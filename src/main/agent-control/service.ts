@@ -65,7 +65,7 @@ import type {
 import type { ScheduleCreated, ScheduleDraft, SchedulesRequest, SchedulesState } from "../../shared/schedules";
 import type { SessionSummary } from "../../shared/session-summary";
 import type { FamilyEdits } from "../../shared/turn-edits";
-import type { HostBotsUpdate } from "../bots";
+import type { HostBotsRoomPost, HostBotsUpdate } from "../bots";
 import { CorePort } from "../core/ports";
 import { CoreError, core } from "../core/process";
 import { RpcTimeoutError } from "../rpc-client";
@@ -467,6 +467,8 @@ export interface AgentControlHost {
 	botsCommand?(device: string, request: BotsCall): Promise<unknown>;
 	/** This computer's bots changed as its paired devices see them (`botsShared`): each connected device is told. */
 	botsShared?(change: SharedBotsDelta): void;
+	/** One of this computer's bots posted in a paired device's group: handed to that device's link; false when it is not connected. */
+	botsRoomPostTo?(device: string, post: unknown): boolean;
 	/**
 	 * Every tombstone (`deleted-sessions.ts`): when the session was deleted, from any path and any launch (the
 	 * sidebar's Delete, `/delete`, a paired device), by its file and computer, or by its saved id alone.
@@ -935,13 +937,18 @@ export class AgentControl {
 	}
 
 	/** A paired device's change to one of this computer's bots (`host.bots.command`): this computer's copy after it. */
-	botsFrom(request: unknown, deviceName: string): Promise<unknown> {
-		return this.#call("botsFrom", { request, deviceName });
+	botsFrom(request: unknown, device: string, deviceName: string): Promise<unknown> {
+		return this.#call("botsFrom", { request, device, deviceName });
 	}
 
 	/** What this computer heard of a paired host's bots; `applied` false: read its whole copy again. */
 	botsRemote(update: HostBotsUpdate): Promise<{ applied: boolean }> {
 		return this.#call("botsRemote", update as unknown as Record<string, unknown>);
+	}
+
+	/** A paired host's bot posted in one of this computer's groups (`host.bots.roomPost`). */
+	botsRoomPost(post: HostBotsRoomPost): Promise<unknown> {
+		return this.#call("botsRoomPost", post as unknown as Record<string, unknown>);
 	}
 
 	/** One pass over the sessions `callerTabId` opened whose work landed. */
@@ -1278,6 +1285,8 @@ export class AgentControl {
 					if (!host.botsCommand) throw new Error("Paired computers' bots are not reachable here.");
 					return host.botsCommand(where, request);
 				}),
+			botsRoomPostTo: ({ device: where, post }: { device: string; post: unknown }) =>
+				coded(() => ({ sent: host.botsRoomPostTo?.(where, post) ?? false })),
 			setOpener: ({ tabId, openerTabId }: { tabId: string; openerTabId: string }) =>
 				coded(() => {
 					if (!host.setOpener) throw new Error("Handing a session to a bot is not available here.");

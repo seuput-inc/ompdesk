@@ -169,6 +169,7 @@ import {
 	type AutopilotNoticeEvent,
 	BenchmarkOptionsSchema,
 	BOTS_EVENT,
+	BOTS_ROOM_EVENT,
 	BotsCommandParams,
 	BotsHomeParams,
 	CustomProviderInputSchema,
@@ -1793,12 +1794,14 @@ export class LocalHostServices implements HostServices {
 			case "host.bots.list":
 				return this.#bots().share();
 			// A device's change to one of this computer's bots: made here, once (a resent answer carries its request id).
-			// An answer to an item question starts a turn of the bot here, one of the device's model requests.
+			// An answer to an item question, and a device group's question to a bot here, start a turn of the bot here:
+			// one of the device's model requests.
 			case "host.bots.command": {
 				const { request } = parse(BotsCommandParams, method, params);
 				const bots = this.#bots();
-				const change = () => bots.from(request, peer.name);
-				if (request.action !== "item" || request.answer === undefined) return change();
+				const change = () => bots.from(request, peer.deviceId, peer.name);
+				const turn = request.action === "roomAsk" || (request.action === "item" && request.answer !== undefined);
+				if (!turn) return change();
 				return this.#metered(
 					peer.deviceId,
 					1,
@@ -1984,6 +1987,17 @@ export class LocalHostServices implements HostServices {
 	/** What devices list of this computer's bots changed (the core's `botsShared`): every connected device follows. */
 	botsChanged(change: SharedBotsDelta): void {
 		for (const conn of this.#conns) emitSafely(conn, BOTS_EVENT, change);
+	}
+
+	/** One of this computer's bots posted in device `device`'s group: told to that device's link; false when it has none. */
+	botsRoomPost(device: string, post: unknown): boolean {
+		let sent = false;
+		for (const conn of this.#conns) {
+			if (conn.peer.deviceId !== device) continue;
+			emitSafely(conn, BOTS_ROOM_EVENT, post);
+			sent = true;
+		}
+		return sent;
 	}
 
 	#bots(): HostBots {

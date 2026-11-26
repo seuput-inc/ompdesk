@@ -60,6 +60,8 @@ import {
 	AUTOPILOT_NOTICE_EVENT,
 	AutopilotNoticeEvent,
 	BOTS_EVENT,
+	BOTS_ROOM_EVENT,
+	BotsRoomPostSchema,
 	DEVICE_ORDER_CHANGED,
 	DEVICE_ORDER_EXCHANGE,
 	DEVICE_RENAME_EVENT,
@@ -816,6 +818,11 @@ export class RemoteDevices {
 		this.#deps.services.botsChanged(change);
 	}
 
+	/** One of this computer's bots posted in device `device`'s group: told to that device; false while it is not connected. */
+	hostBotsRoomPost(device: string, post: unknown): boolean {
+		return this.#deps.services.botsRoomPost(device, post);
+	}
+
 	/** The control tools came up: every connected host's bots are read now (a link that came up first told nobody). */
 	botsReady(): void {
 		for (const [deviceId, link] of this.#links)
@@ -1008,6 +1015,16 @@ export class RemoteDevices {
 		client.on("event", (event, data) => {
 			if (event === DEVICE_ORDER_CHANGED) {
 				void this.#exchangeDeviceOrder(deviceId, link);
+				return;
+			}
+			if (event === BOTS_ROOM_EVENT) {
+				// The host's bot answered this computer's group (it asked the bot with `roomAsk`).
+				const post = BotsRoomPostSchema.safeParse(data);
+				if (post.success)
+					void this.#deps
+						.bots?.()
+						?.roomPost({ device: deviceId, ...post.data })
+						.catch(() => {});
 				return;
 			}
 			if (event === BOTS_EVENT) {

@@ -635,6 +635,15 @@ impl Host {
         .await
     }
 
+    /// `botsRoomPostTo {device, post}`: one of this computer's bots posted in a group of paired device `device`, which
+    /// main hands to that device's connection (`host.bots.roomPost`). False: the device is not connected.
+    pub async fn room_post_to(&self, device: &str, post: &Value) -> R<bool> {
+        let answer: Value = self
+            .ask("botsRoomPostTo", json!({ "device": device, "post": post }))
+            .await?;
+        Ok(answer.get("sent").and_then(Value::as_bool) == Some(true))
+    }
+
     /// `setOpener {tabId, openerTabId}`: `openerTabId` becomes `tabId`'s opener, as a session it opened would have it
     /// (the pool's `setTabOpener`, kept across a relaunch): a session handed to a bot, or one whose lost opener the call
     /// journal names (`Runtime::recover_openers`).

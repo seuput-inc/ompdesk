@@ -68,9 +68,12 @@
  * - The host's bots (the core's `bots_share.rs`; a bot lives and runs on the computer that made it): `host.bots.list {}`
  *   → SharedBots (its bots and items at one version), `host.bots.command {request: BotsCall}` → SharedBots after the
  *   change (a `file` request answers the BotFile), made by the host's core, which refuses making, importing, handing
- *   over and groups; an item answer counts one of the device's model requests. Each change comes as the
- *   `host.bots.changed` event (a SharedBotsDelta on the version the device holds). `host.bots.home {name}` → the home
- *   chat of a bot a device's agent may reach. An older host answers `unsupported`, and its bots are not listed.
+ *   over and the host's groups; an item answer counts one of the device's model requests. Each change comes as the
+ *   `host.bots.changed` event (a SharedBotsDelta on the version the device holds). The device's own group asks a
+ *   host's bot with `host.bots.command` `roomAsk {id, room, roomName, mailId, text}` (one model request; `roomAskStop
+ *   {id}` stops its turn), and the bot's post to that group comes back as the `host.bots.roomPost` event (BotsRoomPost),
+ *   to that device only. `host.bots.home {name}` → the home chat of a bot a device's agent may reach. An older host
+ *   answers `unsupported`, and its bots are not listed.
  * - The host's bridge self-check (bridge-health.ts): `host.bridgeHealth.get {}` → BridgeHealthReport, the latest
  *   result per omp version the host ran in its launch, for `ompdesk_app` `omp.bridge_health` on a session there
  * - Presence (presence.ts): `presence.report {away}` → null, every `PRESENCE_REPORT_MS` while connected; a device
@@ -126,7 +129,8 @@
  *
  * Events (B → A): `tab.event` (TabEventMessage), `sessions.changed` (no data), `host.ompUpdate.changed`,
  * `host.schedules.changed`, `host.projects.changed`, `host.models.changed`, `host.previewRelay`, `host.portTunnel`,
- * `host.summaries`, `host.sessionsDeleted`, `host.remoteOpened`, `host.sessionLinks.changed` and `host.bots.changed`.
+ * `host.summaries`, `host.sessionsDeleted`, `host.remoteOpened`, `host.sessionLinks.changed`, `host.bots.changed` and
+ * `host.bots.roomPost`.
  * Both sides parse what crosses the link with the schemas below.
  */
 import { z } from "zod";
@@ -254,6 +258,11 @@ export const PROJECTS_EVENT = "host.projects.changed";
  * on another version reads `host.bots.list` again); sent to every connected device. An older device drops it.
  */
 export const BOTS_EVENT = "host.bots.changed";
+/**
+ * One of the host's bots posted in a group of the device it is sent to (data: BotsRoomPost): the device asked it
+ * (`host.bots.command` `roomAsk`) and holds the room. Sent to that device only; an older device drops it.
+ */
+export const BOTS_ROOM_EVENT = "host.bots.roomPost";
 /** A session's links on the host changed (no data); sent to every connected device, whose rows read them again. */
 export const SESSION_LINKS_EVENT = "host.sessionLinks.changed";
 /**
@@ -961,6 +970,13 @@ export const SharedBotsDeltaSchema = z.looseObject({
 		items: z.array(z.looseObject({ id: z.string() })),
 	}),
 	remove: z.looseObject({ bots: z.array(z.string()), items: z.array(z.string()) }),
+});
+/** The `host.bots.roomPost` event: a post of the host's bot `bot` in the device's group `room`, kept once by `id`. */
+export const BotsRoomPostSchema = z.object({
+	room: z.string().min(1).max(200),
+	bot: z.string().min(1).max(200),
+	text: z.string().min(1).max(20_000),
+	id: z.string().min(1).max(200),
 });
 
 /** `host.schedules.command` reply and `host.schedules.changed` event: the host's schedules, runs and next starts. */

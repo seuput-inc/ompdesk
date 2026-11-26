@@ -308,6 +308,36 @@ impl Copies {
         self.hosts.get(device)
     }
 
+    /// A paired host's bot by its id, else its name (any case): its host and its row.
+    pub(crate) fn bot(&self, key: &str) -> Option<(String, Value)> {
+        let rows = || {
+            self.hosts
+                .iter()
+                .flat_map(|(device, copy)| copy.rows.bots.iter().map(move |(_, bot)| (device, bot)))
+        };
+        let named = |bot: &Value| {
+            bot.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.to_lowercase() == key.to_lowercase())
+        };
+        rows()
+            .find(|(_, bot)| bot.get("id").and_then(Value::as_str) == Some(key))
+            .or_else(|| rows().find(|(_, bot)| named(bot)))
+            .map(|(device, bot)| (device.clone(), bot.clone()))
+    }
+
+    /// The bot of paired host `device` whose chats run in `folder` (a tab of that host in it is one of its chats).
+    pub(crate) fn bot_in_folder(&self, device: &str, folder: &str) -> Option<Value> {
+        self.hosts
+            .get(device)?
+            .rows
+            .bots
+            .iter()
+            .map(|(_, bot)| bot)
+            .find(|bot| bot.get("folder").and_then(Value::as_str) == Some(folder))
+            .cloned()
+    }
+
     /// `BotsState.remote`: each host's copy with its name and whether its link is up.
     pub(crate) fn json(&self) -> Vec<Value> {
         self.hosts
@@ -323,10 +353,22 @@ impl Copies {
     }
 }
 
-/// What this computer shares and what it holds of its hosts'.
+/// A group on a paired device that asked one of this computer's bots (`roomAsk`): the bot's post to it goes back there.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AskedRoom {
+    pub(crate) bot: String,
+    pub(crate) room: String,
+    pub(crate) name: String,
+    pub(crate) device: String,
+    pub(crate) device_name: String,
+}
+
+/// What this computer shares, what it holds of its hosts', and the devices' groups its bots were asked in.
 pub(crate) struct Across {
     pub(crate) share: Share,
     pub(crate) copies: Copies,
+    /// Kept for this run only: a bot asked again after a relaunch is remembered again.
+    pub(crate) asked: Vec<AskedRoom>,
 }
 
 impl Across {
@@ -335,7 +377,15 @@ impl Across {
         Across {
             share: Share::new(super::bots::new_id("bots")),
             copies: Copies::load(file),
+            asked: Vec::new(),
         }
+    }
+
+    /// Remembers that `asked.device`'s group asked `asked.bot` (its name and the device's as they are now).
+    pub(crate) fn remember(&mut self, asked: AskedRoom) {
+        self.asked
+            .retain(|known| !(known.bot == asked.bot && known.room == asked.room));
+        self.asked.push(asked);
     }
 }
 

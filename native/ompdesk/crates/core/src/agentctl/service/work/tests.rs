@@ -2170,9 +2170,15 @@ async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_onc
 
     // The host makes a paired device's answer; sent again (a retry over the link), it changes nothing.
     let request = json!({ "action": "item", "id": item.id, "answer": { "choice": 0, "question": question }, "requestId": "r1" });
-    let answer = host.bots_from(request.clone(), "MacBook").await.unwrap();
+    let answer = host
+        .bots_from(request.clone(), "dev-b", "MacBook")
+        .await
+        .unwrap();
     assert_eq!(answer["state"]["items"][0]["status"], "working");
-    let again = host.bots_from(request.clone(), "MacBook").await.unwrap();
+    let again = host
+        .bots_from(request.clone(), "dev-b", "MacBook")
+        .await
+        .unwrap();
     assert_eq!(again["version"], answer["version"]);
     let answered = host.items().get(&item.id).cloned().unwrap();
     assert_eq!(
@@ -2205,7 +2211,11 @@ async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_onc
     );
     // A bot is made where it is to live: a device cannot make one here.
     let refused = host
-        .bots_from(json!({ "action": "create", "name": "Cy" }), "MacBook")
+        .bots_from(
+            json!({ "action": "create", "name": "Cy" }),
+            "dev-b",
+            "MacBook",
+        )
         .await
         .unwrap_err();
     assert!(
@@ -2263,4 +2273,191 @@ async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_onc
     // Unpaired, its copy goes.
     device.bots_remote(&json!({ "device": "dev-a", "forget": true }));
     assert_eq!(device.bots_state().get("remote"), None);
+}
+
+#[tokio::test]
+async fn a_group_asks_another_computers_bot_on_its_host_and_takes_its_post_once() {
+    // The device: Ada is its own; Rex lives on paired host dev-a, whose copy it keeps.
+    let root = Scratch::new();
+    let (device, asked, ada_id) = ada(9_792, &root, Mails::default(), |method, _| {
+        (method == "botsCommand").then(|| json!({ "asked": true }))
+    })
+    .await;
+    let rex = json!({ "id": "bot-rex", "name": "Rex", "folder": "/h/rex", "home": "/h/rex.jsonl", "sessions": ["/h/rex.jsonl"] });
+    device.bots_remote(&json!({
+        "device": "dev-a",
+        "name": "Mini",
+        "online": true,
+        "change": { "version": "e1.1", "state": { "bots": [rex], "items": [] } },
+    }));
+    // A group needs one of this computer's bots; another computer's join beside them.
+    let alone = device
+        .bots_command(json!({ "action": "roomCreate", "name": "Solo", "bots": ["Rex"] }))
+        .await
+        .unwrap_err();
+    assert!(
+        alone.message().contains("this computer's bots"),
+        "{}",
+        alone.message()
+    );
+    let state = device
+        .bots_command(json!({ "action": "roomCreate", "name": "Team", "bots": [ada_id, "Rex"] }))
+        .await
+        .unwrap();
+    let room = state["rooms"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(state["rooms"][0]["members"], json!([ada_id, "bot-rex"]));
+    device
+        .bots_command(
+            json!({ "action": "roomPost", "id": room, "text": "Which day?", "messageId": "m1" }),
+        )
+        .await
+        .unwrap();
+    // Rex is asked on its host, with the room's words; Ada here.
+    let ask = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(method, args)| method == "botsCommand" && args["request"]["action"] == "roomAsk")
+        .map(|(_, args)| args.clone())
+        .unwrap();
+    assert_eq!(ask["device"], "dev-a");
+    assert_eq!(ask["request"]["id"], "bot-rex");
+    assert_eq!(ask["request"]["room"], json!(room));
+    assert!(
+        ask["request"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Which day?")
+    );
+    let turns = device.rooms().find(&room).unwrap().messages[0]
+        .turns
+        .clone();
+    assert_eq!(
+        turns
+            .iter()
+            .map(|turn| turn.state.as_str())
+            .collect::<Vec<_>>(),
+        ["asked", "asked"]
+    );
+    // Its post comes back from the host, once by its id, and answers its ask.
+    for _ in 0..2 {
+        device
+            .bots_room_post(&json!({ "device": "dev-a", "room": room, "bot": "bot-rex", "text": "Tuesday.", "id": "post-r1" }))
+            .await
+            .unwrap();
+    }
+    let kept = device.rooms().find(&room).cloned().unwrap();
+    let posts: Vec<&str> = kept
+        .messages
+        .iter()
+        .map(|message| message.text.as_str())
+        .collect();
+    assert_eq!(posts, ["Which day?", "Tuesday."]);
+    assert_eq!(kept.messages[1].name, "Rex");
+    assert!(
+        kept.messages[0]
+            .turns
+            .iter()
+            .any(|turn| turn.bot == "bot-rex" && turn.state == "replied")
+    );
+    // Another device's word for Rex is not Rex's.
+    assert!(device
+        .bots_room_post(&json!({ "device": "dev-z", "room": room, "bot": "bot-rex", "text": "No.", "id": "post-z" }))
+        .await
+        .is_err());
+    // Offline, Rex is not asked: its turn says why.
+    device.bots_remote(&json!({ "device": "dev-a", "name": "Mini", "online": false }));
+    device
+        .bots_command(
+            json!({ "action": "roomPost", "id": room, "text": "Still there?", "messageId": "m2" }),
+        )
+        .await
+        .unwrap();
+    let last = device
+        .rooms()
+        .find(&room)
+        .unwrap()
+        .messages
+        .last()
+        .cloned()
+        .unwrap();
+    let rex_turn = last
+        .turns
+        .iter()
+        .find(|turn| turn.bot == "bot-rex")
+        .unwrap();
+    assert_eq!(rex_turn.state, "failed");
+    assert!(
+        rex_turn
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Mini is offline")
+    );
+}
+
+#[tokio::test]
+async fn a_bot_asked_by_a_paired_computers_group_answers_it_there() {
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let (host, asked, ada_id) = ada(9_793, &root, mails.clone(), |method, _| {
+        (method == "botsRoomPostTo").then(|| json!({ "sent": true }))
+    })
+    .await;
+    let ask = json!({ "action": "roomAsk", "id": ada_id, "room": "room-b1", "roomName": "Team", "mailId": "room-room-b1-1-x", "text": "In the group “Team” (room room-b1), Owner: Which day?" });
+    for _ in 0..2 {
+        host.bots_from(ask.clone(), "dev-b", "MacBook")
+            .await
+            .unwrap();
+    }
+    // The question reached Ada's home chat once, as the group's on that computer.
+    assert_eq!(delivered(&mails, "room-room-b1-1-x"), 1);
+    let (text, is_error) = {
+        let out = host
+            .run("bot1", "ompdesk_room", json!({ "action": "list" }), None)
+            .await;
+        (out.text, out.is_error)
+    };
+    assert!(
+        !is_error && text.contains("Team (room room-b1): on MacBook"),
+        "{text}"
+    );
+    let out = host
+        .run(
+            "bot1",
+            "ompdesk_room",
+            json!({ "action": "post", "room": "Team", "text": "Tuesday." }),
+            None,
+        )
+        .await;
+    assert!(
+        !out.is_error && out.text.contains("Posted in Team on MacBook"),
+        "{}",
+        out.text
+    );
+    let sent = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(method, _)| method == "botsRoomPostTo")
+        .map(|(_, args)| args.clone())
+        .unwrap();
+    assert_eq!(sent["device"], "dev-b");
+    assert_eq!(sent["post"]["room"], "room-b1");
+    assert_eq!(sent["post"]["bot"], json!(ada_id));
+    assert_eq!(sent["post"]["text"], "Tuesday.");
+    // A device's group is no group of this computer: reading it says where it is.
+    let out = host
+        .run(
+            "bot1",
+            "ompdesk_room",
+            json!({ "action": "read", "room": "Team" }),
+            None,
+        )
+        .await;
+    assert!(
+        out.is_error && out.text.contains("on MacBook"),
+        "{}",
+        out.text
+    );
 }

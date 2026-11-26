@@ -1352,6 +1352,7 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
             control
                 .bots_from(
                     args.get("request").cloned().unwrap_or(Value::Null),
+                    args.get("device").and_then(Value::as_str).unwrap_or(""),
                     args.get("deviceName")
                         .and_then(Value::as_str)
                         .unwrap_or("A paired computer"),
@@ -1362,6 +1363,8 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
         "botsShare" => Reply::json(&control.bots_share()),
         // What main heard of a paired host's bots: a copy, a change of it, its link, or that it is no longer paired.
         "botsRemote" => Reply::json(&control.bots_remote(&args)),
+        // A paired host's bot posted in one of this computer's groups (`host.bots.roomPost`).
+        "botsRoomPost" => reply(control.bots_room_post(&args).await),
         "autoClose" => reply(
             control
                 .auto_close(&text_arg(&args, "callerTabId", method)?)

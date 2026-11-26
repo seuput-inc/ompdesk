@@ -1567,6 +1567,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		botsChanged: setBotsState,
 		// What paired devices list of this computer's bots changed: each connected one hears the change.
 		botsShared: change => remoteDevices.hostBotsChanged(change),
+		// One of this computer's bots answered a paired device's group: handed to that device's link.
+		botsRoomPostTo: (device, post) => remoteDevices.hostBotsRoomPost(device, post),
 		sendOutboxFile: path.join(app.getPath("userData"), "send-outbox.json"),
 		attachmentsDir: path.join(app.getPath("userData"), "agent-attachments"),
 		uploads: deps.uploads,
@@ -1652,8 +1654,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	deps.hostBots.current = {
 		home: (name, deviceId, deviceName) => agentControl.botHome(name, deviceId, deviceName),
 		share: () => agentControl.botsShare(),
-		from: (request, deviceName) => agentControl.botsFrom(request, deviceName),
+		from: (request, deviceId, deviceName) => agentControl.botsFrom(request, deviceId, deviceName),
 		remote: update => agentControl.botsRemote(update),
+		roomPost: post => agentControl.botsRoomPost(post),
 	};
 	remoteDevices.botsReady();
 	// The control socket (src/main/control-socket): anything on this computer drives the same service as the tools.

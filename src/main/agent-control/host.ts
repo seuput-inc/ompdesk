@@ -68,7 +68,7 @@ import {
 import type { Schedule } from "../../shared/schedules";
 import type { SessionSummary, VersionedSummaries } from "../../shared/session-summary";
 import type { FamilyEdits } from "../../shared/turn-edits";
-import type { HostBotsUpdate } from "../bots";
+import type { HostBotsRoomPost, HostBotsUpdate } from "../bots";
 import { CoreError, core } from "../core/process";
 import { deletedSessions } from "../deleted-sessions";
 import { discardOpenedWorktree } from "../disk/saved-worktrees";
@@ -239,6 +239,8 @@ export interface AgentControlHostDeps {
 	botsChanged?: (state: BotsState) => void;
 	/** This computer's bots changed as its paired devices see them: every connected device is told. */
 	botsShared?: (change: SharedBotsDelta) => void;
+	/** One of this computer's bots posted in a paired device's group: false when that device is not connected. */
+	botsRoomPostTo?: (device: string, post: unknown) => boolean;
 	/** Where the bytes of the attachments an outbox entry still owes are kept, by content; absent: in memory only. */
 	attachmentsDir?: string | null;
 	/** This computer's upload folder (`web/uploads.ts`): where a file sent to a session on this computer lands. */
@@ -428,13 +430,18 @@ export class AgentControlRuntime {
 	}
 
 	/** A paired device's change to one of this computer's bots (`host.bots.command`): this computer's copy after it. */
-	botsFrom(request: unknown, deviceName: string): Promise<unknown> {
-		return this.control.botsFrom(request, deviceName);
+	botsFrom(request: unknown, device: string, deviceName: string): Promise<unknown> {
+		return this.control.botsFrom(request, device, deviceName);
 	}
 
 	/** What this computer heard of a paired host's bots (its link's copy, a change, the link itself). */
 	botsRemote(update: HostBotsUpdate): Promise<{ applied: boolean }> {
 		return this.control.botsRemote(update);
+	}
+
+	/** A paired host's bot posted in one of this computer's groups (`host.bots.roomPost`). */
+	botsRoomPost(post: HostBotsRoomPost): Promise<unknown> {
+		return this.control.botsRoomPost(post);
 	}
 
 	/** The tab Autopilot (or anyone) opened this one for, if the control tools opened it. */
@@ -1378,6 +1385,7 @@ export class AgentControlRuntime {
 			closedChildren: () => parseClosedChildren(deps.prefs.get(AGENT_CLOSED_CHILDREN_PREF)),
 			botsChanged: state => deps.botsChanged?.(state),
 			botsShared: change => deps.botsShared?.(change),
+			botsRoomPostTo: (device, post) => deps.botsRoomPostTo?.(device, post) ?? false,
 			botsCommand: (device, request) => {
 				const remote = deps.remote;
 				if (!remote) throw new Error("No paired computers here.");

@@ -1079,13 +1079,19 @@ impl AgentControl {
 
     /// A paired device's change to one of this computer's bots (`host.bots.command`): what the owner does on the bot
     /// page, apart from making a bot (it is made where it is to live), importing, handing over a session (R91) and
-    /// groups (each computer's own). Answers this computer's copy after it (`{version, state, refused?}`), or a file.
-    pub async fn bots_from(&self, request: Value, device_name: &str) -> R<Value> {
+    /// this computer's groups; and its own group's question to one of them (`roomAsk`, `roomAskStop`). Answers this
+    /// computer's copy after it (`{version, state, refused?}`), or a file.
+    pub async fn bots_from(&self, request: Value, device: &str, device_name: &str) -> R<Value> {
         let action = request
             .get("action")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned();
+        match action.as_str() {
+            "roomAsk" => return self.room_ask_here(&request, device, device_name).await,
+            "roomAskStop" => return self.room_ask_stop(&request).await,
+            _ => {}
+        }
         if !FROM_DEVICE.contains(&action.as_str()) {
             return fail(format!(
                 "{device_name} cannot {action} the bots of this computer."

@@ -19,6 +19,7 @@ use super::super::fail::{R, fail};
 use super::super::host::Deadline;
 use super::super::types::{ControlTab, RoomArgs};
 use super::bots::new_id;
+use super::bots_share::AskedRoom;
 use crate::agentctl::journal::bots::BotRecord;
 use crate::agentctl::journal::rooms::{HOPS_MAX, MEMBERS_MAX, RoomMessage, RoomRecord, RoomTurn};
 use crate::agentctl::rules::mail::{Mail, MailKind};
@@ -46,14 +47,47 @@ fn mentions(text: &str, name: &str) -> bool {
     })
 }
 
+/// A group's member: one of this computer's bots, or a paired host's from the copy kept of it (`device`; orca-bots-
+/// remote, Orca's `bot-group-remote.ts:57-140`: a group with another computer's bots lives on this one).
+#[derive(Clone, Debug)]
+struct Member {
+    id: String,
+    name: String,
+    home: Option<String>,
+    device: Option<String>,
+}
+
+impl Member {
+    fn local(bot: &BotRecord) -> Member {
+        Member {
+            id: bot.id.clone(),
+            name: bot.name.clone(),
+            home: bot.home.clone(),
+            device: None,
+        }
+    }
+
+    fn remote(device: &str, bot: &Value) -> Option<Member> {
+        let text = |key: &str| bot.get(key).and_then(Value::as_str).map(str::to_owned);
+        Some(Member {
+            id: text("id")?,
+            name: text("name")?,
+            home: text("home"),
+            device: Some(device.to_owned()),
+        })
+    }
+}
+
 /// Who replies to the owner's post under `mode` (`all`, `mentions`, `bot:<id>`).
-fn repliers<'a>(mode: &str, bots: &'a [BotRecord], text: &str) -> Vec<&'a BotRecord> {
-    bots.iter()
-        .filter(|bot| match mode {
+fn repliers<'a>(mode: &str, members: &'a [Member], text: &str) -> Vec<&'a Member> {
+    members
+        .iter()
+        .filter(|member| match mode {
             "all" => true,
-            "mentions" => mentions(text, &bot.name),
+            "mentions" => mentions(text, &member.name),
             other => {
-                other.strip_prefix("bot:") == Some(bot.id.as_str()) || mentions(text, &bot.name)
+                other.strip_prefix("bot:") == Some(member.id.as_str())
+                    || mentions(text, &member.name)
             }
         })
         .collect()
@@ -84,16 +118,38 @@ fn fit(lines: Vec<String>) -> String {
     kept.join("\n")
 }
 
+/// A group's question to a member's home chat: a mail that starts a turn and says how to answer in the room.
+fn room_mail(id: &str, room: &str, from: &str, text: &str, now: f64) -> Mail {
+    let mut mail = Mail::new(id, "ompdesk", from, "", MailKind::Question, text, now);
+    mail.instruction = Some(format!(
+        "Answer in the room with ompdesk_room {{\"action\":\"post\",\"room\":\"{room}\",\"text\":…}}; post nothing when you have nothing to add."
+    ));
+    mail
+}
+
 impl AgentControl {
-    /// The bots `keys` name (ids or names), each once; refused when one is unknown or there are too many.
+    /// The bots `keys` name (ids or names; a paired host's from its copy), each once; refused when one is unknown, there
+    /// are too many, or none is this computer's (Orca's `groupNeedsLocalBot`: the group lives where its bots are).
     fn room_members(&self, keys: &[Value]) -> R<Vec<String>> {
         let mut members: Vec<String> = Vec::new();
+        let mut local = false;
         for key in keys.iter().filter_map(Value::as_str) {
-            let Some(bot) = self.bots().find(key).cloned() else {
-                return fail(format!("No bot \"{key}\"."));
+            let found = self.bots().find(key).map(|bot| bot.id.clone());
+            let id = match found {
+                Some(id) => {
+                    local = true;
+                    id
+                }
+                None => {
+                    let remote = self.across().copies.bot(key);
+                    match remote.and_then(|(_, bot)| bot.get("id")?.as_str().map(str::to_owned)) {
+                        Some(id) => id,
+                        None => return fail(format!("No bot \"{key}\".")),
+                    }
+                }
             };
-            if !members.contains(&bot.id) {
-                members.push(bot.id);
+            if !members.contains(&id) {
+                members.push(id);
             }
         }
         if members.is_empty() {
@@ -101,6 +157,11 @@ impl AgentControl {
         }
         if members.len() > MEMBERS_MAX {
             return fail(format!("A group holds up to {MEMBERS_MAX} bots."));
+        }
+        if !local {
+            return fail(
+                "A group needs one of this computer's bots: another computer's bots join beside them.",
+            );
         }
         Ok(members)
     }
@@ -240,19 +301,25 @@ impl AgentControl {
             text: text.to_owned(),
             ..RoomMessage::default()
         };
-        let bots = self.room_bots(&room);
-        let asked: Vec<BotRecord> = repliers(&room.reply_mode, &bots, text)
+        let members = self.room_members_of(&room);
+        let asked: Vec<Member> = repliers(&room.reply_mode, &members, text)
             .into_iter()
             .cloned()
             .collect();
         self.room_ask(&room.id, message, &asked, now).await
     }
 
-    /// The room's members as bots, in member order.
-    fn room_bots(&self, room: &RoomRecord) -> Vec<BotRecord> {
+    /// The room's members, in member order: this computer's bots, and a paired host's from the copy kept of it.
+    fn room_members_of(&self, room: &RoomRecord) -> Vec<Member> {
         room.members
             .iter()
-            .filter_map(|member| self.bots().find(member).cloned())
+            .filter_map(|member| {
+                let local = self.bots().find(member).map(Member::local);
+                local.or_else(|| {
+                    let (device, bot) = self.across().copies.bot(member)?;
+                    Member::remote(&device, &bot)
+                })
+            })
             .collect()
     }
 
@@ -261,7 +328,7 @@ impl AgentControl {
         &self,
         room_id: &str,
         message: RoomMessage,
-        asked: &[BotRecord],
+        asked: &[Member],
         now: f64,
     ) -> R<()> {
         let Some(room) = self.rooms().change(room_id, |record| {
@@ -273,8 +340,8 @@ impl AgentControl {
             return Ok(());
         };
         let mut turns: Vec<RoomTurn> = Vec::new();
-        for bot in asked {
-            turns.push(self.ask_member(&room, bot, &posted, now).await);
+        for member in asked {
+            turns.push(self.ask_member(&room, member, &posted, now).await);
         }
         if !turns.is_empty() {
             self.rooms().change(room_id, |record| {
@@ -295,11 +362,12 @@ impl AgentControl {
         Ok(())
     }
 
-    /// Asks one member, in its bot's home chat, to reply to `post`: the room's posts since it last read it go along.
+    /// Asks one member, in its bot's home chat, to reply to `post`: the room's posts since it last read it go along. A
+    /// paired host's bot is asked on its host (`roomAsk`), which hands the same question to its home chat there.
     async fn ask_member(
         &self,
         room: &RoomRecord,
-        bot: &BotRecord,
+        bot: &Member,
         post: &RoomMessage,
         now: f64,
     ) -> RoomTurn {
@@ -338,21 +406,64 @@ impl AgentControl {
                 "\n\nEarlier in the room since you last read it:\n{earlier}"
             ));
         }
-        let mut mail = Mail::new(
-            &format!("room-{}-{}-{}", room.id, post.seq, bot.id),
-            "ompdesk",
-            &format!("the group {}", room.name),
-            "",
-            MailKind::Question,
-            &text,
-            now,
-        );
-        mail.instruction = Some(format!(
-            "Answer in the room with ompdesk_room {{\"action\":\"post\",\"room\":\"{}\",\"text\":…}}; post nothing when you have nothing to add.",
-            room.id
-        ));
-        self.mail_session(&home, mail, true).await;
+        let mail_id = format!("room-{}-{}-{}", room.id, post.seq, bot.id);
+        if let Some(device) = &bot.device {
+            let (online, host) = self
+                .across()
+                .copies
+                .host(device)
+                .map_or((false, device.clone()), |copy| {
+                    (copy.online, copy.name.clone())
+                });
+            let asked: R<Value> = if online {
+                self.host
+                    .bots_on(
+                        device,
+                        &json!({
+                            "action": "roomAsk",
+                            "id": bot.id,
+                            "room": room.id,
+                            "roomName": room.name,
+                            "mailId": mail_id,
+                            "text": text,
+                        }),
+                    )
+                    .await
+            } else {
+                fail(format!("{host} is offline: {} was not asked.", bot.name))
+            };
+            if let Err(error) = asked {
+                turn.state = "failed".to_owned();
+                turn.error = Some(error.message().to_string());
+            }
+            return turn;
+        }
+        let from = format!("the group {}", room.name);
+        self.mail_session(
+            &home,
+            room_mail(&mail_id, &room.id, &from, &text, now),
+            true,
+        )
+        .await;
         turn
+    }
+
+    /// Stops the turn the chat `home` of this computer runs, if one does.
+    async fn stop_home(&self, home: &str) {
+        let state = self.host.state();
+        let Some(tab) = state.tabs.iter().find(|tab| {
+            tab.device.is_none() && tab.session_path.as_deref() == Some(home) && tab.busy
+        }) else {
+            return;
+        };
+        let _ = self
+            .host
+            .command(
+                &tab.tab_id,
+                &json!({ "type": "abort" }),
+                Deadline::Ms(self.tuning.state_timeout_ms),
+            )
+            .await;
     }
 
     /// Stops the room: every ask still open ends, and a member chat at work is stopped.
@@ -377,30 +488,36 @@ impl AgentControl {
                 turn.state = "stopped".to_owned();
             }
         });
-        let state = self.host.state();
-        for bot in self.room_bots(&room) {
-            let Some(home) = bot.home.as_deref().filter(|_| open.contains(&bot.id)) else {
+        for member in self.room_members_of(&room) {
+            if !open.contains(&member.id) {
                 continue;
-            };
-            if let Some(tab) = state.tabs.iter().find(|tab| {
-                tab.device.is_none() && tab.session_path.as_deref() == Some(home) && tab.busy
-            }) {
-                let _ = self
-                    .host
-                    .command(
-                        &tab.tab_id,
-                        &json!({ "type": "abort" }),
-                        Deadline::Ms(self.tuning.state_timeout_ms),
-                    )
-                    .await;
+            }
+            match (&member.device, member.home.as_deref()) {
+                (Some(device), _) => {
+                    let stop = json!({ "action": "roomAskStop", "id": member.id });
+                    let _ = self.host.bots_on(device, &stop).await;
+                }
+                (None, Some(home)) => self.stop_home(home).await,
+                (None, None) => {}
             }
         }
         Ok(())
     }
 
-    /// `ompdesk_room`: a bot's chat lists its groups, reads a room and posts in it.
+    /// `ompdesk_room`: a bot's chat lists its groups, reads a room and posts in it. A paired host's chat this computer
+    /// holds is that bot's chat here (its copy names the folder); a group on a paired device that asked one of this
+    /// computer's bots (`roomAsk`) is listed too, and the bot's post to it goes back to that device.
     pub(crate) async fn room_tool(&self, caller: &ControlTab, args: RoomArgs) -> R<String> {
-        let Some(bot) = self.bot_of_folder(&caller.cwd) else {
+        let member = match caller.device.as_deref() {
+            Some(device) => {
+                let bot = self.across().copies.bot_in_folder(device, &caller.cwd);
+                bot.and_then(|bot| Member::remote(device, &bot))
+            }
+            None => self
+                .bot_of_folder(&caller.cwd)
+                .map(|bot| Member::local(&bot)),
+        };
+        let Some(bot) = member else {
             return fail("ompdesk_room works in a bot's chat");
         };
         let rooms: Vec<RoomRecord> = self
@@ -410,15 +527,24 @@ impl AgentControl {
             .filter(|room| room.members.contains(&bot.id))
             .cloned()
             .collect();
+        let away: Vec<AskedRoom> = if bot.device.is_none() {
+            let asked = self.across().asked.clone();
+            asked
+                .into_iter()
+                .filter(|asked| asked.bot == bot.id)
+                .collect()
+        } else {
+            Vec::new()
+        };
         if args.action == "list" {
-            if rooms.is_empty() {
+            if rooms.is_empty() && away.is_empty() {
                 return Ok("You are in no group.".to_owned());
             }
             let lines: Vec<String> = rooms
                 .iter()
                 .map(|room| {
                     let names: Vec<String> = self
-                        .room_bots(room)
+                        .room_members_of(room)
                         .into_iter()
                         .filter(|member| member.id != bot.id)
                         .map(|member| member.name)
@@ -435,6 +561,12 @@ impl AgentControl {
                         room.messages.len()
                     )
                 })
+                .chain(away.iter().map(|asked| {
+                    format!(
+                        "- {} (room {}): on {}; each question brings its posts",
+                        asked.name, asked.room, asked.device_name
+                    )
+                }))
                 .collect();
             return Ok(lines.join("\n"));
         }
@@ -446,11 +578,15 @@ impl AgentControl {
         else {
             return fail(format!("{} needs room (its id or name).", args.action));
         };
+        let named = |id: &str, name: &str| id == key || name.to_lowercase() == key.to_lowercase();
         let Some(room) = rooms
             .iter()
-            .find(|room| room.id == key || room.name.to_lowercase() == key.to_lowercase())
+            .find(|room| named(&room.id, &room.name))
             .cloned()
         else {
+            if let Some(asked) = away.iter().find(|asked| named(&asked.room, &asked.name)) {
+                return self.room_tool_away(&bot, asked, &args).await;
+            }
             return fail(format!(
                 "You are in no group \"{key}\". ompdesk_room {{\"action\":\"list\"}} lists yours."
             ));
@@ -476,59 +612,8 @@ impl AgentControl {
                 Ok(shown.join("\n"))
             }
             "post" => {
-                let text = args.text.as_deref().map(str::trim).unwrap_or("");
-                if text.is_empty() {
-                    return fail("post needs text.");
-                }
-                if text.chars().count() > POST_MAX {
-                    return fail(format!("A post is at most {POST_MAX} characters."));
-                }
-                // The post it answers: the newest that asked this bot and is still open.
-                let hops = room
-                    .messages
-                    .iter()
-                    .rev()
-                    .find(|message| {
-                        message
-                            .turns
-                            .iter()
-                            .any(|turn| turn.bot == bot.id && turn.state == "asked")
-                    })
-                    .map_or(0, |message| message.hops + 1);
-                self.rooms().change(&room.id, |record| {
-                    for turn in record
-                        .messages
-                        .iter_mut()
-                        .flat_map(|message| message.turns.iter_mut())
-                        .filter(|turn| turn.bot == bot.id && turn.state == "asked")
-                    {
-                        turn.state = "replied".to_owned();
-                    }
-                });
-                let now = self.now();
-                let message = RoomMessage {
-                    id: new_id("post"),
-                    at: iso(now.max(0.0) as u64),
-                    author: bot.id.clone(),
-                    name: bot.name.clone(),
-                    text: text.to_owned(),
-                    hops,
-                    ..RoomMessage::default()
-                };
-                // A member it @mentions is asked next, while the chain is short enough.
-                let handed: Vec<BotRecord> = if hops < HOPS_MAX {
-                    self.room_bots(&room)
-                        .into_iter()
-                        .filter(|member| member.id != bot.id && mentions(text, &member.name))
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                self.room_ask(&room.id, message, &handed, now).await?;
-                self.rooms().change(&room.id, |record| {
-                    record.seen.insert(bot.id.clone(), record.last_seq);
-                });
-                self.bots_changed();
+                let text = post_text(args.text.as_deref())?;
+                let handed = self.member_post(&room, &bot, text, None).await?;
                 Ok(match handed.len() {
                     0 => format!("Posted in {}.", room.name),
                     _ => format!(
@@ -545,6 +630,171 @@ impl AgentControl {
             other => fail(format!("ompdesk_room has no action {other}.")),
         }
     }
+
+    /// `ompdesk_room` on a group of a paired device: a post goes back to that device, which holds the room.
+    async fn room_tool_away(&self, bot: &Member, asked: &AskedRoom, args: &RoomArgs) -> R<String> {
+        match args.action.as_str() {
+            "read" => fail(format!(
+                "The group {} is on {}: each question to you brings its posts since you last answered.",
+                asked.name, asked.device_name
+            )),
+            "post" => {
+                let text = post_text(args.text.as_deref())?;
+                let post = json!({
+                    "room": asked.room,
+                    "bot": bot.id,
+                    "text": text,
+                    "id": new_id("post"),
+                });
+                if !self.host.room_post_to(&asked.device, &post).await? {
+                    return fail(format!(
+                        "{} is not connected: post again once it is.",
+                        asked.device_name
+                    ));
+                }
+                Ok(format!(
+                    "Posted in {} on {}.",
+                    asked.name, asked.device_name
+                ))
+            }
+            other => fail(format!("ompdesk_room has no action {other}.")),
+        }
+    }
+
+    /// A member's post: the asks it answers end, the post is kept (once by its `id`) and a member it @mentions is asked
+    /// next while the chain is short enough. The members asked.
+    async fn member_post(
+        &self,
+        room: &RoomRecord,
+        bot: &Member,
+        text: &str,
+        id: Option<String>,
+    ) -> R<Vec<Member>> {
+        if let Some(id) = &id
+            && room.messages.iter().any(|message| message.id == *id)
+        {
+            return Ok(Vec::new());
+        }
+        // The post it answers: the newest that asked this bot and is still open.
+        let hops = room
+            .messages
+            .iter()
+            .rev()
+            .find(|message| {
+                message
+                    .turns
+                    .iter()
+                    .any(|turn| turn.bot == bot.id && turn.state == "asked")
+            })
+            .map_or(0, |message| message.hops + 1);
+        self.rooms().change(&room.id, |record| {
+            for turn in record
+                .messages
+                .iter_mut()
+                .flat_map(|message| message.turns.iter_mut())
+                .filter(|turn| turn.bot == bot.id && turn.state == "asked")
+            {
+                turn.state = "replied".to_owned();
+            }
+        });
+        let now = self.now();
+        let message = RoomMessage {
+            id: id.unwrap_or_else(|| new_id("post")),
+            at: iso(now.max(0.0) as u64),
+            author: bot.id.clone(),
+            name: bot.name.clone(),
+            text: text.to_owned(),
+            hops,
+            ..RoomMessage::default()
+        };
+        let handed: Vec<Member> = if hops < HOPS_MAX {
+            self.room_members_of(room)
+                .into_iter()
+                .filter(|member| member.id != bot.id && mentions(text, &member.name))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        self.room_ask(&room.id, message, &handed, now).await?;
+        self.rooms().change(&room.id, |record| {
+            record.seen.insert(bot.id.clone(), record.last_seq);
+        });
+        self.bots_changed();
+        Ok(handed)
+    }
+
+    /// A paired host's bot posted in one of this computer's groups (`host.bots.roomPost`, told by main as
+    /// `botsRoomPost {device, room, bot, text, id}`): kept as that member's post, once by its id.
+    pub async fn bots_room_post(&self, post: &Value) -> R<Value> {
+        let text = |key: &str| post.get(key).and_then(Value::as_str).unwrap_or("");
+        let Some(room) = self.rooms().find(text("room")).cloned() else {
+            return fail("That group is gone.");
+        };
+        let Some(member) = self.room_members_of(&room).into_iter().find(|member| {
+            member.id == text("bot") && member.device.as_deref() == Some(text("device"))
+        }) else {
+            return fail("That bot is not in the group.");
+        };
+        let body = post_text(Some(text("text")))?;
+        let id = Some(text("id").to_owned()).filter(|id| !id.is_empty());
+        self.member_post(&room, &member, body, id).await?;
+        Ok(json!({ "posted": true }))
+    }
+
+    /// A paired device's group asks one of this computer's bots (`roomAsk {id, room, roomName, mailId, text}`): the
+    /// question goes to the bot's home chat here as the device's own room would put it, and the bot's post to that
+    /// room goes back to the device (`AskedRoom`). The same mail id asked again is handed over once.
+    pub(crate) async fn room_ask_here(
+        &self,
+        request: &Value,
+        device: &str,
+        device_name: &str,
+    ) -> R<Value> {
+        let text = |key: &str| request.get(key).and_then(Value::as_str).unwrap_or("");
+        let bot = self.bot_named(text("id"))?;
+        let Some(home) = bot.home.clone() else {
+            return fail(format!(
+                "{} has no chat yet: open its home chat once.",
+                bot.name
+            ));
+        };
+        let (room, name) = (text("room"), text("roomName"));
+        if room.is_empty() || text("mailId").is_empty() {
+            return fail("roomAsk needs room and mailId.");
+        }
+        self.across().remember(AskedRoom {
+            bot: bot.id.clone(),
+            room: room.to_owned(),
+            name: name.to_owned(),
+            device: device.to_owned(),
+            device_name: device_name.to_owned(),
+        });
+        let from = format!("the group {name} on {device_name}");
+        let mail = room_mail(text("mailId"), room, &from, text("text"), self.now());
+        self.mail_session(&home, mail, true).await;
+        Ok(json!({ "asked": true }))
+    }
+
+    /// A paired device stopped its group: the turn this computer's bot runs for it stops (`roomAskStop {id}`).
+    pub(crate) async fn room_ask_stop(&self, request: &Value) -> R<Value> {
+        let bot = self.bot_named(request.get("id").and_then(Value::as_str).unwrap_or(""))?;
+        if let Some(home) = bot.home.as_deref() {
+            self.stop_home(home).await;
+        }
+        Ok(json!({ "stopped": true }))
+    }
+}
+
+/// A post's text, trimmed: refused when empty or past `POST_MAX`.
+fn post_text(text: Option<&str>) -> R<&str> {
+    let text = text.map(str::trim).unwrap_or("");
+    if text.is_empty() {
+        return fail("post needs text.");
+    }
+    if text.chars().count() > POST_MAX {
+        return fail(format!("A post is at most {POST_MAX} characters."));
+    }
+    Ok(text)
 }
 
 #[cfg(test)]
@@ -562,10 +812,12 @@ mod tests {
 
     #[test]
     fn the_reply_mode_picks_who_answers_the_owner() {
-        let bot = |id: &str, name: &str| BotRecord {
-            id: id.into(),
-            name: name.into(),
-            ..BotRecord::default()
+        let bot = |id: &str, name: &str| {
+            Member::local(&BotRecord {
+                id: id.into(),
+                name: name.into(),
+                ..BotRecord::default()
+            })
         };
         let bots = vec![bot("b1", "Ada"), bot("b2", "Bo")];
         let ids = |mode: &str, text: &str| {
