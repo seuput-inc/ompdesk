@@ -12,6 +12,7 @@ mod cache;
 mod cache_policy;
 mod facts;
 pub(crate) mod local_files;
+mod low_space;
 mod regenerable;
 mod run_state;
 mod saved;
@@ -135,6 +136,7 @@ pub fn register(registry: &mut Registry) {
     run_state::register(registry);
     registry.add("disk.usage", |call| Box::pin(usage::handle(call)));
     saved_records::register(registry);
+    registry.add("disk.lowSpace", |call| Box::pin(low_space::handle(call)));
     registry.add("disk.sizesOpen", |call| {
         Box::pin(async move {
             let OpenParams { file, now } = call.params()?;

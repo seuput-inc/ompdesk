@@ -289,6 +289,13 @@ fn call(_: u64, method: &str, raw: &RawValue) -> Outcome {
         "add" => {
             let at = of.at.unwrap_or_else(now_ms);
             with(file, |store| store.add(&of.path, device, at));
+            // This computer's session takes its links along; a paired host's file keeps them there.
+            if let (Some(file), None) = (file, device) {
+                crate::prefs::session_links::drop_session(
+                    &crate::prefs::session_links::file_beside(file),
+                    &of.path,
+                );
+            }
             Value::Null
         }
         _ => return Outcome::fault("no_method", format!("deleted has no {method}")),

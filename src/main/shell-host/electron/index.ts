@@ -145,6 +145,24 @@ export const readDiagnosticLog: DiagnosticsDeps["readLog"] = selection => client
 
 export const admitNotification: AdmitNotification = report => client.call("app.admitNotification", report);
 
+/** The shell closes the desktop banners still up about `tabId` (`notification.closeTab`, notification.rs). */
+export function closeTabBanners(tabId: string): void {
+	client.call("notification.closeTab", { tab: tabId }).catch(() => undefined);
+}
+
+/**
+ * Each folder dialog macOS shows on OMPdesk's account (the shell's `system.watchFolderPrompts`, tauri-shell
+ * folder_prompts.rs) reaches `onPrompt`; the returned function stops the watch.
+ */
+export function watchFolderPrompts(onPrompt: (prompt: { service: string; responsible: string }) => void): () => void {
+	const unlisten = client.on("system.folderPrompt", onPrompt);
+	client.call("system.watchFolderPrompts").catch(() => undefined);
+	return () => {
+		unlisten();
+		client.call("system.unwatchFolderPrompts").catch(() => undefined);
+	};
+}
+
 export const updateHost: UpdateHost = {
 	stageUpdateBundle: request => client.call("app.stageUpdateBundle", request),
 	updateDestination: asset => client.call("app.updateDestination", { asset }),

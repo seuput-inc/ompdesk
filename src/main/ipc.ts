@@ -142,7 +142,6 @@ import type { Schedule, SchedulesRequest } from "../shared/schedules";
 import { hostedSummaries, type SummariesChanged } from "../shared/session-summary";
 import { SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import { SIDEBAR_PROJECTS_COMMAND } from "../shared/sidebar-projects";
-import { parseTerminalCommands, TERMINAL_COMMANDS_PREF } from "../shared/terminal-commands";
 import { SCRATCH_TERMINAL_TAB } from "../shared/terminal-types";
 import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND } from "../shared/tracker-channels";
 import { isUiLanguage } from "../shared/ui-language";
@@ -177,7 +176,7 @@ import type { MainTextKey } from "./i18n-text";
 import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { noteTypedPrompt } from "./local/prompt-origin";
-import { answerSessionLinks, dropSessionLinks, onSessionLinksChanged, SessionLinksParams } from "./local/session-links";
+import { answerSessionLinks, onSessionLinksChanged, SessionLinksParams } from "./local/session-links";
 import type { LogWatcher } from "./log-watcher";
 import type { MacPermissions } from "./mac-permissions";
 import { type LocalMachine, type MachineServices, machineFor as pickMachine } from "./machine-services";
@@ -229,7 +228,6 @@ import { registerSshToolsIpc } from "./ssh/ipc";
 import { markStartupFromRenderer } from "./startup-timing";
 import { stockHelperRequest } from "./stock-helper";
 import { shellEngine } from "./system-version";
-import { TabAttention } from "./tab-attention";
 import { closeWindowTab, type TabReleaseDeps } from "./tab-release";
 import { type SessionFolderState, type SpawnTabRemote, sessionFolderState, spawnTabForWindow } from "./tab-spawn";
 import { TERMINAL_READ_TOOL } from "./terminal/agent-tool";
@@ -381,9 +379,11 @@ export interface IpcDeps {
 	notifyMuted?: (tabId: string) => boolean;
 	/** The person looked at the tab: the paired phones' banners about it are retracted (`WebHost.tabSeen`). */
 	onTabSeen?: (tabId: string) => void;
+	/** The shell closes the desktop banners still up about the tab (`notification.closeTab`). */
+	closeTabBanners?: (tabId: string) => void;
 	/** A paired page's window is in the foreground (`WebHost.pageVisible`). */
 	pageVisible?: (win: ClientWindow) => boolean;
-	/** Whether the person is away from this computer (presence.ts `readDesktopAway`). */
+	/** Whether the person is away from this computer (the shell's `power.desktopAway`). */
 	desktopAway?: () => boolean | undefined;
 	/** One test push to a paired device's own subscription (`WebHost.testPush`); undefined while there is no web host. */
 	testPush?: (deviceId: string) => Promise<IpcPushTestResult> | undefined;
@@ -519,19 +519,24 @@ const TYPED_COMMANDS: ReadonlySet<string> = new Set(["prompt", "steer", "follow_
 const liveNotifications = new Set<Notification>();
 /** Windows whose close already cancels their pending notification summary. */
 const notifyBatchedWindows = new Set<number>();
-/** The banners about each tab, closed once the person looks at it; when it was looked at (tab-attention.ts). */
-const tabAttention = new TabAttention();
+/** Options of a banner the shell closes once the person looks at its tab (`notification.closeTab`, notification.rs). */
+type TabBannerOptions = Electron.NotificationConstructorOptions & { tab?: string };
 /**
  * The system refused the last banner (Windows reports `failed`; macOS reports nothing, Electron has no read of its
  * permission): the next notify answers `blocked`, and the window says so once.
  */
 let bannersFailing = false;
 
-/** One OS notification; one about a tab switches to it on click. A lone banner about a tab closes once it is seen. */
+/**
+ * One OS notification; one about a tab switches to it on click. A lone banner about a tab is the shell's to close once
+ * the tab is seen (its `tab`).
+ */
 function showNotification(windowId: number, notice: ShownNotice, info?: ShownInfo | null): { close: () => void } {
 	const win = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.id === windowId);
-	const notification = new Notification({ title: notice.title, body: notice.body });
 	const { tabId } = notice;
+	const options: TabBannerOptions = { title: notice.title, body: notice.body };
+	if (win && tabId && !info?.summary) options.tab = tabId;
+	const notification = new Notification(options);
 	notification.on("failed", () => {
 		bannersFailing = true;
 	});
@@ -541,11 +546,7 @@ function showNotification(windowId: number, notice: ShownNotice, info?: ShownInf
 	if (win && tabId) {
 		// Held until clicked or dismissed: a collected Notification drops its click.
 		liveNotifications.add(notification);
-		const forget = info?.summary ? () => undefined : tabAttention.banner(tabId, notification);
-		const release = () => {
-			liveNotifications.delete(notification);
-			forget();
-		};
+		const release = () => liveNotifications.delete(notification);
 		notification.on("close", release);
 		notification.on("click", () => {
 			release();
@@ -622,9 +623,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	/** The same for a window's model setup research. */
 	const remoteModelSetups = new Map<number, string>();
 	const { sidecarPool, sessionIndex, logWatcher, windowManager, remoteDevices } = deps;
-	/** The person looked at the tab: its banners close here and on the phones, and a pending summary forgets it. */
+	/**
+	 * The person looked at the tab: its banners close here and on the phones, a pending summary forgets it, and the
+	 * pool's tab entry keeps when (the seen-since-run clock).
+	 */
 	const tabSeen = (tabId: string) => {
-		tabAttention.seen(tabId);
+		sidecarPool.tabSeen(tabId);
+		deps.closeTabBanners?.(tabId);
 		for (const winId of notifyBatchedWindows) notificationBatcher.forget(winId, tabId);
 		deps.onTabSeen?.(tabId);
 	};
@@ -1935,7 +1940,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 
 	/**
 	 * The person looks at the window's shown tabs: a focused, unminimized desktop window, or a paired page in the
-	 * foreground. Their banners close, on this computer and the phones (tab-attention.ts, web-push-notifier.ts).
+	 * foreground. Their banners close, on this computer (the shell's) and the phones (web-push-notifier.ts).
 	 */
 	const lookedAt = (caller: IpcCaller, tabIds: readonly string[]) => {
 		const win = caller.browserWindow;
@@ -1973,11 +1978,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		if (tabId) tabSeen(tabId);
 	};
 	app.on("browser-window-focus", onWindowFocus);
-	deps.sidecarPool.observeTabs(activity => {
-		if (activity.type === "idle" && activity.outcome) tabAttention.settled(activity.tabId);
-		else if (activity.type === "released") tabAttention.released(activity.tabId);
-	});
-	ipc.handle(IPC_COMMANDS.TABS_SEEN_SINCE_RUN, () => tabAttention.seenSinceRun());
+	ipc.handle(IPC_COMMANDS.TABS_SEEN_SINCE_RUN, () => deps.sidecarPool.seenSinceRun());
 
 	ipc.handle(IPC_COMMANDS.REORDER_TABS, (caller, payload: { tabIds?: unknown }) => {
 		const win = caller.win;
@@ -2253,11 +2254,15 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	};
 	// A deleted session leaves the closed-children record (its opener's family) with its file, also
 	// when a paired device asked the delete; a delete before this rule left its record, which goes now.
-	onSessionDeleted((sessionPath, device) => {
+	onSessionDeleted((_sessionPath, device) => {
 		agentControl.control.changed();
 		void agentControl.forgetDeleted();
-		// A paired host's file keeps its links there, and its own delete drops them.
-		if (!device) dropSessionLinks(sessionPath);
+		// The core dropped this computer's session's links with its tombstone (prefs/session_links.rs): every window, page
+		// and paired device reads them again. A paired host's file keeps its links there, and its own delete drops them.
+		if (!device) {
+			everywhere(IPC_EVENTS.SESSION_LINKS_CHANGED, {} satisfies IpcSessionLinksChanged);
+			remoteDevices.hostSessionLinksChanged();
+		}
 	});
 	void agentControl.forgetDeleted();
 	ipc.handle(IPC_COMMANDS.PREFS_SET, (caller, payload: IpcPrefsSetPayload) => {
@@ -2297,13 +2302,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		if (payload.key === JUDGE_ASSIST_PREF && typeof payload.value !== "boolean") {
 			throw codedError("invalid_preference_key", "Invalid judge assist preference");
 		}
-		// Saved terminal commands run in a shell as typed: only a list that reads whole is stored.
-		if (
-			payload.key === TERMINAL_COMMANDS_PREF &&
-			(!Array.isArray(payload.value) || parseTerminalCommands(payload.value).length !== payload.value.length)
-		) {
-			throw codedError("invalid_preference_key", "Invalid saved terminal commands");
-		}
+		// Saved terminal commands run in a shell as typed: the core's write keeps only a list that reads whole
+		// (crates/core/src/prefs/terminal_commands.rs) and refuses any other with `invalid_preference_key`.
 		if (payload.key === DELEGATION_PREF && !isDelegationMode(payload.value)) {
 			throw codedError("invalid_preference_key", "Invalid delegation strength");
 		}

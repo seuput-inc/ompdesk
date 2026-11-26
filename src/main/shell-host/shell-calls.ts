@@ -27,7 +27,11 @@ interface AsyncForms {
 	installerQuitPending(): void;
 	installerQuitReceipt(receipt: InstallerStartReceipt): void;
 	clipboard: { readTextAsync(): Promise<string> };
-	powerMonitor: { getSystemIdleTimeAsync(): Promise<number> };
+	powerMonitor: {
+		getSystemIdleTimeAsync(): Promise<number>;
+		desktopAway(): boolean | undefined;
+		on(event: "desktop-away", listener: (away: boolean) => void): unknown;
+	};
 	systemPreferences: {
 		isTrustedAccessibilityClientAsync(prompt: boolean): Promise<boolean>;
 		getMediaAccessStatusAsync(mediaType: string): Promise<string>;
@@ -76,6 +80,19 @@ export function readClipboardText(): Promise<string> {
 /** `powerMonitor.getSystemIdleTime()`, in seconds; a failure of any kind is a rejection, never a throw. */
 export async function systemIdleSeconds(): Promise<number> {
 	return shim().powerMonitor.getSystemIdleTimeAsync();
+}
+
+/**
+ * Whether the person is away from this computer: the shell's read (`power.desktopAway`, power.rs: the screen locked,
+ * or no keyboard or mouse input for 3 minutes); undefined until it said, which never silences a phone.
+ */
+export function desktopAway(): boolean | undefined {
+	return shim().powerMonitor.desktopAway();
+}
+
+/** Each change of `desktopAway()`. */
+export function onDesktopAwayChange(listener: (away: boolean) => void): void {
+	shim().powerMonitor.on("desktop-away", listener);
 }
 
 /** `systemPreferences.isTrustedAccessibilityClient(prompt)` (macOS). */

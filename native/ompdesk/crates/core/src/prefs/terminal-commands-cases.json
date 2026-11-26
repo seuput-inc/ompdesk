@@ -1,0 +1,24 @@
+[
+	{ "whole": true, "value": [] },
+	{
+		"whole": true,
+		"value": [
+			{ "id": "a", "label": " Test ", "command": "bun test  \n", "folder": "/w" },
+			{ "id": "d", "label": "Lint", "command": "bun lint", "folder": "" }
+		]
+	},
+	{ "whole": false, "value": "nope" },
+	{ "whole": false, "value": null },
+	{ "whole": false, "value": { "id": "a", "label": "x", "command": "y" } },
+	{ "whole": false, "value": [null] },
+	{ "whole": false, "value": [["a", "x", "y"]] },
+	{ "whole": false, "value": [{ "id": "a", "label": "Test", "command": "x" }, { "id": "a", "label": "Again", "command": "x" }] },
+	{ "whole": false, "value": [{ "id": "", "label": "Test", "command": "x" }] },
+	{ "whole": false, "value": [{ "id": 1, "label": "Test", "command": "x" }] },
+	{ "whole": false, "value": [{ "id": "b", "label": "", "command": "x" }] },
+	{ "whole": false, "value": [{ "id": "c", "label": "Empty", "command": "   " }] },
+	{ "whole": false, "value": [{ "id": "c", "label": "\ufeff\u3000", "command": "x" }] },
+	{ "whole": true, "value": [{ "id": "c", "label": "\u0085", "command": "x" }] },
+	{ "whole": false, "value": [{ "id": "c", "label": "Label", "command": "\u2028\n" }] },
+	{ "whole": false, "value": [{ "id": "c", "label": "Label" }] }
+]

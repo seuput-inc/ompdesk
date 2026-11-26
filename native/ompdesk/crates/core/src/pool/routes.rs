@@ -149,16 +149,19 @@ impl Ctx {
         Ok(())
     }
 
-    /// `#announceRun`: the tab's turn started or settled: told after the resume rules have judged it.
+    /// `#announceRun`: the tab's turn started or settled: told after the resume rules have judged it. A settle with an
+    /// outcome is the end of a run for the seen-since-run clock.
     pub(super) async fn announce_run(&self, tab: &str) -> R<()> {
         let activity = self.with(|pool| {
-            let entry = pool.entry_any(tab)?;
+            let now = pool.now;
+            let entry = pool.entry_any_mut(tab)?;
             Some(if entry.busy() {
                 json!({"type": "busy", "tabId": tab})
             } else {
                 let mut activity = json!({"type": "idle", "tabId": tab});
                 if let Some(last) = entry.tracking.last_outcome() {
                     activity["outcome"] = last.clone();
+                    entry.settled_at = now;
                 }
                 activity
             })
@@ -167,6 +170,27 @@ impl Ctx {
             Some(activity) => self.announce(activity).await,
             None => Ok(()),
         }
+    }
+
+    /// The person looked at the tab.
+    pub(super) fn tab_seen(&self, tab: &str) {
+        self.with(|pool| {
+            let now = pool.now;
+            if let Some(entry) = pool.entry_any_mut(tab) {
+                entry.seen_at = Some(now);
+            }
+        });
+    }
+
+    /// The tabs the person looked at after their last run ended.
+    pub(super) fn seen_since_run(&self) -> Vec<String> {
+        self.with(|pool| {
+            pool.entries
+                .iter()
+                .filter(|entry| entry.seen_at.is_some_and(|seen| seen >= entry.settled_at))
+                .map(|entry| entry.tab_id.clone())
+                .collect()
+        })
     }
 
     /// `#announceAsk`: a blocking request a person has to answer (not a provider sign-in's own traffic) came to the tab.

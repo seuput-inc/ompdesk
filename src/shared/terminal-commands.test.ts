@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { commandInput, commandsFor, parseTerminalCommands } from "./terminal-commands";
 
@@ -27,5 +29,18 @@ describe("saved terminal commands", () => {
 		expect(commandsFor(all, "/w").map(command => command.id)).toEqual(["w", "g"]);
 		expect(commandsFor(all, undefined).map(command => command.id)).toEqual(["g"]);
 		expect(commandInput("cd src\nls\n\n")).toBe("cd src\rls\r");
+	});
+	it("reads whole exactly the lists the core's prefs write keeps (crates/core/src/prefs/terminal_commands.rs)", () => {
+		const cases: { whole: boolean; value: unknown }[] = JSON.parse(
+			readFileSync(
+				join(__dirname, "../../native/ompdesk/crates/core/src/prefs/terminal-commands-cases.json"),
+				"utf8",
+			),
+		);
+		for (const { whole, value } of cases)
+			expect(
+				Array.isArray(value) && parseTerminalCommands(value).length === value.length,
+				JSON.stringify(value),
+			).toBe(whole);
 	});
 });

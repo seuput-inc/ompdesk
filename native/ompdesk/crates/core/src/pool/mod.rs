@@ -207,6 +207,11 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
         "size" => now(Value::from(ctx.with(|pool| pool.entries.len()))),
         "tabFacts" => now(ctx.tab_facts(&p.s("tab").unwrap_or_default())),
         "pendingPlan" => now(ctx.pending_plan(&p.s("tab").unwrap_or_default())),
+        "tabSeen" => {
+            ctx.tab_seen(&p.s("tab").unwrap_or_default());
+            now(Value::Null)
+        }
+        "seenSinceRun" => now(Value::from(ctx.seen_since_run())),
         "isRequestOpen" => now(Value::from(ctx.is_request_open(
             &p.s("tab").unwrap_or_default(),
             &p.s("id").unwrap_or_default(),

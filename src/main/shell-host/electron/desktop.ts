@@ -282,6 +282,9 @@ export function createDesktopModules(host: Host, deps: { focusedWindowId(): numb
 
 	// --- power ---
 	let onBattery = facts.system.onBattery;
+	// Whether the person is away (the shell's power.rs: the screen locked, or no input for 3 min): asked once, then
+	// told at each change; undefined until the shell said, which never silences a phone.
+	let desktopAway: boolean | undefined;
 	class PowerMonitorImpl extends EventEmitter {
 		isOnBatteryPower(): boolean {
 			return onBattery;
@@ -292,6 +295,10 @@ export function createDesktopModules(host: Host, deps: { focusedWindowId(): numb
 		async getSystemIdleTimeAsync(): Promise<number> {
 			return (await client.call<{ seconds: number }>("power.idleTime")).seconds;
 		}
+		/** OMPdesk's own (Electron's was `getSystemIdleState`): whether the person is away from this computer. */
+		desktopAway(): boolean | undefined {
+			return desktopAway;
+		}
 	}
 	const powerMonitor = new PowerMonitorImpl();
 	client.on("power.event", ({ name, onBattery: battery }: { name: string; onBattery?: boolean }) => {
@@ -300,6 +307,16 @@ export function createDesktopModules(host: Host, deps: { focusedWindowId(): numb
 		else if (battery !== undefined) onBattery = battery;
 		powerMonitor.emit(name, makeEvent());
 	});
+	client.on("power.desktopAway", ({ away }: { away: boolean }) => {
+		desktopAway = away;
+		powerMonitor.emit("desktop-away", away);
+	});
+	client.call<{ away?: unknown }>("power.desktopAway").then(
+		({ away }) => {
+			if (desktopAway === undefined && typeof away === "boolean") desktopAway = away;
+		},
+		() => undefined,
+	);
 	const blockers = new Set<number>();
 	let nextBlocker = 1;
 	const powerSaveBlocker = {
