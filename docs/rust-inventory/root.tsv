@@ -478,6 +478,7 @@ src/main/test-symlinks.ts	tooling	-	itWithFileSymlinks gates filesystem tests on
 src/main/test-turn-edits-omp.ts	tooling	-	Stand-in omp serves a synthetic transcript over the live sidecar bridge for turn-edit parity and restart tests.
 src/main/tls-test-rig.ts	tooling	-	testCertificates signs a loopback server certificate with a temporary test authority.
 src/main/tool-approval-stock.test.ts	tooling	-	Vitest suite: reads every approval select stock sends over RPC, and each option means what the card says.
+src/main/tracker-accounts.test.ts	tooling	-	Vitest suite: TrackerAccounts keeps the key sealed, joins a shared list read and marks a refused key to reconnect.
 src/main/tracker-accounts.ts	native-client	-	Linear and Jira requests run in crates/core/src/trackers (trackers.request). Main keeps the account registry and each token in the keystore (SecretFiles), builds the authorization header per request and answers repeats from its 60 s cache; it moves with the keystore owner (§1.3c).
 src/main/turn-resume-ends.test.ts	tooling	-	Vitest suite: the end table and formal/turn-resume name the same rows and checks.
 src/main/turn-resume-ends.ts	tooling	-	HOLD_CHECKS/HOLD_ENDS expose core/src/resume/hold-ends.json for parity tests; core/src/resume/ends.rs makes the runtime decision.
