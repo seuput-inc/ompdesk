@@ -417,6 +417,7 @@ export function RepositoryChanges({ sourceSelector, repo }: { sourceSelector?: R
 					<ConflictReview
 						files={changes.files}
 						onOpen={openFile}
+						rebase={head?.operation === "rebase"}
 						runner={runner}
 						stop={`${place}:${head?.operation ?? ""}`}
 					/>

@@ -282,6 +282,35 @@ async function closePanelView(page: Page): Promise<void> {
 	if (await close.isVisible().catch(() => false)) await close.click();
 }
 
+/** The Files view on Sidebar.tsx: by search, unless a surface before left the viewer open on it. */
+async function openSidebarFile(page: Page, look: Look): Promise<void> {
+	await openPanelView(page, look, "files");
+	const search = page.getByLabel(say(look, "filesPanel.search"), { exact: true }).first();
+	const viewer = page.locator("[data-file-viewer-head]:visible").first();
+	await search.or(viewer).first().waitFor();
+	if ((await viewer.isVisible()) && (await viewer.textContent())?.includes("Sidebar.tsx")) return;
+	if (!(await search.isVisible()))
+		await viewer.getByRole("button", { name: say(look, "filesPanel.back"), exact: true }).click();
+	await search.fill("Sidebar.tsx");
+	await page
+		.getByRole("treeitem", { name: /Sidebar\.tsx/ })
+		.first()
+		.click();
+}
+
+/** Turns Blame off again (`panel-blame` left it on), then closes the panel as `closePanelView`. */
+async function closeBlame(page: Page): Promise<void> {
+	if (
+		await page
+			.locator("[data-code-view] [data-blame-line]:visible")
+			.first()
+			.isVisible()
+			.catch(() => false)
+	)
+		await page.locator("[data-blame-toggle]:visible").first().click();
+	await closePanelView(page);
+}
+
 /** Deletes the notes `panel-notes` left (each card's Delete), then closes the panel as `closePanelView`. */
 async function clearNotesAndClose(page: Page): Promise<void> {
 	const remove = page.locator("[data-notes-shelf]:visible [data-review-note] button[aria-label='Delete note']");
@@ -1649,12 +1678,7 @@ export const SURFACES: readonly Surface[] = [
 		area: "A",
 		title: "Files viewer on a changed file",
 		open: async (page, look) => {
-			await openPanelView(page, look, "files");
-			await page.getByLabel(say(look, "filesPanel.search"), { exact: true }).first().fill("Sidebar.tsx");
-			await page
-				.getByRole("treeitem", { name: /Sidebar\.tsx/ })
-				.first()
-				.click();
+			await openSidebarFile(page, look);
 		},
 		ready: "[data-file-viewer-head]",
 		parity: { session: "work", after: closePanelView },
@@ -1708,23 +1732,12 @@ export const SURFACES: readonly Surface[] = [
 		area: "A",
 		title: "Files viewer with Blame on: the commit that last changed each run of lines",
 		open: async (page, look) => {
-			await openPanelView(page, look, "files");
-			// `panel-files-viewer` ran before in the same session, so the panel may still hold Sidebar.tsx open.
-			const search = page.getByLabel(say(look, "filesPanel.search"), { exact: true }).first();
-			const viewer = page.locator("[data-file-viewer-head]:visible").first();
-			await search.or(viewer).first().waitFor();
-			if (!(await viewer.isVisible())) {
-				await search.fill("Sidebar.tsx");
-				await page
-					.getByRole("treeitem", { name: /Sidebar\.tsx/ })
-					.first()
-					.click();
-			}
+			await openSidebarFile(page, look);
 			if (!(await page.locator("[data-code-view] [data-blame-line]").first().isVisible()))
 				await page.locator("[data-blame-toggle]:visible").first().click();
 		},
 		ready: "[data-code-view] [data-blame-line]",
-		parity: { session: "work", after: closePanelView },
+		parity: { session: "work", after: closeBlame },
 		settle: 1200,
 	},
 

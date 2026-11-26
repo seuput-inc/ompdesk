@@ -5027,6 +5027,8 @@ export const ko: Record<string, string> = {
 	"scm.conflicts.open": "diff 보기",
 	"scm.conflicts.keepOurs": "HEAD 쪽 유지",
 	"scm.conflicts.keepTheirs": "들어오는 쪽 유지",
+	"scm.conflicts.keepBase": "기준 쪽 유지",
+	"scm.conflicts.keepMine": "내 커밋 쪽 유지",
 	"scm.conflicts.keepBoth": "둘 다 유지",
 	"scm.conflicts.markResolved": "해결됨으로 표시",
 	"scm.conflicts.actions": "{path} 해결",

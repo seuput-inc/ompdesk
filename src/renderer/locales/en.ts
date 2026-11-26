@@ -5037,6 +5037,8 @@ export const en: Record<string, string> = {
 	"scm.conflicts.open": "Show diff",
 	"scm.conflicts.keepOurs": "Keep HEAD's version",
 	"scm.conflicts.keepTheirs": "Keep the incoming version",
+	"scm.conflicts.keepBase": "Keep the base's version",
+	"scm.conflicts.keepMine": "Keep your commit's version",
 	"scm.conflicts.keepBoth": "Keep both",
 	"scm.conflicts.markResolved": "Mark resolved",
 	"scm.conflicts.actions": "Resolve {path}",

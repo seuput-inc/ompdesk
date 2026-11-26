@@ -19,6 +19,7 @@ const seen = new Map<string, Set<string>>();
 
 export function ConflictReview({
 	stop,
+	rebase,
 	files,
 	runner,
 	onOpen,
@@ -26,6 +27,8 @@ export function ConflictReview({
 	/** Names the stop: the checkout, the operation and the commit it stopped on. */
 	stop: string;
 	files: RpcGitChanges["files"];
+	/** A stopped rebase: git's "ours" is the base replayed onto, "theirs" the person's own commit. */
+	rebase: boolean;
 	runner: ScmRunner;
 	onOpen: (path: string) => void;
 }) {
@@ -87,8 +90,16 @@ export function ConflictReview({
 							icon={<MoreHorizontal />}
 							items={[
 								{ id: "open", label: t("scm.conflicts.open"), icon: FileDiff, onSelect: () => onOpen(path) },
-								{ id: "ours", label: t("scm.conflicts.keepOurs"), onSelect: () => settle(path, "ours") },
-								{ id: "theirs", label: t("scm.conflicts.keepTheirs"), onSelect: () => settle(path, "theirs") },
+								{
+									id: "ours",
+									label: t(rebase ? "scm.conflicts.keepBase" : "scm.conflicts.keepOurs"),
+									onSelect: () => settle(path, "ours"),
+								},
+								{
+									id: "theirs",
+									label: t(rebase ? "scm.conflicts.keepMine" : "scm.conflicts.keepTheirs"),
+									onSelect: () => settle(path, "theirs"),
+								},
 								{ id: "both", label: t("scm.conflicts.keepBoth"), onSelect: () => settle(path, "both") },
 								{
 									id: "resolved",
