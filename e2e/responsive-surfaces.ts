@@ -2294,6 +2294,8 @@ export const SURFACES: readonly Surface[] = [
 			// A phone shows the list first: the bot's row opens its page.
 			const row = page.locator("[data-bots-page-row]:visible").first();
 			if ((await page.locator("[data-bot-pane]:visible").count()) === 0) await row.click();
+			// The page keeps the tab it was last on (bot-items leaves it on Items).
+			await page.locator('[data-bot-pane-tabs] [data-tab-id="activity"]:visible').first().click();
 		},
 		ready: "[data-bot-pane] [data-bot-activity]",
 		settle: 600,

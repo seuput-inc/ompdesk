@@ -790,30 +790,32 @@ function CommentBox({
 				</div>
 			)}
 			<div className="flex items-end gap-2">
-				<TextArea
-					aria-label={t("bots.items.comment.label")}
-					autoGrow
-					className="min-w-0 flex-1"
-					maxLength={8000}
-					onChange={event => setDraft(item.id, event.target.value)}
-					onKeyDown={event => {
-						if (isImeKeyEvent(event)) return;
-						if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-							event.preventDefault();
-							send();
+				<div className="min-w-0 flex-1">
+					<TextArea
+						aria-label={t("bots.items.comment.label")}
+						autoGrow
+						className="w-full"
+						maxLength={8000}
+						onChange={event => setDraft(item.id, event.target.value)}
+						onKeyDown={event => {
+							if (isImeKeyEvent(event)) return;
+							if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+								event.preventDefault();
+								send();
+							}
+						}}
+						placeholder={
+							replying
+								? replying.options.length > 0 || replying.decisions?.length
+									? t("bots.items.comment.replyOrPick")
+									: t("bots.items.comment.replyTo", { name: bot.name })
+								: t("bots.items.comment.add")
 						}
-					}}
-					placeholder={
-						replying
-							? replying.options.length > 0 || replying.decisions?.length
-								? t("bots.items.comment.replyOrPick")
-								: t("bots.items.comment.replyTo", { name: bot.name })
-							: t("bots.items.comment.add")
-					}
-					ref={boxRef}
-					rows={1}
-					value={draft}
-				/>
+						ref={boxRef}
+						rows={1}
+						value={draft}
+					/>
+				</div>
 				<IconButton
 					disabled={!draft.trim()}
 					icon={<Send />}

@@ -102,7 +102,7 @@ export function BotRoom({ room }: { room: Room }) {
 				.length,
 	);
 	return (
-		<div className="flex min-h-0 min-w-0 flex-1 flex-col" data-bot-room={room.id}>
+		<div className="flex h-full min-h-0 min-w-0 flex-col" data-bot-room={room.id}>
 			<header className="flex items-center gap-3 px-4 pt-4" data-bot-room-header>
 				<GroupFaces bots={members} size={28} />
 				<div className="flex min-w-0 flex-1 flex-col">
@@ -259,22 +259,24 @@ function RoomChat({ room, members }: { room: Room; members: readonly Bot[] }) {
 						size="sm"
 						variant="ghost"
 					/>
-					<TextArea
-						aria-label={t("bots.groups.postLabel", { name: room.name })}
-						autoGrow
-						className="min-w-0 flex-1"
-						onChange={event => setText(event.target.value)}
-						onKeyDown={event => {
-							if (isImeKeyEvent(event)) return;
-							if (event.key === "Enter" && !event.shiftKey) {
-								event.preventDefault();
-								send();
-							}
-						}}
-						placeholder={t("bots.groups.postPlaceholder", { name: room.name })}
-						rows={1}
-						value={text}
-					/>
+					<div className="min-w-0 flex-1">
+						<TextArea
+							aria-label={t("bots.groups.postLabel", { name: room.name })}
+							autoGrow
+							className="w-full"
+							onChange={event => setText(event.target.value)}
+							onKeyDown={event => {
+								if (isImeKeyEvent(event)) return;
+								if (event.key === "Enter" && !event.shiftKey) {
+									event.preventDefault();
+									send();
+								}
+							}}
+							placeholder={t("bots.groups.postPlaceholder", { name: room.name })}
+							rows={1}
+							value={text}
+						/>
+					</div>
 					<IconButton
 						disabled={!text.trim() || sending !== null}
 						icon={<Send />}
