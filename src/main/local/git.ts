@@ -152,7 +152,10 @@ export const handlers: Record<string, LocalHandler> = {
 	git_last_commit_message: (_command, ctx) => scm.lastCommitMessage(ctx.cwd),
 	git_undo_commit: (_command, ctx) => scm.undoCommit(ctx.cwd),
 	git_remote: (command, ctx) =>
-		scm.remote(ctx.cwd, command.action === "push" || command.action === "pull" ? command.action : "fetch"),
+		scm.remote(
+			ctx.cwd,
+			command.action === "push" || command.action === "pull" || command.action === "sync" ? command.action : "fetch",
+		),
 	git_stash: (command, ctx) => scm.stash(ctx.cwd, command.action === "pop" ? "pop" : "push", str(command.message)),
 	git_operation: (command, ctx) => scm.operation(ctx.cwd, command.action === "abort" ? "abort" : "continue"),
 	git_branches: (_command, ctx) => scm.branches(ctx.cwd),

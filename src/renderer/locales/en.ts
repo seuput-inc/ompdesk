@@ -4948,6 +4948,10 @@ export const en: Record<string, string> = {
 	"scm.remote.push": "Push",
 	"scm.remote.pushTitle": "Push to {upstream}",
 	"scm.remote.pushFailed": "Couldn't push",
+	"scm.remote.sync": "Sync",
+	"scm.remote.syncTitle":
+		"Fetch, pull from {upstream} and push your commits (a leased force push when you rebased after pushing)",
+	"scm.remote.syncFailed": "Couldn't sync",
 	"scm.remote.publish": "Publish",
 	"scm.remote.publishTitle": "Publish this branch to the remote",
 	"scm.remote.published": "Published {branch}",

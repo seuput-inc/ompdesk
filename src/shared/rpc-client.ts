@@ -376,7 +376,7 @@ const RPC_COMMAND_TIMEOUTS: Record<string, number> = {
 	git_commit_message: 240_000,
 	git_last_commit_message: 70_000,
 	git_undo_commit: 70_000,
-	git_remote: 360_000,
+	git_remote: 960_000,
 	git_stash: 360_000,
 	git_operation: 360_000,
 	git_branches: 70_000,

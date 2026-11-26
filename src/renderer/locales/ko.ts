@@ -4938,6 +4938,10 @@ export const ko: Record<string, string> = {
 	"scm.remote.push": "푸시",
 	"scm.remote.pushTitle": "{upstream}에 푸시",
 	"scm.remote.pushFailed": "푸시하지 못했어요",
+	"scm.remote.sync": "동기화",
+	"scm.remote.syncTitle":
+		"가져온 뒤 {upstream}에서 받고 내 커밋을 올려요 (푸시한 뒤 rebase했다면 lease를 건 강제 푸시)",
+	"scm.remote.syncFailed": "동기화하지 못했어요",
 	"scm.remote.publish": "게시",
 	"scm.remote.publishTitle": "이 브랜치를 원격에 게시해요",
 	"scm.remote.published": "{branch} 브랜치를 게시했어요",

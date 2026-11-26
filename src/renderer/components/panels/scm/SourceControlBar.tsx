@@ -1,14 +1,16 @@
 /**
  * The Changes panel's source-control row: branch picker, Pull (with the behind
- * count) and Push or Publish (with the ahead count), a menu for fetch, stash,
- * pop and undo-last-commit, and the banner of a merge, rebase, cherry-pick or
- * revert that stopped on conflicts (which this session's agent can be asked to resolve).
- * The list's own refresh sits in the toolbar above.
+ * count), Sync (fetch, then pull and push, or a leased force push of a branch
+ * rebased after it was pushed) and Push or Publish (with the ahead count), a menu
+ * for fetch, stash, pop and undo-last-commit, and the banner of a merge, rebase,
+ * cherry-pick or revert that stopped on conflicts (which this session's agent can
+ * be asked to resolve). The list's own refresh sits in the toolbar above.
  */
 import {
 	Archive,
 	ArchiveRestore,
 	ArrowDown,
+	ArrowDownUp,
 	ArrowUp,
 	CloudUpload,
 	MoreHorizontal,
@@ -90,24 +92,43 @@ export function SourceControlBar({
 						{head.behind > 0 && <span className="tabular-nums text-(--sc-text-muted)">{head.behind}</span>}
 					</Button>
 					{head.upstream ? (
-						<Button
-							disabled={blocked || remoteReason !== undefined}
-							icon={<ArrowUp />}
-							loading={busy === "push"}
-							onClick={() =>
-								void run(
-									"push",
-									{ type: "git_remote", action: "push" },
-									{ failure: t("scm.remote.pushFailed") },
-								)
-							}
-							size="sm"
-							title={remoteReason ?? t("scm.remote.pushTitle", { upstream: head.upstream })}
-							variant="ghost"
-						>
-							{t("scm.remote.push")}
-							{head.ahead > 0 && <span className="tabular-nums text-(--sc-text-muted)">{head.ahead}</span>}
-						</Button>
+						<>
+							<Button
+								disabled={blocked || remoteReason !== undefined}
+								icon={<ArrowDownUp />}
+								loading={busy === "sync"}
+								onClick={() =>
+									void run(
+										"sync",
+										{ type: "git_remote", action: "sync" },
+										{ failure: t("scm.remote.syncFailed") },
+									)
+								}
+								size="sm"
+								title={remoteReason ?? t("scm.remote.syncTitle", { upstream: head.upstream })}
+								variant="ghost"
+							>
+								{t("scm.remote.sync")}
+							</Button>
+							<Button
+								disabled={blocked || remoteReason !== undefined}
+								icon={<ArrowUp />}
+								loading={busy === "push"}
+								onClick={() =>
+									void run(
+										"push",
+										{ type: "git_remote", action: "push" },
+										{ failure: t("scm.remote.pushFailed") },
+									)
+								}
+								size="sm"
+								title={remoteReason ?? t("scm.remote.pushTitle", { upstream: head.upstream })}
+								variant="ghost"
+							>
+								{t("scm.remote.push")}
+								{head.ahead > 0 && <span className="tabular-nums text-(--sc-text-muted)">{head.ahead}</span>}
+							</Button>
+						</>
 					) : (
 						<Button
 							disabled={blocked || remoteReason !== undefined}

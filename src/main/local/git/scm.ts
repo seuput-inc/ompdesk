@@ -50,7 +50,8 @@ const MESSAGE_TIMEOUT_MS = 180_000;
 export const SCM_COMMAND_BUDGETS_MS = {
 	git_commit: COMMIT_TIMEOUT_MS + 60_000,
 	git_commit_message: MESSAGE_TIMEOUT_MS + 60_000,
-	git_remote: REMOTE_TIMEOUT_MS + 60_000,
+	// Sync runs fetch, pull and push one after another, each with the network's timeout.
+	git_remote: 3 * REMOTE_TIMEOUT_MS + 60_000,
 	git_branch: COMMIT_TIMEOUT_MS + 60_000,
 	git_history_action: COMMIT_TIMEOUT_MS + 60_000,
 	git_operation: COMMIT_TIMEOUT_MS + 60_000,
@@ -230,8 +231,17 @@ export async function commitMessage(cwd: string, omp: OmpRuntime): Promise<{ mes
 	return warning ? { message, warning } : { message };
 }
 
-export async function remote(cwd: string, action: "push" | "pull" | "fetch"): Promise<RpcGitRemoteResult> {
-	return mutate(cwd, root => scmGit("git.remote", { root, action, slowMs: REMOTE_TIMEOUT_MS }, 3, REMOTE_TIMEOUT_MS));
+/** Sync: fetch, then a force-with-lease push of a branch rewritten after it was pushed, else pull and push when ahead. */
+export async function remote(cwd: string, action: "push" | "pull" | "fetch" | "sync"): Promise<RpcGitRemoteResult> {
+	const sync = action === "sync";
+	return mutate(cwd, root =>
+		scmGit(
+			"git.remote",
+			{ root, action, slowMs: REMOTE_TIMEOUT_MS },
+			sync ? 6 : 3,
+			(sync ? 3 : 1) * REMOTE_TIMEOUT_MS,
+		),
+	);
 }
 
 export async function stash(cwd: string, action: "push" | "pop", message?: string): Promise<RpcGitMutationResult> {

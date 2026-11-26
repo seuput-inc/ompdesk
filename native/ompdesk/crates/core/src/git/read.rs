@@ -148,8 +148,8 @@ pub async fn status(git: &Git, cwd: &str) -> Result<Status, Fault> {
 pub struct Head {
     pub(super) branch: Option<String>,
     pub(super) upstream: Option<String>,
-    ahead: u64,
-    behind: u64,
+    pub(super) ahead: u64,
+    pub(super) behind: u64,
     pub(super) operation: Option<&'static str>,
     stashes: usize,
     pub(super) has_remote: bool,

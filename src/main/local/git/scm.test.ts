@@ -317,6 +317,45 @@ describe("remote", () => {
 		gitSync(other, "push", "-q");
 		gitSync(root, "commit", "-q", "--allow-empty", "-m", "ours");
 		await expect(scm.remote(root, "push")).rejects.toMatchObject({ code: "push_rejected" });
+		// The refusal fetched: the panel's next read already counts the commit to pull, with no fetch of its own.
+		expect((await getGitChanges(root)).head).toMatchObject({ ahead: 1, behind: 1 });
+	});
+
+	const publishedWithOther = async () => {
+		gitSync(dir, "init", "-q", "--bare", "-b", "main", "remote.git");
+		gitSync(root, "remote", "add", "origin", path.join(dir, "remote.git"));
+		await scm.remote(root, "push");
+		const other = path.join(dir, "other");
+		gitSync(dir, "clone", "-q", path.join(dir, "remote.git"), "other");
+		gitSync(other, "config", "user.email", "o@example.com");
+		gitSync(other, "config", "user.name", "Other");
+		return other;
+	};
+
+	it("syncs: fetches, pulls the remote's commit and pushes its own", async () => {
+		const other = await publishedWithOther();
+		gitSync(other, "commit", "-q", "--allow-empty", "-m", "theirs");
+		gitSync(other, "push", "-q");
+		await fs.writeFile(path.join(root, "ours.txt"), "ours\n");
+		gitSync(root, "add", ".");
+		gitSync(root, "commit", "-qm", "ours");
+		await scm.remote(root, "sync");
+		expect((await getGitChanges(root)).head).toMatchObject({ ahead: 0, behind: 0 });
+		const pushed = gitSync(path.join(dir, "remote.git"), "log", "--format=%s", "main");
+		expect(pushed.split("\n")).toEqual(expect.arrayContaining(["ours", "theirs"]));
+	});
+
+	it("syncs a branch rewritten after it was pushed with a leased force push, never a merge", async () => {
+		await publishedWithOther();
+		await fs.writeFile(path.join(root, "work.txt"), "work\n");
+		gitSync(root, "add", ".");
+		gitSync(root, "commit", "-qm", "work");
+		await scm.remote(root, "push");
+		gitSync(root, "commit", "-q", "--amend", "-m", "work, reworded");
+		expect((await getGitChanges(root)).head).toMatchObject({ ahead: 1, behind: 1 });
+		await scm.remote(root, "sync");
+		expect(gitSync(path.join(dir, "remote.git"), "rev-parse", "main")).toBe(gitSync(root, "rev-parse", "HEAD"));
+		expect(gitSync(root, "log", "-1", "--format=%s")).toBe("work, reworded");
 	});
 });
 

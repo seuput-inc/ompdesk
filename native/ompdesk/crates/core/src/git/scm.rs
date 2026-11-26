@@ -327,6 +327,7 @@ pub enum RemoteAction {
     Push,
     Pull,
     Fetch,
+    Sync,
 }
 
 impl RemoteAction {
@@ -335,6 +336,7 @@ impl RemoteAction {
             RemoteAction::Push => "push",
             RemoteAction::Pull => "pull",
             RemoteAction::Fetch => "fetch",
+            RemoteAction::Sync => "sync",
         }
     }
 }
@@ -371,6 +373,176 @@ fn remote_failure(action: RemoteAction, output: &Output) -> Fault {
     )
 }
 
+/// `fetch --prune`, which every remote action but push starts or ends with.
+async fn fetch(
+    git: &Git,
+    root: &str,
+    action: RemoteAction,
+    slow: Opts<'_>,
+) -> Result<String, Fault> {
+    let output = git.run(root, &["fetch", "--prune"], slow).await?;
+    if output.code != 0 {
+        return Err(remote_failure(action, &output));
+    }
+    Ok(js_trim(&output.stderr).to_owned())
+}
+
+/// A refused push. One the remote refused because the branch moved there is followed by a fetch, so the panel's
+/// next read shows how far behind it is (Orca `git-remote-push-pull.ts:35-63`); that fetch failing changes nothing.
+async fn push_failed(
+    git: &Git,
+    root: &str,
+    action: RemoteAction,
+    output: &Output,
+    slow: Opts<'_>,
+) -> Fault {
+    let fault = remote_failure(action, output);
+    if fault.code == "push_rejected" {
+        let _ = git.run(root, &["fetch", "--prune"], slow).await;
+    }
+    fault
+}
+
+/// `git pull`, merging a divergent branch unless the person set `pull.rebase`/`pull.ff`.
+async fn pull(
+    git: &Git,
+    root: &str,
+    action: RemoteAction,
+    slow: Opts<'_>,
+) -> Result<String, Fault> {
+    // Without the user's own pull.rebase/pull.ff, git refuses a divergent pull; merge then, like a plain
+    // `git pull` did.
+    let configured = git
+        .raw(root, &["config", "--get-regexp", "^pull\\.(rebase|ff)$"])
+        .await?
+        .code
+        == 0;
+    let mut args = vec!["pull", "--no-edit"];
+    if !configured {
+        args.push("--no-rebase");
+    }
+    let opts = Opts {
+        env: &[("GIT_EDITOR", "true")],
+        ..slow
+    };
+    let output = git.run(root, &args, opts).await?;
+    if output.code != 0 {
+        if conflict_count(git, root).await? > 0 {
+            return Err(refuse(
+                "git_failed",
+                "Pull stopped on conflicts; resolve them, then continue",
+            ));
+        }
+        return Err(remote_failure(action, &output));
+    }
+    let stdout = output.text();
+    let said = js_trim(&stdout);
+    Ok(if said.is_empty() {
+        js_trim(&output.stderr).to_owned()
+    } else {
+        said.to_owned()
+    })
+}
+
+/// Whether the branch was rewritten (rebased, amended) after it was pushed: it and its upstream both have commits of
+/// their own, and every one only the upstream has is patch-equivalent to one of HEAD's (`--cherry-mark` marks it
+/// `=`). Orca `git-upstream-status.ts:3-16,61-70`, `upstream.ts:38-64`. A log git cannot read counts as not.
+async fn upstream_rewritten(git: &Git, root: &str) -> Result<bool, Fault> {
+    let output = git
+        .raw(
+            root,
+            &[
+                "log",
+                "--no-show-signature",
+                "--no-color",
+                "--format=%m %H",
+                "--cherry-mark",
+                "--right-only",
+                "HEAD...@{upstream}",
+                "--",
+            ],
+        )
+        .await?;
+    if output.code != 0 {
+        return Ok(false);
+    }
+    let text = output.text();
+    let mut marks = text
+        .split('\n')
+        .map(js_trim)
+        .filter(|line| !line.is_empty());
+    let first = marks.next();
+    Ok(first.is_some_and(|line| line.starts_with('=')) && marks.all(|line| line.starts_with('=')))
+}
+
+/// `push --force-with-lease` of HEAD to the upstream branch, leased on the upstream tip just fetched: a commit someone
+/// else pushed since is never overwritten.
+async fn push_with_lease(
+    git: &Git,
+    root: &str,
+    branch: &str,
+    slow: Opts<'_>,
+) -> Result<String, Fault> {
+    let reference = format!("refs/heads/{branch}");
+    let named = git
+        .text(
+            root,
+            &[
+                "for-each-ref",
+                "--format=%(upstream:remotename)%00%(upstream:remoteref)",
+                &reference,
+            ],
+        )
+        .await?;
+    let named = js_trim(&named);
+    let tip = git
+        .text(root, &["rev-parse", "--verify", "@{upstream}"])
+        .await?;
+    let (Some((remote, remote_ref)), tip) = (named.split_once('\0'), js_trim(&tip)) else {
+        return Err(refuse(
+            "no_remote",
+            format!("{branch} has no upstream to push to"),
+        ));
+    };
+    let lease = format!("--force-with-lease={remote_ref}:{tip}");
+    let target = format!("HEAD:{remote_ref}");
+    let output = git
+        .run(root, &["push", &lease, remote, &target], slow)
+        .await?;
+    if output.code != 0 {
+        return Err(push_failed(git, root, RemoteAction::Sync, &output, slow).await);
+    }
+    Ok(js_trim(&output.stderr).to_owned())
+}
+
+/// Sync (Orca `git-remote-sync.ts:25-92`): fetch; a branch rewritten after it was pushed goes up with
+/// `--force-with-lease`, any other pulls and then pushes only when it has commits of its own the upstream lacks.
+async fn sync(git: &Git, root: &str, branch: &str, slow: Opts<'_>) -> Result<String, Fault> {
+    let action = RemoteAction::Sync;
+    let mut said = vec![fetch(git, root, action, slow).await?];
+    let head = read::head(git, root).await?;
+    if head.upstream.is_none() {
+        return Err(refuse(
+            "no_remote",
+            format!("{branch} has no upstream to sync with"),
+        ));
+    }
+    if head.ahead > 0 && head.behind > 0 && upstream_rewritten(git, root).await? {
+        said.push(push_with_lease(git, root, branch, slow).await?);
+    } else {
+        said.push(pull(git, root, action, slow).await?);
+        if read::head(git, root).await?.ahead > 0 {
+            let output = git.run(root, &["push"], slow).await?;
+            if output.code != 0 {
+                return Err(push_failed(git, root, action, &output, slow).await);
+            }
+            said.push(js_trim(&output.stderr).to_owned());
+        }
+    }
+    said.retain(|line| !line.is_empty());
+    Ok(said.join("\n"))
+}
+
 pub async fn remote(
     git: &Git,
     root: &str,
@@ -385,15 +557,12 @@ pub async fn remote(
         timeout_ms: Some(slow_ms),
         ..Opts::default()
     };
+    let said = |output: String| Remote {
+        published: None,
+        output,
+    };
     if action == RemoteAction::Fetch {
-        let output = git.run(root, &["fetch", "--prune"], slow).await?;
-        if output.code != 0 {
-            return Err(remote_failure(action, &output));
-        }
-        return Ok(Remote {
-            published: None,
-            output: js_trim(&output.stderr).to_owned(),
-        });
+        return Ok(said(fetch(git, root, action, slow).await?));
     }
     let Some(branch) = head.branch else {
         return Err(refuse(
@@ -404,6 +573,9 @@ pub async fn remote(
             ),
         ));
     };
+    if action == RemoteAction::Sync {
+        return Ok(said(sync(git, root, &branch, slow).await?));
+    }
     if action == RemoteAction::Pull {
         if head.upstream.is_none() {
             return Err(refuse(
@@ -411,51 +583,14 @@ pub async fn remote(
                 format!("{branch} has no upstream to pull from"),
             ));
         }
-        // Without the user's own pull.rebase/pull.ff, git refuses a divergent pull; merge then, like a plain
-        // `git pull` did.
-        let configured = git
-            .raw(root, &["config", "--get-regexp", "^pull\\.(rebase|ff)$"])
-            .await?
-            .code
-            == 0;
-        let mut args = vec!["pull", "--no-edit"];
-        if !configured {
-            args.push("--no-rebase");
-        }
-        let opts = Opts {
-            env: &[("GIT_EDITOR", "true")],
-            ..slow
-        };
-        let output = git.run(root, &args, opts).await?;
-        if output.code != 0 {
-            if conflict_count(git, root).await? > 0 {
-                return Err(refuse(
-                    "git_failed",
-                    "Pull stopped on conflicts; resolve them, then continue",
-                ));
-            }
-            return Err(remote_failure(action, &output));
-        }
-        let stdout = output.text();
-        let said = js_trim(&stdout);
-        return Ok(Remote {
-            published: None,
-            output: if said.is_empty() {
-                js_trim(&output.stderr).to_owned()
-            } else {
-                said.to_owned()
-            },
-        });
+        return Ok(said(pull(git, root, action, slow).await?));
     }
     if head.upstream.is_some() {
         let output = git.run(root, &["push"], slow).await?;
         if output.code != 0 {
-            return Err(remote_failure(action, &output));
+            return Err(push_failed(git, root, action, &output, slow).await);
         }
-        return Ok(Remote {
-            published: None,
-            output: js_trim(&output.stderr).to_owned(),
-        });
+        return Ok(said(js_trim(&output.stderr).to_owned()));
     }
     let remotes = git.text(root, &["remote"]).await?;
     let names: Vec<&str> = remotes
@@ -471,7 +606,7 @@ pub async fn remote(
         .run(root, &["push", "--set-upstream", target, &branch], slow)
         .await?;
     if output.code != 0 {
-        return Err(remote_failure(action, &output));
+        return Err(push_failed(git, root, action, &output, slow).await);
     }
     Ok(Remote {
         published: Some(format!("{target}/{branch}")),

@@ -601,7 +601,7 @@ export type RpcCommand =
 	| { id?: string; type: "git_commit_message" }
 	| { id?: string; type: "git_last_commit_message" }
 	| { id?: string; type: "git_undo_commit" }
-	| { id?: string; type: "git_remote"; action: "push" | "pull" | "fetch" }
+	| { id?: string; type: "git_remote"; action: "push" | "pull" | "fetch" | "sync" }
 	| { id?: string; type: "git_stash"; action: "push" | "pop"; message?: string }
 	| { id?: string; type: "git_operation"; action: "continue" | "abort" }
 	| { id?: string; type: "git_branches" }
