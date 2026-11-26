@@ -1902,8 +1902,36 @@ export function runRpcUi(): void {
 				}
 			: {}),
 	};
+	/**
+	 * `fixture:bot-form` (inside a message, an agent's arrives wrapped): the run raises stock's `form` card with this
+	 * HTML, and its answer ends the run with a reply naming the data (`Form answered: {"color":"red"}`). The bridge's
+	 * `project_ask_form` (resources/gui-bridge/ask-form.ts) is stood in for this one form: one radio question.
+	 */
+	const BOT_FORM_HTML =
+		'<form><p>Which color should the badge be?</p><label><input type="radio" name="color" value="red"> Red</label><label><input type="radio" name="color" value="blue"> Blue</label></form>';
+	const BOT_FORM_OPTIONS = ["Red", "Blue"];
+	const botForms = new Set<string>();
+	let botFormSeq = 0;
 	/** A handler returning `undefined` replies itself (deferred, or ahead of the events it pushes). */
 	const bridgeMethods: Record<string, (params: Params, reply: Reply) => unknown> = {
+		project_ask_form: params => {
+			if (!Array.isArray(params.answers))
+				return {
+					questions: [
+						{
+							id: "field-0",
+							question: "Which color should the badge be?",
+							options: BOT_FORM_OPTIONS.map(label => ({ label })),
+							formField: { custom: false, multiline: false, initialText: "", checked: [] },
+						},
+					],
+				};
+			const picked = (params.answers[0] as { selectedOptions?: unknown } | undefined)?.selectedOptions;
+			const label = Array.isArray(picked) ? picked[0] : undefined;
+			if (typeof label !== "string" || !BOT_FORM_OPTIONS.includes(label))
+				return { problem: "Choose a color", index: 0 };
+			return { data: { color: label.toLowerCase() } };
+		},
 		...voiceMethods,
 		// gui-bridge agent-control.ts: stock's extension-UI confirm, answered by the person (extension_ui_response).
 		"agent_control.confirm": (params, reply) => {
@@ -5940,6 +5968,10 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				title: "Allow tool: bash\nls -la",
 				options: ["Approve", "Approve bash for this session", "Deny"],
 			});
+		} else if (message.includes("fixture:bot-form")) {
+			const id = `bot-form-${++botFormSeq}`;
+			botForms.add(id);
+			write({ type: "extension_ui_request", id, method: "form", html: BOT_FORM_HTML });
 		} else if (message === "fixture ask") {
 			write({
 				type: "extension_ui_request",
@@ -6787,6 +6819,21 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 					break;
 				}
 				ok();
+				// The `fixture:bot-form` run goes on with what the form's answer said.
+				if (typeof command.id === "string" && botForms.delete(command.id) && command.cancelled !== true) {
+					const answer: AgentMessage = {
+						role: "assistant",
+						content: [{ type: "text", text: `Form answered: ${JSON.stringify(command.data ?? null)}` }],
+						timestamp: Date.now(),
+						provider: model.provider,
+						model: model.id,
+						stopReason: "stop",
+					};
+					appendMessage(answer);
+					write({ type: "message_end", message: answer });
+					endTurn([answer]);
+					break;
+				}
 				endTurn([]);
 				break;
 			}

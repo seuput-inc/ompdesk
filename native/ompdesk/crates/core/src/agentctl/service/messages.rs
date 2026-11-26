@@ -1203,40 +1203,57 @@ impl AgentControl {
         args: &AnswerArgs,
     ) -> R<String> {
         self.refuse_hidden(target, caller)?;
+        // A card routed to a bot: only that bot answers it, by its request id; nothing else in its place.
+        let routed = self.routed_card(caller, target, args)?;
+        if let (Some(ask), Some(true)) = (&routed, args.escalate) {
+            return self.escalate(caller, target, ask).await;
+        }
         let asks: Vec<_> = target
             .asks
             .iter()
-            .filter(|ask| !is_agent_card(ask))
+            .filter(|ask| !is_agent_card(ask) && !self.routed_away(&target.tab_id, &ask.id))
             .collect();
-        if asks.is_empty()
-            && let Some(plan) = &target.plan
-        {
-            return self.answer_plan(caller, target, plan, args).await;
-        }
-        if asks.is_empty() {
-            return fail(if !target.asks.is_empty() {
-                "That is a confirmation card for the user (OMPdesk asks the person before an agent action); only the user answers it.".to_owned()
-            } else {
-                format!(
-                    "{} is not waiting for an answer ({}). See where it is with ompdesk_session_result; only a session ompdesk_sessions lists as waiting can be answered.",
-                    label(target),
-                    self.state_line(&self.host.state(), target, &SessionState::default())
-                )
-            });
-        }
-        let ask = match &args.request {
-            Some(wanted) => asks.iter().find(|entry| &entry.id == wanted).copied(),
-            None => asks.first().copied(),
-        };
-        let Some(ask) = ask else {
-            return fail(format!(
-                "No pending request \"{}\" there. Pending: {}.",
-                args.request.as_deref().unwrap_or(""),
-                asks.iter()
-                    .map(|entry| entry.id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+        let ask = match &routed {
+            Some(ask) => ask,
+            None => {
+                if asks.is_empty()
+                    && let Some(plan) = &target.plan
+                {
+                    return self.answer_plan(caller, target, plan, args).await;
+                }
+                if asks.is_empty() {
+                    let ours = target.asks.iter().all(is_agent_card);
+                    return fail(if target.asks.is_empty() {
+                        format!(
+                            "{} is not waiting for an answer ({}). See where it is with ompdesk_session_result; only a session ompdesk_sessions lists as waiting can be answered.",
+                            label(target),
+                            self.state_line(&self.host.state(), target, &SessionState::default())
+                        )
+                    } else if ours {
+                        "That is a confirmation card for the user (OMPdesk asks the person before an agent action); only the user answers it.".to_owned()
+                    } else {
+                        format!(
+                            "{} waits only on a card raised for a bot's request: that bot answers it.",
+                            label(target)
+                        )
+                    });
+                }
+                let found = match &args.request {
+                    Some(wanted) => asks.iter().find(|entry| &entry.id == wanted).copied(),
+                    None => asks.first().copied(),
+                };
+                let Some(found) = found else {
+                    return fail(format!(
+                        "No pending request \"{}\" there. Pending: {}.",
+                        args.request.as_deref().unwrap_or(""),
+                        asks.iter()
+                            .map(|entry| entry.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                };
+                found
+            }
         };
         let request = &ask.request;
         let resolved = self
@@ -1426,6 +1443,11 @@ impl AgentControl {
                 response =
                     json!({ "type": "extension_ui_response", "id": ask.id, "answers": answers });
             }
+            // A form only the bot it was routed to answers, through the asking session's own form rules.
+            "form" if routed.is_some() => {
+                response = self.form_response(target, ask, args).await?;
+                summary = "the form".to_owned();
+            }
             other => {
                 return fail(format!(
                     "That request ({other}) is not a question an agent can answer: show it to the user with ompdesk_tab_focus."
@@ -1438,7 +1460,7 @@ impl AgentControl {
         {
             told.remove(&ask.id);
         }
-        let about = if request.method == "ask" {
+        let about = if matches!(request.method.as_str(), "ask" | "form") {
             "its questions".to_owned()
         } else {
             request
@@ -1446,20 +1468,31 @@ impl AgentControl {
                 .clone()
                 .unwrap_or_else(|| "undefined".to_owned())
         };
-        match self
+        // The bot's own answer to a card routed to it: its close is not told back to it.
+        if routed.is_some() {
+            self.routed_answered(&target.tab_id, &ask.id, true);
+        }
+        let delivered = match self
             .companion(caller, target, &about, &ask.id, resolved)
-            .await?
+            .await
         {
-            Some(companion) => {
+            Ok(Some(companion)) => {
                 self.host
                     .answer_with_companion(
                         &target.tab_id,
                         json!({ "askId": ask.id, "response": response }),
                         &companion,
                     )
-                    .await?
+                    .await
             }
-            None => self.host.answer(&target.tab_id, &ask.id, &response).await?,
+            Ok(None) => self.host.answer(&target.tab_id, &ask.id, &response).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = delivered {
+            if routed.is_some() {
+                self.routed_answered(&target.tab_id, &ask.id, false);
+            }
+            return Err(error);
         }
         let by = if caller.title.is_empty() {
             &caller.tab_id
@@ -1650,7 +1683,7 @@ impl AgentControl {
         let Some(ask) = child.asks.iter().find(|entry| entry.id == request_id) else {
             return Ok(());
         };
-        if is_agent_card(ask) {
+        if is_agent_card(ask) || self.routed_away(child_tab_id, request_id) {
             return Ok(());
         }
         {

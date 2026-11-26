@@ -175,6 +175,7 @@ export interface AgentControlHostDeps {
 		| "controlTabs"
 		| "observeTabs"
 		| "routeSideChannel"
+		| "isRequestOpen"
 		| "sidecarOf"
 		| "startTab"
 		| "setTabTask"
@@ -183,6 +184,8 @@ export interface AgentControlHostDeps {
 		| "windowsShowingTab"
 		| "sessionOwner"
 		| "whenTabExited"
+		| "routeAsk"
+		| "delegatedPrompt"
 	>;
 	/** This computer's session index (stored sessions the control tools list, search and read). */
 	sessions?: {
@@ -441,6 +444,10 @@ export class AgentControlRuntime {
 
 	/** One pool activity, to the core's runtime with the opener, the card rule and the released session main knows. */
 	#activity(activity: TabActivity): void {
+		if (activity.type === "askHeld") {
+			this.#routeHeld(activity);
+			return;
+		}
 		const { pool } = this.#deps;
 		const parent = this.#openerOf(activity.tabId);
 		// A child's question card, and its close, tell its opener (local and paired-device children alike), and so does
@@ -484,6 +491,25 @@ export class AgentControlRuntime {
 			this.#parents.delete(activity.tabId);
 			this.#userPrompted.delete(activity.tabId);
 		}
+	}
+
+	/**
+	 * A question of a run another session's message started waits off the windows until the core says whose it is
+	 * (`agentRuntime.routeAsk`): the bot whose chat sent that message holds it, or the owner gets it as any other ask (the
+	 * pool announces it again as an `ask`, so its opener hears of it as before).
+	 */
+	#routeHeld({ tabId, requestId, origin }: Extract<TabActivity, { type: "askHeld" }>): void {
+		const decide = (chat?: string) => {
+			try {
+				this.#deps.pool.routeAsk(tabId, requestId, chat);
+			} catch {
+				// The pool went with the core at quit: no window is left to show it.
+			}
+		};
+		void this.control.runtime.routeAsk({ tabId, requestId, origin }).then(
+			answer => decide(answer.chat ?? undefined),
+			() => decide(),
+		);
 	}
 
 	/**
@@ -1266,7 +1292,15 @@ export class AgentControlRuntime {
 						success: false,
 						error: "That session is gone.",
 					} as RpcResponse);
+				const delegated = command.type === "prompt" ? command.message : undefined;
+				if (delegated) deps.pool.delegatedPrompt(tabId, delegated);
 				const sent = deps.dispatch(win, sidecar, tabId, command, timeoutMs);
+				if (delegated) {
+					const revoke = () => deps.pool.delegatedPrompt(tabId, delegated, true);
+					void sent.then(response => {
+						if (!response.success) revoke();
+					}, revoke);
+				}
 				const opening = this.#opening.get(tabId);
 				if (opening && (command.type === "prompt" || command.type === "set_goal"))
 					void sent.then(
@@ -1301,9 +1335,12 @@ export class AgentControlRuntime {
 			},
 			confirm: (callerTabId, title, message) => this.#confirm(callerTabId, title, message),
 			answer: async (tabId, requestId, response: ExtensionUIResponse) => {
+				if (!deps.pool.isRequestOpen(tabId, requestId)) throw new Error("That question is not open any more.");
 				if (!(await deps.pool.routeSideChannel(requestId, response, tabId)))
 					throw new Error("That question is not open any more.");
 			},
+			escalateAsk: async (tabId, requestId, chatTabId) =>
+				deps.pool.routeAsk(tabId, requestId, chatTabId ?? undefined, chatTabId !== null),
 			markAnswered: async (tabId, byTitle) => {
 				await this.#hostCommand(tabId, {
 					type: "agent_control_note",

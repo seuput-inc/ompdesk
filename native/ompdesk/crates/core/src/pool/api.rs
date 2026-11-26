@@ -430,6 +430,13 @@ impl Ctx {
 
     /// The asks and approvals this window's tabs still wait on, for a page that loaded after they were raised.
     pub(super) fn open_requests(&self, win: i64) -> Value {
+        self.requests_of(win, true)
+    }
+
+    /// The asks this window's tabs wait on. `shown`: as the window shows them (a question a bot holds is none of its
+    /// own; an escalated one shows under the bot's chat). Otherwise every ask under the tab that raised it, as the
+    /// control tools read them (`control_tabs`).
+    fn requests_of(&self, win: i64, shown: bool) -> Value {
         self.with(|pool| {
             let ids: Vec<String> = pool.request_bodies.keys().cloned().collect();
             let mut open = Vec::new();
@@ -439,6 +446,17 @@ impl Ctx {
                     pool.sign_in_requests.remove(&id);
                     continue;
                 };
+                if shown && let Some(routed) = pool.routed.get(&id) {
+                    // An escalated ask shows in its bot's chat, where the owner answers it.
+                    if let super::state::Routed::Escalated(chat) = routed
+                        && pool.entry(chat).is_some_and(|entry| entry.shown_in(win))
+                        && !pool.answering.contains(&id)
+                        && let Some((frame, _)) = Self::escalated_frame(pool, &id, chat)
+                    {
+                        open.push(frame);
+                    }
+                    continue;
+                }
                 if !pool.by_seq(owner).is_some_and(|entry| entry.shown_in(win)) {
                     continue;
                 }
@@ -489,8 +507,17 @@ impl Ctx {
 
     pub(super) fn replay_failed_question(&self, seq: u64, id: &String) {
         self.with(|pool| {
-            if pool.request_owners.get(id) == Some(&seq)
-                && let Some(frame) = Self::replayed_question(pool, seq, id)
+            if pool.request_owners.get(id) != Some(&seq) {
+                return;
+            }
+            if let Some(super::state::Routed::Escalated(chat)) = pool.routed.get(id) {
+                if let Some((mut frame, wins)) = Self::escalated_frame(pool, id, chat) {
+                    frame["resent"] = Value::Bool(true);
+                    self.send(wins, "EXTENSION_UI", frame);
+                }
+                return;
+            }
+            if let Some(frame) = Self::replayed_question(pool, seq, id)
                 && let Some(entry) = pool.by_seq(seq)
             {
                 self.send(Pool::windows_of(entry), "EXTENSION_UI", frame);
@@ -499,6 +526,10 @@ impl Ctx {
     }
 
     fn replayed_question(pool: &mut Pool, seq: u64, id: &String) -> Option<Value> {
+        // A question a bot holds (or agentctl is placing) is no window's to show again.
+        if pool.routed.contains_key(id) {
+            return None;
+        }
         let mut frame = Self::open_request(pool, seq, id)?;
         if frame.get("signIn").is_some() {
             return None;
@@ -602,7 +633,8 @@ impl Ctx {
         self.with(|pool| {
             let mut asks: Vec<(u64, &'static str)> = Vec::new();
             for (id, owner) in pool.request_owners.iter() {
-                if pool.sign_in_requests.contains(id) {
+                // A question the bot that asked for the work holds is not the owner's to answer.
+                if pool.sign_in_requests.contains(id) || pool.routed.contains_key(id) {
                     continue;
                 }
                 let approval = pool
@@ -901,7 +933,8 @@ impl Ctx {
                     "owner": self.window_of_tab(&tab),
                 });
             }
-            windows.push(json!({"win": win, "tabs": tabs, "asks": self.open_requests(win)}));
+            // Every ask under the tab that raised it: a question a bot holds is still that session's to answer.
+            windows.push(json!({"win": win, "tabs": tabs, "asks": self.requests_of(win, false)}));
         }
         Ok(Value::Array(windows))
     }
@@ -1600,6 +1633,7 @@ impl Ctx {
             pool.session_owners.clear();
             pool.request_owners.clear();
             pool.answered.clear();
+            pool.routed.clear();
             pool.restoring.clear();
         });
         Ok(())
@@ -1659,12 +1693,20 @@ impl Ctx {
                 return Value::Null;
             };
             let mut snapshot = Map::new();
-            let asks: Vec<Value> = pool
+            let mut asks: Vec<Value> = pool
                 .request_owners
                 .iter()
-                .filter(|(_, owner)| **owner == entry.seq)
+                .filter(|(id, owner)| **owner == entry.seq && !pool.routed.contains_key(*id))
                 .filter_map(|(id, _)| pool.request_bodies.get(id).map(|held| held.request.clone()))
                 .collect();
+            for (id, route) in &pool.routed {
+                if matches!(route, super::state::Routed::Escalated(chat) if chat == tab)
+                    && !pool.answering.contains(id)
+                    && let Some((mut frame, _)) = Self::escalated_frame(pool, id, tab)
+                {
+                    asks.push(frame["request"].take());
+                }
+            }
             snapshot.insert("asks".into(), Value::Array(asks));
             if let Some(id) = &entry.session_id {
                 snapshot.insert("sessionId".into(), Value::from(id.clone()));
@@ -1705,6 +1747,32 @@ impl Ctx {
         let id = (frame["type"] == "extension_ui_response")
             .then(|| frame["id"].as_str().map(str::to_string))
             .flatten();
+        if let Some(id) = &id {
+            if let Some(source) = id.strip_prefix(super::routes::ESCALATED_PREFIX) {
+                let target = self.with(|pool| {
+                    if !matches!(pool.routed.get(source), Some(super::state::Routed::Escalated(chat)) if chat == tab)
+                        || !pool.entry(tab).is_some_and(|entry| entry.device_views.contains(&from))
+                    {
+                        return None;
+                    }
+                    let seq = *pool.request_owners.get(&source.to_owned())?;
+                    let worker = pool.by_seq(seq)?.tab_id.clone();
+                    pool.answering.insert(source.to_owned()).then_some((worker, seq))
+                });
+                let Some((worker, seq)) = target else {
+                    return Err(fault("already_answered", "This card is no longer open"));
+                };
+                let mut frame = frame.clone();
+                frame["id"] = json!(source);
+                let sent = self.ask("sideChannel", json!({"tab": worker, "frame": frame})).await;
+                self.with(|pool| pool.answering.remove(source));
+                sent?;
+                return self.route_answered(seq, source, &frame, None, false, "submitted").await;
+            }
+            if self.with(|pool| pool.routed.contains_key(id)) {
+                return Err(fault("being_answered", "This question is held by its routing bot"));
+            }
+        }
         // A question an agent's answer holds takes no answer from a device viewing the tab either.
         if let Some(id) = &id {
             self.guard_ask(id, None)?;

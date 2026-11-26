@@ -246,7 +246,9 @@ impl AgentControl {
             return fail("That bot is gone.");
         };
         self.bots_changed();
-        if !paused {
+        if paused {
+            self.return_bot_asks(id).await?;
+        } else {
             self.redeliver_mail_now().await;
         }
         Ok(bot)
@@ -287,6 +289,7 @@ impl AgentControl {
         };
         self.items().remove_bot(&bot.id);
         self.rooms().remove_bot(&bot.id);
+        self.return_bot_asks(id).await?;
         let chats: Vec<String> = bot
             .home
             .iter()

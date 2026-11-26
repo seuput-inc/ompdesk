@@ -160,6 +160,27 @@ pub fn request_mark(id: &str) -> String {
     format!("[ompdesk request {id}]")
 }
 
+/// The request a wrapped message's body carries in its closing marks (`with_dispatch`): its dispatch (`d3`), else its
+/// request id; None for a message sent with neither.
+pub fn message_request(body: &str) -> Option<String> {
+    let mut request = None;
+    for line in body.lines().rev() {
+        if let Some(rest) = line.strip_prefix("[ompdesk dispatch ") {
+            return rest
+                .split_once(':')
+                .map(|(dispatch, _)| dispatch.to_owned());
+        }
+        match line
+            .strip_prefix("[ompdesk request ")
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            Some(id) if request.is_none() => request = Some(id.to_owned()),
+            _ => break,
+        }
+    }
+    request
+}
+
 const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /// When a schedule starts, in English for agents and logs.
