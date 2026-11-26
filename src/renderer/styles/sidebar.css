@@ -177,15 +177,10 @@ html:not([data-shell]) .omp-session-sidebar {
 	display: none;
 }
 
-/* The nav cells (SidebarNav.tsx) sit two to a row in reading order; an odd last cell keeps a column's width, and All
-   sessions takes a whole row (its label and two counts do not fit a half cell). They
-   stack where a half cell would cut "Schedules" (70 px of text in a cell 48 px wider): measured, it needs a 254 px
-   sidebar; 243 px of content here is a 260 px docked sidebar, the margin for Windows' font. A container query, so a
-   phone's drawer is judged by its own width. */
-.omp-sidebar-controls {
-	container: omp-sidebar-controls / inline-size;
-}
-
+/* The nav cells (SidebarNav.tsx) sit two to a row in reading order at every width (the owner's request, 26 Nov 2026,
+   restated 27 Nov 2026 for the narrowest sidebar); an odd last cell keeps a column's width, and All sessions takes a
+   whole row (its label and two counts do not fit a half cell). Where a half cell is too narrow for its words (a 220 px
+   sidebar, Korean's longer labels) the label is cut after its icon and the kit tooltip names it whole. */
 .omp-sidebar-nav {
 	display: grid;
 	grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -194,12 +189,6 @@ html:not([data-shell]) .omp-session-sidebar {
 
 .omp-sidebar-nav > [data-sidebar-nav-row="board"] {
 	grid-column: 1 / -1;
-}
-
-@container omp-sidebar-controls (width < 243px) {
-	.omp-sidebar-nav {
-		grid-template-columns: minmax(0, 1fr);
-	}
 }
 
 .omp-sidebar-session-rename-nested {

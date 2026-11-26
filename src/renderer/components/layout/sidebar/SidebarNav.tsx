@@ -3,9 +3,10 @@
  * place the app goes besides a session: All sessions (the board, with how many sessions need the person and work now;
  * Orca's dashboard entry), Agents, Schedules, Stats and Phone (pairing a phone; not on the phone's own page). Bots has
  * no cell, as in Orca (sidebar/chrome/SidebarNav.tsx): the Bots section pinned atop the lists is its entry, its title
- * opening the Bots page (`SidebarBots.tsx`; the owner's call, 27 Nov 2026). Two cells to a row (the owner's request,
- * 26 Nov 2026), one per row in a sidebar under 260 px (sidebar.css); All sessions takes a whole row, its counts need
- * the room. A half-width cell has no room for the Agents shortcut, so it is the cell's tooltip and `aria-keyshortcuts`.
+ * opening the Bots page (`SidebarBots.tsx`; the owner's call, 27 Nov 2026). Two cells to a row at every width (the
+ * owner's request, 26 Nov 2026, restated 27 Nov 2026); All sessions takes a whole row, its counts need the room. A cell
+ * too narrow for its words cuts its label after its icon, and the kit tooltip names it whole, with the Agents
+ * shortcut a half cell has no room for (also its `aria-keyshortcuts`).
  * A cell's right click (long press, Shift+F10) hides it from this device's sidebar; Customize sidebar shows it again
  * (`navHidden`, device-local).
  */
@@ -124,8 +125,9 @@ export function SidebarNav() {
 						)}
 					</Button>
 				);
-				// A finger's long press is the cell's menu, and a phone has no shortcut to show.
-				return shortcut && !touch ? (
+				// The cell's name in the kit tooltip, whole where a narrow cell cuts it, with the Agents shortcut a half
+				// cell has no room for. A finger's long press is the cell's menu, and a phone has no shortcut to show.
+				return !touch ? (
 					<Tooltip content={t(labelKey)} describe={false} key={row} shortcut={shortcut}>
 						{cell}
 					</Tooltip>
