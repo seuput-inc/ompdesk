@@ -465,9 +465,11 @@ export const KEYMAP_ACTIONS = [
 		hotkeyGroup: "view",
 	},
 	{
-		// ⌘F — find in the focused session's conversation (chat/TranscriptFind.tsx; Orca's `chat.find`).
-		id: "transcript.find",
-		labelKey: "hotkeys.row.transcriptFind",
+		// ⌘F — find in what has focus: a focused terminal's scrollback (Orca `terminal.search`; the terminal reads it
+		// before its shell does and claims the key), else the focused session's conversation (chat/TranscriptFind.tsx;
+		// Orca's `chat.find`). One action, because two owners of one chord leave one of them dead.
+		id: "find",
+		labelKey: "hotkeys.row.find",
 		defaults: ["⌘F"],
 		overlaySafe: false,
 		hotkeyGroup: "view",
@@ -636,14 +638,6 @@ export const KEYMAP_ACTIONS = [
 		labelKey: "hotkeys.row.terminalQuick",
 		defaults: ["⌃`"],
 		overlaySafe: true,
-		hotkeyGroup: "view",
-	},
-	// Find in a focused terminal's scrollback (Orca `terminal.search`, Mod+F); the terminal reads it before its shell does.
-	{
-		id: "terminal.find",
-		labelKey: "hotkeys.row.terminalFind",
-		defaults: ["⌘F"],
-		overlaySafe: false,
 		hotkeyGroup: "view",
 	},
 	{ id: "hotkeys", labelKey: "hotkeys.row.hotkeys", defaults: ["⌘/", "⌃/"], overlaySafe: true, hotkeyGroup: "view" },

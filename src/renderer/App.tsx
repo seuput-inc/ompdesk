@@ -649,8 +649,8 @@ export function App() {
 				case "files.search":
 					ui.openFilesSearch();
 					return;
-				case "transcript.find":
-					// ⌘F — the focused pane's Find bar (chat/TranscriptFind.tsx).
+				case "find":
+					// ⌘F — the focused pane's Find bar (chat/TranscriptFind.tsx); a focused terminal claimed the key first.
 					window.dispatchEvent(
 						new CustomEvent(TRANSCRIPT_FIND_EVENT, { detail: { tabId: focusedRuntimeTabId() } }),
 					);
@@ -669,9 +669,6 @@ export function App() {
 					return;
 				case "terminal.quick":
 					ui.setQuickTerminalOpen(!ui.quickTerminalOpen);
-					return;
-				case "terminal.find":
-					// The focused terminal opened its find bar before its shell saw the key; elsewhere the chord does nothing.
 					return;
 				case "hotkeys":
 					// ⌘/ or ⌃/ — Settings › Keyboard (/hotkeys parity); again returns.
