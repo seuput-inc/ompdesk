@@ -4,9 +4,11 @@ import { type Browser, chromium, devices, expect, type Page, test, webkit } from
 import { createServer, type ViteDevServer } from "vite";
 import { closeBrowser, launchBrowser } from "./harness";
 
-// One live dictation take on a phone page, in Chromium and WebKit (the engine of the shipped Mac app): the page's
-// capture (a 16 kHz AudioContext made in the press, a ScriptProcessorNode) hears a fake microphone's tone, streams
-// PCM16 to the harness's `stt_stream_audio`, shows the words while speaking, and lands stock's transcript in the draft.
+// One live dictation take on a phone page, in Chromium and in WebKit (the engine of the shipped Mac app) where it has
+// Web Audio: the page's capture (a 16 kHz AudioContext made in the press, a ScriptProcessorNode) hears a fake
+// microphone's tone, streams PCM16 to the harness's `stt_stream_audio`, shows the words while speaking, and lands
+// stock's transcript in the draft. Playwright's WebKit on Windows, where e2e runs, has no Web Audio: there the leg
+// checks that a press fails the take and the next press tries again, and the capture in WebKit goes unexercised.
 // The rest is covered without a browser: the take's flow, tail, silence stop and Retry (src/renderer/lib/voice.test.ts),
 // the press rule (dictation-press.test.ts), the phone slot's held press (ComposerToolbar.phone.test.tsx), the tidy
 // pass (dictation-text.test.ts) and the bridge's stream (src/main/bridge-stt-language.test.ts).
@@ -101,10 +103,13 @@ for (const engine of ["chromium", "webkit"] as const)
 			const mic = page.locator('[data-slot="send"] .omp-composer-mic');
 			if (!(await page.evaluate(() => typeof AudioContext === "function"))) {
 				// Playwright's WebKit on Windows has no Web Audio: the press says so, and the next one tries again.
-				for (let press = 0; press < 2; press++) {
-					await mic.tap();
-					await expect(page.locator('[data-dictation-failure="failed"]')).toBeVisible();
-				}
+				await mic.tap();
+				const failure = page.locator('[data-dictation-failure="failed"]');
+				await expect(failure).toBeVisible();
+				await failure.getByRole("button", { name: "Dismiss" }).tap();
+				await expect(page.locator("[data-dictation-failure]")).toHaveCount(0);
+				await mic.tap();
+				await expect(failure).toBeVisible();
 				return;
 			}
 			await mic.tap();
