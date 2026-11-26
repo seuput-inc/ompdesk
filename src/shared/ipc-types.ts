@@ -232,6 +232,11 @@ export const IPC_COMMANDS = {
 	LOG_SNAPSHOT: "log:snapshot",
 	/** Quit the app through the main-process guard, which confirms while sessions work. */
 	APP_QUIT: "app:quit",
+	/**
+	 * "Remove OMPdesk from this computer" (Settings › Updates & about): the `ompdesk` launchers go, the app is shown
+	 * in Finder or its Windows uninstaller starts, and the app quits (IpcRemoveFromComputerResult).
+	 */
+	APP_REMOVE: "app:remove-from-computer",
 	/** Send an RPC command, get response */
 	RPC_COMMAND: "rpc:command",
 	/** Send an RPC command to a specific tab's sidecar (IpcRpcCommandForTabPayload). */
@@ -849,12 +854,20 @@ export type UpdateStatus =
 			restartAt?: number;
 			installing?: true;
 	  }
-	| { state: "not-available"; version: string }
+	/** `unsupportedSystem`: a newer release exists that this Mac's macOS cannot run (the macOS notice names it). */
+	| { state: "not-available"; version: string; unsupportedSystem?: UnsupportedSystemUpdate }
 	/** `message` is user-facing copy in the UI language; `detail` keeps the raw
 	 * technical cause (network/updater error text) for a secondary line or tooltip. */
 	| { state: "error"; message: string; detail?: string; showInBanner?: boolean }
 	/** The release repo refused an anonymous request, or the token cannot read it (it is private again). Settings-only, never a banner. */
 	| { state: "auth-required"; reason: "missing" | "invalid" | "denied" };
+
+/** A release the updater withheld because this Mac runs a macOS below the one it needs. */
+export interface UnsupportedSystemUpdate {
+	version: string;
+	/** The major macOS version the release needs, e.g. "15". */
+	minimumMacOS: string;
+}
 
 /**
  * OMPdesk itself on the machine a tab runs on (Settings on a paired host's
@@ -1415,6 +1428,17 @@ export type IpcNotifyResult = "shown" | "muted" | "dropped" | "blocked";
 
 /** The test banner: shown (or no word from the system, as on macOS), refused (Windows' `failed`), or none can show. */
 export type IpcNotifyTestResult = "shown" | "failed" | "unsupported";
+
+/**
+ * What "Remove OMPdesk from this computer" did: the launcher files it removed, memory's terminal wiring (`none`: was
+ * not on), and how the app itself leaves (`finder`: shown in Finder to move to the Bin; `uninstaller`: Windows'
+ * uninstaller started; `none`: an unpackaged run, or no uninstaller found). The app quits after answering.
+ */
+export interface IpcRemoveFromComputerResult {
+	removed: string[];
+	terminal: "removed" | "failed" | "none";
+	app: "finder" | "uninstaller" | "none";
+}
 
 /** The test push: sent, the subscription expired (and is forgotten), the push service failed, or no subscription. */
 export type IpcPushTestResult = "sent" | "gone" | "failed" | "none";
@@ -2435,6 +2459,11 @@ export interface OmpApi {
 		 * shuts the focused window and leaves the rest of the session behind.
 		 */
 		quit(): void;
+		/**
+		 * "Remove OMPdesk from this computer": the running-work guard asks first (null: kept working, nothing removed);
+		 * then the launchers go, the app leaves as its platform allows, and it quits.
+		 */
+		removeFromComputer(): Promise<IpcRemoveFromComputerResult | null>;
 	};
 	rpc: SessionRpcClient & {
 		commandForTab(tabId: string, cmd: RpcCommand, timeoutMs?: number): Promise<RpcResponse>;

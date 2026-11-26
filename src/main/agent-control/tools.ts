@@ -53,6 +53,11 @@ const BOT_NAME_MAX = 80;
 const ITEM_TITLE_MAX = 200;
 const ITEM_DESCRIPTION_MAX = 20_000;
 const ITEM_TEXT_MAX = 8_000;
+/** Questions one ask holds and one question's words, at most (`DECISIONS_MAX`, `DECISION_MAX` in the core). */
+const ITEM_ASKS_MAX = 5;
+const ITEM_ASK_MAX = 500;
+/** One room post, at most (`POST_MAX` in the core's `work/rooms.rs`). */
+const ROOM_POST_MAX = 20_000;
 
 const SESSION = {
 	type: "string",
@@ -718,15 +723,16 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "OMPdesk bot",
 		description:
 			"Make, list, pause or set up a bot: a folder whose sessions are its chats.\n" +
+			"offer {name, text} proposes a bot instead of making it: the owner sees a card in this chat with its name, what it would do (text) and Create bot, and nothing is made until they press it. " +
 			'A bot is a folder on this computer (default ~/.omp/bots/<name>); every session in that folder is one of its chats, the first its home chat. create {name, folder?} makes the folder and sends nothing: the owner writes first (asks the user first only if they turned off "Let agents manage other sessions"). list shows each bot with its folder, home chat, pause, specialty (from its SOUL.md) and open and owner-waiting items. pause {bot} holds every message to it until resume {bot}, which hands each held one over once; a send to a paused bot is refused. set {bot, model?, auto_approve?, stale_days?, reach?} sets the model its new chats and routines use ("" for omp\'s default), whether its routines run without asking, after how many untouched days an open item reads stale (0 never), and the paired devices whose agents may message it. look_around {bot, on, time?} turns on (daily at time, HH:MM, default 09:00) or off its Look around routine: it reads its projects and saves at most 5 suggestions as planned items. hand {bot, session, text} hands a session to the bot: the bot\'s home chat becomes its opener and the text reaches it from the bot. Only the owner deletes a bot. See skill://ompdesk/references/bots.md.',
 		parameters: {
 			type: "object",
 			properties: {
 				action: {
 					type: "string",
-					enum: ["create", "list", "pause", "resume", "set", "look_around", "hand"],
+					enum: ["create", "offer", "list", "pause", "resume", "set", "look_around", "hand"],
 				},
-				name: { type: "string", maxLength: BOT_NAME_MAX, description: "create: the bot's name." },
+				name: { type: "string", maxLength: BOT_NAME_MAX, description: "create, offer: the bot's name." },
 				folder: {
 					type: "string",
 					description: "create: an absolute folder for it; default ~/.omp/bots/<name>, made unique.",
@@ -751,7 +757,8 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				text: {
 					type: "string",
 					maxLength: MESSAGE_MAX_CHARS,
-					description: "hand: what the bot asks of it, sent as its first message from the bot.",
+					description:
+						"hand: what the bot asks of it, sent as its first message from the bot. offer: what the bot would do, one or two sentences.",
 				},
 			},
 			required: ["action"],
@@ -763,7 +770,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Bot item",
 		description:
 			"Keep a bot's work and its questions to the owner as items (a bot's chat only).\n" +
-			"Items are what a bot works on for its owner and what it needs from them, numbered per bot; the owner sees them on the Bots page. add {title, description?, done_means?, status?} (status planned by default); set {item, …}: status (planned, working, waiting, needs_you, done, canceled), title, description, ask with options and recommended (a question only the owner can answer: the item waits on them, and their answer arrives here as a message that starts a turn), wait and until (what it waits on outside you and the owner), snooze_until (hidden until then; \"\" wakes it); comment {item, text}; done {item, note?} and cancel {item, note?} close it (a line goes into memory/journal/YYYY-MM.md in the bot's folder); link {item, url | file | session | pr}; list {status?} (open ones by default); show {item}. item is its number or id. The owner's changes reach you as notes, once each. See skill://ompdesk/references/bots.md.",
+			"Items are what a bot works on for its owner and what it needs from them, numbered per bot; the owner sees them on the Bots page. add {title, description?, done_means?, status?} (status planned by default); set {item, …}: status (planned, working, waiting, needs_you, done, canceled), title, description, ask with options and recommended (a question only the owner can answer: the item waits on them, and their answer arrives here as a message that starts a turn), or asks (up to 5 questions at once, each with its options; ask is then the words around them), wait and until (what it waits on outside you and the owner), snooze_until (hidden until then; \"\" wakes it); comment {item, text}; done {item, note?} and cancel {item, note?} close it (a line goes into memory/journal/YYYY-MM.md in the bot's folder); link {item, url | file | session | pr}; list {status?} (open ones by default); show {item}. item is its number or id. The owner's changes reach you as notes, once each. See skill://ompdesk/references/bots.md.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -808,6 +815,40 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				file: { type: "string", description: "link: an absolute path." },
 				session: { type: "string", description: "link: a session (id or tab id)." },
 				pr: { type: "string", description: "link: a pull request URL or owner/repo#n." },
+				asks: {
+					type: "array",
+					maxItems: ITEM_ASKS_MAX,
+					description: "set: several questions for the owner at once; the item becomes needs_you.",
+					items: {
+						type: "object",
+						properties: {
+							question: { type: "string", maxLength: ITEM_ASK_MAX },
+							options: { type: "array", maxItems: 8, items: { type: "string" } },
+							recommended: { type: "integer", minimum: 0, description: "The option you recommend (0-based)." },
+							multi: { type: "boolean", description: "The owner may pick several options." },
+						},
+						required: ["question"],
+						additionalProperties: false,
+					},
+				},
+			},
+			required: ["action"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: T.room,
+		label: "Bot room",
+		description:
+			"Talk with the other bots of a group and its owner in the group's room (a bot's chat only).\n" +
+			"A group is bots the owner put together; its room is where the owner posts and members answer. When the owner's post or another member's @mention asks you, a message says so: answer with post {room, text}, or post nothing when you have nothing to add. @Name in your post asks that member to answer too. list shows your groups; read {room, limit?} shows the newest posts (20 by default). room is its id or name. See skill://ompdesk/references/bots.md.",
+		parameters: {
+			type: "object",
+			properties: {
+				action: { type: "string", enum: ["list", "read", "post"] },
+				room: { type: "string", description: "read, post: the room's id or its group's name." },
+				text: { type: "string", maxLength: ROOM_POST_MAX, description: "post: what you say in the room." },
+				limit: { type: "integer", minimum: 1, maximum: 200, description: "read: how many of the newest posts." },
 			},
 			required: ["action"],
 			additionalProperties: false,
@@ -1175,7 +1216,7 @@ export const ARGS = {
 		.strict(),
 	[T.bot]: z
 		.object({
-			action: z.enum(["create", "list", "pause", "resume", "set", "look_around", "hand"]),
+			action: z.enum(["create", "offer", "list", "pause", "resume", "set", "look_around", "hand"]),
 			name: z.string().trim().min(1).max(BOT_NAME_MAX).optional(),
 			folder: z.string().trim().min(1).max(4096).optional(),
 			bot: z.string().trim().min(1).max(200).optional(),
@@ -1212,6 +1253,28 @@ export const ARGS = {
 			file: z.string().trim().min(1).max(4096).optional(),
 			session: sessionArg.optional(),
 			pr: z.string().trim().min(1).max(4096).optional(),
+			asks: z
+				.array(
+					z
+						.object({
+							question: z.string().trim().min(1).max(ITEM_ASK_MAX),
+							options: z.array(z.string().trim().min(1).max(200)).max(8).optional(),
+							recommended: z.number().int().min(0).max(7).optional(),
+							multi: z.boolean().optional(),
+						})
+						.strict(),
+				)
+				.min(1)
+				.max(ITEM_ASKS_MAX)
+				.optional(),
+		})
+		.strict(),
+	[T.room]: z
+		.object({
+			action: z.enum(["list", "read", "post"]),
+			room: z.string().trim().min(1).max(200).optional(),
+			text: z.string().trim().min(1).max(ROOM_POST_MAX).optional(),
+			limit: z.number().int().min(1).max(200).optional(),
 		})
 		.strict(),
 } as const;

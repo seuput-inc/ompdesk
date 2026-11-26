@@ -6,6 +6,7 @@ A bot is a folder on this computer (default `~/.omp/bots/<name>`); every session
 
 `action`:
 - `create` — `name`, `folder` (absolute; default `~/.omp/bots/<name>`, made unique). Makes the folder and sends nothing: the owner writes first. Asks the user first only when "Let agents manage other sessions" is off.
+- `offer` — `name`, `text` (what it would do, one or two sentences): proposes a bot instead of making it. The owner sees a card in this chat with Create bot; nothing is made until they press it, so do not `create` it yourself afterwards. Prefer it when the owner has not asked for the bot by name.
 - `list` — each bot with its folder, home chat, pause, specialty, open items and the items waiting on the owner.
 - `pause` / `resume` — `bot` (name or id). A paused bot takes nothing: a send to one of its chats, a routine's wake-up and a hand-over are refused ("The bot <name> is paused"), and reports to it are held. `resume` hands each held report over once.
 - `set` — `bot`, `model` (its new chats and routines; `""` = omp's default), `auto_approve` (its routines run every tool without asking), `stale_days` (an open item untouched this long reads stale; `0` never), `reach` (paired devices whose agents may message it; `[]` = this computer only).
@@ -18,10 +19,17 @@ A bot by name: `ompdesk_session_send {"session":"bot:<name>"}` reaches its home 
 
 `item` is its number (`3`, `#3`) or id. `action`:
 - `add` — `title`, `description`, `done_means`, `status` (default `planned`).
-- `set` — `item` and any of `status` (`planned`, `working`, `waiting`, `needs_you`, `done`, `canceled`), `title`, `description`, `done_means`, `ask` with `options` and `recommended` (a question only the owner can answer: the item becomes `needs_you`, and their answer reaches you as a message that starts a turn), `wait` with `until` (what it waits on outside you and the owner: the item becomes `waiting`), `snooze_until` (hidden until then; `""` wakes it).
+- `set` — `item` and any of `status` (`planned`, `working`, `waiting`, `needs_you`, `done`, `canceled`), `title`, `description`, `done_means`, `ask` with `options` and `recommended` (a question only the owner can answer: the item becomes `needs_you`, and their answer reaches you as a message that starts a turn), `asks` (up to 5 questions at once, each `{question, options, recommended, multi}`; `ask` is then the words around them, and the owner answers them in one message, a line `Question → answer` each), `wait` with `until` (what it waits on outside you and the owner: the item becomes `waiting`), `snooze_until` (hidden until then; `""` wakes it). A new question or a close ends a snooze.
 - `comment` — `item`, `text`.
 - `done` / `cancel` — `item`, `note`. A closed item adds `- YYYY-MM-DD | item #<n> | <status> | <title>` to `memory/journal/YYYY-MM.md` in the bot's folder and leaves the board 7 days later.
 - `link` — `item` and one of `url`, `file`, `session`, `pr`.
 - `list` — `status` (open ones by default). `show` — `item`.
 
-Code work goes to sessions: `ompdesk_session_open {"message": …, "item": 3}` links each session it opens to the item and a planned item becomes working; while every linked session waits for a usage limit the item says until when. The owner's changes to an item reach you as quiet notes, once each.
+Code work goes to sessions: `ompdesk_session_open {"message": …, "item": 3}` links each session it opens to the item and a planned item becomes working; while every linked session waits for a usage limit the item says until when, and the item's Activity shows each linked session's done or blocked report. The owner's changes to an item reach you as quiet notes, once each; several items the owner moves at once are one note. A snooze alone is not sent.
+
+## `ompdesk_room` (a bot's chat only)
+
+A group is bots the owner put together; its room is where the owner posts and its members answer. A post asks the members the group's reply mode names (all, only those it @mentions, or one bot): you get a message with the post and the room's earlier posts since you last read it. `action`:
+- `post` — `room` (id or group name), `text`: your answer in the room. `@Name` asks that member to answer too (a short chain only). Post nothing when you have nothing to add.
+- `read` — `room`, `limit` (newest posts, default 20).
+- `list` — your groups.

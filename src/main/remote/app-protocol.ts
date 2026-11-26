@@ -155,6 +155,7 @@ import {
 	ScheduleThinkingSchema,
 	WebhookCallSchema,
 } from "../../shared/schedules-schema";
+import { SIDEBAR_ENTRY_FIELDS } from "../../shared/sidebar-prefs";
 import type { SidebarLayoutChange, SidebarProjectsRequest, SidebarProjectsState } from "../../shared/sidebar-projects";
 import { SIGN_IN_PAGE_MAX_CHARS } from "../sign-in-callback";
 
@@ -812,7 +813,12 @@ const UpdateStatusSchema: z.ZodType<UpdateStatus> = z.discriminatedUnion("state"
 		restartAt: z.number().optional(),
 		installing: z.literal(true).optional(),
 	}),
-	z.object({ state: z.literal("not-available"), version: z.string() }),
+	z.object({
+		state: z.literal("not-available"),
+		version: z.string(),
+		// The host's Mac cannot run the newer release; its Settings row says so on a paired computer too.
+		unsupportedSystem: z.object({ version: z.string(), minimumMacOS: z.string() }).optional(),
+	}),
 	z.object({
 		state: z.literal("error"),
 		message: z.string(),
@@ -924,6 +930,13 @@ const SidebarLayoutChangeSchema = z.discriminatedUnion("op", [
 		move: z.object({ path: ProjectPath, over: ProjectPath }).optional(),
 	}),
 	z.object({ op: z.literal("set-sessions-archived"), ids: ProjectOrder, archived: z.boolean() }),
+	z.object({
+		op: z.literal("set-entry"),
+		field: z.enum(SIDEBAR_ENTRY_FIELDS),
+		key: ProjectPath,
+		value: z.string().max(4096).nullable(),
+	}),
+	z.object({ op: z.literal("rename-project-group"), from: ProjectPath, to: z.string().max(4096).nullable() }),
 ]) satisfies z.ZodType<SidebarLayoutChange>;
 
 /** `host.projects.command` params: the device's sidebar reads or edits the host's project list. */
@@ -952,6 +965,12 @@ export const SidebarProjectsStateSchema: z.ZodType<SidebarProjectsState> = z.obj
 			archivedSessions: z.array(ProjectPath),
 			groupOrder: z.array(ProjectPath),
 			sessionOrder: z.record(ProjectPath, z.array(ProjectPath)),
+			// An older host sends none of the keyed entries.
+			projectGroups: z.record(ProjectPath, z.string().max(4096)).optional(),
+			projectColors: z.record(ProjectPath, z.string().max(4096)).optional(),
+			projectEmoji: z.record(ProjectPath, z.string().max(4096)).optional(),
+			sessionEmoji: z.record(ProjectPath, z.string().max(4096)).optional(),
+			sessionParents: z.record(ProjectPath, z.string().max(4096)).optional(),
 		})
 		.optional(),
 });

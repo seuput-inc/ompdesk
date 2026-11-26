@@ -68,6 +68,7 @@ import {
 	StatusDot,
 	Tabs,
 } from "../common";
+import { useFirstVisitTour } from "../onboarding/surface-tours";
 import { PreviewCheckNotice } from "./PreviewCheckNotice";
 import { AllVisualsDialog, PreviewFeedbackBar, usePreviewFeedback } from "./PreviewFeedback";
 import { PreviewStreamView } from "./PreviewStreamView";
@@ -108,6 +109,7 @@ async function startAgentRelay(runtime: SessionRuntime, tabId: string): Promise<
 }
 export function PreviewPanel() {
 	const t = useT();
+	useFirstVisitTour("preview");
 	const tabId = useRuntimeTabId();
 	const runtime = useSessionRuntime();
 	const remote = useTabsStore(s => Boolean(s.tabs.find(tab => tab.id === (tabId ?? s.activeTabId))?.device));

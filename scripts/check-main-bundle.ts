@@ -461,7 +461,26 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // bot page, the templates and their words load later (OnDemandDialogs, `BotsPage` lazy, `bot-launch` imports the
 // templates on a template's create): 3,814 bytes measured over main (branch run 45779653731 on 9878bdec4), added to the
 // budget.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_236_742;
+// Organizing the sidebar (27 Nov 2026, orca-projects): the phone's first screen draws the session list, so what its
+// rows and stores carry is on it: project groups and their section header, project and session glyphs (colour,
+// emoji), the keyed sidebar entries (`setEntry`, `renameProjectGroup`), picking several rows and their menu
+// (`pickedMenuItems`), the row swipe (`SwipeActions`, `sessionSwipeItems`), the open row's account read
+// (`lib/tab-accounts.ts`), the sidebar requests store, the MRU close and the reopened tab's place; the dialogs (move,
+// rename, appearance, emoji, parent, clone, locate folder) load on use: 2,316 bytes over main's measure (2,234,781 in
+// CI run 45784490025 on 9878bdec4, whose budget was 2,232,465), added to the budget.
+// First-visit tours, feature tips and What OMPdesk can do (26 Nov 2026, orca-onboarding). On the first screen: the
+// guide store's tour and tip tables with their seen flags (`stores/starter-guide.ts`), the first-visit check in AppShell
+// (`onboarding/surface-tours.ts`, `spotlight-target.ts`), Help's new item and the update check's macOS notice state.
+// Both tours' cards, the tip row, the sheet and the desktop-only notices load as their own chunks: 2,863 bytes
+// (2,235,624 on CI run 45786852939, omp/agent/orca-onboarding on fbe7b7b8d, against the 2,232,761 its base measured),
+// added to the budget.
+// Bot items, groups and chat cards (26 Nov 2026, orca-bots-items): the sidebar's group rows (`bots/rooms/room-faces.tsx`),
+// the item page's three rebindable keys (`lib/keymap.ts`), the Bots page's room place (`bots/bot-page.ts`) and what
+// decides a chat's bot card and its Hide (`chat/bots/bot-card-kind.tsx`, `hidden-cards.ts`, read by `ToolCard`,
+// `MessageBubble` and `ChatStream`, all on the phone's first screen). The cards, the Items tab, the item page and the
+// room load later (`chat/bots/BotCards.tsx` lazy, `BotsPage` lazy): 5,283 bytes over the budget of its base (2,242,025
+// in branch run 45815652051 at 21739cea5, whose budget was 2,236,742), added to the budget with 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_247_284;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

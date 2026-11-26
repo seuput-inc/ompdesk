@@ -42,9 +42,11 @@ interface Read {
 interface BranchPrsState {
 	/** By `branchPrKey`; null: the branch has no PR. Absent: not read yet. */
 	prs: Readonly<Record<string, GithubBranchPr | null>>;
+	/** When each PR was last read (epoch ms), so a reader holding an older copy of it knows which is newer. */
+	readAt: Readonly<Record<string, number>>;
 }
 
-export const useBranchPrs = create<BranchPrsState>(() => ({ prs: {} }));
+export const useBranchPrs = create<BranchPrsState>(() => ({ prs: {}, readAt: {} }));
 
 const reads = new Map<string, Read>();
 let rows = new Map<string, BranchRow>();
@@ -86,10 +88,12 @@ async function pump(): Promise<void> {
 	running = true;
 	try {
 		const pr = await window.omp.sessions.pullRequest(row.root, row.branch, row.device);
-		reads.set(key, { at: Date.now(), failures: 0 });
-		if (useBranchPrs.getState().prs[key] !== pr) {
-			useBranchPrs.setState(state => ({ prs: { ...state.prs, [key]: pr } }));
-		}
+		const at = Date.now();
+		reads.set(key, { at, failures: 0 });
+		useBranchPrs.setState(state => ({
+			prs: state.prs[key] === pr ? state.prs : { ...state.prs, [key]: pr },
+			readAt: { ...state.readAt, [key]: at },
+		}));
 	} catch {
 		reads.set(key, { at: Date.now(), failures: (reads.get(key)?.failures ?? 0) + 1 });
 	} finally {
@@ -164,5 +168,5 @@ export function resetBranchPrs(): void {
 	timer = undefined;
 	stopReturn?.();
 	stopReturn = undefined;
-	useBranchPrs.setState({ prs: {} });
+	useBranchPrs.setState({ prs: {}, readAt: {} });
 }

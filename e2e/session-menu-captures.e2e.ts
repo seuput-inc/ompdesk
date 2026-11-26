@@ -75,6 +75,8 @@ for (const language of ["en", "ko"] as const)
 			text("sidebar.menu.moveDown"),
 			text("sidebar.menu.moveToProject"),
 			text("sidebar.menu.archive"),
+			text("sidebar.menu.emoji"),
+			text("sidebar.menu.setParent"),
 		];
 		const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-session-menu-")));
 		let host: RemoteInstance | null = null;
@@ -154,7 +156,7 @@ for (const language of ["en", "ko"] as const)
 				...edits.slice(2, 5),
 				// Handing over is this computer's own: its bots are (components/bots/HandToBotDialog.tsx).
 				text("bots.hand.menu"),
-				edits[5],
+				...edits.slice(5),
 				text("sidebar.menu.hideFromAgents"),
 				text("sidebar.menu.copyTitle"),
 				text("sidebar.menu.reveal"),

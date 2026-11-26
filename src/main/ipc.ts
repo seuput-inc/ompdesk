@@ -86,6 +86,7 @@ import type {
 	IpcPrefsSetPayload,
 	IpcPushTestResult,
 	IpcRemoteListDirsPayload,
+	IpcRemoveFromComputerResult,
 	IpcRpcCommandForTabPayload,
 	IpcRpcCommandPayload,
 	IpcSessionLinksPayload,
@@ -267,6 +268,8 @@ function agentCaller(win: ClientWindow): IpcCaller {
 
 export interface IpcDeps {
 	openPageExternal(url: string): Promise<void>;
+	/** "Remove OMPdesk from this computer": asks the running-work guard, removes the launchers, starts the app's removal. */
+	removeFromComputer(): Promise<IpcRemoveFromComputerResult | null>;
 	admitNotification: AdmitNotification;
 	/** What paired web pages report about unsaved Files edits (WebHost forgets a page's report when it drops). */
 	fileEditReports: FileEditReports;
@@ -2082,6 +2085,10 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// session behind it.
 	ipc.on(IPC_COMMANDS.APP_QUIT, caller => {
 		requestQuit("command", caller.connId ? { detail: "from a paired device" } : undefined);
+	});
+	ipc.handle(IPC_COMMANDS.APP_REMOVE, caller => {
+		if (caller.connId) throw new Error("Remove OMPdesk from this computer runs on that computer's own window");
+		return deps.removeFromComputer();
 	});
 
 	// System

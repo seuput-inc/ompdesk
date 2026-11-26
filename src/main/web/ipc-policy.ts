@@ -135,6 +135,12 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		mode: "web",
 		web: "Restart or quit from a confirmation sheet that counts the running turns",
 	},
+	[C.APP_REMOVE]: {
+		dir: "invoke",
+		permission: "host-admin",
+		mode: "web",
+		web: "Never asked: a phone never removes OMPdesk from its host (the row shows on a desktop window only; the shim refuses)",
+	},
 	[C.BRIDGE_HEALTH_TAKE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[BRIDGE_HEALTH_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.DISK_FULL_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },

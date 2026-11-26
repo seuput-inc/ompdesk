@@ -15,6 +15,7 @@ import { runStatsSync } from "../../lib/stats-sync";
 import { useFocusedTabDevice } from "../../stores/remote";
 import { toast, toastError } from "../../stores/toast";
 import { Button, EmptyState, SettingInfo, Tabs } from "../common";
+import { useFirstVisitTour } from "../onboarding/surface-tours";
 import { CostsRoute } from "./CostsRoute";
 import { ErrorsRoute } from "./ErrorsRoute";
 import { FrustrationRoute } from "./FrustrationRoute";
@@ -44,6 +45,7 @@ type RouteId = (typeof ROUTES)[number]["id"];
 
 export function AllSessionsStats() {
 	const t = useT();
+	useFirstVisitTour("stats");
 	const device = useFocusedTabDevice();
 	const [route, setRoute] = useState<RouteId>("overview");
 	const [range, setRange] = useState<StatsRange>("24h");

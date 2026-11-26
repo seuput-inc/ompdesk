@@ -140,7 +140,8 @@ impl AgentControl {
                 serde_json::to_value(self.read_item(&state, bot, item, now)).unwrap_or(Value::Null)
             })
             .collect();
-        json!({ "bots": bots_json, "items": items_json })
+        let rooms_json = serde_json::to_value(self.rooms().all()).unwrap_or_else(|_| json!([]));
+        json!({ "bots": bots_json, "items": items_json, "rooms": rooms_json })
     }
 
     /// The bot `key` names (its name or id).
@@ -288,6 +289,7 @@ impl AgentControl {
             return fail("That bot is gone.");
         };
         self.items().remove_bot(&bot.id);
+        self.rooms().remove_bot(&bot.id);
         let chats: Vec<String> = bot
             .home
             .iter()
@@ -563,6 +565,20 @@ impl AgentControl {
                 Ok(format!(
                     "Made the bot {} in {} (id {}). It has no chat yet: a session opened in that folder is its home chat, and the owner writes first.",
                     bot.name, bot.folder, bot.id
+                ))
+            }
+            // A bot the owner may make (Orca's `bot create --offer`): the chat draws it as a card with Create bot,
+            // and nothing is made until the owner presses it.
+            "offer" => {
+                let name = args.name.as_deref().unwrap_or("").trim();
+                if name.is_empty() {
+                    return fail("offer needs name.");
+                }
+                if self.bot_named(name).is_ok() {
+                    return fail(format!("A bot named {name} already exists."));
+                }
+                Ok(format!(
+                    "Offered the bot {name}: the owner sees a card with Create bot in this chat. Nothing is made until they press it; do not create it yourself."
                 ))
             }
             "list" => Ok(self.bots_text()),
@@ -962,6 +978,7 @@ impl AgentControl {
     pub async fn bots_command(&self, request: Value) -> R<Value> {
         let text = |key: &str| request.get(key).and_then(Value::as_str).map(str::to_owned);
         let id = text("id").unwrap_or_default();
+        let mut refused: Option<&'static str> = None;
         match request.get("action").and_then(Value::as_str).unwrap_or("") {
             "get" => {}
             "create" => {
@@ -1080,7 +1097,11 @@ impl AgentControl {
                 }
             }
             "delete" => self.delete_bot(&id).await?,
-            "item" => self.owner_item(&request).await?,
+            "item" => refused = self.owner_item(&request).await?,
+            "itemsOpened" => self.items_opened(&id)?,
+            "roomCreate" | "roomUpdate" | "roomDelete" | "roomPost" | "roomStop" => {
+                self.owner_room(&request).await?;
+            }
             "handTo" => {
                 let bot = self.bot_named(&id)?;
                 let session = text("session").unwrap_or_default();
@@ -1104,7 +1125,12 @@ impl AgentControl {
             }
             other => return fail(format!("bots: no action {other}")),
         }
-        Ok(self.bots_state())
+        let mut state = self.bots_state();
+        // The owner's answer named a question the bot has since replaced: nothing was written.
+        if let Some(code) = refused {
+            state["refused"] = json!(code);
+        }
+        Ok(state)
     }
 }
 

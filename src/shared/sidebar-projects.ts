@@ -11,7 +11,7 @@
  */
 
 import { type AutopilotRun, isOmpdeskWorktreeFolder, type WorktreeKind } from "./project-origin";
-import { readSidebarPrefs, type SidebarChange, type SidebarPrefs } from "./sidebar-prefs";
+import { readSidebarPrefs, type SidebarChange, type SidebarEntryField, type SidebarPrefs } from "./sidebar-prefs";
 
 export const SIDEBAR_PROJECTS_COMMAND = "sidebar-projects:command";
 /** Pushed on every change: an `IpcSidebarProjects` (`device` unset for this computer's own list). */
@@ -32,14 +32,28 @@ export interface SidebarProject {
 	by?: "sessions";
 }
 
+/**
+ * The host's arrangement a paired view draws and edits. The keyed entries (groups, colors, emoji, parents) are absent
+ * from a host older than them.
+ */
 export type SidebarLayout = Pick<
 	SidebarPrefs,
 	"pinnedGroups" | "pinnedSessions" | "archivedSessions" | "groupOrder" | "sessionOrder"
->;
+> &
+	Partial<Pick<SidebarPrefs, SidebarEntryField>>;
 
 export type SidebarLayoutChange = Extract<
 	SidebarChange,
-	{ op: "set-group-pinned" | "set-session-pinned" | "set-sessions-archived" | "set-group-order" | "set-session-order" }
+	{
+		op:
+			| "set-group-pinned"
+			| "set-session-pinned"
+			| "set-sessions-archived"
+			| "set-group-order"
+			| "set-session-order"
+			| "set-entry"
+			| "rename-project-group";
+	}
 >;
 
 export interface SidebarProjectsState {
@@ -160,6 +174,11 @@ export function parseSidebarProjects(value: unknown): SidebarProjectsState {
 						archivedSessions: layout.archivedSessions,
 						groupOrder: layout.groupOrder,
 						sessionOrder: layout.sessionOrder,
+						projectGroups: layout.projectGroups,
+						projectColors: layout.projectColors,
+						projectEmoji: layout.projectEmoji,
+						sessionEmoji: layout.sessionEmoji,
+						sessionParents: layout.sessionParents,
 					},
 				}
 			: {}),

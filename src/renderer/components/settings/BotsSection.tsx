@@ -9,10 +9,12 @@ import { useEffect, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { ensureBots, useBotsStore } from "../../stores/bots";
 import { useSidebarFolds } from "../../stores/sidebar-folds";
+import { toastError } from "../../stores/toast";
 import { BotAvatar } from "../bots/BotAvatar";
 import { BotSettings } from "../bots/BotSettings";
 import { openBotDialog } from "../bots/bot-launch";
-import { Badge, Button, EmptyState, ListRow, SwitchField } from "../common";
+import { ensureHiddenCards, setCardHidden, useHiddenCards } from "../chat/bots/hidden-cards";
+import { Badge, Button, EmptyState, ListRow, SectionLabel, SwitchField } from "../common";
 import { SettingsSection } from "./SettingsLayout";
 
 export function BotsSection() {
@@ -56,6 +58,7 @@ export function BotsSection() {
 				label={t("bots.settings.showInSidebar")}
 				onCheckedChange={on => useSidebarFolds.getState().setNavHidden("bots", !on)}
 			/>
+			<HiddenCards />
 			{bots.length === 0 ? (
 				<EmptyState size="row" title={t("bots.section.emptyTitle")} />
 			) : (
@@ -78,5 +81,39 @@ export function BotsSection() {
 				</div>
 			)}
 		</SettingsSection>
+	);
+}
+
+/** Bot cards hidden from chats (a card's Hide, FC20), each with Show again; nothing while none is hidden. */
+function HiddenCards() {
+	const t = useT();
+	const hidden = useHiddenCards(s => s.hidden);
+	useEffect(() => {
+		void ensureHiddenCards().catch(() => {});
+	}, []);
+	if (hidden.length === 0) return null;
+	return (
+		<div className="flex flex-col gap-px" data-settings-hidden-cards>
+			<SectionLabel>{t("chat.botCards.hiddenTitle")}</SectionLabel>
+			{hidden.map(kind => (
+				<ListRow
+					actions={
+						<Button
+							onClick={() =>
+								void setCardHidden(kind, false).catch((error: unknown) =>
+									toastError({ title: t("chat.botCards.hideFailed"), error }),
+								)
+							}
+							size="sm"
+							variant="ghost"
+						>
+							{t("chat.botCards.showAgain")}
+						</Button>
+					}
+					key={kind}
+					title={t(`chat.botCards.kind.${kind}`)}
+				/>
+			))}
+		</div>
 	);
 }

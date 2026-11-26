@@ -33,6 +33,7 @@ import { webRuntime } from "../../web/runtime";
 import { preloadPromptList } from "../chat/ConversationNavigator";
 import { preloadTranscriptFind } from "../chat/TranscriptFind";
 import { Button, IconButton, Skeleton, Tooltip } from "../common";
+import { useFirstVisitTour } from "../onboarding/surface-tours";
 import { preloadComposerExtras } from "./composer/composer-extras";
 import { PanelContainer, preloadPanelViews } from "./PanelContainer";
 import { EdgeSwipeZone, SidebarDrawer } from "./SidebarDrawer";
@@ -53,6 +54,8 @@ import { WhatsNewCard } from "./WhatsNewCard";
 const AgentsPage = lazyChunk(() => import("../agents/AgentsPage").then(m => ({ default: m.AgentsPage })));
 const BoardPage = lazyChunk(() => import("../board/BoardPage").then(m => ({ default: m.BoardPage })));
 const BotsPage = lazyChunk(() => import("../bots/BotsPage").then(m => ({ default: m.BotsPage })));
+// A tip row decides once per launch; its own chunk keeps it off a phone's first screen.
+const FeatureTipCard = lazyChunk(() => import("./FeatureTipCard").then(m => ({ default: m.FeatureTipCard })));
 const InsightsPage = lazyChunk(() => import("../insights/InsightsPage").then(m => ({ default: m.InsightsPage })));
 const SettingsPage = lazyChunk(() => import("../settings/SettingsPage").then(m => ({ default: m.SettingsPage })));
 /**
@@ -343,6 +346,8 @@ export function AppShell() {
 		});
 	}, [drawer]);
 	const onPage = destination !== "session";
+	// The shell's own tour: nav rows, search, sessions, status bar, side panel (on the session view).
+	useFirstVisitTour("shell", !onPage);
 	const panelOpen = !onPage && panelVisible;
 	const panelDocked = panelOpen && !compact;
 	// A closed panel stays mounted for its exit: a docked one slides out (`fast`), a sheet closes on its own (`med`).
@@ -443,6 +448,9 @@ export function AppShell() {
 						<UpdateBanner />
 						<MailReentryNoticeGate />
 						<WhatsNewCard />
+						<Suspense fallback={null}>
+							<FeatureTipCard />
+						</Suspense>
 						<SplitWorkspace />
 					</div>
 					{onPage && (

@@ -488,4 +488,10 @@ pub static ROW_NOT_WRITTEN: &[(&str, Decision)] = &[
         "dictationCleanup",
         Decision::Never("it sends what the person says to a model; the person turns that on"),
     ),
+    (
+        "desktopPet",
+        Decision::Never(
+            "a pet on the person's screen, and the picture it shows; the person's own choice",
+        ),
+    ),
 ];

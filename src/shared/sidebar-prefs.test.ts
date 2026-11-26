@@ -80,3 +80,36 @@ describe("muted sessions and projects", () => {
 		});
 	});
 });
+
+describe("keyed entries: project groups, colors, emoji and a session's parent", () => {
+	it("sets, trims and removes an entry, and keeps a parent's empty 'no parent'", () => {
+		let state = readSidebarPrefs({});
+		const apply = (change: SidebarChange) => {
+			const patch = sidebarPatch(state, change);
+			state = { ...state, ...patch };
+			return patch;
+		};
+		expect(apply({ op: "set-entry", field: "projectGroups", key: "/a", value: "  Clients " })).toEqual({
+			projectGroups: { "/a": "Clients" },
+		});
+		expect(apply({ op: "set-entry", field: "projectGroups", key: "/a", value: "Clients" })).toEqual({});
+		expect(apply({ op: "set-entry", field: "projectGroups", key: "/a", value: " " })).toEqual({ projectGroups: {} });
+		expect(apply({ op: "set-entry", field: "sessionParents", key: "/s/2", value: "" })).toEqual({
+			sessionParents: { "/s/2": "" },
+		});
+		expect(apply({ op: "set-entry", field: "sessionParents", key: "/s/2", value: null })).toEqual({
+			sessionParents: {},
+		});
+	});
+
+	it("renames a group for every project in it, or takes them all out of it", () => {
+		const state = readSidebarPrefs({ projectGroups: { "/a": "Clients", "/b": "Tools", "/c": "Clients" } });
+		expect(sidebarPatch(state, { op: "rename-project-group", from: "Clients", to: "Customers" })).toEqual({
+			projectGroups: { "/a": "Customers", "/b": "Tools", "/c": "Customers" },
+		});
+		expect(sidebarPatch(state, { op: "rename-project-group", from: "Clients", to: null })).toEqual({
+			projectGroups: { "/b": "Tools" },
+		});
+		expect(sidebarPatch(state, { op: "rename-project-group", from: "Nobody", to: "X" })).toEqual({});
+	});
+});

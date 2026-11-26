@@ -31,7 +31,20 @@ function brief(value: unknown): BotItemBrief | null {
 	if (typeof number !== "number" || !Number.isSafeInteger(number) || !title || !status) return null;
 	const out: BotItemBrief = { number, title, status };
 	const question = field(value, "question");
-	const text = line(field(question, "text"));
+	// Several questions asked at once: each with its quick replies, after the words around them.
+	const decisions = field(question, "decisions");
+	const asked = Array.isArray(decisions)
+		? decisions
+				.map(decision => {
+					const prompt = line(field(decision, "question"));
+					const replies = field(decision, "options");
+					const said = Array.isArray(replies) ? replies.map(line).filter(Boolean) : [];
+					return prompt && said.length ? `${prompt} (${said.join(" / ")})` : prompt;
+				})
+				.filter(Boolean)
+				.slice(0, 5)
+		: [];
+	const text = [line(field(question, "text")), ...asked].filter(Boolean).join("; ");
 	if (text) {
 		const options = field(question, "options");
 		const recommended = field(question, "recommended");

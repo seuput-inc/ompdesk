@@ -61,6 +61,7 @@ use crate::agentctl::journal::call_journal::{CallBegin, CallJournal, CallRecord,
 use crate::agentctl::journal::items::Items;
 use crate::agentctl::journal::mail_outbox::MailOutbox;
 use crate::agentctl::journal::pending_cleanups::PendingCleanups;
+use crate::agentctl::journal::rooms::Rooms;
 use crate::agentctl::journal::send_outbox::SendOutbox;
 use crate::agentctl::journal::session_fates::{FatedSession, SessionFates, fate_by};
 use crate::agentctl::journal::{Clock, system_clock};
@@ -200,6 +201,8 @@ pub struct Inner {
     /// The bots (`bots.json`) and their items (`items.json`); take `bots` before `items` when both are held.
     bots: Mutex<Bots>,
     items: Mutex<Items>,
+    /// The bot groups and their rooms (`rooms.json` beside `items.json`); never held with `bots` or `items`.
+    rooms: Mutex<Rooms>,
     /// Where a new bot's folder goes (`~/.omp/bots`); None: a bot needs its folder named.
     pub(crate) bots_root: Option<PathBuf>,
     /// The send outbox, or None where main keeps none (a queued message then lives only in its omp).
@@ -256,6 +259,11 @@ impl Inner {
     /// The items.
     pub fn items(&self) -> MutexGuard<'_, Items> {
         lock(&self.items)
+    }
+
+    /// The bot groups and their rooms.
+    pub fn rooms(&self) -> MutexGuard<'_, Rooms> {
+        lock(&self.rooms)
     }
 
     /// `Date.now()`.
@@ -346,6 +354,12 @@ impl AgentControl {
             mailbox,
             bots: Mutex::new(Bots::new(files.bots.clone())),
             items: Mutex::new(Items::new(files.items.clone())),
+            rooms: Mutex::new(Rooms::new(
+                files
+                    .items
+                    .as_ref()
+                    .map(|items| items.with_file_name("rooms.json")),
+            )),
             bots_root: files.bots_root.clone(),
             clock,
             mem: Mutex::new(Mem::default()),
@@ -1048,6 +1062,7 @@ impl AgentControl {
             Tool::App => self.app(&caller, typed(parsed, tool)?).await,
             Tool::Bot => self.bot_tool(&caller, tabs, typed(parsed, tool)?).await,
             Tool::Item => self.item_tool(&caller, typed(parsed, tool)?).await,
+            Tool::Room => self.room_tool(&caller, typed(parsed, tool)?).await,
         }
     }
 

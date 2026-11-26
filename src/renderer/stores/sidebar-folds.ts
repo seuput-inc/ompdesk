@@ -27,6 +27,8 @@ interface SidebarFoldsStore extends SidebarFolds {
 	setGroupFolded: (cwd: string, folded: boolean) => void;
 	setDeviceFolded: (deviceId: string, folded: boolean) => void;
 	setDeviceGroupFolded: (deviceId: string, cwd: string, folded: boolean) => void;
+	/** Folds or opens every project of a list at once: this device's (`deviceId` absent) or a paired host's. */
+	setGroupsFolded: (cwds: readonly string[], folded: boolean, deviceId?: string) => void;
 	setChatsFolded: (deviceId: string, folded: boolean) => void;
 	/** A device header's color; `undefined` goes back to automatic. */
 	setDeviceColor: (deviceId: string, choice: DeviceColorChoice | undefined) => void;
@@ -86,6 +88,17 @@ export const useSidebarFolds = create<SidebarFoldsStore>()((set, get) => {
 		setDeviceGroupFolded: (deviceId, cwd, folded) =>
 			edit({ deviceGroups: withFlag(get().deviceGroups, deviceGroupKey(deviceId, cwd), folded) }),
 		setChatsFolded: (deviceId, folded) => edit({ chats: withFlag(get().chats, deviceId, folded) }),
+		setGroupsFolded: (cwds, folded, deviceId) =>
+			edit(
+				deviceId === undefined
+					? { groups: cwds.reduce((groups, cwd) => withFlag(groups, cwd, folded), get().groups) }
+					: {
+							deviceGroups: cwds.reduce(
+								(groups, cwd) => withFlag(groups, deviceGroupKey(deviceId, cwd), folded),
+								get().deviceGroups,
+							),
+						},
+			),
 		setDeviceColor: (deviceId, choice) => {
 			const { [deviceId]: _previous, ...rest } = get().deviceColors;
 			edit({ deviceColors: choice === undefined ? rest : { ...rest, [deviceId]: choice } });

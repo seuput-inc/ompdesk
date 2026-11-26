@@ -1,12 +1,13 @@
 /**
  * One bot's page (Orca's bot panel, `BotActivityPanel.tsx:52-100`, `BotPanelHeader.tsx:143-276`, `BotPausedBanner`):
  * its header (face with its exception mark, name renamed in place, its now line, Open home chat, the gear for its
- * settings and More: pause or resume, copy its folder) and three tabs: Activity, Chats and Settings (FK-B12, B08).
+ * settings and More: pause or resume, copy its folder) and four tabs: Activity, Items (its count of what needs the
+ * person; FK-B35), Chats and Settings (FK-B12, B08).
  * A paused bot says so across the top with Resume (FK-B25).
  */
 import { House, MoreHorizontal, Settings2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { Bot } from "../../../shared/bots";
+import { type Bot, itemsNeedingYou } from "../../../shared/bots";
 import { useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
 import { refreshBots, useBotsStore } from "../../stores/bots";
@@ -20,6 +21,7 @@ import { BotSettings } from "./BotSettings";
 import { openBotHome } from "./bot-launch";
 import { type BotPageTab, useBotPage } from "./bot-page";
 import type { BotFacts } from "./bot-view";
+import { ItemsPane } from "./items/ItemsPane";
 
 export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; onDeleted: () => void }) {
 	const t = useT();
@@ -44,6 +46,14 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 		});
 	};
 	const mark = bot.paused ? "paused" : facts.needsYou > 0 ? "needsYou" : facts.failed ? "failed" : null;
+	const openItems = useBotsStore(
+		s =>
+			itemsNeedingYou(
+				s.state.items.filter(item => item.bot === bot.id && !item.stale),
+				null,
+				Date.now(),
+			).length,
+	);
 	return (
 		<div className="flex min-h-0 min-w-0 flex-col" data-bot-pane={bot.id}>
 			{bot.paused && (
@@ -139,13 +149,15 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 						label: t("bots.pane.activity"),
 						badge: facts.needsYou > 0 ? facts.needsYou : undefined,
 					},
+					{ id: "items", label: t("bots.pane.items"), badge: openItems > 0 ? openItems : undefined },
 					{ id: "chats", label: t("bots.pane.chats") },
 					{ id: "settings", label: t("bots.pane.settings") },
 				]}
 				variant="underline"
 			/>
-			<div className="min-h-0 flex-1" role="tabpanel">
+			<div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
 				{tab === "activity" && <BotActivity bot={bot} />}
+				{tab === "items" && <ItemsPane bots={[bot]} group={false} owner={bot.id} />}
 				{tab === "chats" && <BotChats bot={bot} />}
 				{tab === "settings" && <BotSettings bot={bot} onDeleted={onDeleted} />}
 			</div>

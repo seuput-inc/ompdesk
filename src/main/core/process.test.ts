@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -311,5 +312,25 @@ describe("CoreProcess", () => {
 		for (let start = 0; start < 3; start++)
 			await expect(echo(core, {})).rejects.toMatchObject({ code: "core_unavailable" });
 		await expect(echo(core, {})).rejects.toThrow(/not started again for 30 s/);
+	});
+
+	it("a process main starts while the core's owner is spawned keeps its pipes: its output ends when it exits", async () => {
+		// libuv on Windows makes the child's ends of a spawn's pipes inheritable until its CreateProcess returned, and every
+		// process the owner worker spawns inherits what is inheritable then: `ompdesk-core --own` spawned beside main's
+		// spawn held that child's stdout for its whole life, so main's `execFileSync` of it never returned (win-platform,
+		// 26 Nov 2026: autopilot-restart-resume.test.ts's `gitSync` beside the file's first core start).
+		const core = startCore();
+		const answered = echo(core, { value: 1 });
+		const windows = process.platform === "win32";
+		const shell = windows ? (process.env.ComSpec ?? "cmd.exe") : "/bin/sh";
+		const open = new Set<number>();
+		// Spawns while the owner may still be starting, so one of them would run beside its spawn.
+		for (let n = 0, until = Date.now() + 2_000; n < 64 && Date.now() < until; n++) {
+			const child = spawn(shell, windows ? ["/d", "/c", "exit"] : ["-c", ":"], { windowsHide: true });
+			open.add(n);
+			child.once("close", () => open.delete(n));
+		}
+		await answered;
+		await vi.waitFor(() => expect(open.size).toBe(0), { timeout: 10_000, interval: 50 });
 	});
 });

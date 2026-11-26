@@ -76,14 +76,28 @@ export function MissingFolderSheet({
 						{t("missingFolder.restore")}
 					</Button>
 				) : (
-					<Button
-						data-missing-folder-archive
-						disabled={!canArchive}
-						onClick={() => void archive()}
-						variant="primary"
-					>
-						{t("missingFolder.archive")}
-					</Button>
+					<>
+						<Button
+							data-missing-folder-locate
+							onClick={() =>
+								void import("../../lib/relocate-folder")
+									.then(module => module.relocateFolder({ device, from: folder, sessions }))
+									.then(moved => moved && onClose())
+									.catch((error: unknown) => toastError({ title: t("sidebar.project.addFailed"), error }))
+							}
+							variant="secondary"
+						>
+							{t("sidebar.menu.locateFolder")}
+						</Button>
+						<Button
+							data-missing-folder-archive
+							disabled={!canArchive}
+							onClick={() => void archive()}
+							variant="primary"
+						>
+							{t("missingFolder.archive")}
+						</Button>
+					</>
 				)
 			}
 			onClose={onClose}

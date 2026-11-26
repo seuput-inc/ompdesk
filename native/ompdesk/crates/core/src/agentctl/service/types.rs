@@ -1624,7 +1624,8 @@ pub struct AppArgs {
 /// `ompdesk_bot`'s arguments (`BotArgs` of `tools.ts`).
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct BotArgs {
-    /// `create`, `list`, `pause`, `resume`, `set`, `look_around` or `hand`.
+    /// `create`, `offer`, `list`, `pause`, `resume`, `set`, `look_around` or `hand`. `offer` takes `name` and the
+    /// purpose in `text`.
     pub action: String,
     #[serde(default)]
     pub name: Option<String>,
@@ -1693,6 +1694,35 @@ pub struct ItemArgs {
     pub session: Option<String>,
     #[serde(default)]
     pub pr: Option<String>,
+    /// Several questions asked at once (`set`): each with its quick replies.
+    #[serde(default)]
+    pub asks: Option<Vec<AskArg>>,
+}
+
+/// One question of `ItemArgs.asks`.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct AskArg {
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub recommended: Option<u32>,
+    #[serde(default)]
+    pub multi: bool,
+}
+
+/// `ompdesk_room`'s arguments (`RoomArgs` of `tools.ts`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct RoomArgs {
+    /// `list`, `read` or `post`.
+    pub action: String,
+    /// Its id or name.
+    #[serde(default)]
+    pub room: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u32>,
 }
 
 /// The control tools' names (`AGENT_CONTROL_TOOLS`).
@@ -1716,10 +1746,11 @@ pub enum Tool {
     Report,
     Bot,
     Item,
+    Room,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 18] = [
+    pub const ALL: [Tool; 19] = [
         Tool::List,
         Tool::Open,
         Tool::Send,
@@ -1738,6 +1769,7 @@ impl Tool {
         Tool::Report,
         Tool::Bot,
         Tool::Item,
+        Tool::Room,
     ];
 
     pub fn name(self) -> &'static str {
@@ -1760,6 +1792,7 @@ impl Tool {
             Tool::Report => "ompdesk_report",
             Tool::Bot => "ompdesk_bot",
             Tool::Item => "ompdesk_item",
+            Tool::Room => "ompdesk_room",
         }
     }
 

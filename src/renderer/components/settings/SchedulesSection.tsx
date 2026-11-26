@@ -49,6 +49,7 @@ import {
 	Tooltip,
 } from "../common";
 import { openPeer } from "../layout/work-board/open-peer";
+import { useFirstVisitTour } from "../onboarding/surface-tours";
 import { MailAccounts } from "./MailAccounts";
 import { ScheduleDialog, type ScheduleSeed } from "./ScheduleDialog";
 import { SettingsRow, SettingsSection } from "./SettingsLayout";
@@ -74,6 +75,7 @@ function groupsOf(schedules: readonly Schedule[], query: string): [string, Sched
 
 export function SchedulesSection() {
 	const t = useT();
+	useFirstVisitTour("schedules");
 	const cwd = useSessionStore(state => state.cwd);
 	// A tab on a paired host shows and edits that host's schedules: they run on the host, in its folders.
 	const device = useFocusedTabDevice();

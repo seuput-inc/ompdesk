@@ -22,6 +22,7 @@ mod bot_files;
 mod bots;
 mod items;
 mod review;
+mod rooms;
 mod schedule;
 #[cfg(test)]
 mod tests;

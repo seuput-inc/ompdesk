@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Locator, Page } from "@playwright/test";
 import { STRESS_PROMPT } from "../src/renderer/dev-harness/fixture";
 import { en } from "../src/renderer/locales/en";
@@ -477,6 +478,69 @@ async function ensureParityBot(page: Page): Promise<void> {
 	});
 }
 
+/** Checks `ready` every 250 ms until it holds, for `timeoutMs`; throws `what` when it never does. */
+async function until(ready: () => Promise<boolean>, what: string, timeoutMs = 30_000): Promise<void> {
+	for (const end = Date.now() + timeoutMs; Date.now() < end; ) {
+		if (await ready()) return;
+		await sleep(250);
+	}
+	throw new Error(what);
+}
+
+/**
+ * The parity bot has items to show (bot-items, bot-item): a chat opened in its folder adds two the way a bot does,
+ * `ompdesk_item add` through the fake omp's host tool (e2e/fixture/rpc-ui.ts), then closes again.
+ */
+async function ensureParityItems(page: Page): Promise<void> {
+	await ensureParityBot(page);
+	const folder = await page.evaluate(async () => {
+		const state = await window.omp.bots.command({ action: "get" });
+		return state.items.length > 0 ? null : (state.bots[0]?.folder ?? null);
+	});
+	if (!folder) return;
+	const tabId = (await page.evaluate(cwd => window.omp.tabs.spawn({ cwd }), folder))?.tabId;
+	if (!tabId) throw new Error("no chat opened in the parity bot's folder");
+	const tool = (args: Record<string, unknown>) =>
+		page.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
+			tabId,
+			`fixture:host-tool:ompdesk_item ${JSON.stringify(args)}`,
+		] as const);
+	try {
+		await until(
+			async () =>
+				(await page.evaluate(() => window.omp.tabs.list())).some(
+					tab => tab.tabId === tabId && tab.status === "ready",
+				),
+			"the parity bot's chat never became ready",
+		);
+		await tool({
+			action: "add",
+			title: "Compare the parity sheet",
+			description: "Read the three views side by side and note what differs.",
+			done_means: "Every surface agrees.",
+			status: "working",
+		});
+		await tool({ action: "add", title: "Plan the next surface" });
+		await until(
+			async () => (await page.evaluate(() => window.omp.bots.command({ action: "get" }))).items.length >= 2,
+			"the parity bot's items never arrived",
+		);
+	} finally {
+		await page.evaluate(id => window.omp.tabs.close(id), tabId);
+	}
+}
+
+/** The Bots page on the parity bot's page, its Items tab chosen. */
+async function openParityItems(page: Page, look: Look): Promise<void> {
+	await ensureParityItems(page);
+	await openDrawer(page, look);
+	await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+	// A phone shows the list first: the bot's row opens its page.
+	if ((await page.locator("[data-bot-pane]:visible").count()) === 0)
+		await page.locator("[data-bots-page-row]:visible").first().click();
+	await page.locator('[data-bot-pane-tabs] [data-tab-id="items"]:visible').first().click();
+}
+
 /**
  * The usage block: a desktop window's opens over its status bar from the usage summary (the owner's decision, 25 Nov
  * 2026); a phone or tablet page keeps it in the sidebar footer.
@@ -503,6 +567,13 @@ async function openProjectMenu(page: Page, look: Look): Promise<void> {
 /** Closes the menu or dialog a surface left open (Escape), so the next starts from the same window. */
 async function closeOverlay(page: Page): Promise<void> {
 	await page.keyboard.press("Escape");
+}
+
+/** An item of the sidebar footer's Help menu, as a person picks it (a phone's drawer first; a finger's action sheet). */
+async function openHelpItem(page: Page, look: Look, name: string): Promise<void> {
+	await openDrawer(page, look);
+	await page.locator("button[aria-label='Help']:visible").first().click();
+	await page.locator(":is([role=menuitem], button):visible", { hasText: name }).first().click();
 }
 
 /** Closes the queue popover, drops both lanes and stops the turn `composer-queue` started, so the session is idle again. */
@@ -2223,8 +2294,67 @@ export const SURFACES: readonly Surface[] = [
 			// A phone shows the list first: the bot's row opens its page.
 			const row = page.locator("[data-bots-page-row]:visible").first();
 			if ((await page.locator("[data-bot-pane]:visible").count()) === 0) await row.click();
+			// The page keeps the tab it was last on (bot-items leaves it on Items).
+			await page.locator('[data-bot-pane-tabs] [data-tab-id="activity"]:visible').first().click();
 		},
 		ready: "[data-bot-pane] [data-bot-activity]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "bot-items",
+		area: "B",
+		title: "A bot's Items tab: the filter, its items in groups (Working, Planned) with their rows",
+		open: openParityItems,
+		ready: "[data-bot-pane] [data-bot-items] [data-bot-item]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "bot-item",
+		area: "B",
+		title: "A bot's item page: back and step, status and links, its description, Done means, activity and the comment box",
+		open: async (page, look) => {
+			await openParityItems(page, look);
+			await page.locator("[data-bot-item-open]:visible").first().click();
+		},
+		ready: "[data-bot-item-page] [data-bot-item-activity]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "bot-room",
+		area: "B",
+		title: "A bot group's room: its faces and menu, the Room and Items tabs, the posts and the post box",
+		open: async (page, look) => {
+			await ensureParityBot(page);
+			await page.evaluate(async () => {
+				const state = await window.omp.bots.command({ action: "get" });
+				if ((state.rooms ?? []).length === 0 && state.bots[0])
+					await window.omp.bots.command({ action: "roomCreate", name: "Parity group", bots: [state.bots[0].id] });
+			});
+			await openDrawer(page, look);
+			await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+			await page.locator("[data-bots-page-room]:visible").first().click();
+		},
+		ready: "[data-bot-room] [data-bot-room-box]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "bot-cards",
+		area: "A",
+		title: "Bot cards in a chat: a new bot offer with Create bot, an ask to a bot and a tool a bot added with Sign in and Remove",
+		// The host's fake omp answers "fixture bot cards" with the three calls ended (e2e/fixture/rpc-ui.ts).
+		open: async page => {
+			await ensureParityBot(page);
+			await promptShownTab(page, "fixture bot cards");
+		},
+		ready: "[data-bot-card='toolsAdded']",
 		settle: 600,
 		when: () => false,
 		parity: { session: "work" },
@@ -2536,7 +2666,9 @@ export const SURFACES: readonly Surface[] = [
 							? openModelSetup(page, look)
 							: dialog.id === "dialog-worktree"
 								? openNewTaskSheet(page, look)
-								: ui(page, dialog.action, ...(dialog.args ?? [])),
+								: dialog.id === "dialog-feedback"
+									? openHelpItem(page, look, "Send feedback")
+									: ui(page, dialog.action, ...(dialog.args ?? [])),
 			...(dialog.id === "dialog-command-palette"
 				? { ready: "[role=dialog] [role=listbox]", parity: { session: "work" as const } }
 				: dialog.id === "dialog-workspace"
@@ -2556,10 +2688,25 @@ export const SURFACES: readonly Surface[] = [
 									ready: "[role=dialog] [data-new-task-sheet] [data-new-task-project]",
 									parity: { session: "work" as const, after: closeOverlay },
 								}
-							: {}),
+							: dialog.id === "dialog-feedback"
+								? {
+										// Opened from the Help menu; ready with its picture field (Orca FB5).
+										ready: "[role=dialog] [data-feedback-picture]",
+										parity: { session: "work" as const, after: closeOverlay },
+									}
+								: {}),
 			settle: 700,
 		}),
 	),
+	{
+		id: "capabilities-sheet",
+		area: "B",
+		title: "Help › What OMPdesk can do: what the app adds, each with Open or Show me",
+		open: (page, look) => openHelpItem(page, look, "What OMPdesk can do"),
+		ready: "[data-capabilities] [data-capability='board']",
+		settle: 700,
+		parity: { session: "work", after: closeOverlay },
+	},
 	{
 		id: "toasts",
 		area: "B",

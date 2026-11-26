@@ -17,6 +17,7 @@ import {
 	readSidebarPrefs,
 	SIDEBAR_PREFS_KEY,
 	type SidebarChange,
+	type SidebarEntryField,
 	type SidebarPrefs,
 	sidebarPatch,
 } from "../../shared/sidebar-prefs";
@@ -48,6 +49,10 @@ interface SidebarPrefsStore extends SidebarPrefs {
 	setSessionOrder: (list: string, order: string[]) => Promise<void>;
 	setSessionsArchived: (ids: readonly string[], archived: boolean) => Promise<void>;
 	toggleRailPin: (pin: RailPin) => Promise<void>;
+	/** A project's group, color or emoji, a session's emoji or parent (`set-entry`); null removes it. */
+	setEntry: (field: SidebarEntryField, key: string, value: string | null) => Promise<void>;
+	/** Renames a project group, or with `to` null takes every project out of it. */
+	renameProjectGroup: (from: string, to: string | null) => Promise<void>;
 	touchWorkspace: (cwd: string) => void;
 	reset: () => void;
 }
@@ -205,6 +210,10 @@ export const useSidebarPrefs = create<SidebarPrefsStore>()((set, get) => {
 				pin,
 				pinned: !state.railPins.includes(pin),
 			})),
+
+		setEntry: (field, key, value) => write("sidebar.entryFailed", () => ({ op: "set-entry", field, key, value })),
+
+		renameProjectGroup: (from, to) => write("sidebar.entryFailed", () => ({ op: "rename-project-group", from, to })),
 
 		touchWorkspace: cwd => {
 			// A lost write costs an ordering hint, nothing the user set out to do. Before the stored blob is known

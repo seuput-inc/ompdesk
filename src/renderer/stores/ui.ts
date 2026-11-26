@@ -343,6 +343,10 @@ interface UiStore {
 	feedbackPrefill: { error?: string; title?: string; description?: string } | null;
 	openFeedback: (prefill?: { error?: string; title?: string; description?: string } | null) => void;
 	closeFeedback: () => void;
+	/** Help › What OMPdesk can do (`dialogs/CapabilitiesSheet`). */
+	capabilitiesOpen: boolean;
+	openCapabilities: () => void;
+	closeCapabilities: () => void;
 	openBenchmark: () => void;
 	closeBenchmark: () => void;
 	openModelSetup: () => void;
@@ -669,6 +673,9 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 	feedbackPrefill: null,
 	openFeedback: prefill => set({ feedbackOpen: true, feedbackPrefill: prefill ?? null }),
 	closeFeedback: () => set({ feedbackOpen: false, feedbackPrefill: null }),
+	capabilitiesOpen: false,
+	openCapabilities: () => set({ capabilitiesOpen: true }),
+	closeCapabilities: () => set({ capabilitiesOpen: false }),
 	benchmarkOpen: false,
 	openBenchmark: () => set({ benchmarkOpen: true }),
 	closeBenchmark: () => set({ benchmarkOpen: false }),

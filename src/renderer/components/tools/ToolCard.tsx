@@ -1,5 +1,14 @@
 import { Ban, CircleX } from "lucide-react";
-import { type ReactNode, type RefObject, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+	type ReactNode,
+	type RefObject,
+	useContext,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { agentDesktopCall, agentDesktopErrorCode, isAgentDesktopNoMatch } from "../../lib/agent-desktop-name";
 import { basename, cx, dirname, durationBetween, resultDetails } from "../../lib/format";
 import { useT } from "../../lib/i18n";
@@ -8,6 +17,7 @@ import { selectDesktopSlotPosition, useDesktopSlotStore } from "../../stores/des
 import { useRuntimeTabId } from "../../stores/session-runtime-context";
 import { selectToolEntry, useToolsStore } from "../../stores/tools";
 import { useUiStore } from "../../stores/ui";
+import { BotCardsInRun, BotToolCard, botCardOf, useCardHidden } from "../chat/bots/bot-card-kind";
 import { stepIntent } from "../chat/work/work-steps";
 import { Collapse, DisclosureButton, Spinner, StatusDot } from "../common";
 import { type DiffStats, toolDiffStats } from "./diff-stats";
@@ -342,6 +352,15 @@ export function ToolCard({
 			DIAGNOSTIC_TOOLS[toolName] && !failed && result != null ? resultDiagnostics(resultDetails(result)) : [],
 		[toolName, result, failed],
 	);
+	// A bot's offer, a request to a bot, an item change or a tool it added draws as its card once the call ended; inside
+	// a work run it stays a row, as the run shows its cards under it (`RunBotCards`).
+	const inRun = useContext(BotCardsInRun);
+	const botCard = inRun ? null : botCardOf(toolName, args);
+	const botCardHidden = useCardHidden(botCard);
+	if (botCard && !isPartial && !isAborted && (!failed || botCard === "botRequests")) {
+		if (botCardHidden) return null;
+		return <BotToolCard args={args} failed={failed} kind={botCard} result={result} toolName={toolName} />;
+	}
 
 	return (
 		<div

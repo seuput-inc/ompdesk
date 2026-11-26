@@ -265,8 +265,9 @@ pub fn mutates(tool: Tool, args: &Value) -> bool {
         Tool::Open | Tool::Send | Tool::Answer | Tool::Stop | Tool::Merge | Tool::App => true,
         Tool::Schedule => action != Some("list"),
         Tool::Autopilot => action != Some("status"),
-        Tool::Bot => action != Some("list"),
+        Tool::Bot => !matches!(action, Some("list" | "offer")),
         Tool::Item => !matches!(action, Some("list" | "show")),
+        Tool::Room => action == Some("post"),
         _ => false,
     }
 }

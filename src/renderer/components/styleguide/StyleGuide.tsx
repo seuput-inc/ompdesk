@@ -104,6 +104,7 @@ import {
 	Spinner,
 	StatusDot,
 	SwapText,
+	SwipeActions,
 	Switch,
 	SwitchField,
 	SwitchTile,
@@ -1177,6 +1178,13 @@ export default function StyleGuide() {
 								title="The project page loads every provider's accounts in one request instead of one per row"
 								titleLines={2}
 							/>
+						</Block>
+						<Block className="space-y-px" label="SwipeActions (swipe the row on a touch screen)">
+							<SwipeActions
+								trailing={[{ id: "archive", label: "Archive", icon: GitBranch, onSelect: () => {} }]}
+							>
+								<ListRow leading={<GitBranch />} onClick={() => {}} title="Swipe me left" />
+							</SwipeActions>
 						</Block>
 						<Block className="space-y-px" label="ListRow size=sm (a side panel's list)">
 							<ListRow

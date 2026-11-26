@@ -155,6 +155,10 @@ const SHORTCUT_ROWS: Record<KeymapActionId, string | null> = {
 	hotkeys: "hotkeys",
 	// A held key: a palette row cannot hold it, and the composer's mic is the click.
 	"voice.dictate": null,
+	// The item page's own keys: they act only inside the page, which no palette row reaches.
+	"botItem.back": null,
+	"botItem.previous": null,
+	"botItem.next": null,
 };
 
 const row = (items: CommandMenuItem[], name: string) => items.find(item => item.name === name);

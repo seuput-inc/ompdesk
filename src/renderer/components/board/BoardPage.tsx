@@ -37,6 +37,7 @@ import {
 } from "../common";
 import { sessionLive } from "../layout/SessionLiveTitle";
 import { SessionStatusLane } from "../layout/sidebar/SessionStatusLane";
+import { useFirstVisitTour } from "../onboarding/surface-tours";
 import { BoardCardView, cardLine } from "./BoardCard";
 import {
 	BOARD_LANES,
@@ -93,6 +94,7 @@ function openCard(card: BoardCard, failed: string): void {
 
 export function BoardPage() {
 	const t = useT();
+	useFirstVisitTour("board");
 	const view = useUiStore(state => state.boardView);
 	const openBoard = useUiStore(state => state.openBoard);
 	const computers = useBoardComputers();

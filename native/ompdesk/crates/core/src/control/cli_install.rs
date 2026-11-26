@@ -150,6 +150,43 @@ pub(super) async fn install(call: Call) -> Result<Reply, Fault> {
     .await
 }
 
+#[derive(Deserialize)]
+struct Remove {
+    dirs: Vec<PathBuf>,
+}
+
+/// The launchers this file wrote (the marked `ompdesk` and `ompdesk.cmd`) leave `dirs`; a foreign one stays.
+fn remove_launchers(dirs: &[PathBuf]) -> Result<Vec<PathBuf>, Fault> {
+    let mut removed = Vec::new();
+    for dir in dirs {
+        for name in ["ompdesk", "ompdesk.cmd"] {
+            let file = dir.join(name);
+            let ours = match fs::read(&file) {
+                Ok(bytes) => bytes
+                    .windows(MARKER.len())
+                    .any(|part| part == MARKER.as_bytes()),
+                Err(error) if error.kind() == ErrorKind::NotFound => false,
+                Err(error) => return Err(tree::fault(&error, "open", &file)),
+            };
+            if !ours {
+                continue;
+            }
+            match fs::remove_file(&file) {
+                Ok(()) => removed.push(file),
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(tree::fault(&error, "unlink", &file)),
+            }
+        }
+    }
+    Ok(removed)
+}
+
+/// "Remove OMPdesk from this computer": the `ompdesk` command goes from the app's bin and Bun's bin.
+pub(super) async fn remove(call: Call) -> Result<Reply, Fault> {
+    let args: Remove = call.params()?;
+    blocking(move || Reply::json(&remove_launchers(&args.dirs)?)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,5 +213,22 @@ mod tests {
         ] {
             assert_eq!(crate::hex(&Sha256::digest(bytes.as_bytes())), expected);
         }
+    }
+
+    #[test]
+    fn removes_only_the_launchers_it_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sh, cmd) = launchers("/app/ompdesk", true);
+        fs::write(dir.path().join("ompdesk"), sh).unwrap();
+        fs::write(dir.path().join("ompdesk.cmd"), cmd.unwrap()).unwrap();
+        let foreign = tempfile::tempdir().unwrap();
+        fs::write(foreign.path().join("ompdesk"), "#!/bin/sh\necho mine\n").unwrap();
+        let dirs = [dir.path().to_path_buf(), foreign.path().to_path_buf()];
+        let removed = remove_launchers(&dirs).unwrap();
+        assert_eq!(removed.len(), 2);
+        assert!(!dir.path().join("ompdesk").exists());
+        assert!(!dir.path().join("ompdesk.cmd").exists());
+        assert!(foreign.path().join("ompdesk").exists());
+        assert!(remove_launchers(&dirs).unwrap().is_empty());
     }
 }

@@ -55,6 +55,10 @@ export interface RowOrder {
 	groupOrder: readonly string[];
 	/** The order the person set for a list (a group's key, or `CHATS_ORDER_KEY`). */
 	sessionOrder: (list: string) => readonly string[] | undefined;
+	/** The group a project is filed under (Orca's project groups); its projects then list together, under its name. */
+	projectGroup?: (cwd: string) => string | undefined;
+	/** The parent the person gave a session (session file → parent's file, `""` = none), over the automatic opener. */
+	sessionParents?: Readonly<Record<string, string>>;
 }
 
 export interface SidebarFacts {
@@ -105,6 +109,8 @@ export interface RowGroup {
 	/** A new, still empty tab works in it. */
 	open: boolean;
 	missing: boolean;
+	/** The project group it is filed under: the groups' projects list together, at the place of the group's first. */
+	section?: string;
 }
 
 export interface SidebarRows {
@@ -251,6 +257,8 @@ export function openerOfSessions(
 	tabs: readonly FamilyTab[],
 	sessions: readonly FamilySession[],
 	recordedOpeners: ReadonlyMap<string, string> = new Map(),
+	/** The parent the person gave a session over every rule here (Orca's parent picker); `""` = none at all. */
+	chosenParents: ReadonlyMap<string, string> = new Map(),
 ): Map<string, string> {
 	const sessionOf = new Map<string, FamilySession>();
 	for (const session of sessions) {
@@ -259,9 +267,11 @@ export function openerOfSessions(
 	}
 	const known = new Set(sessions.map(session => session.path));
 	const direct = new Map<string, string>();
+	for (const [child, parent] of chosenParents)
+		if (known.has(child) && parent !== child && known.has(parent)) direct.set(child, parent);
 	for (const tab of tabs) {
 		const child = sessionOf.get(tab.id);
-		if (!child) continue;
+		if (!child || chosenParents.has(child.path)) continue;
 		const opener =
 			(tab.openedBy ? tabs.find(entry => entry.id === tab.openedBy) : undefined) ??
 			(tab.openedBySession ? tabs.find(entry => entry.sessionPath === tab.openedBySession) : undefined);
@@ -270,7 +280,7 @@ export function openerOfSessions(
 		if (path && path !== child.path) direct.set(child.path, path);
 	}
 	for (const session of sessions) {
-		if (direct.has(session.path)) continue;
+		if (direct.has(session.path) || chosenParents.has(session.path)) continue;
 		const opener = recordedOpeners.get(session.path);
 		if (opener && opener !== session.path && known.has(opener)) {
 			direct.set(session.path, opener);
@@ -444,6 +454,7 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 			created: session.created,
 		})),
 		recorded,
+		new Map(Object.entries(facts.order.sessionParents ?? {})),
 	);
 	for (const path of runParent.keys()) rootOf.delete(path);
 
@@ -543,7 +554,7 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 		if (project.missing) missing.add(key);
 		draftOf(key, key);
 	}
-	const allGroups = orderByManual(
+	const ordered = orderByManual(
 		[...drafts].map(([key, draft]): RowGroup => {
 			// The project's own order; an Autopilot run's children follow its row in that order.
 			const sorted = inListOrder(draft.sessions, key);
@@ -559,6 +570,7 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 			}
 			// A child whose run has no row here still lists, at the end.
 			rows.push(...runChildRows.filter(child => !placed.has(runParent.get(child.path) ?? "")));
+			const section = facts.order.projectGroup?.(key);
 			return {
 				cwd: key,
 				members: draft.members,
@@ -567,6 +579,7 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 				listed: addedAt.has(key),
 				open: open.has(key),
 				missing: missing.has(key),
+				...(section ? { section } : {}),
 			};
 		}),
 		group => group.cwd,
@@ -578,6 +591,22 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 				Math.max(addedAt.get(group.cwd) ?? 0, ...[...group.sessions, ...group.folded].map(createdAt)),
 		},
 	);
+	// A group's projects list together, in their own order, where the group's first project stands (Orca's grouped
+	// project list, sidebar/worktree-list/rows/ProjectGroupDialogs.tsx).
+	const bySection = new Map<string, RowGroup[]>();
+	const allGroups = ordered
+		.flatMap(group => {
+			if (!group.section) return [group];
+			const bucket = bySection.get(group.section);
+			if (bucket) {
+				bucket.push(group);
+				return [];
+			}
+			const opened = [group];
+			bySection.set(group.section, opened);
+			return [opened];
+		})
+		.flat();
 
 	const query = facts.query.trim().toLocaleLowerCase();
 	const matches = (session: RowSession) =>

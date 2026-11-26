@@ -29,18 +29,52 @@ function childPath(parent: string, name: string): string {
 	return `${parent.replace(/[\\/]+$/, "")}${separator}${name}`;
 }
 
-/** Clone `repo` into a folder the person picks (also a project item's missing repository, `GithubProjects.tsx`). */
-export function CloneDialog({ repo, host, onClose }: { repo: string; host: string | undefined; onClose: () => void }) {
+/**
+ * `OWNER/NAME`, a `https://<host>/OWNER/NAME(.git)` URL or `git@<host>:OWNER/NAME(.git)`, read as the repository and
+ * its GitHub host (absent for github.com); null for anything else.
+ */
+export function parseRepoInput(input: string): { repo: string; host?: string } | null {
+	const text = input
+		.trim()
+		.replace(/\.git$/, "")
+		.replace(/\/+$/, "");
+	if (GITHUB_REPO_PATTERN.test(text)) return { repo: text };
+	const match = /^(?:https?:\/\/([^/\s]+)\/|git@([^:\s]+):)([^/\s]+\/[^/\s]+)$/.exec(text);
+	const host = match?.[1] ?? match?.[2];
+	if (!host || !match?.[3] || !GITHUB_REPO_PATTERN.test(match[3])) return null;
+	return host === "github.com" ? { repo: match[3] } : { repo: match[3], host };
+}
+
+/**
+ * Clones a repository into a folder that does not exist yet. With `repo` it is that repository's (the GitHub center's
+ * row, a project item's missing repository in `GithubProjects.tsx`); without, the person names it (the palette's Clone
+ * repository…, Orca's add-project clone step, sidebar/project-admission/dialog/AddRepoCloneStep.tsx), and `onCloned`
+ * hears the new folder.
+ */
+export function CloneDialog({
+	repo: givenRepo,
+	host: givenHost,
+	onClose,
+	onCloned,
+}: {
+	repo?: string;
+	host: string | undefined;
+	onClose: () => void;
+	onCloned?: (path: string) => void;
+}) {
 	const t = useT();
 	const { busy, run } = useGithubMutation();
+	const [source, setSource] = useState("");
 	const [destination, setDestination] = useState("");
+	const named = givenRepo === undefined ? parseRepoInput(source) : { repo: givenRepo, host: givenHost };
+	const repo = named?.repo ?? "";
 	const absolute = /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(destination.trim());
 	const choose = async () => {
 		const parent = await pickWorkspaceDirectory({
 			title: t("github.repos.cloneInto"),
 			device: focusedTabDevice(),
 		});
-		if (parent) setDestination(childPath(parent, repo.split("/")[1] ?? repo));
+		if (parent) setDestination(childPath(parent, repo.split("/")[1] || "repository"));
 	};
 	return (
 		<Modal
@@ -50,7 +84,7 @@ export function CloneDialog({ repo, host, onClose }: { repo: string; host: strin
 						{t("common.cancel")}
 					</Button>
 					<Button
-						disabled={!absolute}
+						disabled={!absolute || !named}
 						form="github-clone"
 						loading={busy === "clone"}
 						type="submit"
@@ -63,27 +97,49 @@ export function CloneDialog({ repo, host, onClose }: { repo: string; host: strin
 			onClose={onClose}
 			open
 			size="md"
-			title={t("github.repos.cloneTitle", { repo })}
+			title={givenRepo === undefined ? t("github.repos.cloneAny") : t("github.repos.cloneTitle", { repo })}
 		>
 			<form
 				className="flex flex-col gap-3"
 				id="github-clone"
 				onSubmit={event => {
 					event.preventDefault();
-					if (!absolute) return;
+					if (!absolute || !named) return;
+					let path = "";
 					void run(
 						"clone",
 						async () => {
-							const cloned = await github({ host, repo, op: "repo_clone", destination: destination.trim() });
+							const cloned = await github({
+								...(named.host === undefined ? {} : { host: named.host }),
+								repo: named.repo,
+								op: "repo_clone",
+								destination: destination.trim(),
+							});
+							path = cloned.path;
 							setDestination(cloned.path);
 						},
 						t("github.actionFailed"),
 						t("github.repos.cloned"),
-					).then(done => done && onClose());
+					).then(done => {
+						if (!done) return;
+						if (path) onCloned?.(path);
+						onClose();
+					});
 				}}
 			>
+				{givenRepo === undefined && (
+					<Input
+						autoFocus
+						error={source.trim() && !named ? t("github.repos.sourceInvalid") : undefined}
+						hint={t("github.repos.sourceHint")}
+						label={t("github.repos.source")}
+						mono
+						onChange={event => setSource(event.target.value)}
+						value={source}
+					/>
+				)}
 				<Input
-					autoFocus
+					autoFocus={givenRepo !== undefined}
 					error={destination.trim() && !absolute ? t("github.repos.destinationAbsolute") : undefined}
 					hint={t("github.repos.destinationHint")}
 					label={t("github.repos.destination")}
@@ -91,6 +147,7 @@ export function CloneDialog({ repo, host, onClose }: { repo: string; host: strin
 					onChange={event => setDestination(event.target.value)}
 					trailing={
 						<IconButton
+							disabled={!named}
 							icon={<FolderOpen />}
 							label={t("github.repos.chooseFolder")}
 							onClick={() => void choose()}

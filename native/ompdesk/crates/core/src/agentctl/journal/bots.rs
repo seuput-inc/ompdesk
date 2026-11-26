@@ -42,6 +42,9 @@ pub struct BotRecord {
     /// Notification kinds the owner turned off for its chats: `permission`, `done`, `failed`.
     pub quiet: Vec<String>,
     pub created_at: String,
+    /// The newest item event the owner had seen when they last opened its Items tab (`itemsOpened`): a row changed
+    /// by anyone else since reads as new.
+    pub items_seen: u64,
 }
 
 impl BotRecord {

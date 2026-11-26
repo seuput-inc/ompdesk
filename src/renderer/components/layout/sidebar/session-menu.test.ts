@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { type SessionMenuActions, type SessionMenuFacts, sessionMenuItems } from "./session-menu";
+import {
+	pickedMenuItems,
+	type SessionMenuActions,
+	type SessionMenuFacts,
+	sessionMenuItems,
+	sessionSwipeItems,
+} from "./session-menu";
 
 const t = (key: string, params?: Record<string, string | number>) =>
 	params ? `${key}:${Object.values(params).join(",")}` : key;
@@ -215,5 +221,35 @@ describe("sessionMenuItems", () => {
 			{ unread: true },
 		])
 			expect(ids({ hasTab: true, ...facts }, marking)).not.toContain("session-mark-unread");
+	});
+});
+
+describe("pickedMenuItems", () => {
+	it("archives only the picked rows no tab holds, refuses when every one is held, and deletes them all, last", () => {
+		const actions = { toggleArchive: vi.fn(), remove: vi.fn() };
+		const items = pickedMenuItems({ count: 3, archivable: 2, archived: false, actions, t });
+		expect(items.map(item => [item.id, item.label, item.disabled ?? false])).toEqual([
+			["picked-archive", "sidebar.menu.archiveCount:2", false],
+			["picked-delete", "sidebar.menu.deleteCount:3", false],
+		]);
+		expect(items.at(-1)?.danger).toBe(true);
+		const held = pickedMenuItems({ count: 2, archivable: 0, archived: false, actions, t });
+		expect(held[0]?.disabled).toBe(true);
+		expect(held[0]?.disabledReason).toBe("sidebar.archiveOpenTab");
+		const restore = pickedMenuItems({ count: 2, archivable: 2, archived: true, actions, t });
+		expect(restore[0]?.id).toBe("picked-restore");
+	});
+});
+
+describe("sessionSwipeItems", () => {
+	it("uncovers the row's enabled Mark as unread to the right and Archive or Restore to the left", () => {
+		const outOfView = sessionSwipeItems(build({ hasTab: true }, { ...every, markUnread: noop }));
+		expect(outOfView.leading?.id).toBe("session-mark-unread");
+		// Archive is disabled while a tab holds the session, so the swipe leaves it out.
+		expect(outOfView.trailing).toEqual([]);
+		const archived = sessionSwipeItems(build({ archived: true }));
+		expect(archived.leading).toBeUndefined();
+		expect(archived.trailing.map(item => item.id)).toEqual(["session-restore"]);
+		expect(sessionSwipeItems(build({})).trailing.map(item => item.id)).toEqual(["session-archive"]);
 	});
 });

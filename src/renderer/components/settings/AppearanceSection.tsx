@@ -33,6 +33,7 @@ import { toast } from "../../stores/toast";
 import { type TranscriptDetail, useUiStore } from "../../stores/ui";
 import { webRuntime } from "../../web/runtime";
 import { Badge, Button, Input, Select, SettingInfo } from "../common";
+import { DesktopPetRow } from "../pet/DesktopPetRow";
 import { SettingsAdvanced, SettingsRow, SettingsSection, SettingsSwitchRow } from "./SettingsLayout";
 import { ThemePicker } from "./ThemePicker";
 import { ThinkingDisplayRow } from "./ThinkingDisplayRow";
@@ -150,6 +151,7 @@ export function AppearanceSection() {
 			<ThisDeviceNote />
 			<SettingsSection title={t("settings.appearance.theme")}>
 				<ThemePicker />
+				<DesktopPetRow />
 			</SettingsSection>
 
 			<SettingsSection title={t("settings.appearance.text")}>

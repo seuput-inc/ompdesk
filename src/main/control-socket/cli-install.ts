@@ -20,11 +20,19 @@ export interface CliInstallOptions {
 	home: string;
 }
 
+/** The app's own bin folder, and Bun's global bin in a packaged app (a terminal outside OMPdesk finds it there). */
+function launcherDirs(options: CliInstallOptions): { appBin: string; bunBin: string | undefined } {
+	const { userData, packaged, env, home } = options;
+	return {
+		appBin: join(userData, "bin"),
+		bunBin: packaged && env.OMP_GUI_HEADLESS !== "1" ? join(bunInstallDir(env, home), "bin") : undefined,
+	};
+}
+
 /** Writes the launchers and puts the app's bin folder on `env.PATH`; returns the folders that now hold ours. */
 export async function installCliLaunchers(options: CliInstallOptions): Promise<string[]> {
-	const { binary, userData, platform, packaged, env, home } = options;
-	const appBin = join(userData, "bin");
-	const bunBin = packaged && env.OMP_GUI_HEADLESS !== "1" ? join(bunInstallDir(env, home), "bin") : undefined;
+	const { binary, platform, env } = options;
+	const { appBin, bunBin } = launcherDirs(options);
 	env.PATH = mergePathLists(env.PATH ?? "", [appBin], platform);
 	try {
 		return (
@@ -34,4 +42,10 @@ export async function installCliLaunchers(options: CliInstallOptions): Promise<s
 		console.warn(`[cli-install] ${error instanceof Error ? error.message : String(error)}`);
 		return [];
 	}
+}
+
+/** "Remove OMPdesk from this computer": the launchers this app wrote leave both folders; returns the files removed. */
+export async function removeCliLaunchers(options: CliInstallOptions): Promise<string[]> {
+	const { appBin, bunBin } = launcherDirs(options);
+	return (await core().call<string[]>("control.removeCli", { dirs: bunBin ? [appBin, bunBin] : [appBin] })).result;
 }

@@ -406,6 +406,12 @@ export const GUI_SEARCH_ITEMS: readonly GuiSearchItem[] = [
 		aliases: "colorBlindMode color blind 색각 색맹",
 	},
 	{
+		id: "desktopPet",
+		section: "appearance",
+		labelKey: "settings.gui.desktopPet",
+		aliases: "desktopPet pet sprite mascot companion 펫 캐릭터 스프라이트",
+	},
+	{
 		id: "transcriptDetail",
 		section: "appearance",
 		labelKey: "settings.gui.transcriptDetail",

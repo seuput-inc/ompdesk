@@ -47,7 +47,9 @@ export type BotDialog =
 	| { kind: "new"; draft?: Partial<NewBotDraft> }
 	| { kind: "templates"; query?: string; selected?: string }
 	| { kind: "import" }
-	| { kind: "hand"; tabId: string; title: string };
+	| { kind: "hand"; tabId: string; title: string }
+	/** New group, or a group's members (`room`: its id). */
+	| { kind: "group"; room?: string };
 
 interface BotDialogsStore {
 	dialog: BotDialog | null;
