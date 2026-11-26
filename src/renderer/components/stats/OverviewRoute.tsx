@@ -20,6 +20,7 @@ import type { AgentTypeRow, OverviewData } from "../../../shared/stats-types";
 import { useStats } from "../../hooks/use-stats";
 import { formatUsd, uiLocale } from "../../lib/format";
 import { useT } from "../../lib/i18n";
+import { DailyActivitySection } from "./DailyActivity";
 import { ChartBox, MetricCard, MetricGrid, RouteFrame, type StatColumn, type StatsRange, StatTable } from "./shared";
 
 export function OverviewRoute({ range }: { range: StatsRange }) {
@@ -134,6 +135,8 @@ export function OverviewRoute({ range }: { range: StatsRange }) {
 							}
 						/>
 					</MetricGrid>
+
+					<DailyActivitySection />
 
 					<SectionLabel className="mt-8 mb-3 first:mt-0" size="title">
 						{t("stats.overview.activity")}
