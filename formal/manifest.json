@@ -349,7 +349,7 @@
 				"native/ompdesk/crates/core/src/remote/handoff.rs",
 				"native/ompdesk/crates/core/src/sessions/deleted.rs"
 			],
-			"syncCommit": "9e6706aaa948e11f0848764449ebc46f12711921"
+			"syncCommit": "8101704afaef5d721b2007215805d53b9b0132a9"
 		}
 	]
 }
