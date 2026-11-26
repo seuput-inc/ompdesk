@@ -221,7 +221,7 @@ describe("handOffSession", () => {
 		expect(deletedSessions().list()).toEqual([]);
 		// The commit that was on the wire reaches the other computer after the abort: refused, nothing lands.
 		const late = await state.held[0]?.().catch((error: unknown) => error);
-		expect(String(late)).toContain("handoff_aborted");
+		expect(late).toMatchObject({ code: "handoff_aborted" });
 		expect(runnable()).toEqual(["a"]);
 	});
 
