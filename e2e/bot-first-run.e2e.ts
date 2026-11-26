@@ -27,7 +27,14 @@ test.beforeEach(async () => {
 	const agent = path.join(profile, "agent");
 	await Promise.all([fs.mkdir(project), fs.mkdir(desktop), fs.mkdir(agent)]);
 	await fs.writeFile(path.join(desktop, "prefs.json"), JSON.stringify({ language: "en", firstRunComplete: true }));
-	app = await launchApp({ project, desktop, agent, profile, env: { OMP_GUI_HEADLESS: "1" } });
+	// A chat is its bot's once the tab reports its session file (the core's `observe_bots`): the fake omp keeps one.
+	app = await launchApp({
+		project,
+		desktop,
+		agent,
+		profile,
+		env: { OMP_GUI_HEADLESS: "1", OMP_GUI_TEST_SESSION_FILES: "1" },
+	});
 	page = await app.firstWindow();
 	errors = [];
 	page.on("pageerror", error => errors.push(error.message));
