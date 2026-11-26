@@ -215,6 +215,7 @@ import {
 	handOffSession,
 	moveSession,
 	onSessionDeleted,
+	reconcileHandOffs,
 	recordSessionDelete,
 	renameSession,
 } from "./session-mutations";
@@ -853,6 +854,21 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		hosted: deps.hostedTabs,
 		savedWorktrees: savedWorktreesForSpawn,
 	};
+	const handOff = {
+		...handOffDeps({ devices: remoteDevices, sessionIndex }),
+		recovered: async (device: string, sessionPath: string) => {
+			remoteDevices.hostSessionsStale(device);
+			const win = windowManager.getTargetWindow();
+			if (!win) return;
+			const { folder } = await remoteDevices.request<SessionFolderState>(device, "sessions.folder", { sessionPath });
+			if (folder) await spawnTabForWindow(agentSpawnDeps, win, { device, sessionPath, cwd: folder });
+		},
+	};
+	remoteDevices.onHostOnline(host => {
+		void reconcileHandOffs(host, handOff).catch((error: unknown) =>
+			handOff.log?.("failed", { device: host, reason: String(error) }),
+		);
+	});
 	// A device's session this computer runs, whose device has been away past the notice, shows in the front window in
 	// the background, so that window carries out the calls the device was never handed (host-services.ts `#takeOver`).
 	deps.hostedTabs.showAway = sessionPath => {
@@ -1777,7 +1793,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// row menu, a phone page of this computer and the control tools' `sessions.hand_off`.
 	ipc.handle(
 		IPC_COMMANDS.SESSIONS_HAND_OFF,
-		async (_caller, payload: IpcSessionsHandOffPayload): Promise<IpcSessionHandOffResult> => {
+		async (caller, payload: IpcSessionsHandOffPayload): Promise<IpcSessionHandOffResult> => {
+			const win = caller.win ?? windowManager.getTargetWindow();
+			if (!win) throw new Error("No window to show the handed-over session");
 			if (typeof payload.sessionPath !== "string" || !payload.sessionPath.endsWith(".jsonl"))
 				throw codedError("invalid_session_path", "Invalid session path");
 			const named = typeof payload.device === "string" ? payload.device.trim() : "";
@@ -1785,15 +1803,15 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				.state()
 				.hosts.find(view => view.deviceId === named || view.name === named)?.deviceId;
 			if (!host) throw codedError("remote_unknown_device", "No paired computer goes by that name");
-			const moved = await handOffSession(
-				sidecarPool,
-				payload.sessionPath,
-				host,
-				handOffDeps({ devices: remoteDevices, sessionIndex }),
-				deps.hostedTabs,
-			);
+			const moved = await handOffSession(sidecarPool, payload.sessionPath, host, handOff, deps.hostedTabs);
 			remoteDevices.hostSessionsStale(host);
-			return { device: host, ...moved };
+			const opened = await spawnTabForWindow(agentSpawnDeps, win, { device: host, ...moved }).catch(
+				(error: unknown) => {
+					handOff.log?.("failed", { device: host, reason: `opening the moved session: ${String(error)}` });
+					return null;
+				},
+			);
+			return { device: host, ...moved, tabId: opened?.tabId ?? opened?.ownerTabId ?? null };
 		},
 	);
 

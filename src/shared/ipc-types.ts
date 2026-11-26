@@ -1392,6 +1392,8 @@ export interface IpcSessionHandOffResult {
 	device: string;
 	sessionPath: string;
 	cwd: string;
+	/** Null when the transfer committed but its remote view could not open. */
+	tabId: string | null;
 }
 
 export interface IpcSessionsTargetsPayload {

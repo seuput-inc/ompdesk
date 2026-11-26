@@ -177,6 +177,7 @@ export const en: Record<string, string> = {
 	"sidebar.handOff.noneOnline": "No paired computer is connected",
 	"sidebar.handOff.moving": "Moving to {device}…",
 	"sidebar.handOff.done": "Moved to {device}",
+	"sidebar.handOff.notOpened": "Moved to {device}. Open the session from that computer’s sidebar section.",
 	"sidebar.handOff.failed": "Couldn't move the session",
 	"sidebar.menu.links": "Link a PR or issue…",
 	"sidebar.links.title": "Session links",

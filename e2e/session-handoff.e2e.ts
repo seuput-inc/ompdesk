@@ -143,9 +143,17 @@ test("a session handed to a paired computer lives and runs there only", async ()
 			expect(result.isError, result.text).toBe(false);
 			expect(result.text).toContain("Moved to PC-B");
 			expect(existsSync(second.file)).toBe(false);
-			expect(
-				existsSync(path.join(hostProfile.root, "agent", "sessions", "fixture", path.basename(second.file))),
-			).toBe(true);
+			const remoteFile = path.join(hostProfile.root, "agent", "sessions", "fixture", path.basename(second.file));
+			expect(existsSync(remoteFile)).toBe(true);
+			await expect
+				.poll(
+					async () =>
+						(await a.evaluate(() => window.omp.tabs.list())).find(
+							tab => tab.device === hostId && tab.sessionPath === remoteFile,
+						)?.status,
+					{ timeout: 60_000 },
+				)
+				.toBe("ready");
 		});
 
 		await test.step("a session of a folder B does not have is refused and stays here", async () => {

@@ -224,7 +224,9 @@ describe("handOffSession", () => {
 		// The link comes back: asked again, the other computer owns it, and this copy goes.
 		state.down = false;
 		state.loses.clear();
-		await reconcileHandOffs("host-b", deps(request));
+		const recovered = vi.fn(async () => {});
+		await reconcileHandOffs("host-b", { ...deps(request), recovered });
+		expect(recovered).toHaveBeenCalledWith("host-b", target());
 		expectMoved();
 	});
 

@@ -176,6 +176,7 @@ export const ko: Record<string, string> = {
 	"sidebar.handOff.noneOnline": "연결된 다른 컴퓨터가 없어요",
 	"sidebar.handOff.moving": "{device} 컴퓨터로 옮기는 중…",
 	"sidebar.handOff.done": "{device} 컴퓨터로 옮겼어요",
+	"sidebar.handOff.notOpened": "{device} 컴퓨터로 옮겼어요. 사이드바에서 그 컴퓨터의 세션을 열어 주세요.",
 	"sidebar.handOff.failed": "세션을 옮기지 못했어요",
 	"sidebar.menu.links": "풀 리퀘스트나 이슈 연결…",
 	"sidebar.links.title": "세션 링크",

@@ -1192,14 +1192,13 @@ export function Sidebar() {
 	const handOffStoredSession = async (session: SidebarSession, host: { id: string; name: string }) => {
 		toast({ message: t("sidebar.handOff.moving", { device: host.name }) });
 		try {
-			const moved = await window.omp.sessions.handOff(session.path, host.id);
-			toast({ variant: "success", message: t("sidebar.handOff.done", { device: host.name }) });
-			void openTab({
-				cwd: moved.cwd,
-				sessionPath: moved.sessionPath,
-				kind: session.kind ?? "agent",
-				device: moved.device,
-			});
+			const { tabId } = await window.omp.sessions.handOff(session.path, host.id);
+			if (tabId) {
+				toast({ variant: "success", message: t("sidebar.handOff.done", { device: host.name }) });
+				await useTabsStore.getState().switchTab(tabId);
+			} else {
+				toast({ variant: "warning", message: t("sidebar.handOff.notOpened", { device: host.name }) });
+			}
 		} catch (error) {
 			toastError({ title: t("sidebar.handOff.failed"), error });
 		}

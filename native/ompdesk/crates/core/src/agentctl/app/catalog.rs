@@ -1902,7 +1902,11 @@ async fn h_sessions_hand_off<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done {
         .and_then(Value::as_str)
         .unwrap_or_default();
     Ok(ActionResult::changed(
-        format!("Moved to {to}; it runs there now as {path}."),
+        if moved.get("tabId").and_then(Value::as_str).is_some() {
+            format!("Moved to {to}; it runs there now as {path}.")
+        } else {
+            format!("Moved to {to} as {path}. Open it from that computer's session list.")
+        },
         "Moved a saved session to another computer",
         "저장된 세션을 다른 컴퓨터로 옮김",
         arg(&args, "sessionPath"),

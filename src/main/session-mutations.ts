@@ -188,6 +188,8 @@ export interface HandOffDeps {
 	removeStored(sessionPath: string): Promise<void>;
 	/** The session list reads again: a pending session leaves it, one given back returns. */
 	relist(): void;
+	/** Reopen a move learned after a restart or timeout, when there is no longer an initiating window. */
+	recovered?(device: string, sessionPath: string): Promise<void>;
 	/** One line per hand-over in the runtime log (source `session-handoff`). */
 	log?(outcome: "moved" | "refused" | "pending" | "failed", details: Record<string, string>): void;
 }
@@ -369,7 +371,8 @@ export async function reconcileHandOffs(host: string, deps: HandOffDeps): Promis
 		if (pending.device !== host || settling.has(pending.id)) continue;
 		settling.add(pending.id);
 		try {
-			await settleHandOff(pending, deps);
+			const settled = await settleHandOff(pending, deps);
+			if (settled.state === "moved") await deps.recovered?.(host, settled.sessionPath);
 		} finally {
 			settling.delete(pending.id);
 		}
