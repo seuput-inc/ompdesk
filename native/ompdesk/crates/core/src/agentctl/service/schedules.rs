@@ -16,10 +16,17 @@ pub(super) fn action_issues(
 ) {
     let has = |key| field(key).is_some();
     let filled = |key| field(key) == Some(true);
-    let starts = ["every_minutes", "daily_at", "at", "in_minutes", "on"]
-        .into_iter()
-        .filter(|&key| has(key))
-        .count();
+    let starts = [
+        "every_minutes",
+        "daily_at",
+        "cron",
+        "at",
+        "in_minutes",
+        "on",
+    ]
+    .into_iter()
+    .filter(|&key| has(key))
+    .count();
     if has("days") && !has("daily_at") {
         issue("days goes with daily_at");
     }
@@ -40,7 +47,9 @@ pub(super) fn action_issues(
             issue("create needs prompt");
         }
         if starts != 1 {
-            issue("create needs exactly one of every_minutes, daily_at, at, in_minutes or on");
+            issue(
+                "create needs exactly one of every_minutes, daily_at, cron, at, in_minutes or on",
+            );
         }
         if has("target") {
             if has("folder") {
@@ -58,14 +67,16 @@ pub(super) fn action_issues(
             issue(&format!("{action} needs id"));
         }
         if action == "update" && starts > 1 {
-            issue("update takes at most one of every_minutes, daily_at, at, in_minutes or on");
+            issue(
+                "update takes at most one of every_minutes, daily_at, cron, at, in_minutes or on",
+            );
         }
         if action != "update"
             && (starts > 0
-                || ["name", "prompt", "model", "target"]
+                || ["name", "prompt", "model", "target", "thinking"]
                     .into_iter()
                     .any(filled)
-                || ["precheck", "results_to", "by", "within_minutes"]
+                || ["precheck", "results_to", "by", "within_minutes", "worktree"]
                     .into_iter()
                     .any(has))
         {

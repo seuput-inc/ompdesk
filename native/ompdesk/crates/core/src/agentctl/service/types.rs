@@ -804,10 +804,33 @@ pub struct ClosedChild {
 pub enum ScheduleEvent {
     Webhook {
         key: String,
+        /// "Only when" tests, quoted fields, the old key after a rotate and the sender that signs calls: the
+        /// schedules' own (`schedules/hooks.rs`), carried through an update as they were.
+        #[serde(default, rename = "where", skip_serializing_if = "Option::is_none")]
+        filter: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contains: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pick: Option<Vec<String>>,
+        #[serde(
+            default,
+            rename = "previousKey",
+            skip_serializing_if = "Option::is_none"
+        )]
+        previous_key: Option<Value>,
+        #[serde(default, rename = "signedBy", skip_serializing_if = "Option::is_none")]
+        signed_by: Option<String>,
     },
     Github {
         repo: String,
         events: Vec<String>,
+        /// Only events by these logins, with this text in their title or text, or with this label.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contains: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
     },
     Files {
         path: String,
@@ -851,6 +874,10 @@ pub enum ScheduleFrequency {
     },
     Once {
         at: String,
+    },
+    /// Five-field cron in local time.
+    Cron {
+        expr: String,
     },
     Event {
         event: ScheduleEvent,
@@ -923,6 +950,12 @@ pub struct ScheduleDraft {
     /// Where a fresh run's answer goes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub results_to: Option<ScheduleResultsTo>,
+    /// A fresh run's `--thinking` level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    /// A fresh run starts in a new worktree of `cwd` each time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<bool>,
 }
 
 /// `ScheduleDraft.resultsTo`.
@@ -1441,16 +1474,38 @@ pub struct ScheduleArgs {
     /// `self` or `notify`.
     #[serde(default)]
     pub results_to: Option<String>,
+    /// A start: five-field cron in local time.
+    #[serde(default)]
+    pub cron: Option<String>,
+    /// A fresh run's `--thinking` level; empty removes it.
+    #[serde(default)]
+    pub thinking: Option<String>,
+    /// A fresh run in a new worktree each time.
+    #[serde(default)]
+    pub worktree: Option<bool>,
 }
 
 /// `ompdesk_schedule`'s `on`: the trigger as the tool takes it (a webhook's key is made by the service).
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "source", rename_all = "lowercase")]
 pub enum ScheduleOn {
-    Webhook,
+    Webhook {
+        #[serde(default, rename = "where")]
+        filter: Option<Value>,
+        #[serde(default)]
+        contains: Option<String>,
+        #[serde(default)]
+        pick: Option<Vec<String>>,
+    },
     Github {
         repo: String,
         events: Vec<String>,
+        #[serde(default)]
+        from: Option<Vec<String>>,
+        #[serde(default)]
+        contains: Option<String>,
+        #[serde(default)]
+        label: Option<String>,
     },
     Files {
         path: String,

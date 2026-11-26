@@ -2400,11 +2400,11 @@ describe("ompdesk_schedule", () => {
 					model: "model",
 					device: "local",
 				},
-				"name: Too small: expected string to have >=1 characters; prompt: Too small: expected string to have >=1 characters; every_minutes: Too small: expected number to be >=1; days goes with daily_at; create needs name; create needs prompt; create needs exactly one of every_minutes, daily_at, at, in_minutes or on; target self wakes this session: it takes no folder; target self wakes this session: it takes no model; target self wakes this session on this computer: it takes no device",
+				"name: Too small: expected string to have >=1 characters; prompt: Too small: expected string to have >=1 characters; every_minutes: Too small: expected number to be >=1; days goes with daily_at; create needs name; create needs prompt; create needs exactly one of every_minutes, daily_at, cron, at, in_minutes or on; target self wakes this session: it takes no folder; target self wakes this session: it takes no model; target self wakes this session on this computer: it takes no device",
 			],
 			[
 				{ action: "create", days: "[2]", extra: true },
-				'Unrecognized key: "extra"; days goes with daily_at; create needs name; create needs prompt; create needs exactly one of every_minutes, daily_at, at, in_minutes or on',
+				'Unrecognized key: "extra"; days goes with daily_at; create needs name; create needs prompt; create needs exactly one of every_minutes, daily_at, cron, at, in_minutes or on',
 			],
 			[{ action: "create", at: "bad" }, "at: at is an ISO 8601 moment; create needs name; create needs prompt"],
 			[{ action: "create", at: 20 }, "at: Invalid input: expected string, received number"],
@@ -2464,7 +2464,7 @@ describe("ompdesk_schedule", () => {
 			(await service.run("main0001", T.schedule, { ...base, every_minutes: 60, folder: "relative/dir" })).text,
 		).toMatch(/absolute/);
 		expect((await service.run("main0001", T.schedule, { ...base })).text).toMatch(
-			/exactly one of every_minutes, daily_at, at, in_minutes or on/,
+			/exactly one of every_minutes, daily_at, cron, at, in_minutes or on/,
 		);
 		expect((await service.run("main0001", T.schedule, { ...base, every_minutes: 60, in_minutes: 5 })).text).toMatch(
 			/exactly one of/,
