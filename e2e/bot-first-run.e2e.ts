@@ -19,7 +19,9 @@ let profile: string;
 let errors: string[];
 
 test.beforeEach(async () => {
-	profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-bot-first-run-"));
+	// The long, real path: a tab's folder is read back resolved (Windows' RUNNER~1, macOS' /private/var), and a chat is
+	// the bot's only when its folder is the bot's.
+	profile = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-bot-first-run-")));
 	const project = path.join(profile, "project");
 	const desktop = path.join(profile, "desktop");
 	const agent = path.join(profile, "agent");
