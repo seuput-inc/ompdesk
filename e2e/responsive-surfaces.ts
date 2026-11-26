@@ -464,6 +464,19 @@ async function openDrawer(page: Page, look: Look): Promise<void> {
 	await page.locator("[data-drawer]").waitFor({ state: "visible", timeout: 10_000 });
 }
 
+/** The view's own computer has a bot to show: "Parity bot", made through the app's own bots API when it has none. */
+async function ensureParityBot(page: Page): Promise<void> {
+	await page.evaluate(async () => {
+		const state = await window.omp.bots.command({ action: "get" });
+		if (state.bots.length === 0)
+			await window.omp.bots.command({
+				action: "create",
+				name: "Parity bot",
+				purpose: "Keeps an eye on the parity sheet.",
+			});
+	});
+}
+
 /**
  * The usage block: a desktop window's opens over its status bar from the usage summary (the owner's decision, 25 Nov
  * 2026); a phone or tablet page keeps it in the sidebar footer.
@@ -928,6 +941,7 @@ export const SETTINGS_SECTIONS = [
 	"permissions",
 	"workspace",
 	"schedules",
+	"bots",
 	"connections",
 	"updates",
 	"advanced",
@@ -2169,6 +2183,55 @@ export const SURFACES: readonly Surface[] = [
 		// Parity only: the audits open the palette through the harness (`dialog-command-palette`).
 		when: () => false,
 		parity: { session: "work", after: closeOverlay },
+	},
+	// Bots (orca-bots-ui): each view reads the bots of its own computer (a bot lives where its folder is), so `open`
+	// first makes "Parity bot" there when it has none; the sections and their order are what must agree.
+	{
+		id: "sidebar-bots",
+		area: "A",
+		title: "The sidebar's Bots section: the header with its options and +, a bot's row with its second line",
+		open: async (page, look) => {
+			await ensureParityBot(page);
+			await openDrawer(page, look);
+			const toggle = page.locator("[data-sidebar-bots-toggle]:visible").first();
+			if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+		},
+		ready: "[data-sidebar-bots] [data-bot-row]",
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "bot-pane",
+		area: "B",
+		title: "The Bots page: the bots' list and a bot's page (header, Activity, Chats, Settings tabs)",
+		open: async (page, look) => {
+			await ensureParityBot(page);
+			await openDrawer(page, look);
+			await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+			// A phone shows the list first: the bot's row opens its page.
+			const row = page.locator("[data-bots-page-row]:visible").first();
+			if ((await page.locator("[data-bot-pane]:visible").count()) === 0) await row.click();
+		},
+		ready: "[data-bot-pane] [data-bot-activity]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "settings-bots",
+		area: "B",
+		title: "Settings › Bots: the sidebar switch and this computer's bots",
+		open: async (page, look) => {
+			await ensureParityBot(page);
+			await openDrawer(page, look);
+			await page.locator('[data-destination="settings"]').first().click();
+			const nav = page.locator('[data-settings-section="bots"]');
+			await nav.waitFor({ state: "visible", timeout: 15_000 });
+			await nav.click();
+		},
+		ready: "[data-settings-page] [data-settings-bots]",
+		when: () => false,
+		parity: { session: "work" },
 	},
 	{
 		id: "board-all",

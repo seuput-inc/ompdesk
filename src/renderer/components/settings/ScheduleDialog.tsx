@@ -18,9 +18,11 @@ import {
 	type ScheduleThinking,
 	scheduleDraftProblem,
 } from "../../../shared/schedules";
+import { useBotsAvailable } from "../../lib/bots-source";
 import { useT } from "../../lib/i18n";
 import { frequencySummary, weekdayNames } from "../../lib/schedule-text";
 import { pickWorkspaceDirectory } from "../../lib/workspace-dirs";
+import { ensureBots, useBotsStore } from "../../stores/bots";
 import { Button, Checkbox, FieldLabel, Input, Modal, PathText, Select, SwitchField, TextArea } from "../common";
 import { ModelValueSelect } from "./ModelValueSelect";
 import { opTakesValues, WebhookFilterFields, type WebhookFilters } from "./schedules/WebhookFilterFields";
@@ -51,8 +53,8 @@ interface Form {
 	worktree: boolean;
 	autoApprove: boolean;
 	enabled: boolean;
-	/** A wake-up schedule: model, thinking and worktree mean nothing to it. */
-	wake: boolean;
+	/** The session each start wakes (a bot's home chat, or one an agent set with `target: "self"`); "" = a fresh run. Model, thinking and worktree mean nothing to a wake. */
+	wakeSession: string;
 }
 
 function formFor(seed: ScheduleSeed | null, cwd: string): Form {
@@ -92,7 +94,7 @@ function formFor(seed: ScheduleSeed | null, cwd: string): Form {
 		worktree: seed?.worktree ?? false,
 		autoApprove: seed?.autoApprove ?? false,
 		enabled: seed?.enabled ?? true,
-		wake: Boolean(seed?.wakeSession),
+		wakeSession: seed?.wakeSession ?? "",
 	};
 }
 
@@ -146,7 +148,9 @@ function draftOf(form: Form): ScheduleDraft {
 		model: form.model.trim() || null,
 		autoApprove: form.autoApprove,
 		enabled: form.enabled,
-		...(form.wake ? {} : { thinking: form.thinking || null, worktree: form.worktree }),
+		...(form.wakeSession
+			? { wakeSession: form.wakeSession }
+			: { thinking: form.thinking || null, worktree: form.worktree }),
 	};
 }
 
@@ -201,6 +205,20 @@ export function ScheduleDialog({
 	const draft = draftOf(form);
 	const problem = problemOf(draft);
 	const days = weekdayNames();
+	// A schedule aimed at a bot (Orca's AutomationBotTargetFields, FK-A16): it wakes the bot's home chat in its folder.
+	const botsAvailable = useBotsAvailable();
+	const bots = useBotsStore(state => state.state.bots).filter(bot => bot.home);
+	useEffect(() => {
+		if (botsAvailable) ensureBots();
+	}, [botsAvailable]);
+	// A saved wake cannot become a fresh run again (the core keeps a wake a save leaves out), so it offers no "fresh".
+	const botOptions = [
+		...(schedule?.wakeSession ? [] : [{ value: "", label: t("schedules.field.runsFresh") }]),
+		...bots.map(bot => ({ value: bot.home ?? "", label: t("schedules.field.runsInBot", { name: bot.name }) })),
+		...(form.wakeSession && !bots.some(bot => bot.home === form.wakeSession)
+			? [{ value: form.wakeSession, label: t("schedules.field.runsInSession") }]
+			: []),
+	];
 
 	const submit = async () => {
 		setTouched(true);
@@ -257,6 +275,19 @@ export function ScheduleDialog({
 					rows={4}
 					value={form.prompt}
 				/>
+				{botsAvailable && !device && (bots.length > 0 || form.wakeSession) && (
+					<Select
+						hint={t("schedules.field.runsInHint")}
+						label={t("schedules.field.runsIn")}
+						onChange={event => {
+							const home = event.target.value;
+							const bot = bots.find(known => known.home === home);
+							setForm(current => ({ ...current, wakeSession: home, ...(bot ? { cwd: bot.folder } : {}) }));
+						}}
+						options={botOptions}
+						value={form.wakeSession}
+					/>
+				)}
 				{/* The folder is a path and a picker button, so the label names their group, never the button. */}
 				<div aria-labelledby={`${formId}-cwd-label`} role="group">
 					<FieldLabel as="span" id={`${formId}-cwd-label`}>
@@ -410,7 +441,7 @@ export function ScheduleDialog({
 						value={form.model}
 					/>
 				</div>
-				{!form.wake && (
+				{!form.wakeSession && (
 					<>
 						<Select
 							label={t("schedules.field.thinking")}

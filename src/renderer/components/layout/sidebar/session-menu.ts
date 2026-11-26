@@ -17,6 +17,7 @@ import {
 	ArrowUp,
 	Bell,
 	BellOff,
+	Bot,
 	Columns2,
 	Copy,
 	ExternalLink,
@@ -89,6 +90,8 @@ export interface SessionMenuActions {
 	moveDown?: () => void;
 	/** Opens the list of projects it can go to. */
 	moveToProject?: () => void;
+	/** Opens Hand to a bot: a bot's home chat becomes its opener and is told what to do with it (bots only). */
+	handToBot?: () => void;
 	/** Archives it, or restores it when archived. */
 	toggleArchive?: () => void;
 	toggleAgentHidden?: () => void;
@@ -220,6 +223,15 @@ export function sessionMenuItems({
 				disabled: facts.hasTab,
 				disabledReason: t("sidebar.moveOpenTab"),
 				onSelect: actions.moveToProject,
+			});
+		if (actions.handToBot)
+			edit.push({
+				id: "session-hand-to-bot",
+				label: t("bots.hand.menu"),
+				icon: Bot,
+				disabled: !facts.hasTab,
+				disabledReason: t("bots.hand.openFirst"),
+				onSelect: actions.handToBot,
 			});
 		if (actions.toggleArchive)
 			edit.push(

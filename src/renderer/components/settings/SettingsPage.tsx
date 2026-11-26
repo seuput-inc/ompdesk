@@ -17,6 +17,7 @@
 import {
 	Blocks,
 	Bot,
+	BotMessageSquare,
 	Brain,
 	CalendarClock,
 	FolderOpen,
@@ -34,6 +35,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SettingEntry, SidecarStatus } from "../../../shared/rpc-types";
 import { useShellMode } from "../../hooks/use-shell-mode";
+import { useBotsAvailable } from "../../lib/bots-source";
 import { useLang, useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
 import { PLATFORM } from "../../lib/keymap";
@@ -54,6 +56,7 @@ import { HostScoped, ThisDeviceTag } from "../remote/HostScope";
 import { AgentSection } from "./AgentSection";
 import { AgentWorktreesRows } from "./AgentWorktreesRow";
 import { AppearanceSection } from "./AppearanceSection";
+import { BotsSection } from "./BotsSection";
 import { ExtensionsSection } from "./ExtensionsSection";
 import { GeneralSection } from "./GeneralSection";
 import { KeyboardSection } from "./KeyboardSection";
@@ -101,6 +104,7 @@ const SECTION_ICONS: Record<SettingsSectionId, LucideIcon> = {
 	workspace: FolderOpen,
 	memory: Brain,
 	schedules: CalendarClock,
+	bots: BotMessageSquare,
 	connections: MonitorSmartphone,
 	updates: HardDriveDownload,
 	advanced: Wrench,
@@ -172,6 +176,7 @@ export function SettingsPage() {
 	const sidecarError = useSessionStore(state => (state.sidecarSlow ? null : state.sidecarError));
 	const { section, sub } = resolveSettingsTarget(settingsTab);
 	const host = useFocusedHost();
+	const botsAvailable = useBotsAvailable();
 	// An unreachable host's sections show its offline notice instead of the connection banners.
 	const hostOffline = host !== undefined && !host.online;
 	const agentSection = AGENT_SECTIONS[section] === true && !hostOffline;
@@ -362,6 +367,8 @@ export function SettingsPage() {
 				return <MemorySection sub={sub} />;
 			case "schedules":
 				return <SchedulesSection />;
+			case "bots":
+				return <BotsSection />;
 			case "connections":
 				return (
 					<>
@@ -483,7 +490,9 @@ export function SettingsPage() {
 												{t(`settings.navHeading.${group.id}`)}
 											</div>
 											{group.items
-												.filter(id => id !== "advanced" || !advancedHidden)
+												.filter(
+													id => (id !== "advanced" || !advancedHidden) && (id !== "bots" || botsAvailable),
+												)
 												.map(id => {
 													const Icon = SECTION_ICONS[id];
 													return (

@@ -50,6 +50,7 @@ import { toastError } from "../../stores/toast";
 import { useToolsStore } from "../../stores/tools";
 import { useUiStore } from "../../stores/ui";
 import { useWebLinkLost } from "../../web/link-status";
+import { BotHomeBanner } from "../bots/BotHomeBanner";
 import {
 	AutoTitleButton,
 	Badge,
@@ -218,6 +219,7 @@ export function TitleBar() {
 	// A remote tab names its host; while the link is down the tab is reconnecting,
 	// not failed. A host that is gone from the device list (unpaired) never comes back.
 	const device = useTabsStore(s => s.tabs.find(tab => tab.id === tabId)?.device);
+	const sessionPathOfTab = useTabsStore(s => s.tabs.find(tab => tab.id === tabId)?.sessionPath);
 	const host = useHostView(device);
 	const remoteLoaded = useRemoteStore(s => s.state !== null);
 	// Unknown before the device list loads: no host is not "removed" and not "reconnecting" yet. The chip is
@@ -566,6 +568,7 @@ export function TitleBar() {
 						</span>
 					</Tooltip>
 				)}
+				{!editingName && <BotHomeBanner cwd={device === undefined ? cwd : null} sessionPath={sessionPathOfTab} />}
 			</nav>
 
 			<div

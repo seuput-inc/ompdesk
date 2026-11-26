@@ -780,8 +780,14 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				remoteState = { ...remoteState, deviceSectionOrder: [...payload] };
 				emit(IPC_EVENTS.REMOTE_STATE, remoteState);
 				return undefined;
-			case BOTS_COMMAND:
+			case BOTS_COMMAND: {
+				// The harness has no bots: their files and other apps' bots read as nothing.
+				const action =
+					typeof payload === "object" && payload !== null && "action" in payload ? payload.action : null;
+				if (action === "file") return { exists: false, content: "", mtimeMs: 0, topics: [], history: [] };
+				if (action === "importSources") return { sources: [] };
 				return { bots: [], items: [] };
+			}
 			case SCHEDULES_COMMAND:
 				return SCHEDULES_STATE;
 			case SIDEBAR_PROJECTS_COMMAND:
