@@ -50,6 +50,7 @@ import { deleteSessionRuntime, setFocusedSessionRuntime } from "../../../stores/
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { useSidebarPrefs } from "../../../stores/sidebar-prefs";
 import { useSidebarProjects } from "../../../stores/sidebar-projects";
+import { askSidebar, useSidebarRequest } from "../../../stores/sidebar-request";
 import { useSidebarSubagentsStore } from "../../../stores/sidebar-subagents";
 import { ensureTabRuntime } from "../../../stores/tab-runtime";
 import { useTabsStore } from "../../../stores/tabs";
@@ -2298,6 +2299,35 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(container.querySelector('[data-workspace-group="/work/alpha"]')).toBeNull();
 		expect(container.querySelectorAll('[data-session-path^="/work/alpha/"]')).toHaveLength(0);
 		expect(container.querySelector('[data-workspace-group="/work/beta"]')).not.toBeNull();
+	});
+
+	it("folds the projects deleted from this list at its end, and Show lists one again", async () => {
+		const omp = installMockOmp(LIST);
+		omp.sidebarProjects.lists.local = {
+			projects: [{ path: "/work/alpha", addedAt: 1 }],
+			removed: ["/work/old", "/work/beta"],
+			worktrees: {},
+		};
+		seedStores();
+		await mount(<Sidebar />);
+		const section = () => container.querySelector('[data-sidebar-removed-projects="local"]');
+		expect(section()?.textContent).toContain("Deleted projects (2)");
+		expect(section()?.querySelector("[data-removed-project]")).toBeNull();
+
+		await fire(section()?.querySelector("button[aria-expanded]") as unknown as Element, "onClick");
+		// Newest removal first.
+		expect(
+			[...(section()?.querySelectorAll("[data-removed-project]") ?? [])].map(row =>
+				row.getAttribute("data-removed-project"),
+			),
+		).toEqual(["/work/beta", "/work/old"]);
+
+		await fire(
+			section()?.querySelector('[data-removed-project="/work/beta"] button') as unknown as Element,
+			"onClick",
+		);
+		expect(omp.sidebarProjects.command).toHaveBeenCalledWith({ action: "add", path: "/work/beta" }, undefined);
+		expect(section()?.textContent).toContain("Deleted projects (1)");
 	});
 
 	it("lists a project with no session, and Delete takes it out without deleting anything unless asked to", async () => {
@@ -7106,6 +7136,27 @@ describe("Sidebar remembered folds", () => {
 		expect(useSidebarFolds.getState().groups).toEqual({ "/work/alpha": false });
 		expect(useSidebarFolds.getState().devices).toEqual({});
 		expect([...useSidebarSubagentsStore.getState().expanded]).toEqual([LIST[0]?.path ?? "", "tab:t0"]);
+	});
+
+	it("folds every project and opens them again from the palette, and reveals the current row inside a fold", async () => {
+		installMockOmp(LIST);
+		seedStores();
+		await mount(<Sidebar />);
+		expect(container.querySelector('[data-session-group="/work/alpha"]')).not.toBeNull();
+
+		await act(async () => askSidebar("fold-projects"));
+		expect(useSidebarFolds.getState().groups).toEqual({ "/work/alpha": true, "/work/beta": true });
+		expect(container.querySelector('[data-session-group="/work/alpha"]')).toBeNull();
+
+		// The focused session's project opens again and its row is outlined; the other project stays folded.
+		await act(async () => askSidebar("reveal-current"));
+		expect(useSidebarFolds.getState().groups).toEqual({ "/work/alpha": false, "/work/beta": true });
+		const current = document.querySelector("[data-current]")?.closest(".omp-sidebar-session-row");
+		expect(current?.hasAttribute("data-reveal")).toBe(true);
+
+		await act(async () => askSidebar("unfold-projects"));
+		expect(useSidebarFolds.getState().groups).toEqual({ "/work/alpha": false, "/work/beta": false });
+		expect(useSidebarRequest.getState().request).toBeNull();
 	});
 });
 

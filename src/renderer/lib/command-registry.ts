@@ -32,6 +32,7 @@ import { useModelStore } from "../stores/model";
 import { useOutputStyleStore } from "../stores/output-style";
 import { type SessionStore, useSessionStore } from "../stores/session";
 import { useSettingsStore } from "../stores/settings";
+import { askSidebar } from "../stores/sidebar-request";
 import { useTabsStore } from "../stores/tabs";
 import { toast, toastError } from "../stores/toast";
 import { useTodoStore } from "../stores/todo";
@@ -1560,6 +1561,24 @@ export function buildCommandMenu(ctx: CommandRegistryContext): CommandMenuItem[]
 		category: "settings",
 		shortcut: kbd("sidebar.toggle"),
 		affordance: { kind: "action", run: () => useUiStore.getState().toggleSidebar() },
+	});
+	add({
+		name: "reveal-current",
+		label: t("sidebar.revealCurrent"),
+		category: "settings",
+		affordance: { kind: "action", run: () => askSidebar("reveal-current") },
+	});
+	add({
+		name: "fold-projects",
+		label: t("sidebar.foldAll.collapse"),
+		category: "settings",
+		affordance: { kind: "action", run: () => askSidebar("fold-projects") },
+	});
+	add({
+		name: "unfold-projects",
+		label: t("sidebar.foldAll.expand"),
+		category: "settings",
+		affordance: { kind: "action", run: () => askSidebar("unfold-projects") },
 	});
 	add({
 		name: "toggle-thinking-blocks",

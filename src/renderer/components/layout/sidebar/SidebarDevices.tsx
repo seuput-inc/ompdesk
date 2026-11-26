@@ -12,6 +12,8 @@ import { closestCenter, DndContext, type DragEndEvent, PointerSensor, useSensor,
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import {
 	Archive,
+	ChevronsDownUp,
+	ChevronsUpDown,
 	ExternalLink,
 	Folder,
 	FolderOpen,
@@ -106,6 +108,7 @@ import { useDeviceHeaderHandle } from "./SidebarDeviceSections";
 import { SidebarFoldButton } from "./SidebarFoldButton";
 import { SidebarFolderMissingMark } from "./SidebarFolderMissingMark";
 import { SidebarFoldSummary } from "./SidebarFoldSummary";
+import { SidebarRemovedProjects } from "./SidebarRemovedProjects";
 import { SidebarRenameField } from "./SidebarRenameField";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
 import { SortableProject } from "./SortableProject";
@@ -141,6 +144,31 @@ const DOT_TONE: Record<HostView["state"], StatusTone> = {
 	offline: "neutral",
 };
 
+/**
+ * Folds every project of one device's list or opens them all again (Orca's `SectionCollapseAllButton`,
+ * sidebar/worktree-list/controls/SectionCollapseAllButton.tsx:10-67): with a mouse it shows while its header is
+ * hovered or holds focus, a finger keeps it. Without device sections the palette's commands do it.
+ */
+function FoldAllButton({ allFolded, onToggle }: { allFolded: boolean; onToggle: () => void }) {
+	const t = useT();
+	return (
+		<span
+			className="hidden group-focus-within/device:contents group-hover/device:contents [@media(hover:none)]:contents"
+			data-sidebar-fold-all={allFolded ? "folded" : "open"}
+		>
+			<IconButton
+				className="text-(--sc-text-subtle) hover:text-(--sc-text)"
+				icon={allFolded ? <ChevronsUpDown /> : <ChevronsDownUp />}
+				label={allFolded ? t("sidebar.foldAll.expand") : t("sidebar.foldAll.collapse")}
+				onClick={onToggle}
+				size="sm"
+				tabIndex={-1}
+				variant="ghost"
+			/>
+		</span>
+	);
+}
+
 /** A device section's header: the toggle that folds its list (glyph, name, what follows the name, chevron) and, at
  * the end, the button that opens or makes a project folder on that device (a new chat is its Chats section's). This
  * device's and every host's alike. */
@@ -156,6 +184,7 @@ function DeviceHeader({
 	extra,
 	badge,
 	summary,
+	foldAll,
 }: {
 	deviceId: string;
 	folded: boolean;
@@ -173,6 +202,8 @@ function DeviceHeader({
 	local?: boolean;
 	/** What the folded header says of the sessions it hides (`fold-summary.ts`); asked only while folded. */
 	summary: () => FoldSummary;
+	/** The list's projects all folded or not, and the toggle that folds or opens them all. */
+	foldAll?: { allFolded: boolean; onToggle: () => void };
 }) {
 	const t = useT();
 	const handle = useDeviceHeaderHandle();
@@ -249,6 +280,7 @@ function DeviceHeader({
 					variant="ghost"
 				/>
 			</span>
+			{foldAll && !folded && <FoldAllButton {...foldAll} />}
 			{extra}
 			{offline ? (
 				// An offline host can start nothing: no dead button takes the name's room (a tablet's sidebar left
@@ -286,16 +318,19 @@ function DeviceHeader({
 export function SidebarLocalHeader({
 	onAddProject,
 	summary,
+	foldAll,
 }: {
 	onAddProject: () => void;
 	/** This device's whole list, by the rows' rule (Sidebar.tsx). */
 	summary: () => FoldSummary;
+	foldAll?: { allFolded: boolean; onToggle: () => void };
 }) {
 	const t = useT();
 	const folded = useSidebarFolds(s => s.devices[LOCAL_DEVICE] === true);
 	return (
 		<DeviceHeader
 			deviceId={LOCAL_DEVICE}
+			foldAll={foldAll}
 			folded={folded}
 			local
 			name={t("remote.sidebar.thisDevice")}
@@ -333,6 +368,13 @@ export function SidebarDeviceSection({
 	// rows are already in place when it connects and nothing below them moves.
 	const hasLastKnownRows = useStore(sessionListFeed("global", host.deviceId).store, s => s.sessions.length > 0);
 	const showRows = online || (host.state === "connecting" && hasLastKnownRows);
+	// The host's projects are its folder groups here (DeviceSessions draws one per project of its list).
+	const projects = useSidebarProjects(s => s.lists[host.deviceId]?.projects);
+	const deviceGroupFolds = useSidebarFolds(s => s.deviceGroups);
+	const projectPaths = useMemo(() => (projects ?? []).map(project => project.path), [projects]);
+	const allFolded =
+		projectPaths.length > 0 &&
+		projectPaths.every(path => deviceGroupFolds[deviceGroupKey(host.deviceId, path)] === true);
 
 	const openRemote = async (args: RemoteOpenArgs) => {
 		useUiStore.getState().closeDestination();
@@ -350,6 +392,15 @@ export function SidebarDeviceSection({
 				canAct={online}
 				offline={host.state === "offline"}
 				deviceId={host.deviceId}
+				foldAll={
+					showRows && projectPaths.length > 0
+						? {
+								allFolded,
+								onToggle: () =>
+									useSidebarFolds.getState().setGroupsFolded(projectPaths, !allFolded, host.deviceId),
+							}
+						: undefined
+				}
 				extra={
 					// On a phone or tablet page: the host's own page, which this computer's paired host shares (the phone
 					// then talks to the host directly instead of through this computer).
@@ -1536,6 +1587,7 @@ function DeviceSessions({
 					)}
 				</section>
 			)}
+			<SidebarRemovedProjects device={host.deviceId} query={query} />
 		</div>
 	);
 }

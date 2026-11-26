@@ -86,7 +86,7 @@ import {
 	sessionTitleParts,
 	type TitleParts,
 } from "../../../lib/session-title";
-import { isRememberedSession, LOCAL_DEVICE } from "../../../lib/sidebar-memory";
+import { deviceGroupKey, isRememberedSession, LOCAL_DEVICE } from "../../../lib/sidebar-memory";
 import {
 	clampSidebarWidth,
 	LANE_MIN_SIDEBAR_WIDTH,
@@ -113,7 +113,8 @@ import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
 import { ensureSessionTargetsOnFocus, requestSessionTargets, useSessionTargets } from "../../../stores/session-targets";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { RAIL_PIN_LABEL_KEYS, useSidebarPrefs } from "../../../stores/sidebar-prefs";
-import { useProjectList } from "../../../stores/sidebar-projects";
+import { useProjectList, useSidebarProjects } from "../../../stores/sidebar-projects";
+import { useSidebarRequest } from "../../../stores/sidebar-request";
 import { toggleSidebarSubagents, useSidebarSubagentsStore } from "../../../stores/sidebar-subagents";
 import { type SessionTab, tabAutoTitle, useTabsStore } from "../../../stores/tabs";
 import { toast, toastError } from "../../../stores/toast";
@@ -165,6 +166,7 @@ import { SidebarFolderMissingMark } from "./SidebarFolderMissingMark";
 import { SidebarFoldSummary } from "./SidebarFoldSummary";
 import { SidebarNav } from "./SidebarNav";
 import { PinMenu, type PinMenuState, pinMenuHandlers, SidebarPinsSheet } from "./SidebarPinsSheet";
+import { SidebarRemovedProjects } from "./SidebarRemovedProjects";
 import { SidebarRenameField } from "./SidebarRenameField";
 import { SessionLinksDialog, sessionLinksWords } from "./SidebarSessionLinks";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
@@ -907,6 +909,21 @@ export function Sidebar() {
 	const toggleGroup = (group: Pick<WorkspaceGroup, "cwd" | "members">) => {
 		useSidebarFolds.getState().setGroupFolded(group.cwd, !isCollapsed(group));
 	};
+	// Fold every project of this device's list or open them all (Orca's `ProjectsCollapseAllButton`,
+	// worktree-list/controls/ProjectsCollapseAllButton.tsx:11-38) from This device's header; a filter shows every
+	// match, so it has none.
+	const allFolded = groups.length > 0 && groups.every(isCollapsed);
+	const localFoldAll =
+		query || groups.length === 0
+			? undefined
+			: {
+					allFolded,
+					onToggle: () =>
+						useSidebarFolds.getState().setGroupsFolded(
+							groups.map(group => group.cwd),
+							!allFolded,
+						),
+				};
 	// The folds and the open families as they were left: the mirror painted the first frame, the saved pref is read
 	// again here and wins when it differs.
 	useEffect(() => {
@@ -1326,6 +1343,66 @@ export function Sidebar() {
 		row.setAttribute("data-reveal", "");
 		row.addEventListener("animationend", () => row.removeAttribute("data-reveal"), { once: true });
 	}, [activeSessionKey]);
+	// Reveal current (Orca's `ScrollToCurrentWorkspaceToolbarButton`, worktree-list/navigation/
+	// ScrollToCurrentWorkspaceToolbarButton.tsx:30-71, a palette command here): opens what hides the focused session's
+	// row (a filter, its device section, its project or Chats, Archived) and brings the row into view with the reveal
+	// outline.
+	const revealCurrentRow = () => {
+		const tabs = useTabsStore.getState();
+		const tab = tabs.tabs.find(candidate => candidate.id === tabs.activeTabId);
+		if (!tab) return;
+		const folds = useSidebarFolds.getState();
+		const device = tab.device ?? LOCAL_DEVICE;
+		setFilter("");
+		if (folds.devices[device]) folds.setDeviceFolded(device, false);
+		if (tab.kind === "chat") {
+			if (folds.chats[device]) folds.setChatsFolded(device, false);
+		} else if (tab.device) {
+			const project = useSidebarProjects.getState().lists[tab.device]?.worktrees?.[tab.cwd] ?? tab.cwd;
+			if (folds.deviceGroups[deviceGroupKey(tab.device, project)])
+				folds.setDeviceGroupFolded(tab.device, project, false);
+		} else {
+			const group = allGroups.find(candidate => candidate.members.includes(tab.cwd));
+			if (group && isCollapsed(group)) folds.setGroupFolded(group.cwd, false);
+			const current = allSessions.find(isCurrentSession);
+			if (current && archivedIds.has(current.id)) setArchivedOpen(true);
+		}
+		setRevealAsked(asked => asked + 1);
+	};
+	// The row a reveal asked for, once the unfolding it made is drawn.
+	const [revealAsked, setRevealAsked] = useState(0);
+	useEffect(() => {
+		if (revealAsked === 0) return;
+		const row = listRef.current
+			?.querySelector<HTMLElement>("[data-current]")
+			?.closest<HTMLElement>(".omp-sidebar-session-row");
+		if (!row) return;
+		row.scrollIntoView?.({ block: "center" });
+		row.setAttribute("data-reveal", "");
+		row.addEventListener("animationend", () => row.removeAttribute("data-reveal"), { once: true });
+	}, [revealAsked]);
+	const foldEveryProject = (folded: boolean) => {
+		const folds = useSidebarFolds.getState();
+		folds.setGroupsFolded(
+			groups.map(group => group.cwd),
+			folded,
+		);
+		const lists = useSidebarProjects.getState().lists;
+		for (const host of sectionHosts)
+			folds.setGroupsFolded(
+				(lists[host.deviceId]?.projects ?? []).map(project => project.path),
+				folded,
+				host.deviceId,
+			);
+	};
+	const sidebarRequest = useSidebarRequest(s => s.request);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a request is taken once, with the list as drawn now.
+	useEffect(() => {
+		if (!sidebarRequest) return;
+		useSidebarRequest.setState({ request: null });
+		if (sidebarRequest === "reveal-current") revealCurrentRow();
+		else foldEveryProject(sidebarRequest === "fold-projects");
+	}, [sidebarRequest]);
 	// After render, exactly one roving item is tabbable: the remembered one,
 	// else the current session, else the first row. Its row's ⋯ (or a section header's own action, such as the Chats
 	// section's New chat) is the next tab stop (focus-within reveals it), so Tab then Enter opens or runs it.
@@ -2322,6 +2399,7 @@ export function Sidebar() {
 						)}
 					</section>
 				)}
+				<SidebarRemovedProjects query={query} />
 			</Collapse>
 		</>
 	);
@@ -2446,6 +2524,7 @@ export function Sidebar() {
 										>
 											{sectionHosts.length > 0 && (
 												<SidebarLocalHeader
+													foldAll={localFoldAll}
 													onAddProject={() => void openProjectFolder()}
 													summary={localFoldSummary}
 												/>
