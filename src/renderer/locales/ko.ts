@@ -8397,7 +8397,7 @@ export const ko: Record<string, string> = {
 	"bots.connectors.service.slack": "Slack",
 	"bots.connectors.service.github": "GitHub",
 	"bots.connectors.service.linear": "Linear",
-	"bots.connectors.service.google": "Google 캘린더",
+	"bots.connectors.service.google": "Google",
 	"bots.connectors.service.gmail": "Gmail",
 	"bots.connectors.catalog.slack": "메시지와 멘션",
 	"bots.connectors.catalog.github": "이슈와 PR에서 부르기",

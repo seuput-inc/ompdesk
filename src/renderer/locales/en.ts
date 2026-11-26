@@ -8424,7 +8424,7 @@ export const en: Record<string, string> = {
 	"bots.connectors.service.slack": "Slack",
 	"bots.connectors.service.github": "GitHub",
 	"bots.connectors.service.linear": "Linear",
-	"bots.connectors.service.google": "Google Calendar",
+	"bots.connectors.service.google": "Google",
 	"bots.connectors.service.gmail": "Gmail",
 	"bots.connectors.catalog.slack": "Messages and mentions",
 	"bots.connectors.catalog.github": "Asks on issues and pull requests",
