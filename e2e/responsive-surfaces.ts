@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Locator, Page } from "@playwright/test";
@@ -67,6 +68,11 @@ export interface Surface {
 		 * its one answered turn (e2e/parity.e2e.ts).
 		 */
 		folderMissing?: boolean;
+		/**
+		 * Before it is captured, each computer has three stored sessions, "Parity stored 1" to "3": B's in the work
+		 * session's folder, A's in its own project, one answered turn each and no tab (e2e/parity.e2e.ts).
+		 */
+		storedRows?: boolean;
 		/**
 		 * Runs in each view after its capture (also when the capture failed): puts back what `open` changed beyond the
 		 * page (the host's settings, a take waiting on the fake omp) or left open in the window beyond what Escape and
@@ -588,6 +594,103 @@ async function openHelpItem(page: Page, look: Look, name: string): Promise<void>
 	await openDrawer(page, look);
 	await page.locator("button[aria-label='Help']:visible").first().click();
 	await page.locator(":is([role=menuitem], button):visible", { hasText: name }).first().click();
+}
+
+/**
+ * The release before the newest in the shipped changelog: what `whatsNewSeenVersion` holds after an update by one
+ * version (read as e2e/starter-guide.e2e.ts reads it).
+ */
+const PREVIOUS_RELEASE =
+	readFileSync("CHANGELOG.md", "utf8")
+		.match(/^## \[([^\]]+)\]/gm)?.[1]
+		?.slice(4, -1) ?? "0.0.1";
+
+/**
+ * The update card as an update brings it: the view's `whatsNewSeenVersion` (on the phone the host's, whose prefs its
+ * page reads) names the release before, and the page loads again as the relaunch after an update does, so
+ * `WhatsNewNotice` decides afresh. The harness page keeps its store call: its prefs live in the page and a load drops them.
+ */
+async function showWhatsNewCard(page: Page): Promise<void> {
+	if (await page.evaluate(() => Boolean(window.__stores))) return ui(page, "showWhatsNewCard", "0.36.1", "0.35.0");
+	await page.evaluate(seen => window.omp.prefs.set("whatsNewSeenVersion", seen), PREVIOUS_RELEASE);
+	await page.reload();
+	await page.locator("[data-whats-new-card]").first().waitFor({ state: "visible", timeout: 60_000 });
+}
+
+/** Dismisses the update card with Escape from inside it, as its own keys do, so the next surface's window has none. */
+async function dismissWhatsNewCard(page: Page): Promise<void> {
+	const card = page.locator("[data-whats-new-card]").first();
+	if (await card.isVisible().catch(() => false)) {
+		await card.focus();
+		await page.keyboard.press("Escape");
+	}
+	await card.waitFor({ state: "hidden", timeout: 10_000 });
+}
+
+/** One of the view's own computer's stored rows (`[data-pickable]`: a paired computer's rows are not), by its title. */
+const storedRow = (page: Page, n: number): Locator =>
+	page.locator(`.omp-sidebar-session-row[data-pickable]:has-text("Parity stored ${n}")`).first();
+
+/**
+ * A finger's swipe left on a stored row (`SwipeActions`; Orca mobile/src/components/list/SwipeRowActions.tsx:69):
+ * CDP touch events, which the page gets as touch pointer events, in steps past half the action's width, so the row
+ * settles open on Archive. A mouse has no swipe (the row's menu holds the same actions), so a window shows the row.
+ */
+async function swipeStoredRow(page: Page, look: Look): Promise<void> {
+	await openDrawer(page, look);
+	const row = storedRow(page, 1);
+	await row.waitFor({ state: "visible", timeout: 30_000 });
+	if (!touchLook(look)) return row.hover();
+	const box = await row.boundingBox();
+	if (!box) throw new Error("the stored row has no box");
+	const x = Math.round(box.x + box.width * 0.6);
+	const y = Math.round(box.y + box.height / 2);
+	const cdp = await page.context().newCDPSession(page);
+	try {
+		await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+		for (let step = 1; step <= 8; step++)
+			await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x - step * 12, y }] });
+		await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+	} finally {
+		await cdp.detach().catch(() => undefined);
+	}
+	await page
+		.locator('[data-swipe-open] [data-swipe-action="session-archive"]')
+		.first()
+		.waitFor({ state: "visible", timeout: 5_000 });
+}
+
+/**
+ * Stored rows picked as a person picks them (Orca worktree-list/navigation/use-selection.ts:66): ⌘/Ctrl-click two,
+ * Shift-click a third (the run from the last pick), then the ⋯ of a picked row opens the one menu for them all
+ * (Orca use-worktree-context-menu-model.tsx:141). Each view picks its own computer's rows: only those can be picked.
+ */
+async function pickStoredRows(page: Page, look: Look): Promise<void> {
+	await openDrawer(page, look);
+	await storedRow(page, 1).waitFor({ state: "visible", timeout: 30_000 });
+	const press = (n: number, modifier: "ControlOrMeta" | "Shift") =>
+		storedRow(page, n)
+			.locator("button")
+			.first()
+			.click({ modifiers: [modifier] });
+	await press(3, "ControlOrMeta");
+	await press(2, "ControlOrMeta");
+	await press(1, "Shift");
+	await page.locator(".omp-sidebar-session-row[data-picked]").nth(1).waitFor({ timeout: 5_000 });
+	const picked = storedRow(page, 1);
+	if (!touchLook(look)) await picked.hover();
+	await picked.locator("[data-sidebar-row-menu]").first().click();
+}
+
+/** Closes the picked rows' menu, then lets go of the picks with Escape in the list (Sidebar.tsx `onListKeyDown`). */
+async function clearPicks(page: Page): Promise<void> {
+	await page.keyboard.press("Escape");
+	const picked = page.locator(".omp-sidebar-session-row[data-picked]");
+	if ((await picked.count()) > 0) {
+		await picked.first().locator("button").first().focus();
+		await page.keyboard.press("Escape");
+	}
+	await picked.first().waitFor({ state: "detached", timeout: 10_000 });
 }
 
 /** Closes the queue popover, drops both lanes and stops the turn `composer-queue` started, so the session is idle again. */
@@ -2781,7 +2884,14 @@ export const SURFACES: readonly Surface[] = [
 								? openNewTaskSheet(page, look)
 								: dialog.id === "dialog-feedback"
 									? openHelpItem(page, look, "Send feedback")
-									: ui(page, dialog.action, ...(dialog.args ?? [])),
+									: dialog.id === "dialog-changelog"
+										? openHelpItem(page, look, say(look, "help.whatsNew"))
+										: dialog.id === "dialog-whats-new"
+											? // The card's See details: the one control that opens a version's notes.
+												showWhatsNewCard(page).then(() =>
+													page.locator("[data-whats-new-details]").first().click(),
+												)
+											: ui(page, dialog.action, ...(dialog.args ?? [])),
 			...(dialog.id === "dialog-command-palette"
 				? { ready: "[role=dialog] [role=listbox]", parity: { session: "work" as const } }
 				: dialog.id === "dialog-workspace"
@@ -2807,7 +2917,13 @@ export const SURFACES: readonly Surface[] = [
 										ready: "[role=dialog] [data-feedback-picture]",
 										parity: { session: "work" as const, after: closeOverlay },
 									}
-								: {}),
+								: dialog.id === "dialog-changelog" || dialog.id === "dialog-whats-new"
+									? {
+											// Help › What's new opens every release; the update card's See details this version's notes.
+											ready: "[role=dialog] [data-changelog-notes]",
+											parity: { session: "work" as const, after: closeOverlay },
+										}
+									: {}),
 			settle: 700,
 		}),
 	),
@@ -2895,6 +3011,25 @@ export const SURFACES: readonly Surface[] = [
 		},
 		ready: "[role='menu'] [role='menuitem']",
 		parity: { session: "work", after: closeOverlay },
+	},
+	{
+		id: "sidebar-row-swipe",
+		area: "A",
+		title: "A stored session's row swiped left on a phone, open on Archive (a window shows the row: no swipe there)",
+		open: swipeStoredRow,
+		ready: ".omp-sidebar-session-row[data-pickable]:has-text('Parity stored 1')",
+		// Parity only: the harness page lists no stored session of its own.
+		when: () => false,
+		parity: { session: "work", storedRows: true },
+	},
+	{
+		id: "sidebar-multi-select",
+		area: "A",
+		title: "Stored rows picked with ⌘/Ctrl-click and Shift-click, and the menu for every picked row",
+		open: pickStoredRows,
+		ready: "[role='menu'] [role='menuitem']",
+		when: () => false,
+		parity: { session: "work", storedRows: true, after: clearPicks },
 	},
 	{
 		id: "sidebar-new-task-row",
@@ -3160,8 +3295,10 @@ export const SURFACES: readonly Surface[] = [
 	{
 		id: "card-whats-new",
 		area: "B",
-		title: "What's new card in the composer's corner",
-		open: page => ui(page, "showWhatsNewCard", "0.36.1", "0.35.0"),
+		title: "What's new card under the title bar after an update",
+		open: showWhatsNewCard,
+		ready: "[data-whats-new-card]",
+		parity: { session: "work", after: dismissWhatsNewCard },
 	},
 	{
 		id: "banner-update-error",

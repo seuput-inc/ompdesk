@@ -954,6 +954,36 @@ if (dir) {
 				await untilAnswered(b, start, { after: "hello" });
 			};
 
+			/**
+			 * What a `storedRows` surface shows, set up once before the first: three sessions on each computer, "Parity
+			 * stored 1" to "3", one answered turn each and their tabs closed, so each is a stored row its own computer's
+			 * window can pick (Sidebar.tsx `pickRow` picks only those) and a phone can swipe. B's, in the work session's
+			 * folder, are made from its phone page, which every view loads afresh, so no window of B keeps a tab of them
+			 * (as `leaveFolderMissing`); A's, in its own project, from its window, which loads again once they are closed.
+			 */
+			let storedRowsLeft = false;
+			const leaveStoredRows = async () => {
+				storedRowsLeft = true;
+				const stored = async (page: Page, cwd: string, title: string) => {
+					const tabId = (await page.evaluate(cwd => window.omp.tabs.spawn({ cwd }), cwd))?.tabId ?? "";
+					if (!tabId) throw new Error(`no tab for ${title}`);
+					const tabOf = async () =>
+						(await page.evaluate(() => window.omp.tabs.list())).find(tab => tab.tabId === tabId);
+					await expect.poll(async () => (await tabOf())?.status, { timeout: 60_000 }).toBe("ready");
+					await page.evaluate(([id, line]) => window.omp.rpc.commandForTab(id, { type: "bash", command: line }), [
+						tabId,
+						`fixture:title:${title}`,
+					] as const);
+					await page.evaluate(id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "hello" }), tabId);
+					await expect.poll(async () => (await tabOf())?.sessionPath ?? "", { timeout: 30_000 }).not.toBe("");
+					await untilAnswered(page, tabId);
+					expect(await page.evaluate(id => window.omp.tabs.close(id), tabId)).toBe(true);
+				};
+				for (const n of [1, 2, 3]) await stored(phone, work.cwd, `Parity stored ${n}`);
+				for (const n of [1, 2, 3]) await stored(a, clientProfile.project, `Parity stored ${n}`);
+				await a.reload();
+			};
+
 			const records: SurfaceRecord[] = [];
 			for (const surface of surfaces) {
 				if (surface.parity.pairedBack) await pairBack();
@@ -961,6 +991,7 @@ if (dir) {
 				if (surface.parity.hiddenRoster && !hiddenRosterLeft) await leaveHiddenRoster();
 				if (surface.parity.crossProject && !crossProjectLeft) await leaveCrossProject();
 				if (surface.parity.folderMissing && !folderMissingLeft) await leaveFolderMissing();
+				if (surface.parity.storedRows && !storedRowsLeft) await leaveStoredRows();
 				const record: SurfaceRecord = {
 					id: surface.id,
 					title: surface.title,
