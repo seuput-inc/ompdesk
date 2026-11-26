@@ -11,7 +11,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SetLayeredWindowAttributes, SetWindowLongPtrW, WINDOWPLACEMENT, WM_SETICON, WS_EX_APPWINDOW,
     WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{SW_SHOWNOACTIVATE, ShowWindow};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    HWND_TOPMOST, SW_HIDE, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_SHOWWINDOW, SetWindowPos,
+    ShowWindow, WS_EX_TOPMOST,
+};
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -147,6 +150,47 @@ pub fn show_no_activate(hwnd: isize) {
 
 pub fn is_focusable(hwnd: isize) -> bool {
     ex_style(hwnd) & WS_EX_NOACTIVATE as isize == 0
+}
+
+/// Places, sizes and shows the window above every non-topmost window, in physical pixels, without activating it
+/// (the notification popup: it must never take focus from what the person is typing).
+pub fn show_topmost_at(hwnd: isize, x: i32, y: i32, width: i32, height: i32) {
+    // SAFETY: SetWindowPos on a window of ours; failure leaves it where it was.
+    unsafe {
+        SetWindowPos(
+            hwnd as HWND,
+            HWND_TOPMOST,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+    };
+}
+
+pub fn hide(hwnd: isize) {
+    // SAFETY: hides a window of ours; the return value is the previous visibility, not an error.
+    unsafe { ShowWindow(hwnd as HWND, SW_HIDE) };
+}
+
+/// The extended styles that keep a window out of the way: (no-activate, tool window, topmost).
+pub fn unobtrusive_flags(hwnd: isize) -> (bool, bool, bool) {
+    let style = ex_style(hwnd);
+    let has = |flag: u32| style & flag as isize != 0;
+    (
+        has(WS_EX_NOACTIVATE),
+        has(WS_EX_TOOLWINDOW),
+        has(WS_EX_TOPMOST),
+    )
+}
+
+/// `DWMWA_WINDOW_CORNER_PREFERENCE` = `DWMWCP_ROUND`: Windows 11's rounded corners for a window without a caption
+/// (earlier builds ignore it).
+pub fn set_round_corners(hwnd: isize) {
+    let round: i32 = 2;
+    // SAFETY: DwmSetWindowAttribute with a 4-byte value for a window of ours; failure leaves square corners.
+    unsafe { DwmSetWindowAttribute(hwnd as HWND, 33, (&round as *const i32).cast(), 4) };
 }
 
 /// `DWMWA_USE_IMMERSIVE_DARK_MODE`: dark title bar and frame for the window (Windows 10 20H1+; older builds ignore it).

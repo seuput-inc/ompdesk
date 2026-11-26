@@ -63,11 +63,20 @@ pub fn new_window_dark() -> bool {
         .unwrap_or(false)
 }
 
+/// The page's background (`--sc-bg`) in the scheme it shows now, as `#rrggbb`.
+pub fn background_hex() -> Option<String> {
+    let colours: Value = serde_json::from_str(WINDOW_BACKGROUND).ok()?;
+    Some(
+        colours[if new_window_dark() { "dark" } else { "light" }]
+            .as_str()?
+            .to_owned(),
+    )
+}
+
 /// What a new app window is painted in until its page paints: the page's own background in the scheme it will open in,
 /// so a window shown before a slow first paint is the app's colour, never white or black.
 pub fn window_background() -> Option<tauri::window::Color> {
-    let colours: Value = serde_json::from_str(WINDOW_BACKGROUND).ok()?;
-    hex(colours[if new_window_dark() { "dark" } else { "light" }].as_str()?)
+    hex(&background_hex()?)
 }
 
 pub fn init() {
