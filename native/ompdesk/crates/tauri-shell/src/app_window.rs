@@ -280,6 +280,7 @@ pub fn plan(options: &Value) -> Plan {
     }
 }
 
+#[cfg(windows)]
 impl Plan {
     /// The `win.op` that first shows the window this plan is for (none for one kept in the tray).
     pub fn first_show(&self) -> Option<&'static str> {
@@ -363,15 +364,14 @@ fn show_window(win: u64, op: &'static str) {
 }
 
 /// The page painted (`ready-to-show`): the first time, the window shows as its launch asked, unless it already showed
-/// before the paint; then how late the paint came is logged (a cold WebView2 start). True at the first paint of a
-/// window without the Mica backdrop: its WebView, transparent over the native boot shell until now, turns opaque.
-pub fn first_paint(wc: u64) -> bool {
-    let Some((first, mica, (shows, late))) = with(wc, |record| {
+/// before the paint; then how late the paint came is logged (a cold WebView2 start). At the first paint, whether the
+/// window has the Mica backdrop: the native boot shell under the page goes, and a window without it turns its WebView
+/// opaque.
+pub fn first_paint(wc: u64) -> Option<bool> {
+    let (first, mica, (shows, late)) = with(wc, |record| {
         let first = !record.painted;
         (first, record.mica, record.paint(headless(), Instant::now()))
-    }) else {
-        return false;
-    };
+    })?;
     if let Some(late) = late {
         log::log(
             "window.first_paint",
@@ -381,7 +381,7 @@ pub fn first_paint(wc: u64) -> bool {
     if let Some((win, op)) = shows {
         show_window(win, op);
     }
-    first && !mica
+    first.then_some(mica)
 }
 
 /// Saves the geometry of an app window that is closing, for the next window to open.

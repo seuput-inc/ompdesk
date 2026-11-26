@@ -633,9 +633,14 @@ fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
 /// The page painted: Node's `ready-to-show`, and the window's first show (app_window.rs).
 fn ready_to_show(wc: u64, win: u64) {
     win_event(win, "ready-to-show");
-    // The page has its own frame now: the WebView, transparent over the native boot shell, turns opaque, so a later
-    // reload paints the background as before.
-    if app_window::first_paint(wc)
+    // The page has its own frame now: the native boot shell under it goes, and a WebView that was transparent over it
+    // turns opaque, so a later reload paints the background as before (a Mica window's page stays translucent).
+    let Some(mica) = app_window::first_paint(wc) else {
+        return;
+    };
+    #[cfg(windows)]
+    boot_paint::clear(wc);
+    if !mica
         && cfg!(windows)
         && let Ok(window) = window_for_win(win)
         && let Err(error) = window.set_background_color(theme::window_background())
@@ -870,16 +875,13 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         }
     };
     #[cfg(windows)]
-    let boot = if plan.mica {
-        None
-    } else {
-        boot_paint::arm(
-            wc,
-            &runtime().user_data,
-            theme::new_window_dark(),
-            boot_paint::EarlyShow::for_first_show(plan.first_show(), plan.maximize),
-        )
-    };
+    let boot = boot_paint::arm(
+        wc,
+        &runtime().user_data,
+        theme::new_window_dark(),
+        plan.mica,
+        boot_paint::EarlyShow::for_first_show(plan.first_show(), plan.maximize),
+    );
     let built = builder.build();
     #[cfg(windows)]
     let shown_while_built = boot.is_some_and(boot_paint::Armed::finish);

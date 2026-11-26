@@ -22,9 +22,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreatePen, CreateSolidBrush,
-    DeleteDC, DeleteObject, EndPaint, FillRect, GetDC, HDC, HGDIOBJ, PAINTSTRUCT, PS_SOLID,
-    ReleaseDC, RoundRect, SRCCOPY, SelectObject,
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection,
+    CreatePen, CreateSolidBrush, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint, FillRect,
+    GdiFlush, GetDC, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT, PS_SOLID, ReleaseDC, RoundRect,
+    SRCCOPY, SelectObject,
 };
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
@@ -90,6 +91,7 @@ struct Geometry {
     column_pad_px: ColumnPad,
     scrollbar_px: f64,
     mark_px: f64,
+    mica_sidebar_share: f64,
     mark: Mark,
 }
 
@@ -263,26 +265,37 @@ fn sidebar_from_prefs(prefs: &Value, g: &Geometry) -> Option<f64> {
 
 /// `COLORREF`s of each fill in one scheme.
 #[derive(Clone, Copy)]
-struct Palette([u32; 6]);
+struct Palette {
+    fills: [u32; 6],
+    /// Opacity of the sidebar band: under the Mica backdrop the page tints it over the backdrop (`micaSidebarShare`).
+    sidebar_alpha: u8,
+}
 
 impl Palette {
-    fn parse(dark: bool) -> Option<Self> {
+    fn parse(dark: bool, mica: bool, geometry: &Geometry) -> Option<Self> {
         let colours: Value = serde_json::from_str(COLOURS).ok()?;
         let scheme = if dark { "dark" } else { "light" };
         let boot = &colours["bootShell"][scheme];
         let colour = |value: &Value| colorref(value.as_str()?);
-        Some(Self([
-            colour(&colours[scheme])?,
-            colour(&boot["surface"])?,
-            colour(&boot["border"])?,
-            colour(&boot["field"])?,
-            colour(&boot["ink"])?,
-            colour(&boot["accent"])?,
-        ]))
+        Some(Self {
+            fills: [
+                colour(&colours[scheme])?,
+                colour(&boot["surface"])?,
+                colour(&boot["border"])?,
+                colour(&boot["field"])?,
+                colour(&boot["ink"])?,
+                colour(&boot["accent"])?,
+            ],
+            sidebar_alpha: if mica {
+                (geometry.mica_sidebar_share * 255.0).round() as u8
+            } else {
+                255
+            },
+        })
     }
 
     fn of(&self, fill: Fill) -> u32 {
-        self.0[fill as usize]
+        self.fills[fill as usize]
     }
 }
 
@@ -326,12 +339,16 @@ struct Pending {
 }
 
 struct Painting {
+    wc: u64,
     hwnd: isize,
     previous: WNDPROC,
     geometry: Geometry,
     palette: Palette,
     sidebar: Option<f64>,
     painted: bool,
+    /// The page has painted: the container draws nothing from here on, so a Mica window's backdrop shows through the
+    /// page's translucent parts instead of the shell.
+    cleared: bool,
 }
 
 static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
@@ -352,15 +369,22 @@ pub struct Armed {
 }
 
 /// Arms the boot shell for the app window `wc` about to be built on this thread.
-pub fn arm(wc: u64, user_data: &Path, dark: bool, show: Option<EarlyShow>) -> Option<Armed> {
-    let (geometry, palette) = (Geometry::parse()?, Palette::parse(dark)?);
+pub fn arm(
+    wc: u64,
+    user_data: &Path,
+    dark: bool,
+    mica: bool,
+    show: Option<EarlyShow>,
+) -> Option<Armed> {
+    let geometry = Geometry::parse()?;
+    let palette = Palette::parse(dark, mica, &geometry)?;
     let prefs = std::fs::read(user_data.join("prefs.json"))
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .unwrap_or(Value::Null);
     let sidebar = sidebar_from_prefs(&prefs, &geometry);
     *lock(&PENDING) = Some(Pending {
-        fields: json!({"wcId": wc, "dark": dark, "sidebar": sidebar}),
+        fields: json!({"wcId": wc, "dark": dark, "mica": mica, "sidebar": sidebar}),
         geometry,
         palette,
         sidebar,
@@ -463,12 +487,14 @@ fn container_created(container: HWND, parent: HWND) {
             ))
         };
         lock(&PAINTINGS).push(Painting {
+            wc: fields["wcId"].as_u64().unwrap_or_default(),
             hwnd: container as isize,
             previous,
             geometry,
             palette,
             sidebar,
             painted: false,
+            cleared: false,
         });
     }
     if let Some(show) = show {
@@ -483,7 +509,7 @@ fn container_created(container: HWND, parent: HWND) {
             ShowWindow(parent, command);
             let dc = GetDC(parent);
             if !dc.is_null() {
-                render(parent, dc, &geometry, &palette, sidebar);
+                render(parent, dc, &geometry, &palette, sidebar, false);
                 ReleaseDC(parent, dc);
             }
         }
@@ -509,9 +535,10 @@ unsafe extern "system" fn container_proc(
                 painting.geometry,
                 painting.palette,
                 painting.sidebar,
+                painting.cleared,
             )
         });
-    let Some((previous, geometry, palette, sidebar)) = found else {
+    let Some((previous, geometry, palette, sidebar, cleared)) = found else {
         // SAFETY: the default procedure for a message this thread is dispatching to a window it owns.
         return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
     };
@@ -526,7 +553,7 @@ unsafe extern "system" fn container_proc(
                     let mut ps: PAINTSTRUCT = std::mem::zeroed();
                     let dc = BeginPaint(hwnd, &mut ps);
                     if !dc.is_null() {
-                        render(hwnd, dc, &geometry, &palette, sidebar);
+                        render(hwnd, dc, &geometry, &palette, sidebar, cleared);
                     }
                     EndPaint(hwnd, &ps);
                 }
@@ -551,8 +578,25 @@ unsafe extern "system" fn container_proc(
     }
 }
 
-/// Draws the shell over `hwnd`'s whole client area into `dc`: off screen first, then in one blit, so a resize never
-/// shows a half-drawn frame.
+/// The page of `wc` painted its own first frame: the shell under it goes, so a translucent page (a Mica window's
+/// sidebar and canvas) shows the backdrop through itself, not the shell.
+pub fn clear(wc: u64) {
+    let containers: Vec<isize> = lock(&PAINTINGS)
+        .iter_mut()
+        .filter(|painting| painting.wc == wc && !painting.cleared)
+        .map(|painting| {
+            painting.cleared = true;
+            painting.hwnd
+        })
+        .collect();
+    for hwnd in containers {
+        // SAFETY: a window of this thread, still alive (a destroyed one leaves PAINTINGS in WM_NCDESTROY).
+        unsafe { InvalidateRect(hwnd as HWND, std::ptr::null(), 0) };
+    }
+}
+
+/// Draws the shell over `hwnd`'s whole client area into `dc` (nothing, fully transparent, once `cleared`): off screen
+/// first, then in one blit, so a resize never shows a half-drawn frame.
 ///
 /// # Safety
 /// `dc` is a live device context of `hwnd`, a window of this thread.
@@ -562,8 +606,10 @@ unsafe fn render(
     geometry: &Geometry,
     palette: &Palette,
     sidebar: Option<f64>,
+    cleared: bool,
 ) {
-    // SAFETY: per the caller; every GDI object made here is selected out and deleted before returning.
+    // SAFETY: per the caller; every GDI object made here is selected out and deleted before returning, and the DIB's
+    // pixels are read only while it lives, after GdiFlush.
     unsafe {
         let mut client: RECT = std::mem::zeroed();
         GetClientRect(hwnd, &mut client);
@@ -572,23 +618,80 @@ unsafe fn render(
             return;
         }
         let scale = f64::from(GetDpiForWindow(hwnd).max(96)) / 96.0;
-        let shapes = layout(
-            geometry,
-            f64::from(w) / scale,
-            f64::from(h) / scale,
-            sidebar,
-        );
+        let shapes = if cleared {
+            Vec::new()
+        } else {
+            layout(
+                geometry,
+                f64::from(w) / scale,
+                f64::from(h) / scale,
+                sidebar,
+            )
+        };
+        // A 32-bit DIB, so every pixel carries its alpha: a Mica window composes the client area by it, and GDI
+        // alone leaves it 0 (transparent).
+        let mut info: BITMAPINFO = std::mem::zeroed();
+        info.bmiHeader = BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB,
+            ..std::mem::zeroed()
+        };
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
         let memory = CreateCompatibleDC(dc);
-        let bitmap = CreateCompatibleBitmap(dc, w, h);
+        let bitmap = CreateDIBSection(
+            memory,
+            &info,
+            DIB_RGB_COLORS,
+            &mut bits,
+            std::ptr::null_mut(),
+            0,
+        );
+        if bitmap.is_null() || bits.is_null() {
+            DeleteDC(memory);
+            return;
+        }
         let old_bitmap = SelectObject(memory, bitmap as HGDIOBJ);
         for shape in &shapes {
             draw(memory, shape, palette, scale);
+        }
+        GdiFlush();
+        let band = shapes
+            .iter()
+            .find(|shape| shape.fill == Fill::Surface)
+            .map(|shape| {
+                let px = |v: f64| (v * scale).round() as usize;
+                px(shape.x)..px(shape.x + shape.w - 1.0)
+            });
+        let pixels = std::slice::from_raw_parts_mut(bits.cast::<u32>(), (w * h) as usize);
+        for (i, pixel) in pixels.iter_mut().enumerate() {
+            let in_band = band
+                .as_ref()
+                .is_some_and(|band| band.contains(&(i % w as usize)));
+            let alpha = if cleared {
+                0
+            } else if in_band {
+                palette.sidebar_alpha
+            } else {
+                255
+            };
+            *pixel = premultiplied(*pixel, alpha);
         }
         BitBlt(dc, 0, 0, w, h, memory, 0, 0, SRCCOPY);
         SelectObject(memory, old_bitmap);
         DeleteObject(bitmap as HGDIOBJ);
         DeleteDC(memory);
     }
+}
+
+/// A DIB pixel (`0x00RRGGBB`) with alpha `a`, its colour premultiplied as DWM composes it.
+fn premultiplied(pixel: u32, a: u8) -> u32 {
+    let a = u32::from(a);
+    let channel = |shift: u32| (((pixel >> shift) & 0xff) * a / 255) << shift;
+    (a << 24) | channel(16) | channel(8) | channel(0)
 }
 
 /// # Safety
@@ -700,10 +803,14 @@ mod tests {
     }
 
     #[test]
-    fn both_schemes_have_every_colour() {
+    fn both_schemes_have_every_colour_and_mica_tints_only_the_sidebar() {
+        let g = geometry();
         for dark in [false, true] {
-            assert!(Palette::parse(dark).is_some(), "dark: {dark}");
+            assert_eq!(Palette::parse(dark, false, &g).unwrap().sidebar_alpha, 255);
+            assert_eq!(Palette::parse(dark, true, &g).unwrap().sidebar_alpha, 158);
         }
         assert_eq!(colorref("#123456"), Some(0x0056_3412));
+        assert_eq!(premultiplied(0x00ff_8000, 255), 0xffff_8000);
+        assert_eq!(premultiplied(0x00ff_8000, 158), 0x9e9e_4f00);
     }
 }

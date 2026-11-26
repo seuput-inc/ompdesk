@@ -27,6 +27,10 @@ describe("boot-shell-geometry.json", () => {
 		);
 		expect(geometry.columnPadPx.min).toBe(px("tokens.css", "--sc-space-4"));
 		expect(geometry.columnPadPx.max).toBe(px("tokens.css", "--sc-space-10"));
+		// Under Mica the sidebar is its surface colour over the backdrop at this share.
+		expect(css("global.css")).toContain(
+			`background: color-mix(in srgb, var(--sc-surface-1) ${geometry.micaSidebarShare * 100}%, transparent);`,
+		);
 	});
 
 	it("repeats the boot shell's own spacing around the composer", () => {

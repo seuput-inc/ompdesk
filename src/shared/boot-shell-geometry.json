@@ -9,6 +9,7 @@
 	"columnPadPx": { "min": 16, "share": 0.03, "max": 40 },
 	"scrollbarPx": 9,
 	"markPx": 48,
+	"micaSidebarShare": 0.62,
 	"mark": {
 		"width": 448,
 		"stroke": 76,
