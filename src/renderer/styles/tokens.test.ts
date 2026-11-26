@@ -13,6 +13,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import windowBackground from "../../shared/window-background.json" with { type: "json" };
 import { CHAT_TEXT_MIX, STATUS_ON_SOFT_MIX, USAGE_ALERT_FILL, USAGE_PLAIN_FILL } from "../lib/theme-contrast";
 import { SC_TOKEN_SOURCES, type ScTokenKey, scTokensFor, THEME_TOKEN_KEYS, THEMES } from "../lib/themes";
 
@@ -95,6 +96,11 @@ describe.each(["light", "dark"] as const)("ompdesk %s palette", scheme => {
 		for (const key of Object.keys(SC_TOKEN_SOURCES) as ScTokenKey[]) {
 			expect(mirrored[key].toLowerCase(), key).toBe(cssValue(scheme, key));
 		}
+	});
+
+	it("is the colour the Tauri host paints a window in before its page has painted", () => {
+		// tauri-shell theme.rs reads window-background.json: a window shown before a cold WebView2 start paints.
+		expect(windowBackground[scheme]).toBe(sc("bg"));
 	});
 
 	it("keeps text at 4.5:1 on every surface", () => {
