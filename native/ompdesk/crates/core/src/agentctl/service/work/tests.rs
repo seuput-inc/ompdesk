@@ -2255,8 +2255,7 @@ async fn a_new_bot_speaks_first_once_and_its_first_run_ends_with_the_owners_firs
 }
 
 #[tokio::test]
-async fn a_bot_made_with_a_purpose_still_runs_first_run_and_one_the_owner_wrote_to_first_gets_no_kickoff()
-{
+async fn a_bot_made_with_a_purpose_still_runs_first_run_and_an_owner_first_gets_no_kickoff() {
     let root = Scratch::new();
     let mails = Mails::default();
     let facts = Arc::new(Mutex::new(said(1, false, "none")));
