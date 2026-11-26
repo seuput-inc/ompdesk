@@ -870,6 +870,11 @@ impl AgentControl {
                 .join("\n\n"))
             }
             "hand" => {
+                if self.host.state().parent_of(&caller.tab_id).is_some() {
+                    return fail(
+                        "A worker cannot hand work to a bot. Report to your opener instead.",
+                    );
+                }
                 let bot = wanted()?;
                 let (Some(session), Some(text)) = (args.session.as_deref(), args.text.as_deref())
                 else {

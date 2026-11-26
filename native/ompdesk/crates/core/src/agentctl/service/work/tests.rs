@@ -2014,7 +2014,7 @@ async fn a_session_a_bots_chat_opened_is_its_worker_with_its_branch() {
     ));
     world["parents"] =
         json!({ "kid1": { "callerTabId": "bot1" }, "work1": { "callerTabId": "main0001" } });
-    let (control, _) = rig_files(
+    let (control, asked) = rig_files(
         9_714,
         world,
         Caps::default(),
@@ -2035,6 +2035,18 @@ async fn a_session_a_bots_chat_opened_is_its_worker_with_its_branch() {
     assert_eq!(workers[0]["branch"], "omp/agent/fix");
     assert_eq!(workers[0]["state"], "working");
     assert_eq!(workers[0]["tabId"], "kid1");
+
+    let hand = control
+        .run(
+            "kid1",
+            "ompdesk_bot",
+            json!({ "action": "hand", "bot": "Ada", "session": "work1", "text": "Take over" }),
+            None,
+        )
+        .await;
+    assert!(hand.is_error && hand.text.contains("Report to your opener"));
+    let calls = asked.lock().unwrap();
+    assert!(!calls.iter().any(|(op, _)| op == "setOpener"));
 }
 
 /// Orca's `sharing/bot-package-archive.ts`, as a local file: a bot's soul, skills and memory topics go out and come
