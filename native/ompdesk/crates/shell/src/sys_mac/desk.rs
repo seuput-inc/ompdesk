@@ -458,14 +458,11 @@ pub fn on_battery() -> bool {
     }
 }
 
-pub fn idle_seconds() -> u64 {
+/// Seconds since the last keyboard or mouse input; none when the system cannot say.
+pub fn idle_seconds() -> Option<u64> {
     // SAFETY: state 0 = combined session, event type !0 = any input event.
     let seconds = unsafe { CGEventSourceSecondsSinceLastEventType(0, u32::MAX) };
-    if seconds.is_finite() && seconds > 0.0 {
-        seconds as u64
-    } else {
-        0
-    }
+    (seconds.is_finite() && seconds >= 0.0).then_some(seconds as u64)
 }
 
 /// Reachability of the default route (an unspecified IPv4 address): reachable and no connection needed.

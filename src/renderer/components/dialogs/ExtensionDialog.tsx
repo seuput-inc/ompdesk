@@ -26,6 +26,7 @@ import {
 import { Fragment, type KeyboardEvent as ReactKeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { OAUTH_PASTE_PROMPT } from "../../../../resources/gui-bridge/extensions/oauth-contracts";
+import { a2uiMarkerToolCallId } from "../../../../resources/gui-bridge/modes/a2ui-contracts";
 import type {
 	ExtensionAskDialogQuestion,
 	ExtensionAskDialogResult,
@@ -50,6 +51,7 @@ import { useTabsStore } from "../../stores/tabs";
 import { toast } from "../../stores/toast";
 import { approvalHeldBack } from "../autopilot/autopilot-view";
 import { Badge, Button, Card, ChoiceList, Input, Kbd, LinkButton, Tabs, TextArea } from "../common";
+import { A2uiWaitingRow } from "../tools";
 import { ApprovalDialog } from "./ApprovalDialog";
 import { useAskDock, useBelowEditorDock } from "./ask-dock";
 import { PromptCard, PromptQueueContext, TimeoutFooter } from "./PromptCard";
@@ -978,7 +980,12 @@ function ActiveDialog({
 					request={request}
 				/>
 			);
-		case "form":
+		case "form": {
+			// An `a2ui` call's form: its card in the chat answers it (docs/design/a2ui.md §2), the dock only says where.
+			const a2uiCall = a2uiMarkerToolCallId(request.html);
+			if (a2uiCall !== undefined) {
+				return <A2uiWaitingRow callId={a2uiCall} onSkip={cancel} remaining={remaining} />;
+			}
 			return (
 				<NativeFormDialog
 					key={request.id}
@@ -988,6 +995,7 @@ function ActiveDialog({
 					onCancel={cancel}
 				/>
 			);
+		}
 		case "ask":
 			// Upstream's opt-in protocol (enabled via set_ask_dialog at session
 			// start): same dialog, but the wire wants one `answers` entry per

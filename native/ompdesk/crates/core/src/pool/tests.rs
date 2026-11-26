@@ -834,3 +834,49 @@ async fn a_stop_whose_run_never_ends_fails_session_running_on_the_core_s_clock_a
     assert_eq!(of(2)["ok"], true);
     assert!(!main.items.iter().any(|item| item["k"] == "stopTimer"));
 }
+
+/// A pool call on main's clock `now`.
+async fn call_at(main: &mut Main, now: i64, method: &str, mut params: Value) -> Value {
+    params["now"] = json!(now);
+    let to = main.instance;
+    main.request(
+        "hub.call",
+        json!({"to": to, "method": method, "params": params}),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_tab_seen_after_its_last_run_ended_is_named_and_one_that_ran_again_since_is_not() {
+    let mut main = Main::start(opts()).await;
+    main.acquire("a", 1, Some("/s/a.jsonl"), false).await;
+    main.acquire("b", 1, Some("/s/b.jsonl"), false).await;
+    let run = |tab: &str, event: Value| json!({"tab": tab, "event": "events", "payload": [event]});
+    let end = json!({"type": "agent_end", "messages": [
+        {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "done"}]}]});
+    for tab in ["a", "b"] {
+        let ready =
+            json!({"tab": tab, "event": "status", "payload": {"status": "ready", "failure": null}});
+        call_at(&mut main, 1, "feed", ready).await;
+        call_at(
+            &mut main,
+            1,
+            "feed",
+            run(tab, json!({"type": "agent_start"})),
+        )
+        .await;
+        call_at(&mut main, 1, "feed", run(tab, end.clone())).await;
+    }
+    assert_eq!(main.call("seenSinceRun", json!({})).await, json!([]));
+    call_at(&mut main, 2, "tabSeen", json!({"tab": "a"})).await;
+    call_at(&mut main, 2, "tabSeen", json!({"tab": "b"})).await;
+    call_at(
+        &mut main,
+        3,
+        "feed",
+        run("b", json!({"type": "agent_start"})),
+    )
+    .await;
+    call_at(&mut main, 3, "feed", run("b", end)).await;
+    assert_eq!(main.call("seenSinceRun", json!({})).await, json!(["a"]));
+}

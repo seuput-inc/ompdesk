@@ -120,6 +120,7 @@ function fakeShell(shell: ShellClient) {
 		"shell.openPath",
 		"theme.setSource",
 		"power.idleTime",
+		"power.desktopAway",
 		"notification.show",
 		"notification.close",
 		"power.blockerStart",
@@ -1683,6 +1684,22 @@ describe("menus, dialogs and the small modules", () => {
 		expect(
 			await (powerMonitor as unknown as { getSystemIdleTimeAsync(): Promise<number> }).getSystemIdleTimeAsync(),
 		).toBe(12);
+		// Whether the person is away is the shell's read: unknown until it says, then each change it tells.
+		const presence = powerMonitor as unknown as { desktopAway(): boolean | undefined };
+		expect(presence.desktopAway()).toBeUndefined();
+		const changes: (boolean | undefined)[] = [];
+		powerMonitor.on("desktop-away" as never, (away: boolean | undefined) => changes.push(away));
+		await shell.event("power.desktopAway", { away: false });
+		await settle();
+		expect(presence.desktopAway()).toBe(false);
+		await shell.event("power.desktopAway", { away: true });
+		await settle();
+		expect(presence.desktopAway()).toBe(true);
+		// The shell could not read the idle time: unknown again, which never silences a phone.
+		await shell.event("power.desktopAway", { away: null });
+		await settle();
+		expect(presence.desktopAway()).toBeUndefined();
+		expect(changes).toEqual([false, true, undefined]);
 		const id = powerSaveBlocker.start("prevent-app-suspension");
 		expect(powerSaveBlocker.isStarted(id)).toBe(true);
 		powerSaveBlocker.stop(id);

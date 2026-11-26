@@ -252,7 +252,7 @@ pub fn entry_size(path: &Path, meta: &fs::Metadata) -> Result<u64, Fault> {
 /// Waits of a refused rename (`RETRY_MS` in `atomic-file.ts`): 20 ms doubling, about 5 s in all.
 const RENAME_RETRY_MS: [u64; 8] = [20, 40, 80, 160, 320, 640, 1_280, 2_560];
 
-/// `writeFileAtomic(file, bytes, { mode, dirMode, commitIf })` of `src/main/atomic-file.ts`: written to a sibling
+/// `writeFileAtomic(file, bytes, { mode, dirMode })` of `src/main/atomic-file.ts`: written to a sibling
 /// temp file, then renamed over `file`, so a crash never leaves half a file. Windows refuses that rename (`EPERM`,
 /// `EACCES`, `EBUSY`) while any process holds the target open, so it is tried again on that backoff. Right before
 /// every rename the request is asked whether it was cancelled: a cancelled one drops the write and never replaces

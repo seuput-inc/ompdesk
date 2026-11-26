@@ -100,6 +100,8 @@ export type ParitySession =
 	| "steer"
 	| "advisor"
 	| "ci"
+	| "a2ui"
+	| "a2uiForm"
 	| "limit"
 	| "turns"
 	| "long"
@@ -1518,6 +1520,49 @@ export const SURFACES: readonly Surface[] = [
 		settle: 900,
 		when: () => false,
 		parity: { session: "ci", inView: '[data-ci-note="failure"]' },
+	},
+	{
+		id: "reply-a2ui",
+		area: "A",
+		title: "An A2UI surface the agent drew in the chat: a card with a heading, a bar chart and a caption",
+		open: async page => {
+			await showTurn(page, "fixture a2ui show");
+			await page.getByText("A2UI surface shown.", { exact: true }).last().waitFor({ timeout: 15_000 });
+		},
+		ready: "[data-a2ui-card] [data-a2ui-chart] canvas",
+		settle: 900,
+		// The audits' harness page has no such turn; the parity sheet asks the fake omp for it.
+		when: () => false,
+		parity: { session: "a2ui", inView: '[data-a2ui-surface="weekly"]' },
+	},
+	{
+		id: "card-a2ui-form",
+		area: "A",
+		title: "An A2UI form the agent waits on: the card's inputs and Send live in the chat, the dock's waiting row with Jump and Skip",
+		// The host's fake omp raises it (e2e/fixture/rpc-ui.ts "fixture a2ui form") as the bridge's `a2ui` tool waits on the
+		// person, with a new request id each time, since each view asks afresh; `after` skips it from the dock.
+		open: async page => {
+			await promptShownTab(page, "fixture a2ui form");
+			await page.locator("[data-a2ui-waiting]").first().waitFor({ timeout: 15_000 });
+		},
+		ready: '[data-a2ui-card][data-a2ui-live] [data-a2ui-surface^="contact-"]',
+		settle: 900,
+		// The audits' harness page has no such turn; the parity sheet asks the fake omp for it.
+		when: () => false,
+		parity: {
+			session: "a2uiForm",
+			inView: '[data-a2ui-card][data-a2ui-live] [data-a2ui-surface^="contact-"]',
+			// The dismissal ends the turn, so the session is idle for the next view's prompt.
+			after: async page => {
+				const skip = page.locator("[data-a2ui-dock-skip]");
+				if (await skip.count()) await skip.first().click();
+				await page.locator("[data-a2ui-waiting]").first().waitFor({ state: "detached", timeout: 15_000 });
+				await page
+					.locator(".omp-composer-toolbar[data-turn-running]")
+					.first()
+					.waitFor({ state: "detached", timeout: 15_000 });
+			},
+		},
 	},
 	...(
 		[

@@ -16,18 +16,23 @@
 //!   it; a migration that changed something is written like any change.
 //!
 //! Hub kind `prefs` (no state per instance): `get {file, key}` → `{value}` or `{}` when nothing is there, `has`,
-//! `set {file, key, value}`, `delete {file, key}`, `store {file}` → the whole store, `replace {file, value}`,
+//! `set {file, key, value}` (prefs.json's `terminalCommands` only as a list the page reads whole,
+//! `terminal_commands.rs`), `delete {file, key}`, `store {file}` → the whole store, `replace {file, value}`,
 //! `recovered {}` → the files `recover` repaired since the last ask.
 //! The owners of single keys, each a read, change and write under the file's one lock (`launch_profile.rs`,
 //! `sidebar.rs`): `launchProfile {file, cwd}` → the profile, `updateLaunchProfile {file, cwd, patch}` → the profile
 //! stored, `launchFlags {file, cwd}` → a spawn's flags, `updateSidebar {file, change, from}` → `{change, log}` (both
-//! null when nothing moved), `moveSidebarPin {file, from, to}` → whether a pin moved.
+//! null when nothing moved), `moveSidebarPin {file, from, to}` → whether a pin moved. The session-links file's rules
+//! (`session_links.rs`): `sessionLinks {file, sessionPath?}`, `sessionLinkAdd {file, sessionPath, link}` → the link,
+//! `sessionLinkRemove {file, sessionPath, url}` → the session's links left.
 
 mod launch_profile;
 mod path;
 mod powers;
 mod retired;
+pub(crate) mod session_links;
 mod sidebar;
+mod terminal_commands;
 #[cfg(test)]
 mod tests;
 
@@ -356,6 +361,10 @@ pub fn get(file: &str, key: &str) -> Result<Option<Value>, Fault> {
 }
 
 pub fn set(file: &str, key: &str, value: Value) -> Result<(), Fault> {
+    let prefs_json = Path::new(file).file_name() == Some(std::ffi::OsStr::new("prefs.json"));
+    if key == terminal_commands::KEY && prefs_json {
+        terminal_commands::check(&value)?;
+    }
     let prefs = prefs(file)?;
     let mut state = prefs.current()?;
     write_key(&mut state.store, key, value)?;
@@ -494,6 +503,19 @@ struct Owned {
     to: String,
 }
 
+/// A session-links call (`session_links.rs`): the link and the URL as main's parser read them.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Links {
+    file: String,
+    #[serde(default)]
+    session_path: Option<String>,
+    #[serde(default)]
+    link: Value,
+    #[serde(default)]
+    url: String,
+}
+
 fn call(_: u64, method: &str, raw: &RawValue) -> Outcome {
     let done = match method {
         "get" => params::<Of>(raw).and_then(|of| {
@@ -530,6 +552,13 @@ fn call(_: u64, method: &str, raw: &RawValue) -> Outcome {
         }),
         "moveSidebarPin" => params::<Owned>(raw)
             .and_then(|o| sidebar::move_pin(&o.file, &o.from, &o.to).map(|moved| json!(moved))),
+        "sessionLinks" => params::<Links>(raw)
+            .and_then(|l| session_links::list(&l.file, l.session_path.as_deref())),
+        "sessionLinkAdd" => params::<Links>(raw)
+            .and_then(|l| session_links::add(&l.file, &l.session_path.unwrap_or_default(), l.link)),
+        "sessionLinkRemove" => params::<Links>(raw).and_then(|l| {
+            session_links::remove(&l.file, &l.session_path.unwrap_or_default(), &l.url)
+        }),
         "recovered" => Ok(json!(recovered())),
         _ => Err(Fault::new("no_method", format!("prefs has no {method}"))),
     };

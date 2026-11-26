@@ -572,7 +572,8 @@ fn tick() {
         return;
     };
     let over = hovered(&window);
-    let idle = system::idle_seconds();
+    // An idle time the system cannot read counts down as active input does.
+    let idle = system::idle_seconds().unwrap_or(0);
     let (expired, more) = with(|state| {
         let now = Instant::now();
         let elapsed = state

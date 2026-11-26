@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { app } from "electron";
 import { codedError, isIpcErrorCode } from "../shared/ipc-error-codes";
 import type { LaunchProfile } from "../shared/launch-profile";
+import type { SessionLink } from "../shared/session-links";
 import { SIDEBAR_PREFS_KEY, type SidebarChange } from "../shared/sidebar-prefs";
 import { hub } from "./core/hub";
 import { CoreError } from "./core/process";
@@ -118,7 +119,7 @@ export class PrefsStore<T extends Record<string, unknown> = Record<string, unkno
 	set(key: string, value: unknown): void;
 	set(key: string, value: unknown): void {
 		if (value === undefined) throw new TypeError("Use `delete()` to clear values");
-		this.#write(key, "set", { key, value });
+		coded(() => this.#write(key, "set", { key, value }));
 	}
 
 	delete(key: string): void {
@@ -169,6 +170,21 @@ export class PrefsStore<T extends Record<string, unknown> = Record<string, unkno
 	/** A peer moved the session file `from` to `to`: the host's pin moves along. Whether one did. */
 	moveSidebarPin(from: string, to: string): boolean {
 		return this.#write(SIDEBAR_PREFS_KEY, "moveSidebarPin", { from, to }) as boolean;
+	}
+
+	/** The session-links file's rules (`crates/core/src/prefs/session_links.rs`): every session's links, or one's. */
+	sessionLinks(sessionPath?: string): Record<string, SessionLink[]> {
+		return this.#call("sessionLinks", { sessionPath: sessionPath ?? null });
+	}
+
+	/** Adds a link `sessionLink` read (or moves it to the newest place); the link stored. */
+	addSessionLink(sessionPath: string, link: SessionLink): SessionLink {
+		return this.#write(null, "sessionLinkAdd", { sessionPath, link }) as SessionLink;
+	}
+
+	/** Removes the link with this URL, if the session keeps it; the session's links left. */
+	removeSessionLink(sessionPath: string, url: string): SessionLink[] {
+		return this.#write(null, "sessionLinkRemove", { sessionPath, url }) as SessionLink[];
 	}
 
 	#answers(): Answers {

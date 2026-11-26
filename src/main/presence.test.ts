@@ -1,28 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DESKTOP_AWAY_SECONDS, DesktopPresence, PRESENCE_FRESH_MS, readDesktopAway } from "./presence";
-
-const monitor = (state: string, idle: number) => ({ getSystemIdleState: () => state, getSystemIdleTime: () => idle });
-
-describe("readDesktopAway", () => {
-	it("is away when locked or idle past the threshold, present otherwise", () => {
-		expect(readDesktopAway(monitor("locked", 0))).toBe(true);
-		expect(readDesktopAway(monitor("idle", 0))).toBe(true);
-		expect(readDesktopAway(monitor("active", DESKTOP_AWAY_SECONDS))).toBe(true);
-		expect(readDesktopAway(monitor("active", DESKTOP_AWAY_SECONDS - 1))).toBe(false);
-	});
-
-	it("says nothing it cannot tell: a throwing monitor or a nonsense idle time", () => {
-		expect(readDesktopAway(monitor("unknown", -1))).toBeUndefined();
-		expect(
-			readDesktopAway({
-				getSystemIdleState: () => {
-					throw new Error("no idle API");
-				},
-				getSystemIdleTime: () => 0,
-			}),
-		).toBeUndefined();
-	});
-});
+import { DesktopPresence, PRESENCE_FRESH_MS } from "./presence";
 
 describe("DesktopPresence", () => {
 	it("is present while a paired computer lately said its person is there, whatever this one reads", () => {

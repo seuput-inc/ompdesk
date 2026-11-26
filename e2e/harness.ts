@@ -138,6 +138,10 @@ export async function appLaunchOptions(
 		PI_PROFILE: "",
 		// The app ends with this worker, even one that dies running no exit handler (src/main/test-launcher-exit.ts).
 		OMP_GUI_TEST_LAUNCHER_PID: String(process.pid),
+		// The person is at the computer (shell-calls.ts `desktopAway`), also for a launch that does not go through
+		// fixture/shell-launch.ts (scripts/tauri-native-smoke.ts drives the host over WebDriver): an idle runner reads
+		// away, and the completion banner a focused window keeps quiet opens the shell's popup as one more window.
+		OMP_GUI_TEST_DESKTOP_AWAY: "0",
 		...("OMP_GUI_OMP" in extra ? {} : { OMP_GUI_OMP: await fixtureOmp(options.profile) }),
 		// Machine setup's managed tools dir is `%LOCALAPPDATA%\ompdesk\tools` on Windows (`managedToolsDir`), one
 		// folder for every app on the PC. A launch that downloads through the test installer has its own, or a

@@ -34,6 +34,11 @@ runs:
         TEST_AUTOMATION: ${{ inputs.test-automation }}
       run: |
         set -euo pipefail
+        # The cargo cache keeps the path crates outside this workspace (the shell's own, the preview's, sysproxy) as if
+        # they were registry crates, and a build restored from another branch's cache took them as fresh while their
+        # sources had changed (mac-smoke, run 45857521403: shell_core's idle_seconds from main's build). They are rebuilt
+        # from source every time; the dependencies stay cached.
+        (cd native/ompdesk/crates/tauri-shell && cargo clean -p ompdesk-shell -p ompdesk-shell-preview -p ompdesk-sysproxy)
         FLAG=""
         if [ "$TEST_AUTOMATION" = "true" ]; then FLAG="--test-automation"; fi
         bun run build:tauri -- $FLAG

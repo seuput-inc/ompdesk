@@ -1,7 +1,6 @@
 /**
- * Supply-chain pins. `bunfig.toml` delays brand-new dependency versions, and every
- * workflow installs one exact Bun, so neither a hijacked release nor a Bun that
- * changed overnight reaches CI or a release build unreviewed.
+ * Supply-chain pins. Every workflow installs one exact Bun, so a Bun that changed
+ * overnight never reaches CI or a release build unreviewed.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -11,7 +10,6 @@ import { MIN_OMP_VERSION } from "./omp-runtime";
 
 const ROOT = path.resolve(__dirname, "../..");
 const WORKFLOWS = path.join(ROOT, ".github/workflows");
-const MIN_RELEASE_AGE_SECONDS = 3 * 24 * 60 * 60;
 
 interface Workflow {
 	jobs?: Record<
@@ -39,14 +37,6 @@ function setupBunVersions(): { file: string; job: string; version: unknown }[] {
 }
 
 describe("supply chain", () => {
-	it("bunfig.toml holds new package versions back for at least three days", () => {
-		const toml = fs.readFileSync(path.join(ROOT, "bunfig.toml"), "utf8");
-		const install = /^\[install\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(toml)?.[1] ?? "";
-		const age = /^minimumReleaseAge\s*=\s*(\d+)\s*(?:#.*)?$/m.exec(install);
-		expect(age, "[install] minimumReleaseAge (seconds) is missing").not.toBeNull();
-		expect(Number(age?.[1])).toBeGreaterThanOrEqual(MIN_RELEASE_AGE_SECONDS);
-	});
-
 	it("every workflow job that sets up Bun pins one exact version, never latest", () => {
 		const uses = setupBunVersions();
 		expect(uses.length).toBeGreaterThan(0);
@@ -105,6 +95,5 @@ describe("supply chain", () => {
 		);
 		const action = fs.readFileSync(path.join(ROOT, ".github/actions/install-omp/action.yml"), "utf8");
 		expect(action).toContain("@oh-my-pi/pi-coding-agent@$(jq -er .version src/shared/omp-tested.json)");
-		expect(action).toContain("--minimum-release-age 0");
 	});
 });

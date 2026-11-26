@@ -146,19 +146,15 @@ pub fn on_battery() -> bool {
     unsafe { GetSystemPowerStatus(&mut status) != 0 && status.ACLineStatus == 0 }
 }
 
-/// Seconds since the last keyboard or mouse input.
-pub fn idle_seconds() -> u64 {
+/// Seconds since the last keyboard or mouse input; none when the system cannot say.
+pub fn idle_seconds() -> Option<u64> {
     let mut info = LASTINPUTINFO {
         cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
         dwTime: 0,
     };
     // SAFETY: `info` has its size set; GetTickCount takes no arguments.
     let (ok, now) = unsafe { (GetLastInputInfo(&mut info), GetTickCount()) };
-    if ok == 0 {
-        0
-    } else {
-        u64::from(now.wrapping_sub(info.dwTime) / 1000)
-    }
+    (ok != 0).then(|| u64::from(now.wrapping_sub(info.dwTime) / 1000))
 }
 
 struct Monitor {

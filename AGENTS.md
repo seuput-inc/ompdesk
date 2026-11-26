@@ -28,6 +28,7 @@ This file holds what every change needs. Each area's detailed rules (its user's 
 - `app-updater` (`.omp/rules/app-updater.md`): OMPdesk's updater: auth, release lookup, install modes, automatic install timing, update log.
 - `waste-guards` (`.omp/rules/waste-guards.md`): Measured session waste: a bash `ready.log` that cannot match is refused, polling gets one hint per kind, the gh guard keeps one session from emptying the GitHub account's quota.
 - `native-rust` (`.omp/rules/native-rust.md`): The conversion from Electron/TypeScript to Rust: what stays TypeScript, target architecture, unit order, the `native/ompdesk` workspace, its build, staging, packaging and CI, the ledger of what has moved.
+- `a2ui` (`.omp/rules/a2ui.md`): A2UI generative UI: the bridge's `a2ui` tool, its catalog and generated schema, the renderer's engine over `@a2ui/web_core`, the card's own chat row, the answer path through stock's form channel, the `lit` refusal.
 
 - New detail about an area goes into its rule file, never here. This file stays under 64 KB (`src/main/agents-md.test.ts`): every byte of it rides in front of every request of every session here.
 - A new area gets its own rule file with `description` and `globs` frontmatter and a line in the list above.
@@ -145,7 +146,7 @@ The shipped app is the Tauri 2 host (`native/ompdesk/crates/tauri-shell`; WKWebV
   - `lint-duplicate-rules`: no rule spelled on two sides of src/main, src/renderer, src/shared and resources/gui-bridge (a regex bound to a top-level `const` whose pattern another side repeats, or an exported constant with the same name and value): import the one copy. Known ones sit in `scripts/lint-duplicate-rules-allow.json` with their files and reason; a copy in one more file fails, and so does a stale entry. Narrow on purpose (a literal match, no clone detection).
   - `lint-omp-imports`: no runtime `@oh-my-pi/*` module outside the omp layer (Bridge › One omp layer) in src, resources/gui-bridge or scripts; only the package name held as data (`PACKAGE_NAME_DATA`) passes. No marker.
 - A commit whose subject is a fix (`fix:`, `fix(scope):`, `fix!:`) changes a test file (`*.test.*`, `*.e2e.*`, `*.spec.*`, anything under `e2e/`; in Rust a line at or after the file's `#[cfg(test)]` mark, a crate's `tests/` folder, or a module's `tests.rs`) or says why not in its body with a line `no-test: <reason>`. `scripts/lint-fix-tests.mjs` (run by bun; its git ignores the repository selectors an enclosing hook or bisect sets) checks the branch's unpublished commits in `check:changed` and the pushed range in ci.yml's `static`; tested by `scripts/lint-fix-tests.test.mjs`.
-- Supply chain: `bunfig.toml` sets `[install] minimumReleaseAge = 259200` (Bun skips a version published less than 3 days ago when it resolves; `bun.lock` pins are untouched; a fresher `bun add`/`bun update` waits or needs `minimumReleaseAgeExcludes`). Every workflow's `oven-sh/setup-bun` pins one exact `bun-version` (never `latest`; bump all together). `src/main/supply-chain.test.ts` pins both.
+- Supply chain: every workflow's `oven-sh/setup-bun` pins one exact `bun-version` (never `latest`; bump all together); `src/main/supply-chain.test.ts` pins it. `bun.lock` pins every dependency version.
 
 ### Tests
 

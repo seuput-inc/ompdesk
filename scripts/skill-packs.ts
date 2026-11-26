@@ -6,9 +6,7 @@
  *                                             the notices and verify; exits 0 with nothing written when it is current
  *   bun scripts/skill-packs.ts version <name> the pinned version
  *
- * Eligible = public for at least bunfig.toml's `minimumReleaseAge` (3 days), the same hold `bun install` gives every
- * new dependency version. A git pack takes the newest commit touching its folder whose committer date is past the
- * hold (GitHub sets that date when it merges a pull request; a pushed commit carries the pusher's own date).
+ * Eligible = the newest descendant of the pin touching the pack's upstream paths, taken as soon as it is public.
  * `.github/workflows/skills-bump.yml` runs this daily and commits each bump that passes to main.
  */
 import { execFileSync } from "node:child_process";
@@ -102,13 +100,6 @@ const Pin = z.object({
 });
 const Versioned = z.object({ version: z.string() });
 
-/** bunfig.toml's `[install] minimumReleaseAge` in ms: one hold for dependencies and skill packs alike. */
-const MIN_AGE_MS = (() => {
-	const match = /^minimumReleaseAge\s*=\s*(\d+)/m.exec(fs.readFileSync(path.join(ROOT, "bunfig.toml"), "utf8"));
-	if (!match) throw new Error("bunfig.toml has no minimumReleaseAge");
-	return Number(match[1]) * 1000;
-})();
-
 interface Release {
 	ref: string;
 	version: string;
@@ -118,10 +109,8 @@ interface Release {
 interface Status {
 	pack: Pack;
 	pinned: Release;
-	/** Newest upstream release past the hold, when newer than the pin. */
+	/** Newest upstream release, when newer than the pin. */
 	eligible: Release | null;
-	/** Newest upstream release still inside the hold, when newer than the pin and `eligible`. */
-	held: Release | null;
 }
 
 function readPin(pack: Pack): z.infer<typeof Pin> {
@@ -144,7 +133,6 @@ function writePin(pack: Pack, release: Release): void {
 }
 
 function packStatus(pack: Pack): Status {
-	const cutoff = new Date(Date.now() - MIN_AGE_MS);
 	const pin = readPin(pack);
 	const pinned = pin.commit;
 	const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${pack.name}-pin-`));
@@ -166,38 +154,24 @@ function packStatus(pack: Pack): Status {
 	};
 	try {
 		execFileSync("git", ["clone", "-q", "--filter=blob:none", "--bare", `https://github.com/${pack.repo}`, dir]);
-		const eligibleRef = git(
-			"log",
-			"-1",
-			"--format=%H",
-			`--until=${cutoff.toISOString()}`,
-			"HEAD",
-			"--",
-			...pack.paths,
-		);
-		const headRef = git("log", "-1", "--format=%H", "HEAD", "--", ...pack.paths);
+		const eligibleRef = git("log", "-1", "--format=%H", "HEAD", "--", ...pack.paths);
 		return {
 			pack,
 			pinned: { ref: pinned, version: pin.version, at: new Date(git("show", "-s", "--format=%cI", pinned)) },
 			eligible: newerThanPin(eligibleRef) ? release(eligibleRef) : null,
-			held: headRef !== eligibleRef && newerThanPin(headRef) ? release(headRef) : null,
 		};
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });
 	}
 }
 
-function statusLine({ pack, pinned, eligible, held }: Status): string {
+function statusLine({ pack, pinned, eligible }: Status): string {
 	const label = (release: Release) => {
 		const at = release.at.toISOString().slice(0, 16);
 		return `${release.version} (${release.ref.slice(0, 7)}, ${at}Z)`;
 	};
 	const lines = [`${pack.name}: pinned ${label(pinned)}`];
-	lines.push(eligible ? `  newer and past the hold: ${label(eligible)}` : "  current: nothing newer past the hold");
-	if (held) {
-		const from = new Date(held.at.getTime() + MIN_AGE_MS).toISOString().slice(0, 16);
-		lines.push(`  held back: ${label(held)}, eligible from ${from}Z`);
-	}
+	lines.push(eligible ? `  newer: ${label(eligible)}` : "  current: nothing newer");
 	return lines.join("\n");
 }
 

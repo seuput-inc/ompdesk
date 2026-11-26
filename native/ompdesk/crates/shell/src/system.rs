@@ -1,5 +1,6 @@
 //! `system.*` (permission queries) and the hidden message window that feeds `power.event`, `theme.changed`,
-//! `screen.changed`, `shortcut.fired` and `net.online` (PROTOCOL.md §9).
+//! `screen.changed`, `shortcut.fired` and `net.online` (PROTOCOL.md §9); the network poll also tells
+//! `power.desktopAway` changes.
 
 use std::time::Duration;
 
@@ -31,6 +32,7 @@ pub fn init() {
         crate::log::log("system.init_failed", json!({ "error": error }));
     }
     let mut last = native::online();
+    let mut away = crate::power::desktop_away();
     let spawned = std::thread::Builder::new()
         .name("net-online".into())
         .spawn(move || {
@@ -40,6 +42,11 @@ pub fn init() {
                 if now != last {
                     last = now;
                     host::event("net.online", json!({ "online": now }));
+                }
+                let now_away = crate::power::desktop_away();
+                if now_away != away {
+                    away = now_away;
+                    host::event("power.desktopAway", json!({ "away": away }));
                 }
             }
         });

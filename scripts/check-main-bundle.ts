@@ -14,7 +14,9 @@
  *   masked frames: `scripts/ws-bundle-probe.ts` is bundled with the main process's
  *   own Vite config and run in Node.
  * - axe-core (the e2e accessibility audit's engine, a devDependency) never ships
- *   in the renderer.
+ *   in the renderer, and neither does lit: `@a2ui/web_core` depends on it for its
+ *   own custom elements, which OMPdesk's A2UI views do not use; its
+ *   `"sideEffects": false` lets the bundler drop them (docs/design/a2ui.md §2).
  * - the renderer ships no .woff or .ttf font: Electron's Chromium always takes the
  *   .woff2, and the renderer's `woff2OnlyFonts` plugin drops the older fallbacks.
  * - the JavaScript a paired phone loads before its first screen (`web.html`'s entry,
@@ -40,6 +42,8 @@ const WS_PROBE_CONFIG = fileURLToPath(new URL("./ws-bundle-probe.config.ts", imp
 const OPTIONAL_PEER_STUB = /__viteOptionalPeerDep_\w+/g;
 /** A property name only axe-core's source carries; it survives minification. */
 const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
+/** The globals lit's three packages register their versions under; they survive minification. */
+const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVersions"];
 /**
  * The phone's first-screen JavaScript, raw bytes (18 Oct 2026: 4.17 MB, 3.79 MB once the side panel's views went
  * lazy, 3.10 MB once each UI language became its own lazy chunk, 3.255 MB with the remembered sidebar state: the
@@ -491,10 +495,19 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // that moves it loads after the page's `load` as its own chunk (`lib/bot-face-motion.ts` and what it imports): 4,452
 // bytes over the budget of its base (2,253,082 in CI run 45852447692 at a789da035, whose budget was 2,248,630), added
 // to the budget with 80 bytes.
-// The changelog window opens at its top (27 Nov 2026, parity-gaps-1127): the notes take the dialog's first focus and
-// the body goes back to its top (`dialogs/ChangelogDialog.tsx`, mounted by App on every screen): measured 2,253,188
-// (branch run 45868695500 at b9624c8b04), 26 bytes over. The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_253_268;
+// An `a2ui` call's own chat row (26 Nov 2026, docs/design/a2ui.md §2), all of it in `main-*.js` (the engine and views
+// stay in the A2UI chunk): `buildHistoryRows` cutting the call out of its card, `MessageBubble` choosing the card, the
+// one lazy loader and its Suspense, the tool's row label, and the preload list's seven new chunk names (the A2UI chunk
+// and what it shares with other lazy chunks: Slider, lib/chart, four lucide icons). Main at 73923cfad measured
+// 2,215,938 (run 45705643845); with this, 2,217,032 (branch run 45710193733), 1,094 bytes more.
+// The A2UI answer path (unit 4): ExtensionDialog telling an a2ui marker form from another (the contracts' marker
+// parser) and handing it to the dock row's lazy loader (the row itself is in the A2UI chunk), and the step reveal
+// finding an a2ui chat row: 2,217,814 (branch run 45712547026), 782 bytes more.
+// Both merged with the quick terminal: measured 2,217,549 (branch run 45727586452; main's GitHub card went lazy
+// meanwhile), inside the quick terminal's budget, which stays.
+// The A2UI stack merged with main at b90e7549d: measured 2,254,932 (CI run 45868553036, omp/agent/a2ui-u4-2 at
+// 33356584c), 1,850 bytes over main's 2,253,082. The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_255_012;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
@@ -584,12 +597,32 @@ if (stubs.size > 0) {
 	process.exit(1);
 }
 
+/** A message only web_core's processor carries: the lit check below inspected the A2UI chunk, not an empty set. */
+const A2UI_ENGINE_MARKER = "Surface not found for message";
+let a2uiEngineSeen = false;
 for (const name of await fs.readdir(RENDERER_ASSETS)) {
 	if (!/\.m?js$/.test(name)) continue;
-	if ((await fs.readFile(RENDERER_ASSETS + name, "utf8")).includes(AXE_MARKER)) {
+	const code = await fs.readFile(RENDERER_ASSETS + name, "utf8");
+	if (code.includes(AXE_MARKER)) {
 		console.error(`out/renderer/assets/${name} bundles axe-core, which is for the e2e audit only.`);
 		process.exit(1);
 	}
+	a2uiEngineSeen ||= code.includes(A2UI_ENGINE_MARKER);
+	const lit = LIT_MARKERS.find(marker => code.includes(marker));
+	if (lit) {
+		console.error(
+			`out/renderer/assets/${name} bundles lit (${lit}): an import reached @a2ui/web_core's custom elements ` +
+				"(its `universal` entry or a basic-catalog component); import only the engine (docs/design/a2ui.md §2).",
+		);
+		process.exit(1);
+	}
+}
+if (!a2uiEngineSeen) {
+	console.error(
+		`no out/renderer asset carries @a2ui/web_core ("${A2UI_ENGINE_MARKER}"): the A2UI chunk is missing, so the lit ` +
+			"check above proved nothing. Update A2UI_ENGINE_MARKER if web_core changed the message.",
+	);
+	process.exit(1);
 }
 
 const legacyFonts = (await fs.readdir(RENDERER, { recursive: true })).filter(name => /\.(woff|ttf)$/i.test(name));
@@ -655,7 +688,7 @@ const sessionListBytes = (await fs.stat(path.join(RENDERER, sessionListFiles[0] 
 
 console.log(
 	"main bundle is self-contained: no un-bundled runtime imports, no optional-peer stubs, the bundled ws carries " +
-		`masked frames; the renderer ships no axe-core and no .woff/.ttf fonts; the phone's first screen loads ` +
+		`masked frames; the renderer ships no axe-core, no lit and no .woff/.ttf fonts; the phone's first screen loads ` +
 		`${firstScreenBytes.toLocaleString("en-US")} bytes of JavaScript in ${firstScreen.size} files, a first visit ` +
 		`${((firstScreenBytes + sessionListBytes) / 1e6).toFixed(2)} MB with the session list`,
 );
