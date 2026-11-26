@@ -2366,7 +2366,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(container.querySelector('[data-workspace-group="/work/beta"]')).not.toBeNull();
 	});
 
-	it("folds the projects deleted from this list at its end, and Show lists one again", async () => {
+	it("lists nothing of the projects deleted from this list (the owner removed their folded list, 27 Nov 2026)", async () => {
 		const omp = installMockOmp(LIST);
 		omp.sidebarProjects.lists.local = {
 			projects: [{ path: "/work/alpha", addedAt: 1 }],
@@ -2375,24 +2375,10 @@ describe("Sidebar menus and pinned ordering", () => {
 		};
 		seedStores();
 		await mount(<Sidebar />);
-		const section = () => container.querySelector('[data-sidebar-removed-projects="local"]');
-		expect(section()?.textContent).toContain("Deleted projects (2)");
-		expect(section()?.querySelector("[data-removed-project]")).toBeNull();
-
-		await fire(section()?.querySelector("button[aria-expanded]") as unknown as Element, "onClick");
-		// Newest removal first.
-		expect(
-			[...(section()?.querySelectorAll("[data-removed-project]") ?? [])].map(row =>
-				row.getAttribute("data-removed-project"),
-			),
-		).toEqual(["/work/beta", "/work/old"]);
-
-		await fire(
-			section()?.querySelector('[data-removed-project="/work/beta"] button') as unknown as Element,
-			"onClick",
-		);
-		expect(omp.sidebarProjects.command).toHaveBeenCalledWith({ action: "add", path: "/work/beta" }, undefined);
-		expect(section()?.textContent).toContain("Deleted projects (1)");
+		expect(container.querySelector('[data-workspace-group="/work/alpha"]')).not.toBeNull();
+		expect(container.querySelector('[data-workspace-group="/work/beta"]')).toBeNull();
+		expect(container.querySelector('[data-workspace-group="/work/old"]')).toBeNull();
+		expect(container.querySelector('[data-tour="sessions"]')?.textContent ?? "").not.toContain("Deleted projects");
 	});
 
 	it("lists a project with no session, and Delete takes it out without deleting anything unless asked to", async () => {

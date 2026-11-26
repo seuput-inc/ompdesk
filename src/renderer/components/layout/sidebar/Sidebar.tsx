@@ -176,7 +176,6 @@ import { SidebarNav } from "./SidebarNav";
 import { SidebarOptions } from "./SidebarOptions";
 import { PinMenu, type PinMenuState, pinMenuHandlers, SidebarPinsSheet } from "./SidebarPinsSheet";
 import { isProjectSectionFold, projectSectionFold, SidebarProjectSection } from "./SidebarProjectSection";
-import { SidebarRemovedProjects } from "./SidebarRemovedProjects";
 import { SidebarRenameField } from "./SidebarRenameField";
 import { SessionLinksDialog, sessionLinksWords } from "./SidebarSessionLinks";
 import { SidebarSleeping } from "./SidebarSleeping";
@@ -2751,7 +2750,6 @@ export function Sidebar() {
 						)}
 					</section>
 				)}
-				<SidebarRemovedProjects query={query} />
 			</Collapse>
 		</>
 	);

@@ -115,7 +115,6 @@ import { SidebarFoldButton } from "./SidebarFoldButton";
 import { SidebarFolderMissingMark } from "./SidebarFolderMissingMark";
 import { SidebarFoldSummary } from "./SidebarFoldSummary";
 import { projectSectionFold, SidebarProjectSection } from "./SidebarProjectSection";
-import { SidebarRemovedProjects } from "./SidebarRemovedProjects";
 import { SidebarRenameField } from "./SidebarRenameField";
 import { SessionLinksDialog, sessionLinksWords } from "./SidebarSessionLinks";
 import { SidebarSleeping } from "./SidebarSleeping";
@@ -1740,7 +1739,6 @@ function DeviceSessions({
 					)}
 				</section>
 			)}
-			<SidebarRemovedProjects device={host.deviceId} query={query} />
 		</div>
 	);
 }
