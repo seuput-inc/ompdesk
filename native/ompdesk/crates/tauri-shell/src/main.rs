@@ -633,23 +633,7 @@ fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
 /// The page painted: Node's `ready-to-show`, and the window's first show (app_window.rs).
 fn ready_to_show(wc: u64, win: u64) {
     win_event(win, "ready-to-show");
-    // The page has its own frame now: the native boot shell under it goes, and a WebView that was transparent over it
-    // turns opaque, so a later reload paints the background as before (a Mica window's page stays translucent).
-    let Some(mica) = app_window::first_paint(wc) else {
-        return;
-    };
-    #[cfg(windows)]
-    boot_paint::clear(wc);
-    if !mica
-        && cfg!(windows)
-        && let Ok(window) = window_for_win(win)
-        && let Err(error) = window.set_background_color(theme::window_background())
-    {
-        log::log(
-            "window.opaque_failed",
-            json!({"wcId": wc, "error": error.to_string()}),
-        );
-    }
+    app_window::first_paint(wc);
 }
 /// The page's preload, or the shell's setup of the page, failed: Node's `preload-error`, and its runtime log line.
 fn preload_error(wc: u64, path: &str, error: Value) {
@@ -830,14 +814,11 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         builder = builder.position(x, y);
     }
     // Painted in the page's own background until the page paints: the window may show before it (app_window.rs
-    // `SHOW_BEFORE_PAINT`). On Windows the WebView itself is transparent until then (the alpha only reaches the
-    // WebView), so the boot shell drawn natively under it (boot_paint.rs) shows until the page's own first frame
-    // (`ready_to_show` turns it opaque). A Mica window draws its backdrop instead.
+    // `SHOW_BEFORE_PAINT`; on Windows already while it is built, boot_paint.rs). A Mica window draws its backdrop
+    // instead.
     if !plan.mica
         && let Some(colour) = theme::window_background()
     {
-        #[cfg(windows)]
-        let colour = tauri::window::Color(colour.0, colour.1, colour.2, 0);
         builder = builder.background_color(colour);
     }
     builder = builder.min_inner_size(window_state::MIN_WIDTH, window_state::MIN_HEIGHT);

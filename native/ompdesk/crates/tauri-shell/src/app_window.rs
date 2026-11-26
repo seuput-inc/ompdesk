@@ -364,14 +364,11 @@ fn show_window(win: u64, op: &'static str) {
 }
 
 /// The page painted (`ready-to-show`): the first time, the window shows as its launch asked, unless it already showed
-/// before the paint; then how late the paint came is logged (a cold WebView2 start). At the first paint, whether the
-/// window has the Mica backdrop: the native boot shell under the page goes, and a window without it turns its WebView
-/// opaque.
-pub fn first_paint(wc: u64) -> Option<bool> {
-    let (first, mica, (shows, late)) = with(wc, |record| {
-        let first = !record.painted;
-        (first, record.mica, record.paint(headless(), Instant::now()))
-    })?;
+/// before the paint; then how late the paint came is logged (a cold WebView2 start).
+pub fn first_paint(wc: u64) {
+    let Some((shows, late)) = with(wc, |record| record.paint(headless(), Instant::now())) else {
+        return;
+    };
     if let Some(late) = late {
         log::log(
             "window.first_paint",
@@ -381,7 +378,6 @@ pub fn first_paint(wc: u64) -> Option<bool> {
     if let Some((win, op)) = shows {
         show_window(win, op);
     }
-    first.then_some(mica)
 }
 
 /// Saves the geometry of an app window that is closing, for the next window to open.

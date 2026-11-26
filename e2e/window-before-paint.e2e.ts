@@ -3,11 +3,12 @@
  * until its page's first paint, and a fresh WebView2 runtime took 50 s to start its browser process (nightly
  * 45646449982): no window at all for that long, so a person clicked the app again. That wait happens inside the
  * Tauri host's `build` of the window, so on Windows the host shows the window as soon as wry's WebView container exists
- * and draws the boot shell into it natively (`boot_paint.rs`); the WebView stays transparent over it until the page's
- * own first frame. Elsewhere the window shows 500 ms after making it, painted in the page's background
- * (`app_window.rs` `SHOW_BEFORE_PAINT`). Either way how late the paint came is logged.
- * `OMP_GUI_TEST_SHELL_HOLD_PAGE_MS` (test builds of the host) answers the first app document that late, as the cold
- * start holds the paint. Unit cases: app_window.rs's and boot_paint.rs's tests.
+ * and draws the boot shell into it natively (`boot_paint.rs`) until WebView2's own window covers it. Elsewhere, and for
+ * a page that is slow after that, the window shows 500 ms after making it, painted in the page's background
+ * (`app_window.rs` `SHOW_BEFORE_PAINT`). Either way how late the paint came is logged. Test builds of the host hold
+ * the build that long after the shell's first paint, pumping messages as wry does (`OMP_GUI_TEST_SHELL_HOLD_WEBVIEW_MS`),
+ * and answer the first app document late (`OMP_GUI_TEST_SHELL_HOLD_PAGE_MS`). Unit cases: app_window.rs's and
+ * boot_paint.rs's tests.
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
@@ -59,36 +60,33 @@ test("a window whose page paints late shows before it, and the late paint is mea
 		path.join(desktop, "prefs.json"),
 		JSON.stringify({ language: "en", firstRunComplete: true, sidebarWidth: SIDEBAR_WIDTH, sidebarVisible: true }),
 	);
-	const app = await launchApp({
+	const log = path.join(desktop, "tauri-shell.jsonl");
+	// Playwright attaches once WebView2 is up, so the boot shell is captured while the launch is still under way.
+	const launching = launchApp({
 		project,
 		desktop,
 		agent,
 		profile,
-		env: { OMP_GUI_TEST_SHELL_HOLD_PAGE_MS: String(HOLD_MS) },
+		env: {
+			OMP_GUI_TEST_SHELL_HOLD_WEBVIEW_MS: String(HOLD_MS),
+			OMP_GUI_TEST_SHELL_HOLD_PAGE_MS: String(HOLD_MS),
+		},
 	});
-	const log = path.join(desktop, "tauri-shell.jsonl");
+	launching.catch(() => {});
 	try {
 		if (process.platform === "win32") {
-			// The window is on screen with the boot shell while its document is held.
-			const bootRecord = async () => (await readRecords(log)).find(record => record.event === "window.boot_shell");
-			await expect.poll(bootRecord, { timeout: 30_000 }).toBeTruthy();
-			const boot = await bootRecord();
+			// The window is on screen with the boot shell while WebView2 is held starting, as a cold start holds it.
+			const record = async (event: string) => (await readRecords(log)).find(entry => entry.event === event);
+			await expect.poll(() => record("window.boot_shell_hold"), { timeout: 30_000 }).toBeTruthy();
+			const boot = await record("window.boot_shell");
 			expect(boot?.sidebar).toBe(SIDEBAR_WIDTH);
 			expect(boot?.shown, "shown while the window was built").toBeTruthy();
 			const file = test.info().outputPath("boot-shell.png");
 			captureWindow(Number(boot?.hwnd), file);
-			const records = await readRecords(log);
-			expect(
-				records.some(record => record.event === "window.first_paint"),
-				"captured before the page painted",
-			).toBe(false);
+			expect(await record("window.first_paint"), "captured before the page painted").toBeUndefined();
 			const { width, height } = await sharp(file).metadata();
 			const pixels = await screenshotBitmap(file);
-			const scale =
-				(width ?? 0) /
-				(await app.evaluate(
-					({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getContentBounds().width ?? 1,
-				));
+			const scale = Number(boot?.scale);
 			const at = (x: number, y: number) => {
 				const i = (Math.round(y * scale) * (width ?? 0) + Math.round(x * scale)) * 4;
 				const hex = (n: number | undefined) => (n ?? 0).toString(16).padStart(2, "0");
@@ -97,12 +95,18 @@ test("a window whose page paints late shows before it, and the late paint is mea
 			const scheme = boot?.dark ? "dark" : "light";
 			const colours = { bg: windowBackground[scheme], ...windowBackground.bootShell[scheme] };
 			const middle = (height ?? 0) / scale / 2;
+			expect(at(SIDEBAR_WIDTH + 24, 12), "the main pane").toBe(colours.bg.toLowerCase());
+			expect(at(SIDEBAR_WIDTH - 1, middle), "the sidebar's border").toBe(colours.border.toLowerCase());
 			// Under the Mica backdrop the band is its surface colour over the backdrop, as the page draws it.
 			if (boot?.mica) expect(at(SIDEBAR_WIDTH / 2, middle), "the tinted band").not.toBe(colours.bg.toLowerCase());
 			else expect(at(SIDEBAR_WIDTH / 2, middle), "the sidebar band").toBe(colours.surface.toLowerCase());
-			expect(at(SIDEBAR_WIDTH - 1, middle), "its border").toBe(colours.border.toLowerCase());
-			expect(at(SIDEBAR_WIDTH + 24, 12), "the main pane").toBe(colours.bg.toLowerCase());
 		}
+	} catch (error) {
+		await exitApp(await launching).catch(() => {});
+		throw error;
+	}
+	const app = await launching;
+	try {
 		const page = await app.firstWindow({ timeout: 45_000 });
 		await expect(page.locator("#root")).not.toBeEmpty({ timeout: 30_000 });
 		const records = await readRecords(log);

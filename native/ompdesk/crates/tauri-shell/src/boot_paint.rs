@@ -24,8 +24,8 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection,
     CreatePen, CreateSolidBrush, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint, FillRect,
-    GdiFlush, GetDC, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT, PS_SOLID, ReleaseDC, RoundRect,
-    SRCCOPY, SelectObject,
+    GdiFlush, GetDC, HDC, HGDIOBJ, PAINTSTRUCT, PS_SOLID, ReleaseDC, RoundRect, SRCCOPY,
+    SelectObject,
 };
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
@@ -339,16 +339,12 @@ struct Pending {
 }
 
 struct Painting {
-    wc: u64,
     hwnd: isize,
     previous: WNDPROC,
     geometry: Geometry,
     palette: Palette,
     sidebar: Option<f64>,
     painted: bool,
-    /// The page has painted: the container draws nothing from here on, so a Mica window's backdrop shows through the
-    /// page's translucent parts instead of the shell.
-    cleared: bool,
 }
 
 static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
@@ -487,14 +483,12 @@ fn container_created(container: HWND, parent: HWND) {
             ))
         };
         lock(&PAINTINGS).push(Painting {
-            wc: fields["wcId"].as_u64().unwrap_or_default(),
             hwnd: container as isize,
             previous,
             geometry,
             palette,
             sidebar,
             painted: false,
-            cleared: false,
         });
     }
     if let Some(show) = show {
@@ -509,12 +503,14 @@ fn container_created(container: HWND, parent: HWND) {
             ShowWindow(parent, command);
             let dc = GetDC(parent);
             if !dc.is_null() {
-                render(parent, dc, &geometry, &palette, sidebar, false);
+                render(parent, dc, &geometry, &palette, sidebar);
                 ReleaseDC(parent, dc);
             }
         }
     }
     fields["hwnd"] = json!(parent as isize);
+    // SAFETY: the DPI of a window of this thread.
+    fields["scale"] = json!(f64::from(unsafe { GetDpiForWindow(parent) }.max(96)) / 96.0);
     fields["shown"] = json!(show.map(|show| format!("{show:?}")));
     fields["ms"] = json!(armed.elapsed().as_millis());
     log::log("window.boot_shell", fields);
@@ -535,10 +531,9 @@ unsafe extern "system" fn container_proc(
                 painting.geometry,
                 painting.palette,
                 painting.sidebar,
-                painting.cleared,
             )
         });
-    let Some((previous, geometry, palette, sidebar, cleared)) = found else {
+    let Some((previous, geometry, palette, sidebar)) = found else {
         // SAFETY: the default procedure for a message this thread is dispatching to a window it owns.
         return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
     };
@@ -553,7 +548,7 @@ unsafe extern "system" fn container_proc(
                     let mut ps: PAINTSTRUCT = std::mem::zeroed();
                     let dc = BeginPaint(hwnd, &mut ps);
                     if !dc.is_null() {
-                        render(hwnd, dc, &geometry, &palette, sidebar, cleared);
+                        render(hwnd, dc, &geometry, &palette, sidebar);
                     }
                     EndPaint(hwnd, &ps);
                 }
@@ -564,6 +559,8 @@ unsafe extern "system" fn container_proc(
                 .is_some_and(|painting| !std::mem::replace(&mut painting.painted, true));
             if first {
                 log::log("window.boot_shell_painted", json!({}));
+                #[cfg(feature = "test-automation")]
+                hold_as_a_cold_start();
             }
             0
         }
@@ -578,25 +575,41 @@ unsafe extern "system" fn container_proc(
     }
 }
 
-/// The page of `wc` painted its own first frame: the shell under it goes, so a translucent page (a Mica window's
-/// sidebar and canvas) shows the backdrop through itself, not the shell.
-pub fn clear(wc: u64) {
-    let containers: Vec<isize> = lock(&PAINTINGS)
-        .iter_mut()
-        .filter(|painting| painting.wc == wc && !painting.cleared)
-        .map(|painting| {
-            painting.cleared = true;
-            painting.hwnd
-        })
-        .collect();
-    for hwnd in containers {
-        // SAFETY: a window of this thread, still alive (a destroyed one leaves PAINTINGS in WM_NCDESTROY).
-        unsafe { InvalidateRect(hwnd as HWND, std::ptr::null(), 0) };
+/// Test seam (`OMP_GUI_TEST_SHELL_HOLD_WEBVIEW_MS=<ms>`, test builds only): after the container's first paint the build
+/// keeps pumping this thread's messages that long, as wry does while a cold WebView2 environment starts.
+#[cfg(feature = "test-automation")]
+fn hold_as_a_cold_start() {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, PostQuitMessage,
+        QS_ALLINPUT, TranslateMessage, WM_QUIT,
+    };
+    let Some(ms) = std::env::var("OMP_GUI_TEST_SHELL_HOLD_WEBVIEW_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+    else {
+        return;
+    };
+    let deadline = Instant::now() + std::time::Duration::from_millis(ms);
+    log::log("window.boot_shell_hold", json!({"ms": ms}));
+    while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+        // SAFETY: this thread's own message queue, pumped as wry's `wait_with_pump` does.
+        unsafe {
+            MsgWaitForMultipleObjects(0, std::ptr::null(), 0, left.as_millis() as u32, QS_ALLINPUT);
+            let mut msg: MSG = std::mem::zeroed();
+            while PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                if msg.message == WM_QUIT {
+                    PostQuitMessage(msg.wParam as i32);
+                    return;
+                }
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
     }
 }
 
-/// Draws the shell over `hwnd`'s whole client area into `dc` (nothing, fully transparent, once `cleared`): off screen
-/// first, then in one blit, so a resize never shows a half-drawn frame.
+/// Draws the shell over `hwnd`'s whole client area into `dc`: off screen first, then in one blit, so a resize never
+/// shows a half-drawn frame.
 ///
 /// # Safety
 /// `dc` is a live device context of `hwnd`, a window of this thread.
@@ -606,7 +619,6 @@ unsafe fn render(
     geometry: &Geometry,
     palette: &Palette,
     sidebar: Option<f64>,
-    cleared: bool,
 ) {
     // SAFETY: per the caller; every GDI object made here is selected out and deleted before returning, and the DIB's
     // pixels are read only while it lives, after GdiFlush.
@@ -618,16 +630,12 @@ unsafe fn render(
             return;
         }
         let scale = f64::from(GetDpiForWindow(hwnd).max(96)) / 96.0;
-        let shapes = if cleared {
-            Vec::new()
-        } else {
-            layout(
-                geometry,
-                f64::from(w) / scale,
-                f64::from(h) / scale,
-                sidebar,
-            )
-        };
+        let shapes = layout(
+            geometry,
+            f64::from(w) / scale,
+            f64::from(h) / scale,
+            sidebar,
+        );
         // A 32-bit DIB, so every pixel carries its alpha: a Mica window composes the client area by it, and GDI
         // alone leaves it 0 (transparent).
         let mut info: BITMAPINFO = std::mem::zeroed();
@@ -671,13 +679,7 @@ unsafe fn render(
             let in_band = band
                 .as_ref()
                 .is_some_and(|band| band.contains(&(i % w as usize)));
-            let alpha = if cleared {
-                0
-            } else if in_band {
-                palette.sidebar_alpha
-            } else {
-                255
-            };
+            let alpha = if in_band { palette.sidebar_alpha } else { 255 };
             *pixel = premultiplied(*pixel, alpha);
         }
         BitBlt(dc, 0, 0, w, h, memory, 0, 0, SRCCOPY);
