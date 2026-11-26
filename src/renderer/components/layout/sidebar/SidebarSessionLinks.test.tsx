@@ -1,20 +1,21 @@
 /**
- * Session links on a row: its words read the store, which reads `session_links` once and again on each change push;
- * the dialog adds a pasted link, removes one with its ✕ and opens one in the browser.
+ * Session links on a row: its words read the store, which reads each computer's links once and again on each change
+ * push naming that computer; the dialog adds a pasted link, removes one with its ✕ and opens one in the browser, on
+ * the computer that runs the session.
  */
 import { parseHTML } from "linkedom";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SessionLink } from "../../../../shared/session-links";
+import type { SessionLink, SessionLinksCommand } from "../../../../shared/session-links";
 import { I18nProvider, useT } from "../../../lib/i18n";
 import { useAllSessionLinks, useSessionLinksStore } from "../../../stores/session-links";
 import { SessionLinksDialog, sessionLinksWords } from "./SidebarSessionLinks";
 
-/** A row's tooltip words for PATH, as the sidebar builds them. */
-function RowWords() {
+/** A row's tooltip words for PATH, as the sidebar builds them (a paired host's section passes its id). */
+function RowWords({ device }: { device?: string }) {
 	const t = useT();
-	return <span data-session-links>{sessionLinksWords(t, useAllSessionLinks()[PATH] ?? []) ?? ""}</span>;
+	return <span data-session-links>{sessionLinksWords(t, useAllSessionLinks(device)[PATH] ?? []) ?? ""}</span>;
 }
 
 const { document, window, Event, CustomEvent, HTMLElement, Node } = parseHTML("<html><body></body></html>");
@@ -38,17 +39,22 @@ const PATH = "/s/a.jsonl";
 const PR: SessionLink = { url: "https://github.com/acme/api/pull/12", kind: "pr", repo: "acme/api", number: 12 };
 const PAGE: SessionLink = { url: "https://example.com/spec", kind: "url" };
 
-let stored: Record<string, SessionLink[]> = {};
-let changed: (() => void) | null = null;
-const ok = (data: unknown) => ({ id: "x", type: "response" as const, command: "", success: true, data });
+const HOST = "host-1";
+/** Each computer's links (`""` this one). */
+let stored: Record<string, Record<string, SessionLink[]>> = {};
+let changed: ((change: { device?: string }) => void) | null = null;
 const omp = {
-	rpc: {
-		sessionLinks: vi.fn(async () => ok(stored)),
-		sessionLinkAdd: vi.fn(async (_path: string, _url: string) => ok(PAGE)),
-		sessionLinkRemove: vi.fn(async (_path: string, _url: string) => ok([])),
+	sessions: {
+		links: vi.fn(async (command: SessionLinksCommand, device?: string) =>
+			command.type === "session_links"
+				? (stored[device ?? ""] ?? {})
+				: command.type === "session_link_add"
+					? PAGE
+					: [],
+		),
 	},
 	events: {
-		onSessionLinksChanged: vi.fn((callback: () => void) => {
+		onSessionLinksChanged: vi.fn((callback: (change: { device?: string }) => void) => {
 			changed = callback;
 			return () => {
 				changed = null;
@@ -88,7 +94,7 @@ async function dispatch(target: EventTarget, event: Event): Promise<void> {
 }
 
 beforeEach(() => {
-	stored = { [PATH]: [PR, PAGE] };
+	stored = { "": { [PATH]: [PR, PAGE] }, [HOST]: { [PATH]: [PR] } };
 	vi.clearAllMocks();
 });
 
@@ -104,17 +110,34 @@ describe("session links on a row", () => {
 		await mount(<RowWords />);
 		const words = () => container.querySelector("[data-session-links]")?.textContent;
 		expect(words()).toBe(`2 linked\nacme/api#12\n${PAGE.url}`);
-		expect(omp.rpc.sessionLinks).toHaveBeenCalledTimes(1);
+		expect(omp.sessions.links).toHaveBeenCalledTimes(1);
 
-		stored = { [PATH]: [PAGE] };
-		await act(async () => changed?.());
+		stored[""] = { [PATH]: [PAGE] };
+		await act(async () => changed?.({}));
 		await flush();
 		expect(words()).toContain("1 linked");
 
-		stored = {};
-		await act(async () => changed?.());
+		stored[""] = {};
+		await act(async () => changed?.({}));
 		await flush();
 		expect(words()).toBe("");
+	});
+
+	it("reads a paired host's row from that host, and follows only that host's pushes", async () => {
+		await mount(<RowWords device={HOST} />);
+		const words = () => container.querySelector("[data-session-links]")?.textContent;
+		expect(words()).toBe("1 linked\nacme/api#12");
+		expect(omp.sessions.links).toHaveBeenCalledWith({ type: "session_links" }, HOST);
+
+		// This computer's change is not the host's: nothing is read for the host's row.
+		await act(async () => changed?.({}));
+		await flush();
+		expect(omp.sessions.links).toHaveBeenCalledTimes(1);
+
+		stored[HOST] = { [PATH]: [PR, PAGE] };
+		await act(async () => changed?.({ device: HOST }));
+		await flush();
+		expect(words()).toContain("2 linked");
 	});
 });
 
@@ -138,7 +161,10 @@ describe("SessionLinksDialog", () => {
 		await dispatch(input, new Event("input", { bubbles: true }));
 		await dispatch(input, new Event("keyup", { bubbles: true }));
 		await dispatch(dialog, new Event("submit", { bubbles: true, cancelable: true }));
-		expect(omp.rpc.sessionLinkAdd).toHaveBeenCalledWith(PATH, PAGE.url);
+		expect(omp.sessions.links).toHaveBeenCalledWith(
+			{ type: "session_link_add", sessionPath: PATH, url: PAGE.url },
+			undefined,
+		);
 
 		const pr = dialog.querySelector(`[data-session-link="${PR.url}"]`);
 		const buttons = pr?.querySelectorAll("button") ?? [];
@@ -146,7 +172,24 @@ describe("SessionLinksDialog", () => {
 		await dispatch(buttons[0] as unknown as EventTarget, new Event("click", { bubbles: true }));
 		expect(omp.system.openExternal).toHaveBeenCalledWith(PR.url);
 		await dispatch(buttons[1] as unknown as EventTarget, new Event("click", { bubbles: true }));
-		expect(omp.rpc.sessionLinkRemove).toHaveBeenCalledWith(PATH, PR.url);
+		expect(omp.sessions.links).toHaveBeenCalledWith(
+			{ type: "session_link_remove", sessionPath: PATH, url: PR.url },
+			undefined,
+		);
+	});
+
+	it("changes a paired host's session on that host", async () => {
+		await mount(<SessionLinksDialog device={HOST} onClose={() => {}} sessionPath={PATH} />);
+		const dialog = document.querySelector("[data-session-links-dialog]");
+		if (!dialog) throw new Error("dialog not found");
+		const pr = dialog.querySelector(`[data-session-link="${PR.url}"]`);
+		expect(dialog.querySelectorAll("[data-session-link]")).toHaveLength(1);
+		const remove = pr?.querySelectorAll("button")[1];
+		await dispatch(remove as unknown as EventTarget, new Event("click", { bubbles: true }));
+		expect(omp.sessions.links).toHaveBeenCalledWith(
+			{ type: "session_link_remove", sessionPath: PATH, url: PR.url },
+			HOST,
+		);
 	});
 
 	it("refuses text that is no https link before anything is sent", async () => {
@@ -154,6 +197,6 @@ describe("SessionLinksDialog", () => {
 		const dialog = document.querySelector("[data-session-links-dialog]");
 		if (!dialog) throw new Error("dialog not found");
 		await dispatch(dialog, new Event("submit", { bubbles: true, cancelable: true }));
-		expect(omp.rpc.sessionLinkAdd).not.toHaveBeenCalled();
+		expect(omp.sessions.links).toHaveBeenCalledTimes(1);
 	});
 });

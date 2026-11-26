@@ -149,7 +149,6 @@ for (const language of ["en", "ko"] as const)
 				text("sidebar.menu.openSplit"),
 				text("sidebar.openInNewWindow"),
 				edits[0],
-				// Links are this computer's own too (stores/session-links.ts).
 				text("sidebar.menu.links"),
 				edits[1],
 				// Muting is this computer's own: a host's session has no such item.
@@ -175,7 +174,10 @@ for (const language of ["en", "ko"] as const)
 			expect(await menuLabels(a)).toEqual([
 				text("sidebar.menu.openSplit"),
 				text("sidebar.openInNewWindow"),
-				...edits,
+				edits[0],
+				// Links are the host's, read and changed there (panels-sidebar.md › The host owns its rows).
+				text("sidebar.menu.links"),
+				...edits.slice(1),
 				text("sidebar.menu.copyTitle"),
 				text("common.delete"),
 			]);

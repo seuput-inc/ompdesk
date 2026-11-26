@@ -6,8 +6,12 @@
  */
 import { X } from "lucide-react";
 import { useState } from "react";
-import type { RpcResponse } from "../../../../shared/rpc-types";
-import { type SessionLink, sessionLink, sessionLinkLabel } from "../../../../shared/session-links";
+import {
+	type SessionLink,
+	type SessionLinksCommand,
+	sessionLink,
+	sessionLinkLabel,
+} from "../../../../shared/session-links";
 import { useT } from "../../../lib/i18n";
 import { openExternal } from "../../../lib/open-external";
 import { useSessionLinks } from "../../../stores/session-links";
@@ -28,24 +32,31 @@ export function sessionLinksWords(
 	return [t("sidebar.links.tip", { count: links.length }), ...links.map(sessionLinkLabel)].join("\n");
 }
 
-/** Adds and removes a session's links; each link opens in the browser. */
-export function SessionLinksDialog({ sessionPath, onClose }: { sessionPath: string; onClose: () => void }) {
+/** Adds and removes a session's links, on the computer that runs it (`device`, else this one); each opens in the browser. */
+export function SessionLinksDialog({
+	sessionPath,
+	device,
+	onClose,
+}: {
+	sessionPath: string;
+	device?: string;
+	onClose: () => void;
+}) {
 	const t = useT();
-	const links = useSessionLinks(sessionPath);
+	const links = useSessionLinks(sessionPath, device);
 	const [input, setInput] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
 	const valid = sessionLink(input) !== null;
 
-	const run = async (call: () => Promise<RpcResponse>): Promise<boolean> => {
+	const run = async (command: SessionLinksCommand): Promise<boolean> => {
 		setBusy(true);
 		setError(null);
 		try {
-			const response = await call();
-			if (!response.success) setError(response.error ?? t("sidebar.links.failed"));
-			return response.success;
+			await window.omp.sessions.links(command, device);
+			return true;
 		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
+			setError((err instanceof Error ? err.message : String(err)) || t("sidebar.links.failed"));
 			return false;
 		} finally {
 			setBusy(false);
@@ -84,7 +95,7 @@ export function SessionLinksDialog({ sessionPath, onClose }: { sessionPath: stri
 				onSubmit={event => {
 					event.preventDefault();
 					if (!valid || busy) return;
-					void run(() => window.omp.rpc.sessionLinkAdd(sessionPath, input.trim())).then(done => {
+					void run({ type: "session_link_add", sessionPath, url: input.trim() }).then(done => {
 						if (done) setInput("");
 					});
 				}}
@@ -121,7 +132,7 @@ export function SessionLinksDialog({ sessionPath, onClose }: { sessionPath: stri
 									className="ml-auto"
 									icon={<X />}
 									label={t("sidebar.links.remove", { link: sessionLinkLabel(link) })}
-									onClick={() => void run(() => window.omp.rpc.sessionLinkRemove(sessionPath, link.url))}
+									onClick={() => void run({ type: "session_link_remove", sessionPath, url: link.url })}
 									size="sm"
 								/>
 							</li>

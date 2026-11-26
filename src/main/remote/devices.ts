@@ -27,6 +27,7 @@ import {
 	IPC_EVENTS,
 	type IpcHostOmpUpdate,
 	type IpcHostSchedules,
+	type IpcSessionLinksChanged,
 	type IpcSessionsChanged,
 	type RemoteDirListing,
 	type RemoteOpenedTab,
@@ -82,6 +83,7 @@ import {
 	RemoteOpenedTabSchema,
 	SCHEDULES_EVENT,
 	SchedulesStateSchema,
+	SESSION_LINKS_EVENT,
 	SESSIONS_CHANGED_EVENT,
 	SESSIONS_DELETED_EVENT,
 	SESSIONS_DELETED_MAX_PATHS,
@@ -786,6 +788,11 @@ export class RemoteDevices {
 		this.#deps.services.modelsChanged();
 	}
 
+	/** A session's links here changed: devices showing this computer's rows read them again. */
+	hostSessionLinksChanged(): void {
+		this.#deps.services.sessionLinksChanged();
+	}
+
 	/** This machine's sidebar project list changed: devices showing its section follow. */
 	hostSidebarProjectsChanged(state: SidebarProjectsState): void {
 		this.#deps.services.sidebarProjectsChanged(state);
@@ -985,6 +992,12 @@ export class RemoteDevices {
 			if (event === MODELS_CHANGED_EVENT) {
 				// No data: the windows read the focused tab's catalog and the open list again, which is that host's when a tab of it is focused.
 				this.#deps.broadcast(IPC_EVENTS.MODELS_CONFIG_CHANGED, undefined);
+				return;
+			}
+			if (event === SESSION_LINKS_EVENT) {
+				this.#deps.broadcast(IPC_EVENTS.SESSION_LINKS_CHANGED, {
+					device: deviceId,
+				} satisfies IpcSessionLinksChanged);
 				return;
 			}
 			if (event === SUMMARIES_EVENT) {

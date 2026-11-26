@@ -1,19 +1,39 @@
 /**
  * Links a person or an agent attached to a session (Orca's workspace references, `src/cli/references/reference.ts`,
  * MIT): kept per session file in `<userData>/session-links.json`, at most `SESSION_LINKS_MAX` per session and
- * `SESSION_LINK_SESSIONS_MAX` sessions (the least recently changed go first). A window's command is answered by
- * `ipc.ts` for this computer's sessions; an agent's reaches the computer its session runs on through its tab.
+ * `SESSION_LINK_SESSIONS_MAX` sessions (the least recently changed go first). A window's or phone page's command
+ * (`SESSIONS_LINKS`) is answered by the computer that runs the session: `ipc.ts` here, a paired host's `sessions.links`
+ * there; an agent's reaches that computer through its tab.
  */
+import { z } from "zod";
 import {
 	SESSION_LINK_SESSIONS_MAX,
 	SESSION_LINKS_MAX,
 	type SessionLink,
+	type SessionLinksCommand,
 	sessionLink,
 } from "../../shared/session-links";
 import { type PrefsStore, prefsFile } from "../prefs-store";
 import { LocalCommandError, type LocalHandler } from "./types";
 
 type Links = Record<string, SessionLink[]>;
+
+const LinkText = z.string().min(1).max(4096);
+/** A window's, phone page's or paired device's command (`SESSIONS_LINKS`, `sessions.links`). */
+export const SessionLinksParams = z
+	.object({
+		command: z.discriminatedUnion("type", [
+			z.object({ type: z.literal("session_links"), sessionPath: LinkText.optional() }).strict(),
+			z
+				.object({
+					type: z.enum(["session_link_add", "session_link_remove"]),
+					sessionPath: LinkText,
+					url: LinkText,
+				})
+				.strict(),
+		]),
+	})
+	.strict() satisfies z.ZodType<{ command: SessionLinksCommand }>;
 
 let file: PrefsStore<Links> | null = null;
 const store = (): PrefsStore<Links> => (file ??= prefsFile<Links>("session-links"));

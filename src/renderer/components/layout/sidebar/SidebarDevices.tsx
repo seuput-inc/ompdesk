@@ -65,6 +65,7 @@ import { type BranchRow, branchPrOf, branchPrTone, useBranchPrs, watchBranchPrs 
 import { summariesOf, useHostedSessionsStore, useSummaryMap } from "../../../stores/hosted-sessions";
 import { pickRemoteDirectory, useTailscaleHint } from "../../../stores/remote";
 import type { SessionStore } from "../../../stores/session";
+import { useAllSessionLinks } from "../../../stores/session-links";
 import { sessionListFeed } from "../../../stores/session-list";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
 import { ensureSessionTargetsOnFocus, requestSessionTargets, useSessionTargets } from "../../../stores/session-targets";
@@ -114,6 +115,7 @@ import { SidebarFoldSummary } from "./SidebarFoldSummary";
 import { projectSectionFold, SidebarProjectSection } from "./SidebarProjectSection";
 import { SidebarRemovedProjects } from "./SidebarRemovedProjects";
 import { SidebarRenameField } from "./SidebarRenameField";
+import { SessionLinksDialog, sessionLinksWords } from "./SidebarSessionLinks";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
 import { SortableProject } from "./SortableProject";
 import { sessionMenuItems } from "./session-menu";
@@ -508,6 +510,9 @@ function DeviceSessions({
 	const prView = `device:${host.deviceId}`;
 	useEffect(() => watchBranchPrs(prView, shownBranches, selectedBranches));
 	useEffect(() => () => watchBranchPrs(prView, [], []), [prView]);
+	// The links attached to the host's sessions, kept on the host (stores/session-links.ts, as Sidebar.tsx's rows).
+	const sessionLinks = useAllSessionLinks(host.deviceId);
+	const [linksFor, setLinksFor] = useState<string | null>(null);
 	// What every row shows of the host's sessions, as the host built it (its windows' tabs, the tabs it runs for any
 	// device): a row reads its run, prompt and subagents from it whether or not a tab here holds the session.
 	const hostSummaries = useSummaryMap(host.deviceId);
@@ -1007,6 +1012,7 @@ function DeviceSessions({
 						}
 					: {}),
 				rename: () => startRename(session),
+				...(session.path.startsWith("tab:") ? {} : { links: () => setLinksFor(session.path) }),
 				copyTitle: () => void copyText(sessionDisplayLabel(session, t("sidebar.untitled"))),
 				togglePin: editable
 					? () =>
@@ -1182,6 +1188,7 @@ function DeviceSessions({
 		}
 		const pr = branchPrOf(branchPrs, branchRow);
 		const prWords = pr ? branchPrWords(t, pr) : null;
+		const linkWords = indexed ? sessionLinksWords(t, sessionLinks[session.path] ?? []) : null;
 		// Its family, as a local row's (Sidebar.tsx): the tab's subagents and the sessions its agent opened. The ones
 		// running light the row as on the host, though no tab here holds it.
 		const opened = openedOf(session);
@@ -1213,6 +1220,7 @@ function DeviceSessions({
 			target ? t("sidebar.row.repositoryTip", { name: target.name }) : null,
 			target?.head ? headWords(t, target.head).tip : null,
 			prWords,
+			linkWords,
 			openElsewhere && !working ? t("sidebar.row.open") : null,
 			folderMissing ? t("sidebar.folderMissingTip", { folder: session.cwd }) : null,
 			reason ?? null,
@@ -1335,6 +1343,7 @@ function DeviceSessions({
 							{working && <span className="sr-only">, {t("sidebar.signal.running")}</span>}
 							{openElsewhere && !working && <span className="sr-only">, {t("sidebar.row.open")}</span>}
 							{prWords && <span className="sr-only">, {prWords}</span>}
+							{linkWords && <span className="sr-only">, {linkWords}</span>}
 						</>
 					}
 					titleText={rowTip}
@@ -1456,6 +1465,9 @@ function DeviceSessions({
 					x={moveMenu.x}
 					y={moveMenu.y}
 				/>
+			)}
+			{linksFor && (
+				<SessionLinksDialog device={host.deviceId} onClose={() => setLinksFor(null)} sessionPath={linksFor} />
 			)}
 		</>
 	);

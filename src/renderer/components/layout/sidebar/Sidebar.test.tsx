@@ -45,6 +45,7 @@ import { useProjectOrigins } from "../../../stores/project-origins";
 import { useQueueStore } from "../../../stores/queue";
 import { useRemoteStateSync, useRemoteStore } from "../../../stores/remote";
 import { useSessionStore } from "../../../stores/session";
+import { useSessionLinksStore } from "../../../stores/session-links";
 import { resetSessionListFeeds, sessionListFeed } from "../../../stores/session-list";
 import { deleteSessionRuntime, setFocusedSessionRuntime } from "../../../stores/session-runtime-context";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
@@ -101,6 +102,7 @@ interface MockOmp {
 		search: Mock<(query: string, scope: string) => Promise<string[]>>;
 		openInNewWindow: Mock<(payload: { sessionPath?: string }) => Promise<boolean>>;
 		move: Mock<(path: string, cwd: string) => Promise<string>>;
+		links: Mock<(command: { type: string }, device?: string) => Promise<unknown>>;
 	};
 	events: {
 		onSessionsChanged: Mock<() => () => void>;
@@ -154,6 +156,7 @@ function installMockOmp(sessionList: SessionInfo[]): MockOmp {
 			search: vi.fn(async () => []),
 			openInNewWindow: vi.fn(async () => true),
 			move: vi.fn(async (path: string, cwd: string) => `${cwd}/${path.slice(path.lastIndexOf("/") + 1)}`),
+			links: vi.fn(async () => ({})),
 		},
 		events: {
 			onSessionsChanged: vi.fn(() => () => {}),
@@ -415,6 +418,7 @@ afterEach(async () => {
 	});
 	useSidebarPrefs.getState().reset();
 	useSidebarProjects.getState().reset();
+	useSessionLinksStore.getState().reset();
 	resetLastReadForTest();
 	useSidebarFolds.getState().reset();
 	useAgentReviewStore.getState().reset();
@@ -4390,8 +4394,9 @@ describe("Sidebar device sections", () => {
 			[...container.querySelectorAll('[data-sidebar-device="dev-studio"] [data-device-session]')].map(row =>
 				row.getAttribute("data-device-session"),
 			);
-		async function mountHost() {
+		async function mountHost(setup?: (omp: MockOmp) => void) {
 			const omp = installWithRemote();
+			setup?.(omp);
 			const host = [
 				session("/s/app/one.jsonl", "/code/app", {
 					title: "App one",
@@ -4417,13 +4422,14 @@ describe("Sidebar device sections", () => {
 			return omp;
 		}
 
-		it("is the one menu this computer's rows have, less what only this computer can do (show in folder, hide from agents)", async () => {
+		it("is the one menu this computer's rows have, less what only this computer can do (show in folder, hide from agents, mute)", async () => {
 			await mountHost();
 			await fire(hostRow("/s/app/one.jsonl"), "onContextMenu");
 			expect(menuItemLabels()).toEqual([
 				"Open in split view",
 				"Open in new window",
 				"Rename session",
+				"Link a PR or issue…",
 				"Pin to top",
 				"Move up",
 				"Move down",
@@ -4434,6 +4440,33 @@ describe("Sidebar device sections", () => {
 				"Copy title",
 				"Delete",
 			]);
+		});
+
+		it("reads and changes a host's session links on the host", async () => {
+			const omp = await mountHost(omp =>
+				omp.sessions.links.mockImplementation(async (command, device) =>
+					command.type === "session_links" && device === "dev-studio"
+						? {
+								"/s/app/one.jsonl": [
+									{ url: "https://github.com/acme/app/pull/7", kind: "pr", repo: "acme/app", number: 7 },
+								],
+							}
+						: {},
+				),
+			);
+			// The host's section read them on the host when it mounted.
+			expect(omp.sessions.links).toHaveBeenCalledWith({ type: "session_links" }, "dev-studio");
+			await fire(hostRow("/s/app/one.jsonl"), "onContextMenu");
+			await fire(menuItem("Link a PR or issue…"), "onClick");
+			expect(document.querySelector("[data-session-links-dialog]")).not.toBeNull();
+			const remove = document.querySelector(
+				'[data-session-link="https://github.com/acme/app/pull/7"] button + button',
+			);
+			await fire(remove, "onClick");
+			expect(omp.sessions.links).toHaveBeenCalledWith(
+				{ type: "session_link_remove", sessionPath: "/s/app/one.jsonl", url: "https://github.com/acme/app/pull/7" },
+				"dev-studio",
+			);
 		});
 
 		it("renames through the host", async () => {
@@ -6183,6 +6216,7 @@ describe("Sidebar device sections", () => {
 					listeners.add(listener);
 					return () => listeners.delete(listener);
 				},
+				onResynced: () => () => {},
 			});
 			function LinkedSidebar() {
 				useRemoteStateSync();

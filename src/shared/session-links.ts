@@ -18,6 +18,11 @@ export const SESSION_LINKS_MAX = 20;
 /** At most this many sessions keep links (the least recently changed go). */
 export const SESSION_LINK_SESSIONS_MAX = 2000;
 
+/** One read or change of a computer's session links (`window.omp.sessions.links`; a paired host's `sessions.links`). */
+export type SessionLinksCommand =
+	| { type: "session_links"; sessionPath?: string }
+	| { type: "session_link_add" | "session_link_remove"; sessionPath: string; url: string };
+
 export interface GithubItemLink {
 	/** A GitHub Enterprise host (`ghe.example.com[:port]`); absent for github.com. */
 	host?: string;

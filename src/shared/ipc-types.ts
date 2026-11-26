@@ -66,6 +66,7 @@ import type {
 	SubagentFrame,
 } from "./rpc-types";
 import type { SchedulesApi, SchedulesState } from "./schedules";
+import type { SessionLinksCommand } from "./session-links";
 import type { SessionListDelta, VersionedSessionList } from "./session-list-delta";
 import type { SummariesChanged, VersionedSummaries } from "./session-summary";
 import type { SessionArtworks, SessionTargetQuery, SessionTargets } from "./session-target";
@@ -155,7 +156,10 @@ export const IPC_EVENTS = {
 	REMOTE_OPENED_TABS_CHANGED: "sessions:remote-opened-changed",
 	/** The session files this computer's windows' tabs hold changed (`string[]`, `SESSIONS_HELD`) */
 	SESSIONS_HELD_CHANGED: "sessions:held-changed",
-	/** A session's attached links on this computer changed (`session_link_add`/`_remove`, a delete): read them again. */
+	/**
+	 * A computer's session links changed (`IpcSessionLinksChanged`: this computer's, or a paired host's `device`): a
+	 * window or page showing its rows reads them again.
+	 */
 	SESSION_LINKS_CHANGED: "sessions:links-changed",
 	/** Log line appended */
 	LOG_LINE: "log:line",
@@ -281,6 +285,8 @@ export const IPC_COMMANDS = {
 	SESSIONS_ARTWORK: "sessions:artwork",
 	/** The pull request of a row's branch, read in its repository root (`{root, branch}` → `GithubBranchPr | null`) */
 	SESSIONS_PULL_REQUEST: "sessions:pull-request",
+	/** Read or change a computer's session links (`IpcSessionLinksPayload`; the answer of `answerSessionLinks`) */
+	SESSIONS_LINKS: "sessions:links",
 	/** Save one open session's diagnostic bundle: stock's `/dump all|anon` zip plus OMPdesk's diagnostics text (`DiagnosticBundleRequest` → `DiagnosticBundleResult`) */
 	SESSIONS_DUMP_BUNDLE: "sessions:dump-bundle",
 	/** Fetch stats endpoint */
@@ -2250,6 +2256,17 @@ export interface IpcSessionsChanged {
 	list?: SessionListDelta;
 }
 
+/** The `sessions:links-changed` push: whose links changed, absent for this computer's own. */
+export interface IpcSessionLinksChanged {
+	device?: string;
+}
+
+export interface IpcSessionLinksPayload {
+	command: SessionLinksCommand;
+	/** The paired host whose session it is; absent for this computer's. */
+	device?: string;
+}
+
 /**
  * A tab of a computer's window that runs on a paired device (`device`) and that a session of that computer opened
  * (`ompdesk_session_open {device}`), as the computer's other views see it: the facts the window holding it draws its
@@ -2496,8 +2513,8 @@ export interface OmpApi {
 		onRemoteOpenedChanged(callback: (tabs: RemoteOpenedTab[]) => void): () => void;
 		/** The session files this computer's windows' tabs hold changed (the whole list, `SESSIONS_HELD`). */
 		onHeldSessionsChanged(callback: (files: string[]) => void): () => void;
-		/** A session's attached links on this computer changed (`SESSION_LINKS_CHANGED`): read `session_links` again. */
-		onSessionLinksChanged(callback: () => void): () => void;
+		/** A computer's session links changed (`SESSION_LINKS_CHANGED`): read that computer's again. */
+		onSessionLinksChanged(callback: (change: IpcSessionLinksChanged) => void): () => void;
 		onLogBatch(callback: (batch: LogBatch) => void): () => void;
 		onMenuAction(callback: (action: MenuAction) => void): () => void;
 		onDeepLink(callback: (link: DeepLinkPayload) => void): () => void;
@@ -2699,6 +2716,11 @@ export interface OmpApi {
 		artwork(roots: string[], device?: string): Promise<SessionArtworks>;
 		/** The pull request of a row's branch, read in its repository root on that computer; null: it has none. */
 		pullRequest(root: string, branch: string, device?: string): Promise<GithubBranchPr | null>;
+		/**
+		 * Read or change session links on the computer that runs the session (`device`, else this one): `session_links`
+		 * answers path → `SessionLink[]`, an add the `SessionLink` kept, a remove the session's links left.
+		 */
+		links(command: SessionLinksCommand, device?: string): Promise<unknown>;
 		/**
 		 * Save an open session's diagnostic bundle: the save dialog (on a paired web page, the computer's save sheet),
 		 * then stock's dump zip of the tab's omp plus `ompdesk-diagnostics.txt`. Failures resolve as results.
