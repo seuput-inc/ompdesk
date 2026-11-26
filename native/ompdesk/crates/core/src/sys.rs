@@ -709,13 +709,16 @@ pub fn stdio_not_inherited() {
     }
 }
 
-/// Closes every inheritable pipe or file handle of this process but its stdin, stdout and stderr, and returns how
-/// many; run first thing, before this process opens anything of its own. libuv starts a process with every inheritable
-/// handle of its parent, and on Windows a spawn's pipe ends are inheritable until its CreateProcess returned, with no
-/// lock between threads: main's worker that spawns `ompdesk-core --own` beside a spawn on main's own thread handed
-/// `--own` that other child's pipe ends, and `--own` lives as long as main, so that child's output never ended and
-/// main's `execFileSync` of it never returned (win-platform, 26 Nov 2026). A redirect to a file leaks the same way and
-/// keeps the file from being deleted. Consoles, NUL and objects that are no file are left as they are.
+/// Closes every inheritable handle to a file object (a pipe, a file on disk) of this process but its stdin, stdout and
+/// stderr, and returns how many; run first thing, before this process opens anything of its own. libuv starts a process
+/// with every inheritable handle of its parent, and on Windows a spawn's pipe ends are inheritable until its
+/// CreateProcess returned, with no lock between threads: main's worker that spawns `ompdesk-core --own` beside a spawn
+/// on main's own thread handed `--own` that other child's pipe ends, and `--own` lives as long as main, so that child's
+/// output never ended and main's `execFileSync` of it never returned (win-platform, 26 Nov 2026). A redirect to a file
+/// leaks the same way and keeps the file from being deleted. Each handle is judged from the snapshot alone (its inherit
+/// attribute, and its object type against the type of this process's own stdio, a file object), never by asking the
+/// handle: `GetFileType` on a leaked synchronous pipe end waits while another process's `ReadFile` on it is pending.
+/// With no stdio to learn the type from, nothing is closed.
 #[cfg(windows)]
 pub fn close_inherited_handles() -> std::io::Result<usize> {
     use std::ffi::c_void;
@@ -725,9 +728,9 @@ pub fn close_inherited_handles() -> std::io::Result<usize> {
     const STD_INPUT_HANDLE: u32 = -10_i32 as u32;
     const STD_OUTPUT_HANDLE: u32 = -11_i32 as u32;
     const STD_ERROR_HANDLE: u32 = -12_i32 as u32;
-    const HANDLE_FLAG_INHERIT: u32 = 0x1;
-    const FILE_TYPE_DISK: u32 = 1;
-    const FILE_TYPE_PIPE: u32 = 3;
+    const OBJ_INHERIT: usize = 0x2;
+    // The entry layout read below is the 64-bit one.
+    const _: () = assert!(size_of::<usize>() == 8);
     #[link(name = "ntdll")]
     unsafe extern "system" {
         fn NtQueryInformationProcess(
@@ -742,12 +745,11 @@ pub fn close_inherited_handles() -> std::io::Result<usize> {
     unsafe extern "system" {
         fn GetCurrentProcess() -> Handle;
         fn GetStdHandle(which: u32) -> Handle;
-        fn GetHandleInformation(handle: Handle, flags: *mut u32) -> i32;
-        fn GetFileType(handle: Handle) -> u32;
         fn CloseHandle(handle: Handle) -> i32;
     }
-    // `PROCESS_HANDLE_SNAPSHOT_INFORMATION`: the count, a reserved word, then the entries
-    // (`PROCESS_HANDLE_TABLE_ENTRY_INFO`: the handle, two counts, then four 32-bit fields).
+    // `PROCESS_HANDLE_SNAPSHOT_INFORMATION`: the count, a reserved word, then five words per entry
+    // (`PROCESS_HANDLE_TABLE_ENTRY_INFO`: the handle, two counts, `GrantedAccess` | `ObjectTypeIndex` << 32,
+    // `HandleAttributes` | `Reserved` << 32).
     let mut words = 512;
     let snapshot = loop {
         let mut buffer = vec![0usize; words];
@@ -775,27 +777,24 @@ pub fn close_inherited_handles() -> std::io::Result<usize> {
         }
         break buffer;
     };
-    let stride = (3 * size_of::<usize>() + 16) / size_of::<usize>();
     // SAFETY: `GetStdHandle` takes one of the three constants and only reads this process's table.
     let stdio = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
         .map(|which| unsafe { GetStdHandle(which) });
+    let entries: Vec<&[usize]> = snapshot[2..].chunks_exact(5).take(snapshot[0]).collect();
+    let Some(file_type) = entries
+        .iter()
+        .find(|entry| stdio.contains(&(entry[0] as Handle)))
+        .map(|entry| entry[3] >> 32)
+    else {
+        return Ok(0);
+    };
     let mut closed = 0;
-    for entry in snapshot[2..].chunks_exact(stride).take(snapshot[0]) {
+    for entry in entries {
         let handle = entry[0] as Handle;
-        if stdio.contains(&handle) {
-            continue;
-        }
-        let mut flags = 0;
-        // SAFETY: `handle` is in this process's table; both calls only read it (GetFileType takes no file lock: the
-        // C runtime calls it on every handle a process starts with).
-        let file = unsafe {
-            GetHandleInformation(handle, &mut flags) != 0 && flags & HANDLE_FLAG_INHERIT != 0
-        } && matches!(
-            unsafe { GetFileType(handle) },
-            FILE_TYPE_DISK | FILE_TYPE_PIPE
-        );
+        let leaked =
+            !stdio.contains(&handle) && entry[4] & OBJ_INHERIT != 0 && entry[3] >> 32 == file_type;
         // SAFETY: an inherited handle nothing in this process opened or uses yet.
-        if file && unsafe { CloseHandle(handle) } != 0 {
+        if leaked && unsafe { CloseHandle(handle) } != 0 {
             closed += 1;
         }
     }
