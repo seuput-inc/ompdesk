@@ -76,7 +76,13 @@ export function DictationRows() {
 		test.current = running;
 		setLevel(0);
 		// Made inside the click: WebKit keeps a context made later suspended.
-		const context = captureContext();
+		let context: AudioContext;
+		try {
+			context = captureContext();
+		} catch {
+			stopTest();
+			return;
+		}
 		openMicrophone(microphone || undefined)
 			.then(stream => {
 				if (test.current !== running) {

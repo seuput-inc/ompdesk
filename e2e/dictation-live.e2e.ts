@@ -98,7 +98,16 @@ for (const engine of ["chromium", "webkit"] as const)
 	test(`a live take streams what the microphone hears and lands its words · ${engine}`, async () => {
 		const page = await openPhone(engine);
 		try {
-			await page.locator('[data-slot="send"] .omp-composer-mic').tap();
+			const mic = page.locator('[data-slot="send"] .omp-composer-mic');
+			if (!(await page.evaluate(() => typeof AudioContext === "function"))) {
+				// Playwright's WebKit on Windows has no Web Audio: the press says so, and the next one tries again.
+				for (let press = 0; press < 2; press++) {
+					await mic.tap();
+					await expect(page.locator('[data-dictation-failure="failed"]')).toBeVisible();
+				}
+				return;
+			}
+			await mic.tap();
 			await expect(page.locator('[data-dictation="recording"]')).toBeVisible();
 			// A second of audio is 32 000 bytes of PCM16 at 16 kHz: the capture context runs and is not suspended.
 			await expect.poll(() => streamedBytes(page), { timeout: 10_000 }).toBeGreaterThan(16_000);

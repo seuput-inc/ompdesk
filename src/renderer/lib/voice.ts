@@ -185,7 +185,14 @@ export async function recordAndTranscribe(listener: DictationListener = {}): Pro
 	cancelBeforeStart = false;
 	stopBeforeStart = false;
 	// Made now, inside the press that started the take: WebKit keeps a context made later suspended.
-	const context = captureContext();
+	let context: AudioContext;
+	try {
+		context = captureContext();
+	} catch (cause) {
+		// A browser without Web Audio (Playwright's WebKit on Windows) cannot hear a take.
+		startPending = false;
+		return { error: cause instanceof Error ? cause.message : String(cause), failure: "failed" };
+	}
 	// The stream opens, and the take's code loads, while the mic does.
 	const streamOpening = openStream();
 	const live = import("./dictation-live");

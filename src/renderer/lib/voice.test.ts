@@ -292,6 +292,13 @@ describe("a take's edges", () => {
 		}
 	});
 
+	it("fails a take in a browser without Web Audio, and the next press tries again", async () => {
+		vi.stubGlobal("AudioContext", undefined);
+		for (let press = 0; press < 2; press++)
+			await expect(recordAndTranscribe()).resolves.toMatchObject({ failure: "failed" });
+		expect(mic.getUserMedia).not.toHaveBeenCalled();
+	});
+
 	it("names a missing dictation model, and nothing else, as no-model", () => {
 		expect(classifyTranscribeError("No dictation model configured")).toBe("no-model");
 		expect(classifyTranscribeError("Dictation role is not set")).toBe("no-model");
