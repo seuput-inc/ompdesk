@@ -266,10 +266,13 @@ fn a_crash_after_the_rename_reads_as_moved() {
         },
     );
     record.save().unwrap();
+    // A session handed back to a path this computer once left: the crash came before the commit cleared it.
+    crate::sessions::deleted::add(&path, None);
     assert_eq!(
         abort(&of(&world, "macbook")).unwrap(),
         json!({ "state": "moved", "sessionPath": path })
     );
+    assert!(!crate::sessions::deleted::has(&path, None));
     assert_eq!(state(&world), State::Done { path });
     let _ = fs::remove_dir_all(&world.root);
 }

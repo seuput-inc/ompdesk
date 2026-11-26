@@ -399,6 +399,8 @@ fn resolve(
     keep: bool,
 ) -> Result<Option<String>, Fault> {
     if Path::new(target).is_file() {
+        // A crash between the rename and the commit's own clear left this computer's old tombstone of the path.
+        crate::sessions::deleted::clear(target);
         record.set(
             &of.id,
             &of.from,
