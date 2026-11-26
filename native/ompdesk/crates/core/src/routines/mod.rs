@@ -12,6 +12,7 @@
 pub(crate) mod connectors;
 mod files;
 pub(crate) mod github;
+pub(crate) mod google;
 mod imap;
 pub(crate) mod runtime;
 pub(crate) mod text;
@@ -84,6 +85,7 @@ struct ScanParams {
 
 pub fn register(registry: &mut Registry) {
     imap::register(registry);
+    google::register(registry);
     // The computer woke or came back online: a bot's Slack socket waiting to reconnect goes at once.
     registry.add("routines.wake", |_call| {
         Box::pin(async move {

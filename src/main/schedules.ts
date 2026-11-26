@@ -155,7 +155,7 @@ interface RoutineToken {
 interface RoutineAsk {
 	token: RoutineToken;
 	ask: number;
-	kind: "git" | "github" | "email" | "slack" | "linear";
+	kind: "git" | "github" | "email" | "slack" | "linear" | "google";
 	account: string;
 }
 
@@ -381,10 +381,11 @@ export class ScheduleService {
 		let answer: { value: unknown } | { error: string };
 		try {
 			let value: unknown;
-			if (kind === "email") value = host.email(account);
-			else if (kind === "slack" || kind === "linear") {
-				if (!host[kind]) throw new Error("A bot's connectors are not available here");
-				value = kind === "slack" ? host.slack?.(account) : host.linear?.(account);
+			if (kind === "email") value = await host.email(account);
+			else if (kind === "slack" || kind === "linear" || kind === "google") {
+				const own = host[kind];
+				if (!own) throw new Error("A bot's connectors are not available here");
+				value = own(account);
 			} else value = await host[kind]();
 			answer = { value };
 		} catch (error) {

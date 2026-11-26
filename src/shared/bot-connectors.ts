@@ -5,8 +5,9 @@
  * core makes it from the bot's page (`BotsRequest` `connect`) and the bot answers with `ompdesk_bot reply`.
  *
  * What a connector needs that is not a routine lives in main (`src/main/connector-accounts.ts`): a Slack app's bot
- * token, app-level token and signing secret, each encrypted by the OS keystore and never sent back to a window, an
- * agent or a log. Linear uses a Settings › Trackers account; GitHub the person's own `gh`.
+ * token, app-level token and signing secret, a Google sign-in's client secret and refresh token, each encrypted by the
+ * OS keystore and never sent back to a window, an agent or a log. Linear uses a Settings › Trackers account; GitHub
+ * the person's own `gh`.
  */
 import type { Schedule, ScheduleEvent } from "./schedules";
 
@@ -31,9 +32,24 @@ export interface SlackApp {
 	needsReentry: boolean;
 }
 
+/**
+ * A Google account the owner signed in to for bots, through their own Google app (a Desktop OAuth client made in
+ * Google Cloud; Orca `google-setup.md`): the calendar's events and Gmail are read with it.
+ */
+export interface GoogleAccount {
+	id: string;
+	email: string;
+	/** A kept token cannot be read this run without macOS asking for the login password: sign in again. */
+	needsReentry: boolean;
+}
+
 export interface BotConnectorsState {
 	slack: SlackApp[];
+	google: GoogleAccount[];
 }
+
+/** An email routine's account that is a Google sign-in for bots (`google:<email>`): Gmail over IMAP with OAuth. */
+export const GMAIL_ACCOUNT = "google:";
 
 export type BotConnectorsRequest =
 	| { action: "list" }
@@ -42,7 +58,15 @@ export type BotConnectorsRequest =
 	 * empty one removes it (the app-level token and the signing secret). The bot token is checked with Slack first.
 	 */
 	| { action: "saveSlack"; id?: string; botToken?: string; appToken?: string; signingSecret?: string }
-	| { action: "removeSlack"; id: string };
+	| { action: "removeSlack"; id: string }
+	/**
+	 * Sign in to Google in the browser with the owner's Desktop OAuth client (`clientFile`, the JSON Google Cloud
+	 * downloads), or again with the one an account `id` keeps; answers once the person allowed it or the sign-in ended.
+	 */
+	| { action: "signInGoogle"; clientFile?: string; id?: string }
+	/** Ends the sign-in under way. */
+	| { action: "cancelGoogle" }
+	| { action: "removeGoogle"; id: string };
 
 export interface BotConnectorsApi {
 	command(request: BotConnectorsRequest): Promise<BotConnectorsState>;
@@ -68,7 +92,8 @@ export type BotConnector =
 	| { service: "slack"; schedule: Schedule; account: string; from: string[] }
 	| { service: "github"; schedule: Schedule; repo: string; handle: string; from: string[] }
 	| { service: "linear"; schedule: Schedule; account: string; handle: string; from: string[] }
-	| { service: "google"; schedule: Schedule; account: string; leadMinutes: number };
+	| { service: "google"; schedule: Schedule; account: string; leadMinutes: number }
+	| { service: "gmail"; schedule: Schedule; account: string; from?: string };
 
 /** The connector a schedule is, by its event; null for any other schedule. */
 export function connectorOf(schedule: Schedule): BotConnector | null {
@@ -86,6 +111,15 @@ export function connectorOf(schedule: Schedule): BotConnector | null {
 			return { service: "linear", schedule, account: event.account, handle: event.handle, from: event.from };
 		case "google":
 			return { service: "google", schedule, account: event.account, leadMinutes: event.leadMinutes };
+		case "email":
+			return event.account.startsWith(GMAIL_ACCOUNT)
+				? {
+						service: "gmail",
+						schedule,
+						account: event.account.slice(GMAIL_ACCOUNT.length),
+						...(event.from ? { from: event.from } : {}),
+					}
+				: null;
 		default:
 			return null;
 	}

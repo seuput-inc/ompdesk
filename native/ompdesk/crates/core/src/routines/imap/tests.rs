@@ -84,6 +84,7 @@ fn account(port: u16, tls: Arc<ClientConfig>) -> Mailbox {
             username: "fixture".into(),
             password: "unused".into(),
             mailbox: "INBOX".into(),
+            oauth: false,
         },
         timeout_ms: 30_000,
         plain_loopback: false,
@@ -192,6 +193,7 @@ fn mime_and_untrusted_protocol_fragments_preserve_charset_and_secret_boundaries(
         username: "fixture".into(),
         password: "a\\\"b".into(),
         mailbox: "INBOX".into(),
+        oauth: false,
     };
     let raw = format!("{} {}", login.password, quote(&login.password).unwrap());
     let scrubbed = login.scrub(raw);

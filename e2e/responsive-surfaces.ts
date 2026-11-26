@@ -2456,6 +2456,54 @@ export const SURFACES: readonly Surface[] = [
 		when: () => false,
 		parity: { session: "work" },
 	},
+	// A bot's connectors (orca-bots-connectors): its page's Settings › Connectors, the "Add to <bot>" catalog and two of
+	// its setup sheets. The bot needs no home chat for these: a missing one shows as the dialog's warning banner.
+	...(
+		[
+			["bot-connectors", "The bot page's Settings › Connectors: the empty row and its Add button", null, null],
+			[
+				"bot-connector-add",
+				"Add to <bot>: the catalog of Slack, GitHub, Linear and Google",
+				"add",
+				"[data-connector-catalog]",
+			],
+			[
+				"bot-connector-slack",
+				"Connect Slack: Socket Mode or request URL, the manifest, the tokens and who can ask",
+				"slack",
+				"[data-connector-setup='slack']",
+			],
+			[
+				"bot-connector-google",
+				"Connect Google: the Google Cloud steps, the client file and Sign in with Google",
+				"google",
+				"[data-connector-setup='google']",
+			],
+		] as const
+	).map(
+		([id, title, step, ready]): Surface => ({
+			id,
+			area: "B",
+			title,
+			open: async (page, look) => {
+				await ensureParityBot(page);
+				await openDrawer(page, look);
+				await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+				if ((await page.locator("[data-bot-pane]:visible").count()) === 0)
+					await page.locator("[data-bots-page-row]:visible").first().click();
+				await page.locator('[data-bot-pane-tabs] [data-tab-id="settings"]:visible').first().click();
+				const section = page.locator("[data-bot-connectors]:visible").first();
+				await section.scrollIntoViewIfNeeded();
+				if (step === null) return;
+				await section.locator("[data-bot-connectors-add]").first().click();
+				if (step !== "add") await page.locator(`[data-connector-pick="${step}"]:visible`).first().click();
+			},
+			ready: ready ?? "[data-bot-pane] [data-bot-connectors]",
+			settle: 600,
+			when: () => false,
+			parity: { session: "work", ...(step === null ? {} : { after: closeOverlay }) },
+		}),
+	),
 	{
 		id: "bot-items",
 		area: "B",

@@ -34,11 +34,14 @@ export interface RoutineHost {
 	log(message: string): void;
 	git(): Promise<CoreRunner>;
 	github(): Promise<{ home: string; runner: CoreRunner | null }>;
-	email: MailAccounts["pollAccount"];
+	/** An email routine's mailbox for one read: a mail account's, or a bot's Gmail sign-in's (null: no such account). */
+	email(name: string): ReturnType<MailAccounts["pollAccount"]> | Promise<object | null>;
 	/** A bot's Slack connector's app-level token, for one Socket Mode connection (null: none kept). */
 	slack?(account: string): { appToken: string | null };
 	/** A bot's Linear connector's account with its header, for one read. */
 	linear?(account: string): unknown;
+	/** A bot's Google connector's client and refresh token, for one access token (`routines/google.rs`). */
+	google?(account: string): { clientId: string; clientSecret: string; refreshToken: string };
 	observe(wake: string | null, tell: (activity: Activity, tab?: Tab) => void): () => void;
 	/** Production uses the native defaults. A test launch may shorten the periods. */
 	timing?: Partial<

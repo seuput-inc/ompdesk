@@ -1,8 +1,8 @@
 /**
  * A bot's connectors (orca-bots-connectors; Orca's `settings/bots/BotConnectorsSection.tsx:89-185`,
  * `BotConnectorRow.tsx:133-194`, `AddConnectorDialog.tsx:17-76`, `apps/bot-app-catalog.ts:84-93`, `ConnectorTryIt.tsx`,
- * `BotHowToAsk.tsx` and the per-service setup flows under `bots/{slack,github,linear}/`), on a local route: the person's
- * own Slack app, `gh` and Linear key, never Orca Cloud or Composio.
+ * `BotHowToAsk.tsx` and the per-service setup flows under `bots/{slack,github,linear}/`, `google-setup.md`), on a
+ * local route: the person's own Slack app, `gh`, Linear key and Google app, never Orca Cloud or Composio.
  *
  * - `BotConnectorsSection` (FS79): the bot page's Connectors, one row per connector (its routine, `connectorOf`) with
  *   how to ask it and who may; Add opens the dialog.
@@ -12,7 +12,7 @@
  * - `ConnectorOfferCard` (FM64): the card a bot's `ompdesk_bot offer_connector` leaves in its chat, whose button opens the
  *   dialog on that service.
  */
-import { CalendarDays, GitPullRequest, Hash, ListChecks, Plus, Trash2 } from "lucide-react";
+import { CalendarDays, GitPullRequest, Hash, ListChecks, Mail, Plus, Trash2 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import {
 	ANYONE,
@@ -23,6 +23,7 @@ import {
 	botHandle,
 	connectorOf,
 	GITHUB_ASK_EVENTS,
+	GMAIL_ACCOUNT,
 	slackManifest,
 } from "../../../shared/bot-connectors";
 import type { Bot } from "../../../shared/bots";
@@ -48,20 +49,25 @@ import {
 	SegmentedChoice,
 	Select,
 	SwitchField,
+	TextArea,
 } from "../common";
 import { isBotSchedule, useLocalSchedules } from "./bot-automations";
 
 const SLACK_APPS_URL = "https://api.slack.com/apps?new_app=1";
+const GOOGLE_CLOUD_URL = "https://console.cloud.google.com/apis/credentials";
 
-const ICONS: Record<BotConnectorService, ReactNode> = {
+const ICONS: Record<BotConnector["service"], ReactNode> = {
 	slack: <Hash aria-hidden className="size-4 text-(--sc-text-muted)" />,
 	github: <GitPullRequest aria-hidden className="size-4 text-(--sc-text-muted)" />,
 	linear: <ListChecks aria-hidden className="size-4 text-(--sc-text-muted)" />,
 	google: <CalendarDays aria-hidden className="size-4 text-(--sc-text-muted)" />,
+	gmail: <Mail aria-hidden className="size-4 text-(--sc-text-muted)" />,
 };
 
-/** The services a bot can be connected to here (Google comes with its own setup below once built). */
-const OFFERED = BOT_CONNECTOR_SERVICES.filter(service => service !== "google");
+/** The setup a connector is changed in: a bot's Gmail and its calendar share the Google one. */
+function setupOf(connector: BotConnector): BotConnectorService {
+	return connector.service === "gmail" ? "google" : connector.service;
+}
 
 /** Who may ask, as a comma list; `*` alone is anyone. */
 function peopleOf(text: string): string[] {
@@ -75,9 +81,9 @@ function peopleOf(text: string): string[] {
 	];
 }
 
-/** This computer's bots' Slack apps, read once per surface (their tokens never come back). */
+/** This computer's bots' Slack apps and Google sign-ins, read once per surface (their tokens never come back). */
 function useSlackApps(): [BotConnectorsState, (state: BotConnectorsState) => void] {
-	const [state, setState] = useState<BotConnectorsState>({ slack: [] });
+	const [state, setState] = useState<BotConnectorsState>({ slack: [], google: [] });
 	useEffect(() => {
 		if (typeof window.omp?.botConnectors?.command !== "function") return;
 		let live = true;
@@ -104,6 +110,7 @@ function placeOf(connector: BotConnector, apps: BotConnectorsState, trackers: Tr
 		case "linear":
 			return trackers?.accounts.find(account => account.id === connector.account)?.label ?? connector.account;
 		case "google":
+		case "gmail":
 			return connector.account;
 	}
 }
@@ -120,11 +127,14 @@ export function HowToAsk({ bot, connector }: { bot: Bot; connector: BotConnector
 			return <>{t("bots.connectors.ask.linear", { handle: connector.handle })}</>;
 		case "google":
 			return <>{t("bots.connectors.ask.google", { name: bot.name, minutes: connector.leadMinutes })}</>;
+		case "gmail":
+			return <>{t("bots.connectors.ask.gmail", { name: bot.name, email: connector.account })}</>;
 	}
 }
 
 function whoLabel(t: (key: string, params?: Record<string, number>) => string, connector: BotConnector): string {
 	if (connector.service === "google") return "";
+	if (connector.service === "gmail") return connector.from ?? "";
 	if (connector.from.includes(ANYONE)) return t("bots.connectors.who.anyone");
 	return connector.from.length === 1
 		? connector.from[0] === "me"
@@ -151,7 +161,7 @@ export function BotConnectorsSection({ bot }: { bot: Bot }) {
 		.filter(schedule => isBotSchedule(bot, schedule))
 		.flatMap(schedule => connectorOf(schedule) ?? []);
 	const add = (
-		<Button icon={<Plus />} onClick={() => setDialog({})} size="sm" variant="ghost">
+		<Button data-bot-connectors-add icon={<Plus />} onClick={() => setDialog({})} size="sm" variant="ghost">
 			{t("bots.connectors.add")}
 		</Button>
 	);
@@ -161,7 +171,7 @@ export function BotConnectorsSection({ bot }: { bot: Bot }) {
 			{connectors.length === 0 ? (
 				<EmptyState
 					actions={
-						<Button onClick={() => setDialog({})} size="sm" variant="secondary">
+						<Button data-bot-connectors-add onClick={() => setDialog({})} size="sm" variant="secondary">
 							{t("bots.connectors.addFirst")}
 						</Button>
 					}
@@ -178,7 +188,7 @@ export function BotConnectorsSection({ bot }: { bot: Bot }) {
 									{
 										id: "edit",
 										label: t("bots.connectors.edit"),
-										onSelect: () => setDialog({ service: connector.service, connector }),
+										onSelect: () => setDialog({ service: setupOf(connector), connector }),
 									},
 									{
 										id: "remove",
@@ -205,7 +215,7 @@ export function BotConnectorsSection({ bot }: { bot: Bot }) {
 						key={connector.schedule.id}
 						leading={ICONS[connector.service]}
 						meta={connector.schedule.enabled ? whoLabel(t, connector) : t("bots.connectors.off")}
-						onClick={() => setDialog({ service: connector.service, connector })}
+						onClick={() => setDialog({ service: setupOf(connector), connector })}
 						size="sm"
 						title={`${t(`bots.connectors.service.${connector.service}`)} · ${placeOf(connector, apps, trackers)}`}
 					/>
@@ -281,7 +291,7 @@ export function ConnectorDialog({
 			{!bot.home && <Banner variant="warning">{t("bots.connectors.needsHome", { name: bot.name })}</Banner>}
 			{step.kind === "pick" && (
 				<div className="flex flex-col gap-1" data-connector-catalog>
-					{OFFERED.map(service => (
+					{BOT_CONNECTOR_SERVICES.map(service => (
 						<ListRow
 							data-connector-pick={service}
 							description={t(`bots.connectors.catalog.${service}`)}
@@ -319,6 +329,16 @@ export function ConnectorDialog({
 					onDone={schedule => setStep({ kind: "done", schedule })}
 					onTrackers={onTrackers}
 					trackers={trackers}
+				/>
+			)}
+			{step.kind === "setup" && step.service === "google" && (
+				<GoogleSetup
+					apps={apps}
+					bot={bot}
+					connector={connector?.service === "google" || connector?.service === "gmail" ? connector : undefined}
+					onApps={onApps}
+					onCancel={onClose}
+					onDone={schedule => setStep({ kind: "done", schedule })}
 				/>
 			)}
 			{step.kind === "done" && done && <TryIt bot={bot} connector={done} />}
@@ -741,6 +761,214 @@ function LinearSetup({
 }
 
 /**
+ * Google (Orca `google-setup.md`, `google-scopes.ts:24-68`, `google-trigger-match.ts:173-199`): the person's own
+ * Desktop OAuth client signs in from this computer's browser; the bot is woken before calendar events, by new Gmail,
+ * or both (each its own routine). Editing one changes only that one.
+ */
+function GoogleSetup({
+	bot,
+	connector,
+	apps,
+	onApps,
+	onCancel,
+	onDone,
+}: {
+	bot: Bot;
+	connector?: Extract<BotConnector, { service: "google" | "gmail" }>;
+	apps: BotConnectorsState;
+	onApps: (state: BotConnectorsState) => void;
+	onCancel: () => void;
+	onDone: (schedule: string) => void;
+}) {
+	const t = useT();
+	const [account, setAccount] = useState(connector?.account ?? apps.google[0]?.email ?? "");
+	const [clientFile, setClientFile] = useState("");
+	const [signingIn, setSigningIn] = useState(false);
+	const [calendar, setCalendar] = useState(connector ? connector.service === "google" : true);
+	const [lead, setLead] = useState(String(connector?.service === "google" ? connector.leadMinutes : 10));
+	const [gmail, setGmail] = useState(connector?.service === "gmail");
+	const [gmailFrom, setGmailFrom] = useState(connector?.service === "gmail" ? (connector.from ?? "") : "");
+	const [saving, save] = useSave(onDone);
+	const kept = apps.google.find(known => known.email === account);
+	const minutes = Number.parseInt(lead, 10);
+	const ready =
+		Boolean(bot.home) &&
+		Boolean(kept) &&
+		!kept?.needsReentry &&
+		(calendar || gmail) &&
+		(!calendar || (minutes >= 0 && minutes <= 1440));
+	const signIn = () => {
+		setSigningIn(true);
+		const known = new Set(apps.google.map(item => item.email));
+		window.omp.botConnectors
+			.command({
+				action: "signInGoogle",
+				...(clientFile.trim() ? { clientFile: clientFile.trim() } : kept ? { id: kept.id } : {}),
+			})
+			.then(state => {
+				setSigningIn(false);
+				onApps(state);
+				setClientFile("");
+				const signed = state.google.find(item => !known.has(item.email));
+				if (signed) setAccount(signed.email);
+			})
+			.catch((error: unknown) => {
+				setSigningIn(false);
+				toastError({ title: t("bots.connectors.google.signInFailed"), error });
+			});
+	};
+	const cancelSignIn = () =>
+		void window.omp.botConnectors.command({ action: "cancelGoogle" }).catch(() => {
+			// The sign-in's own answer says how it ended.
+		});
+	return (
+		<div className="flex flex-col gap-4" data-connector-setup="google">
+			{apps.google.length > 0 && (
+				<Select
+					label={t("bots.connectors.google.account")}
+					onChange={event => setAccount(event.target.value)}
+					options={[
+						...apps.google.map(known => ({ value: known.email, label: known.email })),
+						{ value: "", label: t("bots.connectors.google.another") },
+					]}
+					value={account}
+				/>
+			)}
+			{(!kept || kept.needsReentry) && (
+				<>
+					{kept?.needsReentry && <Banner variant="warning">{t("bots.connectors.google.reentry")}</Banner>}
+					{!kept && (
+						<section className="flex flex-col gap-2">
+							<SectionLabel as="h4">{t("bots.connectors.google.step1")}</SectionLabel>
+							<p className="text-sc-xs text-(--sc-text-muted)">{t("bots.connectors.google.step1Hint")}</p>
+							<div className="flex gap-2">
+								<Button onClick={() => openExternal(GOOGLE_CLOUD_URL)} size="sm" variant="secondary">
+									{t("bots.connectors.google.open")}
+								</Button>
+							</div>
+							<TextArea
+								autoComplete="off"
+								hint={t("bots.connectors.google.clientFileHint")}
+								label={t("bots.connectors.google.clientFile")}
+								mono
+								onChange={event => setClientFile(event.target.value)}
+								placeholder='{"installed":{"client_id":"….apps.googleusercontent.com", …}}'
+								rows={3}
+								spellCheck={false}
+								value={clientFile}
+							/>
+						</section>
+					)}
+					<section className="flex flex-col gap-2">
+						<SectionLabel as="h4">{t("bots.connectors.google.step2")}</SectionLabel>
+						<p className="text-sc-xs text-(--sc-text-muted)">
+							{signingIn ? t("bots.connectors.google.waiting") : t("bots.connectors.google.signInHint")}
+						</p>
+						<div className="flex gap-2">
+							<Button
+								disabled={!kept && clientFile.trim() === ""}
+								loading={signingIn}
+								onClick={signIn}
+								size="sm"
+								variant="primary"
+							>
+								{t("bots.connectors.google.signIn")}
+							</Button>
+							{signingIn && (
+								<Button onClick={cancelSignIn} size="sm" variant="ghost">
+									{t("bots.connectors.cancel")}
+								</Button>
+							)}
+						</div>
+					</section>
+				</>
+			)}
+			{kept && !kept.needsReentry && (
+				<section className="flex flex-col gap-2">
+					<SectionLabel as="h4">{t("bots.connectors.google.step3", { name: bot.name })}</SectionLabel>
+					{connector?.service !== "gmail" && (
+						<>
+							{!connector && (
+								<SwitchField
+									checked={calendar}
+									description={t("bots.connectors.google.calendarHint")}
+									label={t("bots.connectors.google.calendar")}
+									onCheckedChange={setCalendar}
+								/>
+							)}
+							{calendar && (
+								<Input
+									inputMode="numeric"
+									label={t("bots.connectors.google.lead")}
+									max={1440}
+									min={0}
+									onChange={event => setLead(event.target.value)}
+									type="number"
+									value={lead}
+								/>
+							)}
+						</>
+					)}
+					{connector?.service !== "google" && (
+						<>
+							{!connector && (
+								<SwitchField
+									checked={gmail}
+									description={t("bots.connectors.google.gmailHint")}
+									label={t("bots.connectors.google.gmail")}
+									onCheckedChange={setGmail}
+								/>
+							)}
+							{gmail && (
+								<Input
+									hint={t("bots.connectors.google.gmailFromHint")}
+									label={t("bots.connectors.google.gmailFrom")}
+									onChange={event => setGmailFrom(event.target.value)}
+									value={gmailFrom}
+								/>
+							)}
+						</>
+					)}
+				</section>
+			)}
+			<SetupFooter
+				disabled={!ready}
+				onCancel={onCancel}
+				onSave={() =>
+					save(async () => {
+						let first: string | null = null;
+						if (calendar)
+							first = await connect(
+								bot,
+								{ source: "google", account, leadMinutes: minutes },
+								connector?.service === "google" ? connector : undefined,
+							);
+						if (gmail) {
+							const made = await connect(
+								bot,
+								{
+									source: "email",
+									account: `${GMAIL_ACCOUNT}${account}`,
+									...(gmailFrom.trim() ? { from: gmailFrom.trim() } : {}),
+								},
+								connector?.service === "gmail" ? connector : undefined,
+							);
+							first ??= made;
+						}
+						toast({
+							variant: "success",
+							message: t("bots.connectors.saved", { service: t("bots.connectors.service.google") }),
+						});
+						return first;
+					})
+				}
+				saving={saving}
+			/>
+		</div>
+	);
+}
+
+/**
  * FM64: the card a bot's `ompdesk_bot {"action":"offer_connector","service":…}` leaves in its chat; its button opens the
  * connector's setup for that bot. Shown only in the bot's own chat on this computer, where the bot is known.
  */
@@ -756,7 +984,6 @@ export function ConnectorOfferCard({ bot, service }: { bot: Bot; service: BotCon
 			.then(setTrackers)
 			.catch(() => {});
 	}, [open]);
-	const offered = service !== "google";
 	return (
 		<Card className="flex items-center gap-3" data-connector-offer={service} padding="md">
 			{ICONS[service]}
@@ -764,7 +991,7 @@ export function ConnectorOfferCard({ bot, service }: { bot: Bot; service: BotCon
 				<span className="text-sc-sm font-medium">{t("bots.connectors.offer.title")}</span>
 				<span className="text-sc-xs text-(--sc-text-muted)">{t(`bots.connectors.catalog.${service}`)}</span>
 			</div>
-			<Button disabled={!offered} onClick={() => setOpen(true)} size="sm" variant="primary">
+			<Button onClick={() => setOpen(true)} size="sm" variant="primary">
 				{t("bots.connectors.offer.connect", { service: t(`bots.connectors.service.${service}`) })}
 			</Button>
 			{open && (

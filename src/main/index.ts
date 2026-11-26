@@ -2280,22 +2280,32 @@ app.whenReady().then(async () => {
 		core: async (params, timeoutMs) => (await core().call("trackers.request", params, { timeoutMs })).result,
 		proxyPref: () => prefsStore().get("proxyUrl"),
 	});
-	// Bots' Slack apps; each token is kept encrypted by the OS keystore and handed to the core per use (connector-accounts.ts).
+	// Bots' Slack apps and Google sign-ins; each token is kept encrypted by the OS keystore and handed to the core per
+	// use (connector-accounts.ts).
 	connectorAccounts = new ConnectorAccounts({
 		dir: app.getPath("userData"),
 		box: secretBox,
-		core: async (method, params) => (await core().call(method, params, { timeoutMs: 30_000 })).result,
+		core: async (method, params, timeoutMs = 30_000) => (await core().call(method, params, { timeoutMs })).result,
+		openExternal: url => shell.openExternal(url),
 	});
 	// Before the first window exists, so its page load is seen (it also writes the update's start mark, below).
 	const firstWindowReady = firstWindowLoaded();
+	const ports = routinePorts(sidecarPool, mailAccounts);
 	void scheduleService
 		.start({
-			...routinePorts(sidecarPool, mailAccounts),
-			// A bot's connectors: a Slack app's app-level token for one Socket Mode connection, a Linear account per read.
+			...ports,
+			// A bot's Gmail (`google:<email>`) is read with its Google sign-in; any other name is a mail account.
+			email: async name => (await connectorAccounts?.gmailMailbox(name)) ?? ports.email(name),
+			// A bot's connectors: a Slack app's app-level token for one Socket Mode connection, a Linear account per read,
+			// a Google sign-in per access token.
 			slack: app => ({ appToken: connectorAccounts?.slackTokens(app)?.appToken ?? null }),
 			linear: account => {
 				if (!trackerAccounts) throw new Error("Trackers are not available yet");
 				return trackerAccounts.linearAccount(account);
+			},
+			google: account => {
+				if (!connectorAccounts) throw new Error("A bot's connectors are not available yet");
+				return connectorAccounts.googleSign(account);
 			},
 			file: join(app.getPath("userData"), "routine-marks.json"),
 			// A routine catching up after relaunch may open a session.

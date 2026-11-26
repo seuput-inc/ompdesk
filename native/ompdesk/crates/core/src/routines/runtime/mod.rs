@@ -6,6 +6,7 @@ mod email;
 mod files;
 mod git;
 mod github;
+mod google;
 mod linear;
 pub(crate) mod sessions;
 mod slack;
@@ -118,6 +119,7 @@ impl Source {
                 "email" => email::run(&event, mark, &context, &working, timing).await,
                 "calendar" => calendar::run(&event, mark, &context, &working, timing).await,
                 "slack" => slack::run(&event, &context, &working).await,
+                "google" => google::run(&event, mark, &context, &working).await,
                 "linear" => linear::run(&event, mark, &context, &working, timing).await,
                 _ => context.failure("could not start its trigger", Some("unknown source")),
             }
