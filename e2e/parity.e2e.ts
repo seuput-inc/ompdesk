@@ -23,7 +23,7 @@ import { writeShellGh } from "./fixture/shell-gh";
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, REMOTE_LOGIN, type RemoteInstance } from "./remote-harness";
 import { crashed, type Look, panelCrash } from "./responsive-audit";
-import { type ParitySession, SURFACES, type Surface } from "./responsive-surfaces";
+import { PARITY_WORK_PROMPT, type ParitySession, SURFACES, type Surface } from "./responsive-surfaces";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
@@ -339,7 +339,7 @@ if (dir) {
 				start,
 			);
 			const input = b.locator("textarea").first();
-			await input.fill("Show this session the same way everywhere");
+			await input.fill(PARITY_WORK_PROMPT);
 			await input.press("Enter");
 			await expect(b.getByText("Local fixture reply").first()).toBeVisible({ timeout: 30_000 });
 			await expect
