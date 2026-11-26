@@ -312,7 +312,7 @@ mod tests {
             compare(&git, root).await.unwrap().unwrap().source,
             "default"
         );
-        let diff = read::diff(&git, root, "new.txt", Some(&default.changes.base.unwrap()))
+        let diff = read::diff(&git, root, "new.txt", default.changes.base.as_deref())
             .await
             .unwrap();
         let diff = serde_json::to_value(diff).unwrap();
