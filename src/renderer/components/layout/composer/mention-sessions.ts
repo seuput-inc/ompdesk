@@ -4,10 +4,7 @@
  * first, then this project's other sessions. A pick writes the session's title and saved id into the message, the
  * address every `ompdesk_session_*` tool takes, so the agent can read it or write to it.
  */
-import { useMemo } from "react";
-import { useStore } from "zustand";
 import { sessionListFeed } from "../../../stores/session-list";
-import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useTabsStore } from "../../../stores/tabs";
 import type { CompletionItem } from "./use-completion-menu";
 
@@ -49,28 +46,27 @@ export function sessionMentionItems(
 	return items;
 }
 
-/** This tab's opened sessions, then the other sessions of its folder on the computer it runs on, newest first. */
-export function useMentionSessions(cwd: string): MentionSession[] {
-	const tabId = useRuntimeTabId();
-	const tabs = useTabsStore(state => state.tabs);
-	const device = useTabsStore(state => state.tabs.find(tab => tab.id === tabId)?.device);
-	// The whole list of the computer the tab runs on (the sidebar holds it open); this folder's rows are kept below.
-	const stored = useStore(sessionListFeed("global", device).store, state => state.sessions);
-	return useMemo(() => {
-		const own = tabs.find(tab => tab.id === tabId);
-		const seen = new Set<string>(own?.sessionId ? [own.sessionId] : []);
-		const sessions: MentionSession[] = [];
-		for (const tab of tabs) {
-			if (!tab.sessionId || seen.has(tab.sessionId)) continue;
-			const opened = tab.openedBy === tabId || (own?.sessionPath && tab.openedBySession === own.sessionPath);
-			if (!opened) continue;
-			seen.add(tab.sessionId);
-			sessions.push({ id: tab.sessionId, title: tab.title || tab.sessionId, child: true });
-		}
-		const rows = stored
-			.filter(row => row.cwd === cwd && !seen.has(row.id) && row.title)
-			.sort((a, b) => b.modified.localeCompare(a.modified));
-		for (const row of rows) sessions.push({ id: row.id, title: row.title ?? row.id, child: false });
-		return sessions;
-	}, [cwd, stored, tabId, tabs]);
+/**
+ * Tab `tabId`'s opened sessions, then the other sessions of its folder on the computer it runs on, newest first, as
+ * the stores hold them when the `@` menu is derived (each keystroke derives it again).
+ */
+export function mentionSessions(cwd: string, tabId: string | null): MentionSession[] {
+	const { tabs } = useTabsStore.getState();
+	const own = tabs.find(tab => tab.id === tabId);
+	const seen = new Set<string>(own?.sessionId ? [own.sessionId] : []);
+	const sessions: MentionSession[] = [];
+	for (const tab of tabs) {
+		if (!tab.sessionId || seen.has(tab.sessionId)) continue;
+		const opened = tab.openedBy === tabId || (own?.sessionPath && tab.openedBySession === own.sessionPath);
+		if (!opened) continue;
+		seen.add(tab.sessionId);
+		sessions.push({ id: tab.sessionId, title: tab.title || tab.sessionId, child: true });
+	}
+	// The whole list of the computer the tab runs on (the sidebar holds it open); this folder's rows are kept.
+	const rows = sessionListFeed("global", own?.device)
+		.store.getState()
+		.sessions.filter(row => row.cwd === cwd && !seen.has(row.id) && row.title)
+		.sort((a, b) => b.modified.localeCompare(a.modified));
+	for (const row of rows) sessions.push({ id: row.id, title: row.title ?? row.id, child: false });
+	return sessions;
 }

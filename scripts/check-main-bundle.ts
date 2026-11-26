@@ -417,15 +417,17 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // terminal port, 26 Nov 2026; the saved-command store and parser load with the palette, the sheet and xterm on first
 // open), on top of the review notes: measured 2,218,875 (local build of omp/agent/orca-terminal rebased on 73923cfad),
 // 2,857 bytes over. The budget is that measure plus 80 bytes.
-// The conversation's reading and writing extras (26 Nov 2026, orca-chat-reading), all on the session's first screen:
-// the composer keeps a draft's pictures as ordered slots and their kept-file references (`stores/composer.ts`,
-// `draft-persistence.ts`, `use-composer-draft.ts`, the "Attach again" chip), the `@` menu's sessions
-// (`mention-sessions.ts`), links kept in a paste (`pasted-links.ts`), a long prompt's fold (`MessageBubble`), the
-// manual compaction events and no-op notice, the composer's ⌘↵ and the transcript's Backspace and paste keys. The Find
-// bar (`TranscriptFindBar`) and the rail's list (`PromptListPanel`) load on first use: measured 2,229,435 (local build
-// of omp/agent/orca-chat-reading rebased on cf385789a, over the terminal port), 10,560 bytes over. The budget is that
-// measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_229_515;
+// The conversation's reading and writing extras (26 Nov 2026, orca-chat-reading). On the first screen, because the
+// first paint of a session draws them: a restored draft's pictures as ordered slots with their kept-file references
+// (`stores/composer.ts`, `draft-persistence.ts`, `use-composer-draft.ts`; a slot is a thumbnail, a still placeholder or
+// the "Attach again" chip inside the one picture strip), a long prompt's fold (`MessageBubble`), the rail's "Your
+// messages" button, the Find bar's listener (`TranscriptFind`), the transcript's Backspace and paste keys, the
+// composer's ⌘↵, the manual compaction events (a compaction under way when the page loads) and their strings. The
+// no-op notice is one branch of the compact call. On use only: the Find bar (`TranscriptFindBar`), the rail's list
+// (`PromptListPanel`), and the `@` menu's sessions and paste links (`composer-extras.ts`, preloaded on idle and on the
+// composer's focus): measured 2,227,289 (local build of omp/agent/orca-chat-reading rebased on 26190f1da), 8,414 bytes
+// over. The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_227_369;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

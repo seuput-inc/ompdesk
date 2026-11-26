@@ -17,6 +17,7 @@ import { useT } from "../../../lib/i18n";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { useModelStore } from "../../../stores/model";
 import { compactModelLabel, compactModelLabels, compactModelText } from "../../settings/providers/provider-marks";
+import { composerExtras } from "./composer-extras";
 import { fileMentionFor } from "./composer-files";
 import {
 	MAX_LIST_MENU_ITEMS,
@@ -29,7 +30,7 @@ import {
 	mentionToken,
 	searchMentionFiles,
 } from "./input-area-utils";
-import { type MentionSession, sessionMentionItems } from "./mention-sessions";
+import type { MentionSession } from "./mention-sessions";
 
 /** Wait before a typed folder of a cut-off `@` listing is asked for on its own. */
 const MENTION_DIR_DEBOUNCE_MS = 150;
@@ -204,8 +205,8 @@ export function useCompletionMenu({
 }: {
 	text: string;
 	filePaths: string[];
-	/** The sessions the `@` menu offers after the files (mention-sessions.ts). */
-	sessions: readonly MentionSession[];
+	/** The sessions the `@` menu offers after the files (mention-sessions.ts), read when the menu is derived. */
+	sessions: () => readonly MentionSession[];
 	commands: AvailableCommand[];
 	emojiAutocomplete: boolean;
 	textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -478,10 +479,11 @@ export function useCompletionMenu({
 				highlights: ranges,
 			}));
 			const lowerQuery = q.toLowerCase();
-			const sessionItems = sessionMentionItems(sessions, q, {
-				child: t("input.mention.childSession"),
-				session: t("input.mention.session"),
-			});
+			const sessionItems =
+				composerExtras()?.sessionMentionItems(sessions(), q, {
+					child: t("input.mention.childSession"),
+					session: t("input.mention.session"),
+				}) ?? [];
 			items.push(...sessionItems);
 			let schemes = 0;
 			for (const scheme of MENTION_SCHEMES) {

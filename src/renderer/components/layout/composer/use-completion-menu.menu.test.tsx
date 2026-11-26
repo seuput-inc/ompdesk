@@ -61,8 +61,8 @@ interface Derived {
 }
 
 let root: Root | undefined;
-/** One stable list: a new array each render would derive the menu again. */
-const NO_SESSIONS: never[] = [];
+/** One stable getter: a new one each render would derive the menu again. */
+const NO_SESSIONS = () => [];
 let latest: Derived;
 
 function Probe({ text, filePaths, commands }: { text: string; filePaths: string[]; commands: AvailableCommand[] }) {

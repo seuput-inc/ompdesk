@@ -6,8 +6,8 @@ import { type RefObject, useCallback, useEffect, useRef, useState } from "react"
 import type { AvailableCommand } from "../../../../shared/rpc-types";
 import { type SessionStore, useSessionStore } from "../../../stores/session";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
+import { composerExtras } from "./composer-extras";
 import { cachedMentionFiles, listMentionFiles, mentionToken } from "./input-area-utils";
-import { useMentionSessions } from "./mention-sessions";
 import { type CompletionItem, type CompletionMenu, sameCompletionMenu, useCompletionMenu } from "./use-completion-menu";
 
 const MENTION_FS_DEBOUNCE_MS = 150;
@@ -46,7 +46,8 @@ export function useComposerMenu({
 }): ComposerMenu {
 	const [menu, setMenu] = useState<CompletionMenu | null>(null);
 	const [filePaths, setFilePaths] = useState<string[]>([]);
-	const sessions = useMentionSessions(cwd);
+	// Read when the `@` menu is derived, once its module loaded (composer-extras.ts).
+	const sessions = useCallback(() => composerExtras()?.mentionSessions(cwd, runtimeTabId) ?? [], [cwd, runtimeTabId]);
 	/**
 	 * A menu the user closed (Esc, ←/→, a click): the same token's menu stays closed while the draft is
 	 * unchanged, so moving the caret back into the token does not bring it back; any edit lifts it.
