@@ -294,7 +294,8 @@ function BoardLanes({
 	const lanes = useMemo(() => boardLanes(cards), [cards]);
 	return (
 		<div className="min-h-0 flex-1 overflow-auto px-6 pb-6 min-[1280px]:px-10" data-board-lanes>
-			<div className="grid min-h-full auto-cols-[minmax(15rem,1fr)] grid-flow-col gap-3">
+			{/* Lanes wrap rather than scroll sideways: a lane cut at the edge hides the cards it holds. */}
+			<div className="grid min-h-full grid-cols-[repeat(auto-fit,minmax(15rem,1fr))] gap-3">
 				{BOARD_LANES.map(lane => {
 					const listed = lanes[lane];
 					const capped = lane === "idle" ? listed.slice(0, IDLE_SHOWN) : listed;
