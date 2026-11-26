@@ -532,6 +532,7 @@ test.describe("on a paired device", () => {
 		test.setTimeout(240_000);
 		const { hostProfile, clientProfile, call, client: app } = await pairApps();
 		const parentTab = (await app.page.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.tabId ?? "";
+		await fs.rm(path.join(os.tmpdir(), "child-asked-probe.log"), { force: true });
 		// Finish the setup turn: otherwise its missing-result reminder is another mail delivered to the host.
 		const open = await call("ompdesk_session_open", {
 			device: "PC-B",
@@ -548,7 +549,14 @@ test.describe("on a paired device", () => {
 		// Nobody polls: the opener's omp on this computer gets one question mail naming the card, between its steps.
 		const mails = () =>
 			mailReports(clientProfile.record, details => details.kind === "question" && details.from === child);
-		await expect.poll(async () => (await mails()).length, { timeout: 30_000 }).toBe(1);
+		try {
+			await expect.poll(async () => (await mails()).length, { timeout: 30_000 }).toBe(1);
+		} finally {
+			const probe = await fs
+				.readFile(path.join(os.tmpdir(), "child-asked-probe.log"), "utf8")
+				.catch(() => "(no probe log)");
+			console.log(`[child-asked-probe]\n${probe}`);
+		}
 		const [mail] = await mails();
 		expect(mail?.deliverAs).toBe("aside");
 		expect(mail?.triggerTurn).toBe(true);

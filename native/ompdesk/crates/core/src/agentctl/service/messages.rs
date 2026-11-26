@@ -1620,16 +1620,25 @@ impl AgentControl {
         request_id: &str,
     ) -> R<()> {
         let state = self.host.state();
+        let trace = |why: &str| {
+            crate::agentctl::runtime::activity::probe(&format!(
+                "child_asked {opener_tab_id} {child_tab_id} {request_id}: {why}"
+            ))
+        };
         if !state.enabled {
+            trace("disabled");
             return Ok(());
         }
         let Some(tabs) = state.tabs(opener_tab_id) else {
+            trace("no tabs for opener");
             return Ok(());
         };
         let Some(child) = tabs.iter().find(|tab| tab.tab_id == child_tab_id) else {
+            trace(&format!("child not among {} tabs", tabs.len()));
             return Ok(());
         };
         if child.hidden {
+            trace("hidden");
             return Ok(());
         }
         if state.parent_of(child_tab_id) != Some(opener_tab_id)
@@ -1638,11 +1647,21 @@ impl AgentControl {
                 .iter()
                 .any(|id| id == child_tab_id)
         {
+            trace("not opened by opener");
             return Ok(());
         }
         let Some(ask) = child.asks.iter().find(|entry| entry.id == request_id) else {
+            trace(&format!(
+                "card not in child's asks {:?}",
+                child
+                    .asks
+                    .iter()
+                    .map(|entry| entry.id.as_str())
+                    .collect::<Vec<_>>()
+            ));
             return Ok(());
         };
+        trace("mailing");
         if is_agent_card(ask) {
             return Ok(());
         }

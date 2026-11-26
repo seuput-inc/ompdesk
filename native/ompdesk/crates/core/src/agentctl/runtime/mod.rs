@@ -21,7 +21,7 @@
 //! Opened with the service (`agentControl.open` with a `runtime` section, which a test of the service alone leaves
 //! out); the wire is `agentRuntime.*`, by the same port number.
 
-mod activity;
+pub(crate) mod activity;
 mod review;
 mod wake;
 

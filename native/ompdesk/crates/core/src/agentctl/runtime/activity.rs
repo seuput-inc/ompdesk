@@ -8,6 +8,18 @@ use serde::Deserialize;
 use super::{Runtime, is_outside};
 use crate::agentctl::service::types::ReleasedSession;
 
+/// Probe only (probe/child-asked-trace): one line in `<temp>/child-asked-probe.log`.
+pub(crate) fn probe(line: &str) {
+    use std::io::Write;
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("child-asked-probe.log"))
+    {
+        let _ = writeln!(file, "{} {line}", std::process::id());
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ActivityKind {
@@ -91,6 +103,12 @@ impl Runtime {
         }
         // A child's question card tells its opener (local and paired-device children alike); an Autopilot run's
         // children are answered by its approver, and the run reads them itself.
+        if activity.kind == ActivityKind::Ask {
+            probe(&format!(
+                "activity ask {tab} parent={parent:?} announce={} request={:?}",
+                activity.announce, activity.request_id
+            ));
+        }
         if activity.kind == ActivityKind::Ask
             && activity.announce
             && let (Some(parent), Some(request)) = (&parent, &activity.request_id)
