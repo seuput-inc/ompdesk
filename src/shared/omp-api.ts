@@ -142,6 +142,7 @@ import type { OmpUpdatedNotice, OmpUpdateState } from "./omp-update";
 import {
 	PREVIEW_COMMAND,
 	PREVIEW_HISTORY,
+	PREVIEW_OPEN_FILE,
 	PREVIEW_PAGE,
 	PREVIEW_SAVE_PDF,
 	PREVIEW_STATE,
@@ -260,6 +261,7 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			page: request => transport.invoke(PREVIEW_PAGE, request),
 			visuals: () => transport.invoke(PREVIEW_VISUALS),
 			history: request => transport.invoke(PREVIEW_HISTORY, request),
+			openFile: (tabId, path) => transport.invoke(PREVIEW_OPEN_FILE, tabId, path),
 			onVisual: callback => subscribe<PreviewVisualEvent>(PREVIEW_VISUAL, callback),
 			stream: {
 				poll: request => transport.invoke(PREVIEW_STREAM_POLL, request),

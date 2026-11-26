@@ -9,6 +9,8 @@ export const PREVIEW_VISUALS = "preview:visuals";
 export const PREVIEW_VISUAL = "preview:visual";
 /** Renderer → main: the Preview's browsing history on this computer (core `previewHistory.*`). */
 export const PREVIEW_HISTORY = "preview:history";
+/** Renderer → main: show a file of a tab's folder (an .html or .svg page) in the Preview as a visual of that tab. */
+export const PREVIEW_OPEN_FILE = "preview:open-file";
 /**
  * Web viewers only (a paired phone or tablet): its page is an offscreen page on this computer streamed as JPEG
  * frames over the socket (main/web/preview-stream.ts). `POLL` acknowledges the last frame and holds until the
@@ -199,6 +201,11 @@ export interface PreviewApi {
 	visuals(): Promise<PreviewVisualRecord[]>;
 	/** This computer's browsing history: address suggestions, recent sites, removing one, clearing all. */
 	history<R extends PreviewHistoryRequest>(request: R): Promise<PreviewHistoryResults[R["action"]]>;
+	/**
+	 * Show `path` (a page or picture inside `tabId`'s folder on this computer) in that tab's Preview, through the same
+	 * confined, network-less visual session the agent's `gui_visualize` uses (Orca's workspace document preview).
+	 */
+	openFile(tabId: string, path: string): Promise<void>;
 	/** The agent showed or updated a visual for a tab. */
 	onVisual(callback: (event: PreviewVisualEvent) => void): () => void;
 	/** A web viewer's streamed page (see `PREVIEW_STREAM_POLL`); a desktop window's calls are refused. */

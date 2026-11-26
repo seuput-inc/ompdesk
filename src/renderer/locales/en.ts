@@ -4169,6 +4169,8 @@ export const en: Record<string, string> = {
 	"fileViewer.outline": "Outline",
 	"fileViewer.outlineEmpty": "No headings in this document.",
 	"fileViewer.htmlFrame": "Rendered HTML of {name}",
+	"fileViewer.openInPreview": "Open in Preview",
+	"fileViewer.openInPreviewFailed": "Couldn't open the file in Preview",
 	"fileViewer.jsonInvalid": "Not valid JSON. Showing the raw text.",
 	"fileViewer.tableEmpty": "This table is empty.",
 	"fileViewer.tableClipped": "Showing the first {rows} rows.",

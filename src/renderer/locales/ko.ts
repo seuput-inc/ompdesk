@@ -4159,6 +4159,8 @@ export const ko: Record<string, string> = {
 	"fileViewer.outline": "목차",
 	"fileViewer.outlineEmpty": "이 문서에는 제목이 없어요.",
 	"fileViewer.htmlFrame": "{name}의 렌더링된 HTML",
+	"fileViewer.openInPreview": "Preview에서 열기",
+	"fileViewer.openInPreviewFailed": "파일을 Preview에서 열지 못했어요",
 	"fileViewer.jsonInvalid": "올바른 JSON이 아니에요. 원본 텍스트를 보여 줘요.",
 	"fileViewer.tableEmpty": "표가 비어 있어요.",
 	"fileViewer.tableClipped": "처음 {rows}행만 보여 주고 있어요.",

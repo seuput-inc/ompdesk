@@ -127,7 +127,7 @@ import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
 import { isMacPermission } from "../shared/mac-permissions";
 import { MAIL_ACCOUNTS_COMMAND, type MailAccountDraft } from "../shared/mail-accounts";
 import { type ModelSetupRequest, parseResearchPick } from "../shared/model-setup";
-import { PREVIEW_VISUAL, type PreviewVisualEvent } from "../shared/preview";
+import { PREVIEW_OPEN_FILE, PREVIEW_VISUAL, type PreviewVisualEvent } from "../shared/preview";
 import { isReplyLanguagePref, REPLY_LANGUAGE_PREF } from "../shared/reply-language";
 import type {
 	AgentMessage,
@@ -597,6 +597,17 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		},
 		coreBrowsingHistory(app.getPath("userData")),
 	);
+	// A person's "Open in Preview" on a page or picture of the Files viewer (Orca's workspace document preview,
+	// `browser-pane/workspace-doc/**`): the file becomes a visual of the tab, in the same confined visual session as
+	// the agent's `gui_visualize`, and the tab's window shows it.
+	ipc.handle(PREVIEW_OPEN_FILE, async (caller, tabId: unknown, file: unknown) => {
+		if (typeof tabId !== "string" || typeof file !== "string" || !caller.win) throw new Error("Invalid file");
+		const target = deps.sidecarPool.tabTarget(caller.win, tabId);
+		const sidecar = target && !target.device ? deps.sidecarPool.sidecarOf(target.tabId) : null;
+		if (!target || !sidecar) throw new Error("Only a tab on this computer shows its files in the Preview");
+		const { record } = await visuals.open(target.tabId, sidecar.cwd, { target: file });
+		caller.win.webContents.send(PREVIEW_VISUAL, { tabId, visualId: record.id } satisfies PreviewVisualEvent);
+	});
 	/** The paired host a window's running benchmark is on, so closing the window stops it there. */
 	const remoteBenchmarks = new Map<number, string>();
 	/** The same for a window's model setup research. */
