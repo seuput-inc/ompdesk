@@ -1381,7 +1381,30 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(labels.some(label => label.includes("Remove from sidebar"))).toBe(false);
 		expect(labels.filter(label => label.includes("Delete"))).toEqual(["Delete"]);
 		expect(labels.at(-1)).toBe("Delete");
-		expect(labels).toHaveLength(9);
+		expect(labels.some(label => label.includes("Appearance…"))).toBe(true);
+		expect(labels.some(label => label.includes("Move to group…"))).toBe(true);
+		expect(labels).toHaveLength(11);
+	});
+
+	it("lists a project group's projects under its header, and folding the group hides them", async () => {
+		installMockOmp(LIST);
+		seedStores();
+		useSidebarPrefs.setState({
+			hydrated: true,
+			projectGroups: { "/work/alpha": "Clients", "/work/beta": "Clients" },
+			projectEmoji: { "/work/beta": "🚀" },
+		});
+		await mount(<Sidebar />);
+		const header = () => container.querySelector('[data-project-section="Clients"]');
+		expect(header()?.textContent).toContain("Clients");
+		expect(header()?.textContent).toContain("2");
+		expect(container.querySelector('[data-workspace-group="/work/beta"] [data-project-emoji]')?.textContent).toBe(
+			"🚀",
+		);
+		await fire(header()?.querySelector("button[aria-expanded]") as unknown as Element, "onClick");
+		expect(container.querySelector('[data-workspace-group="/work/alpha"]')).toBeNull();
+		expect(container.querySelector('[data-workspace-group="/work/beta"]')).toBeNull();
+		expect(header()).not.toBeNull();
 	});
 
 	it("each project header offers + in place of a count, and Move moves the project", async () => {

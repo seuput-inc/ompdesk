@@ -17,6 +17,8 @@ import {
 	BellOff,
 	FolderSearch,
 	GitBranchPlus,
+	Layers,
+	Palette,
 	Pencil,
 	Pin,
 	PinOff,
@@ -48,6 +50,10 @@ export interface ProjectMenuActions {
 	archiveAll?: () => void;
 	/** A project whose folder is gone: find where it is now and move its sessions there. */
 	locate?: () => void;
+	/** Files it under a project group, or takes it out of one (a dialog). */
+	moveToGroup?: () => void;
+	/** Its color, emoji and preview (a dialog). */
+	appearance?: () => void;
 	/** Opens the delete confirm. */
 	remove: () => void;
 }
@@ -87,6 +93,20 @@ export function projectMenuItems({ facts, actions, t }: ProjectMenuInput): Conte
 		});
 	if (actions.rename)
 		edit.push({ id: "group-rename", label: t("sidebar.menu.rename"), icon: Pencil, onSelect: actions.rename });
+	if (actions.appearance)
+		edit.push({
+			id: "group-appearance",
+			label: t("sidebar.menu.appearance"),
+			icon: Palette,
+			onSelect: actions.appearance,
+		});
+	if (actions.moveToGroup)
+		edit.push({
+			id: "group-move-to-group",
+			label: t("sidebar.menu.moveToGroup"),
+			icon: Layers,
+			onSelect: actions.moveToGroup,
+		});
 	if (actions.moveUp)
 		edit.push({
 			id: "group-move-up",

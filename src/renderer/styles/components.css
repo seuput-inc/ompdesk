@@ -4946,7 +4946,8 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 	background-color: var(--sc-hover);
 }
 .omp-device-header[data-device-color] [data-device-glyph],
-[data-device-chip][data-device-color] [data-device-glyph] {
+[data-device-chip][data-device-color] [data-device-glyph],
+[data-project-glyph][data-device-color] {
 	color: var(--device-color);
 }
 

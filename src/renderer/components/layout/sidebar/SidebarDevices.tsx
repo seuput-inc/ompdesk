@@ -70,6 +70,7 @@ import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
 import { ensureSessionTargetsOnFocus, requestSessionTargets, useSessionTargets } from "../../../stores/session-targets";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { useProjectList, useSidebarProjects } from "../../../stores/sidebar-projects";
+import { openProjectDialog } from "../../../stores/sidebar-request";
 import { useSidebarSubagentsStore } from "../../../stores/sidebar-subagents";
 import { type SessionTab, tabChipLabel, useTabsStore } from "../../../stores/tabs";
 import { toast, toastError } from "../../../stores/toast";
@@ -99,6 +100,7 @@ import { hostSectionSummary, remoteOpenedTab, summaryRowState } from "./host-row
 import { useHostWorkspace } from "./host-workspace";
 import { NewTaskRows } from "./NewTaskRows";
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
+import { ProjectGlyph } from "./ProjectGlyph";
 import { deleteProject, isStoredRow } from "./project-delete";
 import { projectMenuItems } from "./project-menu";
 import { logSelection, useRowSelection } from "./row-selection";
@@ -108,6 +110,7 @@ import { useDeviceHeaderHandle } from "./SidebarDeviceSections";
 import { SidebarFoldButton } from "./SidebarFoldButton";
 import { SidebarFolderMissingMark } from "./SidebarFolderMissingMark";
 import { SidebarFoldSummary } from "./SidebarFoldSummary";
+import { projectSectionFold, SidebarProjectSection } from "./SidebarProjectSection";
 import { SidebarRemovedProjects } from "./SidebarRemovedProjects";
 import { SidebarRenameField } from "./SidebarRenameField";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
@@ -535,6 +538,7 @@ function DeviceSessions({
 	const split = useTabsStore(state => state.split);
 	const splitIds = useMemo(() => (split ? new Set(splitTabIds(split)) : null), [split]);
 	const deviceGroupFolds = useSidebarFolds(s => s.deviceGroups);
+	const sectionFolds = useSidebarFolds(s => s.groups);
 	const deviceTabs = useMemo(() => allTabs.filter(tab => tab.device === host.deviceId), [allTabs, host.deviceId]);
 	// The host's own rule (Sidebar.tsx): a session in its no-project workspace (`~/.omp/work`, where a session opened
 	// there without a folder starts) is one of its chats, so it is here too.
@@ -617,6 +621,7 @@ function DeviceSessions({
 					pinnedGroups: layout?.pinnedGroups ?? NO_KEYS,
 					groupOrder: layout?.groupOrder ?? NO_KEYS,
 					sessionOrder: list => layout?.sessionOrder[list],
+					projectGroup: cwd => layout?.projectGroups?.[cwd],
 				},
 				query,
 				nameOf: cwd => basename(cwd) || cwd,
@@ -1417,9 +1422,23 @@ function DeviceSessions({
 			<NewTaskRows device={host.deviceId} except={projectPaths} />
 			<DndContext collisionDetection={closestCenter} onDragEnd={onGroupDragEnd} sensors={groupSensors}>
 				<SortableContext items={projectPaths} strategy={verticalListSortingStrategy}>
-					{groups.map(group => {
+					{groups.map((group, index) => {
 						const groupCollapsed = !query && deviceGroupFolds[deviceGroupKey(host.deviceId, group.cwd)] === true;
-						const FolderIcon = groupCollapsed ? Folder : FolderOpen;
+						// A project group's first project heads it (the local list's rule, Sidebar.tsx `renderGroup`).
+						const section =
+							group.section && groups[index - 1]?.section !== group.section ? (
+								<SidebarProjectSection
+									count={groups.filter(other => other.section === group.section).length}
+									device={host.deviceId}
+									name={group.section}
+								/>
+							) : null;
+						if (
+							group.section &&
+							!query &&
+							sectionFolds[projectSectionFold(host.deviceId, group.section)] === true
+						)
+							return <Fragment key={group.cwd}>{section}</Fragment>;
 						const name = basename(group.cwd) || group.cwd;
 						const pinned = layout?.pinnedGroups.includes(group.cwd) === true;
 						const archivable = group.sessions.filter(
@@ -1444,6 +1463,10 @@ function DeviceSessions({
 													ids: archivable.map(row => row.id),
 													archived: true,
 												}),
+											moveToGroup: () =>
+												openProjectDialog({ kind: "move", device: host.deviceId, cwd: group.cwd, name }),
+											appearance: () =>
+												openProjectDialog({ kind: "look", device: host.deviceId, cwd: group.cwd, name }),
 										}
 									: {}),
 								...(!editable || query
@@ -1466,91 +1489,104 @@ function DeviceSessions({
 							t,
 						});
 						return (
-							<SortableProject
-								className=""
-								disabled={!editable || query.length > 0}
-								id={group.cwd}
-								key={group.cwd}
-							>
-								{dragHandle => (
-									<div data-device-group={group.cwd} data-project-missing={group.missing ? "" : undefined}>
-										<div
-											className="omp-sidebar-head group/head flex items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
-											data-flip-key={`group:${group.cwd}`}
-											onContextMenu={event =>
-												setRowMenu({ ...anchorFromEvent(event), items: groupItems, label: name })
-											}
-											{...dragHandle}
-										>
-											<SidebarFoldButton
-												className={group.missing ? "text-(--sc-text-subtle)" : "text-(--sc-text-muted)"}
-												data-roving-item={`device-group:${host.deviceId}:${group.cwd}`}
-												onClick={() =>
-													useSidebarFolds
-														.getState()
-														.setDeviceGroupFolded(host.deviceId, group.cwd, !groupCollapsed)
+							<Fragment key={group.cwd}>
+								{section}
+								<SortableProject className="" disabled={!editable || query.length > 0} id={group.cwd}>
+									{dragHandle => (
+										<div data-device-group={group.cwd} data-project-missing={group.missing ? "" : undefined}>
+											<div
+												className="omp-sidebar-head group/head flex items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
+												data-flip-key={`group:${group.cwd}`}
+												onContextMenu={event =>
+													setRowMenu({ ...anchorFromEvent(event), items: groupItems, label: name })
 												}
-												tabIndex={-1}
-												title={group.missing ? `${group.cwd}\n${t("sidebar.project.missing")}` : group.cwd}
-												folded={groupCollapsed}
-												icon={<FolderIcon aria-hidden className="size-(--sc-icon-sm) shrink-0" />}
+												{...dragHandle}
 											>
-												<span className="min-w-0 flex-1 truncate">{name}</span>
-												{pinned && (
-													<Pin
-														aria-label={t("sidebar.pinned")}
-														className="size-3 shrink-0 text-(--sc-text-subtle)"
-														data-sidebar-group-pin
-													/>
-												)}
-												{group.missing && <span className="sr-only">, {t("sidebar.project.missing")}</span>}
-												{groupCollapsed && (
-													<SidebarFoldSummary
-														summary={foldSummary([
-															...group.sessions.flatMap(hostFoldSignals),
-															...group.folded.map(child => childFoldSignal(familyChildFor(child))),
-														])}
-													/>
-												)}
-											</SidebarFoldButton>
-											<IconButton
-												className="omp-sidebar-project-menu pointer-events-none text-(--sc-text-subtle) opacity-0 transition-opacity duration-(--sc-duration-fast) ease-(--sc-ease-standard) group-focus-within/head:pointer-events-auto group-focus-within/head:opacity-100 group-hover/head:pointer-events-auto group-hover/head:opacity-100 hover:text-(--sc-text) [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
-												icon={<MoreHorizontal />}
-												label={t("sidebar.groupMenu")}
-												onClick={event => {
-													const rect = event.currentTarget.getBoundingClientRect();
-													setRowMenu({ x: rect.left, y: rect.bottom + 4, items: groupItems, label: name });
-												}}
-												size="sm"
-												tabIndex={-1}
-											/>
-											<IconButton
-												className="mr-1 text-(--sc-text-subtle) hover:text-(--sc-text)"
-												data-device-group-new={group.cwd}
-												disabled={group.missing}
-												icon={<Plus />}
-												label={t("sidebar.menu.newAgentHere")}
-												onClick={() => void onOpen({ cwd: group.cwd, kind: "agent" })}
-												size="sm"
-												tabIndex={-1}
-											/>
-										</div>
-										<Collapse open={!groupCollapsed}>
-											<div className="space-y-px">
-												<NewTaskRows cwd={group.cwd} device={host.deviceId} />
-												{group.sessions.map(session => renderRow(session))}
-												<SidebarLooseChildren
-													foldKey={`device-group:${host.deviceId}:${group.cwd}`}
-													opened={group.folded.map(child => ({
-														...familyChildFor(child),
-														held: tree.rows.held.has(child.path),
-													}))}
+												<SidebarFoldButton
+													className={group.missing ? "text-(--sc-text-subtle)" : "text-(--sc-text-muted)"}
+													data-roving-item={`device-group:${host.deviceId}:${group.cwd}`}
+													onClick={() =>
+														useSidebarFolds
+															.getState()
+															.setDeviceGroupFolded(host.deviceId, group.cwd, !groupCollapsed)
+													}
+													tabIndex={-1}
+													title={
+														group.missing ? `${group.cwd}\n${t("sidebar.project.missing")}` : group.cwd
+													}
+													folded={groupCollapsed}
+													icon={
+														<ProjectGlyph
+															color={layout?.projectColors?.[group.cwd]}
+															emoji={layout?.projectEmoji?.[group.cwd]}
+															open={!groupCollapsed}
+														/>
+													}
+												>
+													<span className="min-w-0 flex-1 truncate">{name}</span>
+													{pinned && (
+														<Pin
+															aria-label={t("sidebar.pinned")}
+															className="size-3 shrink-0 text-(--sc-text-subtle)"
+															data-sidebar-group-pin
+														/>
+													)}
+													{group.missing && (
+														<span className="sr-only">, {t("sidebar.project.missing")}</span>
+													)}
+													{groupCollapsed && (
+														<SidebarFoldSummary
+															summary={foldSummary([
+																...group.sessions.flatMap(hostFoldSignals),
+																...group.folded.map(child => childFoldSignal(familyChildFor(child))),
+															])}
+														/>
+													)}
+												</SidebarFoldButton>
+												<IconButton
+													className="omp-sidebar-project-menu pointer-events-none text-(--sc-text-subtle) opacity-0 transition-opacity duration-(--sc-duration-fast) ease-(--sc-ease-standard) group-focus-within/head:pointer-events-auto group-focus-within/head:opacity-100 group-hover/head:pointer-events-auto group-hover/head:opacity-100 hover:text-(--sc-text) [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100"
+													icon={<MoreHorizontal />}
+													label={t("sidebar.groupMenu")}
+													onClick={event => {
+														const rect = event.currentTarget.getBoundingClientRect();
+														setRowMenu({
+															x: rect.left,
+															y: rect.bottom + 4,
+															items: groupItems,
+															label: name,
+														});
+													}}
+													size="sm"
+													tabIndex={-1}
+												/>
+												<IconButton
+													className="mr-1 text-(--sc-text-subtle) hover:text-(--sc-text)"
+													data-device-group-new={group.cwd}
+													disabled={group.missing}
+													icon={<Plus />}
+													label={t("sidebar.menu.newAgentHere")}
+													onClick={() => void onOpen({ cwd: group.cwd, kind: "agent" })}
+													size="sm"
+													tabIndex={-1}
 												/>
 											</div>
-										</Collapse>
-									</div>
-								)}
-							</SortableProject>
+											<Collapse open={!groupCollapsed}>
+												<div className="space-y-px">
+													<NewTaskRows cwd={group.cwd} device={host.deviceId} />
+													{group.sessions.map(session => renderRow(session))}
+													<SidebarLooseChildren
+														foldKey={`device-group:${host.deviceId}:${group.cwd}`}
+														opened={group.folded.map(child => ({
+															...familyChildFor(child),
+															held: tree.rows.held.has(child.path),
+														}))}
+													/>
+												</div>
+											</Collapse>
+										</div>
+									)}
+								</SortableProject>
+							</Fragment>
 						);
 					})}
 				</SortableContext>

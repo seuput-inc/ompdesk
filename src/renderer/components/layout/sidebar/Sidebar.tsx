@@ -116,7 +116,7 @@ import { ensureSessionTargetsOnFocus, requestSessionTargets, useSessionTargets }
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { RAIL_PIN_LABEL_KEYS, useSidebarPrefs } from "../../../stores/sidebar-prefs";
 import { useProjectList, useSidebarProjects } from "../../../stores/sidebar-projects";
-import { useSidebarRequest } from "../../../stores/sidebar-request";
+import { openProjectDialog, useSidebarRequest } from "../../../stores/sidebar-request";
 import { toggleSidebarSubagents, useSidebarSubagentsStore } from "../../../stores/sidebar-subagents";
 import { type SessionTab, tabAutoTitle, useTabsStore } from "../../../stores/tabs";
 import { toast, toastError } from "../../../stores/toast";
@@ -154,6 +154,7 @@ import { childFoldSignal, type FoldSignal, foldSummary, sessionFoldSignal } from
 import { remoteOpenedTab, summaryRowState } from "./host-row-state";
 import { NewTaskRows } from "./NewTaskRows";
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
+import { ProjectGlyph } from "./ProjectGlyph";
 import { deleteProject, isStoredRow } from "./project-delete";
 import { projectMenuItems } from "./project-menu";
 import { RAIL_PIN_ICONS } from "./rail-pin-icons";
@@ -168,6 +169,7 @@ import { SidebarFolderMissingMark } from "./SidebarFolderMissingMark";
 import { SidebarFoldSummary } from "./SidebarFoldSummary";
 import { SidebarNav } from "./SidebarNav";
 import { PinMenu, type PinMenuState, pinMenuHandlers, SidebarPinsSheet } from "./SidebarPinsSheet";
+import { isProjectSectionFold, projectSectionFold, SidebarProjectSection } from "./SidebarProjectSection";
 import { SidebarRemovedProjects } from "./SidebarRemovedProjects";
 import { SidebarRenameField } from "./SidebarRenameField";
 import { SessionLinksDialog, sessionLinksWords } from "./SidebarSessionLinks";
@@ -207,6 +209,8 @@ interface WorkspaceGroup extends RowGroup {
 
 /** The palette's Clone repository… (it pulls in the GitHub center's dialog, so not on the first screen). */
 const SidebarCloneDialog = lazy(() => import("./SidebarCloneDialog"));
+/** A project header's Move to group, Rename group and Appearance dialogs, on first use. */
+const ProjectDialog = lazy(() => import("./ProjectDialogs"));
 
 /** A delete the row or context menu queued, awaiting the confirmation dialog. */
 type PendingDelete =
@@ -574,6 +578,9 @@ export function Sidebar() {
 	const agentHidden = useSidebarPrefs(s => s.agentHidden);
 	const groupAliases = useSidebarPrefs(s => s.groupAliases);
 	const archivedSessions = useSidebarPrefs(s => s.archivedSessions);
+	const projectGroups = useSidebarPrefs(s => s.projectGroups);
+	const projectColors = useSidebarPrefs(s => s.projectColors);
+	const projectEmoji = useSidebarPrefs(s => s.projectEmoji);
 	// The projects this computer lists apart from its sessions: an empty one keeps its group (src/main/sidebar-projects.ts).
 	const projectList = useProjectList();
 	const {
@@ -817,6 +824,7 @@ export function Sidebar() {
 				pinnedGroups,
 				groupOrder,
 				sessionOrder: list => sessionOrder[list],
+				projectGroup: cwd => projectGroups[cwd],
 			},
 			query: filter,
 			nameOf: key => groupAliases[key] ?? projectName(key).name,
@@ -841,6 +849,7 @@ export function Sidebar() {
 			sessionOrder,
 			filter,
 			groupAliases,
+			projectGroups,
 		],
 	);
 	// A session an agent here opened on a paired device is that opener's child too: its tab, or a stand-in for one
@@ -850,8 +859,17 @@ export function Sidebar() {
 	// While the pointer is on the list its rows keep their places (`sidebar-hold.ts`); the person's own changes apply.
 	const pointing = usePointingAt(listRef);
 	const ownOrder = useMemo(
-		() => JSON.stringify([pinnedSessions, pinnedGroups, groupOrder, sessionOrder, archivedSessions, filter]),
-		[pinnedSessions, pinnedGroups, groupOrder, sessionOrder, archivedSessions, filter],
+		() =>
+			JSON.stringify([
+				pinnedSessions,
+				pinnedGroups,
+				groupOrder,
+				sessionOrder,
+				archivedSessions,
+				filter,
+				projectGroups,
+			]),
+		[pinnedSessions, pinnedGroups, groupOrder, sessionOrder, archivedSessions, filter, projectGroups],
 	);
 	const rows = useHeld(family.rows, holdRows, ownOrder, pointing);
 	const rowsHeldBack = rows === family.rows ? 0 : rowsWaiting(rows, family.rows);
@@ -943,7 +961,7 @@ export function Sidebar() {
 		if (!listLive || !tabsListed) return;
 		const folders = new Set(allGroups.map(group => group.cwd));
 		for (const session of sessions) if (!projectName(session.cwd).gone) folders.add(session.cwd);
-		useSidebarFolds.getState().pruneGroups(key => folders.has(key));
+		useSidebarFolds.getState().pruneGroups(key => folders.has(key) || isProjectSectionFold(key));
 		// A session an open tab holds stays known even before the index lists its file.
 		const known = new Set([
 			...sessions.map(session => session.path),
@@ -1410,6 +1428,7 @@ export function Sidebar() {
 		else foldEveryProject(sidebarRequest === "fold-projects");
 	}, [sidebarRequest]);
 	const [cloning, setCloning] = useState(false);
+	const projectDialog = useSidebarRequest(s => s.dialog);
 	// After render, exactly one roving item is tabbable: the remembered one,
 	// else the current session, else the first row. Its row's ⋯ (or a section header's own action, such as the Chats
 	// section's New chat) is the next tab stop (focus-within reveals it), so Tab then Enter opens or runs it.
@@ -2082,13 +2101,12 @@ export function Sidebar() {
 		);
 	};
 
-	const renderGroup = (group: WorkspaceGroup) => {
+	const renderProject = (group: WorkspaceGroup) => {
 		const key = `group:${group.cwd}`;
 		const groupCollapsed = isCollapsed(group);
 		const isCurrentProject = group.cwd === cwd && activeTabKind !== "chat" && !activeTabRemote;
 		const tabIndex = -1;
 		const pinned = pinnedGroups.includes(group.cwd);
-		const FolderIcon = groupCollapsed ? Folder : FolderOpen;
 		// Sessions an agent opened that no opener row holds: only the ones that need a look or a tab holds are listed, so
 		// a group made only of those, with nothing to show, is not drawn. A project of the list is, empty or not.
 		const loose = looseOf(group);
@@ -2163,10 +2181,11 @@ export function Sidebar() {
 									title={group.missing ? `${group.tooltip}\n${t("sidebar.project.missing")}` : group.tooltip}
 									folded={groupCollapsed}
 									icon={
-										<FolderIcon
-											aria-hidden
-											className="size-(--sc-icon-sm) shrink-0"
+										<ProjectGlyph
+											color={projectColors[group.cwd]}
 											data-sidebar-workspace-icon
+											emoji={projectEmoji[group.cwd]}
+											open={!groupCollapsed}
 										/>
 									}
 								>
@@ -2230,6 +2249,24 @@ export function Sidebar() {
 					</>
 				)}
 			</SortableProject>
+		);
+	};
+	// A project group's first project heads it with the group's header; a folded group draws its header alone (a filter
+	// shows every match).
+	const renderGroup = (group: WorkspaceGroup, index: number) => {
+		const section =
+			group.section && groups[index - 1]?.section !== group.section ? (
+				<SidebarProjectSection
+					count={groups.filter(other => other.section === group.section).length}
+					name={group.section}
+				/>
+			) : null;
+		const hidden = group.section && !query && groupFolds[projectSectionFold(undefined, group.section)] === true;
+		return (
+			<Fragment key={group.cwd}>
+				{section}
+				{!hidden && renderProject(group)}
+			</Fragment>
 		);
 	};
 
@@ -2595,6 +2632,11 @@ export function Sidebar() {
 					<SidebarCloneDialog onClose={() => setCloning(false)} />
 				</Suspense>
 			)}
+			{projectDialog && (
+				<Suspense fallback={null}>
+					<ProjectDialog onClose={() => openProjectDialog(null)} request={projectDialog} />
+				</Suspense>
+			)}
 			{/* Project menu: the one builder every computer's project headers use (project-menu.ts). */}
 			{groupMenu &&
 				(() => {
@@ -2652,6 +2694,12 @@ export function Sidebar() {
 									togglePin: then(() => useSidebarPrefs.getState().toggleGroupPin(group.cwd)),
 									toggleMute: then(() => useSidebarPrefs.getState().toggleGroupMuted(group.cwd)),
 									archiveAll: then(() => setArchived(archivable, true)),
+									moveToGroup: then(() =>
+										openProjectDialog({ kind: "move", cwd: group.cwd, name: group.name }),
+									),
+									appearance: then(() =>
+										openProjectDialog({ kind: "look", cwd: group.cwd, name: group.name }),
+									),
 									...(group.missing
 										? {
 												locate: then(
