@@ -66,6 +66,10 @@ import type { VisualPages, VisualStore } from "./visuals";
 const AGENT_ACTIVITY_MS = 250;
 /** A screenshot waits at most this long for the agent's pointer to leave the page (a paused page never answers). */
 const CURSOR_HIDE_WAIT_MS = 300;
+/** A server's sign-in waits this long for the person (the shell's own wait, `AUTH_WAIT`); then it is cancelled. */
+const AUTH_PROMPT_MS = 300_000;
+/** Numbers each sign-in prompt, so an answer reaches only the challenge it was for. */
+let authPrompts = 0;
 
 /** Where a CDP `Input.dispatchMouseEvent` lands, in the viewport's CSS pixels. */
 function mousePoint(params: unknown): { x: number; y: number } | null {
@@ -217,6 +221,8 @@ interface PreviewPage {
 	find: { query: string; index: number } | null;
 	/** Follows the link under the pointer while the page is shown (`hoverUrl`); a second call while it runs does nothing. */
 	watchHover: () => void;
+	/** Answers the server sign-in `state.auth` waits on: a name and password once, or nothing to cancel. */
+	answerAuth: ((username?: string, password?: string) => void) | null;
 }
 
 interface AgentLink {
@@ -626,6 +632,7 @@ export function registerPreviewHost(
 			stopRetry: () => {},
 			find: null,
 			watchHover: () => {},
+			answerAuth: null,
 		};
 		if (stream) {
 			// The page's dialogs wait for the viewer (preview-dialog.ts); leaving a page is never a question.
@@ -706,6 +713,24 @@ export function registerPreviewHost(
 			if (!mayGo(details.url)) details.preventDefault();
 		});
 		contents.on("will-attach-webview", event => event.preventDefault());
+		// A server asks the person to sign in (Orca's HTTP auth prompt): the panel asks, the answer goes to this one
+		// challenge and nothing keeps it. A newer challenge replaces an unanswered one; a proxy's is the computer's.
+		contents.on("login", (event, details, authInfo, callback) => {
+			if (kind !== "web" || authInfo.isProxy) return;
+			event.preventDefault();
+			page.answerAuth?.();
+			const id = ++authPrompts;
+			const timer = setTimeout(() => page.answerAuth?.(), AUTH_PROMPT_MS);
+			page.answerAuth = (username, password) => {
+				clearTimeout(timer);
+				page.answerAuth = null;
+				if (page.state.auth?.id === id) publish(owner(), page, { auth: null });
+				callback(username, password);
+			};
+			publish(owner(), page, {
+				auth: { id, origin: URL.canParse(details.url) ? new URL(details.url).origin : "", realm: authInfo.realm },
+			});
+		});
 		// Real input reaching the page; a script's `dispatchEvent` never does. The agent's CDP input may, so
 		// `choose` also refuses while the agent or any debugger holds the page.
 		contents.on("input-event", (_event, input) => {
@@ -1160,7 +1185,13 @@ export function registerPreviewHost(
 			publish(current, page);
 		} else if (request.action === "clearProblems") publish(current, page, { problems: [] });
 		else if (request.action === "dismissNotice") publish(current, page, { notice: null });
-		else if (request.action === "colorScheme") {
+		else if (request.action === "authAnswer") {
+			// The answer may come after the person switched tabs: it goes to the page whose prompt it answers.
+			const asked = current.pages.find(candidate => candidate.state.auth?.id === request.id);
+			const { username, password } = request;
+			if (typeof username === "string" && typeof password === "string") asked?.answerAuth?.(username, password);
+			else asked?.answerAuth?.();
+		} else if (request.action === "colorScheme") {
 			if (!["system", "light", "dark"].includes(request.scheme)) throw new Error("Unknown color scheme");
 			// Orca's per-page appearance (`toolbar/browser-toolbar-page-display-items.tsx`): Chromium's media emulation on
 			// the page's own DevTools session, so the agent's debugger neither sees nor undoes it; it outlives navigation.

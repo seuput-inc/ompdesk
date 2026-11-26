@@ -11,6 +11,7 @@ import { Globe, History, Network, Server, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { type PreviewHistoryEntry, portAddress } from "../../../shared/preview";
 import type { SshForward } from "../../../shared/ssh-tools";
+import { hostPortUrl } from "../../lib/host-ports";
 import { useT } from "../../lib/i18n";
 import { useSessionPorts, useSessionPortsPoll } from "../../stores/session-ports";
 import { toastError } from "../../stores/toast";
@@ -91,11 +92,9 @@ export function PreviewStart({
 										onClick={() => {
 											if (!remote) onOpen(url);
 											else if (tabId)
-												window.omp.preview
-													.hostPort(tabId, port)
-													.then(onOpen, (error: unknown) =>
-														toastError({ title: t("panel.preview.start.remoteFailed"), error }),
-													);
+												hostPortUrl(tabId, port).then(onOpen, (error: unknown) =>
+													toastError({ title: t("panel.preview.start.remoteFailed"), error }),
+												);
 										}}
 										size="sm"
 										title={`:${port}`}

@@ -121,6 +121,11 @@ export interface PreviewState {
 	/** The page's renderer died; a reload restores it. */
 	crashed: boolean;
 	agent: PreviewAgentState | null;
+	/**
+	 * A server asks the person to sign in to load the page (HTTP basic or digest auth, Orca's HTTP auth prompt): the
+	 * panel asks, `authAnswer` gives the name and password once, and nothing keeps them.
+	 */
+	auth: PreviewAuthPrompt | null;
 	/** The user's zoom (1 = 100 %), on top of the scale a viewport frame needs to fit. */
 	zoom: number;
 	viewport: PreviewViewport;
@@ -156,6 +161,7 @@ export const EMPTY_PREVIEW_PAGE: PreviewPageState = {
 	hoverUrl: "",
 	crashed: false,
 	agent: null,
+	auth: null,
 	zoom: 1,
 	viewport: "fill",
 	problems: [],
@@ -165,6 +171,14 @@ export const EMPTY_PREVIEW_PAGE: PreviewPageState = {
 };
 export const EMPTY_PREVIEW: PreviewState = { ...EMPTY_PREVIEW_PAGE, tabs: [], activeTab: "" };
 export type PreviewColorScheme = "system" | "light" | "dark";
+/** One server sign-in the page waits on. */
+export interface PreviewAuthPrompt {
+	id: number;
+	/** The asking server, as `https://host:port`. */
+	origin: string;
+	/** What the server calls the protected area; "" when it named none. */
+	realm: string;
+}
 export type PreviewRequest =
 	/** `dpr`: a web viewer's device pixel ratio (its frames are capped at 2); an Electron window never sends it. */
 	| { action: "layout"; bounds: PreviewBounds; visible: boolean; dpr?: number }
@@ -191,7 +205,9 @@ export type PreviewRequest =
 	| { action: "back" | "forward" | "reload" | "stop" | "dispose" }
 	/** Reload past the cache (Orca's hard reload). */
 	| { action: "hardReload" }
-	| { action: "colorScheme"; scheme: PreviewColorScheme };
+	| { action: "colorScheme"; scheme: PreviewColorScheme }
+	/** The person's answer to `auth`: a name and password used once, or nothing to cancel (the page shows the 401). */
+	| { action: "authAnswer"; id: number; username?: string; password?: string };
 export interface PreviewApi {
 	command(request: PreviewRequest): Promise<PreviewState>;
 	/** Ask where to save, then print the page to that PDF: the saved path, or `null` when the user cancelled. */

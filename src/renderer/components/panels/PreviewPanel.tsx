@@ -31,7 +31,6 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
 	clampPreviewZoom,
 	EMPTY_PREVIEW,
-	isLoopbackUrl,
 	PREVIEW_PROBLEM_LIMIT,
 	PREVIEW_TAB_LIMIT,
 	PREVIEW_VIEWPORTS,
@@ -44,6 +43,7 @@ import {
 	previewProblemCount,
 	reducePreviewState,
 } from "../../../shared/preview";
+import { hostTabCannotOpen } from "../../lib/host-ports";
 import { useT } from "../../lib/i18n";
 import { openExternal } from "../../lib/open-external";
 import { latestBashPreviewUrl } from "../../lib/preview-browser";
@@ -75,6 +75,7 @@ import {
 	Tabs,
 } from "../common";
 import { useFirstVisitTour } from "../onboarding/surface-tours";
+import { PreviewAuthDialog } from "./PreviewAuth";
 import { PreviewCheckNotice } from "./PreviewCheckNotice";
 import { AllVisualsDialog, PreviewFeedbackBar, usePreviewFeedback } from "./PreviewFeedback";
 import { PreviewFind } from "./PreviewFind";
@@ -145,7 +146,8 @@ export function PreviewPanel() {
 	const web = chromePlatform() === "web";
 	const urlInput = useRef<HTMLInputElement>(null);
 	const address = previewAddress(input);
-	const remoteBlocked = remote && isLoopbackUrl(address ?? "");
+	// A paired host's tab opens this computer's loopback only through its servers' stand-ins (`lib/host-ports.ts`).
+	const remoteBlocked = remote && hostTabCannotOpen(address ?? "");
 	const [problemsOpen, setProblemsOpen] = useState(false);
 	const problemsAnchor = useRef<HTMLButtonElement>(null);
 	const [agentStarting, setAgentStarting] = useState(false);
@@ -160,7 +162,7 @@ export function PreviewPanel() {
 		setInput(url);
 		setTyping(false);
 		setInvalid(false);
-		if (!(remote && isLoopbackUrl(url))) command({ action: "load", url });
+		if (!(remote && hostTabCannotOpen(url))) command({ action: "load", url });
 	};
 	const suggestions = useAddressSuggestions(input, typing, openUrl);
 	const agentTab = useRef<string | null>(null);
@@ -228,7 +230,7 @@ export function PreviewPanel() {
 		lastRequested.current = requested;
 		setInput(url);
 		setInvalid(false);
-		if (!(remote && isLoopbackUrl(url))) command({ action: "load", url });
+		if (!(remote && hostTabCannotOpen(url))) command({ action: "load", url });
 	}, [requested, latest, remote, tabId, command]);
 	// C135: the tab's visuals come back as preview tabs (the first one shown when no address was asked for),
 	// and the ones the agent shows while this panel is up open at once.
@@ -797,6 +799,10 @@ export function PreviewPanel() {
 					onOpen={visualId => command({ action: "openVisual", tabId, visualId })}
 				/>
 			)}
+			<PreviewAuthDialog
+				auth={state.auth}
+				onAnswer={(id, answer) => command({ action: "authAnswer", id, ...(answer ?? {}) })}
+			/>
 		</div>
 	);
 }

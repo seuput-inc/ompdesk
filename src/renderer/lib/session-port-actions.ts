@@ -7,6 +7,7 @@ import type { SessionPortProcess } from "../../shared/rpc-types";
 import { useSessionPortsStore } from "../stores/session-ports";
 import { useTabsStore } from "../stores/tabs";
 import { useUiStore } from "../stores/ui";
+import { hostPortUrl } from "./host-ports";
 
 /** The read under way for each tab: a second ask joins it. */
 const reads = new Map<string, Promise<void>>();
@@ -51,7 +52,7 @@ export async function endSessionPort(tabId: string, process: SessionPortProcess)
 export async function openSessionPort(tabId: string, port: number, worktreeFolder?: string | null): Promise<void> {
 	const tabs = useTabsStore.getState();
 	const remote = tabs.tabs.find(tab => tab.id === tabId)?.device;
-	const url = remote ? await window.omp.preview.hostPort(tabId, port) : portAddress(port, worktreeFolder);
+	const url = remote ? await hostPortUrl(tabId, port) : portAddress(port, worktreeFolder);
 	if (tabs.activeTabId !== tabId) await tabs.switchTab(tabId);
 	useUiStore.getState().openPreview(url);
 }
