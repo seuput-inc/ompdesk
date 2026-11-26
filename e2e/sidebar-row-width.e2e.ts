@@ -198,6 +198,10 @@ test("a pick that changes the list's height moves no row of another project", as
 	await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1280, 960));
 	await page.waitForFunction(() => window.omp?.rpc != null);
 	await expect.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status).toBe("ready");
+	// The Bots section's card for a first bot (orca-bots-ui) is no part of this case's heights: folded to its header.
+	const botsToggle = page.locator("[data-sidebar-bots-toggle]");
+	if ((await botsToggle.getAttribute("aria-expanded")) === "true") await botsToggle.click();
+	await expect(botsToggle).toHaveAttribute("aria-expanded", "false");
 	const rows = `[data-session-group=${cssString(beta)}] .omp-sidebar-session-row:not([data-session-path$="beta-2.jsonl"])`;
 	// Beta unfolded by hand: both projects open, the list scrolls.
 	await page

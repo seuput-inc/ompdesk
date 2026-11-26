@@ -7919,6 +7919,7 @@ export const ko: Record<string, string> = {
 	"bots.section.fold": "봇: 봇 {total}개, 확인할 것 {needsYou}개",
 	"bots.section.collapseAll": "봇 모두 접기",
 	"bots.section.expandAll": "봇 모두 펼치기",
+	"bots.section.region": "내 봇",
 	"bots.section.emptyTitle": "나의 AI 동료",
 	"bots.section.emptyDescription": "봇은 자기 폴더에서 계속 일해요. 기억하고, 지켜보고, 알려 줘요.",
 	"bots.section.allHidden": "모든 봇이 일시정지되어 숨겨졌어요.",

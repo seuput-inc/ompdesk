@@ -387,7 +387,7 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 	};
 
 	return (
-		<section aria-label={t("destination.bots")} className="mb-1" data-sidebar-bots>
+		<section aria-label={t("bots.section.region")} className="mb-1" data-sidebar-bots>
 			{header}
 			<Collapse open={!folded}>
 				<div className="space-y-px" data-bot-lane>
