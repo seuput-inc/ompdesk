@@ -448,7 +448,11 @@ describe("SidecarPool tabs", () => {
 		const [a, b] = sidecars;
 		fw.sent.length = 0;
 
-		const update = { type: "message_update" };
+		const update = {
+			type: "message_update",
+			message: { role: "assistant", timestamp: 5, content: [{ type: "text", text: "a" }] },
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "a" },
+		};
 		const started = { type: "subagent_lifecycle", payload: { id: "sa-1", status: "started" } };
 		b?.emitEvents([update, { type: "agent_end" }]);
 		expect(fw.sentTo(IPC_EVENTS.EVENTS_BATCH)).toEqual([]);

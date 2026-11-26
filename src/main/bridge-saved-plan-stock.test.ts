@@ -21,14 +21,14 @@ describe.skipIf(!existsSync(omp) || !sessionManager)("a session saved with plan 
 	it("opens with plan mode off", async () => {
 		const scratch = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "ompdesk-saved-plan-")));
 		onTestFinished(() => fs.rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
-		const agent = path.join(scratch, ".omp", "agent");
+		const agent = path.join(scratch, "agent");
 		const project = path.join(scratch, "project");
 		await fs.mkdir(agent, { recursive: true, mode: 0o700 });
 		await fs.mkdir(project);
 		// A model that is never answered: rpc mode refuses to start without one, and a CI runner has none.
 		await fs.writeFile(
 			path.join(agent, "models.yml"),
-			"providers:\n  fixture:\n    baseUrl: http://127.0.0.1:9/v1\n    api: openai-completions\n    apiKey: unused\n    models:\n      - id: idle\n",
+			"providers:\n  fixture:\n    baseUrl: http://127.0.0.1:9/v1\n    api: openai-completions\n    apiKey: unused\n    models:\n      - id: idle\n        name: Idle\n        reasoning: false\n",
 		);
 		// The journal as stock wrote it while plan mode was on: a message, then the mode change.
 		const file = runStock<string>(`
@@ -67,6 +67,7 @@ describe.skipIf(!existsSync(omp) || !sessionManager)("a session saved with plan 
 			stderr += chunk.toString();
 		});
 		const rpc = new StockRpc(frame => child.stdin.write(`${JSON.stringify(frame)}\n`), { timeout: 30_000 });
+		child.once("exit", code => rpc.rejectAll(`omp exited (${code}): ${stderr}`));
 		const lines = createInterface({ input: child.stdout });
 		lines.on("line", line => {
 			try {

@@ -62,9 +62,10 @@ impl Ctx {
     /// What an automatic update restart must wait for on this computer's tabs.
     pub(super) fn restart_holds(&self) -> Value {
         self.with(|pool| {
-            let compacting = pool.entries.iter().any(|entry| {
-                !entry.hosted_view && entry.tracking.run.compacting == Some(true)
-            });
+            let compacting = pool
+                .entries
+                .iter()
+                .any(|entry| !entry.hosted_view && entry.tracking.run.compacting == Some(true));
             json!({"compacting": compacting})
         })
     }

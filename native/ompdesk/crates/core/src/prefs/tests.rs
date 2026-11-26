@@ -196,7 +196,10 @@ fn removed_modes_leave_live_shortcuts_alone() {
     }))
     .unwrap();
     assert!(super::retired::migrate(&mut store, temp().path()));
-    assert_eq!(json!(store), json!({"keymapOverrides": {"goal.toggle": "g"}}));
+    assert_eq!(
+        json!(store),
+        json!({"keymapOverrides": {"goal.toggle": "g"}})
+    );
 }
 
 #[test]

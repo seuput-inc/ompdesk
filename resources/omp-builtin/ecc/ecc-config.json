@@ -64,7 +64,7 @@
 			}
 		},
 		"renamedCommands": {
-			"plan": { "to": "ecc-plan", "why": "/plan is stock omp's plan mode and OMPdesk's Plan command." }
+			"plan": { "to": "ecc-plan", "why": "/plan is stock omp's plan mode." }
 		},
 		"commands": "Prompt commands run only when the user types them, so they never compete with pstack's routing (an invoked command outranks the pstack section); all 24 are kept.",
 		"hidden": "Every kept skill has disable-model-invocation: true (read as skill://<name>); only the generated index skill `ecc` is listed to the model."

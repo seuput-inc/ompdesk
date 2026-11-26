@@ -1950,7 +1950,12 @@ export const SURFACES: readonly Surface[] = [
 		id: "composer-mode-goal",
 		area: "A",
 		title: "Mode popover › Goal",
-		open: page => ui(page, "openModes", "goal"),
+		open: async page => {
+			await page.locator("[data-run-settings-trigger]").first().click();
+			await page.locator('[data-tab-id="goal"]').click();
+		},
+		ready: '[data-tab-id="goal"][aria-selected="true"]',
+		parity: { session: "work", after: closeOverlay },
 	},
 	{
 		id: "model-picker",
@@ -3006,6 +3011,8 @@ export const SURFACES: readonly Surface[] = [
 		area: "A",
 		title: "Run settings (mode, thinking, approval, delegation): a popover, a bottom sheet on a phone",
 		open: page => page.locator("[data-run-settings-trigger]").first().click(),
+		ready: '[data-tab-id="goal"]',
+		parity: { session: "work", after: closeOverlay },
 	},
 	{
 		id: "composer-context-usage",
