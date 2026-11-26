@@ -168,11 +168,6 @@ export interface SessionRpcClient {
 	getLastLink(): Promise<RpcResponse>;
 	setSessionName(name: string): Promise<RpcResponse>;
 	regenerateSessionTitle(): Promise<RpcResponse>;
-	autoModeDecide(message: string): Promise<RpcResponse>;
-	/** Ask while the user types what `autoModeDecide(message)` will ask at Enter; changes nothing. */
-	autoModePrefetch(message: string): Promise<RpcResponse>;
-	autoModeUndo(mode: "plan" | "goal"): Promise<RpcResponse>;
-	autoModeEnd(mode: "plan" | "goal"): Promise<RpcResponse>;
 	setEntryLabel(entryId: string, label?: string): Promise<RpcResponse>;
 	handoff(customInstructions?: string): Promise<RpcResponse>;
 	getLoginProviders(): Promise<RpcResponse>;
@@ -193,8 +188,6 @@ export interface SessionRpcClient {
 	getSettings(paths?: string[]): Promise<RpcResponse>;
 	setSetting(path: string, value: unknown): Promise<RpcResponse>;
 	getProviders(forceRefresh?: boolean): Promise<RpcResponse>;
-	setPlanMode(enabled: boolean): Promise<RpcResponse>;
-	getPlanMode(): Promise<RpcResponse>;
 	getModelRoles(): Promise<RpcResponse>;
 	setModelRole(role: string, modelId: string | null): Promise<RpcResponse>;
 	getModelRoleMetadata(): Promise<RpcResponse>;
@@ -267,12 +260,6 @@ export interface SessionRpcClient {
 	getThemeColors(name: string): Promise<RpcResponse>;
 	getTranscript(): Promise<RpcResponse>;
 	getTranscriptPage(cursor?: string, limit?: number, fromEnd?: boolean): Promise<RpcResponse>;
-	planApproval(
-		approved: boolean,
-		option?: "execute" | "compact" | "keep_context" | "save",
-		feedback?: string,
-		savePath?: string,
-	): Promise<RpcResponse>;
 	getGoal(): Promise<RpcResponse>;
 	guidedGoal(initial?: string): Promise<RpcResponse>;
 	setAgentsPaused(enabled: boolean): Promise<RpcResponse>;
@@ -354,7 +341,6 @@ const RPC_COMMAND_TIMEOUTS: Record<string, number> = {
 	dump_session_archive: 120_000,
 	handoff: 660_000,
 	reload_plugins: 120_000,
-	plan_approval: 660_000,
 	switch_leaf: 660_000,
 	login: 660_000,
 	// Reads every account's quota; each usage request has stock's 10s budget, and
@@ -597,10 +583,6 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		getLastLink: () => rpcCommand({ type: "get_last_link" }),
 		setSessionName: name => rpcCommand({ type: "set_session_name", name }),
 		regenerateSessionTitle: () => rpcCommand({ type: "regenerate_session_title" }),
-		autoModeDecide: message => rpcCommand({ type: "auto_mode_decide", message }),
-		autoModePrefetch: message => rpcCommand({ type: "auto_mode_prefetch", message }),
-		autoModeUndo: mode => rpcCommand({ type: "auto_mode_undo", mode }),
-		autoModeEnd: mode => rpcCommand({ type: "auto_mode_end", mode }),
 		setEntryLabel: (entryId, label) => rpcCommand({ type: "set_entry_label", entryId, label }),
 		handoff: customInstructions => rpcCommand({ type: "handoff", customInstructions }),
 		getLoginProviders: () => rpcCommand({ type: "get_login_providers" }),
@@ -617,8 +599,6 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		getSettings: paths => rpcCommand({ type: "get_settings", paths }),
 		setSetting: (path, value) => rpcCommand({ type: "set_setting", path, value }),
 		getProviders: forceRefresh => rpcCommand({ type: "get_providers", forceRefresh }),
-		setPlanMode: enabled => rpcCommand({ type: "set_plan_mode", enabled }),
-		getPlanMode: () => rpcCommand({ type: "get_plan_mode" }),
 		// Each candidate model once on the wire (a host with many providers sent a paired device 882 KB of repeats).
 		getModelRoles: async () => {
 			const response = await rpcCommand({ type: "get_model_roles", compact: true });
@@ -681,8 +661,6 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		getTranscript: () => fetchTranscript(rpcCommand),
 		getTranscriptPage: (cursor, limit, fromEnd) =>
 			rpcCommand({ type: "get_transcript_page", cursor, limit, fromEnd }),
-		planApproval: (approved, option, feedback, savePath) =>
-			rpcCommand({ type: "plan_approval", approved, option, feedback, savePath }),
 		getAutopilot: options =>
 			rpcCommand(options?.allCycles ? { type: "get_autopilot", allCycles: true } : { type: "get_autopilot" }),
 		setAutopilot: action => rpcCommand({ type: "set_autopilot", ...action }),

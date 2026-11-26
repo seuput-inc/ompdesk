@@ -189,6 +189,17 @@ fn every_retired_pref_leaves_and_a_live_one_stays() {
 }
 
 #[test]
+fn removed_modes_leave_live_shortcuts_alone() {
+    let mut store = serde_json::from_value(json!({
+        "autoMode": true,
+        "keymapOverrides": {"plan.toggle": "p", "goal.toggle": "g"}
+    }))
+    .unwrap();
+    assert!(super::retired::migrate(&mut store, temp().path()));
+    assert_eq!(json!(store), json!({"keymapOverrides": {"goal.toggle": "g"}}));
+}
+
+#[test]
 fn a_retired_theme_becomes_its_successor_and_any_other_value_stays() {
     let dir = temp();
     let mut store = serde_json::from_value::<Map<String, Value>>(json!({

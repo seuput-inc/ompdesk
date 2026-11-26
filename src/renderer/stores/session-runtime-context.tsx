@@ -9,7 +9,6 @@ export type RuntimeStoreKey =
 	| "extensionUi"
 	| "messages"
 	| "model"
-	| "planApproval"
 	| "queue"
 	| "session"
 	| "settings"

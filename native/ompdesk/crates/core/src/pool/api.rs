@@ -59,26 +59,13 @@ impl Ctx {
         })
     }
 
-    pub(super) fn pending_plan(&self, tab: &str) -> Value {
-        self.with(|pool| {
-            pool.entry(tab).map_or(Value::Null, |entry| {
-                entry.plan_proposal.as_ref().map_or(Value::Null, |(title, path)| {
-                    json!({"title": title, "planFilePath": path, "generation": entry.plan_generation})
-                })
-            })
-        })
-    }
-
     /// What an automatic update restart must wait for on this computer's tabs.
     pub(super) fn restart_holds(&self) -> Value {
         self.with(|pool| {
-            let mut compacting = false;
-            let mut plan_waiting = false;
-            for entry in pool.entries.iter().filter(|entry| !entry.hosted_view) {
-                compacting |= entry.tracking.run.compacting == Some(true);
-                plan_waiting |= entry.plan_proposal.is_some();
-            }
-            json!({"compacting": compacting, "planWaiting": plan_waiting})
+            let compacting = pool.entries.iter().any(|entry| {
+                !entry.hosted_view && entry.tracking.run.compacting == Some(true)
+            });
+            json!({"compacting": compacting})
         })
     }
 
@@ -679,7 +666,6 @@ impl Ctx {
                 return Value::Null;
             };
             let payload = pool.tab_status(entry, &cwd);
-            let ask = ask.or(entry.plan_proposal.as_ref().map(|_| "approval"));
             let mut facts = Map::new();
             facts.insert("sessionPath".into(), opt(entry.session_file.clone()));
             facts.insert("tabId".into(), Value::from(entry.tab_id.clone()));
@@ -884,7 +870,7 @@ impl Ctx {
 
     /// `controlTabs`: what the control tools' snapshot reads of every window that owns a tab, in one call instead of
     /// several per tab (main's thread waits on each): per window (`tabWindows`'s order) its `tabsForWindow` rows and
-    /// `openRequests`, each row with its tab's `tabFacts`, `pendingPlan`, `formerTabIds`, `hasDraft` and owner window
+    /// `openRequests`, each row with its tab's `tabFacts`, `formerTabIds`, `hasDraft` and owner window
     /// (`windowOfTab`) under `control`.
     pub(super) async fn control_tabs(&self) -> R<Value> {
         let wins: Vec<i64> = serde_json::from_value(self.tab_windows()).unwrap_or_default();
@@ -895,7 +881,6 @@ impl Ctx {
                 let tab = row["tabId"].as_str().unwrap_or_default().to_string();
                 row["control"] = json!({
                     "facts": self.tab_facts(&tab),
-                    "plan": self.pending_plan(&tab),
                     "formerIds": self.former_tab_ids(&tab),
                     "hasDraft": self.has_draft(&tab),
                     "owner": self.window_of_tab(&tab),
@@ -951,7 +936,7 @@ impl Ctx {
     }
 
     /// Nothing in the tab is live as the pool sees it (`idle-release.ts`): this computer's own ready tab on a saved
-    /// session, shown in no window, split pane or device, opened by the person, with no turn, compaction, ask, plan,
+    /// session, shown in no window, split pane or device, opened by the person, with no turn, compaction, ask,
     /// draft, retry, continuation, sign-in or pending restart.
     pub(super) async fn quiet(&self, tab: &str) -> R<bool> {
         let facts = self.facts(&[tab.to_string()]).await?;
@@ -975,7 +960,7 @@ impl Ctx {
             if entry.opened_by.is_some() || entry.opened_by_session.is_some() {
                 return false;
             }
-            if entry.awaiting_connection || entry.plan_proposal.is_some() || entry.resuming {
+            if entry.awaiting_connection || entry.resuming {
                 return false;
             }
             if entry.unsaved_prompt.is_some()

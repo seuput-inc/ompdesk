@@ -20,7 +20,7 @@ import { fixtureProviderOptions } from "../../../e2e/models-config-fixture";
 import type { PromptOriginEnv } from "../../../resources/gui-bridge/prompt-origin-contracts";
 import type { AccountRotationMode, AccountRotationState } from "../../shared/account-rotation";
 import { type AgentReviewItem, type AgentReviewResult, wrapAgentMessage } from "../../shared/agent-control";
-import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
+import { ipcErrorCode } from "../../shared/ipc-error-codes";
 import type {
 	CustomProviderInput,
 	CustomProvidersConfig,
@@ -6050,180 +6050,30 @@ describe("an answer with attachments for a tab a device runs here", () => {
 		expect(sidecar.commands).toEqual([]);
 		expect(sidecar.sideFrames).toEqual([]);
 	});
-
-	it("refuses a plan approval from a device while an agent's approval holds that plan, and approves the plan once", async () => {
-		const { services, sidecar, call, x } = await hosted();
-		sidecar.emit("events", [{ type: "plan_proposal", planFilePath: "/p/plan.md", title: "Plan" }]);
-		const note = Promise.withResolvers<void>();
-		const held = sidecar.rpcClient.command;
-		sidecar.rpcClient.command = async command => {
-			if (command.type === "agent_control_mail") await note.promise;
-			return held(command);
-		};
-		const answering = call(
-			step({
-				requestId: "answer-1|plan",
-				plan: { type: "plan_approval", approved: true },
-				planFile: "/p/plan.md",
-				planGeneration: 1,
-			}),
-		);
-		await new Promise(resolve => setTimeout(resolve, 20));
-		const person = await services
-			.call(x.peer, "tab.command", { rtab: "t1", command: { type: "plan_approval", approved: false } }, x)
-			.catch((error: unknown) => error);
-		expect(ipcErrorCode(person)).toBe("being_answered");
-		note.resolve();
-		await answering;
-		expect(sidecar.commands.map(command => command.type)).toEqual(["agent_control_mail", "plan_approval"]);
-	});
-
-	it("sends no approval to a revised plan that reuses the plan file", async () => {
-		const { sidecar, call } = await hosted();
-		sidecar.emit("events", [{ type: "plan_proposal", planFilePath: "/p/plan.md", title: "Plan" }]);
-		sidecar.emit("events", [{ type: "plan_proposal", planFilePath: "/p/plan.md", title: "Plan, revised" }]);
-		await expect(
-			call(
-				step({
-					requestId: "answer-1|plan",
-					plan: { type: "plan_approval", approved: true },
-					planFile: "/p/plan.md",
-					planGeneration: 1,
-				}),
-			),
-		).rejects.toThrow(/plan changed since you read it/);
-		expect(sidecar.commands).toEqual([]);
-	});
 });
 
-describe("a device answering a window's tab meets the pool's claims", () => {
-	it("is refused a plan approval the pool says an agent's approval holds", async () => {
-		const context = setup();
-		const guard = vi.fn((_tabId: string) => {
-			throw codedError("being_answered", "An agent is answering this plan right now");
-		});
-		context.local.localTabs.guardPlan = guard as never;
-		context.local.owned.set("/s/local.jsonl", { tabId: "win1", winId: 1 });
-		const view = new FakeHostSidecar(workDir, "agent");
-		view.setStatus("ready");
-		context.local.views.set("/s/local.jsonl", view);
-		const x = new FakeConnection(peer("device-x"));
-		await context.services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, sessionPath: "/s/local.jsonl" }, x);
-		const refused = await context.services
-			.call(x.peer, "tab.command", { rtab: "t1", command: { type: "plan_approval", approved: true } }, x)
-			.catch((error: unknown) => error);
-		expect(guard).toHaveBeenCalledWith("win1");
-		expect(ipcErrorCode(refused)).toBe("being_answered");
-		expect(view.commands).toEqual([]);
-	});
-});
-
-describe("a paired tab's plan generation is the host's, end to end", () => {
-	const proposal = (title: string) => ({
-		type: "plan_proposal",
-		planFilePath: "/p/plan.md",
-		title,
-		planContent: "x",
-		options: [],
-	});
-	const proposals = (conn: FakeConnection) =>
-		conn
-			.tabEvents()
-			.filter(event => event.name === "events")
-			.flatMap(event => event.arg as { type: string; generation?: number }[])
-			.filter(event => event.type === "plan_proposal");
-
-	it("stamps the generation it issued on the proposal it forwards, and on the one a returning device is sent", async () => {
-		const { services, sidecars } = setup();
-		const first = new FakeConnection(peer("device-x"));
-		await services.call(first.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, first);
-		const sidecar = sidecars[0];
-		if (!sidecar) throw new Error("expected a sidecar");
-		sidecar.setStatus("ready");
-		// This host has numbered other plans already (the device's own counter is another, so the two are unequal).
-		sidecar.emit("events", [proposal("one")]);
-		sidecar.emit("events", [proposal("two")]);
-		sidecar.emit("events", [proposal("three")]);
-		const sent = proposals(first).map(event => event.generation);
-		expect(sent).toEqual([1, 2, 3]);
-		// The link drops and comes back: the pending plan is sent again with the very same generation.
-		services.disconnected(first.peer, first);
-		const second = new FakeConnection(peer("device-x"));
-		await services.call(second.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, second);
-		expect(proposals(second).map(event => event.generation)).toEqual([3]);
-	});
-
-	it("answers with attachments for the host's generation, whatever number the device holds for other plans", async () => {
+describe("a removed mode a device asks for", () => {
+	it("refuses plan and auto mode on before the tab's omp hears it, and lets plan mode off through", async () => {
 		const { services, sidecars } = setup();
 		const x = new FakeConnection(peer("device-x"));
 		await services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
 		const sidecar = sidecars[0];
 		if (!sidecar) throw new Error("expected a sidecar");
 		sidecar.setStatus("ready");
-		sidecar.emit("events", [proposal("one")]);
-		sidecar.emit("events", [proposal("two")]);
-		const forwarded = proposals(x).at(-1)?.generation;
-		expect(forwarded).toBe(2);
-		const answer = (planGeneration: number) =>
-			services.call(
-				x.peer,
-				"tab.command",
-				{
-					rtab: "t1",
-					command: {
-						type: "agent_control_answer",
-						requestId: `answer-${planGeneration}|plan`,
-						companion: {
-							content: "note",
-							details: { id: `answer-${planGeneration}` },
-							delivery: { triggerTurn: false },
-						},
-						plan: { type: "plan_approval", approved: true },
-						planFile: "/p/plan.md",
-						planGeneration,
-					},
-				},
-				x,
-			);
-		// What the device's own pool numbered (another counter) is refused; the host's own number is accepted.
-		await expect(answer(9)).rejects.toThrow(/plan changed since you read it/);
+		const send = (command: Record<string, unknown>) =>
+			services.call(x.peer, "tab.command", { rtab: "t1", command }, x);
+		await expect(send({ type: "set_plan_mode", enabled: true })).resolves.toMatchObject({
+			success: false,
+			code: "mode_removed",
+			error: expect.stringMatching(/Plan mode was removed/),
+		});
+		await expect(send({ type: "auto_mode_decide", text: "hi" })).resolves.toMatchObject({
+			success: false,
+			code: "mode_removed",
+		});
 		expect(sidecar.commands).toEqual([]);
-		await answer(forwarded ?? 0);
-		expect(sidecar.commands.map(command => command.type)).toEqual(["agent_control_mail", "plan_approval"]);
-	});
-
-	it("stamps a window tab's plan with the pool's generation for a device that views it, on a reconnect too, and its answer is that plan's", async () => {
-		const context = setup();
-		const SESSION = "/s/local.jsonl";
-		context.local.owned.set(SESSION, { tabId: "win1", winId: 1 });
-		const view = new FakeHostSidecar(workDir, "agent");
-		view.setStatus("ready");
-		context.local.views.set(SESSION, view);
-		// The pool numbered this plan 7; this host's own counter has issued one other number.
-		let pending: { title: string; planFilePath: string; generation: number } | null = null;
-		context.local.localTabs.pendingPlan = () => pending;
-		const run = vi.fn(async () => {});
-		Object.assign(context.local.localTabs, { targetAnswer: { run } });
-		const x = new FakeConnection(peer("device-x"));
-		await context.services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, sessionPath: SESSION }, x);
-		pending = { title: "Plan", planFilePath: "/p/plan.md", generation: 7 };
-		view.emit("events", [proposal("Plan")]);
-		expect(proposals(x).map(event => event.generation)).toEqual([7]);
-		// The link drops and comes back: the pool's current number goes with the proposal again.
-		context.services.disconnected(x.peer, x);
-		const back = new FakeConnection(peer("device-x"));
-		await context.services.call(back.peer, "tab.open", { rtab: "t1", cwd: workDir, sessionPath: SESSION }, back);
-		expect(proposals(back).map(event => event.generation)).toEqual([7]);
-		// The device's agent answers for what it was sent; the pool's one step gets that very number.
-		const step = {
-			type: "agent_control_answer",
-			requestId: "answer-1|plan",
-			companion: { content: "note", details: { id: "answer-1" }, delivery: { triggerTurn: false } },
-			plan: { type: "plan_approval", approved: true },
-			planFile: "/p/plan.md",
-			planGeneration: 7,
-		};
-		await context.services.call(back.peer, "tab.command", { rtab: "t1", command: step }, back);
-		expect(run).toHaveBeenCalledWith("win1", expect.objectContaining({ planGeneration: 7 }), expect.any(Function));
+		// Off goes on to the tab, where the local handler answers it without stock (local/modes.ts).
+		await send({ type: "set_plan_mode", enabled: false });
+		expect(sidecar.commands).toMatchObject([{ type: "set_plan_mode", enabled: false }]);
 	});
 });

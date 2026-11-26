@@ -886,7 +886,7 @@ export default function StyleGuide() {
 							<IconButton icon={<Settings />} label="Settings" variant="secondary" />
 							<IconButton icon={<ArrowUp />} label="Send" variant="primary" />
 							<IconButton icon={<Trash2 />} label="Delete" variant="danger" />
-							<IconButton icon={<Sparkles />} label="Plan mode" pressed />
+							<IconButton icon={<Sparkles />} label="Thinking" pressed />
 							<IconButton disabled icon={<Copy />} label="Copy" />
 						</div>
 						<MenuButton icon={<MoreHorizontal />} items={menuItems} label="Session actions" />
@@ -1431,7 +1431,7 @@ export default function StyleGuide() {
 										<p className="p-3 text-sc-sm text-(--sc-text-secondary)">
 											{detailPick === "model"
 												? "acme-opus-5 · thinking high"
-												: "Plan mode · ask before edits"}
+												: "Tool approval · ask before edits"}
 										</p>
 									}
 									label="Settings groups"

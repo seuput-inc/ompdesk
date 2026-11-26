@@ -26,7 +26,7 @@ const KEY_SURFACES = [
 	"session-idle",
 	"sidebar",
 	"transcript-stress",
-	"composer-mode-plan",
+	"composer-mode-goal",
 	"model-picker",
 	"image-viewer",
 	"panel-files",
@@ -295,7 +295,6 @@ const TAP_SURFACES = [
 	"dialog-feedback",
 	"dialog-worktree",
 	"card-ask",
-	"dialog-plan-approval",
 ];
 const HOST_SURFACES = ["host-path-actions", "host-browser-folder"];
 

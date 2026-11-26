@@ -13,7 +13,7 @@ This file holds what every change needs. Each area's detailed rules (its user's 
 - `settings-layout-look` (`.omp/rules/settings-layout-look.md`): Settings layout and minimal-settings rule, figure headers, phone/tablet layout and touch targets, themes and contrast, profile and reply language, sidebar header, memory and projects.
 - `ui-parity` (`.omp/rules/ui-parity.md`): UI parity sheet: local, paired, phone.
 - `composer` (`.omp/rules/composer.md`): The composer: Stop/Esc/queue, delegation strength, working cue and age slot, toolbar and Run chip, phone composer, Run sheet, input mechanics, dictation, read-aloud, touch Enter.
-- `smart-features` (`.omp/rules/smart-features.md`): Prompt suggestions and inline completion, mojibake refusal, automatic session titles, automatic Plan/Goal choice, judge-model assists.
+- `smart-features` (`.omp/rules/smart-features.md`): Prompt suggestions and inline completion, mojibake refusal, automatic session titles, judge-model assists.
 - `autopilot` (`.omp/rules/autopilot.md`): Autopilot runs: board, branch and target, no soft stops, start sheet and land shipping, permissions, restart, AUTOPILOT.md guide and release facts, checked cycle reports.
 - `control-tools` (`.omp/rules/control-tools.md`): The ompdesk_* agent tools: safety and full control, app control, the control socket and `ompdesk` CLI, the ompdesk skill, worker contract, worktrees and review list, other windows and devices, mailbox, shared checkouts, schedules, worktree seeding and names.
 - `panels-sidebar` (`.omp/rules/panels-sidebar.md`): Composer history and stats, side panel and view sheets, sidebar families and subagent titles, split view, files the conversation names, Preview (agent browsing, visuals), SSH tools.

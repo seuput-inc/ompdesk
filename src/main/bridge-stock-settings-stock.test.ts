@@ -10,9 +10,8 @@ import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-
  *
  * omp maps a bridge's `@oh-my-pi/*` import onto the running omp's module only when its bundle registers that
  * subpath; any other subpath falls back to the package's source file, a second module graph with its own settings
- * registry whose handles read other settings' slots (`goal.enabled` read `[]` on omp 18.12.2). With
- * `plan.enabled`, `goal.enabled` and `security.enabled` false in config.yml:
- * - the automatic mode choice asks no model ("unavailable", no latency);
+ * registry whose handles read other settings' slots (`goal.enabled` read `[]` on omp 18.12.2). With `goal.enabled`
+ * and `security.enabled` false in config.yml:
  * - a guided goal is refused as disabled;
  * - a security scan is refused as disabled (stock's own coordinator, through its tool);
  * - every stock module the bridge loads is this omp's own, except the copies capabilities.ts `COPY_SAFE` lists
@@ -30,7 +29,6 @@ const ADAPTERS = readdirSync(resolve("resources/gui-bridge/omp"), { recursive: t
 	.join(",\n ");
 
 const PROBE = `
-import { methods as autoMode } from "./modes/auto-mode";
 import { methods as goal } from "./modes/goal";
 import { methods as security } from "./security";
 import { probe, stockCopies } from "./health";
@@ -44,7 +42,6 @@ export default function (pi) {
   try {
    const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID).session;
    const env = { pi, session: () => session, context: () => undefined, emit: () => {} };
-   out.decision = await autoMode["modes.auto_mode_decide"]({ message: "refactor the whole settings module across all files and add tests" }, env);
    try {
     await goal["modes.guided_goal"]({}, env);
     out.guided = "started";
@@ -79,7 +76,6 @@ export default function (pi) {
 `;
 
 interface Probe {
-	decision?: { mode: string; reason?: string; latencyMs: number };
 	guided?: string;
 	security?: string;
 	copies?: string[];
@@ -134,9 +130,8 @@ function run(config: string): Probe {
 
 describe.skipIf(!existsSync(omp))("stock settings the bridge reads", () => {
 	it("are the user's, read through this omp's own modules", () => {
-		const probe = run("plan:\n  enabled: false\ngoal:\n  enabled: false\nsecurity:\n  enabled: false\n");
+		const probe = run("goal:\n  enabled: false\nsecurity:\n  enabled: false\n");
 		expect(probe.error).toBeUndefined();
-		expect(probe.decision).toEqual({ mode: "none", reason: "unavailable", latencyMs: 0 });
 		expect(probe.guided).toMatch(/Goal mode is disabled/);
 		expect(probe.security).toMatch(/Security is disabled/);
 		expect(probe.copies).toEqual(probe.copySafe);

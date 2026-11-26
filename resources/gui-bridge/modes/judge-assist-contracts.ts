@@ -1,6 +1,6 @@
 /**
- * Judge-model assists: small decisions OMPdesk asks stock's judge (`judgment` `resolveJudge`, the `judge` role chain,
- * as auto mode does) only while that chain resolves first to a native decision model (`hasNativeJudge`: TypeSafe's Jev
+ * Judge-model assists: small decisions OMPdesk asks stock's judge (`judgment` `resolveJudge`, the `judge` role chain)
+ * only while that chain resolves first to a native decision model (`hasNativeJudge`: TypeSafe's Jev
  * through OpenRouter on a stock install). With a prompted fallback (Sonnet, a local model), no key, the switch off, an
  * error or a timeout, every feature keeps the code rule it had before: OMPdesk works fully without the judge and only
  * gets better with it. Dependency-free: main and the renderer import it.

@@ -2,7 +2,7 @@
 
 ## The promise
 
-A session `ompdesk_session_open` made gets its setup (worker mark, model, plan mode) and its first message (or goal) exactly once, also when the app quits between the child's tab and that message, and its opener hears when it cannot.
+A session `ompdesk_session_open` made gets its setup (worker mark, model) and its first message (or goal) exactly once, also when the app quits between the child's tab and that message, and its opener hears when it cannot.
 
 ## The harm
 
@@ -22,6 +22,6 @@ One open, up to 2 quits (3 in `fix-three-quits`); any interleaving of the open, 
 
 ## Not in the model
 
-- The setup commands one by one (each is idempotent: `agent_control_worker` journals once, `set_model` and `set_plan_mode` set a state): modelled as part of the hand-over.
+- The setup commands one by one (each is idempotent: `agent_control_worker` journals once, `set_model` sets a state): modelled as part of the hand-over.
 - A goal (`set_goal`): settled once stock took it, since its entry carries no marker; a quit after stock took it and before it journaled is not covered (stock journals the goal state at once).
 - Telling the opener: a refused setup step calls `trouble` once (`Owed::prompt`); not a safety property.

@@ -1,10 +1,9 @@
 /**
- * Workspace dock: the region between the transcript and the composer. It holds the plan-mode card, the todo list
- * (collapsed to one line), the goal strip and the island (which hides itself while a turn runs: the work card then
- * says its agents and sessions). The work card draws no todo or goal: the dock (and the work board, where it docks)
- * is the one place the todo progress and the goal live.
- * A plan proposal awaiting a decision carries the plan and its choices itself, so the plan card steps aside until it
- * is answered. Subagents never get a card of their own: while a turn runs their lanes live in the work card and the
+ * Workspace dock: the region between the transcript and the composer. It holds the todo list (collapsed to one
+ * line), the goal strip and the island (which hides itself while a turn runs: the work card then says its agents and
+ * sessions). The work card draws no todo or goal: the dock (and the work board, where it docks) is the one place the
+ * todo progress and the goal live.
+ * Subagents never get a card of their own: while a turn runs their lanes live in the work card and the
  * roster in the sidebar; the island row sums up agents still working or waiting and running background shells.
  * The dock still owns the stream-time roster poll, since it is mounted in every tab.
  * Each card self-gates its visibility, so the region collapses to zero height
@@ -19,12 +18,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useOverlayPresence } from "../../../hooks/use-overlay-presence";
 import { useSubagentRosterPoll } from "../../../hooks/use-subagent-roster-poll";
 import { useT } from "../../../lib/i18n";
-import { usePlanApprovalStore } from "../../../stores/plan-approval";
 import { useSessionStore } from "../../../stores/session";
 import { selectTodoCardVisible, useTodoStore } from "../../../stores/todo";
 import { PanelErrorBoundary } from "../../common";
 import { GoalDockBar } from "./GoalDockBar";
-import { PlanDockCard } from "./PlanDockCard";
 import { TodoDockCard } from "./TodoDockCard";
 import { useWorkspaceDockFocus, WorkspaceDockFocusProvider } from "./WorkspaceDockFocus";
 import { WorkspaceIsland } from "./WorkspaceIsland";
@@ -48,14 +45,11 @@ function defaultFocusHeight(): number {
 function WorkspaceDockContent() {
 	const { focusedCard } = useWorkspaceDockFocus();
 	const t = useT();
-	const proposalPending = usePlanApprovalStore(s => s.pending !== null);
-	const planCardVisible = useSessionStore(state => state.planModeEnabled) && !proposalPending;
 	const goalVisible = useSessionStore(state => state.goal !== null);
 	const todoVisible = useTodoStore(selectTodoCardVisible);
 	// A card that ends stays for its fade-out (`fast`, the exit class's own duration), then the stack closes up.
-	const plan = useOverlayPresence(planCardVisible, "fast");
 	const todo = useOverlayPresence(todoVisible, "fast");
-	const cardsVisible = plan.mounted || todo.mounted;
+	const cardsVisible = todo.mounted;
 
 	// Focused-card height: user-resizable via the drag handle above the stack,
 	// persisted across launches. null = fall back to the viewport-derived cap.
@@ -169,11 +163,6 @@ function WorkspaceDockContent() {
 							maxHeight: `min(${cap}, var(--omp-dock-room, 100dvh))`,
 						}}
 					>
-						{plan.mounted && (
-							<PanelErrorBoundary>
-								<PlanDockCard exiting={plan.closing} />
-							</PanelErrorBoundary>
-						)}
 						{todo.mounted && (
 							<PanelErrorBoundary>
 								<TodoDockCard exiting={todo.closing} />

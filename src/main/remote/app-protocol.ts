@@ -15,7 +15,7 @@
  * - `tab.cancelWait {rtab}`: Cancel on the tab's connection wait or scheduled retry
  * - `tab.continueCut {rtab}`, `tab.dismissCut {rtab}`: Continue or Dismiss on the cut-off row of the window's tab a view
  *   shows; an older host answers `unsupported`
- * - `sessions.list|search|kindFor|delete|rename|move`, `fs.list|read|readImage|readPlan|listDirs`,
+ * - `sessions.list|search|kindFor|delete|rename|move`, `fs.list|read|readImage|listDirs`,
  *   `workspace.default`, `launchProfile.get|update`
  * - `sidebar.deviceOrder.exchange` → the merged device ranks, keyed only by hashes of OMPdesk device identities.
  *   `sidebar.deviceOrder.changed` carries no data: the device exchanges again, as it does on every link-up.

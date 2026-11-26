@@ -34,7 +34,6 @@ interface MockOmp {
 		mcpReload: Mock<() => Promise<RpcResponse>>;
 		mcpAction: Mock<(name: string, action: string) => Promise<RpcResponse>>;
 		setAgentsPaused: Mock<(enabled: boolean) => Promise<RpcResponse>>;
-		setPlanMode: Mock<(enabled: boolean) => Promise<RpcResponse>>;
 		tan: Mock<(work: string) => Promise<RpcResponse>>;
 		omfg: Mock<(complaint: string) => Promise<RpcResponse>>;
 		getState: Mock<() => Promise<RpcResponse>>;
@@ -58,7 +57,6 @@ function installMockOmp(): MockOmp {
 			followUp: vi.fn(async () => success({})),
 			guidedGoal: vi.fn(async () => success({ started: true })),
 			setAgentsPaused: vi.fn(async enabled => success({ paused: enabled, pausedAt: enabled ? 123 : undefined })),
-			setPlanMode: vi.fn(async enabled => success({ enabled })),
 			tan: vi.fn(async () => success({ jobId: "job-1" })),
 			omfg: vi.fn(async () => success({ state: "saved", savedPath: "/tmp/rule.md" })),
 			mcpReauth: vi.fn(async () => success({ ok: true })),
@@ -75,7 +73,6 @@ function installMockOmp(): MockOmp {
 					contextUsage: null,
 					messageCount: 0,
 					queuedMessageCount: 0,
-					planModeEnabled: false,
 					todoPhases: [],
 				}),
 			),
@@ -246,24 +243,6 @@ describe("planComposerSubmit", () => {
 			expect(omp.rpc.followUp).not.toHaveBeenCalled();
 		});
 
-		it("runs the pre-prompt work only when this window sees an idle agent", async () => {
-			installMockOmp();
-			const beforePrompt = vi.fn(async () => undefined);
-			for (const isStreaming of [true, false]) {
-				const submit = planComposerSubmit({
-					message: "hello",
-					images: [],
-					isStreaming,
-					commands: [],
-					hostDecides: true,
-					beforePrompt,
-				});
-				if (submit.kind !== "send") throw new Error("expected send");
-				await submit.request();
-			}
-			expect(beforePrompt).toHaveBeenCalledTimes(1);
-		});
-
 		it("leaves a slash command on its own path", async () => {
 			const omp = installMockOmp();
 			const submit = planComposerSubmit({
@@ -381,19 +360,15 @@ describe("planComposerSubmit GUI-only routing", () => {
 		expect(omp.rpc.prompt).not.toHaveBeenCalled();
 	});
 
-	it("serves /plan natively even though stock omp does not advertise it", async () => {
-		const omp = installMockOmp();
+	it("leaves /plan to the agent: Plan mode is no command of the composer's", () => {
+		installMockOmp();
 		const submit = planComposerSubmit({
 			message: "/plan",
 			images: [],
-			isStreaming: false, // Stock lists its own builtins but not /plan; the composer merges GUI commands in.
+			isStreaming: false,
 			commands: withGuiCommands([{ name: "compact", source: "builtin", description: "compact" }]),
 		});
-		await Promise.resolve();
-
-		expect(submit.kind).toBe("handled");
-		expect(omp.rpc.setPlanMode).toHaveBeenCalledWith(true);
-		expect(omp.rpc.prompt).not.toHaveBeenCalled();
+		expect(submit.kind).toBe("send");
 	});
 
 	it("describes a stock command that omp advertises with its own name as the description", () => {
@@ -420,7 +395,7 @@ describe("planComposerSubmit GUI-only routing", () => {
 	});
 
 	it("still sends an unknown slash command to the agent", () => {
-		const omp = installMockOmp();
+		installMockOmp();
 		const submit = planComposerSubmit({
 			message: "/definitely-not-a-command hi",
 			images: [],
@@ -428,7 +403,6 @@ describe("planComposerSubmit GUI-only routing", () => {
 			commands: withGuiCommands([{ name: "compact", source: "builtin", description: "compact" }]),
 		});
 		expect(submit.kind).toBe("send");
-		expect(omp.rpc.setPlanMode).not.toHaveBeenCalled();
 	});
 
 	it("opens the native copy selector for typed /copy", () => {

@@ -127,16 +127,6 @@ function runGuiMcpVerb(message: string, commands: AvailableCommand[]): boolean |
 	return runGuiAffordance(item.affordance, rest.join(" ") || undefined);
 }
 
-/** Error code of a submission withdrawn before it was sent (see `signal`): no failure to show, the draft returns. */
-export const SUBMIT_CANCELLED = "submit_cancelled";
-const cancelledSubmit: RpcResponse = {
-	type: "response",
-	command: "prompt",
-	success: false,
-	error: "Withdrawn before it was sent",
-	code: SUBMIT_CANCELLED,
-};
-
 export function planComposerSubmit(input: {
 	message: string;
 	/** The draft as the user saw it (paste markers folded); a slash command is read from it. Defaults to `message`. */
@@ -145,10 +135,6 @@ export function planComposerSubmit(input: {
 	isStreaming: boolean;
 	commands: AvailableCommand[];
 	rpc?: Pick<TabRpc, "compact" | "prompt" | "steer">;
-	/** Runs just before a plain (non-slash, non-streaming) prompt is sent: the automatic mode choice. */
-	beforePrompt?: () => Promise<unknown>;
-	/** Aborted before the prompt leaves (Stop or Esc during the mode choice): nothing is sent. */
-	signal?: AbortSignal;
 	/**
 	 * Other devices may send to this tab (a shared tab, or a page on a phone), so this window's idea of
 	 * "running" can be a beat stale: a plain message goes as a prompt that steers a run still going,
@@ -200,14 +186,10 @@ export function planComposerSubmit(input: {
 		toast({ variant: "warning", message: translate("input.skills.off", { name }) });
 	if (!isSlashCommand && isStreaming && !input.hostDecides)
 		return { kind: "send", request: () => rpc.steer(message, images) };
+	// Only stock knows whether a goal or another sender started a turn since Enter.
 	return {
 		kind: "send",
-		request: async () => {
-			if (!isSlashCommand && !isStreaming) await input.beforePrompt?.();
-			if (input.signal?.aborted) return cancelledSubmit;
-			// Only stock knows whether a goal or another sender started a turn since Enter.
-			return isSlashCommand ? rpc.prompt(message, images) : rpc.prompt(message, images, "steer");
-		},
+		request: () => (isSlashCommand ? rpc.prompt(message, images) : rpc.prompt(message, images, "steer")),
 	};
 }
 

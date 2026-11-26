@@ -515,9 +515,8 @@ for (const language of variants(["en", "ko"] as const))
 					const peer = (await b.evaluate(() => window.omp.remote.getState())).host.peers[0];
 					if (!peer) throw new Error("expected A among B's devices");
 					const used = peer.usage.requests;
-					// A typed prompt costs two of A's requests on B: the automatic mode choice's judge
-					// (`auto_mode_decide`, a model command in remote/quota-commands.ts) and the turn.
-					const limit = used + 2;
+					// A typed prompt costs one of A's requests on B: the turn.
+					const limit = used + 1;
 					await b.keyboard.press("ControlOrMeta+Comma");
 					await b.locator('[data-settings-page] [data-settings-section="connections"]').click();
 					const row = b.locator(`[data-remote-peer="${peer.deviceId}"]`);

@@ -5,13 +5,12 @@ import { AdvisorModelRow } from "./AdvisorModelRow";
 import { SchemaField } from "./SchemaField";
 import { useSettingsData } from "./settings-data";
 
-/** The plan, goal, rule and advisor switches; starting goal mode / autopilot or opening Agents lives in the composer and palette. */
+/** The goal, rule and advisor switches; starting goal mode / autopilot or opening Agents lives in the composer and palette. */
 export function AgentModes() {
 	const t = useT();
 	const { values, advisorActive, loadState, sidecarReady } = useSettingsData();
 	return (
 		<>
-			<SchemaField path="plan.enabled" />
 			<SchemaField path="goal.enabled" />
 			<SchemaField path="ttsr.enabled" />
 			<SchemaField

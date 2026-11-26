@@ -65,8 +65,6 @@ import type {
 	IpcFsReadImagePayload,
 	IpcFsReadImageResult,
 	IpcFsReadPayload,
-	IpcFsReadPlanPayload,
-	IpcFsReadPlanResult,
 	IpcFsReadResult,
 	IpcFsSaveCopyPayload,
 	IpcFsSaveCopyResult,
@@ -177,6 +175,7 @@ import { getMainLanguage, mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
 import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
+import { removedModeRefusal } from "./local/modes";
 import { noteTypedPrompt } from "./local/prompt-origin";
 import { answerSessionLinks, onSessionLinksChanged, SessionLinksParams } from "./local/session-links";
 import type { LogWatcher } from "./log-watcher";
@@ -258,7 +257,6 @@ import {
 	FS_BINARY_LOCAL_MAX_BYTES,
 	listWorkspace,
 	mutateWorkspace,
-	readPlanFile,
 	readWorkspaceBinary,
 	readWorkspaceFile,
 	readWorkspaceImage,
@@ -906,7 +904,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 
 	/** Composer modes with no stock event: the other windows that show the tab re-read them (`noteModeChanged`). */
 	const MODE_TOGGLE_COMMANDS: Record<string, true> = {
-		set_plan_mode: true,
 		set_prewalk: true,
 		set_agents_paused: true,
 		set_goal: true,
@@ -933,9 +930,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		const hostName = deps.promptOrigins?.hostName() ?? os.hostname();
 		return { ...page, messages: localizePromptOrigins(page.messages, ownId, hostName) };
 	};
-
-	/** The plan approvals an agent's attachment step sends for the plan it claimed (`TargetAnswer`). */
-	const ownPlanApprovals = new WeakSet<object>();
 
 	const dispatchRpcCommand = async (
 		win: ClientWindow,
@@ -969,6 +963,17 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				command: slotCommand,
 				success: true,
 				data: desktopSlot.state(),
+			};
+		}
+		const refusal = removedModeRefusal(payload.command);
+		if (refusal) {
+			return {
+				id: payload.command.id,
+				type: "response",
+				command: payload.command.type,
+				success: false,
+				error: refusal,
+				code: "mode_removed",
 			};
 		}
 		// A tab whose omp is still starting (its place in the start queue, its first answer, a stalled start begun again)
@@ -1062,32 +1067,15 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				};
 			}
 		}
-		// A plan an agent's approval holds (`SidecarPool.claimPlan`) takes no other approve or reject.
-		if (cmd.type === "plan_approval" && issuerTabId) {
-			try {
-				sidecarPool.guardPlan(issuerTabId, ownPlanApprovals.has(payload));
-			} catch (err) {
-				return {
-					id: _id,
-					type: "response",
-					command: cmd.type,
-					success: false,
-					error: err instanceof Error ? err.message : String(err),
-					code: "being_answered",
-				};
-			}
-		}
 		// An answer with attachments is one step where the answered session runs (`target-answer.ts`): this main for its
 		// own tabs; a paired host's tab goes on to that host's main below.
 		if (cmd.type === "agent_control_answer" && !sidecar.device) {
 			if (!issuerTabId)
 				return { id: _id, type: "response", command: cmd.type, success: false, error: "No tab", code: "no_tab" };
 			try {
-				await sidecarPool.targetAnswer.run(issuerTabId, cmd as AnswerStep, (command, own) => {
-					const inner = { ...payload, command };
-					if (own) ownPlanApprovals.add(inner);
-					return dispatchRpcCommand(win, sidecar, issuerTabId, inner, channel);
-				});
+				await sidecarPool.targetAnswer.run(issuerTabId, cmd as AnswerStep, command =>
+					dispatchRpcCommand(win, sidecar, issuerTabId, { ...payload, command }, channel),
+				);
 				return { id: _id, type: "response", command: cmd.type, success: true, data: null };
 			} catch (err) {
 				return {
@@ -3003,24 +2991,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		},
 	);
 	ipc.on(IPC_COMMANDS.FS_MEDIA_RELEASE, (caller, url: unknown) => deps.mediaStreams.release(url, caller.sender.id));
-
-	ipc.handle(
-		IPC_COMMANDS.FS_READ_PLAN,
-		async (caller, payload: IpcFsReadPlanPayload): Promise<IpcFsReadPlanResult> => {
-			const target = targetFor(deps, caller, payload?.tabId);
-			const request = { fsPath: payload?.fsPath, localRoot: payload?.localRoot ?? null };
-			if (target?.device) {
-				return remoteFs({ ...target, device: target.device }, "fs.readPlan", request, (error, code) => ({
-					ok: false,
-					path: null,
-					content: null,
-					error,
-					...(code ? { code } : {}),
-				}));
-			}
-			return readPlanFile(cwdFor(deps, caller, payload?.tabId), sessionIndex.sessionsDir, request);
-		},
-	);
 
 	ipc.handle(IPC_COMMANDS.SIDECAR_STATUS_GET, caller => {
 		const sidecar = sidecarFor(deps, caller);

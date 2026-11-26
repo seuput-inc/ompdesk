@@ -132,7 +132,6 @@ export interface NextPromptSession {
 		getBranch?(): ReadonlyArray<{ type?: string; customType?: string; data?: unknown; message?: unknown }>;
 	};
 	getTodoPhases?(): ReadonlyArray<{ tasks: ReadonlyArray<{ content: string; status: string }> }>;
-	getPlanModeState?(): { enabled: boolean; planFilePath?: string } | undefined;
 	getGoalModeState?(): { enabled: boolean; goal?: { objective?: string; status?: string } } | undefined;
 	getAsyncJobTree?(): { running: ReadonlyArray<{ type: string; label: string; command?: string }> } | null;
 	extensionRunner?: {
@@ -571,11 +570,9 @@ function fail(session: NextPromptSession, trigger: NextPromptTrigger, error: unk
 // ───────────────────────────── suggestions ─────────────────────────────
 
 function sessionExtras(session: NextPromptSession): SessionExtras {
-	const plan = session.getPlanModeState?.();
 	const goal = session.getGoalModeState?.();
 	const jobs = session.getAsyncJobTree?.();
 	return {
-		...(plan ? { plan: { enabled: plan.enabled === true } } : {}),
 		...(session.getTodoPhases ? { todoPhases: session.getTodoPhases() } : {}),
 		...(goal?.goal?.objective
 			? {

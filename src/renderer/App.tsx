@@ -6,7 +6,6 @@ import { ChangelogDialog, WhatsNewNotice } from "./components/dialogs/ChangelogD
 import { ChildAsks } from "./components/dialogs/ChildAsks";
 import { ExtensionDialog } from "./components/dialogs/ExtensionDialog";
 import { ModelRestoreDialog } from "./components/dialogs/ModelRestoreDialog";
-import { PlanApprovalDialog } from "./components/dialogs/PlanApprovalDialog";
 import { TabSwitcher, useTabSwitcherStore } from "./components/dialogs/TabSwitcher";
 import { WebDeviceNotice } from "./components/dialogs/WebDeviceNotice";
 import { WebPairingDialog } from "./components/dialogs/WebPairingDialog";
@@ -22,7 +21,6 @@ import { useHostAppearance } from "./hooks/use-host-appearance";
 import { useIdleCompactionDraft } from "./hooks/use-idle-compaction-draft";
 import { useInterruptedWork } from "./hooks/use-interrupted-work";
 import { useOutputStyle } from "./hooks/use-output-style";
-import { usePlanApproval } from "./hooks/use-plan-approval";
 import { useRpcEvents } from "./hooks/use-rpc-events";
 import { useSessionAttention } from "./hooks/use-session-attention";
 import { newSessionNow, requestSessionSwitch } from "./hooks/use-session-switch";
@@ -245,7 +243,6 @@ export function App() {
 	// What the person sent while a computer was out of reach goes once its link is back.
 	useEffect(installOutboxDelivery, []);
 	useExtensionUi();
-	usePlanApproval();
 	// Session tabs: GET_TABS boot reconciliation + TAB_STATUS subscription.
 	useSessionTabs();
 	// Remote devices: the RemoteState snapshot + `remote:state` pushes.
@@ -548,16 +545,6 @@ export function App() {
 						error => toastError({ title: t("palette.failed"), error }),
 					);
 					return;
-				case "plan.toggle": {
-					// ⌥⇧P — toggle plan mode (TUI app.plan.toggle).
-					const enabled = !useSessionStore.getState().planModeEnabled;
-					void runSessionCommand(focusedTabRpc().setPlanMode(enabled), t("settings.runtime.planMode"), data => {
-						const result = data as { enabled?: boolean } | undefined;
-						if (typeof result?.enabled === "boolean")
-							useSessionStore.setState({ planModeEnabled: result.enabled });
-					});
-					return;
-				}
 				case "tools.expand":
 					// ⌃O — expand/collapse all tool cards (TUI app.tools.expand).
 					ui.toggleToolsExpandAll();
@@ -971,7 +958,6 @@ export function App() {
 					<TabRuntimeProvider key={tabId} tabId={tabId}>
 						<ExtensionDialog />
 						<ChildAsks openerTabId={tabId} />
-						<PlanApprovalDialog />
 					</TabRuntimeProvider>
 				))}
 				<FirstRunGate />

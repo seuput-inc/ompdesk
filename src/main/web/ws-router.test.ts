@@ -566,6 +566,29 @@ describe("model quota", () => {
 		]);
 	});
 
+	it("refuses plan and auto mode on before counting them or running them, and runs plan mode off", async () => {
+		const r = await rig();
+		const refused = (id: number, command: Record<string, unknown>) =>
+			r.frame({ t: "inv", id, ch: IPC_COMMANDS.RPC_COMMAND_FOR_TAB, a: [{ tabId: "t", command, timeoutMs: 1 }] });
+		await refused(1, { type: "set_plan_mode", enabled: true });
+		await r.frame({
+			t: "inv",
+			id: 2,
+			ch: IPC_COMMANDS.RPC_COMMAND,
+			a: [{ command: { type: "auto_mode_decide", message: "refactor it" }, timeoutMs: 1 }],
+		});
+		await r.settle();
+		expect(r.invoke).not.toHaveBeenCalled();
+		expect(r.quota.reserve).not.toHaveBeenCalled();
+		expect(r.socket.frames("res")).toMatchObject([
+			{ id: 1, ok: true, v: { success: false, code: "mode_removed", error: expect.stringMatching(/Plan mode/) } },
+			{ id: 2, ok: true, v: { success: false, code: "mode_removed" } },
+		]);
+		await refused(3, { type: "set_plan_mode", enabled: false });
+		await r.settle();
+		expect(r.invoke).toHaveBeenCalledOnce();
+	});
+
 	it("charges a finished turn's tokens to the device that drove the tab, even while its page is hidden", async () => {
 		const r = await rig();
 		await r.frame({ t: "inv", id: 1, ch: IPC_COMMANDS.RPC_COMMAND_FOR_TAB, a: [{ tabId: "tab-9", ...prompt }] });

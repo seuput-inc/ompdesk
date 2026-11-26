@@ -1,5 +1,5 @@
 /**
- * Mode popover captures: the Plan switch and the Goal and Autopilot tabs in light/dark × en/ko, plus the Autopilot and
+ * Mode popover captures: the Goal and Autopilot tabs in light/dark × en/ko, plus the Autopilot and
  * Goal tabs in a short window (the popover scrolls inside the viewport instead of overflowing it).
  * Runs only with OMPDESK_MODE_SHOTS=<dir> (before/after comparisons of the compact redesign).
  */
@@ -33,10 +33,9 @@ for (const language of ["en", "ko"] as const)
 				await page.locator("[data-run-settings-trigger]").click();
 				await expect(popover).toBeVisible();
 				await page.waitForTimeout(400);
-				await shoot("plan");
-				// Plan is one switch above the tabs (never a tab beside its own off switch); Goal and Autopilot are tabs.
+				await shoot("closed-tabs");
+				// Goal and Autopilot are the only tabs; Plan mode was removed.
 				await expect(popover.locator('[data-tab-id="plan"]')).toHaveCount(0);
-				await expect(popover.locator("[data-plan-mode]")).toHaveCount(1);
 				for (const tab of ["goal", "autopilot"]) {
 					await popover.locator(`[data-tab-id="${tab}"]`).click();
 					await page.waitForTimeout(400);

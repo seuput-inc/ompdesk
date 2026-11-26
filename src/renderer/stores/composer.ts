@@ -126,13 +126,6 @@ export interface ComposerStore {
 	draft: string;
 	sending: boolean;
 	submissionUncertain: boolean;
-	/**
-	 * Withdraws the submission still being prepared (the automatic mode choice runs before a prompt
-	 * leaves): true when it had not left yet, so nothing reaches omp. Null when none is pending.
-	 */
-	cancelSubmit: (() => boolean) | null;
-	/** The automatic mode choice is being asked right now ("Deciding how to run this…"); Stop/Esc return at once. */
-	decidingMode: boolean;
 	/** A Stop was sent for the running turn and the turn has not ended yet: a second click or Esc sends nothing. */
 	stopping: boolean;
 	/** When the first Esc of "Esc again to stop" was pressed; null when none waits (an edit of the draft disarms it). */
@@ -153,9 +146,7 @@ export interface ComposerStore {
 	editsRequeueing: number;
 	noteRequeueing: (delta: 1 | -1) => void;
 	setSending: (value: boolean) => void;
-	setCancelSubmit: (cancel: (() => boolean) | null) => void;
 	setSubmissionUncertain: (value: boolean) => void;
-	setDecidingMode: (value: boolean) => void;
 	setStopping: (value: boolean) => void;
 	/** Arm "Esc again to stop"; disarms itself after `DOUBLE_ESC_MS`. */
 	armStop: (now?: number) => void;
@@ -211,8 +202,6 @@ export const createComposerStore = () =>
 		draft: "",
 		sending: false,
 		submissionUncertain: false,
-		cancelSubmit: null,
-		decidingMode: false,
 		stopping: false,
 		stopArmedAt: null,
 		restoredQueue: [],
@@ -222,9 +211,7 @@ export const createComposerStore = () =>
 		editsRequeueing: 0,
 		noteRequeueing: delta => set(state => ({ editsRequeueing: Math.max(0, state.editsRequeueing + delta) })),
 		setSending: sending => set({ sending }),
-		setCancelSubmit: cancelSubmit => set({ cancelSubmit }),
 		setSubmissionUncertain: submissionUncertain => set({ submissionUncertain }),
-		setDecidingMode: decidingMode => set({ decidingMode }),
 		setStopping: stopping => set({ stopping }),
 		armStop: (now = Date.now()) => {
 			set({ stopArmedAt: now });
@@ -347,8 +334,6 @@ export const createComposerStore = () =>
 				pictureSlots: [],
 				sending: false,
 				submissionUncertain: false,
-				cancelSubmit: null,
-				decidingMode: false,
 				stopping: false,
 				stopArmedAt: null,
 				restoredQueue: [],

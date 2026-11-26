@@ -18,7 +18,6 @@ import { useComposerStore } from "../stores/composer";
 import { useForkHandoffStore } from "../stores/fork-handoff";
 import { useMessagesStore } from "../stores/messages";
 import { useModelStore } from "../stores/model";
-import { usePlanApprovalStore } from "../stores/plan-approval";
 import { useQueueStore } from "../stores/queue";
 import { useSessionStore } from "../stores/session";
 import { deleteSessionRuntime, setFocusedSessionRuntime } from "../stores/session-runtime-context";
@@ -61,7 +60,6 @@ function serverState(overrides: Partial<RpcSessionState> = {}): RpcSessionState 
 		contextUsage: null,
 		messageCount: 0,
 		queuedMessageCount: 0,
-		planModeEnabled: false,
 		todoPhases: [],
 		...overrides,
 	} as RpcSessionState;
@@ -154,7 +152,6 @@ function resetAll(): void {
 	useSubagentsStore.getState().reset();
 	useModelStore.getState().reset();
 	useToolsStore.getState().reset();
-	usePlanApprovalStore.getState().clearProposal();
 	useUiStore.getState().closeSessionOverlays();
 	useForkHandoffStore.getState().closeHandoffDialog();
 	useToastStore.setState({ toasts: [] });
@@ -336,11 +333,6 @@ describe("switchSessionNow F-OWN owner guard", () => {
 		});
 		useTodoStore.getState().setPhases([{ name: "old phase", tasks: [] }]);
 		useModelStore.setState({ model: { provider: "old", id: "old-model" } });
-		usePlanApprovalStore.getState().showProposal({
-			planFilePath: "/old-plan.md",
-			planContent: "old plan",
-			options: ["execute"],
-		});
 		useUiStore.getState().openActiveTools();
 		useForkHandoffStore.getState().openHandoffDialog();
 		useSessionStore.setState({

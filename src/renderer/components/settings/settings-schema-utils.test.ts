@@ -31,21 +31,24 @@ const HOST_GATES = [
 	"unpausedProvidersNotProject",
 ];
 
-/** Gates of stock's own memory settings, which OMPdesk does not list (ai-memory replaced them), so it has no rule for them. */
-const UNLISTED_GATES = ["hindsightActive", "mnemopiActive", "autolearnActive"];
+/**
+ * Gates of stock's own memory and plan-mode settings, which OMPdesk does not list (ai-memory replaced the first; plan
+ * mode was removed), so it has no rule for them.
+ */
+const UNLISTED_GATES = [
+	"hindsightActive",
+	"mnemopiActive",
+	"autolearnActive",
+	"planModeEnabled",
+	"planAutosaveEnabled",
+];
 /** Each settings-backed gate with the value combinations that flip it. */
 const CASES: Record<string, Record<string, unknown>[]> = {
 	advisorEnabled: [{ "advisor.enabled": true }, { "advisor.enabled": false }],
 	autoThinkingActive: [{ defaultThinkingLevel: "auto" }, { defaultThinkingLevel: "high" }],
 	usageAwareFallbackEnabled: [{ "retry.usageAwareFallback": true }, { "retry.usageAwareFallback": false }],
-	planModeEnabled: [{ "plan.enabled": true }, { "plan.enabled": false }],
 	vimModeEnabled: [{ "tui.vimMode": true }, { "tui.vimMode": false }],
 	composerPredictionsEnabled: [{ "composer.predictions": true }, { "composer.predictions": false }],
-	planAutosaveEnabled: [
-		{ "plan.enabled": true, "plan.autosave": true },
-		{ "plan.enabled": true, "plan.autosave": false },
-		{ "plan.enabled": false, "plan.autosave": true },
-	],
 };
 
 interface StockConditions {

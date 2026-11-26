@@ -85,6 +85,7 @@ import { discardOpenedWorktree, savedWorktreesForSpawn } from "../disk/saved-wor
 import { type ExtensionApplyPlan, extensionApplyDecision, mergeApplyPlans } from "../extension-reload";
 import { coreGit } from "../local/git/exec";
 import { createWorktree, tablessWorktreeBridge } from "../local/git/worktree";
+import { removedModeRefusal } from "../local/modes";
 import { noteTypedPrompt } from "../local/prompt-origin";
 import { answerSessionLinks, SessionLinksParams } from "../local/session-links";
 import type { BridgeClient } from "../local/types";
@@ -151,7 +152,6 @@ import {
 	listDirectories,
 	listWorkspace,
 	mutateWorkspace,
-	readPlanFile,
 	readWorkspaceBinary,
 	readWorkspaceFile,
 	readWorkspaceImage,
@@ -358,7 +358,7 @@ export interface HostServicesDeps {
 		| "notePrompted"
 		| "beginMove"
 	> &
-		Partial<Pick<SidecarPool, "targetAnswer" | "guardPlan" | "pendingPlan">> & {
+		Partial<Pick<SidecarPool, "targetAnswer">> & {
 			/** Counts the tabs a device runs here among those waiting on one provider (model-wait-count.ts). */
 			modelWait?: Pick<ModelWaitTracker, "observe" | "forget" | "snapshot">;
 		};
@@ -506,10 +506,6 @@ interface HostTab extends RunTracking {
 	answered: Map<string, string>;
 	/** Asks an agent's answer holds while its attachments go in (`TargetAnswer`), by request id. */
 	askClaims: Map<string, number>;
-	/** The plan proposal this tab's omp waits on (a tab that runs here), and the generation main gave it. */
-	planProposal?: { title: string; planFilePath: string; generation: number; event: AgentSessionEvent };
-	/** The plan an agent's approval holds while its attachments go in. */
-	planClaim?: { plan: object; claim: number };
 	/** What the connection last got of `events`/`subagentFrame`, when its device asked for slim ones. */
 	linkEvents?: { conn: HostConnection; sender: LinkEventSender };
 	/**
@@ -626,7 +622,6 @@ const FsReadImageParams = z.object({
 });
 const FsMutateParams = z.object({ ...FsRoot, mutation: z.unknown() });
 const FsSearchParams = z.object({ ...FsRoot, request: z.unknown() });
-const FsReadPlanParams = z.object({ ...FsRoot, fsPath: z.string(), localRoot: z.string().nullable() });
 const ListDirsParams = z.object({ path: z.string().optional(), query: z.string().max(255).optional() });
 const LaunchProfileGetParams = z.object({ cwd: AbsolutePath });
 const LaunchProfileUpdateParams = z.object({ cwd: AbsolutePath, patch: z.record(z.string(), z.unknown()) });
@@ -720,8 +715,6 @@ export class LocalHostServices implements HostServices {
 	/** Moves a device's command has on its way, by `resumeId` (turn-resume.ts `trackMove`). */
 	readonly #moves = new MovesInFlight();
 	readonly #uploadOwner = ++nextUploadOwner;
-	/** Plan proposals counted for the tabs that run here: stock rewrites one plan file for a revised proposal. */
-	#planGeneration = 0;
 	#claimSerial = 0;
 	/** An answer with attachments for a tab that runs here is one claimed step (`TargetAnswer`), as `localTabs.targetAnswer` is for a window's. */
 	readonly #answers = new TargetAnswer({
@@ -745,23 +738,6 @@ export class LocalHostServices implements HostServices {
 			} finally {
 				tab?.askClaims.delete(id);
 			}
-		},
-		claimPlan: (tabId, planFile, generation) => {
-			const tab = this.#byResume(tabId);
-			const plan = tab?.planProposal;
-			if (!tab || !plan || plan.planFilePath !== planFile || plan.generation !== generation || tab.planClaim)
-				return null;
-			const claim = ++this.#claimSerial;
-			tab.planClaim = { plan, claim };
-			return claim;
-		},
-		planStillClaimed: (tabId, claim) => {
-			const tab = this.#byResume(tabId);
-			return tab?.planClaim?.claim === claim && tab.planProposal === tab.planClaim.plan;
-		},
-		releasePlan: (tabId, claim) => {
-			const tab = this.#byResume(tabId);
-			if (tab?.planClaim?.claim === claim) tab.planClaim = undefined;
 		},
 	});
 	/** Live connections that have talked to us; `sessions.changed` goes to each. */
@@ -1394,7 +1370,6 @@ export class LocalHostServices implements HostServices {
 						tab.run.saga ||
 						tab.retry ||
 						tab.asks.size ||
-						tab.planProposal ||
 						tab.awaitingConnection ||
 						tab.scheduledRetry ||
 						tab.resuming ||
@@ -1687,10 +1662,6 @@ export class LocalHostServices implements HostServices {
 			case "host.fs.readRange": {
 				const { rtab, cwd, ...payload } = parse(FsReadRangeParams, method, params);
 				return encodeBinaryRead(await readWorkspaceRange(this.#fsRoot(peer, rtab, cwd), payload));
-			}
-			case "fs.readPlan": {
-				const { rtab, cwd, ...payload } = parse(FsReadPlanParams, method, params);
-				return readPlanFile(this.#fsRoot(peer, rtab, cwd), this.#deps.sessionIndex.sessionsDir, payload);
 			}
 			case "fs.listDirs": {
 				const listing = parse(ListDirsParams, method, params);
@@ -2284,10 +2255,6 @@ export class LocalHostServices implements HostServices {
 			// The asks the device still shows may be gone (the omp restarted or withdrew them meanwhile),
 			// and the omp may have raised others: the whole open list replaces the device's.
 			this.#emit(existing, "openAsks", [...existing.asks.values()]);
-			// A plan still waiting for approval: the device's pool keeps this host's generation for it, the same one
-			// its agent's answer carries back.
-			const pending = this.#pendingPlanEvent(existing);
-			if (pending) this.#emit(existing, "events", [pending]);
 			// The device's waiting row and retry countdown may date from before it lost this computer.
 			this.#emit(existing, "awaitingConnection", existing.awaitingConnection === true);
 			this.#emit(existing, "scheduledRetry", scheduledRetryArg(existing.scheduledRetry));
@@ -2741,7 +2708,7 @@ export class LocalHostServices implements HostServices {
 				}
 				return news;
 			});
-			this.#emit(tab, "events", this.#stampPlans(tab, stamped));
+			this.#emit(tab, "events", stamped);
 			// A tab a window shows is counted by the pool; a device's own tab waits on this computer's account too.
 			if (!tab.viewing) this.#deps.localTabs.modelWait?.observe(`hosted:${tab.resumeId}`, "", events);
 			// Another device's tab here is charged to that device as it runs (its own tab sees the same replies), and a
@@ -2891,53 +2858,6 @@ export class LocalHostServices implements HostServices {
 		};
 	}
 
-	/**
-	 * Gives each `plan_proposal` of a tab that runs here its generation (stock rewrites one plan file for a revised
-	 * proposal, so the path is no identity), keeps the stamped event for a device that comes back, and clears it when
-	 * the proposal resolves. A tab that views another's omp keeps none: that omp's own pool numbers its plans.
-	 */
-	#stampPlans(tab: HostTab, events: AgentSessionEvent[]): AgentSessionEvent[] {
-		if (typeof tab.viewing === "object") return events;
-		// A window's tab a device views: the pool numbers its plans, and it read this very event before the view
-		// forwards it (its listeners were on the omp first), so its pending plan carries the number to stamp.
-		const windowPlan = (path: string): number | undefined => {
-			if (tab.viewing !== "window" || !tab.sessionFile) return undefined;
-			const owner = this.#deps.localTabs.sessionOwner(tab.sessionFile);
-			const pending = owner ? this.#deps.localTabs.pendingPlan?.(owner.tabId) : null;
-			return pending?.planFilePath === path ? pending.generation : undefined;
-		};
-		let out: AgentSessionEvent[] | undefined;
-		events.forEach((event, index) => {
-			if (event.type === "plan_proposal") {
-				const generation = tab.viewing === "window" ? windowPlan(event.planFilePath) : ++this.#planGeneration;
-				if (generation === undefined) return;
-				const stamped = { ...event, generation };
-				tab.planProposal = {
-					title: event.title ?? "",
-					planFilePath: event.planFilePath,
-					generation: stamped.generation,
-					event: stamped as AgentSessionEvent,
-				};
-				out ??= events.slice();
-				out[index] = stamped as AgentSessionEvent;
-			} else if (event.type === "plan_proposal_resolved" && tab.planProposal?.planFilePath === event.planFilePath)
-				tab.planProposal = undefined;
-		});
-		return out ?? events;
-	}
-
-	/** The proposal a returning device is sent again: this host's own, or (a window's tab it views) the pool's current. */
-	#pendingPlanEvent(tab: HostTab): AgentSessionEvent | undefined {
-		const kept = tab.planProposal;
-		if (!kept || typeof tab.viewing === "object") return undefined;
-		if (tab.viewing !== "window") return kept.event;
-		const owner = tab.sessionFile ? this.#deps.localTabs.sessionOwner(tab.sessionFile) : null;
-		const pending = owner ? this.#deps.localTabs.pendingPlan?.(owner.tabId) : null;
-		return pending?.planFilePath === kept.planFilePath
-			? ({ ...kept.event, generation: pending.generation } as AgentSessionEvent)
-			: undefined;
-	}
-
 	#emit(tab: HostTab, name: TabEventName, arg: unknown): void {
 		const { conn } = tab;
 		if (!conn) return;
@@ -2991,6 +2911,16 @@ export class LocalHostServices implements HostServices {
 		const { deliveryId, ...rest } = params.command;
 		if (typeof deliveryId === "string" && deliveryId)
 			return deliverOnce(deliveryId, () => this.#command(peer, { ...params, command: rest }));
+		// A command of a removed mode is refused before it is counted or reaches omp (local/modes.ts).
+		const refusal = removedModeRefusal(params.command);
+		if (refusal)
+			return {
+				type: "response",
+				command: params.command.type,
+				success: false,
+				error: refusal,
+				code: "mode_removed",
+			};
 		const tab = this.#tab(peer, params.rtab);
 		const client = tab.sidecar.rpcClient;
 		if (!client) throw codedError("sidecar_not_connected", "Sidecar not connected");
@@ -3008,13 +2938,6 @@ export class LocalHostServices implements HostServices {
 				? windowAnswers.run(window.tabId, step, send)
 				: this.#answers.run(tab.resumeId, step, send));
 			return { type: "response", command: "agent_control_answer", success: true, data: null } as RpcResponse;
-		}
-		// A plan an agent's approval holds takes no other approve or reject, from this device or any other.
-		if (params.command.type === "plan_approval") {
-			const window =
-				tab.viewing === "window" && tab.sessionFile ? this.#deps.localTabs.sessionOwner(tab.sessionFile) : null;
-			if (window) this.#deps.localTabs.guardPlan?.(window.tabId);
-			else if (tab.planClaim) throw codedError("being_answered", "An agent is answering this plan right now");
 		}
 		// The client device forwards its renderer's RpcCommand verbatim; omp and
 		// the local handlers validate the command itself. A Stop is logged with the device and the control it named,

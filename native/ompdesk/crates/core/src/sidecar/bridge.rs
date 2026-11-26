@@ -557,7 +557,7 @@ mod tests {
                 }
                 "echo" => serde_json::json!({ "id": id, "ok": true, "result": request["params"] }),
                 "old" => serde_json::json!({
-                    "id": id, "ok": false, "error": "Plan mode is unavailable", "code": "unsupported_omp",
+                    "id": id, "ok": false, "error": "Command is unavailable", "code": "unsupported_omp",
                 }),
                 "drop" => break,
                 other => {
@@ -662,7 +662,7 @@ mod tests {
         );
         assert_eq!(
             text(bridge.request("old", None, None).await),
-            Err(("unsupported_omp".into(), "Plan mode is unavailable".into()))
+            Err(("unsupported_omp".into(), "Command is unavailable".into()))
         );
         assert_eq!(
             events.lock().unwrap().as_slice(),

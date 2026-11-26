@@ -88,7 +88,6 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 		import("@oh-my-pi/pi-coding-agent/extensibility/plugins/git-url"),
 	"@oh-my-pi/pi-coding-agent/extensibility/settings": () => import("@oh-my-pi/pi-coding-agent/extensibility/settings"),
 	"@oh-my-pi/pi-coding-agent/extensibility/skills": () => import("@oh-my-pi/pi-coding-agent/extensibility/skills"),
-	"@oh-my-pi/pi-coding-agent/internal-urls": () => import("@oh-my-pi/pi-coding-agent/internal-urls"),
 	"@oh-my-pi/pi-coding-agent/internal-urls/router": () => import("@oh-my-pi/pi-coding-agent/internal-urls/router"),
 	"@oh-my-pi/pi-coding-agent/internal-urls/local-protocol": () =>
 		import("@oh-my-pi/pi-coding-agent/internal-urls/local-protocol"),
@@ -118,9 +117,6 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents": () =>
 		import("@oh-my-pi/pi-coding-agent/modes/rpc/rpc-subagents"),
 	"@oh-my-pi/pi-coding-agent/modes/settings": () => import("@oh-my-pi/pi-coding-agent/modes/settings"),
-	"@oh-my-pi/pi-coding-agent/plan-mode/approved-plan": () =>
-		import("@oh-my-pi/pi-coding-agent/plan-mode/approved-plan"),
-	"@oh-my-pi/pi-coding-agent/plan-mode/plan-files": () => import("@oh-my-pi/pi-coding-agent/plan-mode/plan-files"),
 	"@oh-my-pi/pi-coding-agent/registry/agent-lifecycle": () =>
 		import("@oh-my-pi/pi-coding-agent/registry/agent-lifecycle"),
 	"@oh-my-pi/pi-coding-agent/registry/agent-registry": () =>
@@ -196,7 +192,6 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/tools/gh-run-watch": () => import("@oh-my-pi/pi-coding-agent/tools/gh-run-watch"),
 	"@oh-my-pi/pi-coding-agent/tools/manage-skill": () => import("@oh-my-pi/pi-coding-agent/tools/manage-skill"),
 	"@oh-my-pi/pi-coding-agent/tools/path-utils": () => import("@oh-my-pi/pi-coding-agent/tools/path-utils"),
-	"@oh-my-pi/pi-coding-agent/tools/resolve": () => import("@oh-my-pi/pi-coding-agent/tools/resolve"),
 	"@oh-my-pi/pi-coding-agent/tools/security-scan": () => import("@oh-my-pi/pi-coding-agent/tools/security-scan"),
 	"@oh-my-pi/pi-coding-agent/tools/todo": () => import("@oh-my-pi/pi-coding-agent/tools/todo"),
 	"@oh-my-pi/pi-coding-agent/tools/tts": () => import("@oh-my-pi/pi-coding-agent/tools/tts"),
@@ -231,9 +226,7 @@ const LOADERS: Readonly<Record<string, () => Promise<unknown>>> = {
 	"@oh-my-pi/pi-coding-agent/utils/title-card": () => import("@oh-my-pi/pi-coding-agent/utils/title-card"),
 	"@oh-my-pi/pi-coding-agent/utils/title-settings": () => import("@oh-my-pi/pi-coding-agent/utils/title-settings"),
 	"@oh-my-pi/pi-coding-agent/tiny/text": () => import("@oh-my-pi/pi-coding-agent/tiny/text"),
-	"@oh-my-pi/pi-coding-agent/tiny/message-preproc": () => import("@oh-my-pi/pi-coding-agent/tiny/message-preproc"),
 	"@oh-my-pi/pi-coding-agent/judgment": () => import("@oh-my-pi/pi-coding-agent/judgment"),
-	"@oh-my-pi/pi-coding-agent/plan-mode/settings": () => import("@oh-my-pi/pi-coding-agent/plan-mode/settings"),
 	"@oh-my-pi/pi-ai/utils/schema": () => import("@oh-my-pi/pi-ai/utils/schema"),
 };
 

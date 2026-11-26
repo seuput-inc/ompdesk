@@ -673,7 +673,6 @@
  "constants": {
   "nudge": {
    "no_progress": "Autopilot: no cycle is running. Call `autopilot begin` and continue with the next cycle.",
-   "plan": "Autopilot: plan mode stopped the run and is off now; nobody approves plans here. Call `autopilot begin` and continue with the next cycle.",
    "blocked": "Autopilot: every todo item is blocked, so the run stopped. If a cycle is open, end it with each blocker as a follow-up; then call `autopilot begin` and pick an item that is not blocked.",
    "error": "Autopilot: the last turn failed and nothing retried it. Call `autopilot begin` and continue; repeat the failed step only if the failure looks transient, otherwise record it as a follow-up and pick another item."
   },

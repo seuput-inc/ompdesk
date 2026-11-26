@@ -457,12 +457,6 @@
   },
   {
    "in": [
-    "plan_approval"
-   ],
-   "out": 660000
-  },
-  {
-   "in": [
     "switch_leaf"
    ],
    "out": 660000

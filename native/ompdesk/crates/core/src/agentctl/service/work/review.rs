@@ -157,23 +157,17 @@ impl AgentControl {
         for (key, value) in self.report_fields(&self.host.state(), tab) {
             item.insert(key, value);
         }
-        // Its plan waits for approval, or a question card of its own waits for an answer: the opener (or the
-        // person) answers it, nothing is left to review. The card's own question goes along, for the line under
-        // its row.
         let card = tab
             .asks
             .iter()
             .find(|entry| !ask_title(&entry.request).starts_with(AGENT_CARD_PREFIX));
-        let question = match (card, &tab.plan) {
-            (Some(card), _) => trim(&ask_title(&card.request)).to_owned(),
-            (None, Some(plan)) => trim(&plan.title).to_owned(),
-            (None, None) => String::new(),
-        };
-        let waiting = tab.plan.is_some() || card.is_some();
-        if waiting {
+        let waiting = card.is_some();
+        if let Some(card) = card {
+            let title = ask_title(&card.request);
+            let question = trim(&title);
             item.insert("waiting".into(), json!(true));
             if !question.is_empty() {
-                item.insert("question".into(), json!(one_line(&question, 240)));
+                item.insert("question".into(), json!(one_line(question, 240)));
             }
         }
         let Some(worktree) = &tab.worktree else {

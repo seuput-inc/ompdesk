@@ -30,7 +30,6 @@ import {
 	useModelStore,
 } from "../stores/model";
 import { useNextPromptStore } from "../stores/next-prompt";
-import type { PendingPlanProposal, PlanApprovalStore } from "../stores/plan-approval";
 import { type QueueStore, useQueueStore } from "../stores/queue";
 import { type SessionStore, snapshotModeState, useSessionStore } from "../stores/session";
 import {
@@ -85,8 +84,7 @@ function writeUsage(state: RpcSessionState): void {
 /**
  * Apply what a snapshot reports that no session event carries (usage and the
  * composer modes), for a snapshot that events outdated while it was in flight.
- * Dropping these with the rest left them stale with nothing to re-sync them:
- * any frame landing mid-hydration kept plan mode off until the next turn.
+ * Dropping these with the rest left them stale with nothing to re-sync them.
  * The model selection lands too unless something wrote it meanwhile
  * (`thinking_level_changed`, a config frame, a pick): dropped, a relaunch
  * into a busy session showed "Choose model" and thinking off for good.
@@ -146,8 +144,7 @@ export function applySessionState(
 
 /**
  * Light re-sync of session state (no transcript/subagent fetch). Used for
- * agent_start: server-side plan-mode exits (plan_approval accept) emit no
- * event, so turn start is the sync point that keeps planModeEnabled honest.
+ * agent_start, the sync point for what no event carries.
  * Model switches go through refreshModelState instead.
  */
 export async function refreshSessionState(tabId = useTabsStore.getState().activeTabId): Promise<void> {
@@ -191,7 +188,7 @@ export async function refreshSessionState(tabId = useTabsStore.getState().active
 }
 
 /**
- * Another window that shows the tab toggled a composer mode (plan, prewalk, the agents pause,
+ * Another window that shows the tab toggled a composer mode (prewalk, the agents pause,
  * goal, fast/slow). Most have no event of their own, so the host says so with a
  * `config_update {modes: true}` frame (main/sidecar-pool.ts `noteModeChanged`) and this window re-reads them.
  */
@@ -377,53 +374,6 @@ export async function syncNextPrompt(
 		return true;
 	} catch {
 		// unsupported_omp or transient — next_prompt_config or the next hydration retries.
-		return false;
-	}
-}
-
-function isPlanProposal(value: unknown): value is PendingPlanProposal {
-	return (
-		typeof value === "object" &&
-		value !== null &&
-		"planFilePath" in value &&
-		typeof value.planFilePath === "string" &&
-		"planContent" in value &&
-		typeof value.planContent === "string" &&
-		"options" in value &&
-		Array.isArray(value.options) &&
-		value.options.every(option => typeof option === "string")
-	);
-}
-
-/**
- * Re-show the plan proposal the bridge holds awaiting approval
- * (get_plan_mode → `proposal`). Main routes every `plan_proposal` frame to its
- * tab, shown or hidden, but a frame emitted before this renderer subscribed
- * (a reload, a restored window) is gone while the agent still waits on it.
- * A proposal already on screen is left alone, keeping its feedback and
- * submit state.
- */
-export async function syncPlanProposal(
-	tabId: string,
-	command: TabCommand,
-	isCurrent: HydrationGuard,
-): Promise<boolean> {
-	const plan = sessionRuntimeStore<PlanApprovalStore>(tabId, "planApproval");
-	const before = plan?.getState();
-	try {
-		const res = await command({ type: "get_plan_mode" });
-		if (!isCurrent() || !res.success || !plan || plan.getState() !== before) return false;
-		if (!res.data || typeof res.data !== "object") return false;
-		const proposal = "proposal" in res.data ? res.data.proposal : undefined;
-		if (proposal == null) return plan.getState().pending === null;
-		if (!isPlanProposal(proposal)) return false;
-		const shown = plan.getState().pending;
-		if (shown?.planFilePath === proposal.planFilePath && shown.planContent === proposal.planContent) return true;
-		if (shown) return false;
-		plan.getState().showProposal(proposal);
-		return true;
-	} catch {
-		// Transient — the next hydration retries.
 		return false;
 	}
 }
@@ -1035,21 +985,12 @@ async function loadTabSession(
 
 	// Subagents and secondary chips do not hold the transcript hostage. Their
 	// requests still begin in parallel, but the core session can paint first.
-	// A proposal can only be pending while plan mode is on.
-	const wire =
-		stateResult.status === "fulfilled" && stateResult.value.success
-			? (stateResult.value.data as RpcSessionState | null)
-			: null;
-	const planOk = wire?.planModeEnabled
-		? await syncPlanProposal(tabId, runtime.command, isCurrent)
-		: !sessionRuntimeStore<PlanApprovalStore>(tabId, "planApproval")?.getState().pending;
 	const subagentsOk = await subagentsResult;
 	const secondary = await secondaryResult;
 	if (required === "core") return isCurrent() && coreOk;
 	return (
 		isCurrent() &&
 		coreOk &&
-		planOk &&
 		subagentsOk === true &&
 		secondary.every(result => result.status === "fulfilled" && result.value === true)
 	);

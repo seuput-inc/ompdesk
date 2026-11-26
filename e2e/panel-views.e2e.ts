@@ -35,7 +35,7 @@ for (const theme of variants(["light", "dark"] as const)) {
 			profile,
 			env: {
 				OMP_GUI_OMP: bin,
-				OMP_GUI_TEST_PANEL_PLAN: plan,
+				OMP_GUI_TEST_PANEL_JOBS: "1",
 			},
 		});
 		try {
@@ -65,15 +65,7 @@ for (const theme of variants(["light", "dark"] as const)) {
 			await aside.screenshot({ animations: "disabled", path: test.info().outputPath(`header-${theme}.png`) });
 			await expect(aside.getByRole("button", { name: "View options", exact: true })).toHaveCount(0);
 			await expect(aside.getByRole("button", { name: "More", exact: true })).toHaveCount(0);
-			await openSheet("plan", "Plan document");
-			const planSheet = page.getByRole("dialog", { name: "Plan document" });
-			await expect(planSheet).toContainText("Ship the right-panel views");
-			await expect(planSheet.locator(".line-through")).toContainText("Inspect stock session APIs");
-			await expect(planSheet.getByRole("button", { name: "Approve plan", exact: true })).toBeEnabled();
-			await page.mouse.move(0, 0);
-			await planSheet.screenshot({ animations: "disabled", path: test.info().outputPath(`plan-${theme}.png`) });
-			await planSheet.getByRole("button", { name: "Close", exact: true }).click();
-			await expect(planSheet).toHaveCount(0);
+			// The jobs fixture (OMP_GUI_TEST_PANEL_JOBS) shows a running and a finished job.
 			await openSheet("jobs", "Background tasks");
 			const jobsSheet = page.getByRole("dialog", { name: "Background tasks" });
 			await expect(jobsSheet).toContainText("Completed local job");
@@ -125,7 +117,6 @@ for (const theme of variants(["light", "dark"] as const)) {
 			}
 			for (const [id, title] of [
 				["jobs", "Background tasks"],
-				["plan", "Plan document"],
 				["logs", "Logs"],
 			] as const) {
 				await openSheet(id, title);

@@ -188,7 +188,6 @@ function setup(
 							awaitingConnection: false,
 							retrying: false,
 						},
-						plan: null,
 						formerIds: [],
 						hasDraft: false,
 						owner: windowOfTab(tab.tabId),
@@ -2023,7 +2022,6 @@ describe("a caller outside OMPdesk (the control socket)", () => {
 				hidden: false,
 				resuming: false,
 				hasAsk: true,
-				hasPlan: false,
 			},
 		]);
 	});
@@ -2203,7 +2201,6 @@ describe("the snapshot of main the core reads", () => {
 				tabWindows: () => [win],
 				openRequests: () => [],
 				tabFacts: () => null,
-				pendingPlan: () => null,
 				formerTabIds: () => [],
 				hasDraft: () => false,
 			};

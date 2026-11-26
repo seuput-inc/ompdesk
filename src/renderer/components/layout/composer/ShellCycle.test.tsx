@@ -74,8 +74,7 @@ describe("narrow composer toolbar", () => {
 			expect(containerBlocks(query)).not.toContain(".omp-composer");
 	});
 
-	it("folds the labels in four levels by the toolbar's width: steer, run chip, glyphs and effort, model name", () => {
-		expect(containerBlocks("omp-toolbar (max-width: 860px)")).toContain(".omp-composer-fold-1");
+	it("folds the labels in three levels by the toolbar's width: run chip, glyphs and effort, model name", () => {
 		expect(containerBlocks("omp-toolbar (max-width: 740px)")).toContain(".omp-composer-fold-2");
 		expect(containerBlocks("omp-toolbar (max-width: 620px)")).toMatch(
 			/\.omp-composer-glyphs[\s\S]*\.omp-composer-effort/,

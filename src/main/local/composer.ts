@@ -40,7 +40,6 @@ interface StateExtras {
 	cwd: string;
 	autoRetryEnabled: boolean;
 	thinkingConfigured: ThinkingLevel | "auto" | undefined;
-	planModeEnabled: boolean;
 	prewalkArmed: boolean;
 	agentsPaused: boolean;
 	agentsPausedAt?: number;
@@ -136,7 +135,6 @@ export const handlers: Record<string, LocalHandler> = {
 			autoRetryEnabled: extras?.autoRetryEnabled ?? true,
 			thinkingConfigured: extras?.thinkingConfigured ?? state.thinkingLevel,
 			availableThinkingLevels: reasoningLevels(levels?.levels),
-			planModeEnabled: extras?.planModeEnabled ?? false,
 			prewalkArmed: extras?.prewalkArmed ?? false,
 			agentsPaused: extras?.agentsPaused ?? false,
 			ultrafastSupported: extras?.ultrafastSupported ?? false,

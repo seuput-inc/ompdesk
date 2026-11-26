@@ -460,7 +460,7 @@ export function createAutopilotFake(host: AutopilotFakeHost) {
 			const current = state();
 			if (!current || (current.role ?? "parent") !== "parent" || current.state !== "running") return;
 			if (goal?.status !== "active") return;
-			const verdict = classifyStall({ lastTurnErrored, planMode: false, todosAllBlocked: false });
+			const verdict = classifyStall({ lastTurnErrored, todosAllBlocked: false });
 			if (verdict.kind === "nudge") {
 				frame({ type: "autopilot_nudge", reason: verdict.reason });
 				scheduleStall();

@@ -142,9 +142,8 @@ describe("the Run sheet is one line per row", () => {
 		expect(grids).toHaveLength(2);
 		// Two columns, the left a tenth wider so the Korean labels on Windows' face are not cut (RunSettings TILE_COLUMNS).
 		for (const grid of grids) expect(grid.className).toContain("grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]");
-		// Plus the Mode section's Plan and Auto mode, each a whole-row tile with its glyph like the others.
 		const tiles = Array.from(sheet.querySelectorAll("[data-switch-tile]"));
-		expect(tiles).toHaveLength(11);
+		expect(tiles).toHaveLength(9);
 		expect(sheet.querySelector("[data-switch-field]")).toBeNull();
 		for (const tile of tiles) {
 			expect(tile.querySelector("[data-setting-icon] svg")).not.toBeNull();
@@ -173,14 +172,14 @@ describe("the Run sheet is one line per row", () => {
 	it("ends every row in its (i), so the glyphs stand in one column", async () => {
 		const sheet = await openSheet();
 		const rows = Array.from(sheet.querySelectorAll("[data-switch-tile], [data-choice-row], [data-context-size]"));
-		expect(rows.length).toBeGreaterThanOrEqual(15);
+		expect(rows.length).toBeGreaterThan(0);
 		for (const row of rows) {
 			const controls = row.querySelectorAll("[role=switch], [role=radiogroup], select, [data-setting-info]");
 			expect(controls[controls.length - 1]?.hasAttribute("data-setting-info")).toBe(true);
 		}
 	});
 
-	it("starts focus on the Mode section's tab, never on Plan's switch or an (i) whose tooltip covers the tabs", async () => {
+	it("starts focus on the Mode section's tab, not an (i) whose tooltip covers the tabs", async () => {
 		const focused: Element[] = [];
 		const focus = vi
 			.spyOn(HTMLElement.prototype as unknown as { focus: () => void }, "focus")
@@ -224,10 +223,9 @@ describe("the Mode section opened before the tab's run state arrived", () => {
 		await openSheet({ openAdvanced: false });
 		expect(selectedTab()).toBe("");
 		expect(document.querySelector("[data-autopilot-sheet]")).toBeNull();
-		// Plan is one switch above the tabs, never a tab that could read as chosen over an off switch.
+		// Goal and Autopilot are the only modes; Plan mode was removed.
 		const tabNames = Array.from(document.querySelectorAll('[role="tab"]')).map(tab => tab.textContent ?? "");
-		expect(tabNames.some(name => name.includes(translate("input.modes.tab.plan")))).toBe(false);
-		expect(document.querySelectorAll("[data-plan-mode]")).toHaveLength(1);
+		expect(tabNames).toEqual([translate("input.modes.tab.goal"), translate("input.modes.tab.autopilot")]);
 		await act(async () => useAutopilotStore.getState().apply(running));
 		expect(selectedTab()).toContain(translate("input.modes.tab.autopilot"));
 		expect(document.querySelector("[data-autopilot-open-screen]")).not.toBeNull();

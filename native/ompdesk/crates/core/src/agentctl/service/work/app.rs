@@ -25,9 +25,7 @@ use crate::server::Fault;
 /// long work get a window as large as their own budget; the others have none of their own.
 pub fn command_timeout(kind: &str) -> Option<u64> {
     Some(match kind {
-        "bash" | "eval" | "compact" | "handoff" | "plan_approval" | "switch_leaf" | "login" => {
-            660_000
-        }
+        "bash" | "eval" | "compact" | "handoff" | "switch_leaf" | "login" => 660_000,
         "set_model"
         | "cycle_model"
         | "get_transcript"

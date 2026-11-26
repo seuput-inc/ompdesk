@@ -70,9 +70,6 @@ pub(super) struct Entry {
     pub session_held: bool,
     pub failure: Option<Value>,
     pub start_wait: Option<StartWait>,
-    pub plan_proposal: Option<(String, String)>,
-    /// Which proposal of the tab it is: bumped for every new one (stock rewrites one plan file for a revision).
-    pub plan_generation: u64,
     pub resuming: bool,
     /// Why the tab's cut-off turn waits for the person's Continue (`off`, `crash-loop`, `failed`).
     pub cut_off: Option<String>,
@@ -137,8 +134,6 @@ impl Entry {
             session_held: false,
             failure: None,
             start_wait: None,
-            plan_proposal: None,
-            plan_generation: 0,
             resuming: false,
             cut_off: None,
             unsaved_prompt: None,
@@ -257,11 +252,8 @@ pub(super) struct Pool {
     pub request_owners: OMap<String, u64>,
     /// Questions an agent's answer holds while its attachments go in, by request id → the claim.
     pub claims: HashMap<String, u64>,
-    /// Plans an agent's approval holds, by tab → (the proposal's generation, the claim).
-    pub plan_claims: HashMap<String, (u64, u64)>,
-    /// The last claim and the last plan generation handed out.
+    /// The last claim handed out.
     pub claim_serial: u64,
-    pub plan_serial: u64,
     pub request_bodies: OMap<String, Held>,
     pub sign_in_requests: HashSet<String>,
     pub answering: HashSet<String>,
@@ -370,7 +362,6 @@ impl Pool {
             && !entry.awaiting_connection
             && entry.scheduled_retry.is_none()
             && entry.tracking.retry.is_none()
-            && entry.plan_proposal.is_none()
             && !self.request_owners.iter().any(|(id, owner)| {
                 *owner == entry.seq
                     && self

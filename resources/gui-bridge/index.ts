@@ -178,7 +178,6 @@ const AREAS: readonly Area[] = [
 		features: ["pluginReload", "mcpUpdateReconnect"],
 		load: () => import("./extensions/update"),
 	},
-	{ name: "modes/plan", features: ["planMode", "planApproval"], load: () => import("./modes/plan") },
 	{
 		name: "modes/goal",
 		features: ["guidedGoal", "goalReplace", "goalBudget", "goalTimeLimit"],
@@ -192,7 +191,6 @@ const AREAS: readonly Area[] = [
 	},
 	{ name: "modes/memory-recall", features: ["memoryRecall"], load: () => import("./modes/memory-recall") },
 	{ name: "modes/auto-title", features: ["autoTitle"], load: () => import("./modes/auto-title") },
-	{ name: "modes/auto-mode", features: ["autoMode", "autoModeUndo"], load: () => import("./modes/auto-mode") },
 	{ name: "modes/judge-assist", features: ["judgeAssist"], load: () => import("./modes/judge-assist") },
 	{ name: "modes/output-style", features: ["outputStyle"], load: () => import("./modes/output-style") },
 	{ name: "modes/user-profile", features: ["userProfile"], load: () => import("./modes/user-profile") },

@@ -100,7 +100,6 @@ async function launch(staged: string, failed?: string) {
 		resumes: () => true,
 		busy: () => false,
 		asking: () => false,
-		planWaiting: () => false,
 		compacting: () => false,
 		opening: () => false,
 		backgroundWork: async () => NO_BACKGROUND_WORK,

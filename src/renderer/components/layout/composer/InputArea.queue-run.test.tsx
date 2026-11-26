@@ -1,5 +1,5 @@
 /**
- * The composer's run-state wiring: the Esc hints under the field (Esc again to stop, deciding), Stop busy while a stop is
+ * The composer's run-state wiring: the Esc hint under the field (Esc again to stop), Stop busy while a stop is
  * in flight, the placeholder priority (blocked > editing queued > steer > idle), Edit queued, where the field holds a
  * queued message (out of stock's queue, held by the core) and Save / Cancel / Esc queue it back, and the queue the core
  * kept from an omp that went, which comes back into the restored tray and is never sent by itself.
@@ -248,14 +248,6 @@ describe("Esc and Stop in the composer", () => {
 		);
 		await typeInto("my draft!");
 		expect(document.querySelector("[data-stop-hint]")).toBeNull();
-	});
-
-	it("says Deciding how to run this… while the automatic mode choice runs", async () => {
-		await mount();
-		await act(async () => useComposerStore.getState().setDecidingMode(true));
-		expect(document.querySelector("[data-deciding-hint]")?.textContent).toBe("Deciding how to run this…");
-		await act(async () => useComposerStore.getState().setDecidingMode(false));
-		expect(document.querySelector("[data-deciding-hint]")).toBeNull();
 	});
 
 	it("keeps Stop busy and inert until the turn ends", async () => {

@@ -37,7 +37,6 @@ import { ensureAgentReviewSubscription, useAgentReviewStore } from "../../../sto
 import { isAutopilotTab, isLiveAutopilot, useAutopilotStore } from "../../../stores/autopilot";
 import { isApprovalRequest, isUserBlockingRequest, useExtensionUiStore } from "../../../stores/extension-ui";
 import { useMessagesStore } from "../../../stores/messages";
-import { usePlanApprovalStore } from "../../../stores/plan-approval";
 import { useSessionStore } from "../../../stores/session";
 import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useSubagentsStore } from "../../../stores/subagents";
@@ -304,7 +303,6 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 		() => pending.filter(request => isUserBlockingRequest({ loginRequestIds }, request)),
 		[pending, loginRequestIds],
 	);
-	const planProposal = usePlanApprovalStore(state => state.pending);
 
 	const lastTurn = useTodoStore(state => state.lastTurn);
 	const running = agents.length + jobs.length + opened.counts.running;
@@ -323,7 +321,7 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 	// What the last turn left (the session rows' lazy chunk tells it), for a quiet board's head.
 	const [outcome, setOutcome] = useState<string | null>(null);
 
-	const asks = pendingAsks({ pendingRequests: pending, loginRequestIds }, planProposal !== null);
+	const asks = pendingAsks({ pendingRequests: pending, loginRequestIds });
 	const showsLast = !turnActive && lastTurn !== null;
 	const present =
 		turnActive ||
@@ -435,14 +433,11 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 	const jumpKey = actionShortcut("board.focus");
 
 	// Each row's tag is the same kind `sessionAttention` names on the head, so an approval never reads as a question.
-	const askItems = [
-		...(planProposal ? [{ id: "plan", label: t("workBoard.planReview"), kind: "review" as const }] : []),
-		...blocking.map(request => ({
-			id: request.id,
-			label: requestLabel(request, t),
-			kind: isApprovalRequest(request) ? ("approval" as const) : ("ask" as const),
-		})),
-	];
+	const askItems = blocking.map(request => ({
+		id: request.id,
+		label: requestLabel(request, t),
+		kind: isApprovalRequest(request) ? ("approval" as const) : ("ask" as const),
+	}));
 	const waitingChildren = opened.rows.filter(row => row.status === "waiting");
 	const nowChildren = opened.rows.filter(row => row.status !== "waiting");
 	// The presented lists, not the live ones: the last row of a finished agent or job fades out inside its section.
@@ -686,7 +681,6 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 							</span>
 						) : undefined
 					}
-					// Not "Plan": that is the plan-mode card's word, and Needs you can say "a plan is ready for review".
 					title={t(plan ? (showsGoal ? "workBoard.goalAndTodos" : "dock.todo") : "workBoard.goal")}
 				>
 					{showsGoal && goal && (

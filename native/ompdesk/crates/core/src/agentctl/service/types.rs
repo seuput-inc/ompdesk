@@ -79,18 +79,6 @@ impl FileEdits {
     }
 }
 
-/// A plan proposal that waits for approval (plan mode).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TabPlan {
-    #[serde(default)]
-    pub title: String,
-    pub plan_file_path: String,
-    /// Which proposal of the tab it is (main bumps it for every new or revised one): the answer names it.
-    #[serde(default)]
-    pub generation: Option<u64>,
-}
-
 /// A tab's git-worktree binding (`IpcTabWorktree`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -201,8 +189,6 @@ pub struct ControlTab {
     pub cut_off: Option<String>,
     #[serde(default)]
     pub asks: Vec<ControlAsk>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan: Option<TabPlan>,
     #[serde(default)]
     pub hidden: bool,
     #[serde(default)]
@@ -686,8 +672,6 @@ pub struct SessionStateInfo {
     pub is_streaming: bool,
     #[serde(default)]
     pub is_settled: Option<bool>,
-    #[serde(default)]
-    pub plan_mode_enabled: bool,
     #[serde(default)]
     pub todo_phases: Vec<TodoPhase>,
     #[serde(default)]
@@ -1253,7 +1237,7 @@ pub struct OpenOne {
     pub restore: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// `plan` or `goal`.
+    /// `goal` makes the first message the session goal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

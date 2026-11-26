@@ -15,7 +15,6 @@ import { useOpenedChildren } from "../../../hooks/use-opened-children";
 import { useTabPollKey } from "../../../hooks/use-tab-poll";
 import { useT } from "../../../lib/i18n";
 import { isUserBlockingRequest, useExtensionUiStore } from "../../../stores/extension-ui";
-import { usePlanApprovalStore } from "../../../stores/plan-approval";
 import { useSessionStore } from "../../../stores/session";
 import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useSubagentsStore } from "../../../stores/subagents";
@@ -31,7 +30,6 @@ export function useComposerLive(): { state: LiveState | null; background: number
 	const blocking = useExtensionUiStore(
 		s => s.pendingRequests.filter(request => isUserBlockingRequest(s, request)).length,
 	);
-	const proposal = usePlanApprovalStore(s => s.pending !== null);
 	const tabId = useRuntimeTabId();
 	const sessions = useOpenedChildren(tabId).counts.running;
 	// Stock's own word that background work keeps the session unsettled (main's `settling`): at least one thing runs,
@@ -40,7 +38,7 @@ export function useComposerLive(): { state: LiveState | null; background: number
 	const settling = useTabsStore(s => s.tabs.some(tab => tab.id === pollTab && tab.settling === true));
 	const background = Math.max(agents + shells + sessions, settling ? 1 : 0);
 	return {
-		state: liveWorkState({ streaming, waiting: blocking + (proposal ? 1 : 0), background }),
+		state: liveWorkState({ streaming, waiting: blocking, background }),
 		background,
 	};
 }

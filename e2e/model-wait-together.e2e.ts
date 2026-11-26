@@ -28,8 +28,6 @@ test.beforeEach(async () => {
 		desktop,
 		agent,
 		profile,
-		// The automatic mode choice takes about a second, as the real judge's does: a prompt leaves after it.
-		env: { OMP_GUI_TEST_AUTO_MODE_DELAY_MS: "800" },
 	});
 	page = await app.firstWindow();
 	await page.waitForFunction(() => window.omp?.rpc != null);

@@ -106,8 +106,6 @@ export interface ControlTab {
 	cutOff?: "off" | "crash-loop" | "failed";
 	/** Open asks and approvals that wait for the person. */
 	asks: ControlAsk[];
-	/** A plan proposal that waits for approval (plan mode); answered like an ask with `ompdesk_session_answer`. */
-	plan?: { title: string; planFilePath: string; generation?: number };
 	/** The user hid this session from agents (Sidebar › Hide from other agents). */
 	hidden: boolean;
 	worktree?: IpcTabWorktree;

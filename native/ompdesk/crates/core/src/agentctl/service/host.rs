@@ -274,8 +274,6 @@ pub struct Caps {
 /// How long a command is waited for (`command`'s `timeoutMs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Deadline {
-    /// The RPC client's own default.
-    Default,
     Ms(u64),
     /// No time limit (`NO_DEADLINE`).
     None,
@@ -652,7 +650,6 @@ impl Host {
     ) -> R<RpcResponse> {
         let mut args = json!({ "tabId": tab_id, "command": command });
         match deadline {
-            Deadline::Default => {}
             Deadline::Ms(ms) => args["timeoutMs"] = json!(ms),
             Deadline::None => args["noDeadline"] = json!(true),
         }

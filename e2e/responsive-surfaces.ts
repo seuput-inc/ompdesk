@@ -1091,7 +1091,7 @@ export const SETTINGS_SECTIONS = [
 
 /** The side panel's views (`PANEL_TABS`); the other session views open as sheets (`VIEW_SHEETS`, stores/ui.ts). */
 const PANELS = ["terminal", "diff", "preview", "files"] as const;
-const VIEW_SHEETS = ["jobs", "plan", "logs", "tree", "work"] as const;
+const VIEW_SHEETS = ["jobs", "logs", "tree", "work"] as const;
 
 const DIALOG_FLAGS: ReadonlyArray<{ id: string; action: string; args?: unknown[]; title: string }> = [
 	{ id: "dialog-rename", action: "openRenameDialog", title: "Rename session" },
@@ -1945,12 +1945,6 @@ export const SURFACES: readonly Surface[] = [
 		},
 		ready: "[data-image-viewer-head]",
 		settle: 600,
-	},
-	{
-		id: "composer-mode-plan",
-		area: "A",
-		title: "Mode popover › Plan",
-		open: page => ui(page, "openModes", "plan"),
 	},
 	{
 		id: "composer-mode-goal",
@@ -3270,24 +3264,6 @@ export const SURFACES: readonly Surface[] = [
 				message: "src/renderer/components/layout/sidebar/Sidebar.tsx already exists.",
 			});
 		},
-	},
-	{
-		id: "dialog-plan-approval",
-		area: "B",
-		title: "Plan approval dialog",
-		open: page =>
-			page.evaluate(() => {
-				const store = window.__stores?.planApproval?.getState() as
-					| { showProposal(proposal: unknown): void }
-					| undefined;
-				store?.showProposal({
-					planFilePath: "/Users/dev/projects/ompdesk/.omp/plans/fix-flaky-sidebar.md",
-					title: "Fix the flaky sidebar test",
-					planContent: `# Plan\n\n1. Reproduce the flake with \`--repeat 10\`\n2. Wait for the row to mount before asserting\n3. Run the suite ten times\n\n| Step | Owner |\n| --- | --- |\n| Reproduce | agent |\n| Fix | agent |\n\n\`\`\`ts\nawait waitFor(() => expect(rowFor("Session /work/alpha/mine")).toBeTruthy());\n\`\`\``,
-					options: ["execute", "compact", "keep_context", "save"],
-				});
-			}),
-		settle: 700,
 	},
 	{
 		id: "dialog-schedule-new",

@@ -4,7 +4,7 @@
  * section decided by the packaged gating rules (`modes/pstack-core.ts`, imported by the fake, not copied):
  * - on by default: the spawn carries the pack root, the skill list shows the pstack skills (hidden from the model's
  *   list, readable by `skill://`), no stock-named `tdd`/`teach`, and a Code session's main agent has the section;
- * - Plan mode and an Autopilot run leave the full section out; Solo delegation flips its delegation paragraph;
+ * - an Autopilot run leaves the full section out; Solo delegation flips its delegation paragraph;
  * - the switch off (pref `pstack`): no pack root, no pstack skills, no section;
  * - the ECC pack (`resources/omp-builtin/ecc`) rides its own switch (pref `ecc`): its root and its listed index skill
  *   with every other ECC skill hidden, gone when off. What the real omp does with that root is
@@ -116,17 +116,12 @@ test("on by default: the pack loads, its skills are listed, a Code session's mai
 	}
 });
 
-test("Plan mode leaves the section out and it returns with the mode; Solo delegation flips the delegation paragraph", async () => {
+test("Solo delegation flips the delegation paragraph", async () => {
 	test.setTimeout(120_000);
 	const { app, page, tab } = await launch({});
 	try {
 		const full = await sectionOf(page, tab);
 		expect(full).toContain('`agent: "pstack-agent"`');
-		expect((await command(page, tab, { type: "set_plan_mode", enabled: true })).success).toBe(true);
-		expect(await sectionOf(page, tab)).toBeUndefined();
-		expect((await command(page, tab, { type: "set_plan_mode", enabled: false })).success).toBe(true);
-		expect(await sectionOf(page, tab)).toBe(full);
-
 		expect((await command(page, tab, { type: "set_delegation", mode: "solo" })).success).toBe(true);
 		const solo = await sectionOf(page, tab);
 		expect(solo).toContain("there is no `task` tool");

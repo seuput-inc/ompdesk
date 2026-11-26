@@ -27,7 +27,7 @@ const SURFACE_LOOKS: ReadonlyArray<{ look: Look; surfaces: readonly string[] }> 
 		look: DESKTOP,
 		surfaces: ["session-idle", "sheet-jobs", "sheet-tree", "sheet-work", "panel-files", "settings-general", "toasts"],
 	},
-	{ look: COMPACT, surfaces: ["session-idle", "panel-files", "sheet-plan"] },
+	{ look: COMPACT, surfaces: ["session-idle", "panel-files", "sheet-jobs"] },
 	{
 		look: SHORT,
 		surfaces: [

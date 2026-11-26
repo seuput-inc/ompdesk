@@ -329,9 +329,9 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "public",
 		summary:
 			"Goal commands: goal get/create/resume/pause/drop; the default `goal.continuationModes` is completed by the bridge.",
-		files: ["src/main/local/auto-mode.ts", "src/main/local/modes.ts"],
+		files: ["src/main/local/modes.ts"],
 		stock: ["omp://rpc.md#goal", "goal"],
-		tests: ["src/main/local/auto-mode.test.ts"],
+		tests: ["src/main/local/modes.test.ts", "src/main/bridge-saved-plan-stock.test.ts"],
 	},
 	{
 		id: "Q07",
@@ -555,26 +555,6 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		],
 		stock: ["@oh-my-pi/pi-coding-agent/export/share", "@oh-my-pi/pi-coding-agent/commands/settings"],
 		tests: ["src/main/bridge-capabilities.test.ts"],
-	},
-	{
-		id: "B08",
-		area: "bridge",
-		contract: "internal",
-		summary:
-			"Plan mode: plan files, approved plan, resolve tool and plan proposal handler, toolset and session mode set through stock's plan-mode modules.",
-		files: [
-			"resources/gui-bridge/modes/plan.ts",
-			"resources/gui-bridge/capabilities.ts",
-			"resources/gui-bridge/health.ts",
-		],
-		stock: [
-			"@oh-my-pi/pi-coding-agent/plan-mode/plan-files",
-			"@oh-my-pi/pi-coding-agent/plan-mode/approved-plan",
-			"@oh-my-pi/pi-coding-agent/tools/resolve",
-			"@oh-my-pi/pi-coding-agent/internal-urls",
-			"@oh-my-pi/pi-utils",
-		],
-		tests: ["src/main/bridge-auto-plan-stock.test.ts"],
 	},
 	{
 		id: "B09",
@@ -1358,11 +1338,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"Judge assists, auto mode and the memory judge: stock's judgment module (and `judgment/standalone`), tiny/message-preproc, plan-mode settings, `nativeJudgmentImageBounds`, cache and usage journal and native-judge detection.",
+			"Judge assists and the memory judge: stock's judgment module (and `judgment/standalone`), `nativeJudgmentImageBounds`, cache and usage journal and native-judge detection.",
 		files: [
 			"resources/gui-bridge/modes/judge-assist.ts",
 			"resources/gui-bridge/modes/judge-assist-engine.ts",
-			"resources/gui-bridge/modes/auto-mode.ts",
 			"resources/gui-bridge/memory-judge-host.ts",
 			"resources/gui-bridge/stats-host.ts",
 			"resources/gui-bridge/capabilities.ts",
@@ -1371,19 +1350,11 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		stock: [
 			"@oh-my-pi/pi-ai",
 			"@oh-my-pi/pi-coding-agent/judgment",
-			"@oh-my-pi/pi-coding-agent/tiny/message-preproc",
-			"@oh-my-pi/pi-coding-agent/plan-mode/settings",
 			"@oh-my-pi/pi-coding-agent/config/registry",
 			"@oh-my-pi/pi-coding-agent/judgment/standalone",
 			"nativeJudgmentImageBounds",
 		],
-		tests: [
-			"src/main/bridge-judge-assist-stock.test.ts",
-			"src/main/bridge-auto-mode-stock.test.ts",
-			"src/main/bridge-auto-mode-prefetch-stock.test.ts",
-			"src/main/bridge-memory-judge-stock.test.ts",
-			"src/main/bridge-auto-mode-real.test.ts",
-		],
+		tests: ["src/main/bridge-judge-assist-stock.test.ts", "src/main/bridge-memory-judge-stock.test.ts"],
 	},
 	{
 		id: "B44",

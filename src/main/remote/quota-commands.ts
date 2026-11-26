@@ -52,10 +52,6 @@ export const MODEL_COMMAND_TYPES = [
 	"refresh_next_prompt",
 	// The automatic title (bridge modes/auto-title.ts): `/rename` without a title runs the cheap title model.
 	"regenerate_session_title",
-	// The automatic mode choice (bridge modes/auto-mode.ts): one cheap judge request on the host per typed prompt.
-	"auto_mode_decide",
-	// The same request asked while typing (the composer sends it for this computer's own tabs only).
-	"auto_mode_prefetch",
 	// Judge-model assists (bridge modes/judge-assist.ts): one judge request when a native judge resolves, else none.
 	"judge_preview_check",
 	// `ompdesk_compare` with criteria (bridge agent-control.ts): one judge request on the `advisor` role, else `slow`,
@@ -73,8 +69,6 @@ export const MODEL_COMMAND_TYPES = [
 export const CONDITIONAL_MODEL_COMMAND_TYPES = [
 	// `summarize: true` summarizes the abandoned branch (`navigateTree`).
 	"switch_leaf",
-	// Approving to execute or compact sends the plan prompt; a rejection with feedback sends it as a turn.
-	"plan_approval",
 	// An objective or a resume starts a goal turn; budgets, limits, pause and drop do not.
 	"set_goal",
 	// Start and resume run model turns; every other action (stop, pause, notes, ship queue) does not.
@@ -85,9 +79,6 @@ export const CONDITIONAL_MODEL_COMMAND_TYPES = [
 export const QUOTA_FREE_COMMAND_TYPES = [
 	// Judge-model assists: whether a native judge would answer (bridge modes/judge-assist.ts, stock `hasNativeJudge`); no model call.
 	"judge_available",
-	// The chip's undo and the end of the request an automatic mode was used for: leave the mode; no model.
-	"auto_mode_undo",
-	"auto_mode_end",
 	// An OMPdesk control tool's confirmation card: a stock extension-UI confirm, no model.
 	"agent_control_confirm",
 	"agent_control_note",
@@ -199,7 +190,6 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"get_omp_update",
 	"get_orphan_worktrees",
 	"get_saved_worktrees",
-	"get_plan_mode",
 	"get_plugin_detail",
 	"get_plugin_doctor",
 	"get_plugins",
@@ -386,10 +376,6 @@ export function commandUsesModel(command: RpcCommand): boolean {
 	switch (command.type) {
 		case "switch_leaf":
 			return command.summarize === true;
-		case "plan_approval":
-			return command.approved === true
-				? command.option !== "save"
-				: typeof command.feedback === "string" && command.feedback.trim() !== "";
 		case "set_autopilot":
 			return command.action === "start" || command.action === "resume";
 		case "set_goal":

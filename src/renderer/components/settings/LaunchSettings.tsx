@@ -329,14 +329,6 @@ export function LaunchProfileSection() {
 				label={t("settings.launch.noLsp")}
 				onCheckedChange={value => void update({ noLsp: value })}
 			/>
-			<SettingsSwitchRow
-				checked={profile.planYolo === true}
-				description={t("settings.launch.planYoloDesc")}
-				disabled={locked}
-				id="settings-workspace-launch-planYolo"
-				label={t("settings.launch.planYolo")}
-				onCheckedChange={value => void update({ planYolo: value })}
-			/>
 			<SettingsRow
 				control={textField("profile", false)}
 				htmlFor={ids.profile}

@@ -493,7 +493,6 @@ class FakeHost implements AgentControlHost {
 				return ok({
 					isStreaming: tab.busy,
 					todoPhases: tab.todos ?? [],
-					planModeEnabled: false,
 					...(tab.model ? { model: tab.model } : {}),
 				});
 			case "get_session_stats":
@@ -815,7 +814,7 @@ describe("ompdesk_session_open", () => {
 		const result = await control(host).run("main0001", T.open, {
 			sessions: [
 				{ message: "part one", worktree: true },
-				{ message: "part two", folder: "/other", model: "claude-x", mode: "plan" },
+				{ message: "part two", folder: "/other", model: "claude-x", mode: "goal" },
 			],
 		});
 		expect(result.isError).toBe(false);
@@ -827,7 +826,7 @@ describe("ompdesk_session_open", () => {
 		expect(prompts(host, one as string)[0]).toBe(
 			wrapAgentMessage('part one\n\n[ompdesk dispatch d1: report with ompdesk_report, dispatch "d1"]', "Boss"),
 		);
-		expect(host.sent.some(entry => entry.tabId === two && entry.command.type === "set_plan_mode")).toBe(true);
+		expect(host.sent.some(entry => entry.tabId === two && entry.command.type === "set_goal")).toBe(true);
 		expect(host.sent.some(entry => entry.tabId === two && entry.command.type === "set_model")).toBe(true);
 		// Each child, never the caller, is marked a worker before its first prompt (its bridge adds the contract).
 		const workers = host.sent.filter(entry => entry.command.type === "agent_control_worker");
@@ -838,6 +837,17 @@ describe("ompdesk_session_open", () => {
 		const firstPrompt = host.sent.findIndex(entry => entry.tabId === one && entry.command.type === "prompt");
 		const mark = host.sent.findIndex(entry => entry.tabId === one && entry.command.type === "agent_control_worker");
 		expect(mark).toBeLessThan(firstPrompt);
+	});
+
+	it("refuses mode plan before anything opens, and names goal or a plain message instead", async () => {
+		const host = new FakeHost({ tabId: "main0001", title: "Boss" });
+		const result = await control(host).run("main0001", T.open, {
+			sessions: [{ message: "part one" }, { message: "part two", mode: "plan" }],
+		});
+		expect(result.isError).toBe(true);
+		expect(result.text).toContain('Plan mode was removed from OMPdesk: open the session with mode "goal"');
+		expect(result.text).toContain("or with no mode (a plain first message)");
+		expect(host.spawned).toHaveLength(0);
 	});
 
 	it("opens on the model a role runs on now (task, smol, …) and refuses an empty role by name", async () => {
@@ -951,7 +961,6 @@ describe("ompdesk_session_open", () => {
 	it.each([
 		["agent_control_worker", "sidecar_not_connected", "Sidecar not connected", { message: "go" }],
 		["set_model", "sidecar_not_ready", "Sidecar not ready (error)", { message: "go", model: "claude-x" }],
-		["set_plan_mode", "sidecar_not_ready", "Sidecar not ready (error)", { message: "go", mode: "plan" }],
 		["prompt", "sidecar_not_ready", "Sidecar not ready (error)", { message: "go" }],
 		["set_goal", "sidecar_not_ready", "Sidecar not ready (error)", { message: "go", mode: "goal" }],
 	] as const)(
@@ -1633,47 +1642,6 @@ describe("ompdesk_session_answer", () => {
 		expect((await control(host).run("main0001", T.answer, { session: "work0002", choice: "x" })).text).toMatch(
 			/not waiting/,
 		);
-	});
-
-	const planned = { title: "Share over Tailscale", planFilePath: "local://PLAN.md" };
-
-	it("approves a pending plan through plan_approval when agents may approve, and marks the answer", async () => {
-		const host = new FakeHost({ tabId: "main0001", title: "Boss" }, { tabId: "work0002", plan: planned });
-		const service = control(host);
-		const refused = await service.run("main0001", T.answer, { session: "work0002", approve: true });
-		expect(refused.text).toContain("사용자 승인이 필요해요");
-		expect(host.sent.some(entry => entry.command.type === "plan_approval")).toBe(false);
-		host.approve = true;
-		const done = await service.run("main0001", T.answer, {
-			session: "work0002",
-			approve: true,
-			choice: "keep_context",
-		});
-		expect(done.isError).toBe(false);
-		expect(host.sent.find(entry => entry.command.type === "plan_approval")).toEqual({
-			tabId: "work0002",
-			command: { type: "plan_approval", approved: true, option: "keep_context" },
-		});
-		expect(host.marked).toContain("Boss");
-	});
-
-	it("rejects a pending plan with feedback whatever the approve setting, and refuses an unknown option", async () => {
-		const host = new FakeHost({ tabId: "main0001" }, { tabId: "work0002", plan: planned });
-		const service = control(host);
-		expect(
-			(await service.run("main0001", T.answer, { session: "work0002", approve: true, choice: "save" })).isError,
-		).toBe(true);
-		const rejected = await service.run("main0001", T.answer, {
-			session: "work0002",
-			approve: false,
-			text: "Split it in two",
-		});
-		expect(rejected.isError).toBe(false);
-		expect(host.sent.find(entry => entry.command.type === "plan_approval")?.command).toEqual({
-			type: "plan_approval",
-			approved: false,
-			feedback: "Split it in two",
-		});
 	});
 });
 
@@ -3286,24 +3254,6 @@ describe("autoClose: opened sessions whose work landed", () => {
 		expect(host.deletedStored).toEqual([{ path: "/s/kid.jsonl", device: undefined }]);
 		// Gone for good: the id names nothing any more.
 		expect((await service.run("main0001", T.read, { session: child.tabId })).isError).toBe(true);
-	});
-
-	it("treats a plan awaiting approval as waiting: listed, a wait returns, no auto-close, no review", async () => {
-		const plan = { title: "Share over Tailscale", planFilePath: "local://PLAN.md" };
-		const { host, service, child } = await finishedChild({
-			worktree: true,
-			patch: { plan, lastRun: { id: 1, stopReason: "aborted" }, last: "Plan written." },
-		});
-		const listed = await service.run("main0001", T.list, { status: "waiting" });
-		expect(listed.text).toContain(child.tabId);
-		expect(listed.text).toContain('waiting for plan approval: "Share over Tailscale" (local://PLAN.md)');
-		const waited = await service.run("main0001", T.result, { session: child.tabId, wait: true });
-		expect(waited.text).toMatch(/needs an answer/);
-		await service.autoClose("main0001");
-		expect(closes(host)).toHaveLength(0);
-		const [item] = await service.reviewItems("main0001");
-		expect(item).toMatchObject({ state: "running", waiting: true });
-		expect(item?.failed).toBeUndefined();
 	});
 
 	it("asks a child that ended its turn without a verdict or report to report once, then tells its opener once", async () => {
@@ -5891,16 +5841,12 @@ describe("answer matrix", () => {
 			{ choice: "A" },
 			{ error: /`answers`.*"q1".*"q2"/ },
 		],
-		["plan · nothing", null, {}, { error: /approve: true.*approve: false/ }],
-		["plan · execute", null, { choice: "execute", approve: true }, { error: /사용자 승인이 필요해요/ }],
 	];
 
 	it.each(rows)("%s", async (_name, ask, args, want) => {
 		const host = new FakeHost(
 			{ tabId: "main0001", title: "Boss" },
-			ask
-				? { tabId: "wait0002", title: "Asker", asks: [ask] }
-				: { tabId: "wait0002", title: "Planner", plan: { title: "Plan", planFilePath: "/p.md" } },
+			{ tabId: "wait0002", title: "Asker", asks: ask ? [ask] : [] },
 		);
 		const outcome = await control(host).run("main0001", T.answer, { session: "wait0002", ...args });
 		if (want.error) {

@@ -424,7 +424,6 @@ for (const [language, theme] of VARIANTS) {
 				["pr.center", "Alt+p"],
 				["tools.expand", "Control+o"],
 				["thinking.toggle", "Control+t"],
-				["plan.toggle", "Alt+Shift+p"],
 				["retry", "Alt+r"],
 				["dequeue", "Alt+ArrowUp"],
 				["model.cycleForward", "Control+p"],

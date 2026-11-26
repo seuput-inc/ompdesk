@@ -243,12 +243,10 @@ describe("start", () => {
 		expect(nextTab).toBe(0);
 	});
 
-	it("starts from a tab in Plan mode or with its own Goal: the run is a new tab, the source tab is left as it is", async () => {
-		world.plan = true;
+	it("starts from a tab with its own Goal: the run is a new tab, the source tab is left as it is", async () => {
 		world.goal = { enabled: true, status: "active" };
 		const { response } = await start();
 		expect(response.success, JSON.stringify(response)).toBe(true);
-		expect(world.stock("parent", "set_plan_mode")).toEqual([]);
 		expect(world.stock("parent", "set_goal")).toEqual([]);
 	});
 

@@ -6,7 +6,7 @@
  * the `peek` (progress, current item) in place of the count badge, so a
  * collapsed card costs a single row above the composer. `focusDockCard(id)`
  * deep links expand the card and flash a ring — that is how command-palette
- * entries (todo edit, plan-review) land here now that the workspace drawer no
+ * entries (todo edit) land here now that the workspace drawer no
  * longer carries these surfaces.
  */
 

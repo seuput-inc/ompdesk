@@ -501,7 +501,6 @@ export interface AppFacts {
 	failure?: { tool: string; command?: string; exitCode?: number; message?: string };
 	/** Files changed this turn, in order, deduplicated. */
 	changedFiles?: string[];
-	plan?: { title?: string };
 	todos?: { done: number; total: number; inProgress?: string; next?: string };
 	/** A question the agent asked this turn and the user's answer (the turn went on after it). */
 	answered?: { question?: string; answer: string };
@@ -558,7 +557,6 @@ export function buildAppState(facts: AppFacts): string {
 			`files-changed: ${facts.changedFiles.length} (${shown.join(", ")}${more > 0 ? `, +${more} more` : ""})`,
 		);
 	}
-	if (facts.plan) lines.push(`plan: open${facts.plan.title ? ` — ${clip(facts.plan.title)}` : ""}`);
 	if (facts.todos && facts.todos.total > 0 && facts.todos.done < facts.todos.total) {
 		const { done, total, inProgress, next } = facts.todos;
 		const detail = [
@@ -647,7 +645,6 @@ export function isTestCommand(command: string): boolean {
 
 /** What the session tells beyond its messages (stock accessors the bridge reads). */
 export interface SessionExtras {
-	plan?: { enabled: boolean; title?: string };
 	/** Todo phases as stock keeps them. */
 	todoPhases?: ReadonlyArray<{ tasks: ReadonlyArray<{ content: string; status: string }> }>;
 	goal?: { objective: string; status?: string; enabled?: boolean };
@@ -772,7 +769,6 @@ export function extractFacts(messages: readonly unknown[], extras: SessionExtras
 	if (changed.size > 0) facts.changedFiles = [...changed];
 	if (lastTest) facts.tests = lastTest;
 	if (userBash) facts.userBash = userBash;
-	if (extras.plan?.enabled) facts.plan = { ...(extras.plan.title ? { title: extras.plan.title } : {}) };
 	if (extras.todoPhases) {
 		const tasks = extras.todoPhases.flatMap(phase => phase.tasks);
 		const open = tasks.filter(task => task.status !== "completed" && task.status !== "abandoned");
