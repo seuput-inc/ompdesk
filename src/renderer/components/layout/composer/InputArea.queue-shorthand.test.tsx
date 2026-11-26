@@ -1856,7 +1856,8 @@ describe("InputArea dictation", () => {
 		expect(document.querySelector("button[data-dictation-send]")).toBeNull();
 		opened.resolve(new FakeStream());
 		await flush();
-		expect(phase()).toBe("recording");
+		// The take's capture loads while the microphone opens (`lib/dictation-live.ts`).
+		await vi.waitFor(() => expect(phase()).toBe("recording"));
 		// The microphone hears a tenth of a second (the take is transcribed whole: this omp has no live stream).
 		mic.context().feed(new Float32Array(1600).fill(0.1));
 	}
@@ -2562,6 +2563,7 @@ describe("InputArea composer audit", () => {
 			if (!mic) throw new Error("mic button missing");
 			await click(mic);
 			await flush();
+			await vi.waitFor(() => expect(fakeMic.context().processor).not.toBeNull());
 			fakeMic.context().feed(new Float32Array(1600).fill(0.1));
 			await act(async () => useComposerStore.getState().setImages([image("AQ==")]));
 			const stopAndSend = document.querySelector("button[data-dictation-send]") as unknown as TestElement | null;
@@ -2581,6 +2583,7 @@ describe("InputArea composer audit", () => {
 			Object.assign(window.omp.rpc, { transcribeAudio });
 			const take = recordAndTranscribe();
 			await flush();
+			await vi.waitFor(() => expect(fakeMic.context().processor).not.toBeNull());
 			fakeMic.context().feed(new Float32Array(1600).fill(0.1));
 			await act(async () => root.render(<div />));
 			stopVoiceRecording();
