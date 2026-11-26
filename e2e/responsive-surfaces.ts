@@ -1668,9 +1668,16 @@ export const SURFACES: readonly Surface[] = [
 		},
 		ready: '[data-transcript-find] [data-find-status]:text-matches("^1/1$")',
 		settle: 400,
-		// Parity only: a real window's ⌘F over the work session.
+		// Parity only: a real window's ⌘F over the work session. The find left the window at the first turn: `after`
+		// closes the bar and goes back to the end, where the surfaces after it expect the work session.
 		when: () => false,
-		parity: { session: "work", after: closeOverlay },
+		parity: {
+			session: "work",
+			after: async page => {
+				await closeOverlay(page);
+				await showTranscriptEnd(page);
+			},
+		},
 	},
 	// The turn rail in the transcript's left gutter (ConversationNavigator). A phone's page does not draw it (its CSS
 	// hides it below a wide workspace), so there the capture is the transcript alone; the ticks are mounted all the same.
