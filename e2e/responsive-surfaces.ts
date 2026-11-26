@@ -367,6 +367,40 @@ async function openNewTaskSheet(page: Page, look: Look): Promise<void> {
 	await palette.locator('[data-command-name="new-worktree-tab"]').click();
 }
 
+/**
+ * A new task that fails at its worktree's create, from the sheet (worktree on, a typed name, a base ref no repository
+ * has): its sidebar row stays, failed, with Retry and Close, and nothing was made (no fetch, no name step, no session).
+ */
+async function failNewTask(page: Page, look: Look): Promise<void> {
+	await openNewTaskSheet(page, look);
+	const sheet = page.locator("[role=dialog]:has([data-new-task-sheet])");
+	await sheet.locator("[data-new-task-project]").waitFor({ timeout: 15_000 });
+	await sheet.locator("input[maxlength='41']").fill("parity missing base");
+	await sheet.locator("[data-worktree-base] label").nth(2).click();
+	await sheet.locator("[data-worktree-base] input[list]").fill("no-such-base");
+	await sheet.locator("button[type=submit]").click();
+	await sheet.waitFor({ state: "detached", timeout: 15_000 });
+	await openDrawer(page, look);
+}
+
+/** Closes every failed new task row `failNewTask` left (each row's Close; a phone's drawer is still open). */
+async function dismissNewTasks(page: Page): Promise<void> {
+	for (const close of await page.locator("[data-new-task-close]:visible").all()) await close.click();
+	await page.locator("[data-new-task]").first().waitFor({ state: "detached", timeout: 10_000 });
+}
+
+/** Agents › GitHub › Issues with the parity sheet's one issue open (B's `gh`, e2e/parity.e2e.ts `writeParityGh`). */
+async function openIssueDetail(page: Page): Promise<void> {
+	await openPageTab(page, "agents", "github");
+	await page
+		.locator("[data-github-center] li")
+		.filter({ hasText: "Closed PRs keep their session row" })
+		.locator("button")
+		.first()
+		.click({ timeout: 15_000 });
+	await page.locator("[data-github-issue-start]").waitFor({ state: "visible", timeout: 15_000 });
+}
+
 /** Put a prompt of the web host's sheet layer (`?host=1` pages) in front of the person. */
 async function hostPrompt(page: Page, prompt: Record<string, unknown>): Promise<void> {
 	await page.evaluate(prompt => {
@@ -2305,6 +2339,30 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work" },
 	},
 	{
+		id: "agents-issue-detail",
+		area: "B",
+		title: "Agents › GitHub › an issue's detail, its Start a task button first",
+		open: openIssueDetail,
+		ready: "[data-github-issue] [data-github-issue-start]",
+		settle: 900,
+		// Parity only: the issue comes from B's `gh`, which the harness page has not.
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "agents-issue-start",
+		area: "B",
+		title: "The new task sheet an issue's Start a task opens: its branch name and prompt filled from the issue",
+		open: async page => {
+			await openIssueDetail(page);
+			await page.locator("[data-github-issue-start]").click();
+		},
+		ready: "[role=dialog] [data-new-task-sheet] [data-new-task-project]",
+		settle: 700,
+		when: () => false,
+		parity: { session: "work", after: closeOverlay },
+	},
+	{
 		id: "stats",
 		area: "B",
 		title: "Insights › Stats (this session)",
@@ -2501,6 +2559,16 @@ export const SURFACES: readonly Surface[] = [
 		},
 		ready: "[role='menu'] [role='menuitem']",
 		parity: { session: "work", after: closeOverlay },
+	},
+	{
+		id: "sidebar-new-task-row",
+		area: "A",
+		title: "A new task's sidebar row after its worktree's create failed: the reason, Retry and Close",
+		open: failNewTask,
+		ready: "[data-new-task][data-new-task-state='failed']",
+		// Parity only: the harness page has no repository to cut a worktree from.
+		when: () => false,
+		parity: { session: "work", after: dismissNewTasks },
 	},
 	{
 		id: "sidebar-project-menu",

@@ -29,8 +29,8 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd,
 
 /**
  * B's `gh`: signed in, the project's repository `o/r` with one open PR whose detail has a file, a passing check and an
- * open review thread, one open issue and one project (`agents-prs`, `agents-pr-detail`, `agents-github`,
- * `agents-github-projects`). The project's own branch
+ * open review thread, one open issue with its detail and one project (`agents-prs`, `agents-pr-detail`, `agents-github`,
+ * `agents-github-projects`, `agents-issue-detail`, `agents-issue-start`). The project's own branch
  * has no PR (`--head`), so the sidebar rows show none and the Changes panel offers to link one.
  */
 async function writeParityGh(bin: string): Promise<void> {
@@ -121,6 +121,7 @@ async function writeParityGh(bin: string): Promise<void> {
 			`"pr view"*comments,reviews*) cat "${bin}/comments.json" ;;`,
 			`"pr view"*) cat "${bin}/view.json" ;;`,
 			`"pr diff"*) cat "${bin}/pr.diff" ;;`,
+			`"issue view"*) echo '{"number":12,"title":"Closed PRs keep their session row","state":"OPEN","author":{"login":"reviewer"},"labels":[{"name":"bug"}],"comments":[],"updatedAt":"2026-11-20T09:00:00Z","url":"https://github.com/o/r/issues/12","body":"A session whose pull request closed still shows the PR beside its row."}' ;;`,
 			`"issue list"*) echo '[{"number":12,"title":"Closed PRs keep their session row","state":"OPEN","author":{"login":"reviewer"},"labels":[{"name":"bug"}],"comments":[],"updatedAt":"2026-11-20T09:00:00Z","url":"https://github.com/o/r/issues/12"}]' ;;`,
 			`"label list"*|"release list"*|"run list"*|"workflow list"*|"repo list"*) echo '[]' ;;`,
 			"*) exit 1 ;;",
