@@ -127,6 +127,7 @@ import { type PanelTab, useUiStore } from "../../../stores/ui";
 import { startInstall, useInstallOffered } from "../../../web/install-ui";
 import { openBotDialog } from "../../bots/bot-launch";
 import { type BotChatFacts, botFacts, botMatches } from "../../bots/bot-view";
+import { RemoteBotChats } from "../../bots/RemoteBotChats";
 import {
 	anchorFromEvent,
 	Badge,
@@ -2555,8 +2556,8 @@ export function Sidebar() {
 	};
 
 	// The Bots section's rows: each bot with what its chats' rows say (`botFacts`) and those rows; a filter keeps a bot
-	// its name or purpose matches (all its chats) or whose chats match (only those). A paired host's bot lists no chat
-	// rows here: its chats are that host's sessions, under its own section.
+	// its name or purpose matches (all its chats) or whose chats match (only those). A paired host's bot folds its chats
+	// (the host's sessions in its folder, which the host's section leaves out of its projects) under its row.
 	const botEntries: SidebarBotEntry[] = botsShown
 		? bots.flatMap(bot => {
 				const chatsOf = (groups: typeof rows.groups) =>
@@ -2564,7 +2565,7 @@ export function Sidebar() {
 				const all = chatsOf(rows.allGroups);
 				const byName = !query || botMatches(bot, query);
 				const shown = byName ? all : chatsOf(rows.groups);
-				if (!byName && shown.length === 0) return [];
+				if (!byName && (bot.device || shown.length === 0)) return [];
 				let current = false;
 				const chats: BotChatFacts[] = all.map(session => {
 					const state = sessionRowState(session);
@@ -2588,8 +2589,12 @@ export function Sidebar() {
 					{
 						bot,
 						facts: botFacts(bot, chats, needing),
-						chats: shown.map(session => renderSessionRow(session, true)),
-						chatCount: shown.length,
+						chats: bot.device ? (
+							<RemoteBotChats bot={bot} />
+						) : (
+							shown.map(session => renderSessionRow(session, true))
+						),
+						chatCount: bot.device ? bot.sessions.length : shown.length,
 						current,
 					},
 				];

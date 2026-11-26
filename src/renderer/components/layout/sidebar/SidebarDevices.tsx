@@ -42,6 +42,7 @@ import {
 import { splitTabIds } from "../../../../shared/split-layout";
 import { useSessionList } from "../../../hooks/use-session-list";
 import { useShellInput } from "../../../hooks/use-shell-mode";
+import { useBotsAvailable } from "../../../lib/bots-source";
 import { DEVICE_COLORS, type DeviceColorChoice, deviceColorOf } from "../../../lib/device-color";
 import { saveDiagnosticBundle } from "../../../lib/diagnostic-bundle";
 import { basename, copyText, formatClock } from "../../../lib/format";
@@ -61,6 +62,7 @@ import { deviceGroupKey, LOCAL_DEVICE } from "../../../lib/sidebar-memory";
 import { tabSignalPresentation } from "../../../lib/tab-signal";
 import { pickWorkspaceDirectory } from "../../../lib/workspace-dirs";
 import { useAgentReviewStore } from "../../../stores/agent-review";
+import { useBotsStore } from "../../../stores/bots";
 import { type BranchRow, branchPrOf, branchPrTone, useBranchPrs, watchBranchPrs } from "../../../stores/branch-prs";
 import { summariesOf, useHostedSessionsStore, useSummaryMap } from "../../../stores/hosted-sessions";
 import { pickRemoteDirectory, useTailscaleHint } from "../../../stores/remote";
@@ -664,7 +666,24 @@ function DeviceSessions({
 	// While the pointer is on the sidebar the host's rows keep their places (`sidebar-hold.ts`), as this computer's do.
 	const ownOrder = useMemo(() => JSON.stringify([layout, query]), [layout, query]);
 	const rows = useHeld(tree.rows, holdRows, ownOrder);
-	const { chats, groups, children: familyChildrenOf, archived: archivedRows, folderMissing: missingFolders } = rows;
+	const {
+		chats,
+		groups: folderGroups,
+		children: familyChildrenOf,
+		archived: archivedRows,
+		folderMissing: missingFolders,
+	} = rows;
+	// The host's bots' folders are no projects here, as this computer's own are not: their chats list under the bot in
+	// the Bots section (orca-bots-remote). With the Bots section hidden they stay projects, as on the host.
+	const botsAvailable = useBotsAvailable();
+	const botsNavHidden = useSidebarFolds(s => s.navHidden.bots === true);
+	const botsShown = botsAvailable && !botsNavHidden;
+	const hostBots = useBotsStore(s => s.state.bots);
+	const groups = useMemo(() => {
+		if (!botsShown) return folderGroups;
+		const folders = new Set(hostBots.filter(bot => bot.device === host.deviceId).map(bot => bot.folder));
+		return folders.size === 0 ? folderGroups : folderGroups.filter(group => !folders.has(group.cwd));
+	}, [botsShown, folderGroups, hostBots, host.deviceId]);
 	// The host's tabs on paired devices its sessions opened, by the row they nest under.
 	const remoteChildrenOf = useMemo(() => {
 		const byRoot = new Map<string, SessionTab[]>();

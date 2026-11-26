@@ -28,7 +28,7 @@ async function until(ready: () => Promise<boolean>, what: string): Promise<void>
 }
 
 /** A: makes the bot and, from a chat in its folder (its home), an item that asks its owner which day. */
-async function botWithQuestion(a: Page): Promise<{ id: string; home: string }> {
+async function botWithQuestion(a: Page): Promise<{ id: string; home: string; folder: string }> {
 	const made = await a.evaluate(() =>
 		window.omp.bots.command({ action: "create", name: "Courier", purpose: "Carries notes between computers." }),
 	);
@@ -55,7 +55,7 @@ async function botWithQuestion(a: Page): Promise<{ id: string; home: string }> {
 		return home !== "" && state.items.some(item => item.bot === bot.id && item.status === "needs_you");
 	}, "the bot's question never arrived");
 	await a.evaluate(id => window.omp.tabs.close(id), tabId);
-	return { id: bot.id, home };
+	return { id: bot.id, home, folder: bot.folder };
 }
 
 test("a bot made on one computer is listed, chatted with and answered on its paired computer, and reads offline", async () => {
@@ -92,6 +92,10 @@ test("a bot made on one computer is listed, chatted with and answered on its pai
 		}, "B never listed A's bot");
 		const row = b.locator(`[data-bot-entry="${courier.id}"]`);
 		await expect(row.locator(`[data-bot-owner="${deviceId}"]`)).toHaveText("Studio");
+		// Its chats fold under its row, never as a project of A's section (as this computer's own bots' chats).
+		await row.locator(`[data-bot-fold="${courier.id}"]`).click();
+		await expect(row.locator(`[data-bot-chats="${courier.id}"] [data-bot-chat="home"]`)).toHaveCount(1);
+		await expect(b.locator(`[data-device-group=${JSON.stringify(courier.folder)}]`)).toHaveCount(0);
 		await b.screenshot({ path: "test-results/bots-remote-listed.png", scale: "css", animations: "disabled" });
 
 		// Its chat opens on A, as a tab of A on the bot's home chat.
