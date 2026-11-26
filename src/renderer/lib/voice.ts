@@ -16,90 +16,17 @@
  * another is still synthesizing or playing is DROPPED (documented choice;
  * the TUI vocalizer chains utterances, the GUI keeps the transport simple).
  */
-import type { SttStreamStart, SttStreamWords } from "../../../resources/gui-bridge/stt-language-contracts";
-import type { SynthesizeSpeechResult, TranscribeAudioResult } from "../../shared/rpc-types";
+import type { SttStreamStart } from "../../../resources/gui-bridge/stt-language-contracts";
+import type { SynthesizeSpeechResult } from "../../shared/rpc-types";
 import { useMessagesStore } from "../stores/messages";
 import { useSessionStore } from "../stores/session";
 import { useSettingsStore } from "../stores/settings";
 import { toastError } from "../stores/toast";
-import {
-	captureContext,
-	captureMicrophone,
-	chosenMicrophone,
-	METER_BARS,
-	openMicrophone,
-	STT_SAMPLE_RATE,
-} from "./dictation-capture";
+import { captureContext, chosenMicrophone, METER_BARS, openMicrophone } from "./dictation-capture";
 import { translate } from "./i18n";
 import { messageText } from "./messages";
 
 export { METER_BARS };
-
-const WAV_HEADER_BYTES = 44;
-
-// ---------------------------------------------------------------------------
-// WAV (PCM16 mono) writer — mirrors encodeWav in the agent's tts/wav.ts; the
-// GUI has no runtime dependency on the agent package, so keep these in sync.
-// ---------------------------------------------------------------------------
-
-/** Float samples as little-endian PCM16 into `view` from `offset`. */
-function writePcm16(samples: Float32Array, view: DataView, offset: number): void {
-	for (let i = 0; i < samples.length; i += 1) {
-		const sample = samples[i]!;
-		const clamped = Math.max(-1, Math.min(1, sample));
-		view.setInt16(offset + i * 2, Math.round(clamped < 0 ? clamped * 32_768 : clamped * 32_767), true);
-	}
-}
-
-function encodeWavPcm16(samples: Float32Array, sampleRate: number): Uint8Array {
-	const dataBytes = samples.length * 2;
-	const buffer = new ArrayBuffer(WAV_HEADER_BYTES + dataBytes);
-	const view = new DataView(buffer);
-	const writeAscii = (offset: number, text: string): void => {
-		for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
-	};
-	writeAscii(0, "RIFF");
-	view.setUint32(4, WAV_HEADER_BYTES - 8 + dataBytes, true);
-	writeAscii(8, "WAVE");
-	writeAscii(12, "fmt ");
-	view.setUint32(16, 16, true);
-	view.setUint16(20, 1, true); // PCM
-	view.setUint16(22, 1, true); // mono
-	view.setUint32(24, sampleRate, true);
-	view.setUint32(28, sampleRate * 2, true); // byte rate
-	view.setUint16(32, 2, true); // block align
-	view.setUint16(34, 16, true); // bits per sample
-	writeAscii(36, "data");
-	view.setUint32(40, dataBytes, true);
-	writePcm16(samples, view, WAV_HEADER_BYTES);
-	return new Uint8Array(buffer);
-}
-
-/** A live take's audio as `stt_stream_audio` takes it: PCM16 without a header. */
-function pcm16Bytes(samples: Float32Array): Uint8Array {
-	const buffer = new ArrayBuffer(samples.length * 2);
-	writePcm16(samples, new DataView(buffer), 0);
-	return new Uint8Array(buffer);
-}
-
-function joinSamples(chunks: readonly Float32Array[]): Float32Array {
-	const joined = new Float32Array(chunks.reduce((sum, chunk) => sum + chunk.length, 0));
-	let offset = 0;
-	for (const chunk of chunks) {
-		joined.set(chunk, offset);
-		offset += chunk.length;
-	}
-	return joined;
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-	let binary = "";
-	const chunkSize = 0x8000;
-	for (let i = 0; i < bytes.length; i += chunkSize) {
-		binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-	}
-	return btoa(binary);
-}
 
 function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
 	const binary = atob(base64);
@@ -126,7 +53,7 @@ async function readSetting(path: string): Promise<unknown> {
 // ---------------------------------------------------------------------------
 
 /** One take in flight: what a stop (with or without the tail) and a cancel do to it. */
-interface ActiveTake {
+export interface ActiveTake {
 	stop(withTail: boolean): void;
 	cancel(): void;
 }
@@ -169,8 +96,6 @@ export interface SpeechModelDownload {
 	percent: number;
 }
 
-/** How often a live take's audio goes to the stream (ms): the words keep up, and each send is a few KB. */
-const STREAM_SEND_MS = 250;
 /**
  * Capture goes on this long after a stop, so the word being finished reaches the recognizer (Orca's stop tail,
  * `use-audio-capture-stop-tail.ts:7-8`, 250 ms; here 300).
@@ -178,8 +103,6 @@ const STREAM_SEND_MS = 250;
 export const STOP_TAIL_MS = 300;
 /** A take nobody speaks into for this long ends by itself (Orca's `DEFAULT_STOP_AFTER_SILENCE_SECONDS`, 60). */
 export const SILENCE_STOP_MS = 60_000;
-/** The audio kept for Retry: ten minutes, as Orca's kept recording (`dictation-kept-recording.ts:12-13`). */
-const MAX_KEPT_SAMPLES = 10 * 60 * STT_SAMPLE_RATE;
 
 /** A take's audio, in memory only, so a failed transcription can be tried again. */
 export interface KeptRecording {
@@ -187,15 +110,6 @@ export interface KeptRecording {
 	samples: number;
 	/** False once audio past the cap was dropped: a retry would lose words. */
 	complete: boolean;
-}
-
-function keep(recording: KeptRecording, samples: Float32Array): void {
-	const room = MAX_KEPT_SAMPLES - recording.samples;
-	if (room < samples.length) recording.complete = false;
-	if (room <= 0) return;
-	const kept = samples.length > room ? samples.subarray(0, room) : samples;
-	recording.chunks.push(kept);
-	recording.samples += kept.length;
 }
 
 /** End the take in flight: capture goes on for {@link STOP_TAIL_MS}, then the take is transcribed. */
@@ -254,6 +168,11 @@ async function openStream(): Promise<string | null> {
 	}
 }
 
+/** Let a take's stream go (discarded, empty, or transcribed whole instead). */
+export function dropStream(id: string | null): void {
+	if (id) window.omp.rpc.sttStreamCancel(id).catch(() => {});
+}
+
 /**
  * Capture the chosen microphone until {@link stopVoiceRecording} fires (or nobody speaks for {@link SILENCE_STOP_MS}),
  * streaming the audio to stock's live session so `onWords` follows the speech, and resolve with the transcript.
@@ -267,14 +186,16 @@ export async function recordAndTranscribe(listener: DictationListener = {}): Pro
 	stopBeforeStart = false;
 	// Made now, inside the press that started the take: WebKit keeps a context made later suspended.
 	const context = captureContext();
-	// The stream opens while the mic does: a model still loading queues the first words in its worker.
+	// The stream opens, and the take's code loads, while the mic does.
 	const streamOpening = openStream();
+	const live = import("./dictation-live");
 	let stream: MediaStream;
+	let runTake: Awaited<typeof live>["runTake"];
 	try {
-		stream = await openMicrophone(await chosenMicrophone());
+		[stream, { runTake }] = await Promise.all([chosenMicrophone().then(openMicrophone), live]);
 	} catch (cause) {
 		void context.close();
-		void streamOpening.then(id => dropStream(id));
+		void streamOpening.then(dropStream);
 		return { error: cause instanceof Error ? cause.message : String(cause), failure: classifyMicError(cause) };
 	} finally {
 		startPending = false;
@@ -282,164 +203,28 @@ export async function recordAndTranscribe(listener: DictationListener = {}): Pro
 	if (cancelBeforeStart) {
 		for (const track of stream.getTracks()) track.stop();
 		void context.close();
-		void streamOpening.then(id => dropStream(id));
+		void streamOpening.then(dropStream);
 		return { error: "" };
 	}
-
-	const kept: KeptRecording = { chunks: [], samples: 0, complete: true };
-	let unsent: Float32Array[] = [];
-	let streamId: string | null = null;
-	/** The stream failed mid-take: the take is transcribed whole instead. */
-	let streamLost = false;
-	let sending: Promise<void> = Promise.resolve();
-	let endedBy: "silence" | undefined;
-	let cancelled = false;
-	const ended = Promise.withResolvers<void>();
-	/** The stop that ends capture: its tail timer, or null for one without a tail (silence). */
-	let tail: ReturnType<typeof setTimeout> | null | undefined;
-	const capture = captureMicrophone(
-		stream,
-		samples => {
-			keep(kept, samples);
-			if (!streamLost) unsent.push(samples);
+	return runTake(stream, context, listener, streamOpening, {
+		hold: take => {
+			activeTake = take;
 		},
-		listener.onLevels,
-		context,
-	);
-
-	const send = (): Promise<void> => {
-		sending = sending.then(async () => {
-			if (!streamId || streamLost || unsent.length === 0) return;
-			const audio = joinSamples(unsent);
-			unsent = [];
-			try {
-				const response = await window.omp.rpc.sttStreamAudio(streamId, bytesToBase64(pcm16Bytes(audio)));
-				if (!response.success) throw new Error(response.error);
-				const words = response.data as SttStreamWords;
-				listener.onWords?.({ text: words.text, partial: words.partial });
-				if (words.quietMs >= SILENCE_STOP_MS && !listener.isHolding?.()) {
-					endedBy = "silence";
-					take.stop(false);
-				}
-			} catch {
-				streamLost = true;
-				unsent = [];
-			}
-		});
-		return sending;
-	};
-	const sender = setInterval(() => void send(), STREAM_SEND_MS);
-	void streamOpening.then(id => {
-		if (cancelled) dropStream(id);
-		streamId = id;
-		// No stream: the take is transcribed whole from what is kept.
-		if (!id) {
-			streamLost = true;
-			unsent = [];
-		}
+		release: take => {
+			if (activeTake === take) activeTake = null;
+		},
+		stopFirst: stopBeforeStart,
 	});
-
-	const take: ActiveTake = {
-		stop: withTail => {
-			if (tail !== undefined) return;
-			if (!withTail) {
-				tail = null;
-				ended.resolve();
-				return;
-			}
-			tail = setTimeout(() => ended.resolve(), STOP_TAIL_MS);
-		},
-		cancel: () => {
-			cancelled = true;
-			clearTimeout(tail ?? undefined);
-			ended.resolve();
-		},
-	};
-	activeTake = take;
-	listener.onRecording?.();
-	if (stopBeforeStart) take.stop(true);
-	await ended.promise;
-	clearInterval(sender);
-	capture.close();
-	if (activeTake === take) activeTake = null;
-	const id = await streamOpening;
-	if (cancelled) {
-		dropStream(id);
-		return { error: "" };
-	}
-	if (kept.samples === 0) {
-		dropStream(id);
-		return { error: translate("voice.mic.empty"), failure: "empty" };
-	}
-	listener.onTranscribing?.();
-	await send();
-	if (id && !streamLost) {
-		try {
-			const response = await window.omp.rpc.sttStreamStop(id);
-			if (!response.success) return failed(response.error, classifyTranscribeError(response.error), kept);
-			return { ...heard(response.data), endedBy };
-		} catch (cause) {
-			return failed(cause instanceof Error ? cause.message : String(cause), "failed", kept);
-		}
-	}
-	dropStream(id);
-	const result = await transcribeKept(kept, listener.onPreparing);
-	return "text" in result ? { ...result, endedBy } : result;
-}
-
-function dropStream(id: string | null): void {
-	if (id) window.omp.rpc.sttStreamCancel(id).catch(() => {});
-}
-
-function heard(data: unknown): { text: string; language?: string } {
-	const result = data as TranscribeAudioResult | undefined;
-	return { text: result?.text ?? "", ...(result?.language ? { language: result.language } : {}) };
-}
-
-function failed(error: string, failure: DictationFailure, kept: KeptRecording): DictationResult {
-	return { error, failure, ...(kept.complete && kept.samples > 0 ? { kept } : {}) };
 }
 
 /** Transcribe a failed take's kept audio again, whole (Orca's Retry, `use-dictation-retry.ts`). */
-export function retryTranscription(kept: KeptRecording, listener: DictationListener = {}): Promise<DictationResult> {
-	listener.onTranscribing?.();
-	return transcribeKept(kept, listener.onPreparing);
-}
-
-/**
- * A take transcribed whole (`transcribe_audio`): it waits for the language's model to download, and meanwhile
- * `onPreparing` says how far it got (the prepare loop loads on the first wait, off the phone's first screen).
- */
-async function transcribeKept(
+export async function retryTranscription(
 	kept: KeptRecording,
-	onPreparing: DictationListener["onPreparing"],
+	listener: DictationListener = {},
 ): Promise<DictationResult> {
-	let transcribed = false;
-	if (onPreparing)
-		void import("./stt-prepare")
-			.then(({ prepareRecognition }) =>
-				prepareRecognition(
-					(language, percent) => {
-						if (!transcribed) onPreparing({ language, percent });
-					},
-					() => transcribed,
-				),
-			)
-			// Here, failed or unknown to this omp: nothing more to wait for but the pass itself.
-			.then(() => {
-				if (!transcribed) onPreparing(null);
-			})
-			.catch(() => {});
-	try {
-		const wav = encodeWavPcm16(joinSamples(kept.chunks), STT_SAMPLE_RATE);
-		const response = await window.omp.rpc.transcribeAudio(bytesToBase64(wav), "audio/wav");
-		if (!response.success) return failed(response.error, classifyTranscribeError(response.error), kept);
-		return heard(response.data);
-	} catch (cause) {
-		return failed(cause instanceof Error ? cause.message : String(cause), "failed", kept);
-	} finally {
-		transcribed = true;
-	}
+	listener.onTranscribing?.();
+	const { transcribeKept } = await import("./dictation-live");
+	return transcribeKept(kept, listener.onPreparing);
 }
 
 // ---------------------------------------------------------------------------

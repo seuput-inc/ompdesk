@@ -8,7 +8,7 @@ import {
 	SPECTRUM_LEVEL,
 	uninstallFakeMic,
 } from "../test-support/dictation";
-import { resamplerTo16k } from "./dictation-capture";
+import { resamplerTo16k } from "./dictation-live";
 import { translate } from "./i18n";
 import {
 	cancelVoiceRecording,

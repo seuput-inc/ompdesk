@@ -11,7 +11,6 @@ import { TabSwitcher, useTabSwitcherStore } from "./components/dialogs/TabSwitch
 import { WebDeviceNotice } from "./components/dialogs/WebDeviceNotice";
 import { WebPairingDialog } from "./components/dialogs/WebPairingDialog";
 import { WorktreeLifecycleDialog } from "./components/dialogs/WorktreeLifecycleDialog";
-import { DictationHost } from "./components/dictation/DictationHost";
 import { AppShell } from "./components/layout/AppShell";
 import { DesktopSlotIndicator } from "./components/layout/DesktopSlotIndicator";
 import { FirstRunGate } from "./components/onboarding/FirstRunGate";
@@ -89,6 +88,7 @@ import { usePreviewVisualEvents } from "./stores/preview-visuals";
 import { useRemoteStateSync } from "./stores/remote";
 import { useSessionStore } from "./stores/session";
 import { focusedRuntimeTabId } from "./stores/session-runtime-context";
+import { useSettingsStore } from "./stores/settings";
 import { steppingFromTabId, useActiveTabKind, useSessionTabs, useTabsStore, visibleTabIds } from "./stores/tabs";
 import { toast, toastError } from "./stores/toast";
 import { isSidebarDrawerMode, migrateDefaultPanelTab, useUiStore } from "./stores/ui";
@@ -118,6 +118,10 @@ const ThemePickerDialog = lazyChunk(() =>
 );
 const QuickTerminal = lazyChunk(() =>
 	import("./components/layout/QuickTerminal").then(m => ({ default: m.QuickTerminal })),
+);
+// The `voice.dictate` key and dictation outside the composer: loaded once dictation is on, off the phone's first screen.
+const DictationHost = lazyChunk(() =>
+	import("./components/dictation/DictationHost").then(m => ({ default: m.DictationHost })),
 );
 
 function FocusedSessionEffects() {
@@ -482,6 +486,7 @@ export function App() {
 	// Defaults resolve for the renderer's platform (⌘ → ⌃ on Windows).
 	// The memo recomputes only when the overrides object identity changes.
 	const keymapOverrides = useUiStore(s => s.keymapOverrides);
+	const sttEnabled = useSettingsStore(s => s.sttEnabled);
 	const keymap = useMemo(() => compileKeymap(KEYMAP_ACTIONS, keymapOverrides), [keymapOverrides]);
 
 	// Boot hydration of user keybinding overrides (prefs key "keymapOverrides").
@@ -1004,7 +1009,11 @@ export function App() {
 			</div>
 			<SetupTakeoverHost />
 			<ToastStack />
-			<DictationHost />
+			{sttEnabled ? (
+				<Suspense fallback={null}>
+					<DictationHost />
+				</Suspense>
+			) : null}
 		</div>
 	);
 	return <FocusedRuntimeProvider tabId={activeTabId}>{surface}</FocusedRuntimeProvider>;

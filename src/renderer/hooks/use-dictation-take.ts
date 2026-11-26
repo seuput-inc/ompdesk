@@ -7,7 +7,6 @@
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import type { DictationPhase } from "../components/layout/composer/DictationOverlay";
 import { DictationPress } from "../lib/dictation-press";
-import { polishDictation } from "../lib/dictation-text";
 import { translate } from "../lib/i18n";
 import { isImeKeyEvent } from "../lib/ime";
 import {
@@ -141,6 +140,8 @@ export function useDictationTake({
 			// Still "Transcribing…" while the words are tidied (and, when on, cleaned): nothing lands meanwhile.
 			const skip = new AbortController();
 			polishing.current = skip;
+			// Loaded when a take first lands: off the phone's first screen.
+			const { polishDictation } = await import("../lib/dictation-text");
 			const text = await polishDictation(result.text.trim(), result.language, skip.signal);
 			polishing.current = null;
 			if (!mountedRef.current) return;

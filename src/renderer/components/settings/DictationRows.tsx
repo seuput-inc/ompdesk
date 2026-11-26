@@ -5,14 +5,8 @@
  * cleanup on a small model. Shown while dictation is on.
  */
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import {
-	captureContext,
-	captureMicrophone,
-	listMicrophones,
-	METER_BARS,
-	type MicrophoneCapture,
-	openMicrophone,
-} from "../../lib/dictation-capture";
+import { captureContext, METER_BARS, openMicrophone } from "../../lib/dictation-capture";
+import { captureMicrophone, listMicrophones, type MicrophoneCapture } from "../../lib/dictation-live";
 import { saveGuiPreference } from "../../lib/display-preferences";
 import { useT } from "../../lib/i18n";
 import { useSettingsStore } from "../../stores/settings";
