@@ -30,6 +30,10 @@ const RECOVERY_COOLDOWN: Duration = Duration::from_secs(30);
 const HANG_RESTART: Duration = Duration::from_secs(15);
 /// A second stuck-page restart within this long tells the person once; a single one only goes to the log.
 const HANG_NOTICE_WITHIN: Duration = Duration::from_secs(60 * 60);
+/// A window shows this long after it was made though its page has not painted yet, in the theme's background: a fresh
+/// WebView2 runtime can take 50 s to start its browser process (nightly 45646449982), and a window that waited for the
+/// first paint did not exist on screen meanwhile, so a person clicked the app again.
+const SHOW_BEFORE_PAINT: Duration = Duration::from_millis(500);
 
 /// Windows 11 22H2 (build 22621) is the first build the Mica backdrop draws on.
 fn mica_supported(windows_build: Option<u32>) -> bool {
@@ -190,7 +194,9 @@ struct Record {
     slot: u32,
     mica: bool,
     presence: Option<Presence>,
+    opened_at: Instant,
     shown: bool,
+    painted: bool,
     /// What the page last loaded, with its query: a crash reload loads it again.
     url: Option<String>,
     last_reload: Option<Instant>,
@@ -202,12 +208,33 @@ struct Record {
 
 static RECORDS: LazyLock<Mutex<HashMap<u64, Record>>> = LazyLock::new(Mutex::default);
 impl Record {
-    /// The `win.op` the first paint shows the window with, and the window; nothing after the first paint.
-    fn first_paint(&mut self, headless: bool) -> Option<(u64, &'static str)> {
-        if std::mem::replace(&mut self.shown, true) {
+    /// The `win.op` that first shows the window, and the window; nothing once it was shown, nor for one its launch
+    /// keeps in the tray.
+    fn show(&mut self, headless: bool) -> Option<(u64, &'static str)> {
+        let op = first_show(self.presence, headless)?;
+        (!std::mem::replace(&mut self.shown, true)).then_some((self.win, op))
+    }
+
+    /// [`SHOW_BEFORE_PAINT`] passed: the window shows if its page has not painted.
+    fn show_before_paint(&mut self, headless: bool) -> Option<(u64, &'static str)> {
+        if self.painted {
             return None;
         }
-        first_show(self.presence, headless).map(|op| (self.win, op))
+        self.show(headless)
+    }
+
+    /// The page painted (every load sends it): the first time, the window shows unless it already did, and how long
+    /// after it was made the first paint came when the window had to show before it.
+    fn paint(
+        &mut self,
+        headless: bool,
+        now: Instant,
+    ) -> (Option<(u64, &'static str)>, Option<Duration>) {
+        if std::mem::replace(&mut self.painted, true) {
+            return (None, None);
+        }
+        let late = self.shown.then(|| now.duration_since(self.opened_at));
+        (self.show(headless), late)
     }
 }
 
@@ -253,7 +280,8 @@ pub fn plan(options: &Value) -> Plan {
     }
 }
 
-/// The window `plan` was for exists.
+/// The window `plan` was for exists. It shows at its page's first paint, or after [`SHOW_BEFORE_PAINT`] if that comes
+/// later.
 pub fn opened(win: u64, wc: u64, plan: Plan) {
     records().insert(
         wc,
@@ -262,7 +290,9 @@ pub fn opened(win: u64, wc: u64, plan: Plan) {
             slot: plan.slot,
             mica: plan.mica,
             presence: plan.presence,
+            opened_at: Instant::now(),
             shown: false,
+            painted: false,
             url: None,
             last_reload: None,
             hang: None,
@@ -270,6 +300,17 @@ pub fn opened(win: u64, wc: u64, plan: Plan) {
             crash_offered: false,
         },
     );
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(SHOW_BEFORE_PAINT).await;
+        let shows = with(wc, |record| record.show_before_paint(headless())).flatten();
+        if let Some((win, op)) = shows {
+            log::log(
+                "window.shown_before_paint",
+                json!({"wcId": wc, "winId": win, "op": op, "ms": SHOW_BEFORE_PAINT.as_millis()}),
+            );
+            show_window(win, op);
+        }
+    });
 }
 
 /// The window closed: its slot is free and its pending restart lapses.
@@ -288,19 +329,35 @@ pub fn page_url(wc: u64, url: &str) -> String {
     .unwrap_or_else(|| url.to_owned())
 }
 
-/// The page painted (`ready-to-show`): the first time, the window shows as its launch asked.
+fn headless() -> bool {
+    std::env::var("OMP_GUI_HEADLESS").as_deref() == Ok("1")
+}
+
+fn show_window(win: u64, op: &'static str) {
+    crate::ui::run(move || {
+        if let Err(error) = crate::win_op(&json!({"winId": win, "op": op, "args": {}})) {
+            log::log(
+                "window.first_show_failed",
+                json!({"winId": win, "op": op, "code": error.code, "error": error.message}),
+            );
+        }
+    });
+}
+
+/// The page painted (`ready-to-show`): the first time, the window shows as its launch asked, unless it already showed
+/// before the paint; then how late the paint came is logged (a cold WebView2 start).
 pub fn first_paint(wc: u64) {
-    let headless = std::env::var("OMP_GUI_HEADLESS").as_deref() == Ok("1");
-    let shows = with(wc, |record| record.first_paint(headless)).flatten();
+    let Some((shows, late)) = with(wc, |record| record.paint(headless(), Instant::now())) else {
+        return;
+    };
+    if let Some(late) = late {
+        log::log(
+            "window.first_paint",
+            json!({"wcId": wc, "ms": late.as_millis()}),
+        );
+    }
     if let Some((win, op)) = shows {
-        crate::ui::run(move || {
-            if let Err(error) = crate::win_op(&json!({"winId": win, "op": op, "args": {}})) {
-                log::log(
-                    "window.first_show_failed",
-                    json!({"winId": win, "op": op, "code": error.code, "error": error.message}),
-                );
-            }
-        });
+        show_window(win, op);
     }
 }
 
@@ -624,23 +681,61 @@ mod tests {
         assert_eq!(first_show(Some(Presence::Hidden), false), None);
     }
 
-    #[test]
-    fn a_window_shows_once_whatever_paints_after() {
-        // `ready-to-show` comes with every load, a reload's too; only the first one shows the window.
-        let mut record = Record {
+    fn record(presence: Option<Presence>, opened_at: Instant) -> Record {
+        Record {
             win: 3,
             slot: 0,
             mica: false,
-            presence: None,
+            presence,
+            opened_at,
             shown: false,
+            painted: false,
             url: None,
             last_reload: None,
             hang: None,
             last_hang_restart: None,
             crash_offered: false,
-        };
-        assert_eq!(record.first_paint(false), Some((3, "show")));
-        assert_eq!(record.first_paint(false), None);
+        }
+    }
+
+    #[test]
+    fn a_window_shows_once_whatever_paints_after() {
+        // `ready-to-show` comes with every load, a reload's too; only the first one shows the window.
+        let opened = Instant::now();
+        let mut record = record(None, opened);
+        assert_eq!(record.paint(false, opened), (Some((3, "show")), None));
+        assert_eq!(record.paint(false, opened), (None, None));
+        assert_eq!(record.show_before_paint(false), None);
+    }
+
+    #[test]
+    fn a_window_whose_page_has_not_painted_shows_anyway_and_its_late_paint_is_measured() {
+        // A cold WebView2 start: the window must exist on screen long before the page paints.
+        let opened = Instant::now();
+        let mut record = record(None, opened);
+        assert_eq!(record.show_before_paint(true), Some((3, "showInactive")));
+        let painted = opened + Duration::from_secs(50);
+        assert_eq!(
+            record.paint(true, painted),
+            (None, Some(Duration::from_secs(50)))
+        );
+    }
+
+    #[test]
+    fn an_update_relaunch_keeps_its_presence_when_shown_before_paint() {
+        let opened = Instant::now();
+        assert_eq!(
+            record(Some(Presence::Hidden), opened).show_before_paint(false),
+            None
+        );
+        assert_eq!(
+            record(Some(Presence::Minimized), opened).show_before_paint(false),
+            Some((3, "minimize"))
+        );
+        assert_eq!(
+            record(Some(Presence::Behind), opened).show_before_paint(false),
+            Some((3, "showInactive"))
+        );
     }
 
     #[test]
