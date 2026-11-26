@@ -163,7 +163,7 @@ mod tests {
         assert_eq!(all.len(), SESSION_LINK_SESSIONS_MAX);
         assert!(all.contains_key("/s/0.jsonl"));
         assert!(!all.contains_key("/s/1.jsonl"));
-        assert_eq!(all.keys().last().unwrap(), "/s/new.jsonl");
+        assert_eq!(all.keys().next_back().unwrap(), "/s/new.jsonl");
     }
 
     #[test]
