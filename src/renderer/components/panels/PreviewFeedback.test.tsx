@@ -227,6 +227,85 @@ describe("preview feedback", () => {
 		expect(useReviewNotesStore.getState().notes).toHaveLength(1);
 	});
 
+	it("draws on a region's screenshot, and the drawn picture is the one the composer receives (FT64)", async () => {
+		// linkedom has no canvas or image decoding: a canvas that records its strokes and exports them as its picture.
+		const strokes: number[][] = [];
+		const canvasProto = Object.getPrototypeOf(document.createElement("canvas")) as Record<string, unknown>;
+		const context = {
+			drawImage: vi.fn(),
+			beginPath: () => strokes.push([]),
+			moveTo: (x: number, y: number) => strokes.at(-1)?.push(x, y),
+			lineTo: (x: number, y: number) => strokes.at(-1)?.push(x, y),
+			stroke: vi.fn(),
+		};
+		const saved = { ...canvasProto };
+		Object.assign(canvasProto, {
+			getContext: () => context,
+			toDataURL: () => "data:image/png;base64,DRAWN",
+			setPointerCapture: () => {},
+			getBoundingClientRect: () => ({ left: 10, top: 20, width: 100, height: 50 }),
+		});
+		// A 200 x 100 screenshot shown at 100 x 50: every point is in the picture's own pixels.
+		globals.Image = class {
+			naturalWidth = 200;
+			naturalHeight = 100;
+			onload: (() => void) | null = null;
+			set src(_value: string) {
+				queueMicrotask(() => this.onload?.());
+			}
+		};
+		try {
+			const state = { ...EMPTY_PREVIEW, url: "http://localhost:3000/", title: "Home", activeTab: "p1" };
+			useReviewNotesStore.getState().add({
+				owner: "|s:s-1",
+				anchor: {
+					kind: "preview",
+					page: previewPageKey(state),
+					title: "Home",
+					url: state.url,
+					pick: "region",
+					elements: [{ selector: "header", tag: "header", text: "" }],
+					image: "AAAA",
+				},
+				body: "",
+			});
+			await mount(state);
+			await act(async () => button("Draw on screenshot 1").click());
+			const canvas = document.querySelector("[data-preview-markup]");
+			if (!canvas) throw new Error("No drawing surface");
+			const pointer = (type: string, x: number, y: number) =>
+				act(async () => {
+					const event = new Event(type, { bubbles: true });
+					Object.assign(event, { clientX: x, clientY: y, pointerId: 1 });
+					canvas.dispatchEvent(event);
+				});
+			await pointer("pointerdown", 20, 30);
+			await pointer("pointermove", 60, 45);
+			await pointer("pointerup", 60, 45);
+			expect(strokes.at(-1)).toEqual([20, 20, 100, 50]);
+			const save = [...document.querySelectorAll("button")].find(candidate => candidate.textContent === "Save");
+			await act(async () => save?.click());
+			const filled: unknown[] = [];
+			const listen = (event: globalThis.Event) => filled.push((event as globalThis.CustomEvent).detail);
+			window.addEventListener("omp:fill-composer", listen);
+			try {
+				const send = container
+					.querySelectorAll("button")
+					.find(candidate => candidate.textContent === "Add to message");
+				await act(async () => send?.click());
+			} finally {
+				window.removeEventListener("omp:fill-composer", listen);
+			}
+			expect(filled).toMatchObject([{ images: [{ type: "image", data: "DRAWN" }] }]);
+		} finally {
+			for (const key of ["getContext", "toDataURL", "setPointerCapture", "getBoundingClientRect"]) {
+				if (key in saved) canvasProto[key] = saved[key];
+				else delete canvasProto[key];
+			}
+			delete globals.Image;
+		}
+	});
+
 	it("stays out of the way on a plain page with nothing picked", async () => {
 		await mount({ ...EMPTY_PREVIEW, url: "http://localhost:3000/", activeTab: "p1" });
 		expect(container.querySelector("[data-preview-feedback]")).toBeNull();

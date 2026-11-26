@@ -202,7 +202,7 @@ export function BotItemPage({
 			tabIndex={-1}
 		>
 			<div className="flex items-center gap-1 border-b border-(--sc-border-subtle) px-3 py-1.5" data-bot-item-nav>
-				<Button icon={<ArrowLeft />} onClick={onBack} size="sm" variant="ghost">
+				<Button data-bot-item-back icon={<ArrowLeft />} onClick={onBack} size="sm" variant="ghost">
 					{t("bots.items.view.back")}
 				</Button>
 				<span className="flex-1" />

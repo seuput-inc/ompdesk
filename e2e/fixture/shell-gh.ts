@@ -1,9 +1,9 @@
 /**
- * A stand-in `gh` written as a POSIX shell script, for a spec to put first on PATH (`fake-gh-install.ts` compiles a
- * JS fake instead). POSIX runs `script` through its shebang. The app spawns `gh` without a shell and looks for
- * `gh.exe`, then `gh` (src/main/local/git/exec.ts `resolveBin`): on Windows neither a shebang script nor a `.cmd`
- * runs, so `gh.exe` is a compiled launcher that hands its arguments to Git for Windows' `sh` with the same `script`,
- * which a spec writes once for both.
+ * A stand-in command (`gh`, `adb`) written as a POSIX shell script, for a spec to put first on PATH
+ * (`fake-gh-install.ts` compiles a JS fake instead). POSIX runs `script` through its shebang. The app spawns these
+ * without a shell and looks for `<name>.exe`, then `<name>` (src/main/local/git/exec.ts `resolveBin`, core
+ * `emulator.rs` `run`): on Windows neither a shebang script nor a `.cmd` runs, so `<name>.exe` is a compiled launcher
+ * that hands its arguments to Git for Windows' `sh` with the same `script`, which a spec writes once for both.
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -11,10 +11,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { baseTemp } from "../../scripts/run-temp";
 
+// The launcher finds its script by its own name: `adb.exe` reads `adb.argv.json` beside it.
 const LAUNCHER = `import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-const [file, ...head] = JSON.parse(readFileSync(join(dirname(process.execPath), "gh.argv.json"), "utf8"));
+import { basename, dirname, join } from "node:path";
+const name = basename(process.execPath).replace(/\\.exe$/i, "");
+const [file, ...head] = JSON.parse(readFileSync(join(dirname(process.execPath), \`\${name}.argv.json\`), "utf8"));
 const run = spawnSync(file, [...head, ...process.argv.slice(2)], { stdio: "inherit" });
 process.exit(run.status ?? 1);
 `;
@@ -58,17 +60,20 @@ function gitSh(): string {
 	return path.join(execPath, "..", "..", "..", "bin", "sh.exe");
 }
 
-/** Writes `bin/gh` (POSIX) or `bin/gh.exe` (Windows) so that `gh <args>` runs `script` with those arguments. */
-export async function writeShellGh(bin: string, script: string): Promise<void> {
+/** Writes `bin/<name>` (POSIX) or `bin/<name>.exe` (Windows) so that `<name> <args>` runs `script` with those arguments. */
+export async function writeShellBin(bin: string, name: string, script: string): Promise<void> {
 	await fs.mkdir(bin, { recursive: true });
 	if (process.platform !== "win32") {
-		await fs.writeFile(path.join(bin, "gh"), script, { mode: 0o755 });
+		await fs.writeFile(path.join(bin, name), script, { mode: 0o755 });
 		return;
 	}
-	const target = path.join(bin, "gh.exe");
+	const target = path.join(bin, `${name}.exe`);
 	const shared = await launcherExe();
 	// A hard link costs nothing; another volume (OMP_GUI temp on a different drive) falls back to a copy.
 	await fs.link(shared, target).catch(() => fs.copyFile(shared, target));
-	await fs.writeFile(path.join(bin, "gh.sh"), script);
-	await fs.writeFile(path.join(bin, "gh.argv.json"), JSON.stringify([gitSh(), path.join(bin, "gh.sh")]));
+	await fs.writeFile(path.join(bin, `${name}.sh`), script);
+	await fs.writeFile(path.join(bin, `${name}.argv.json`), JSON.stringify([gitSh(), path.join(bin, `${name}.sh`)]));
 }
+
+/** `writeShellBin` for `gh`. */
+export const writeShellGh = (bin: string, script: string): Promise<void> => writeShellBin(bin, "gh", script);

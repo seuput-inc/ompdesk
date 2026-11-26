@@ -62,6 +62,7 @@ import {
 	ErrorDetail,
 	FieldLabel,
 	FieldShell,
+	FindBar,
 	HoverCard,
 	IconButton,
 	InlineNotice,
@@ -913,6 +914,21 @@ export default function StyleGuide() {
 					</Block>
 					<Block label="Chip — toggles, removable with a text action, plain">
 						<ChipSamples />
+					</Block>
+					<Block label="FindBar — the field with its count, previous, next, close">
+						<FindBar
+							canStep
+							className="flex w-80 items-center gap-1"
+							closeLabel="Close find"
+							label="Find in page"
+							nextLabel="Next match"
+							onClose={() => {}}
+							onQuery={() => {}}
+							onStep={() => {}}
+							previousLabel="Previous match"
+							query="preview"
+							status="2/7"
+						/>
 					</Block>
 					<Block className="flex items-center gap-4" label="Kbd (platform-formatted)">
 						<Kbd shortcut="⌘K" />

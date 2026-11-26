@@ -20,6 +20,8 @@ import {
 	EMPTY_PREVIEW_PAGE,
 	isLoopbackUrl,
 	PREVIEW_COMMAND,
+	PREVIEW_DEVICE,
+	PREVIEW_HISTORY,
 	PREVIEW_LOAD_STALL_MS,
 	PREVIEW_PAGE,
 	PREVIEW_PROBLEM_LIMIT,
@@ -34,6 +36,10 @@ import {
 	PREVIEW_VIEWPORTS,
 	PREVIEW_VISUALS,
 	type PreviewBounds,
+	type PreviewDevice,
+	type PreviewDeviceRequest,
+	type PreviewHistoryEntry,
+	type PreviewHistoryRequest,
 	type PreviewPageRequest,
 	type PreviewPageState,
 	type PreviewRequest,
@@ -41,6 +47,9 @@ import {
 	previewUrl,
 	VISUAL_SCHEME,
 } from "../../shared/preview";
+import { core } from "../core/process";
+import { tunnelledLoopback } from "../remote/port-tunnels";
+import { spawnPath } from "../shell-env";
 import { encodeImage, fitImage } from "../shell-host/image";
 import { applyAcceptLanguages, seedSpellchecker } from "../system-languages";
 import { type ClientWindow, isWebWindow } from "../web/client-window";
@@ -59,6 +68,19 @@ import type { VisualPages, VisualStore } from "./visuals";
 
 /** Activity marks and console problems reach the panel at most this often. */
 const AGENT_ACTIVITY_MS = 250;
+/** A screenshot waits at most this long for the agent's pointer to leave the page (a paused page never answers). */
+const CURSOR_HIDE_WAIT_MS = 300;
+/** A server's sign-in waits this long for the person (the shell's own wait, `AUTH_WAIT`); then it is cancelled. */
+const AUTH_PROMPT_MS = 300_000;
+/** Numbers each sign-in prompt, so an answer reaches only the challenge it was for. */
+let authPrompts = 0;
+
+/** Where a CDP `Input.dispatchMouseEvent` lands, in the viewport's CSS pixels. */
+function mousePoint(params: unknown): { x: number; y: number } | null {
+	if (!params || typeof params !== "object") return null;
+	const { x, y } = params as { x?: unknown; y?: unknown };
+	return typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
 /** Tabs a page may open itself within `PAGE_OPENS_WINDOW_MS`; more in that time are refused (a popup storm). */
 const PAGE_OPENS_PER_WINDOW = 4;
 const PAGE_OPENS_WINDOW_MS = 2000;
@@ -76,6 +98,34 @@ const NO_PAGE_RETRY_MS = 500;
 /** The most selected text, and the largest PDF, a viewer is sent. */
 const SELECTION_MAX_CHARS = 100_000;
 const PDF_MAX_BYTES = 5 * 1024 * 1024;
+/**
+ * A dev server's address that refused or dropped the load is tried again until it answers (Orca's load-failure
+ * auto-retry, `navigate/browser-load-failure-auto-retry.tsx:20-22`): faster than Chrome's 1/5/30 s, since a dev
+ * server comes up in seconds and a refused attempt is cheap. Only while the page is shown.
+ */
+const RETRY_DELAYS_MS = [1000, 1000, 2000, 3000, 5000];
+const RETRY_MAX_ATTEMPTS = 120;
+/**
+ * Chromium's net errors a reload can fix (Orca `shared/browser/navigation/browser-load-failure.ts:105-124`):
+ * refused, name not resolved, timed out, reset, closed, empty response, network changed, failed, unreachable.
+ * Certificate, blocked and HTTP errors are not retried.
+ */
+const RETRYABLE_LOAD_ERRORS: ReadonlySet<number> = new Set([
+	-102, -105, -137, -7, -118, -100, -101, -103, -324, -21, -104, -109,
+]);
+/** A host a developer runs themselves: this computer, or a dev-only name (Orca's `readHost`). */
+function devServerUrl(url: string): boolean {
+	try {
+		return isLoopbackUrl(url) || /\.(?:local|test|internal|lan)$/i.test(new URL(url).hostname);
+	} catch {
+		return false;
+	}
+}
+/** A DevTools command on the page's own session (the shell's `wc.cdp.send`), never the agent's debugger. */
+function pageCdp(contents: WebContents, method: string, params: unknown): Promise<unknown> {
+	const own = (contents as WebContents & { cdp?: (method: string, params?: unknown) => Promise<unknown> }).cdp;
+	return own ? own.call(contents, method, params) : Promise.reject(new Error("No DevTools access to this page"));
+}
 
 const pollRequestSchema = z.object({
 	ack: z.number().int().nonnegative().nullable(),
@@ -118,7 +168,7 @@ const VISUAL_NO_ROUTE: Electron.ProxyConfig = {
 
 const selector = z.string().min(1).max(2000);
 const pageRequestSchema: z.ZodType<PreviewPageRequest> = z.discriminatedUnion("action", [
-	z.object({ action: z.enum(["pick", "region", "cancel", "tweaks", "clearVariables"]) }),
+	z.object({ action: z.enum(["pick", "region", "cancel", "tweaks", "clearVariables", "findStop"]) }),
 	z.object({ action: z.enum(["parent", "highlight"]), selector }),
 	z.object({
 		action: z.literal("pins"),
@@ -129,6 +179,33 @@ const pageRequestSchema: z.ZodType<PreviewPageRequest> = z.discriminatedUnion("a
 		name: z.string().regex(/^--[\w-]+$/),
 		value: z.string().max(500),
 	}),
+	z.object({
+		action: z.literal("find"),
+		query: z.string().max(500),
+		step: z.union([z.literal(-1), z.literal(0), z.literal(1)]),
+	}),
+]);
+const historyRequestSchema: z.ZodType<PreviewHistoryRequest> = z.discriminatedUnion("action", [
+	z.object({
+		action: z.literal("list"),
+		query: z.string().max(2048),
+		limit: z.number().int().min(1).max(50).optional(),
+	}),
+	z.object({ action: z.literal("remove"), url: z.string().max(4096) }),
+	z.object({ action: z.literal("clear") }),
+]);
+
+const DeviceId = z.string().min(1).max(200);
+const deviceRequestSchema: z.ZodType<PreviewDeviceRequest> = z.discriminatedUnion("action", [
+	z.object({ action: z.literal("list") }),
+	z.object({ action: z.literal("screen"), platform: z.enum(["ios", "android"]), id: DeviceId }),
+	z.object({
+		action: z.literal("tap"),
+		id: DeviceId,
+		x: z.number().int().min(0).max(100_000),
+		y: z.number().int().min(0).max(100_000),
+	}),
+	z.object({ action: z.literal("key"), id: DeviceId, key: z.enum(["back", "home", "apps"]) }),
 ]);
 
 /** One tab of a window's preview: its own sandboxed page in the window's web or visual session. */
@@ -155,6 +232,14 @@ interface PreviewPage {
 	input: InputSequence;
 	/** A web viewer's window DIPs per frame CSS px (`placeStreamed`): a wheel delta in frame px is scaled by it. */
 	streamScale: number;
+	/** Ends the page's retry of a dev server that refused it (a person's own navigation replaces it). */
+	stopRetry: () => void;
+	/** The find shown on the page: the query and the match index main last asked for. */
+	find: { query: string; index: number } | null;
+	/** Follows the link under the pointer while the page is shown (`hoverUrl`); a second call while it runs does nothing. */
+	watchHover: () => void;
+	/** Answers the server sign-in `state.auth` waits on: a name and password once, or nothing to cancel. */
+	answerAuth: ((username?: string, password?: string) => void) | null;
 }
 
 interface AgentLink {
@@ -296,6 +381,26 @@ const DEFAULT_STREAM_GEOMETRY = {
 	profile: streamProfile(390, 2),
 };
 
+/** This computer's Preview browsing history (core `browsing.rs`), kept outside the Preview's browser. */
+export interface BrowsingHistory {
+	add(url: string, title: string): Promise<unknown>;
+	list(query: string, limit?: number): Promise<PreviewHistoryEntry[]>;
+	remove(url: string): Promise<unknown>;
+	clear(): Promise<unknown>;
+}
+
+/** The history in `<userData>/preview-history.json`, read and written by the core. */
+export function coreBrowsingHistory(userData: string): BrowsingHistory {
+	const call = async <T>(method: string, params: Record<string, unknown>): Promise<T> =>
+		(await core().call<T>(method, { userData, ...params }, { timeoutMs: 10_000 })).result;
+	return {
+		add: (url, title) => call("previewHistory.add", { url, title }),
+		list: (query, limit) => call("previewHistory.list", { query, ...(limit ? { limit } : {}) }),
+		remove: url => call("previewHistory.remove", { url }),
+		clear: () => call("previewHistory.clear", {}),
+	};
+}
+
 /**
  * No preload, no shell IPC, and two fresh in-memory sessions for each window, shared by its tabs: `web` for
  * every page the user, a popup or the agent browses, `visual` for `omp-visual:` pages alone. A page stays in the
@@ -306,6 +411,7 @@ const DEFAULT_STREAM_GEOMETRY = {
  * views, in sessions of their own (`preview-web-<n>`, `preview-visual-web-<n>`); their pages' JS dialogs wait for the
  * viewer (preview-dialog.ts).
  * Agent browsing on a paired host's tab runs over `tunnel` (the relay is on the host's loopback); without one it is refused.
+ * Every web page a tab commits goes into `history` (address suggestions, recent sites), never a visual's.
  * Returns what the agent's `gui_visualize` reads and waits on.
  */
 export function registerPreviewHost(
@@ -314,6 +420,7 @@ export function registerPreviewHost(
 	visuals: VisualStore,
 	viewers?: PreviewWebSupport,
 	tunnel?: PreviewRelayTunnel,
+	history?: BrowsingHistory,
 ): VisualPages {
 	const hosts = new Map<number, PreviewHost>();
 	/** One pair of sessions per window; Electron keeps a session for a name until the app quits, so hosts reuse it. */
@@ -409,6 +516,7 @@ export function registerPreviewHost(
 		link.extension.dispose();
 		link.socket.close();
 		link.page.state = { ...link.page.state, agent: null };
+		void runOnPage(link.page, pageCall("cursor", null));
 		send(host);
 	};
 	/**
@@ -429,10 +537,13 @@ export function registerPreviewHost(
 		page.state = { ...page.state, agent: { ...agent, attached: false, reconnecting: true } };
 		send(host);
 	};
-	/** The web address a web page may show, or null: http(s) only, and no loopback for a paired host's tab. */
+	/**
+	 * The web address a web page may show, or null: http(s) only, and no loopback for a paired host's tab but this
+	 * computer's stand-ins for its tabs' dev servers (remote/port-tunnels.ts).
+	 */
 	const allowed = (host: PreviewHost, url: string) => {
 		const safe = previewUrl(url);
-		return safe && !(host.remote() && isLoopbackUrl(safe)) ? safe : null;
+		return safe && !(host.remote() && isLoopbackUrl(safe) && !tunnelledLoopback(safe)) ? safe : null;
 	};
 	/**
 	 * A web address a visual's page tried to reach. It never goes there; right after the user's own click or key
@@ -535,6 +646,10 @@ export function registerPreviewHost(
 			mapper: new InputMapper(),
 			input: new InputSequence(),
 			streamScale: 1,
+			stopRetry: () => {},
+			find: null,
+			watchHover: () => {},
+			answerAuth: null,
 		};
 		if (stream) {
 			// The page's dialogs wait for the viewer (preview-dialog.ts); leaving a page is never a question.
@@ -615,20 +730,109 @@ export function registerPreviewHost(
 			if (!mayGo(details.url)) details.preventDefault();
 		});
 		contents.on("will-attach-webview", event => event.preventDefault());
+		// A server asks the person to sign in (Orca's HTTP auth prompt): the panel asks, the answer goes to this one
+		// challenge and nothing keeps it. A newer challenge replaces an unanswered one; a proxy's is the computer's.
+		contents.on("login", (event, details, authInfo, callback) => {
+			if (kind !== "web" || authInfo.isProxy) return;
+			event.preventDefault();
+			page.answerAuth?.();
+			const id = ++authPrompts;
+			const timer = setTimeout(() => page.answerAuth?.(), AUTH_PROMPT_MS);
+			page.answerAuth = (username, password) => {
+				clearTimeout(timer);
+				page.answerAuth = null;
+				if (page.state.auth?.id === id) publish(owner(), page, { auth: null });
+				callback(username, password);
+			};
+			publish(owner(), page, {
+				auth: { id, origin: URL.canParse(details.url) ? new URL(details.url).origin : "", realm: authInfo.realm },
+			});
+		});
 		// Real input reaching the page; a script's `dispatchEvent` never does. The agent's CDP input may, so
 		// `choose` also refuses while the agent or any debugger holds the page.
 		contents.on("input-event", (_event, input) => {
 			if (input.type === "mouseUp" || input.type === "keyUp") page.lastInput = Date.now();
 		});
-		// A notice from the Preview check described the document that is now being replaced.
+		// A dev server that refused or dropped the load is tried again while the page shows (`RETRY_DELAYS_MS`); the
+		// failure stays on screen meanwhile, saying so. A person's own navigation, a commit or the cap ends it.
+		let retry: { url: string; attempts: number; timer: NodeJS.Timeout | undefined } | null = null;
+		page.stopRetry = () => {
+			if (!retry) return;
+			clearTimeout(retry.timer);
+			retry = null;
+			if (page.state.retrying) update({ retrying: false });
+		};
+		const scheduleRetry = () => {
+			const pending = retry;
+			if (!pending) return;
+			if (pending.attempts >= RETRY_MAX_ATTEMPTS) {
+				page.stopRetry();
+				return;
+			}
+			pending.timer = setTimeout(
+				() => {
+					if (retry !== pending || contents.isDestroyed()) return;
+					const host = owner();
+					// A page nobody sees is not loaded again; it waits its turn (Orca counts only real attempts).
+					if (host.active !== page || !host.layout?.visible) {
+						scheduleRetry();
+						return;
+					}
+					pending.attempts += 1;
+					void contents.loadURL(pending.url).catch(() => {});
+				},
+				RETRY_DELAYS_MS[Math.min(pending.attempts, RETRY_DELAYS_MS.length - 1)],
+			);
+		};
+		contents.once("destroyed", () => clearTimeout(retry?.timer));
+		// The link under the pointer, for the panel's status line (Orca's link status bubble): one waiting call on the
+		// shown page answers each change; a navigation ends it and the next stop of loading starts it again.
+		let hovering = false;
+		page.watchHover = () => {
+			if (hovering || kind === "visual") return;
+			hovering = true;
+			void (async () => {
+				let last = "";
+				while (!contents.isDestroyed() && owner().active === page && owner().pages.includes(page)) {
+					const href = await Promise.resolve()
+						.then(() => runOnPage(page, pageCall("hoverLink", last)))
+						.catch(() => null);
+					if (typeof href !== "string") break;
+					last = href;
+					const shown = previewUrl(href) ?? "";
+					if (shown !== page.state.hoverUrl) update({ hoverUrl: shown });
+				}
+				hovering = false;
+			})();
+		};
+		// A notice from the Preview check described the document that is now being replaced. A retry keeps its failure.
 		contents.on("did-start-loading", () =>
-			update({ error: null, crashed: false, ...(page.state.notice?.kind === "check" ? { notice: null } : {}) }),
+			update({
+				...(retry ? {} : { error: null }),
+				crashed: false,
+				hoverUrl: "",
+				...(page.state.notice?.kind === "check" ? { notice: null } : {}),
+			}),
 		);
+		// A web page the tab committed goes into this computer's history once it stops loading, with its title.
+		let visit: string | null = null;
 		contents.on("did-stop-loading", () => {
 			endStall();
 			update();
+			if (owner().active === page) page.watchHover();
+			const committed = visit;
+			visit = null;
+			if (committed && history && !page.state.error)
+				void history.add(committed, contents.getTitle()).catch(() => undefined);
 		});
 		contents.on("did-navigate", (_event, url) => {
+			if (kind === "web" && previewUrl(url)) visit = url;
+			// The retried server answered: the page it committed replaces the failure. Chromium's own error page is no answer.
+			if (retry && !url.startsWith("chrome-error:")) {
+				clearTimeout(retry.timer);
+				retry = null;
+				update({ error: null, retrying: false });
+			}
 			// A visual's page that leaves its own address (for an empty document) no longer shows it; a web visual
 			// browses on.
 			if (page.visual) {
@@ -652,11 +856,18 @@ export function registerPreviewHost(
 			update();
 			pageUpdated();
 		});
-		contents.on("did-fail-load", (_event, code, description, _url, mainFrame) => {
+		contents.on("did-fail-load", (_event, code, description, url, mainFrame) => {
 			// -3 (aborted) is also a newer navigation replacing this one: its own wait stays; a Stop ends it at did-stop-loading.
 			if (!mainFrame || code === -3) return;
 			endStall();
-			update({ error: description, loading: false });
+			const again = kind === "web" && RETRYABLE_LOAD_ERRORS.has(code) && devServerUrl(url);
+			if (!again) page.stopRetry();
+			else if (retry?.url !== url) {
+				if (retry) clearTimeout(retry.timer);
+				retry = { url, attempts: 0, timer: undefined };
+			}
+			update({ error: description, loading: false, retrying: again });
+			if (again) scheduleRetry();
 		});
 		contents.on("render-process-gone", () => {
 			clearTimeout(stall);
@@ -680,6 +891,7 @@ export function registerPreviewHost(
 		host.active = page;
 		place(host);
 		page.stream?.refresh();
+		page.watchHover();
 		send(host);
 	}
 	/** Close one tab; closing the last leaves a fresh empty one. */
@@ -899,13 +1111,27 @@ export function registerPreviewHost(
 				message => {
 					if (socket.isOpen) socket.send(JSON.stringify(message));
 				},
-				// "" = the agent let go of the debugger; the mark keeps its last action.
-				method => {
+				// "" = the agent let go of the debugger; the mark keeps its last action. Its mouse events move the pointer
+				// drawn on the page (Orca's agent cursor); a screenshot waits until that pointer is out of the picture.
+				(method, params, sessionId) => {
+					if (method === "Input.dispatchMouseEvent" && !sessionId) {
+						const point = mousePoint(params);
+						if (point) void runOnPage(page, pageCall("cursor", point));
+					}
+					const hold =
+						method === "Page.captureScreenshot" || method === ""
+							? Promise.race([
+									runOnPage(page, pageCall("cursor", null)),
+									new Promise(resolve => setTimeout(resolve, CURSOR_HIDE_WAIT_MS)),
+								]).then(() => {})
+							: undefined;
 					if (method) latest = method;
-					if (pending) return;
-					const wait = AGENT_ACTIVITY_MS - (Date.now() - lastPublished);
-					if (wait <= 0) flushActivity();
-					else pending = setTimeout(flushActivity, wait);
+					if (!pending) {
+						const wait = AGENT_ACTIVITY_MS - (Date.now() - lastPublished);
+						if (wait <= 0) flushActivity();
+						else pending = setTimeout(flushActivity, wait);
+					}
+					return hold;
 				},
 				// This computer's own addresses are never the host agent's to open (the Preview's rule for a host's tab).
 				{ blockLoopback: remote },
@@ -976,7 +1202,22 @@ export function registerPreviewHost(
 			publish(current, page);
 		} else if (request.action === "clearProblems") publish(current, page, { problems: [] });
 		else if (request.action === "dismissNotice") publish(current, page, { notice: null });
-		else if (request.action === "load") {
+		else if (request.action === "authAnswer") {
+			// The answer may come after the person switched tabs: it goes to the page whose prompt it answers.
+			const asked = current.pages.find(candidate => candidate.state.auth?.id === request.id);
+			const { username, password } = request;
+			if (typeof username === "string" && typeof password === "string") asked?.answerAuth?.(username, password);
+			else asked?.answerAuth?.();
+		} else if (request.action === "colorScheme") {
+			if (!["system", "light", "dark"].includes(request.scheme)) throw new Error("Unknown color scheme");
+			// Orca's per-page appearance (`toolbar/browser-toolbar-page-display-items.tsx`): Chromium's media emulation on
+			// the page's own DevTools session, so the agent's debugger neither sees nor undoes it; it outlives navigation.
+			await pageCdp(page.contents, "Emulation.setEmulatedMedia", {
+				features: [{ name: "prefers-color-scheme", value: request.scheme === "system" ? "" : request.scheme }],
+			});
+			publish(current, page, { colorScheme: request.scheme });
+		} else if (request.action === "load") {
+			page.stopRetry();
 			const url = allowed(current, request.url);
 			if (!url) throw new Error("Preview URL unavailable");
 			if (page.state.session === "web") {
@@ -988,12 +1229,20 @@ export function registerPreviewHost(
 				if (current.pages.length >= PREVIEW_TAB_LIMIT) throw new Error("Too many preview tabs");
 				loadInto(current, openPage(current, "web", true), url);
 			}
-		} else if (request.action === "back" && page.contents.navigationHistory.canGoBack())
+		} else if (request.action === "back" && page.contents.navigationHistory.canGoBack()) {
+			page.stopRetry();
 			page.contents.navigationHistory.goBack();
-		else if (request.action === "forward" && page.contents.navigationHistory.canGoForward())
+		} else if (request.action === "forward" && page.contents.navigationHistory.canGoForward()) {
+			page.stopRetry();
 			page.contents.navigationHistory.goForward();
-		else if (request.action === "reload") page.contents.reload();
-		else if (request.action === "stop") page.contents.stop();
+		} else if (request.action === "reload" || request.action === "hardReload") {
+			page.stopRetry();
+			if (request.action === "hardReload") page.contents.reloadIgnoringCache();
+			else page.contents.reload();
+		} else if (request.action === "stop") {
+			page.stopRetry();
+			page.contents.stop();
+		}
 		return windowState(current);
 	});
 	ipc.handle(PREVIEW_SAVE_PDF, async caller => {
@@ -1013,10 +1262,49 @@ export function registerPreviewHost(
 		return choice.filePath;
 	});
 	ipc.handle(PREVIEW_VISUALS, () => visuals.list());
+	ipc.handle(PREVIEW_HISTORY, async (_caller, raw: unknown) => {
+		const request = historyRequestSchema.parse(raw);
+		if (!history) return request.action === "list" ? [] : null;
+		if (request.action === "list") return history.list(request.query, request.limit);
+		await (request.action === "remove" ? history.remove(request.url) : history.clear());
+		return null;
+	});
+	// This computer's running mobile devices (Orca's emulator pane): the core runs `simctl`/`adb` on the login shell's
+	// PATH; nothing is booted here (the `ompdesk-mobile-emulator` skill does that).
+	ipc.handle(PREVIEW_DEVICE, async (_caller, raw: unknown) => {
+		const request = deviceRequestSchema.parse(raw);
+		const path = await spawnPath();
+		if (request.action === "list")
+			return (await core().call<{ devices: PreviewDevice[] }>("emulator.devices", { path })).result.devices;
+		if (request.action === "screen") {
+			const { bin } = await core().call("emulator.screen", { path, platform: request.platform, id: request.id });
+			if (!bin) throw new Error("The device sent no picture");
+			return Buffer.from(bin).toString("base64");
+		}
+		const { action, ...params } = request;
+		await core().call(`emulator.${action}`, { path, ...params });
+		return null;
+	});
 	ipc.handle(PREVIEW_PAGE, async (caller, raw: unknown) => {
 		const request = pageRequestSchema.parse(raw);
 		const page = hosts.get(caller.sender.id)?.active;
 		if (!page?.state.url || page.state.crashed) throw new Error("No page to work on");
+		if (request.action === "find" || request.action === "findStop") {
+			if (request.action === "findStop" || !request.query) {
+				page.find = null;
+				await runOnPage(page, pageCall("findStop"));
+				return null;
+			}
+			// The page keeps nothing between calls: main says which match to show, the page wraps it around its count.
+			const index =
+				request.step === 0 || page.find?.query !== request.query ? 0 : (page.find?.index ?? 0) + request.step;
+			const found = (await runOnPage(page, pageCall("find", request.query, index))) as {
+				active: number;
+				total: number;
+			} | null;
+			page.find = found ? { query: request.query, index: Math.max(0, found.active - 1) } : null;
+			return found;
+		}
 		const args =
 			request.action === "parent" || request.action === "highlight"
 				? [request.selector]

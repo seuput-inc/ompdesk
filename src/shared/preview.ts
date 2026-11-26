@@ -7,6 +7,14 @@ export const PREVIEW_PAGE = "preview:page";
 export const PREVIEW_VISUALS = "preview:visuals";
 /** Main → renderer: the agent showed (or updated) a visual for a tab (`PreviewVisualEvent`). */
 export const PREVIEW_VISUAL = "preview:visual";
+/** Renderer → main: the Preview's browsing history on this computer (core `previewHistory.*`). */
+export const PREVIEW_HISTORY = "preview:history";
+/** Renderer → main: show a file of a tab's folder (an .html or .svg page) in the Preview as a visual of that tab. */
+export const PREVIEW_OPEN_FILE = "preview:open-file";
+/** Renderer → main: the address here that shows a paired host tab's dev server on a port (remote/port-tunnels.ts). */
+export const PREVIEW_HOST_PORT = "preview:host-port";
+/** Renderer → main: this computer's running iOS Simulators and Android devices, their screens and input (core `emulator.*`). */
+export const PREVIEW_DEVICE = "preview:device";
 /**
  * Web viewers only (a paired phone or tablet): its page is an offscreen page on this computer streamed as JPEG
  * frames over the socket (main/web/preview-stream.ts). `POLL` acknowledges the last frame and holds until the
@@ -103,9 +111,23 @@ export interface PreviewState {
 	canGoBack: boolean;
 	canGoForward: boolean;
 	error: string | null;
+	/**
+	 * The page's dev server refused or dropped the load and main tries it again until it answers (Orca's load-failure
+	 * auto-retry): the failure shows meanwhile, saying so.
+	 */
+	retrying: boolean;
+	/** The `prefers-color-scheme` the page is shown with: the system's, or forced light or dark (Orca's page display). */
+	colorScheme: PreviewColorScheme;
+	/** The link under the pointer, shown in a status line at the panel's foot (Orca's link status bubble); "" for none. */
+	hoverUrl: string;
 	/** The page's renderer died; a reload restores it. */
 	crashed: boolean;
 	agent: PreviewAgentState | null;
+	/**
+	 * A server asks the person to sign in to load the page (HTTP basic or digest auth, Orca's HTTP auth prompt): the
+	 * panel asks, `authAnswer` gives the name and password once, and nothing keeps them.
+	 */
+	auth: PreviewAuthPrompt | null;
 	/** The user's zoom (1 = 100 %), on top of the scale a viewport frame needs to fit. */
 	zoom: number;
 	viewport: PreviewViewport;
@@ -136,8 +158,12 @@ export const EMPTY_PREVIEW_PAGE: PreviewPageState = {
 	canGoBack: false,
 	canGoForward: false,
 	error: null,
+	retrying: false,
+	colorScheme: "system",
+	hoverUrl: "",
 	crashed: false,
 	agent: null,
+	auth: null,
 	zoom: 1,
 	viewport: "fill",
 	problems: [],
@@ -146,6 +172,15 @@ export const EMPTY_PREVIEW_PAGE: PreviewPageState = {
 	session: "web",
 };
 export const EMPTY_PREVIEW: PreviewState = { ...EMPTY_PREVIEW_PAGE, tabs: [], activeTab: "" };
+export type PreviewColorScheme = "system" | "light" | "dark";
+/** One server sign-in the page waits on. */
+export interface PreviewAuthPrompt {
+	id: number;
+	/** The asking server, as `https://host:port`. */
+	origin: string;
+	/** What the server calls the protected area; "" when it named none. */
+	realm: string;
+}
 export type PreviewRequest =
 	/** `dpr`: a web viewer's device pixel ratio (its frames are capped at 2); an Electron window never sends it. */
 	| { action: "layout"; bounds: PreviewBounds; visible: boolean; dpr?: number }
@@ -169,7 +204,12 @@ export type PreviewRequest =
 	| { action: "restoreVisuals"; tabId: string; show: boolean }
 	/** Add a visual from "All visuals" to `tabId` and show it. */
 	| { action: "openVisual"; tabId: string; visualId: string }
-	| { action: "back" | "forward" | "reload" | "stop" | "dispose" };
+	| { action: "back" | "forward" | "reload" | "stop" | "dispose" }
+	/** Reload past the cache (Orca's hard reload). */
+	| { action: "hardReload" }
+	| { action: "colorScheme"; scheme: PreviewColorScheme }
+	/** The person's answer to `auth`: a name and password used once, or nothing to cancel (the page shows the 401). */
+	| { action: "authAnswer"; id: number; username?: string; password?: string };
 export interface PreviewApi {
 	command(request: PreviewRequest): Promise<PreviewState>;
 	/** Ask where to save, then print the page to that PDF: the saved path, or `null` when the user cancelled. */
@@ -179,10 +219,61 @@ export interface PreviewApi {
 	page<R extends PreviewPageRequest>(request: R): Promise<PreviewPageResults[R["action"]]>;
 	/** "All visuals" (C141), newest first. */
 	visuals(): Promise<PreviewVisualRecord[]>;
+	/** This computer's browsing history: address suggestions, recent sites, removing one, clearing all. */
+	history<R extends PreviewHistoryRequest>(request: R): Promise<PreviewHistoryResults[R["action"]]>;
+	/**
+	 * Show `path` (a page or picture inside `tabId`'s folder on this computer) in that tab's Preview, through the same
+	 * confined, network-less visual session the agent's `gui_visualize` uses (Orca's workspace document preview).
+	 */
+	openFile(tabId: string, path: string): Promise<void>;
+	/**
+	 * The address on this computer that shows `port` of `tabId`, a tab that runs on a paired host: a stand-in here for
+	 * the host's loopback, which the host connects only to a port the tab's own processes listen on.
+	 */
+	hostPort(tabId: string, port: number): Promise<string>;
+	/** This computer's running mobile devices (Orca's emulator pane): list, a screen as PNG base64, an Android tap or key. */
+	device<R extends PreviewDeviceRequest>(request: R): Promise<PreviewDeviceResults[R["action"]]>;
 	/** The agent showed or updated a visual for a tab. */
 	onVisual(callback: (event: PreviewVisualEvent) => void): () => void;
 	/** A web viewer's streamed page (see `PREVIEW_STREAM_POLL`); a desktop window's calls are refused. */
 	stream: PreviewStreamApi;
+}
+
+/** One address the Preview committed on this computer (Orca's browser history; no cookies, no page content). */
+export interface PreviewHistoryEntry {
+	url: string;
+	title: string;
+	/** The last visit, epoch ms. */
+	at: number;
+	visits: number;
+}
+export type PreviewHistoryRequest =
+	/** Suggestions for `query` (the newest with none), at most `limit` (default 8). */
+	{ action: "list"; query: string; limit?: number } | { action: "remove"; url: string } | { action: "clear" };
+export interface PreviewHistoryResults {
+	list: PreviewHistoryEntry[];
+	remove: null;
+	clear: null;
+}
+
+/** A running iOS Simulator or Android device on this computer. */
+export interface PreviewDevice {
+	platform: "ios" | "android";
+	id: string;
+	name: string;
+}
+export type PreviewDeviceRequest =
+	| { action: "list" }
+	| { action: "screen"; platform: PreviewDevice["platform"]; id: string }
+	/** Android only: a tap at the screen's pixel, or a hardware key. */
+	| { action: "tap"; id: string; x: number; y: number }
+	| { action: "key"; id: string; key: "back" | "home" | "apps" };
+export interface PreviewDeviceResults {
+	list: PreviewDevice[];
+	/** PNG, base64. */
+	screen: string;
+	tap: null;
+	key: null;
 }
 
 /** One JPEG frame of the viewer's offscreen page. */
@@ -306,7 +397,19 @@ export type PreviewPageRequest =
 	/** The page's CSS custom properties on :root. */
 	| { action: "tweaks" }
 	| { action: "setVariable"; name: string; value: string }
-	| { action: "clearVariables" };
+	| { action: "clearVariables" }
+	/**
+	 * Find `query` in the page (Orca's find bar): `step` 1 the next match, -1 the previous, 0 the first from the top
+	 * (a new query). Matches select and scroll into view; case is ignored.
+	 */
+	| { action: "find"; query: string; step: -1 | 0 | 1 }
+	/** End the find: the page's selection is cleared. */
+	| { action: "findStop" };
+/** Where a find stands: the match shown (1-based, 0 for none) of how many. */
+export interface PreviewFindResult {
+	active: number;
+	total: number;
+}
 export interface PreviewPageResults {
 	pick: PreviewElement | null;
 	region: { image: string; elements: PreviewElement[] } | null;
@@ -317,6 +420,8 @@ export interface PreviewPageResults {
 	tweaks: PreviewCssVariable[];
 	setVariable: null;
 	clearVariables: null;
+	find: PreviewFindResult | null;
+	findStop: null;
 }
 export function previewUrl(value: string): string | null {
 	try {
@@ -337,18 +442,55 @@ export function previewAddress(input: string): string | null {
 	const host = /^(localhost|\d{1,3}(\.\d{1,3}){3}|\[::1\]|[\w-]+(\.[\w-]+)*\.[a-z]{2,})(:\d+)?([/?#]\S*)?$/i.exec(
 		text,
 	);
-	if (host) {
-		const loopback = ["localhost", "[::1]"].includes(host[1].toLowerCase()) || host[1].startsWith("127.");
-		return previewUrl(`${loopback ? "http" : "https"}://${text}`);
-	}
+	if (host) return previewUrl(`${loopbackHost(host[1]) ? "http" : "https"}://${text}`);
 	return `https://www.google.com/search?q=${encodeURIComponent(text)}`;
+}
+/**
+ * A host name this computer reaches on itself: `localhost` and any `*.localhost` (Chromium resolves those to
+ * loopback, RFC 6761), 127.0.0.0/8, `::1`, and the wildcard binds a server may print (`0.0.0.0`, `::`).
+ */
+function loopbackHost(hostname: string): boolean {
+	const host = hostname
+		.toLowerCase()
+		.replace(/^\[|\]$/g, "")
+		.replace(/\.$/, "");
+	return (
+		host === "localhost" ||
+		host.endsWith(".localhost") ||
+		/^127(\.\d{1,3}){3}$/.test(host) ||
+		host === "::1" ||
+		host === "0.0.0.0" ||
+		host === "::"
+	);
 }
 export function isLoopbackUrl(value: string): boolean {
 	try {
-		return ["localhost", "127.0.0.1", "[::1]"].includes(new URL(value).hostname);
+		return loopbackHost(new URL(value).hostname);
 	} catch {
 		return false;
 	}
+}
+/**
+ * The host a worktree's dev server opens under in the Preview (Orca's localhost worktree labels,
+ * `shared/workspace/ports/localhost-worktree-labels.ts:67-88`, MIT): `<worktree>.localhost`, which Chromium sends to
+ * loopback, so each worktree's pages keep their own cookies and storage. Only a linked worktree gets one; the main
+ * checkout stays on `localhost`. Lowercase letters, digits and `-`, at most 48 characters.
+ */
+export function worktreeLocalhost(worktreeFolder: string): string {
+	const name = worktreeFolder.split(/[\\/]/).findLast(part => part.trim()) ?? worktreeFolder;
+	const slug = name
+		.trim()
+		.toLowerCase()
+		.replace(/['"]/g, "")
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 48)
+		.replace(/-+$/g, "");
+	return `${slug || "worktree"}.localhost`;
+}
+/** The address a port a session's process listens on opens at: `http://localhost:<port>/`, or its worktree's host. */
+export function portAddress(port: number, worktreeFolder?: string | null): string {
+	return `http://${worktreeFolder ? worktreeLocalhost(worktreeFolder) : "localhost"}:${port}/`;
 }
 export function reducePreviewState(state: PreviewState, patch: Partial<PreviewState>): PreviewState {
 	return { ...state, ...patch };

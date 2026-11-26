@@ -8,6 +8,7 @@ export { AsyncSection, type AsyncSectionProps } from "./AsyncSection";
 export { AutoTitleButton } from "./AutoTitleButton";
 export { Badge, type BadgeProps, type BadgeVariant } from "./Badge";
 export { Banner, type BannerProps, type BannerVariant } from "./Banner";
+export { BotFace, type BotFaceProps } from "./BotFace";
 export { BrandMark, type BrandMarkProps, type BrandMarkVariant } from "./BrandMark";
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from "./Button";
 export {
@@ -40,6 +41,7 @@ export { DisclosureButton, type DisclosureButtonProps, type DisclosureChevron } 
 export { isTopmostDialog, registerDialogLayer } from "./dialog-layer";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { ErrorDetail } from "./ErrorDetail";
+export { FindBar, type FindBarProps } from "./FindBar";
 export { HoverCard, type HoverCardProps } from "./HoverCard";
 export { IconButton, type IconButtonProps, type IconButtonSize, type IconButtonTone } from "./IconButton";
 export { InlineNotice, type InlineNoticeProps, type InlineNoticeTone } from "./InlineNotice";

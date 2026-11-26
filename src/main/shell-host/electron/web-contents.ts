@@ -218,6 +218,39 @@ export class WebContents extends EventEmitter implements PageRecord {
 		return event.defaultPrevented;
 	}
 
+	/**
+	 * `wc.login`: a server's sign-in challenge to the page, as Electron's `login` event (`authInfo` names the server, the
+	 * callback takes the name and password, or nothing to cancel). Cancelled unless a listener takes it
+	 * (`preventDefault`), as Electron does.
+	 */
+	login(details: {
+		url: string;
+		origin: string;
+		scheme: string;
+		realm: string;
+	}): Promise<{ username: string; password: string } | null> {
+		const { promise, resolve } = Promise.withResolvers<{ username: string; password: string } | null>();
+		const event = makeEvent({});
+		const origin = URL.canParse(details.origin) ? new URL(details.origin) : null;
+		const callback = (username?: string, password?: string) =>
+			resolve(username === undefined ? null : { username, password: password ?? "" });
+		this.emit(
+			"login",
+			event,
+			{ url: details.url },
+			{
+				isProxy: false,
+				scheme: details.scheme,
+				host: origin?.hostname ?? "",
+				port: Number(origin?.port || (origin?.protocol === "https:" ? 443 : 80)),
+				realm: details.realm,
+			},
+			callback,
+		);
+		if (!event.defaultPrevented) callback();
+		return promise;
+	}
+
 	#settleLoads(error: Error | null): void {
 		const loads = this.#loads;
 		this.#loads = [];
@@ -564,6 +597,10 @@ export function servePages(host: Host): void {
 	client.handle("wc.navigate", (params: { wcId: number; kind: string } & Record<string, unknown>) => {
 		const page = host.pages.get(params.wcId) as WebContents | undefined;
 		return { prevent: page ? page.navigation(params.kind, params) : true };
+	});
+	client.handle("wc.login", (params: { wcId: number; url: string; origin: string; scheme: string; realm: string }) => {
+		const page = host.pages.get(params.wcId) as WebContents | undefined;
+		return page ? page.login(params) : null;
 	});
 }
 

@@ -141,6 +141,8 @@ export const IPC_ERROR_CODES = [
 	"tracker_forbidden",
 	"tracker_failed",
 	"tracker_busy",
+	// A paired host's tab has no process listening on the port a device's Preview asked for (host-services.ts `host.portTunnel.*`).
+	"port_unavailable",
 ] as const;
 
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];

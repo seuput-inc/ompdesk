@@ -28,6 +28,8 @@ import type { OmpTransport } from "../../shared/omp-api";
 import {
 	EMPTY_PREVIEW,
 	PREVIEW_COMMAND,
+	PREVIEW_DEVICE,
+	PREVIEW_HISTORY,
 	PREVIEW_STATE,
 	PREVIEW_STREAM_COPY,
 	PREVIEW_STREAM_DIALOG,
@@ -259,6 +261,9 @@ const EMPTY_LISTS = [
 	IPC_COMMANDS.SESSIONS_HELD,
 	"worktree-lifecycle:prompts-get",
 	"ssh-tools:prompts",
+	// The Preview start page's recent sites and running devices: none on the harness.
+	PREVIEW_HISTORY,
+	PREVIEW_DEVICE,
 ];
 
 /** A stock-shaped settings list (`get_settings_schema`): a few rows so a settings page shows its real layout. */

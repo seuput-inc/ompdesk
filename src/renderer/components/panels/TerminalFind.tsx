@@ -1,9 +1,8 @@
 import type { ISearchOptions } from "@xterm/addon-search";
-import { CaseSensitive, ChevronDown, ChevronUp, Regex, X } from "lucide-react";
-import { type KeyboardEvent, useCallback, useEffect, useState } from "react";
+import { CaseSensitive, Regex } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { useT } from "../../lib/i18n";
-import { isImeKeyEvent } from "../../lib/ime";
-import { IconButton, Input, PopoverSurface } from "../common";
+import { FindBar, IconButton, PopoverSurface } from "../common";
 
 /** What the find bar needs of xterm's search addon (`@xterm/addon-search`). */
 export interface TerminalSearch {
@@ -68,18 +67,6 @@ export function TerminalFind({ search, onClose }: { search: TerminalSearch; onCl
 	}, [query, search, options]);
 	const next = () => query && safeFind(() => search.findNext(query, options(false)));
 	const previous = () => query && safeFind(() => search.findPrevious(query, options(false)));
-	const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-		if (isImeKeyEvent(event.nativeEvent)) return;
-		if (event.key === "Escape") {
-			event.preventDefault();
-			event.stopPropagation();
-			onClose();
-		} else if (event.key === "Enter") {
-			event.preventDefault();
-			if (event.shiftKey) previous();
-			else next();
-		}
-	};
 	// xterm reports -1 once the matches pass its highlight limit.
 	const status = !query
 		? ""
@@ -90,53 +77,39 @@ export function TerminalFind({ search, onClose }: { search: TerminalSearch; onCl
 				: `${results.resultIndex + 1}/${results.resultCount}`;
 	return (
 		<div className="absolute top-2 right-3 z-10" data-terminal-find>
-			<PopoverSurface className="flex w-80 max-w-[calc(100%-1rem)] items-center gap-1 p-1.5">
-				<Input
-					aria-label={t("panel.terminal.find.label")}
+			<PopoverSurface className="w-80 max-w-[calc(100%-1rem)] p-1.5">
+				<FindBar
 					autoFocus
-					className="min-w-0 flex-1"
-					controlSize="sm"
-					onChange={event => setQuery(event.target.value)}
-					onKeyDown={onKeyDown}
-					placeholder={t("panel.terminal.find.placeholder")}
-					value={query}
+					canStep={Boolean(query)}
+					className="flex items-center gap-1"
+					closeLabel={t("panel.terminal.find.close")}
+					label={t("panel.terminal.find.label")}
+					nextLabel={t("panel.terminal.find.next")}
+					onClose={onClose}
+					onQuery={setQuery}
+					onStep={direction => (direction > 0 ? next() : previous())}
+					previousLabel={t("panel.terminal.find.previous")}
+					query={query}
+					status={status}
+					tools={
+						<>
+							<IconButton
+								icon={<CaseSensitive />}
+								label={t("panel.terminal.find.case")}
+								onClick={() => setCaseSensitive(on => !on)}
+								pressed={caseSensitive}
+								size="sm"
+							/>
+							<IconButton
+								icon={<Regex />}
+								label={t("panel.terminal.find.regex")}
+								onClick={() => setRegex(on => !on)}
+								pressed={regex}
+								size="sm"
+							/>
+						</>
+					}
 				/>
-				<IconButton
-					icon={<CaseSensitive />}
-					label={t("panel.terminal.find.case")}
-					onClick={() => setCaseSensitive(on => !on)}
-					pressed={caseSensitive}
-					size="sm"
-				/>
-				<IconButton
-					icon={<Regex />}
-					label={t("panel.terminal.find.regex")}
-					onClick={() => setRegex(on => !on)}
-					pressed={regex}
-					size="sm"
-				/>
-				<span
-					aria-live="polite"
-					className="min-w-10 shrink-0 text-center text-sc-xs text-(--sc-text-muted) tabular-nums"
-					data-terminal-find-status
-				>
-					{status}
-				</span>
-				<IconButton
-					disabled={!query}
-					icon={<ChevronUp />}
-					label={t("panel.terminal.find.previous")}
-					onClick={previous}
-					size="sm"
-				/>
-				<IconButton
-					disabled={!query}
-					icon={<ChevronDown />}
-					label={t("panel.terminal.find.next")}
-					onClick={next}
-					size="sm"
-				/>
-				<IconButton icon={<X />} label={t("panel.terminal.find.close")} onClick={onClose} size="sm" />
 			</PopoverSurface>
 		</div>
 	);

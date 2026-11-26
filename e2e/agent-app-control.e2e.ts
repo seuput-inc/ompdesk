@@ -115,7 +115,7 @@ test("the agent lists actions, changes the theme with a toast and undo, opens th
 
 	const opened = await app_("ui.panel", { tab: "preview" });
 	expect(opened.isError).toBe(false);
-	await expect(page.getByRole("textbox", { name: "Preview URL" })).toBeVisible({ timeout: 30_000 });
+	await expect(page.getByRole("combobox", { name: "Preview URL" })).toBeVisible({ timeout: 30_000 });
 
 	const usage = await app_("usage.read");
 	expect(usage.isError).toBe(false);

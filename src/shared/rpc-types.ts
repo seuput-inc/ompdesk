@@ -338,6 +338,10 @@ export type RpcCommand =
 	| { id?: string; type: "get_copy_targets" }
 	/** The newest http(s) link in an assistant message (stock `extractLastLink`), for `/open`. */
 	| { id?: string; type: "get_last_link" }
+	// What the tab's processes on its computer listen on (`SessionProcesses`, the core's `procs.ports`): a
+	// `SessionPortProcess[]`. `end_session_port` ends one of them by its id and start; `{ended}`.
+	| { id?: string; type: "get_session_ports" }
+	| { id?: string; type: "end_session_port"; pid: number; startedMs: number }
 
 	// Plan approval (structured)
 	| {
@@ -2919,6 +2923,17 @@ export interface CompactionPointsResult {
 	models: Array<{ selector: string; point: CompactionPoint }>;
 	/** The model each role resolves to in stock's `/models` Roles view, configured or auto-selected. */
 	roles: Array<{ role: string; selector: string; autoSelected: boolean; point: CompactionPoint }>;
+}
+
+/** One of a tab's processes that listens on TCP (`get_session_ports`). */
+export interface SessionPortProcess {
+	pid: number;
+	/** As `end_session_port` names it; absent when the OS did not say (then it cannot be ended from here). */
+	startedMs?: number;
+	/** Its executable's file name. */
+	name: string;
+	/** Ascending. */
+	ports: number[];
 }
 
 // ============================================================================

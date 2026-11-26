@@ -809,6 +809,7 @@ export class AgentControlRuntime {
 			owner && isWebWindow(owner.webContents.id)
 				? this.#deps.fileEdits.edits(owner.webContents.id, info.tabId)
 				: undefined;
+		const sidecar = this.#deps.pool.sidecarOf(info.tabId);
 		return {
 			tabId: info.tabId,
 			// Until stock names an opened session, it reads as the work it was opened for (`IpcTabInfo.task`).
@@ -816,8 +817,11 @@ export class AgentControlRuntime {
 			cwd: info.cwd,
 			...(info.device ? { device: info.device, deviceName: this.#deps.deviceName(info.device) } : {}),
 			status: info.status,
-			...(this.#deps.pool.sidecarOf(info.tabId)?.statusPayload?.sessionHeld ? { sessionHeld: true } : {}),
-			...(this.#deps.pool.sidecarOf(info.tabId)?.shared === true ? { viewing: true as const } : {}),
+			...(sidecar?.statusPayload?.sessionHeld ? { sessionHeld: true } : {}),
+			...(sidecar?.shared === true ? { viewing: true as const } : {}),
+			...(sidecar?.processTag
+				? { processTag: sidecar.processTag, ...(sidecar.pid !== undefined ? { ompPid: sidecar.pid } : {}) }
+				: {}),
 			...(info.message && (info.status === "error" || info.status === "exited") ? { failure: info.message } : {}),
 			...(info.status === "starting" && (info.queued || info.slow)
 				? { startWait: info.queued ? ("queued" as const) : ("slow" as const) }

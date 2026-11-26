@@ -16,6 +16,7 @@ import {
 	DEVICE_ORDER_EXCHANGE,
 	MOBILE_WEB_LINK_EVENT,
 	MODELS_CHANGED_EVENT,
+	PORT_TUNNEL_EVENT,
 	PREVIEW_RELAY_EVENT,
 	SESSIONS_DELETED_EVENT,
 	SessionsDeletedParams,
@@ -842,5 +843,82 @@ describe("agent browsing's tunnel to a host tab's relay", () => {
 		expect(closed).toHaveBeenCalledTimes(1);
 		expect(refused.isOpen).toBe(false);
 		expect(() => a.devices.previewRelay("unknown-host", "t1")).toThrow(/not paired/);
+	});
+});
+
+describe("a host tab's dev server through this computer's stand-in", () => {
+	async function tunnelled() {
+		const connected = await rig.connected();
+		const { b } = connected;
+		await vi.waitFor(() =>
+			expect(b.services.call.mock.calls.some(call => call[1] === "sessions.summaries")).toBe(true),
+		);
+		const conn = b.services.call.mock.calls.find(call => call[1] === "sessions.summaries")?.[3] as HostConnection;
+		const asked = () =>
+			b.services.call.mock.calls
+				.filter(call => String(call[1]).startsWith("host.portTunnel."))
+				.map(call => [call[1], call[2]] as [string, Record<string, unknown>]);
+		return { ...connected, conn, asked };
+	}
+
+	/** The Preview's connection to the stand-in, with what it read so far. */
+	async function browse(url: string, host = new URL(url).host) {
+		const socket = connect(Number(new URL(url).port), "127.0.0.1");
+		const read: Buffer[] = [];
+		socket.on("data", data => read.push(data));
+		const ended = new Promise<void>(done => socket.on("close", () => done()));
+		await new Promise<void>(done => socket.once("connect", () => done()));
+		const request = `GET / HTTP/1.1\r\nHost: ${host}\r\n\r\n`;
+		socket.write(request);
+		return { socket, request, read: () => Buffer.concat(read).toString(), ended };
+	}
+
+	it("carries each connection the Preview makes to the host's tab, both ways, and ends it with the host's side", async () => {
+		const { a, hostId, conn, asked } = await tunnelled();
+		const url = await a.devices.hostPort(hostId, "t1", 5173);
+		expect(url).toMatch(/^http:\/\/localhost:\d+\/$/);
+		// The same tab and port reuse the stand-in.
+		expect(await a.devices.hostPort(hostId, "t1", 5173)).toBe(url);
+
+		const page = await browse(url);
+		await vi.waitFor(() =>
+			expect(asked().map(([method]) => method)).toEqual(["host.portTunnel.connect", "host.portTunnel.send"]),
+		);
+		const [[, connect], [, sent]] = asked();
+		expect(connect).toMatchObject({ rtab: "t1", port: 5173 });
+		expect(sent).toEqual({ rtab: "t1", conn: connect?.conn, data: Buffer.from(page.request).toString("base64") });
+
+		conn.emit(PORT_TUNNEL_EVENT, {
+			kind: "data",
+			conn: connect?.conn,
+			data: Buffer.from("HTTP/1.1 204 No Content\r\n\r\n").toString("base64"),
+		});
+		await vi.waitFor(() => expect(page.read()).toBe("HTTP/1.1 204 No Content\r\n\r\n"));
+		conn.emit(PORT_TUNNEL_EVENT, { kind: "close", conn: connect?.conn });
+		await page.ended;
+	});
+
+	it("refuses a request naming another site, and stops standing in when the link drops", async () => {
+		const { a, b, hostId, asked } = await tunnelled();
+		const url = await a.devices.hostPort(hostId, "t1", 5174);
+		// DNS rebinding: a page of another site that resolves to this loopback never reaches the host.
+		const rebound = await browse(url, `evil.example:${new URL(url).port}`);
+		await rebound.ended;
+		expect(rebound.read()).toMatch(/^HTTP\/1\.1 421/);
+		expect(asked()).toEqual([]);
+
+		await b.devices.dispose();
+		await vi.waitFor(async () => {
+			const refused = connect(Number(new URL(url).port), "127.0.0.1");
+			const failed = await new Promise<boolean>(done => {
+				refused.once("error", () => done(true));
+				refused.once("connect", () => {
+					refused.destroy();
+					done(false);
+				});
+			});
+			expect(failed).toBe(true);
+		});
+		await expect(a.devices.hostPort("unknown-host", "t1", 5174)).rejects.toThrow(/not paired/);
 	});
 });

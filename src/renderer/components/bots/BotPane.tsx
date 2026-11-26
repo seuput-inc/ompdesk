@@ -71,7 +71,7 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 				</Banner>
 			)}
 			<header className="flex items-center gap-3 px-4 pt-4" data-bot-pane-header>
-				<BotAvatar bot={bot} mark={mark} size={36} />
+				<BotAvatar bot={bot} mark={mark} size={36} working={facts.working} />
 				<div className="flex min-w-0 flex-1 flex-col">
 					{renaming ? (
 						<Input

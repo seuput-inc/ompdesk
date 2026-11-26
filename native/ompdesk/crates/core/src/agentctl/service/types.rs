@@ -257,6 +257,12 @@ pub struct ControlTab {
     /// Its turn waits for the internet connection and goes on once it is back (`IpcTabInfo.awaitingConnection`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub awaiting_connection: bool,
+    /// The process tag of the tab's omp on this computer (`SessionProcesses`), absent for a paired host's tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_tag: Option<String>,
+    /// The tab's own omp, whose browser relay listens: never one of the session's servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omp_pid: Option<u32>,
 }
 
 /// Stock's auto-retry saga a running turn is in (`IpcRetrySaga`).

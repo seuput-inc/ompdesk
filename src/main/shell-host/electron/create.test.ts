@@ -772,6 +772,33 @@ describe("webContents", () => {
 		});
 	});
 
+	it("asks a page's login listener for a server's sign-in, and cancels when none takes it", async () => {
+		const { webContents } = new electron.BrowserWindow({});
+		const challenge = {
+			wcId: webContents.id,
+			url: "https://intranet.example/a",
+			origin: "https://intranet.example",
+			scheme: "basic",
+			realm: "Staff",
+		};
+		// Electron's default: nobody prevented the event, so the challenge is cancelled.
+		expect(await shell.call("wc.login", challenge)).toBeNull();
+		const asked: unknown[] = [];
+		webContents.on("login", (event, details, authInfo, callback) => {
+			event.preventDefault();
+			asked.push([details.url, authInfo]);
+			callback("ada", "s3cret");
+		});
+		expect(await shell.call("wc.login", challenge)).toEqual({ username: "ada", password: "s3cret" });
+		expect(asked).toEqual([
+			[
+				"https://intranet.example/a",
+				{ isProxy: false, scheme: "basic", host: "intranet.example", port: 443, realm: "Staff" },
+			],
+		]);
+		expect(await shell.call("wc.login", { ...challenge, wcId: 999 })).toBeNull();
+	});
+
 	it("executes JavaScript and builds the DevTools-protocol calls", async () => {
 		const { webContents } = new electron.BrowserWindow({});
 		fake.answers.set("wc.op", params => (params.op === "executeJavaScript" ? { result: 42 } : {}));

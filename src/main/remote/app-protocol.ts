@@ -101,6 +101,13 @@
  *   port while the host's `login` runs. `host.signIn.callback {rtab, path, query}` → SignInCallbackReply: the host
  *   replays `query` only to the callback of the open_url its tab's running sign-in raised, and only on that path with
  *   that flow's `state`, once; refused `sign_in_unavailable` otherwise. Free. An older host answers `unsupported`.
+ * - A host tab's dev server in a device's Preview (port-tunnels.ts; Orca's paired server forwards): the server runs
+ *   on the host's loopback, so the device stands in for it on its own and carries each connection the Preview makes.
+ *   `host.portTunnel.connect {rtab, port, conn}` → null (the host connects only to a port the tab's own processes listen
+ *   on, `get_session_ports`; refused `port_unavailable` otherwise), `host.portTunnel.send {rtab, conn, data}` → null
+ *   (bytes, base64), `host.portTunnel.close {rtab, conn}` → null; the host pushes the server's bytes and the
+ *   connection's end as the `host.portTunnel` event. `conn` is the device's own number for the connection. Free. An
+ *   older host answers `unsupported`.
  *
  * - What every session row shows of the host's sessions, as the host built it (`shared/session-summary.ts`):
  *   `sessions.summaries {}` → VersionedSummaries; each change comes as the `host.summaries` event (a SummaryDelta on
@@ -112,8 +119,8 @@
  *   hold are deleted); each delete is pushed as the `host.sessionsDeleted` event. An older host answers `unsupported`.
  *
  * Events (B → A): `tab.event` (TabEventMessage), `sessions.changed` (no data), `host.ompUpdate.changed`,
- * `host.schedules.changed`, `host.projects.changed`, `host.models.changed`, `host.previewRelay`, `host.summaries`,
- * `host.sessionsDeleted`, `host.remoteOpened` and `host.sessionLinks.changed`.
+ * `host.schedules.changed`, `host.projects.changed`, `host.models.changed`, `host.previewRelay`, `host.portTunnel`,
+ * `host.summaries`, `host.sessionsDeleted`, `host.remoteOpened` and `host.sessionLinks.changed`.
  * Both sides parse what crosses the link with the schemas below.
  */
 import { z } from "zod";
@@ -270,6 +277,27 @@ export const SignInCallbackReply = z.object({
 	contentType: z.string().max(200),
 	body: z.string().max(SIGN_IN_PAGE_MAX_CHARS),
 });
+/**
+ * A host tab's dev server through the device's stand-in (`host.portTunnel.*` above). The params are strict: the device
+ * names the tab and a port the host checks against the tab's own listening processes, never an address.
+ */
+export const PORT_TUNNEL_METHODS = {
+	connect: "host.portTunnel.connect",
+	send: "host.portTunnel.send",
+	close: "host.portTunnel.close",
+} as const;
+export const PORT_TUNNEL_EVENT = "host.portTunnel";
+const TunnelConn = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+export const PortTunnelConnectParams = z
+	.object({ rtab: PreviewRelayRtab, port: z.number().int().min(1).max(65_535), conn: TunnelConn })
+	.strict();
+export const PortTunnelSendParams = z.object({ rtab: PreviewRelayRtab, conn: TunnelConn, data: z.string() }).strict();
+export const PortTunnelCloseParams = z.object({ rtab: PreviewRelayRtab, conn: TunnelConn }).strict();
+export const PortTunnelEvent = z.discriminatedUnion("kind", [
+	z.object({ kind: z.literal("data"), conn: TunnelConn, data: z.string() }),
+	z.object({ kind: z.literal("close"), conn: TunnelConn }),
+]);
+export type PortTunnelEvent = z.infer<typeof PortTunnelEvent>;
 /**
  * This computer's session summaries changed (data: a `SummaryDelta`), sent to every connected device; `sessions.summaries
  * {}` answers the whole set (a device reads it as its link comes up and whenever a change does not apply on its copy).

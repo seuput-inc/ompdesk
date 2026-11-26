@@ -249,7 +249,7 @@ test("a visual's page sends nothing off its own origin; a clicked link opens onl
 		const aside = shell.locator("aside[data-docked]");
 		await pressShortcutUntilVisible(shell, "ControlOrMeta+j", aside);
 		await aside.getByRole("button", { name: "Preview", exact: true }).click();
-		const address = shell.getByRole("textbox", { name: "Preview URL" });
+		const address = shell.getByRole("combobox", { name: "Preview URL" });
 		await address.fill(`http://control.${DNS_SUFFIX}/`);
 		await address.press("Enter");
 		await expect(aside.getByRole("alert")).toContainText("ERR_NAME_NOT_RESOLVED");

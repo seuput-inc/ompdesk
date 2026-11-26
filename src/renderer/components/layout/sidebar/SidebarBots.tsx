@@ -216,7 +216,13 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 						{foldedFaces(sorted, facts)
 							.slice(0, 6)
 							.map(bot => (
-								<BotAvatar bot={bot} key={bot.id} mark={botMark(bot, facts.get(bot.id))} size={16} />
+								<BotAvatar
+									bot={bot}
+									key={bot.id}
+									mark={botMark(bot, facts.get(bot.id))}
+									size={16}
+									working={facts.get(bot.id)?.working}
+								/>
 							))}
 					</span>
 				)}
@@ -359,7 +365,7 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 									}
 								},
 							}}
-							leading={<BotAvatar bot={bot} mark={botMark(bot, fact)} size={28} />}
+							leading={<BotAvatar bot={bot} mark={botMark(bot, fact)} size={28} working={fact.working} />}
 							meta={
 								fact.working ? (
 									<WorkingArc state="turn" />

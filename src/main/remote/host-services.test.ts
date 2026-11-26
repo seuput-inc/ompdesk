@@ -11,7 +11,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
+import { type AddressInfo, createServer as createNetServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -79,6 +79,8 @@ import {
 	MOBILE_WEB_LINK_EVENT,
 	MODELS_CHANGED_EVENT,
 	OMP_UPDATE_EVENT,
+	PORT_TUNNEL_EVENT,
+	PORT_TUNNEL_METHODS,
 	PREVIEW_RELAY_EVENT,
 	PREVIEW_RELAY_METHODS,
 	PROJECTS_EVENT,
@@ -5878,6 +5880,107 @@ describe("LocalHostServices agent browsing tunnel (host.previewRelay.*)", () => 
 		await services.call(x.peer, PREVIEW_RELAY_METHODS.open, { rtab: "t1" }, x);
 		server.sockets[0]?.send("a screenshot that does not fit");
 		await vi.waitFor(() => expect(server.sockets[0]?.readyState).toBe(WebSocket.CLOSED));
+	});
+});
+
+describe("LocalHostServices dev-server tunnel (host.portTunnel.*)", () => {
+	const servers: Server[] = [];
+	afterEach(async () => {
+		for (const server of servers.splice(0)) await new Promise<void>(done => server.close(() => done()));
+	});
+
+	/** A tab's dev server stand-in: a TCP server on loopback that records what it hears and keeps its sockets. */
+	async function devServer() {
+		const sockets: Socket[] = [];
+		const heard: string[] = [];
+		const server = createNetServer(socket => {
+			sockets.push(socket);
+			socket.on("data", data => heard.push(data.toString()));
+		});
+		servers.push(server);
+		await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
+		return { port: (server.address() as AddressInfo).port, sockets, heard, server };
+	}
+
+	/** A device's tab whose processes listen on `ports` (its `get_session_ports`). */
+	async function tabListening(ports: number[]) {
+		const context = setup();
+		const x = new FakeConnection(peer("device-x"));
+		await context.services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
+		await context.services.call(x.peer, "tab.start", { rtab: "t1" }, x);
+		const sidecar = context.sidecars[0];
+		if (!sidecar) throw new Error("no sidecar");
+		sidecar.rpcClient.command = async (command: RpcCommand): Promise<RpcResponse> => ({
+			type: "response",
+			command: command.type,
+			success: true,
+			data: command.type === "get_session_ports" ? [{ pid: 4242, name: "node", ports }] : {},
+		});
+		const events = () => x.events.filter(entry => entry.event === PORT_TUNNEL_EVENT).map(entry => entry.data);
+		return { ...context, x, events };
+	}
+
+	it("connects only to a port the tab's own processes listen on, and carries the bytes both ways", async () => {
+		const server = await devServer();
+		const other = await devServer();
+		const { services, x, events } = await tabListening([server.port]);
+		const call = (method: string, params: unknown) => services.call(x.peer, method, params, x);
+
+		// A port nothing of the tab listens on is never dialed, though something there would answer.
+		const refused = await call(PORT_TUNNEL_METHODS.connect, { rtab: "t1", port: other.port, conn: 1 }).catch(
+			(error: unknown) => error,
+		);
+		expect(ipcErrorCode(refused)).toBe("port_unavailable");
+		expect(other.sockets).toEqual([]);
+		// A device never names an address, and another device's tab is not its to reach.
+		await expect(
+			call(PORT_TUNNEL_METHODS.connect, { rtab: "t1", port: server.port, conn: 2, host: "10.0.0.1" }),
+		).rejects.toThrow(/Invalid host.portTunnel.connect/);
+		const y = new FakeConnection(peer("device-y"));
+		const foreign = await services
+			.call(y.peer, PORT_TUNNEL_METHODS.connect, { rtab: "t1", port: server.port, conn: 3 }, y)
+			.catch((error: unknown) => error);
+		expect(ipcErrorCode(foreign)).toBe("unknown_tab");
+
+		// Bytes the device sends while the port is checked wait for the connection, in order.
+		const connecting = call(PORT_TUNNEL_METHODS.connect, { rtab: "t1", port: server.port, conn: 7 });
+		await call(PORT_TUNNEL_METHODS.send, { rtab: "t1", conn: 7, data: Buffer.from("GET / ").toString("base64") });
+		await connecting;
+		await call(PORT_TUNNEL_METHODS.send, { rtab: "t1", conn: 7, data: Buffer.from("HTTP/1.1").toString("base64") });
+		await vi.waitFor(() => expect(server.heard.join("")).toBe("GET / HTTP/1.1"));
+		server.sockets[0]?.write("HTTP/1.1 204 No Content\r\n\r\n");
+		await vi.waitFor(() =>
+			expect(events()).toContainEqual({
+				kind: "data",
+				conn: 7,
+				data: Buffer.from("HTTP/1.1 204 No Content\r\n\r\n").toString("base64"),
+			}),
+		);
+
+		// The server ends the connection: the device hears it.
+		server.sockets[0]?.end();
+		await vi.waitFor(() => expect(events()).toContainEqual({ kind: "close", conn: 7 }));
+	});
+
+	it("ends the tab's connections when the device closes one or the link drops", async () => {
+		const server = await devServer();
+		const { services, x } = await tabListening([server.port]);
+		const connect = (conn: number) =>
+			services.call(x.peer, PORT_TUNNEL_METHODS.connect, { rtab: "t1", port: server.port, conn }, x);
+		const ended = (index: number) => vi.waitFor(() => expect(server.sockets[index]?.readableEnded).toBe(true));
+		const reading = (index: number) => server.sockets[index]?.resume();
+
+		await connect(1);
+		await vi.waitFor(() => expect(server.sockets).toHaveLength(1));
+		reading(0);
+		await services.call(x.peer, PORT_TUNNEL_METHODS.close, { rtab: "t1", conn: 1 }, x);
+		await ended(0);
+
+		await connect(2);
+		await vi.waitFor(() => expect(server.sockets).toHaveLength(2));
+		reading(1);
+		services.disconnected(x.peer, x);
+		await ended(1);
 	});
 });
 
