@@ -1805,3 +1805,51 @@ async fn a_session_handed_to_a_bot_gets_its_home_chat_as_opener_and_the_text_fro
             .contains("Finish the release notes")
     );
 }
+
+#[tokio::test]
+async fn the_owners_create_carries_the_purpose_and_a_refused_seed_makes_no_bot() {
+    let root = Scratch::new();
+    let (control, _asked, _id) = ada(9_712, &root, Mails::default(), |_, _| None).await;
+    let state = control
+        .bots_command(json!({
+            "action": "create",
+            "name": "Rex",
+            "purpose": "Reviews pull requests.",
+            "skills": [{ "name": "pr-review", "content": "# Review\nRead the diff." }],
+        }))
+        .await
+        .unwrap();
+    let rex = state["bots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|bot| bot["name"] == "Rex")
+        .unwrap();
+    assert_eq!(rex["specialty"], json!("Reviews pull requests."));
+    assert!(root.0.join("rex/.omp/skills/pr-review/SKILL.md").is_file());
+    let refused = control
+        .bots_command(json!({ "action": "create", "name": "Bad", "skills": [{ "name": "../x", "content": "x" }] }))
+        .await;
+    assert!(refused.is_err());
+    assert!(control.bot_named("Bad").is_err());
+    assert!(
+        !root.0.join("bad").exists(),
+        "the folder it made goes with it"
+    );
+    let state = control
+        .bots_command(json!({ "action": "update", "id": rex["id"], "quiet": ["done", "nonsense"] }))
+        .await
+        .unwrap();
+    let rex = state["bots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|bot| bot["name"] == "Rex")
+        .unwrap();
+    assert_eq!(rex["quiet"], json!(["done"]));
+    let soul = control
+        .bots_command(json!({ "action": "file", "id": rex["id"], "file": "SOUL.md" }))
+        .await
+        .unwrap();
+    assert_eq!(soul["content"], json!("# Rex\n\nReviews pull requests.\n"));
+}

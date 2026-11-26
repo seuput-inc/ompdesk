@@ -37,7 +37,7 @@ import {
 	privacyPaneUrl,
 	reviewFromDevice,
 } from "../shared/agent-control";
-import { BOTS_COMMAND, BOTS_FOLDER, type BotsRequest } from "../shared/bots";
+import { BOTS_COMMAND, BOTS_FOLDER, type BotsCall } from "../shared/bots";
 import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
@@ -2572,7 +2572,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// The Bots page: this computer's bots and their items (the owner's own; agents use ompdesk_bot and ompdesk_item).
 	ipc.handle(BOTS_COMMAND, (_caller, request: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid bots request");
-		return agentControl.bots(request as BotsRequest);
+		return agentControl.bots(request as BotsCall);
 	});
 	// Settings › Schedules › Email accounts: this computer's own (a password goes in and never comes back out).
 	ipc.handle(MAIL_ACCOUNTS_COMMAND, async (_caller, request: unknown) => {
