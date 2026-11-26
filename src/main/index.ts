@@ -6,7 +6,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir, release } from "node:os";
-import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import {
 	app,
@@ -66,7 +66,7 @@ import {
 } from "../shared/desktop-prefs";
 import { ECC_PREF } from "../shared/ecc";
 import { LAUNCH_INCIDENT_PREF, launchIncidentOf } from "../shared/feedback";
-import { IPC_COMMANDS, IPC_EVENTS, type SessionKind } from "../shared/ipc-types";
+import { IPC_COMMANDS, IPC_EVENTS, type IpcRemoveFromComputerResult, type SessionKind } from "../shared/ipc-types";
 import { KEYCHAIN_WOULD_ASK } from "../shared/keychain";
 import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
 import { MOBILE_WEB_COMMAND, MOBILE_WEB_GET_STATE, MOBILE_WEB_PORT, MOBILE_WEB_STATE } from "../shared/mobile-web";
@@ -96,7 +96,15 @@ import { registerAiMemoryIpc } from "./ai-memory/ipc";
 import { AiMemoryService, pidFileControl } from "./ai-memory/service";
 import { MemorySync, serveConclusionPull, serveConclusionPush, servePull, servePush } from "./ai-memory/sync";
 import { MemoryUpkeep } from "./ai-memory/upkeep";
-import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes, startQuitLog } from "./app-quit";
+import {
+	confirmQuit,
+	installQuitGuard,
+	quitApproved,
+	quitRisk,
+	requestQuit,
+	setQuitResumes,
+	startQuitLog,
+} from "./app-quit";
 import { sweepStaleTemps } from "./atomic-file";
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
@@ -104,7 +112,7 @@ import { onBotsState } from "./bots";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
 import { answersWithin, ConnectivityMonitor, PROBE_TIMEOUT_MS, probeTarget, reaches } from "./connectivity";
 import { CONSOLE_POLL_MS, ConsoleWindowWatch, listConsoleWindows } from "./console-window-watch";
-import { installCliLaunchers } from "./control-socket/cli-install";
+import { installCliLaunchers, removeCliLaunchers } from "./control-socket/cli-install";
 import { takeHubMinute } from "./core/hub";
 import { core, shutdownCore } from "./core/process";
 import { routeCoreSaves } from "./core-saves";
@@ -129,6 +137,7 @@ import { startLowDiskWatch } from "./health-watch";
 import { getMainLanguage, mainT } from "./i18n";
 import { canGiveBack } from "./idle-release";
 import { startupCwd } from "./initial-cwd";
+import { spawnDetachedOffThread } from "./installer-spawn";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
 import { shellRunner } from "./local/git/exec";
 import {
@@ -250,6 +259,7 @@ import {
 	setupUpdater,
 	updateStatus,
 } from "./updater";
+import { macBundlePath } from "./updater-state";
 import { FileEditReports } from "./web/file-edit-reports";
 import { IPC_POLICY } from "./web/ipc-policy";
 import { IpcRegistry } from "./web/ipc-registry";
@@ -879,14 +889,56 @@ app.whenReady().then(async () => {
 	});
 	configureTerminalHistory({ userData: app.getPath("userData"), notice: () => mainT("terminal.restored") });
 	// The CLI the app ships (bun run build:native stages it for an unpacked run).
-	await installCliLaunchers({
+	const cliLaunchers = {
 		binary: nativeBinPath("ompdesk"),
 		userData: app.getPath("userData"),
 		platform,
 		packaged: app.isPackaged,
 		env: process.env,
 		home: homedir(),
-	});
+	};
+	await installCliLaunchers(cliLaunchers);
+	/**
+	 * Settings › Updates & about › "Remove OMPdesk from this computer" (Orca FS119,
+	 * settings/advanced/uninstall/use-orca-uninstall.ts:76). The running-work guard asks first (refused: nothing is
+	 * removed, null). Then memory's wiring in the terminal omp goes when it is on (Memory's own switch path), the
+	 * launchers go, the app shows its bundle in Finder or starts its Windows uninstaller (off main's thread, as an
+	 * update's setup: installer-spawn.ts), and quits. Sessions, memory, omp and settings stay.
+	 */
+	const removeFromComputer = async (): Promise<IpcRemoveFromComputerResult | null> => {
+		if (!(await confirmQuit())) return null;
+		// A failure leaves the wiring; the launchers and the app still go.
+		const terminal = aiMemoryService?.state().wiring.terminal
+			? await aiMemoryService.setTerminal(false).then(
+					() => "removed" as const,
+					() => "failed" as const,
+				)
+			: ("none" as const);
+		const removed = await removeCliLaunchers(cliLaunchers);
+		let leaves: IpcRemoveFromComputerResult["app"] = "none";
+		const exe = app.isPackaged ? app.getPath("exe") : null;
+		const bundle = exe && process.platform === "darwin" ? macBundlePath(exe) : undefined;
+		if (bundle) {
+			shell.showItemInFolder(bundle);
+			leaves = "finder";
+		} else if (exe && process.platform === "win32") {
+			// electron-builder's NSIS uninstaller beside the app (`Uninstall ${productName}.exe`); it keeps app data.
+			const uninstaller = join(dirname(exe), "Uninstall OMPdesk.exe");
+			if (existsSync(uninstaller))
+				leaves = await spawnDetachedOffThread(uninstaller, []).then(
+					() => "uninstaller" as const,
+					() => "none" as const,
+				);
+		}
+		writeRuntimeLog({
+			source: "app-quit",
+			message: "remove from this computer",
+			details: { removed: removed.length, app: leaves, terminal },
+		});
+		// After the answer has left for the page; the guard already asked.
+		setTimeout(() => requestQuit("command", { detail: "remove from this computer" }), 0);
+		return { removed, app: leaves, terminal };
+	};
 	const builtinDir = app.isPackaged
 		? join(process.resourcesPath, "omp-builtin")
 		: join(devResourcesDir, "omp-builtin");
@@ -2564,6 +2616,7 @@ app.whenReady().then(async () => {
 	});
 	registerIpcHandlers({
 		openPageExternal,
+		removeFromComputer,
 		admitNotification,
 		fileEditReports,
 		ipc,

@@ -38,6 +38,7 @@ import { useFocusedHost, useHostView } from "../../stores/remote";
 import { useSessionStore } from "../../stores/session";
 import { toast, toastError } from "../../stores/toast";
 import { runUpdaterAction, useUpdaterStore } from "../../stores/updater";
+import { webRuntime } from "../../web/runtime";
 import {
 	Badge,
 	Banner,
@@ -55,7 +56,8 @@ import { AppAutoUpdateRow } from "./AppAutoUpdateRow";
 import { DiagnosticsRow } from "./DiagnosticsRow";
 import { OmpHeldNote, OmpTestedNote, OmpUpdateFailureNotice } from "./OmpUpdateRows";
 import { ProductStar } from "./ProductStar";
-import { SettingsRow, SettingsSection } from "./SettingsLayout";
+import { RemoveFromComputerRow } from "./RemoveFromComputerRow";
+import { SettingsAdvanced, SettingsRow, SettingsSection } from "./SettingsLayout";
 
 export type UpdateOverviewState = "checking" | "healthy" | "attention" | "error";
 
@@ -325,6 +327,13 @@ export function UpdatesSection() {
 				id="setting-about-star"
 				label={t("about.repo")}
 			/>
+
+			{/* This computer's own removal: never from a phone's page, nor while Settings show a paired host. */}
+			{!host && webRuntime() === null && (
+				<SettingsAdvanced>
+					<RemoveFromComputerRow />
+				</SettingsAdvanced>
+			)}
 		</SettingsSection>
 	);
 }

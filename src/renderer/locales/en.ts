@@ -3263,7 +3263,7 @@ export const en: Record<string, string> = {
 	"stats.daily.copyFailed": "Image not copied",
 	"stats.daily.save": "Save image…",
 	"stats.daily.saveFailed": "Image not saved",
-	"stats.daily.drawFailed": "The card could not be drawn.",
+	"stats.daily.drawFailed": "Couldn't draw the card.",
 
 	// Stats models route
 	"stats.models.requestsByModel": "Requests by model",
@@ -6110,6 +6110,19 @@ export const en: Record<string, string> = {
 	"diagnostics.status.error": "Error",
 	"about.repo": "OMPdesk on GitHub",
 	"about.repoDesc": "The star only tells the maintainer the app helps.",
+	"settings.remove.label": "Remove OMPdesk from this computer",
+	"settings.remove.desc": "Removes the ompdesk command, then the app. Sessions, memory and omp stay.",
+	"settings.remove.action": "Remove…",
+	"settings.remove.title": "Remove OMPdesk from this computer?",
+	"settings.remove.goes": "What goes:",
+	"settings.remove.goesCli": "The ompdesk command in your terminals",
+	"settings.remove.goesTerminal": "Memory's link in the terminal omp",
+	"settings.remove.goesApp":
+		"The app itself: on a Mac it is shown in Finder to move to the Bin; on Windows its uninstaller starts",
+	"settings.remove.stays": "What stays: your sessions, memory pages, omp and OMPdesk's settings folder.",
+	"settings.remove.quits": "OMPdesk quits when it is done.",
+	"settings.remove.confirm": "Remove and quit",
+	"settings.remove.failed": "OMPdesk not removed",
 	"about.star": "Star on GitHub",
 	"about.starred": "Starred",
 	"about.openRepo": "Open on GitHub",

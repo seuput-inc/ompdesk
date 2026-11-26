@@ -76,6 +76,7 @@ import type {
 	IpcOpenPathResult,
 	IpcPrefsChangedPayload,
 	IpcPushTestResult,
+	IpcRemoveFromComputerResult,
 	IpcSessionOpenNewWindowPayload,
 	IpcSessionOwner,
 	IpcSessionsChanged,
@@ -326,10 +327,11 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			diagnostics: () => transport.invoke(IPC_COMMANDS.DIAGNOSTICS_BUILD) as Promise<string>,
 			startupMark: mark => transport.send(IPC_COMMANDS.RUNTIME_STARTUP_MARK, mark),
 		},
-		// Fire-and-forget: the guard may show a modal, and the renderer has nothing
-		// to learn from the outcome.
 		app: {
+			// Fire-and-forget: the guard may show a modal, and the renderer has nothing to learn from the outcome.
 			quit: () => transport.send(IPC_COMMANDS.APP_QUIT),
+			removeFromComputer: () =>
+				transport.invoke(IPC_COMMANDS.APP_REMOVE) as Promise<IpcRemoveFromComputerResult | null>,
 		},
 
 		rpc: {
