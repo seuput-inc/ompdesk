@@ -5447,7 +5447,7 @@ export const ko: Record<string, string> = {
 	"panel.preview.feedback.regionImage": "영역 {n} 스크린샷",
 	"panel.preview.feedback.draw": "스크린샷 {n}에 그리기",
 	"panel.preview.feedback.drawTitle": "스크린샷 {n}에 그리기",
-	"panel.preview.feedback.drawHint": "끌어서 그리세요. 그린 선은 그림의 일부로 에이전트에게 갑니다.",
+	"panel.preview.feedback.drawHint": "끌어서 그리세요. 그린 선은 그림의 일부로 에이전트에게 전해져요.",
 	"panel.preview.feedback.drawUndo": "되돌리기",
 	"panel.preview.feedback.drawClear": "모두 지우기",
 	"panel.preview.feedback.elements": "영역 안의 요소",
