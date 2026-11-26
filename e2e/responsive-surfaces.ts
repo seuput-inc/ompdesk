@@ -271,7 +271,7 @@ async function ui(page: Page, action: string, ...args: unknown[]): Promise<void>
  * Show the side panel's `view` by clicks a person makes, on a real window as on the harness: the title bar's Side
  * panel button when the panel is closed, then the view's button (the panel's top bar; a phone's tab bar at its foot).
  */
-async function openPanelView(page: Page, look: Look, view: "diff" | "files"): Promise<void> {
+async function openPanelView(page: Page, look: Look, view: "diff" | "files" | "terminal"): Promise<void> {
 	const button = page
 		.locator(".omp-panel-topbar:visible, [data-panel-tabbar]:visible")
 		.getByRole("button", { name: say(look, `panel.tabs.${view}`), exact: true })
@@ -304,15 +304,18 @@ async function clearNotesAndClose(page: Page): Promise<void> {
  * Open the command palette by clicks: the sidebar's search button (Command palette), behind the phone's Open menu
  * drawer where the sidebar is one.
  */
-async function clickCommandPalette(page: Page): Promise<void> {
+async function clickCommandPalette(page: Page, look: Look): Promise<void> {
 	const entry = page.locator("[data-command-center-entry]:visible").first();
 	if (!(await entry.isVisible().catch(() => false)))
-		await page.getByRole("button", { name: "Open menu", exact: true }).first().click();
+		await page
+			.getByRole("button", { name: say(look, "shell.openMenu"), exact: true })
+			.first()
+			.click();
 	await entry.click();
 }
 
-async function openWorkspaceDialog(page: Page): Promise<void> {
-	await clickCommandPalette(page);
+async function openWorkspaceDialog(page: Page, look: Look): Promise<void> {
+	await clickCommandPalette(page, look);
 	const palette = page.locator('[role="dialog"]:has([data-palette-index])');
 	await palette.getByRole("combobox").fill("switch-project");
 	await palette.locator('[data-command-name="switch-project"]').click();
@@ -1634,16 +1637,48 @@ export const SURFACES: readonly Surface[] = [
 			area: "A",
 			title: `Side panel › ${panel}`,
 			open: async (page, look) => {
-				if (panel !== "diff") return ui(page, "setPanelTab", panel);
-				await openPanelView(page, look, "diff");
-				await page.locator("[data-scm-bar]:visible").first().waitFor({ timeout: 20_000 });
+				if (panel === "preview" || panel === "files") return ui(page, "setPanelTab", panel);
+				await openPanelView(page, look, panel);
+				await page
+					.locator(panel === "diff" ? "[data-scm-bar]:visible" : "[data-terminal-head]:visible")
+					.first()
+					.waitFor({ timeout: 20_000 });
 			},
+			// The terminal's sheet is ready once its first shell's tab shows (with the phone's key bar under it).
 			ready:
-				panel === "diff" ? "[data-scm-bar]:visible" : "[data-sheet-panel], [data-panel-tabbar], .omp-panel-topbar",
-			...(panel === "diff" ? { parity: { session: "work" as const, after: closePanelView } } : {}),
+				panel === "diff"
+					? "[data-scm-bar]:visible"
+					: panel === "terminal"
+						? "[data-terminal-tab]:visible"
+						: "[data-sheet-panel], [data-panel-tabbar], .omp-panel-topbar",
+			...(panel === "diff" || panel === "terminal"
+				? { parity: { session: "work" as const, after: closePanelView } }
+				: {}),
 			settle: 900,
 		}),
 	),
+	{
+		// The quick terminal (Orca's floating terminal): opened from the palette, its first shell's tab ready.
+		id: "quick-terminal",
+		area: "A",
+		title: "Quick terminal",
+		open: async (page, look) => {
+			await clickCommandPalette(page, look);
+			const palette = page.locator('[role="dialog"]:has([data-palette-index])');
+			await palette.getByRole("combobox").fill("quick-terminal");
+			await palette.locator('[data-command-name="quick-terminal"]').click();
+		},
+		ready: '[data-sheet-kind="quick-terminal"] [data-terminal-tab]',
+		// The shell takes Escape (xterm keeps it), so the sheet closes by its own ✕.
+		parity: {
+			session: "work",
+			after: async page => {
+				const close = page.locator('[data-sheet-kind="quick-terminal"] button[aria-label="Close"]').first();
+				if (await close.isVisible().catch(() => false)) await close.click();
+			},
+		},
+		settle: 900,
+	},
 	...VIEW_SHEETS.map(
 		(view): Surface => ({
 			id: `sheet-${view}`,
@@ -2092,9 +2127,9 @@ export const SURFACES: readonly Surface[] = [
 			title: dialog.title,
 			open: (page, look) =>
 				dialog.id === "dialog-command-palette"
-					? clickCommandPalette(page)
+					? clickCommandPalette(page, look)
 					: dialog.id === "dialog-workspace"
-						? openWorkspaceDialog(page)
+						? openWorkspaceDialog(page, look)
 						: dialog.id === "dialog-model-setup"
 							? openModelSetup(page, look)
 							: ui(page, dialog.action, ...(dialog.args ?? [])),

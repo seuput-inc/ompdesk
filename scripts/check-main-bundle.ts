@@ -417,16 +417,20 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // run 45687946641), 3,139 bytes over. The budget is that measure plus 80 bytes.
 // With main's queued-edit requeue (8c6217faf, b99ecc9af: the composer store's `editsRequeueing`) merged: measured
 // 2,215,938 (branch run 45699393025). The budget is that measure plus 80 bytes.
+// The quick terminal's shortcut, store fields and lazy mount, the palette's quick-terminal and saved-command rows (Orca
+// terminal port, 26 Nov 2026; the saved-command store and parser load with the palette, the sheet and xterm on first
+// open), on top of the review notes: measured 2,218,875 (local build of omp/agent/orca-terminal rebased on 73923cfad),
+// 2,857 bytes over. The budget is that measure plus 80 bytes.
 // An `a2ui` call's own chat row (26 Nov 2026, docs/design/a2ui.md §2), all of it in `main-*.js` (the engine and views
 // stay in the A2UI chunk): `buildHistoryRows` cutting the call out of its card, `MessageBubble` choosing the card, the
 // one lazy loader and its Suspense, the tool's row label, and the preload list's seven new chunk names (the A2UI chunk
 // and what it shares with other lazy chunks: Slider, lib/chart, four lucide icons). Main at 73923cfad measured
-// 2,215,938 (run 45705643845); with this, 2,217,032 (branch run 45710193733), 1,094 bytes more. The budget is that
-// measure plus 80 bytes.
+// 2,215,938 (run 45705643845); with this, 2,217,032 (branch run 45710193733), 1,094 bytes more.
 // The A2UI answer path (unit 4): ExtensionDialog telling an a2ui marker form from another (the contracts' marker
 // parser) and handing it to the dock row's lazy loader (the row itself is in the A2UI chunk), and the step reveal
-// finding an a2ui chat row: 2,217,814 (branch run 45712547026), 782 bytes more. The budget is that measure plus 80.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_217_894;
+// finding an a2ui chat row: 2,217,814 (branch run 45712547026), 782 bytes more.
+// Both on top of the quick terminal: the measure below plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_220_831;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

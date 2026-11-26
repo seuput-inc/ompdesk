@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { CustomProviderView, IpcSavedFolder, SessionInfo } from "../../shared/ipc-types";
+import type { SshTarget } from "../../shared/ssh-tools";
 import { KEYMAP_ACTIONS, type KeymapOverrides, sanitizeOverrides } from "../lib/keymap";
 import type { NotificationTone } from "../lib/notification-sound";
 import { PREFS_BOOT_RETRY_MS, readPref } from "../lib/prefs-read";
@@ -166,6 +167,15 @@ interface UiStore {
 	discardedForTabClose: string | null;
 	/** Terminal session the Terminal panel selects once it lists it ("Run in terminal", /cleanse); cleared then. */
 	terminalFocusId: string | null;
+	/**
+	 * A terminal asked for (the keymap's `terminal.new`, the palette, Settings › SSH's Open terminal): the Terminal panel,
+	 * or the quick terminal with `scratch`, starts one for each `seq` it has not answered, running `ssh`'s host when set.
+	 */
+	terminalNew: { seq: number; scratch?: boolean; ssh?: SshTarget };
+	newTerminal: (options?: { scratch?: boolean; ssh?: SshTarget }) => void;
+	/** The quick terminal (Orca's floating terminal): this window's terminals in the home folder, and its notes. */
+	quickTerminalOpen: boolean;
+	setQuickTerminalOpen: (open: boolean) => void;
 	/** The Files drawer's viewer asked for a wider docked panel (not persisted; the drag width stays the pref). */
 	filePreviewExpanded: boolean;
 	/** The Terminal panel asked for a wider docked panel, like `filePreviewExpanded` (not persisted). */
@@ -461,6 +471,9 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 	pendingFileSwitch: null,
 	discardedForTabClose: null,
 	terminalFocusId: null,
+	terminalNew: { seq: 0 },
+	quickTerminalOpen: false,
+	setQuickTerminalOpen: open => set({ quickTerminalOpen: open }),
 	filePreviewExpanded: false,
 	terminalExpanded: false,
 	fileViewModes: new Map(),
@@ -500,6 +513,11 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 		const next = { panelTab: tab, panelVisible: true };
 		if (get().fileEditDirty && tab !== get().panelTab) set({ pendingFileSwitch: next });
 		else set(next);
+	},
+	newTerminal: options => {
+		if (options?.scratch) set({ quickTerminalOpen: true });
+		else get().setPanelTab("terminal");
+		set({ terminalNew: { seq: get().terminalNew.seq + 1, ...options } });
 	},
 	openSubagentPanel: subagent => {
 		const next = { panelSubagent: subagent, panelTab: "subagent" as const, panelVisible: true };

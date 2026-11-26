@@ -1,3 +1,5 @@
+import type { SshTarget } from "./ssh-tools";
+
 export interface TerminalSnapshot {
 	id: string;
 	output: string;
@@ -17,6 +19,15 @@ export interface TerminalSnapshot {
 	 * character, so the viewer clears its screen before writing it instead of continuing a stream with a hole in it.
 	 */
 	gap?: boolean;
+	/** The name a person gave this terminal (Rename); absent: none, the program's title or the shell's name show. */
+	title?: string;
+	/** The shell's program name (`zsh`, `pwsh`), what its tab reads until a program or a person names it. */
+	shell?: string;
+	/**
+	 * The answer to `busy`: a command runs in the shell's foreground (true) or none does (false); absent where the
+	 * worker could not tell, which a close treats as running.
+	 */
+	busy?: boolean;
 }
 /**
  * What a restart keeps of one side-panel terminal (`crates/core/src/termhistory.rs`): its tab's session file, its
@@ -48,6 +59,8 @@ export interface TerminalShell {
 }
 /** Pref holding the shell path new terminals start with; unset or unknown = the first detected shell. */
 export const TERMINAL_SHELL_PREF = "terminalShell";
+/** The quick terminal's stand-in tab id: a window's own terminals in the home folder, kept by no session. */
+export const SCRATCH_TERMINAL_TAB = "~scratch";
 /** A web viewer's `list` is held at most this long when nothing new has been written. */
 export const TERMINAL_POLL_MAX_WAIT_MS = 1000;
 /** The most output (UTF-16 units) one reply carries to a web viewer: the viewer acknowledges it by asking again. */
@@ -58,8 +71,19 @@ export type TerminalOperation =
 	 * restart, close, clear, claim), or this long (a viewport's long poll; at most `TERMINAL_POLL_MAX_WAIT_MS`). `budget`: cut each session's `output` to this many units.
 	 */
 	| { action: "list"; offsets?: Record<string, number>; waitMs?: number; budget?: number }
-	/** `shell`: a detected shell's path; omitted = this computer's default. */
-	| { action: "create"; cols: number; rows: number; shell?: string }
+	/**
+	 * `shell`: a detected shell's path; omitted = this computer's default. `ssh`: a saved host of Settings › SSH, which
+	 * main turns into its `ssh` run (`program`, never accepted from a page). `title`: the terminal's name from the start.
+	 */
+	| {
+			action: "create";
+			cols: number;
+			rows: number;
+			shell?: string;
+			ssh?: SshTarget;
+			title?: string;
+			program?: { path: string; args: string[] };
+	  }
 	| { action: "write"; id: string; data: string }
 	| { action: "resize"; id: string; cols: number; rows: number }
 	/** Take the PTY's size from whoever has it (the viewer's next `resize` is then applied). */
@@ -69,7 +93,10 @@ export type TerminalOperation =
 	 * screen stayed blank after a `gap` replay settled. Answered as a list without output.
 	 */
 	| { action: "redraw"; id: string }
-	| { action: "close" | "restart" | "clear"; id: string };
+	/** Name the terminal for every viewer; "" gives it back its program's or shell's name. */
+	| { action: "rename"; id: string; title: string }
+	/** Whether a command runs in the shell (`busy` on its row): a close asks first only then (Orca FT22). */
+	| { action: "close" | "restart" | "clear" | "busy"; id: string };
 export interface TerminalApi {
 	request(tabId: string, operation: TerminalOperation): Promise<TerminalSnapshot[]>;
 	/** Shells the tab's computer can start (a paired host's for its tabs), the default first. */

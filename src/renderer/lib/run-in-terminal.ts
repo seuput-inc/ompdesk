@@ -4,6 +4,7 @@
  * host's tab uses the host's), the first live session or a new one, and the Terminal panel
  * opens on it. Lines are typed as the keyboard would (`\r`), ending with one.
  */
+import { commandInput } from "../../shared/terminal-commands";
 import { useUiStore } from "../stores/ui";
 
 /** Fence languages (after CodeBlock's alias step) whose text a shell runs. */
@@ -21,11 +22,7 @@ export async function runInTerminal(tabId: string, code: string): Promise<void> 
 		sessions.find(session => !session.exited) ??
 		(await window.omp.terminal.request(tabId, { action: "create", cols: 80, rows: 24 })).at(-1);
 	if (!live) throw new Error("No terminal session");
-	await window.omp.terminal.request(tabId, {
-		action: "write",
-		id: live.id,
-		data: `${code.replace(/\r?\n/g, "\r").replace(/\r+$/, "")}\r`,
-	});
+	await window.omp.terminal.request(tabId, { action: "write", id: live.id, data: commandInput(code) });
 	useUiStore.setState({ terminalFocusId: live.id });
 	useUiStore.getState().setPanelTab("terminal");
 }

@@ -129,7 +129,7 @@ import { stockHelperRequest } from "../stock-helper";
 import { MAX_FORMER_TAB_IDS } from "../tab-layout";
 import { sessionFolderState } from "../tab-spawn";
 import { MAX_TERMINAL_READ_LINES } from "../terminal/agent-tool";
-import { disposeTerminals, readTerminalOutput, terminalRequest } from "../terminal/requests";
+import { disposeTerminals, readTerminalOutput, terminalRequest, validPageOperation } from "../terminal/requests";
 import { detectShells } from "../terminal/shells";
 import {
 	MovesInFlight,
@@ -1493,13 +1493,12 @@ export class LocalHostServices implements HostServices {
 			case "terminal.request": {
 				const { rtab, operation } = parse(TerminalParams, method, params);
 				const tab = this.#tab(peer, rtab);
+				// A device names neither the program a PTY here runs nor this computer's saved SSH hosts.
+				const asked = operation as TerminalOperation;
+				if (!validPageOperation(asked) || (asked.action === "create" && asked.ssh))
+					throw new Error("Invalid terminal operation");
 				// A paired device's terminal here is never told where this computer's control socket is.
-				return terminalRequest(
-					{ deviceId: peer.deviceId, rtab },
-					tab.sidecar.cwd,
-					operation as TerminalOperation,
-					controlEnvFor(true),
-				);
+				return terminalRequest({ deviceId: peer.deviceId, rtab }, tab.sidecar.cwd, asked, controlEnvFor(true));
 			}
 			case "terminal.read": {
 				const { rtab, read } = parse(TerminalReadParams, method, params);

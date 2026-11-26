@@ -9,7 +9,7 @@
  * (`remote_path_native`): this machine cannot see that disk.
  */
 
-import { promises as fsp } from "node:fs";
+import { promises as fsp, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, dialog, Notification, screen, shell } from "electron";
@@ -137,6 +137,8 @@ import { SCHEDULES_COMMAND, SCHEDULES_LOG, type Schedule, type SchedulesRequest 
 import { hostedSummaries, type SummariesChanged } from "../shared/session-summary";
 import { SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import { SIDEBAR_PROJECTS_COMMAND } from "../shared/sidebar-projects";
+import { parseTerminalCommands, TERMINAL_COMMANDS_PREF } from "../shared/terminal-commands";
+import { SCRATCH_TERMINAL_TAB } from "../shared/terminal-types";
 import { isUiLanguage } from "../shared/ui-language";
 import {
 	findChromiumBrowsers,
@@ -402,10 +404,21 @@ function targetFor(deps: IpcDeps, caller: IpcCaller, tabId?: string) {
 function cwdFor(deps: IpcDeps, caller: IpcCaller, tabId?: string): string | null {
 	const win = caller.win;
 	if (!win) return null;
+	if (tabId === SCRATCH_TERMINAL_TAB) return quickNotesFolder();
 	const target = deps.sidecarPool.tabTarget(win, tabId);
 	if (tabId) return target && !target.device ? target.sidecar.cwd : null;
 	if (target && !target.device) return target.sidecar.cwd;
 	return deps.windowManager.recordFor(win)?.cwd ?? null;
+}
+
+/** The quick terminal's files are its scratch notes, `<userData>/notes` (made at first use, this user's alone). */
+let notesFolder: string | null = null;
+function quickNotesFolder(): string {
+	if (notesFolder) return notesFolder;
+	const folder = path.join(app.getPath("userData"), "notes");
+	mkdirSync(folder, { recursive: true, mode: 0o700 });
+	notesFolder = folder;
+	return folder;
 }
 
 /** The caller's cwd when its active tab runs on `device` (undefined = this machine), else null. */
@@ -2230,6 +2243,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		}
 		if (payload.key === JUDGE_ASSIST_PREF && typeof payload.value !== "boolean") {
 			throw codedError("invalid_preference_key", "Invalid judge assist preference");
+		}
+		// Saved terminal commands run in a shell as typed: only a list that reads whole is stored.
+		if (
+			payload.key === TERMINAL_COMMANDS_PREF &&
+			(!Array.isArray(payload.value) || parseTerminalCommands(payload.value).length !== payload.value.length)
+		) {
+			throw codedError("invalid_preference_key", "Invalid saved terminal commands");
 		}
 		if (payload.key === DELEGATION_PREF && !isDelegationMode(payload.value)) {
 			throw codedError("invalid_preference_key", "Invalid delegation strength");

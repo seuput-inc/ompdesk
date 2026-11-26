@@ -24,6 +24,7 @@ import { createTabRpc, type TabRpc } from "./tab-rpc";
 
 import { OUTPUT_STYLE_IDS } from "../../../resources/gui-bridge/modes/output-style-contracts";
 import type { AvailableCommand, CopyTarget, RpcResponse } from "../../shared/rpc-types";
+import type { TerminalCommand } from "../../shared/terminal-commands";
 import { hydrateSession, hydrateTabSession } from "../hooks/use-rpc-events";
 import { newSessionNow } from "../hooks/use-session-switch";
 import { openHandoffDialog } from "../stores/fork-handoff";
@@ -145,6 +146,8 @@ export interface CommandRegistryContext {
 	availableCommands: AvailableCommand[];
 	/** The user's remapped chords; rows backed by a shortcut show the chord that fires it. */
 	keymapOverrides?: KeymapOverrides;
+	/** The saved terminal commands the palette offers (its tab's folder's first) and the tab they run in. */
+	terminalCommands?: { tabId: string; commands: readonly TerminalCommand[] };
 	openModelPicker: () => void;
 	openSettings: (tab?: string) => void;
 	openProviders: () => void;
@@ -1479,6 +1482,40 @@ export function buildCommandMenu(ctx: CommandRegistryContext): CommandMenuItem[]
 			affordance: { kind: "window", open: () => useUiStore.getState().setPanelTab(view) },
 		});
 	}
+	add({
+		name: "new-terminal",
+		label: t("hotkeys.row.terminalNew"),
+		description: t("panel.title"),
+		category: "panel",
+		shortcut: kbd("terminal.new"),
+		affordance: { kind: "action", run: () => useUiStore.getState().newTerminal() },
+	});
+	add({
+		name: "quick-terminal",
+		label: t("hotkeys.row.terminalQuick"),
+		description: t("quickTerminal.desc"),
+		category: "panel",
+		shortcut: kbd("terminal.quick"),
+		affordance: { kind: "action", run: () => useUiStore.getState().setQuickTerminalOpen(true) },
+	});
+	// Saved terminal commands (Orca's quick commands, FT37) the palette passes: its tab's folder's and every project's,
+	// each run in that tab's terminal as `runInTerminal` does.
+	const saved = ctx.terminalCommands;
+	if (saved)
+		for (const command of saved.commands)
+			add({
+				name: `terminal-command-${command.id}`,
+				label: t("panel.terminal.commands.run", { name: command.label }),
+				description: command.command,
+				category: "panel",
+				affordance: {
+					kind: "action",
+					run: () =>
+						void runInTerminal(saved.tabId, command.command).catch(error =>
+							toastError({ title: t("panel.terminal.failed"), error }),
+						),
+				},
+			});
 	// The session views that open as sheets (`jobs` and `tree` are their own commands above and below).
 	for (const [name, view] of [
 		["logs", "logs"],
@@ -2092,6 +2129,7 @@ type CommandContextSnapshot = Pick<
 	| "prewalkArmed"
 	| "availableCommands"
 	| "keymapOverrides"
+	| "terminalCommands"
 >;
 
 /** The one assembly of a command context: UI openers, shared session actions, and RPCs bound to `rpc`. */

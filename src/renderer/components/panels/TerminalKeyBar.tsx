@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
 import {
 	FONT_SCALE_MAX,
 	FONT_SCALE_MIN,
 	type HeldModifiers,
-	TERMINAL_KEYS,
+	keysByUse,
+	noteKeyUse,
+	readKeyUse,
 	type TerminalKey,
 } from "../../lib/terminal-keys";
 import { Button } from "../common";
@@ -19,7 +21,8 @@ const KEY = "min-w-(--sc-control-md) aria-pressed:bg-(--sc-selected)";
 /**
  * The keys a soft keyboard lacks, above it (design §7.2): text size on the left, then a row that scrolls sideways.
  * A key goes out on pointer down (no wait for the click) and never takes focus from the terminal, so the soft
- * keyboard stays up; a held arrow repeats. Ctrl and Alt are sticky toggles the panel applies to the next key.
+ * keyboard stays up; a held arrow repeats. Ctrl and Alt are sticky toggles the panel applies to the next key. The keys
+ * this device presses most come first, ordered once when the bar opens.
  */
 export function TerminalKeyBar({
 	held,
@@ -39,6 +42,7 @@ export function TerminalKeyBar({
 }) {
 	const t = useT();
 	const repeating = useRef<{ delay?: number; interval?: number }>({});
+	const [keys] = useState(() => keysByUse(readKeyUse(storage())));
 	const stop = useCallback(() => {
 		window.clearTimeout(repeating.current.delay);
 		window.clearInterval(repeating.current.interval);
@@ -46,6 +50,7 @@ export function TerminalKeyBar({
 	}, []);
 	useEffect(() => stop, [stop]);
 	const press = (key: TerminalKey) => {
+		noteKeyUse(storage(), key.id);
 		if (key.modifier) {
 			onModifier(key.modifier);
 			return;
@@ -97,7 +102,7 @@ export function TerminalKeyBar({
 			</div>
 			{/* The scroller clips its keys' hit areas to its own box: it takes the bar's padding, so a key's reach fills the bar. */}
 			<div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1 [scrollbar-width:none]">
-				{TERMINAL_KEYS.map(key => (
+				{keys.map(key => (
 					<Button
 						aria-label={key.aria ? t(key.aria) : undefined}
 						aria-pressed={key.modifier ? held[key.modifier] : undefined}
@@ -126,4 +131,12 @@ export function TerminalKeyBar({
 			</div>
 		</div>
 	);
+}
+
+function storage(): Storage | undefined {
+	try {
+		return window.localStorage;
+	} catch {
+		return undefined;
+	}
 }

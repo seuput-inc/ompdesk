@@ -21,7 +21,7 @@ function terminals(): Promise<TerminalService> {
 		// Reuse stock's portable-pty / Windows ConPTY implementation in Bun. No Electron native addon.
 		const stock = await import(ompModuleFile("pi-natives"));
 		if (typeof stock.PtySession !== "function") throw new Error("Installed omp has no interactive PtySession");
-		service = new TerminalService(() => new stock.PtySession() as Pty, shellCwd);
+		service = new TerminalService(() => new stock.PtySession() as Pty, shellCwd, commandRunning);
 		return service;
 	})().catch(error => {
 		starting = null;
@@ -31,6 +31,35 @@ function terminals(): Promise<TerminalService> {
 }
 export function disposeTerminals(): void {
 	service?.dispose();
+}
+
+/**
+ * Whether a command runs in the shell `pid` (Orca probes the PTY's child processes for its close guard). POSIX: the
+ * terminal's foreground process group is another than the shell's own (a job runs; a prompt's background helper such
+ * as gitstatusd does not count). Windows: the shell has a child process. Null when neither can be read in time.
+ */
+function commandRunning(pid: number): Promise<boolean | null> {
+	const { promise, resolve } = Promise.withResolvers<boolean | null>();
+	const windows = process.platform === "win32";
+	const [command, args] = windows
+		? [
+				"powershell.exe",
+				[
+					"-NoProfile",
+					"-NonInteractive",
+					"-Command",
+					`@(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${pid}').Count`,
+				],
+			]
+		: ["ps", ["-o", "tpgid=", "-o", "pgid=", "-p", String(pid)]];
+	execFile(command, args, { timeout: 4000, windowsHide: true }, (error, stdout) => {
+		const numbers = error ? [] : stdout.trim().split(/\s+/).map(Number);
+		if (windows) resolve(Number.isInteger(numbers[0]) ? (numbers[0] ?? 0) > 0 : null);
+		else if (numbers.length === 2 && numbers.every(Number.isInteger))
+			resolve((numbers[0] ?? 0) > 0 && numbers[0] !== numbers[1]);
+		else resolve(null);
+	});
+	return promise;
 }
 
 /** The folder a shell is in now: Linux's `/proc`, macOS's `lsof`; Windows has no such read, so the start folder stands. */
@@ -85,11 +114,20 @@ export const methods: HelperMethods = {
 			/** The tab's session file ("" for none), which keeps its terminals across a restart. */
 			session?: string;
 		};
-		const options = ptyOptions(cwd, env, shell);
+		// A program main chose (a saved SSH host's `ssh`) runs in the PTY in place of a shell.
+		const options = ptyOptions(
+			cwd,
+			env,
+			operation.action === "create" && operation.program ? operation.program : shell,
+		);
 		const service = await terminals();
 		// A web viewer's long poll holds here, in the worker, until the PTY writes (never a timer loop in main).
 		if (operation.action === "list" && operation.waitMs) await service.wait(owner, operation);
-		return frame(terminalFrame(service, owner, operation, options, read, session));
+		const busy = operation.action === "busy" ? await service.busy(owner, operation.id) : null;
+		const answer = terminalFrame(service, owner, operation, options, read, session);
+		if (operation.action === "busy" && busy !== null)
+			answer.rows = answer.rows.map(row => (row.id === operation.id ? { ...row, busy } : row));
+		return frame(answer);
 	},
 	/** A tab's saved terminals back after a restart (`main/terminal/history.ts`), each in its folder when it still exists. */
 	"terminal.restore": async params => {
