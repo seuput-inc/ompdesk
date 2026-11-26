@@ -449,10 +449,11 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // screen (`layout/sidebar/NewTaskRows.tsx` and the step runner of `stores/new-tasks.ts`, its composer helpers already
 // loaded): 737 bytes measured over main (CI build of omp/agent/orca-worktree-create on 8fafd91b6), added to the budget.
 // Work sources outside GitHub (26 Nov 2026, orca-trackers): `omp-api.ts`'s `trackers` member and GitLab's request
-// timeout, the tracker fault codes in `shared/ipc-error-codes.ts` and GitHub sign-in's project scope argument; the
-// channel names sit in `shared/tracker-channels.ts` so the tracker rules stay with the source bar's lazy chunks: 178
-// bytes measured over main (e2e-nightly run 45772688302, omp/agent/orca-trackers at 6ca07ab32), added to the budget.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_232_643;
+// timeout, the tracker fault codes in `shared/ipc-error-codes.ts`, GitHub sign-in's project scope argument and a new
+// task's exact branch (`stores/new-tasks.ts`, `worktreeCreate`'s `branch`); the channel names sit in
+// `shared/tracker-channels.ts` so the tracker rules stay with the source bar's lazy chunks: measured 2,232,761
+// (e2e-nightly run 45779116807, omp/agent/orca-trackers at c149c5843). The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_232_841;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
