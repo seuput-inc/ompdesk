@@ -249,6 +249,14 @@ export function formatShortcut(label: string, platform: KeymapPlatform = PLATFOR
 	return [...new Set(parts)].join(" / ");
 }
 
+/** A macOS-spelled shortcut as `aria-keyshortcuts` names it on `platform` ("⌥A" → "Alt+A"; ⌘ is CmdOrCtrl, as in formatShortcut). */
+export function ariaKeyShortcut(label: string, platform: KeymapPlatform = PLATFORM): string | undefined {
+	const chord = parseChordParts(platformChord(label, platform));
+	if (!chord) return undefined;
+	const mods = [chord.ctrl && "Control", chord.alt && "Alt", chord.shift && "Shift", chord.meta && "Meta"];
+	return [...mods.filter(Boolean), WINDOWS_KEY_NAMES[chord.key] ?? chord.key].join("+");
+}
+
 /** Structural subset of KeyboardEvent that chord extraction reads (test-friendly). */
 export interface KeyEventLike {
 	key: string;

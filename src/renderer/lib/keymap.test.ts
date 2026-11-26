@@ -15,6 +15,7 @@ import { NATIVE_CHORDS } from "../../shared/hotkeys";
 import {
 	actionKbd,
 	actionShortcut,
+	ariaKeyShortcut,
 	chordFromEvent,
 	compileKeymap,
 	detectConflicts,
@@ -327,6 +328,13 @@ describe("shortcut labels", () => {
 		expect(actionShortcut("tab.newChat", "windows")).toBe("Ctrl+Shift+T");
 		expect(actionShortcut("thinking.toggle", "windows")).toBe("Ctrl+Alt+T");
 		expect(actionShortcut("tab.newChat", "mac")).toBe("⇧⌘T");
+	});
+
+	it("names a shortcut for aria-keyshortcuts as it fires on each platform", () => {
+		expect(ariaKeyShortcut("⌥A", "mac")).toBe("Alt+A");
+		expect(ariaKeyShortcut("⇧⌘T", "mac")).toBe("Shift+Meta+T");
+		expect(ariaKeyShortcut("⇧⌘T", "windows")).toBe("Control+Shift+T");
+		expect(ariaKeyShortcut("not a chord", "mac")).toBeUndefined();
 	});
 
 	it("hands Kbd the chord an action fires on this platform, then the user's override", () => {
