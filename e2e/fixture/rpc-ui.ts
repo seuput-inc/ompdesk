@@ -83,6 +83,20 @@ const E2E_DIR = nodePath.dirname(import.meta.dir);
 const README_SCENE = process.env.OMP_GUI_README_SCENE === "1";
 
 /**
+ * `OMP_GUI_TEST_PREVIEW_START=1` (the `preview-start` parity surface): this omp starts a dev server, as an agent's
+ * `bun run dev` would, so the Preview's start page lists the session's port. It is a child of this omp (it carries the
+ * tab's tag, `procs.ports`) and ends when this omp is gone.
+ */
+function startDevServer(): void {
+	const server = `const http = require("node:http");
+const page = "<!doctype html><title>Fixture app</title><h1>Fixture app</h1><p>Served by the session's dev server.</p>";
+http.createServer((_req, res) => { res.setHeader("content-type", "text/html"); res.end(page); }).listen(0, "127.0.0.1");
+const parent = ${process.pid};
+setInterval(() => { try { process.kill(parent, 0); } catch { process.exit(0); } }, 500);`;
+	spawn(process.execPath, ["-e", server], { stdio: "ignore", windowsHide: true }).unref();
+}
+
+/**
  * The fake omp's `--mode rpc-ui`: stock RPC on stdin/stdout, plus the gui-bridge extension's socket (loaded
  * with `-e`, address in `OMP_GUI_BRIDGE`) answering the bridge methods the e2e suites reach.
  */
@@ -7600,6 +7614,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			maxFrameBytes: MAX_FRAME_BYTES,
 			maxReassembledFrameBytes: MAX_REASSEMBLED_BYTES,
 		});
+		if (process.env.OMP_GUI_TEST_PREVIEW_START === "1") startDevServer();
 		createInterface({ input: process.stdin })
 			.on("line", line => handleCommand(JSON.parse(line)))
 			// Like stock rpc mode: the host closing stdin ends the process (a running stream timer would not), and a

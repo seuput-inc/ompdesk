@@ -17,7 +17,7 @@
  *
  * Each has Hide (FC20, `NativeChatCardHideButton.tsx`): that kind leaves every chat (`hidden-cards.ts`).
  */
-import { EyeOff, ListTodo, Moon, Send, UserRoundPlus, Wrench } from "lucide-react";
+import { EyeOff, ListTodo, Moon, Send, Wrench } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { type Bot, ITEM_STATUSES, type Item, type ItemStatus } from "../../../../shared/bots";
 import type { AgentMessage } from "../../../../shared/rpc-types";
@@ -29,6 +29,7 @@ import { botOfFolder, ensureBots, useBotsStore } from "../../../stores/bots";
 import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useTabsStore } from "../../../stores/tabs";
 import { toastError } from "../../../stores/toast";
+import { BotAvatar } from "../../bots/BotAvatar";
 import { openBotDialog } from "../../bots/bot-launch";
 import { openBotPage } from "../../bots/bot-page";
 import { ItemStatusIcon, statusName } from "../../bots/items/ItemStatusIcon";
@@ -272,9 +273,7 @@ function OfferCard({ args }: { args: Record<string, unknown> }) {
 		<div className="group/bot-card py-1" data-bot-card="botOffers" data-bot-offer={made ? "created" : "open"}>
 			<Card padding="row" surface="elevated">
 				<div className="flex min-w-0 items-start gap-2.5">
-					<span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-(--sc-radius-md) bg-(--sc-hover) text-sc-md font-medium">
-						{name.slice(0, 1).toUpperCase() || <UserRoundPlus aria-hidden className="size-4" />}
-					</span>
+					<BotAvatar bot={made ?? { name: name || "?" }} className="mt-0.5" size={32} />
 					<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 						<div className="flex min-w-0 items-center gap-1.5">
 							<span className="text-sc-xs text-(--sc-text-muted)">{t("chat.botCards.offer.heading")}</span>
@@ -359,9 +358,12 @@ function RequestCard({
 		>
 			<span className={cx("shrink-0", failed && "text-(--sc-danger)")}>{heading}</span>
 			{bot ? (
-				<LinkButton className="shrink-0 font-medium" onClick={() => openBotPage(bot.id)} tone="inherit">
-					{bot.name}
-				</LinkButton>
+				<>
+					<BotAvatar bot={bot} size={16} />
+					<LinkButton className="shrink-0 font-medium" onClick={() => openBotPage(bot.id)} tone="inherit">
+						{bot.name}
+					</LinkButton>
+				</>
 			) : (
 				<span className="shrink-0 font-medium">{target.name}</span>
 			)}

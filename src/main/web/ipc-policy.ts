@@ -32,6 +32,10 @@ import {
 } from "../../shared/mobile-web";
 import {
 	PREVIEW_COMMAND,
+	PREVIEW_DEVICE,
+	PREVIEW_HISTORY,
+	PREVIEW_HOST_PORT,
+	PREVIEW_OPEN_FILE,
 	PREVIEW_PAGE,
 	PREVIEW_SAVE_PDF,
 	PREVIEW_STATE,
@@ -63,6 +67,10 @@ export type IpcChannel =
 	| typeof PREVIEW_SAVE_PDF
 	| typeof PREVIEW_PAGE
 	| typeof PREVIEW_VISUALS
+	| typeof PREVIEW_HISTORY
+	| typeof PREVIEW_OPEN_FILE
+	| typeof PREVIEW_HOST_PORT
+	| typeof PREVIEW_DEVICE
 	| typeof PREVIEW_STREAM_POLL
 	| typeof PREVIEW_STREAM_INPUT
 	| typeof PREVIEW_STREAM_DIALOG
@@ -416,6 +424,10 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	},
 	[PREVIEW_PAGE]: { dir: "invoke", permission: "workspace", mode: "web", web: "Runs on the streamed offscreen page" },
 	[PREVIEW_VISUALS]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[PREVIEW_HISTORY]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[PREVIEW_OPEN_FILE]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[PREVIEW_HOST_PORT]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[PREVIEW_DEVICE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[PREVIEW_STREAM_POLL]: {
 		dir: "invoke",
 		permission: "workspace",

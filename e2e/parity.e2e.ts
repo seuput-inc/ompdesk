@@ -14,12 +14,13 @@
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type Browser, chromium, devices, expect, type Locator, type Page, test } from "@playwright/test";
 import { STRESS_PROMPT } from "../src/renderer/dev-harness/fixture";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { writeShellGh } from "./fixture/shell-gh";
+import { writeShellBin, writeShellGh } from "./fixture/shell-gh";
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, REMOTE_LOGIN, type RemoteInstance } from "./remote-harness";
 import { crashed, type Look, panelCrash } from "./responsive-audit";
@@ -172,6 +173,54 @@ async function seedProject(project: string): Promise<void> {
 	await fs.writeFile(path.join(project, "wait-for.ts"), "export const waitFor = () => {};\n");
 }
 
+/**
+ * The Preview start page's device (`OMP_GUI_TEST_PREVIEW_START=1`, the `preview-start` and `preview-device` surfaces):
+ * an Android emulator `adb` reports, with a phone app's screen, behind an adb server answering on 5037 (core
+ * `emulator.rs` runs adb only then). Returns the folder to put first on both apps' PATH and what ends the adb server's
+ * stand-in.
+ */
+async function fakeAndroidDevice(parent: string, browser: Browser): Promise<{ bin: string; close(): Promise<void> }> {
+	const bin = path.join(parent, "adbbin");
+	await fs.mkdir(bin, { recursive: true });
+	const screen = await browser.newPage({ viewport: { width: 360, height: 760 }, deviceScaleFactor: 2 });
+	await screen.setContent(`<!doctype html><body style="margin:0;font:16px system-ui,sans-serif;background:#f4f1ea;color:#1f2328">
+<header style="background:#2f6f4f;color:#fff;padding:36px 20px 16px;font-size:22px;font-weight:600">Fixture app</header>
+<main style="padding:20px;display:flex;flex-direction:column;gap:12px">
+${["Today", "Upcoming", "Done"].map(label => `<div style="background:#fff;border-radius:12px;padding:16px">${label}</div>`).join("")}
+</main></body>`);
+	await screen.screenshot({ path: path.join(bin, "screen.png") });
+	await screen.close();
+	await writeShellBin(
+		bin,
+		"adb",
+		[
+			"#!/bin/sh",
+			'case "$*" in',
+			'"devices -l") printf "List of devices attached\\nemulator-5554          device product:sdk_gphone64 model:Pixel_8 device:emu64a transport_id:1\\n" ;;',
+			'*"screencap -p") cat "$(dirname "$0")/screen.png" ;;',
+			"esac",
+			"",
+		].join("\n"),
+	);
+	// A real adb server already up on this machine answers the same; the fake `adb` first on PATH still lists the device.
+	const server = net.createServer(socket => socket.destroy());
+	await new Promise<void>(resolve => {
+		server.once("error", () => resolve());
+		server.listen(5037, "127.0.0.1", () => resolve());
+	});
+	return { bin, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
+}
+
+/** Two recent sites in a computer's Preview history (`<userData>/preview-history.json`, core `browsing.rs`). */
+async function seedPreviewHistory(userData: string): Promise<void> {
+	const at = Date.now();
+	const entries = [
+		{ url: "https://example.com/", title: "Example Domain", at, visits: 3 },
+		{ url: "https://www.w3.org/WAI/", title: "Web Accessibility Initiative", at: at - 60_000, visits: 1 },
+	];
+	await fs.writeFile(path.join(userData, "preview-history.json"), JSON.stringify({ entries }), { mode: 0o600 });
+}
+
 const dir = process.env.OMP_GUI_PARITY;
 const BLOCKED_USAGE = process.env.OMP_GUI_TEST_USAGE_ACCOUNTS === "blocked";
 const language = process.env.OMP_GUI_PARITY_LANGUAGE === "ko" ? "ko" : "en";
@@ -289,9 +338,14 @@ if (dir) {
 		let proxy: ServeProxy | undefined;
 		const browser = await chromium.launch();
 		const pageErrors: string[] = [];
+		let android: { bin: string; close(): Promise<void> } | undefined;
 		try {
 			const ghBin = path.join(parent, "ghbin");
 			await writeParityGh(ghBin);
+			// `preview-start`, `preview-device`: both computers see the same emulator (each lists its own devices).
+			const previewStart = process.env.OMP_GUI_TEST_PREVIEW_START === "1";
+			if (previewStart) android = await fakeAndroidDevice(parent, browser);
+			const devicePath = android ? `${android.bin}${path.delimiter}` : "";
 			const hostProfile = await makeRemoteProfile(parent, "host", {
 				language: DESKTOP.lang,
 				theme: DESKTOP.theme,
@@ -302,7 +356,7 @@ if (dir) {
 				env: {
 					OMP_GUI_START_SLOW_MS: "1500",
 					OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1",
-					PATH: `${ghBin}${path.delimiter}${process.env.PATH}`,
+					PATH: `${devicePath}${ghBin}${path.delimiter}${process.env.PATH}`,
 				},
 			});
 			await seedProject(hostProfile.project);
@@ -311,7 +365,10 @@ if (dir) {
 				theme: DESKTOP.theme,
 				port: hostProfile.port,
 				prefs: { displayPreferences: { showTokenUsage: true }, ...(BLOCKED_USAGE ? { sidebarWidth: 227 } : {}) },
-				env: { OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1" },
+				env: {
+					OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1",
+					...(devicePath ? { PATH: `${devicePath}${process.env.PATH}` } : {}),
+				},
 			});
 			// `settings-updates-token-dropped`: a token the keychain would not release was removed at an earlier launch, and
 			// the marker it left is what Settings › Updates shows (src/main/update-auth.ts).
@@ -319,6 +376,8 @@ if (dir) {
 				for (const profile of [hostProfile, clientProfile])
 					await fs.writeFile(path.join(profile.desktop, "update-token.dropped"), "keychain-would-ask");
 			}
+			if (previewStart)
+				for (const profile of [hostProfile, clientProfile]) await seedPreviewHistory(profile.desktop);
 			host = await launchRemote(hostProfile);
 			client = await launchRemote(clientProfile);
 			const b = host.page;
@@ -995,6 +1054,7 @@ if (dir) {
 			await browser.close().catch(() => undefined);
 			await proxy?.close().catch(() => undefined);
 			for (const instance of [client, host]) if (instance) await exitApp(instance.app);
+			await android?.close().catch(() => undefined);
 			await fs.rm(parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => undefined);
 		}
 	};

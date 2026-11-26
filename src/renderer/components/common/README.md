@@ -37,6 +37,7 @@ allow-list beside the marker.
 | The label over a control that is not an `Input` (a `SegmentedChoice`, a model select, a group of checkboxes) | `FieldLabel` (`Input`'s label look; `as` `label` with `htmlFor` for a form element, `legend` in a `<fieldset>`, `span` with an `id` the radio group's `aria-labelledby` names) | a hand `text-sc-sm font-medium` label |
 | A field the kit has no primitive for (a list of chips, a folder picked by a button) with its label, hint and error | `FieldShell` (`controlId` when the label names a form element, `labelId` for a group's `aria-labelledby`; its error is announced, `role="alert"`) | a label `htmlFor` an id nothing has, an error nobody hears |
 | A picker's search over its result list | `SearchField` with `listbox` (the field is the list's combobox; rows are `OptionRow`, no tab stops) | rows the Tab key walks |
+| Find in what a surface shows (a conversation, a terminal, a page) | `FindBar` (the field with its count at the end, previous, next, close; Enter, Shift+Enter, Escape; `tools` for toggles; the owner keeps the query and the search and places the bar) | a find row of your own |
 | Sibling views of one surface | `Tabs` (`underline` sections, `segmented` 2–4 modes or a row of steps, `pills` for things open side by side or, `orientation="vertical"`, a page's sections that are one row on a phone; each scrolls sideways when it does not fit; a tab takes `tooltip`, `leading`/`trailing` marks, `attrs` hooks, `keyshortcuts`, `onDoubleClick`, `onContextMenu` for its menu, `className`, and `onClose` with `closeLabel` for a ✕, Delete and a middle click; `onChange` says `click` or `key`) | buttons that look like tabs, a `<nav>` of `aria-current` buttons for views |
 | A table column the rows sort by | `SortHeader` (the `<th>` with `aria-sort` and the direction glyph; `direction`, `onSort`, `align`) | a header button with its own arrows |
 | A row of a picker's listbox driven from its field (`aria-activedescendant`) | `OptionRow` (`active` highlight, `selected`, `size` `md`/`sm`/`xs` for a dense 28 px list) | a copied row class string |
@@ -88,6 +89,7 @@ allow-list beside the marker.
 | A code a phone camera reads (pairing) | `QrCode` (drawn locally, never by an image service) | an image URL |
 | The app's mark | `BrandMark` | an inline copy of the π |
 | The picture of a repository a row works in (a session row's leading mark) | `ProjectArtwork` (`src`: the repository's image or its owner's avatar, a `data:` URI or a URL the app serves; with none, or one that fails, the name's letter on a hue from the name; decorative, the row says the name in words) | an `<img>` of your own, a letter in a coloured span |
+| A bot's face with no picture of its own | `BotFace` (`seed`: the bot's id, the same face on every device; `presence` what it acts out; drawn at rest, the rig loads after the page; still under reduced motion, off screen, in a hidden window and in test runs; decorative). Bots draw it through `bots/BotAvatar`, where an uploaded picture wins | a letter tile, an animation of your own |
 | The UI language switch | `LangSwitcher` | a language select of your own |
 
 ## Layer plumbing

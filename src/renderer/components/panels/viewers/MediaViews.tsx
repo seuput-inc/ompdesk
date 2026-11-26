@@ -11,7 +11,14 @@ import { basename } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { ZoomableImage } from "../../common";
 import { useMediaSource } from "./media-source";
-import { useReportFileInfo, ViewerFailure, ViewerLoading, ViewerTooLarge } from "./viewer-chrome";
+import {
+	OpenInPreviewButton,
+	useReportFileInfo,
+	ViewerFailure,
+	ViewerLoading,
+	ViewerTooLarge,
+	ViewerToolbar,
+} from "./viewer-chrome";
 
 interface MediaViewProps {
 	path: string;
@@ -61,20 +68,28 @@ export function ImageView({ path, tabId }: MediaViewProps) {
 	if (state.status === "error") return <ViewerFailure failure={state.failure} />;
 	if (state.status === "tooLarge") return <ViewerTooLarge path={path} size={state.size} />;
 	return (
-		<div className="h-full overflow-auto p-3" data-viewer="image">
-			<ZoomableImage
-				alt={basename(path)}
-				className="h-auto max-w-full"
-				onLoad={event =>
-					setDimensions({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })
-				}
-				src={state.src}
-			/>
-			{dimensions && (
-				<p className="mt-2 text-sc-xs text-(--sc-text-muted) tabular-nums" data-image-info>
-					{t("fileViewer.imageInfo", { width: dimensions.width, height: dimensions.height })}
-				</p>
+		<div className="flex h-full min-h-0 flex-col" data-viewer="image">
+			{/* An SVG can be a whole page (scripts, links): the Preview shows it as one. */}
+			{/\.svg$/i.test(path) && (
+				<ViewerToolbar label={t("fileViewer.toolbar")}>
+					<OpenInPreviewButton path={path} tabId={tabId} />
+				</ViewerToolbar>
 			)}
+			<div className="min-h-0 flex-1 overflow-auto p-3">
+				<ZoomableImage
+					alt={basename(path)}
+					className="h-auto max-w-full"
+					onLoad={event =>
+						setDimensions({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })
+					}
+					src={state.src}
+				/>
+				{dimensions && (
+					<p className="mt-2 text-sc-xs text-(--sc-text-muted) tabular-nums" data-image-info>
+						{t("fileViewer.imageInfo", { width: dimensions.width, height: dimensions.height })}
+					</p>
+				)}
+			</div>
 		</div>
 	);
 }

@@ -49,7 +49,9 @@ function setup() {
 			},
 		},
 		message => posted.push(message as Record<string, unknown>),
-		method => activity.push(method),
+		method => {
+			activity.push(method);
+		},
 	);
 	const rpc = async (id: number, body: Record<string, unknown>) => {
 		extension.handle(JSON.stringify({ t: "rpc", id, ...body }));

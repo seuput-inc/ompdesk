@@ -37,10 +37,36 @@ pub struct Navigation {
     pub url: String,
 }
 
+/// A server's HTTP authentication challenge to a page's request (`Fetch.authRequired`, source `Server`).
+pub struct AuthChallenge {
+    pub session_id: String,
+    pub url: String,
+    pub origin: String,
+    pub scheme: String,
+    pub realm: String,
+}
+
+/// What the person typed for one challenge; used once and never kept.
+pub struct Credentials {
+    pub username: String,
+    pub password: String,
+}
+
 /// Adapts the host's existing navigation authorization. No allow-list is stored in the browser service.
 pub trait NavigationHandler: Send + Sync {
     fn allow(&self, navigation: Navigation) -> Pin<Box<dyn Future<Output = bool> + Send>>;
+
+    /// Asks the person for a server's credentials; `None` cancels the challenge (the page shows the server's 401).
+    fn authenticate(
+        &self,
+        _challenge: AuthChallenge,
+    ) -> Pin<Box<dyn Future<Output = Option<Credentials>> + Send>> {
+        Box::pin(async { None })
+    }
 }
+
+/// How long a page's request waits for the person's answer to a server's sign-in.
+const AUTH_WAIT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Copy)]
 pub struct Viewport {
@@ -648,10 +674,13 @@ fn web_url(url: &str) -> bool {
 }
 
 fn interception(all_resources: bool) -> Value {
+    // `handleAuthRequests`: a server's challenge to an intercepted request asks the person (`authenticate`) instead of
+    // failing at once in a headless browser.
     if all_resources {
-        json!({"patterns":[{"urlPattern":"*","requestStage":"Request"}]})
+        json!({"patterns":[{"urlPattern":"*","requestStage":"Request"}],"handleAuthRequests":true})
     } else {
-        json!({"patterns":[{"urlPattern":"*","resourceType":"Document","requestStage":"Request"}]})
+        json!({"patterns":[{"urlPattern":"*","resourceType":"Document","requestStage":"Request"}],
+            "handleAuthRequests":true})
     }
 }
 
@@ -668,6 +697,7 @@ async fn enforce_policy(
     requests: Option<Arc<Requests>>,
 ) {
     let mut operations = tokio::task::JoinSet::new();
+    let prompts = Arc::new(std::sync::Mutex::new(Prompts::default()));
     loop {
         tokio::select! {
             result = operations.join_next(), if !operations.is_empty() => {
@@ -684,6 +714,11 @@ async fn enforce_policy(
                         return;
                     }
                 };
+                if event.method == "Fetch.authRequired" {
+                    // Waits on the person for minutes: never in `operations`, whose bound ends the browser.
+                    answer_auth(transport.clone(), event, handler.clone(), Arc::clone(&prompts));
+                    continue;
+                }
                 if !matches!(event.method.as_str(), "Target.attachedToTarget" | "Target.detachedFromTarget" | "Fetch.requestPaused") {
                     continue;
                 }
@@ -701,6 +736,115 @@ async fn enforce_policy(
             }
         }
     }
+}
+
+/// Open sign-in prompts across the browser: more at once are cancelled (a page asking from many frames).
+const MAX_PROMPTS: usize = 3;
+
+/// The challenges waiting on one prompt, by tab session, origin and realm: one answer serves them all.
+#[derive(Default)]
+struct Prompts {
+    waiting: std::collections::HashMap<String, Vec<tokio::sync::oneshot::Sender<Value>>>,
+}
+
+/// Answers a `Fetch.authRequired` without holding the policy loop: a proxy's challenge gets Chromium's own answer, a
+/// server's asks the person once per session, origin and realm (`authenticate`), and one past `MAX_PROMPTS` or with no
+/// one to ask is cancelled (the page shows the server's 401).
+fn answer_auth(
+    transport: Transport,
+    event: Event,
+    handler: Option<Arc<dyn NavigationHandler>>,
+    prompts: Arc<std::sync::Mutex<Prompts>>,
+) {
+    let Ok(id) = string_field(&event.params, "requestId") else {
+        return;
+    };
+    let field = |name: &str| {
+        event
+            .params
+            .pointer(&format!("/authChallenge/{name}"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
+    let respond = {
+        let session = event.session_id.clone();
+        move |answer: Value| async move {
+            let _ = transport
+                .request(
+                    "Fetch.continueWithAuth",
+                    json!({"requestId":id,"authChallengeResponse":answer}),
+                    session.as_deref(),
+                )
+                .await;
+        }
+    };
+    let cancel = json!({"response":"CancelAuth"});
+    let (Some(handler), Some(session_id)) = (handler, event.session_id.clone()) else {
+        tokio::spawn(respond(cancel));
+        return;
+    };
+    if field("source") == "Proxy" {
+        tokio::spawn(respond(json!({"response":"Default"})));
+        return;
+    }
+    let challenge = AuthChallenge {
+        session_id,
+        url: event
+            .params
+            .pointer("/request/url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned(),
+        origin: field("origin"),
+        scheme: field("scheme"),
+        realm: field("realm"),
+    };
+    let key = format!(
+        "{}\u{0}{}\u{0}{}",
+        challenge.session_id, challenge.origin, challenge.realm
+    );
+    let (answer, received) = tokio::sync::oneshot::channel();
+    let asks = {
+        let mut prompts = prompts.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(waiters) = prompts.waiting.get_mut(&key) {
+            waiters.push(answer);
+            false
+        } else if prompts.waiting.len() >= MAX_PROMPTS {
+            drop(prompts);
+            tokio::spawn(respond(cancel));
+            return;
+        } else {
+            prompts.waiting.insert(key.clone(), vec![answer]);
+            true
+        }
+    };
+    if asks {
+        tokio::spawn(async move {
+            let credentials = tokio::time::timeout(AUTH_WAIT, handler.authenticate(challenge))
+                .await
+                .ok()
+                .flatten();
+            let answer = match credentials {
+                Some(credentials) => json!({"response":"ProvideCredentials",
+                    "username":credentials.username,"password":credentials.password}),
+                None => json!({"response":"CancelAuth"}),
+            };
+            let waiters = prompts
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .waiting
+                .remove(&key)
+                .unwrap_or_default();
+            for waiter in waiters {
+                let _ = waiter.send(answer.clone());
+            }
+        });
+    }
+    tokio::spawn(async move {
+        let answer = received.await.unwrap_or(cancel);
+        respond(answer).await;
+    });
 }
 
 async fn policy_event(

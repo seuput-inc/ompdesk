@@ -160,6 +160,10 @@ export interface ControlTab {
 	scheduledRetry?: IpcScheduledRetry;
 	/** Its turn waits for the internet connection and goes on once it is back. */
 	awaitingConnection?: true;
+	/** The tab's process tag on this computer (`SessionProcesses`): the core lists what its processes listen on. */
+	processTag?: string;
+	/** The tab's own omp, left out of that list (its browser relay listens). */
+	ompPid?: number;
 }
 
 /** A saved session (stock's session index on this computer or a paired device), open in a tab or not. */

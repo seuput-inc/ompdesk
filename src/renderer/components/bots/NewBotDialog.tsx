@@ -14,7 +14,7 @@ import { useCurrentLang, useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
 import { botTemplateWords } from "../../locales/bot-templates";
 import { useBotsStore } from "../../stores/bots";
-import { Banner, Button, Checkbox, FieldLabel, IconButton, Input, Modal, TextArea } from "../common";
+import { Banner, BotFace, Button, Checkbox, FieldLabel, IconButton, Input, Modal, TextArea } from "../common";
 import { ModelValueSelect } from "../settings/ModelValueSelect";
 import { BotAvatar } from "./BotAvatar";
 import { createBot, type NewBotDraft, openBotDialog } from "./bot-launch";
@@ -36,10 +36,9 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 	);
 	const [purpose, setPurpose] = useState(draft?.purpose ?? template?.line ?? "");
 	const [model, setModel] = useState<string | null>(draft?.model ?? null);
-	// A face from the carousel (its index), an uploaded picture, or the letter mark (-1).
-	const [face, setFace] = useState(() =>
-		template ? template.template.mascot : Math.floor(Math.random() * BOT_MASCOT_COUNT),
-	);
+	// A face from the carousel (its index), an uploaded picture, or its own drawn face (-1), which it gets from its id
+	// once made: until then the dialog shows that face's shape uncoloured.
+	const [face, setFace] = useState(() => (template ? template.template.mascot : -1));
 	const [upload, setUpload] = useState<string | null>(draft?.picture ?? null);
 	const [skills, setSkills] = useState<readonly string[]>(template?.template.skills ?? []);
 	const [error, setError] = useState<string | null>(null);
@@ -209,7 +208,11 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 							}}
 							size="sm"
 						/>
-						<BotAvatar bot={{ name: name || "?", picture }} size={64} />
+						{picture ? (
+							<BotAvatar bot={{ name: name || "?", picture }} size={64} />
+						) : (
+							<BotFace color="var(--sc-text-muted)" seed={formId} size={64} />
+						)}
 						<IconButton
 							icon={<ChevronRight />}
 							label={t("bots.picture.next")}

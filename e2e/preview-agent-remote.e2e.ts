@@ -65,7 +65,7 @@ interface AgentView {
 function viewOf(panel: Locator): AgentView {
 	return {
 		status: panel.locator("[data-preview-status]"),
-		address: panel.getByRole("textbox", { name: PREVIEW_URL }),
+		address: panel.getByRole("combobox", { name: PREVIEW_URL }),
 		banner: panel.locator("[data-preview-agent]"),
 		robot: panel.getByRole("button", { name: ROBOT }),
 		takeOver: panel.locator("[data-preview-agent]").getByRole("button", { name: TAKE_OVER }),

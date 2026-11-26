@@ -480,7 +480,18 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // `MessageBubble` and `ChatStream`, all on the phone's first screen). The cards, the Items tab, the item page and the
 // room load later (`chat/bots/BotCards.tsx` lazy, `BotsPage` lazy): 5,283 bytes over the budget of its base (2,242,025
 // in branch run 45815652051 at 21739cea5, whose budget was 2,236,742), added to the budget with 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_247_284;
+// The Preview's session ports and link toast (26 Nov 2026, orca-preview): the sidebar polls what each open tab's
+// processes listen on (`stores/session-ports.ts`), names them in the row's tooltip and lists Open and Stop per port in
+// its menu (`session-menu.ts`; reading, ending and opening load by import(), `lib/session-port-actions.ts`), and the
+// phone's link toast offers Open in Preview beside Open on computer (a toast's `secondAction`,
+// `web/host-ui/WebHostUi.tsx`): 1,346 bytes over main (2,232,994 in e2e-nightly run 45773210485, omp/agent/orca-preview
+// at 6db34b5b0, over main's 2,231,648), added to the budget.
+// A bot's living face (27 Nov 2026, orca-bots-face): the face drawn at rest where a bot has no picture, on the phone's
+// first screen through the sidebar's Bots rows (`lib/bot-face.ts`, `common/BotFace.tsx`, `bots/BotAvatar.tsx`); the rig
+// that moves it loads after the page's `load` as its own chunk (`lib/bot-face-motion.ts` and what it imports): 4,452
+// bytes over the budget of its base (2,253,082 in CI run 45852447692 at a789da035, whose budget was 2,248,630), added
+// to the budget with 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_253_162;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

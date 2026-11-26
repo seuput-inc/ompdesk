@@ -849,6 +849,11 @@ export class SidecarManager extends EventEmitter {
 		return this.#pid;
 	}
 
+	/** The tab's process tag (`SessionProcesses`), once its first omp was started; its control row's ports read by it. */
+	get processTag(): string | undefined {
+		return this.#processes?.tag;
+	}
+
 	start(): void {
 		if (this.#disposed) return;
 		this.#ensureOpen();
@@ -1636,7 +1641,7 @@ export class SidecarManager extends EventEmitter {
 				: runtime,
 			send,
 			bridge,
-			...(this.#processes ? { leftProcesses: this.#processes.leftover } : {}),
+			...(this.#processes ? { leftProcesses: this.#processes.leftover, processes: this.#processes } : {}),
 		};
 	}
 

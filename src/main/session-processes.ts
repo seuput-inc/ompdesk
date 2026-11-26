@@ -39,6 +39,7 @@ import { basename, isAbsolute, normalize, relative } from "node:path";
 import { z } from "zod";
 import type { LeftProcess, LeftProcesses, OutputPeer } from "../../resources/gui-bridge/restart-core";
 import type { SessionUse } from "../shared/ipc-types";
+import type { SessionPortProcess } from "../shared/rpc-types";
 import { writeFileAtomicDeferred } from "./atomic-file";
 import { core } from "./core/process";
 import { SESSION_TAG_ENV } from "./omp-launch";
@@ -60,6 +61,11 @@ export const LIST_TIMEOUT_MS = 10_000;
  * tried once more: a worker whose omp is gone ends itself within seconds, and what it started then carries the tag alone.
  */
 export const RETRY_REMAINING_MS = 60_000;
+/**
+ * One scan of what the live tabs' processes listen on (`procs.ports`) answers every tab that asks within this long: a
+ * scan reads every process's environment, and each open session row asks for its own tab.
+ */
+export const PORTS_FRESH_MS = 5_000;
 
 /**
  * The share of one core, in percent, over `SPIN_SAMPLE_MS`, at which a process with a closed output path reads as
@@ -178,6 +184,21 @@ async function endTaggedProcesses(
 	return answer.result;
 }
 
+/** One tagged process that listens, as `procs.ports` answers it. */
+export interface TaggedListener extends SessionPortProcess {
+	tag: string;
+}
+
+/** What the processes of `tags` listen on, the pids of `exclude` left out (Orca's workspace port scan, by tag). */
+async function listenTaggedProcesses(tags: readonly string[], exclude: readonly number[]): Promise<TaggedListener[]> {
+	const answer = await core().call<TaggedListener[]>(
+		"procs.ports",
+		{ env: SESSION_TAG_ENV, tags, keepArg: STOCK_WORKER_ARG, exclude, timeoutMs: LIST_TIMEOUT_MS },
+		{ timeoutMs: LIST_TIMEOUT_MS },
+	);
+	return answer.result;
+}
+
 /** What a tab's omp is launched with that says whose its processes are. */
 export interface SessionProcessFacts {
 	cwd: string;
@@ -240,6 +261,10 @@ export interface SessionProcessHandle {
 	 * ended (only with the switch on). Undefined for a tab that took nothing over, or when nothing was left.
 	 */
 	leftover(): Promise<LeftProcesses | undefined>;
+	/** What the tab's processes listen on, its own omp left out (its browser relay listens); [] when the core cannot say. */
+	ports(): Promise<SessionPortProcess[]>;
+	/** Ends one of them by its id and start (stock's workers never); whether it is gone. */
+	endPort(pid: number, startedMs: number): Promise<boolean>;
 }
 
 /** A tag and whose it is, for the memory record. */
@@ -260,6 +285,8 @@ export interface SessionProcessesDeps {
 	survey?(tags: readonly string[], sampleMs?: number): Promise<TaggedProcess[]>;
 	/** Ends just these processes of `tags`, each by its id and start (default: `procs.end` with `only`). */
 	endOnly?(tags: readonly string[], only: ReadonlyArray<{ pid: number; startedMs: number }>): Promise<EndResult>;
+	/** What the processes of `tags` listen on (default: the core's `procs.ports`). */
+	listen?(tags: readonly string[], exclude: readonly number[]): Promise<TaggedListener[]>;
 	/**
 	 * Whether a launch ends a kept session's process whose output's other end is closed and that keeps spinning
 	 * (default: on; index.ts reads the hidden pref `endSpinningOnClosedOutput`, which only a stored `false` turns off).
@@ -313,6 +340,9 @@ export class SessionProcesses {
 	readonly #newTag: () => string;
 	readonly #now: () => number;
 	readonly #later: (run: () => void, ms: number) => void;
+	readonly #listen: (tags: readonly string[], exclude: readonly number[]) => Promise<TaggedListener[]>;
+	/** The last scan of the live tabs' listeners, shared for `PORTS_FRESH_MS`. */
+	#listening: { at: number; scan: Promise<TaggedListener[]> } | null = null;
 	readonly #entries = new Map<string, TagEntry>();
 	/** Ends under way; `settled()` waits for them. */
 	readonly #ending = new Set<Promise<void>>();
@@ -324,6 +354,7 @@ export class SessionProcesses {
 		this.#end = deps.end ?? endTaggedProcesses;
 		this.#survey = deps.survey ?? surveyTaggedProcesses;
 		this.#endOnly = deps.endOnly ?? endTaggedProcesses;
+		this.#listen = deps.listen ?? listenTaggedProcesses;
 		this.#newTag = deps.newTag ?? (() => randomBytes(16).toString("hex"));
 		this.#now = deps.now ?? Date.now;
 		this.#later = deps.later ?? ((run, ms) => void setTimeout(run, ms).unref());
@@ -376,7 +407,37 @@ export class SessionProcesses {
 				return this.#endEntry(held, "closed");
 			},
 			leftover: () => this.#leftover(held),
+			ports: async () => {
+				if (held.state !== "live") return [];
+				const { tag } = held.record;
+				return (await this.#listeners())
+					.filter(listener => listener.tag === tag)
+					.map(({ tag: _tag, ...listener }) => listener);
+			},
+			endPort: async (pid, startedMs) => {
+				if (held.state !== "live" || this.#deps.frozen()) return false;
+				const result = await this.#endOnly([held.record.tag], [{ pid, startedMs }]);
+				this.#listening = null;
+				return result.ended.some(ended => ended.pid === pid) && !result.left.some(left => left.pid === pid);
+			},
 		};
+	}
+
+	/** What every live tab's processes listen on: one scan answers each tab that asks within `PORTS_FRESH_MS`. */
+	#listeners(): Promise<TaggedListener[]> {
+		const now = this.#now();
+		if (this.#listening && now - this.#listening.at < PORTS_FRESH_MS) return this.#listening.scan;
+		const live = [...this.#entries.values()].filter(entry => entry.state === "live");
+		const scan = this.#listen(
+			live.map(entry => entry.record.tag),
+			live.flatMap(entry => (entry.pid === undefined ? [] : [entry.pid])),
+		).catch(() => {
+			// A failed scan is not kept: the next ask scans again.
+			if (this.#listening?.scan === scan) this.#listening = null;
+			return [];
+		});
+		this.#listening = { at: now, scan };
+		return scan;
 	}
 
 	/**

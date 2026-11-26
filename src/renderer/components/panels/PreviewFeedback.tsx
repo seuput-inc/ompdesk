@@ -14,6 +14,7 @@ import {
 	ArrowUpToLine,
 	Crosshair,
 	MousePointerClick,
+	Pencil,
 	RotateCcw,
 	Send,
 	SlidersHorizontal,
@@ -37,6 +38,7 @@ import { notesOwner, previewPageKey, useReviewNotesStore } from "../../stores/re
 import { useTabsStore } from "../../stores/tabs";
 import { toastError } from "../../stores/toast";
 import { AsyncSection, Button, Chip, IconButton, Input, Modal, Select, Tooltip } from "../common";
+import { PreviewMarkupDialog } from "./PreviewMarkup";
 
 export interface PreviewNote {
 	/** The review note's id (`stores/review-notes.ts`). */
@@ -81,8 +83,8 @@ const elementLabel = (element: PreviewElement | undefined) =>
 
 export interface PreviewFeedback {
 	notes: PreviewNote[];
-	/** Change a note's comment, or move its pin to another element. */
-	updateNote: (id: string, change: { comment?: string; elements?: PreviewElement[] }) => void;
+	/** Change a note's comment, move its pin to another element, or replace its screenshot (drawn on). */
+	updateNote: (id: string, change: { comment?: string; elements?: PreviewElement[]; image?: string }) => void;
 	removeNote: (id: string) => void;
 	/** The picker waiting on the page, if any. */
 	picking: "element" | "region" | null;
@@ -201,7 +203,15 @@ export function usePreviewFeedback(state: PreviewState, tabId: string | null): P
 			if (note?.anchor.kind !== "preview") return;
 			store().update(id, {
 				...(change.comment === undefined ? {} : { body: change.comment }),
-				...(change.elements ? { anchor: { ...note.anchor, elements: change.elements } } : {}),
+				...(change.elements || change.image
+					? {
+							anchor: {
+								...note.anchor,
+								...(change.elements ? { elements: change.elements } : {}),
+								...(change.image ? { image: change.image } : {}),
+							},
+						}
+					: {}),
 			});
 		},
 		removeNote: id => store().remove([id]),
@@ -261,6 +271,7 @@ export function PreviewFeedbackBar({
 }) {
 	const t = useT();
 	const { notes, picking, variables } = feedback;
+	const [drawingOn, setDrawingOn] = useState<PreviewNote | null>(null);
 	const visual = state.visual;
 	const sendable = notes.length > 0 || Object.values(feedback.changed).some(([from, to]) => from !== to);
 	if (!visual && !picking && notes.length === 0 && !variables) return null;
@@ -398,11 +409,19 @@ export function PreviewFeedbackBar({
 									{note.kind === "region" && (
 										<div className="flex min-w-0 items-start gap-2">
 											{note.image && (
-												<img
-													alt={t("panel.preview.feedback.regionImage", { n: note.n })}
-													className="max-h-16 max-w-24 shrink-0 rounded-(--sc-radius-sm) border border-(--sc-border) object-contain"
-													src={`data:image/png;base64,${note.image}`}
-												/>
+												<div className="flex shrink-0 flex-col items-center gap-0.5">
+													<img
+														alt={t("panel.preview.feedback.regionImage", { n: note.n })}
+														className="max-h-16 max-w-24 rounded-(--sc-radius-sm) border border-(--sc-border) object-contain"
+														src={`data:image/png;base64,${note.image}`}
+													/>
+													<IconButton
+														label={t("panel.preview.feedback.draw", { n: note.n })}
+														icon={<Pencil />}
+														size="sm"
+														onClick={() => setDrawingOn(note)}
+													/>
+												</div>
 											)}
 											<ul
 												aria-label={t("panel.preview.feedback.elements")}
@@ -486,6 +505,12 @@ export function PreviewFeedbackBar({
 					</Button>
 				</div>
 			)}
+			<PreviewMarkupDialog
+				image={drawingOn?.image ?? null}
+				n={drawingOn?.n ?? 0}
+				onClose={() => setDrawingOn(null)}
+				onSave={image => drawingOn && feedback.updateNote(drawingOn.id, { image })}
+			/>
 		</div>
 	);
 }

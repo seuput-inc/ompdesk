@@ -196,11 +196,17 @@ export function refusedCommand(method: string, params: unknown, blockLoopback = 
 	return null;
 }
 
+/**
+ * What the agent just did: the CDP method it sent with its params and session ("" = it let go of the debugger, "attach"
+ * = it took it). A returned promise holds the command until it settles.
+ */
+export type RelayActivity = (method: string, params?: unknown, sessionId?: string) => void | Promise<void>;
+
 /** Plays stock's relay extension for one preview page over an established socket. */
 export class PreviewRelayExtension {
 	readonly #page: RelayPage;
 	readonly #post: (message: object) => void;
-	readonly #onActivity: (method: string) => void;
+	readonly #onActivity: RelayActivity;
 	readonly #blockLoopback: boolean;
 	#relayDetaching = false;
 	#disposed = false;
@@ -227,7 +233,7 @@ export class PreviewRelayExtension {
 	constructor(
 		page: RelayPage,
 		post: (message: object) => void,
-		onActivity: (method: string) => void,
+		onActivity: RelayActivity,
 		options: { blockLoopback?: boolean } = {},
 	) {
 		this.#page = page;
@@ -369,7 +375,8 @@ export class PreviewRelayExtension {
 					const historyRefused = await this.#historyRefusal(rpc.params, rpc.sessionId);
 					if (historyRefused) throw new Error(historyRefused);
 				}
-				this.#onActivity(method);
+				// Awaited: a screenshot waits until the agent's pointer drawn on the page is out of the picture.
+				await this.#onActivity(method, rpc.params, rpc.sessionId);
 				const result: unknown = await debuggerApi.sendCommand(method, rpc.params, rpc.sessionId);
 				return result && typeof result === "object" ? result : {};
 			}

@@ -128,7 +128,7 @@ for (const language of variants(["en", "ko"] as const))
 				await capture(page, `${language}-${theme}-web-menu`);
 				await menu.getByRole("menuitem", { name: text.preview }).click();
 				await expect(menu).toHaveCount(0);
-				await expect(aside.getByRole("textbox", { name: text.previewUrl })).toHaveValue("http://127.0.0.1:9/docs");
+				await expect(aside.getByRole("combobox", { name: text.previewUrl })).toHaveValue("http://127.0.0.1:9/docs");
 
 				// Mail link: mail app and copy address.
 				await reply.getByRole("link", { name: "the team" }).click({ button: "right" });

@@ -9,7 +9,7 @@
  * never raw error text as the message — localize it and pass the raw cause
  * as `detail` (lib/error-detail), shown as a quiet, selectable second line.
  * Anything the user must act on to continue is a Banner or a Dialog; an
- * optional `action` only offers a shortcut to the fix (it dismisses the toast).
+ * optional `action` (and at most one `secondAction` beside it) only offers a shortcut (it dismisses the toast).
  * `ToastCard` is the visual, shared with the style guide.
  */
 
@@ -36,6 +36,8 @@ export interface ToastCardProps {
 	detail?: string;
 	/** One follow-up, shown as a link-styled button under the message. */
 	action?: { label: ReactNode; onClick: () => void };
+	/** A second follow-up beside the first (a link opened here: on the computer, or in the Preview). */
+	secondAction?: { label: ReactNode; onClick: () => void };
 	/** Repeat count; shown as ×N above 1. */
 	count?: number;
 	onDismiss?: () => void;
@@ -69,6 +71,7 @@ export function ToastCard({
 	message,
 	detail: rawDetail,
 	action,
+	secondAction,
 	count = 1,
 	onDismiss,
 	flipKey,
@@ -104,15 +107,23 @@ export function ToastCard({
 						{withPathBreaks(detail)}
 					</div>
 				)}
-				{action && (
-					<button
-						className="mt-1.5 text-sc-sm font-medium text-(--sc-accent) hover:underline"
-						data-toast-action
-						onClick={action.onClick}
-						type="button"
-					>
-						{action.label}
-					</button>
+				{(action || secondAction) && (
+					<div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+						{[action, secondAction].map(
+							(follow, index) =>
+								follow && (
+									<button
+										className="text-sc-sm font-medium text-(--sc-accent) hover:underline"
+										data-toast-action={index === 0 ? "" : "second"}
+										key={index}
+										onClick={follow.onClick}
+										type="button"
+									>
+										{follow.label}
+									</button>
+								),
+						)}
+					</div>
 				)}
 			</div>
 			{count > 1 && (
@@ -283,6 +294,17 @@ export function ToastStack() {
 										onClick: () => {
 											dismiss(entry.id);
 											entry.action?.run();
+										},
+									}
+								: undefined
+						}
+						secondAction={
+							entry.secondAction
+								? {
+										label: entry.secondAction.label,
+										onClick: () => {
+											dismiss(entry.id);
+											entry.secondAction?.run();
 										},
 									}
 								: undefined

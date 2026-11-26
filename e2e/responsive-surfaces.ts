@@ -274,7 +274,7 @@ async function ui(page: Page, action: string, ...args: unknown[]): Promise<void>
  * Show the side panel's `view` by clicks a person makes, on a real window as on the harness: the title bar's Side
  * panel button when the panel is closed, then the view's button (the panel's top bar; a phone's tab bar at its foot).
  */
-async function openPanelView(page: Page, look: Look, view: "diff" | "files" | "terminal"): Promise<void> {
+async function openPanelView(page: Page, look: Look, view: "diff" | "files" | "terminal" | "preview"): Promise<void> {
 	const button = page
 		.locator(".omp-panel-topbar:visible, [data-panel-tabbar]:visible")
 		.getByRole("button", { name: say(look, `panel.tabs.${view}`), exact: true })
@@ -530,15 +530,29 @@ async function ensureParityItems(page: Page): Promise<void> {
 	}
 }
 
-/** The Bots page on the parity bot's page, its Items tab chosen. */
+/** The Bots page on the parity bot's page, its Items tab chosen and its list shown (not an item another surface opened). */
 async function openParityItems(page: Page, look: Look): Promise<void> {
 	await ensureParityItems(page);
 	await openDrawer(page, look);
 	await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
-	// A phone shows the list first: the bot's row opens its page.
+	// A phone shows the list first, and a group's room may be the page: the bot's row opens its page.
 	if ((await page.locator("[data-bot-pane]:visible").count()) === 0)
 		await page.locator("[data-bots-page-row]:visible").first().click();
 	await page.locator('[data-bot-pane-tabs] [data-tab-id="items"]:visible').first().click();
+	await closeParityItem(page);
+}
+
+/** Back from an open item page to the Items list; nothing when the list shows. */
+async function closeParityItem(page: Page): Promise<void> {
+	const back = page.locator("[data-bot-item-back]:visible").first();
+	if ((await back.count()) > 0) await back.click();
+}
+
+/** What bot-items and bot-item opened, closed: the item page back to the list, the bot page back on Activity. */
+async function closeParityItems(page: Page): Promise<void> {
+	await closeParityItem(page);
+	const activity = page.locator('[data-bot-pane-tabs] [data-tab-id="activity"]:visible').first();
+	if ((await activity.count()) > 0) await activity.click();
 }
 
 /**
@@ -1935,26 +1949,121 @@ export const SURFACES: readonly Surface[] = [
 			area: "A",
 			title: `Side panel › ${panel}`,
 			open: async (page, look) => {
-				if (panel === "preview" || panel === "files") return ui(page, "setPanelTab", panel);
+				if (panel === "files") return ui(page, "setPanelTab", panel);
 				await openPanelView(page, look, panel);
 				await page
-					.locator(panel === "diff" ? "[data-scm-bar]:visible" : "[data-terminal-head]:visible")
+					.locator(
+						panel === "diff"
+							? "[data-scm-bar]:visible"
+							: panel === "preview"
+								? "[data-preview-panel]:visible"
+								: "[data-terminal-head]:visible",
+					)
 					.first()
 					.waitFor({ timeout: 20_000 });
 			},
-			// The terminal's sheet is ready once its first shell's tab shows (with the phone's key bar under it).
+			// The terminal's sheet is ready once its first shell's tab shows (with the phone's key bar under it). The
+			// Preview's empty tab shows its start page (servers, forwards, devices, recent sites).
 			ready:
 				panel === "diff"
 					? "[data-scm-bar]:visible"
 					: panel === "terminal"
 						? "[data-terminal-tab]:visible"
-						: "[data-sheet-panel], [data-panel-tabbar], .omp-panel-topbar",
-			...(panel === "diff" || panel === "terminal"
+						: panel === "preview"
+							? "[data-preview-panel]:visible"
+							: "[data-sheet-panel], [data-panel-tabbar], .omp-panel-topbar",
+			...(panel === "diff" || panel === "terminal" || panel === "preview"
 				? { parity: { session: "work" as const, after: closePanelView } }
 				: {}),
 			settle: 900,
 		}),
 	),
+	{
+		// The Preview's start page with every source filled (`OMP_GUI_TEST_PREVIEW_START=1`): the work session's dev server
+		// (the fake omp's child, `procs.ports`; on a paired computer it opens through the host), an Android emulator
+		// (e2e/parity.e2e.ts `fakeAndroidDevice`) and two recent sites (`seedPreviewHistory`).
+		id: "preview-start",
+		area: "A",
+		title: "Preview start page: the session's dev server, a running device, recent sites",
+		open: async (page, look) => {
+			await openPanelView(page, look, "preview");
+			for (const section of ["servers", "devices", "recent"])
+				await page.locator(`[data-preview-start-${section}]:visible`).first().waitFor({ timeout: 30_000 });
+		},
+		ready: "[data-preview-start]:visible",
+		// The audits' harness page has no session processes, devices or history; the parity sheet starts them.
+		when: () => false,
+		parity: {
+			session: "work",
+			after: closePanelView,
+			available: () => process.env.OMP_GUI_TEST_PREVIEW_START === "1",
+		},
+		settle: 900,
+	},
+	{
+		// The emulator pane (Orca's FT71): the start page's device opened, its screen read by `adb exec-out screencap`.
+		id: "preview-device",
+		area: "A",
+		title: "Preview device screen: an Android emulator with its keys",
+		open: async (page, look) => {
+			await openPanelView(page, look, "preview");
+			const devices = page.locator("[data-preview-start-devices]:visible").first();
+			await devices.waitFor({ timeout: 30_000 });
+			await devices.getByRole("button").first().click();
+			await page
+				.locator("[data-preview-device] img:visible")
+				.first()
+				.evaluate(
+					(image: HTMLImageElement) =>
+						image.complete && image.naturalWidth > 0
+							? undefined
+							: new Promise(resolve => image.addEventListener("load", resolve, { once: true })),
+					undefined,
+					{ timeout: 20_000 },
+				);
+		},
+		ready: "[data-preview-device]:visible",
+		when: () => false,
+		parity: {
+			session: "work",
+			after: async page => {
+				// The device's head row ends with its close button.
+				const close = page.locator("[data-preview-device]:visible > div").first().getByRole("button").last();
+				if (await close.isVisible().catch(() => false)) await close.click();
+				await closePanelView(page);
+			},
+			available: () => process.env.OMP_GUI_TEST_PREVIEW_START === "1",
+		},
+		settle: 900,
+	},
+	{
+		// A link tapped on the phone opens there; the toast after it offers the computer and the computer's Preview
+		// (Orca's FM51). A computer's window opens a link in the system browser and has no such toast, so its views show
+		// the reply with the link.
+		id: "phone-link-toast",
+		area: "B",
+		title: "Phone link toast: Open on computer and Open in Preview",
+		open: async (page, look) => {
+			await showTurn(page, "fixture reply components");
+			const link = page.locator('.markdown-body a[href="https://example.com/docs"]').first();
+			await showInReply(page, link);
+			if (!touchLook(look)) return;
+			const opened = page
+				.context()
+				.waitForEvent("page", { timeout: 10_000 })
+				.catch(() => undefined);
+			await link.click();
+			await (await opened)?.close();
+			await page
+				.getByRole("button", { name: say(look, "hostUi.link.inPreview"), exact: true })
+				.first()
+				.waitFor({ timeout: 10_000 });
+		},
+		// The audits' harness page is not a paired phone's (no host to offer); the parity sheet's phone is.
+		when: () => false,
+		parity: { session: "reply" },
+		settle: 300,
+	},
 	{
 		// The quick terminal (Orca's floating terminal): opened from the palette, its first shell's tab ready.
 		id: "quick-terminal",
@@ -2310,7 +2419,7 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-bot-pane] [data-bot-items] [data-bot-item]",
 		settle: 600,
 		when: () => false,
-		parity: { session: "work" },
+		parity: { session: "work", after: closeParityItems },
 	},
 	{
 		id: "bot-item",
@@ -2323,7 +2432,7 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-bot-item-page] [data-bot-item-activity]",
 		settle: 600,
 		when: () => false,
-		parity: { session: "work" },
+		parity: { session: "work", after: closeParityItems },
 	},
 	{
 		id: "bot-room",

@@ -90,7 +90,7 @@ for (const [language, theme] of variants([
 			await Promise.all([driven.waitForNavigation(), driven.click("#next")]);
 			await expect(page.locator("[data-preview-status]")).toHaveText("Second page");
 			await expect(
-				page.getByRole("textbox", { name: language === "ko" ? "미리보기 URL" : "Preview URL" }),
+				page.getByRole("combobox", { name: language === "ko" ? "미리보기 URL" : "Preview URL" }),
 			).toHaveValue(`${site}next`);
 			// Stock's tab.back()/tab.forward() (puppeteer goBack/goForward) read Page.getNavigationHistory and jump to an
 			// entry; the relay checks that entry's URL and lets it through.

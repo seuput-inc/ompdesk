@@ -463,7 +463,7 @@ describe("mac bundle configs", () => {
 		});
 	});
 
-	it("keeps OMPdesk's own extension root to its skill", () => {
+	it("keeps OMPdesk's own extension root to its skills", () => {
 		const root = path.join(PACKAGE_ROOT, "resources/omp-builtin");
 		expect(fs.readdirSync(root).sort()).toEqual([
 			"agent-desktop",
@@ -474,9 +474,12 @@ describe("mac bundle configs", () => {
 			"pstack",
 			"skills",
 		]);
-		expect(fs.readdirSync(path.join(root, "skills"))).toEqual(["ompdesk"]);
+		// The control tools' skill and the emulator skill beside it, named `ompdesk-…` so no user skill shadows it.
+		expect(fs.readdirSync(path.join(root, "skills")).sort()).toEqual(["ompdesk", "ompdesk-mobile-emulator"]);
 		const skill = fs.readFileSync(path.join(root, "skills/ompdesk/SKILL.md"), "utf8");
 		expect(skill).toMatch(/^---\nname: ompdesk\ndescription: \S/);
+		const emulator = fs.readFileSync(path.join(root, "skills/ompdesk-mobile-emulator/SKILL.md"), "utf8");
+		expect(emulator).toMatch(/^---\nname: ompdesk-mobile-emulator\ndescription: \S/);
 	});
 
 	it("ships the formal-verification skill as its own model-invocable root, under a name no installed skill shares", () => {

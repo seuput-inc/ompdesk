@@ -636,7 +636,10 @@ fn receive(shared: &Shared, bytes: &[u8]) -> Result<()> {
     };
     if matches!(
         event.method.as_str(),
-        "Target.attachedToTarget" | "Target.detachedFromTarget" | "Fetch.requestPaused"
+        "Target.attachedToTarget"
+            | "Target.detachedFromTarget"
+            | "Fetch.requestPaused"
+            | "Fetch.authRequired"
     ) {
         let policy = shared
             .policy_events
