@@ -2599,6 +2599,7 @@ export const ko: Record<string, string> = {
 	"updater.card.compactDownloading": "받는 중 {percent}%",
 	"updater.card.checking": "업데이트 확인 중…",
 	"updater.card.upToDate": "최신 버전이에요 ({version})",
+	"updater.card.needsMacos": "OMPdesk {version}에는 macOS {macos}가 필요해요",
 	"updater.card.failed": "업데이트 확인 실패",
 	"updater.card.authRequired": "업데이트하려면 GitHub 접근이 필요해요",
 	"updater.card.openSettings": "업데이트 설정 열기",
@@ -6132,6 +6133,13 @@ export const ko: Record<string, string> = {
 	"diskCare.kept": "그대로 둔 항목: {count}개",
 	"diskCare.failed": "실패: {count}건",
 	"updates.upToDate": "최신 상태",
+	"updates.needsMacos": "macOS {macos} 필요",
+	"macosRequirement.title": "이제 OMPdesk 업데이트에는 macOS {macos}가 필요해요",
+	"macosRequirement.description":
+		"OMPdesk {version}부터 macOS {macos} 이상이 필요해요. 지금 버전은 계속 쓸 수 있지만, 이 Mac에서는 새 업데이트를 받지 못해요.",
+	"macosRequirement.body": "최신 OMPdesk를 받으려면 macOS를 {macos} 이상으로 업데이트하세요.",
+	"macosRequirement.dismiss": "확인",
+	"macosRequirement.guide": "macOS 업데이트 방법",
 	"updates.authRequired": "토큰 필요",
 	"updates.auth.label": "GitHub 토큰(선택)",
 	"updates.auth.description":

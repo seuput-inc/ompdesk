@@ -808,7 +808,12 @@ const UpdateStatusSchema: z.ZodType<UpdateStatus> = z.discriminatedUnion("state"
 		restartAt: z.number().optional(),
 		installing: z.literal(true).optional(),
 	}),
-	z.object({ state: z.literal("not-available"), version: z.string() }),
+	z.object({
+		state: z.literal("not-available"),
+		version: z.string(),
+		// The host's Mac cannot run the newer release; its Settings row says so on a paired computer too.
+		unsupportedSystem: z.object({ version: z.string(), minimumMacOS: z.string() }).optional(),
+	}),
 	z.object({
 		state: z.literal("error"),
 		message: z.string(),

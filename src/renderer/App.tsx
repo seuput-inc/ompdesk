@@ -5,6 +5,7 @@ import { Button, InlineNotice, Modal, ToastStack } from "./components/common";
 import { ChangelogDialog, WhatsNewNotice } from "./components/dialogs/ChangelogDialog";
 import { ChildAsks } from "./components/dialogs/ChildAsks";
 import { ExtensionDialog } from "./components/dialogs/ExtensionDialog";
+import { MacosRequirementNotice } from "./components/dialogs/MacosRequirementNotice";
 import { ModelRestoreDialog } from "./components/dialogs/ModelRestoreDialog";
 import { PlanApprovalDialog } from "./components/dialogs/PlanApprovalDialog";
 import { TabSwitcher, useTabSwitcherStore } from "./components/dialogs/TabSwitcher";
@@ -981,6 +982,7 @@ export function App() {
 				) : null}
 				<ChangelogDialog />
 				<WhatsNewNotice />
+				<MacosRequirementNotice />
 				<StarterTour />
 				<RemoteFolderPickerHost />
 				<WebPairingDialog />

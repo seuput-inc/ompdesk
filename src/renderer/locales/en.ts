@@ -2609,6 +2609,7 @@ export const en: Record<string, string> = {
 	"updater.card.compactDownloading": "Downloading {percent}%",
 	"updater.card.checking": "Checking for updates…",
 	"updater.card.upToDate": "OMPdesk {version} is up to date",
+	"updater.card.needsMacos": "OMPdesk {version} needs macOS {macos}",
 	"updater.card.failed": "Update check failed",
 	"updater.card.authRequired": "GitHub access needed to update",
 	"updater.card.openSettings": "Open update settings",
@@ -6143,6 +6144,13 @@ export const en: Record<string, string> = {
 	"diskCare.kept": "Left in place: {count}",
 	"diskCare.failed": "Failed: {count}",
 	"updates.upToDate": "Up to date",
+	"updates.needsMacos": "Needs macOS {macos}",
+	"macosRequirement.title": "OMPdesk updates now need macOS {macos}",
+	"macosRequirement.description":
+		"OMPdesk {version} requires macOS {macos} or later. This version keeps working, but it won't get new updates on this Mac.",
+	"macosRequirement.body": "Update macOS to macOS {macos} or later to get the latest OMPdesk.",
+	"macosRequirement.dismiss": "Got it",
+	"macosRequirement.guide": "How to update macOS",
 	"updates.authRequired": "Token needed",
 	"updates.auth.label": "GitHub token (optional)",
 	"updates.auth.description":

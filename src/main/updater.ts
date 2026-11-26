@@ -86,6 +86,7 @@ import {
 	downloadInstaller,
 	lookupRelease,
 	type PlatformRelease,
+	ReleaseFeedError,
 	setUpdateNetwork,
 	UPDATE_ASSETS,
 	UPDATE_METADATA_ERROR,
@@ -770,20 +771,28 @@ async function checkOnce(): Promise<void> {
 		return;
 	}
 	const error = failure.error;
-	let access = await checkRepoAccess(token);
-	// An anonymous request GitHub answers "not found" means the repo is
-	// private again: a token is needed (or the one tried was rejected).
-	if (access === "denied" && !token) access = rejected ? "invalid" : "missing";
 	const code = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : undefined;
 	const detail = error instanceof Error ? error.message : String(error);
-	// A release without usable metadata is no update, but never a silent one.
-	const message =
-		code === UPDATE_METADATA_ERROR
-			? mainT("updates.releaseInvalid")
-			: code === UPDATE_PLATFORM_ERROR
-				? mainT("updates.installerMissing")
-				: mainT("updates.checkFailed");
-	const settled = settleFailedUpdateCheck(access, code, message, appVersion(), checkAsked, detail);
+	// A newer release this Mac's macOS cannot run is no failure: this version keeps working, and the macOS notice
+	// says what the next one needs (Orca main/updater/releases/updater-system-requirement.ts:22).
+	const unsupported = error instanceof ReleaseFeedError ? error.unsupportedSystem : undefined;
+	let settled: UpdateStatus;
+	if (unsupported && (compareVersions(unsupported.version, appVersion()) ?? -1) > 0) {
+		settled = { state: "not-available", version: appVersion(), unsupportedSystem: unsupported };
+	} else {
+		let access = await checkRepoAccess(token);
+		// An anonymous request GitHub answers "not found" means the repo is
+		// private again: a token is needed (or the one tried was rejected).
+		if (access === "denied" && !token) access = rejected ? "invalid" : "missing";
+		// A release without usable metadata is no update, but never a silent one.
+		const message =
+			code === UPDATE_METADATA_ERROR
+				? mainT("updates.releaseInvalid")
+				: code === UPDATE_PLATFORM_ERROR
+					? mainT("updates.installerMissing")
+					: mainT("updates.checkFailed");
+		settled = settleFailedUpdateCheck(access, code, message, appVersion(), checkAsked, detail);
+	}
 	// A held download is still the answer when the look for a newer one fails (an error would drop it, and with it the hold).
 	if (heldStartFailed()) {
 		logUpdate("check", {
@@ -795,7 +804,7 @@ async function checkOnce(): Promise<void> {
 		return;
 	}
 	// A repo with no release yet is the same answer as "no update"; the rest is an error with its kind.
-	if (settled.state === "not-available") {
+	if (settled.state === "not-available" && !settled.unsupportedSystem) {
 		logUpdate("check", {
 			event: "no-update",
 			current: appVersion(),

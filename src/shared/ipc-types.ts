@@ -843,12 +843,20 @@ export type UpdateStatus =
 			restartAt?: number;
 			installing?: true;
 	  }
-	| { state: "not-available"; version: string }
+	/** `unsupportedSystem`: a newer release exists that this Mac's macOS cannot run (the macOS notice names it). */
+	| { state: "not-available"; version: string; unsupportedSystem?: UnsupportedSystemUpdate }
 	/** `message` is user-facing copy in the UI language; `detail` keeps the raw
 	 * technical cause (network/updater error text) for a secondary line or tooltip. */
 	| { state: "error"; message: string; detail?: string; showInBanner?: boolean }
 	/** The release repo refused an anonymous request, or the token cannot read it (it is private again). Settings-only, never a banner. */
 	| { state: "auth-required"; reason: "missing" | "invalid" | "denied" };
+
+/** A release the updater withheld because this Mac runs a macOS below the one it needs. */
+export interface UnsupportedSystemUpdate {
+	version: string;
+	/** The major macOS version the release needs, e.g. "15". */
+	minimumMacOS: string;
+}
 
 /**
  * OMPdesk itself on the machine a tab runs on (Settings on a paired host's
