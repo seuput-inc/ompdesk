@@ -94,9 +94,9 @@ test("a bot made on one computer is listed, chatted with and answered on its pai
 		}, "B never listed A's bot");
 		const row = b.locator(`[data-bot-entry="${courier.id}"]`);
 		await expect(row.locator(`[data-bot-owner="${deviceId}"]`)).toHaveText("Studio");
-		// Its chats fold under its row, never as a project of A's section (as this computer's own bots' chats).
+		// Its chats fold under its row, never as a project of A's section.
 		await row.locator(`[data-bot-fold="${courier.id}"]`).click();
-		await expect(row.locator(`[data-bot-chats="${courier.id}"] [data-bot-chat="home"]`)).toHaveCount(1);
+		await expect(row.getByRole("button", { name: "Home chat", exact: true })).toBeVisible();
 		await expect(b.locator(`[data-device-group=${JSON.stringify(courier.folder)}]`)).toHaveCount(0);
 		await b.screenshot({ path: "test-results/bots-remote-listed.png", scale: "css", animations: "disabled" });
 

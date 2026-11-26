@@ -29,7 +29,6 @@ export function RemoteBotChats({ bot }: { bot: Bot }) {
 		const home = session.path === bot.home;
 		return (
 			<ListRow
-				data-bot-chat={home ? "home" : "side"}
 				key={session.path}
 				leading={home ? <House aria-hidden className="size-4 text-(--sc-accent)" /> : undefined}
 				meta={<TimeAgo className="text-(--sc-text-subtle)" iso={session.modified} />}
