@@ -12,6 +12,7 @@ import type { SessionInfo } from "./ipc-types";
 import {
 	CHATS_ORDER_KEY,
 	holdRows,
+	openerOfSessions,
 	type RowSession,
 	type RowTab,
 	remoteOpenedChildren,
@@ -635,5 +636,33 @@ describe("project groups", () => {
 			["/p/c", undefined],
 		]);
 		expect(rows.groups.map(group => group.cwd)).toEqual(rows.allGroups.map(group => group.cwd));
+	});
+});
+
+describe("a parent the person gave", () => {
+	const session = (path: string, created: string) => ({ path, id: path, title: path, created });
+	const sessions = [session("/s/a", "2026-01-01"), session("/s/b", "2026-01-02"), session("/s/c", "2026-01-03")];
+
+	it('nests a session under the parent chosen, over what a record names, and `""` lifts it out', () => {
+		const recorded = new Map([["/s/c", "/s/a"]]);
+		expect(openerOfSessions([], sessions, recorded)).toEqual(new Map([["/s/c", "/s/a"]]));
+		expect(openerOfSessions([], sessions, recorded, new Map([["/s/c", "/s/b"]]))).toEqual(
+			new Map([["/s/c", "/s/b"]]),
+		);
+		expect(openerOfSessions([], sessions, recorded, new Map([["/s/c", ""]]))).toEqual(new Map());
+	});
+
+	it("nests nothing under a parent that is gone, and a chain still nests under its first", () => {
+		expect(openerOfSessions([], sessions, new Map(), new Map([["/s/c", "/s/gone"]]))).toEqual(new Map());
+		const chain = new Map([
+			["/s/b", "/s/a"],
+			["/s/c", "/s/b"],
+		]);
+		expect(openerOfSessions([], sessions, new Map(), chain)).toEqual(
+			new Map([
+				["/s/b", "/s/a"],
+				["/s/c", "/s/a"],
+			]),
+		);
 	});
 });

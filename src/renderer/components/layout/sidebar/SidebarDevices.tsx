@@ -68,6 +68,7 @@ import type { SessionStore } from "../../../stores/session";
 import { sessionListFeed } from "../../../stores/session-list";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
 import { ensureSessionTargetsOnFocus, requestSessionTargets, useSessionTargets } from "../../../stores/session-targets";
+import { setSidebarEntry } from "../../../stores/sidebar-entries";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { useProjectList, useSidebarProjects } from "../../../stores/sidebar-projects";
 import { openProjectDialog } from "../../../stores/sidebar-request";
@@ -621,6 +622,7 @@ function DeviceSessions({
 					pinnedGroups: layout?.pinnedGroups ?? NO_KEYS,
 					groupOrder: layout?.groupOrder ?? NO_KEYS,
 					sessionOrder: list => layout?.sessionOrder[list],
+					sessionParents: layout?.sessionParents,
 					projectGroup: cwd => layout?.projectGroups?.[cwd],
 				},
 				query,
@@ -1028,6 +1030,42 @@ function DeviceSessions({
 								archived: !hostArchived.has(session.id),
 							})
 					: undefined,
+				...(editable && !session.path.startsWith("tab:")
+					? {
+							setEmoji: () =>
+								openProjectDialog({
+									kind: "emoji",
+									device: host.deviceId,
+									path: session.path,
+									name: sessionDisplayTitle(session, t("sidebar.untitled")),
+								}),
+							setParent: () =>
+								openProjectDialog({
+									kind: "parent",
+									device: host.deviceId,
+									path: session.path,
+									name: sessionDisplayTitle(session, t("sidebar.untitled")),
+									candidates: tree.rows.code
+										.filter(
+											other =>
+												other.cwd === session.cwd &&
+												other.path !== session.path &&
+												other.liveTabId === undefined &&
+												tree.rows.rootOf.get(other.path) !== session.path,
+										)
+										.map(other => ({
+											path: other.path,
+											title: sessionDisplayTitle(other, t("sidebar.untitled")),
+										})),
+								}),
+							...(tree.rows.rootOf.has(session.path)
+								? {
+										removeParent: () =>
+											void setSidebarEntry(host.deviceId, "sessionParents", session.path, ""),
+									}
+								: {}),
+						}
+					: {}),
 				saveBundle: anonymized => {
 					if (tab)
 						void saveDiagnosticBundle({ tabId: tab.id, title: sessionDisplayTitle(session, "") }, anonymized);
@@ -1280,6 +1318,11 @@ function DeviceSessions({
 					selected={active}
 					title={
 						<>
+							{layout?.sessionEmoji?.[session.path] && (
+								<span aria-hidden className="mr-1 shrink-0" data-session-emoji>
+									{layout.sessionEmoji[session.path]}
+								</span>
+							)}
 							<SessionLiveTitle
 								agents={workingAgentCount(summary?.agents ?? [])}
 								opened={runningOpened}

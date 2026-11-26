@@ -581,6 +581,8 @@ export function Sidebar() {
 	const projectGroups = useSidebarPrefs(s => s.projectGroups);
 	const projectColors = useSidebarPrefs(s => s.projectColors);
 	const projectEmoji = useSidebarPrefs(s => s.projectEmoji);
+	const sessionEmoji = useSidebarPrefs(s => s.sessionEmoji);
+	const sessionParents = useSidebarPrefs(s => s.sessionParents);
 	// The projects this computer lists apart from its sessions: an empty one keeps its group (src/main/sidebar-projects.ts).
 	const projectList = useProjectList();
 	const {
@@ -825,6 +827,7 @@ export function Sidebar() {
 				groupOrder,
 				sessionOrder: list => sessionOrder[list],
 				projectGroup: cwd => projectGroups[cwd],
+				sessionParents,
 			},
 			query: filter,
 			nameOf: key => groupAliases[key] ?? projectName(key).name,
@@ -850,6 +853,7 @@ export function Sidebar() {
 			filter,
 			groupAliases,
 			projectGroups,
+			sessionParents,
 		],
 	);
 	// A session an agent here opened on a paired device is that opener's child too: its tab, or a stand-in for one
@@ -868,8 +872,9 @@ export function Sidebar() {
 				archivedSessions,
 				filter,
 				projectGroups,
+				sessionParents,
 			]),
-		[pinnedSessions, pinnedGroups, groupOrder, sessionOrder, archivedSessions, filter, projectGroups],
+		[pinnedSessions, pinnedGroups, groupOrder, sessionOrder, archivedSessions, filter, projectGroups, sessionParents],
 	);
 	const rows = useHeld(family.rows, holdRows, ownOrder, pointing);
 	const rowsHeldBack = rows === family.rows ? 0 : rowsWaiting(rows, family.rows);
@@ -2070,6 +2075,11 @@ export function Sidebar() {
 					selected={active}
 					title={
 						<>
+							{sessionEmoji[session.path] && (
+								<span aria-hidden className="mr-1 shrink-0" data-session-emoji>
+									{sessionEmoji[session.path]}
+								</span>
+							)}
 							<SessionLiveTitle
 								agents={workingAgents}
 								opened={runningOpened}
@@ -2804,6 +2814,46 @@ export function Sidebar() {
 											() => void useSidebarPrefs.getState().toggleAgentHidden(session.path),
 										),
 										links: then(() => setLinksFor(session.path)),
+										...(session.liveTabId === undefined
+											? {
+													setEmoji: then(() =>
+														openProjectDialog({
+															kind: "emoji",
+															path: session.path,
+															name: sessionDisplayTitle(session, t("sidebar.untitled")),
+														}),
+													),
+													setParent: then(() =>
+														openProjectDialog({
+															kind: "parent",
+															path: session.path,
+															name: sessionDisplayTitle(session, t("sidebar.untitled")),
+															candidates: codeSessions
+																.filter(
+																	other =>
+																		other.cwd === session.cwd &&
+																		other.path !== session.path &&
+																		other.liveTabId === undefined &&
+																		rows.rootOf.get(other.path) !== session.path,
+																)
+																.map(other => ({
+																	path: other.path,
+																	title: sessionDisplayTitle(other, t("sidebar.untitled")),
+																})),
+														}),
+													),
+												}
+											: {}),
+										...(rows.rootOf.has(session.path)
+											? {
+													removeParent: then(
+														() =>
+															void useSidebarPrefs
+																.getState()
+																.setEntry("sessionParents", session.path, ""),
+													),
+												}
+											: {}),
 									}
 								: {}),
 							copyTitle: then(() => void copyText(sessionDisplayLabel(session, t("sidebar.untitled")))),

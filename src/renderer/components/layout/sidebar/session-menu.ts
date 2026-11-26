@@ -28,12 +28,15 @@ import {
 	FolderSearch,
 	Link2,
 	MailCheck,
+	Network,
 	PanelRightClose,
 	Pencil,
 	Pin,
 	PinOff,
 	Rows2,
+	Smile,
 	Trash2,
+	Unlink,
 	X,
 } from "lucide-react";
 import { type KeymapPlatform, PLATFORM } from "../../../lib/keymap";
@@ -97,6 +100,12 @@ export interface SessionMenuActions {
 	toggleAgentHidden?: () => void;
 	/** Copies its title as the row shows it. */
 	copyTitle?: () => void;
+	/** Picks the session it nests under, by hand (Orca's parent picker). */
+	setParent?: () => void;
+	/** Lifts it out of the family it nests in, to a row of its own list. */
+	removeParent?: () => void;
+	/** Picks the emoji drawn before its title. */
+	setEmoji?: () => void;
 	reveal?: () => void;
 	/** Saves the open tab's diagnostic bundle; `anonymized` when Option/Alt was held. */
 	saveBundle?: (anonymized: boolean) => void;
@@ -251,6 +260,22 @@ export function sessionMenuItems({
 							onSelect: actions.toggleArchive,
 						},
 			);
+		if (actions.setEmoji)
+			edit.push({ id: "session-emoji", label: t("sidebar.menu.emoji"), icon: Smile, onSelect: actions.setEmoji });
+		if (actions.setParent && !facts.chat)
+			edit.push({
+				id: "session-parent",
+				label: t("sidebar.menu.setParent"),
+				icon: Network,
+				onSelect: actions.setParent,
+			});
+		if (actions.removeParent)
+			edit.push({
+				id: "session-remove-parent",
+				label: t("sidebar.menu.removeParent"),
+				icon: Unlink,
+				onSelect: actions.removeParent,
+			});
 	}
 	if (actions.toggleAgentHidden)
 		edit.push({

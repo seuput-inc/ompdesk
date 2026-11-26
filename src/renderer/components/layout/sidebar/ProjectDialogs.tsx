@@ -7,8 +7,10 @@
  * - Appearance (Orca's project peek and identity editor: repo/project-peek/ProjectPeek.tsx,
  *   ProjectAppearanceEditor.tsx, settings/repository/identity/RepositoryIconEmojiPicker.tsx): what the header shows,
  *   its color (the device hues) and its emoji (`:name` suggests from the composer's emoji data).
+ * - A session's emoji (Orca's workspace emoji, components/workspace-emoji/*) and the parent it nests under (Orca's
+ *   parent picker, workspace-actions/parenting/WorktreeParentPickerPopover.tsx).
  *
- * Each saves to the computer the project belongs to (`stores/sidebar-entries.ts`).
+ * Each saves to the computer the project or session belongs to (`stores/sidebar-entries.ts`).
  */
 import { useEffect, useId, useState } from "react";
 import { DEVICE_COLORS } from "../../../lib/device-color";
@@ -21,7 +23,16 @@ import { ProjectGlyph } from "./ProjectGlyph";
 export type ProjectDialogRequest =
 	| { kind: "move"; device?: string; cwd: string; name: string }
 	| { kind: "rename"; device?: string; group: string }
-	| { kind: "look"; device?: string; cwd: string; name: string };
+	| { kind: "look"; device?: string; cwd: string; name: string }
+	| { kind: "emoji"; device?: string; path: string; name: string }
+	| {
+			kind: "parent";
+			device?: string;
+			path: string;
+			name: string;
+			/** The sessions it may nest under: its own list's, itself and its own children left out. */
+			candidates: readonly { path: string; title: string }[];
+	  };
 
 function MoveDialog({
 	request,
@@ -162,21 +173,8 @@ function LookDialog({
 	const emojis = useSidebarEntry("projectEmoji", request.device);
 	const [color, setColor] = useState(colors[request.cwd] ?? "");
 	const [emoji, setEmoji] = useState(emojis[request.cwd] ?? "");
-	const [suggestions, setSuggestions] = useState<EmojiSuggestionItem[]>([]);
 	const colorLabel = useId();
-	useEffect(() => {
-		let live = true;
-		void getEmojiSuggestions(emoji)
-			.then(found => {
-				if (live) setSuggestions(found?.items.slice(0, 8) ?? []);
-			})
-			.catch(() => undefined);
-		return () => {
-			live = false;
-		};
-	}, [emoji]);
-	// A `:name` still being typed is no emoji yet.
-	const pickedEmoji = emoji.startsWith(":") ? "" : emoji.trim();
+	const pickedEmoji = chosenEmoji(emoji);
 	const save = () => {
 		onClose();
 		if (color !== (colors[request.cwd] ?? ""))
@@ -244,37 +242,181 @@ function LookDialog({
 						selected={new Set([color])}
 					/>
 				</div>
-				<div className="flex flex-col gap-2">
-					<Input
-						hint={t("sidebar.look.emojiHint")}
-						label={t("sidebar.look.emoji")}
-						maxLength={32}
-						onChange={event => setEmoji(event.target.value)}
-						value={emoji}
+				<EmojiField onChange={setEmoji} value={emoji} />
+			</form>
+		</Modal>
+	);
+}
+
+/** An emoji typed or pasted, or picked from what `:name` suggests (the composer's emoji data). */
+function EmojiField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+	const t = useT();
+	const [suggestions, setSuggestions] = useState<EmojiSuggestionItem[]>([]);
+	useEffect(() => {
+		let live = true;
+		void getEmojiSuggestions(value)
+			.then(found => {
+				if (live) setSuggestions(found?.items.slice(0, 8) ?? []);
+			})
+			.catch(() => undefined);
+		return () => {
+			live = false;
+		};
+	}, [value]);
+	return (
+		<div className="flex flex-col gap-2">
+			<Input
+				hint={t("sidebar.look.emojiHint")}
+				label={t("sidebar.look.emoji")}
+				maxLength={32}
+				onChange={event => onChange(event.target.value)}
+				value={value}
+			/>
+			{suggestions.length > 0 && (
+				<div className="flex flex-wrap gap-1" data-project-emoji-suggestions>
+					{suggestions.map(item => (
+						<Button
+							key={item.label}
+							onClick={() => onChange(item.value)}
+							size="sm"
+							title={item.label}
+							variant="ghost"
+						>
+							{item.value}
+						</Button>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
+/** A `:name` still being typed is no emoji yet. */
+const chosenEmoji = (text: string) => (text.startsWith(":") ? "" : text.trim());
+
+function EmojiDialog({
+	request,
+	onClose,
+}: {
+	request: Extract<ProjectDialogRequest, { kind: "emoji" }>;
+	onClose: () => void;
+}) {
+	const t = useT();
+	const emojis = useSidebarEntry("sessionEmoji", request.device);
+	const [emoji, setEmoji] = useState(emojis[request.path] ?? "");
+	return (
+		<Modal
+			footer={
+				<>
+					<Button onClick={onClose} variant="secondary">
+						{t("common.cancel")}
+					</Button>
+					<Button form="session-emoji" type="submit" variant="primary">
+						{t("common.save")}
+					</Button>
+				</>
+			}
+			onClose={onClose}
+			open
+			size="sm"
+			title={t("sidebar.emoji.title", { name: request.name })}
+		>
+			<form
+				id="session-emoji"
+				onSubmit={event => {
+					event.preventDefault();
+					onClose();
+					const next = chosenEmoji(emoji);
+					if (next !== (emojis[request.path] ?? ""))
+						void setSidebarEntry(request.device, "sessionEmoji", request.path, next || null);
+				}}
+			>
+				<EmojiField onChange={setEmoji} value={emoji} />
+			</form>
+		</Modal>
+	);
+}
+
+/**
+ * The session a row nests under, chosen by hand (Orca's parent picker, workspace-actions/parenting/
+ * WorktreeParentPickerPopover.tsx): one of its list's sessions, or Automatic (back to who opened it).
+ */
+function ParentDialog({
+	request,
+	onClose,
+}: {
+	request: Extract<ProjectDialogRequest, { kind: "parent" }>;
+	onClose: () => void;
+}) {
+	const t = useT();
+	const parents = useSidebarEntry("sessionParents", request.device);
+	const current = parents[request.path];
+	const [chosen, setChosen] = useState(current ?? AUTOMATIC);
+	const labelId = useId();
+	return (
+		<Modal
+			footer={
+				<>
+					<Button onClick={onClose} variant="secondary">
+						{t("common.cancel")}
+					</Button>
+					<Button
+						disabled={chosen === (current ?? AUTOMATIC)}
+						form="session-parent"
+						type="submit"
+						variant="primary"
+					>
+						{t("common.save")}
+					</Button>
+				</>
+			}
+			onClose={onClose}
+			open
+			size="sm"
+			title={t("sidebar.parent.title", { name: request.name })}
+		>
+			<form
+				className="flex flex-col gap-3"
+				data-session-parent-dialog
+				id="session-parent"
+				onSubmit={event => {
+					event.preventDefault();
+					onClose();
+					void setSidebarEntry(
+						request.device,
+						"sessionParents",
+						request.path,
+						chosen === AUTOMATIC ? null : chosen,
+					);
+				}}
+			>
+				<span className="text-sc-sm text-(--sc-text-secondary)" id={labelId}>
+					{t("sidebar.parent.choose")}
+				</span>
+				<div className="max-h-80 overflow-y-auto">
+					<ChoiceList
+						choices={[
+							{ key: AUTOMATIC, label: t("sidebar.parent.automatic") },
+							...request.candidates.map(candidate => ({ key: candidate.path, label: candidate.title })),
+						]}
+						labelledBy={labelId}
+						mode="single"
+						onChoose={setChosen}
+						selected={new Set([chosen])}
 					/>
-					{suggestions.length > 0 && (
-						<div className="flex flex-wrap gap-1" data-project-emoji-suggestions>
-							{suggestions.map(item => (
-								<Button
-									key={item.label}
-									onClick={() => setEmoji(item.value)}
-									size="sm"
-									title={item.label}
-									variant="ghost"
-								>
-									{item.value}
-								</Button>
-							))}
-						</div>
-					)}
 				</div>
 			</form>
 		</Modal>
 	);
 }
 
+/** The parent picker's "back to the automatic opener" choice, which no session file can be. */
+const AUTOMATIC = "\u0000automatic";
+
 export default function ProjectDialog({ request, onClose }: { request: ProjectDialogRequest; onClose: () => void }) {
 	if (request.kind === "move") return <MoveDialog onClose={onClose} request={request} />;
 	if (request.kind === "rename") return <RenameDialog onClose={onClose} request={request} />;
+	if (request.kind === "emoji") return <EmojiDialog onClose={onClose} request={request} />;
+	if (request.kind === "parent") return <ParentDialog onClose={onClose} request={request} />;
 	return <LookDialog onClose={onClose} request={request} />;
 }

@@ -128,3 +128,49 @@ describe("Appearance", () => {
 		expect(updateSidebar).toHaveBeenCalledWith({ op: "set-entry", field: "projectEmoji", key: "/a", value: "🚀" });
 	});
 });
+
+describe("a session's parent and emoji", () => {
+	it("nests the session under the one chosen, and Automatic gives it back to its opener", async () => {
+		useSidebarPrefs.setState({ sessionParents: { "/s/c.jsonl": "/s/a.jsonl" } });
+		const candidates = [
+			{ path: "/s/a.jsonl", title: "Alpha" },
+			{ path: "/s/b.jsonl", title: "Beta" },
+		];
+		await mount({ kind: "parent", path: "/s/c.jsonl", name: "Gamma", candidates });
+		await run('[data-choice="/s/b.jsonl"]', "onClick");
+		await submit("#session-parent");
+		expect(updateSidebar).toHaveBeenLastCalledWith({
+			op: "set-entry",
+			field: "sessionParents",
+			key: "/s/c.jsonl",
+			value: "/s/b.jsonl",
+		});
+		await act(async () => root?.unmount());
+		await mount({ kind: "parent", path: "/s/c.jsonl", name: "Gamma", candidates });
+		await run('[data-choice="\u0000automatic"]', "onClick");
+		await submit("#session-parent");
+		expect(updateSidebar).toHaveBeenLastCalledWith({
+			op: "set-entry",
+			field: "sessionParents",
+			key: "/s/c.jsonl",
+			value: null,
+		});
+	});
+
+	it("sets a session's emoji, and a `:name` still being typed sets none", async () => {
+		await mount({ kind: "emoji", path: "/s/c.jsonl", name: "Gamma" });
+		await run("#session-emoji input", "onChange", { target: { value: ":rock" } });
+		await submit("#session-emoji");
+		expect(updateSidebar).not.toHaveBeenCalled();
+		await act(async () => root?.unmount());
+		await mount({ kind: "emoji", path: "/s/c.jsonl", name: "Gamma" });
+		await run("#session-emoji input", "onChange", { target: { value: "🐛" } });
+		await submit("#session-emoji");
+		expect(updateSidebar).toHaveBeenCalledWith({
+			op: "set-entry",
+			field: "sessionEmoji",
+			key: "/s/c.jsonl",
+			value: "🐛",
+		});
+	});
+});

@@ -57,6 +57,8 @@ export interface RowOrder {
 	sessionOrder: (list: string) => readonly string[] | undefined;
 	/** The group a project is filed under (Orca's project groups); its projects then list together, under its name. */
 	projectGroup?: (cwd: string) => string | undefined;
+	/** The parent the person gave a session (session file → parent's file, `""` = none), over the automatic opener. */
+	sessionParents?: Readonly<Record<string, string>>;
 }
 
 export interface SidebarFacts {
@@ -255,6 +257,8 @@ export function openerOfSessions(
 	tabs: readonly FamilyTab[],
 	sessions: readonly FamilySession[],
 	recordedOpeners: ReadonlyMap<string, string> = new Map(),
+	/** The parent the person gave a session over every rule here (Orca's parent picker); `""` = none at all. */
+	chosenParents: ReadonlyMap<string, string> = new Map(),
 ): Map<string, string> {
 	const sessionOf = new Map<string, FamilySession>();
 	for (const session of sessions) {
@@ -263,9 +267,11 @@ export function openerOfSessions(
 	}
 	const known = new Set(sessions.map(session => session.path));
 	const direct = new Map<string, string>();
+	for (const [child, parent] of chosenParents)
+		if (known.has(child) && parent !== child && known.has(parent)) direct.set(child, parent);
 	for (const tab of tabs) {
 		const child = sessionOf.get(tab.id);
-		if (!child) continue;
+		if (!child || chosenParents.has(child.path)) continue;
 		const opener =
 			(tab.openedBy ? tabs.find(entry => entry.id === tab.openedBy) : undefined) ??
 			(tab.openedBySession ? tabs.find(entry => entry.sessionPath === tab.openedBySession) : undefined);
@@ -274,7 +280,7 @@ export function openerOfSessions(
 		if (path && path !== child.path) direct.set(child.path, path);
 	}
 	for (const session of sessions) {
-		if (direct.has(session.path)) continue;
+		if (direct.has(session.path) || chosenParents.has(session.path)) continue;
 		const opener = recordedOpeners.get(session.path);
 		if (opener && opener !== session.path && known.has(opener)) {
 			direct.set(session.path, opener);
@@ -448,6 +454,7 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 			created: session.created,
 		})),
 		recorded,
+		new Map(Object.entries(facts.order.sessionParents ?? {})),
 	);
 	for (const path of runParent.keys()) rootOf.delete(path);
 
