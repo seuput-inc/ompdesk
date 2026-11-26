@@ -11,6 +11,8 @@
 
 import { Bot, GitBranch, MessageSquare, Network } from "lucide-react";
 import { memo, useEffect, useMemo, useState } from "react";
+import { useStore } from "zustand";
+import { createStore, type StoreApi } from "zustand/vanilla";
 import type { Billing } from "../../../../../resources/gui-bridge/model-setup-contracts";
 import type { SubagentSnapshot } from "../../../../shared/rpc-types";
 import { hostedSummaries } from "../../../../shared/session-summary";
@@ -19,9 +21,11 @@ import { cx } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { useProjectNames } from "../../../lib/project-origin";
 import { costKinds, costWords } from "../../../lib/spend";
+import { talkingWith } from "../../../lib/talking-with";
 import { ensureAgentReviewSubscription, useAgentReviewStore } from "../../../stores/agent-review";
 import { ensureClosedChildren, useClosedChildrenStore } from "../../../stores/closed-children";
 import { summariesOf, tabSummary, useHostedSessionsStore } from "../../../stores/hosted-sessions";
+import type { MessagesStore } from "../../../stores/messages";
 import { useRemoteStore } from "../../../stores/remote";
 import { onSessionRuntimesChange, sessionRuntimeStore } from "../../../stores/session-runtime-context";
 import type { SubagentsStore } from "../../../stores/subagents";
@@ -128,12 +132,33 @@ function open(node: WorkTreeNode): void {
 		});
 }
 
+/** A tab with no runtime here holds no transcript. */
+const NO_MESSAGES: StoreApi<Pick<MessagesStore, "messages">> = createStore(() => ({ messages: [] }));
+
+/** Who else writes to the tab's session (`lib/talking-with.ts`), read from its transcript while the tooltip shows. */
+function TalkingWith({ tabId, family }: { tabId: string; family: ReadonlySet<string> }) {
+	const t = useT();
+	const store: StoreApi<Pick<MessagesStore, "messages">> =
+		sessionRuntimeStore<MessagesStore>(tabId, "messages") ?? NO_MESSAGES;
+	const messages = useStore(store, state => state.messages);
+	const names = useMemo(() => talkingWith(messages, family), [messages, family]);
+	if (names.length === 0) return null;
+	return (
+		<span className="block" data-work-tree-talking>
+			{t("workTree.talkingWith", { names: names.join(", ") })}
+		</span>
+	);
+}
+
 const TreeRow = memo(function TreeRow({
 	node,
 	billing,
+	family,
 }: {
 	node: WorkTreeNode;
 	billing?: Readonly<Record<string, Billing>>;
+	/** The titles of the node's family, which "talking with" leaves out. */
+	family: ReadonlySet<string>;
 }) {
 	const t = useT();
 	const stateLabel = node.state ? t(`workTree.state.${node.state}`) : "";
@@ -166,11 +191,16 @@ const TreeRow = memo(function TreeRow({
 	return (
 		<li>
 			<Tooltip
-				content={details.map(line => (
-					<span className="block" key={line}>
-						{line}
-					</span>
-				))}
+				content={[
+					...details.map(line => (
+						<span className="block" key={line}>
+							{line}
+						</span>
+					)),
+					node.target?.kind === "tab" && node.kind !== "subagent" ? (
+						<TalkingWith family={family} key="talking" tabId={node.target.tabId} />
+					) : null,
+				]}
 				describe={false}
 			>
 				{/* controls-ok: the omp-work-tree-row class draws the indented tree row (touch heights in mobile.css) */}
@@ -221,6 +251,10 @@ const TreeRow = memo(function TreeRow({
 function FamilyTree({ family, billing }: { family: WorkTreeFamily; billing?: Readonly<Record<string, Billing>> }) {
 	const t = useT();
 	const [finishedOpen, setFinishedOpen] = useState(false);
+	const titles = useMemo(
+		() => new Set([family.root, ...family.rows, ...family.finished].map(node => node.title)),
+		[family],
+	);
 	const summary = [
 		family.running > 0 ? t("sidebar.family.running", { count: family.running }) : "",
 		family.waiting > 0 ? t("sidebar.family.waiting", { count: family.waiting }) : "",
@@ -234,7 +268,7 @@ function FamilyTree({ family, billing }: { family: WorkTreeFamily; billing?: Rea
 				<li className="flex items-center">
 					<div className="min-w-0 flex-1">
 						<ul>
-							<TreeRow billing={billing} node={family.root} />
+							<TreeRow billing={billing} family={titles} node={family.root} />
 						</ul>
 					</div>
 					{hasCost(family.cost) ? (
@@ -254,7 +288,7 @@ function FamilyTree({ family, billing }: { family: WorkTreeFamily; billing?: Rea
 					) : null}
 				</li>
 				{family.rows.map(node => (
-					<TreeRow billing={billing} key={node.key} node={node} />
+					<TreeRow billing={billing} family={titles} key={node.key} node={node} />
 				))}
 			</ul>
 			{family.finished.length > 0 ? (
@@ -277,7 +311,12 @@ function FamilyTree({ family, billing }: { family: WorkTreeFamily; billing?: Rea
 					{finishedOpen ? (
 						<ul data-work-tree-finished-rows>
 							{family.finished.map(node => (
-								<TreeRow billing={billing} key={node.key} node={{ ...node, depth: node.depth + 1 }} />
+								<TreeRow
+									billing={billing}
+									family={titles}
+									key={node.key}
+									node={{ ...node, depth: node.depth + 1 }}
+								/>
 							))}
 						</ul>
 					) : null}

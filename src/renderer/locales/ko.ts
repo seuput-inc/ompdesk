@@ -5145,6 +5145,7 @@ export const ko: Record<string, string> = {
 	"workTree.empty": "다른 작업을 시작한 세션이 없어요",
 	"workTree.untitled": "제목 없음",
 	"workTree.finished": "완료 {count}개",
+	"workTree.talkingWith": "대화 상대: {names}",
 	"workTree.branchBase": "{base}에 반영",
 	"workTree.state.running": "실행 중",
 	"workTree.state.waiting": "답변 대기",

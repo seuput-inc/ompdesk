@@ -5155,6 +5155,7 @@ export const en: Record<string, string> = {
 	"workTree.empty": "No session has started other work",
 	"workTree.untitled": "Untitled",
 	"workTree.finished": "Finished {count}",
+	"workTree.talkingWith": "Talking with {names}",
 	"workTree.branchBase": "lands in {base}",
 	"workTree.state.running": "Running",
 	"workTree.state.waiting": "Waiting for you",
