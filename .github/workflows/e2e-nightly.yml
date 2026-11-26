@@ -10,7 +10,8 @@
 # The parity sheet of a UI change, on a runner (a machine that must not run it, or one without a second app to pair):
 #   gh workflow run e2e-nightly.yml --ref <branch> -f parity="settings-device-switch"
 #   gh run download <run-id> -n parity   # <dir>/<surface>/{local,remote,phone,sheet}.png and parity.json
-#   gh workflow run e2e-nightly.yml --ref <branch> -f parity="--both-orders"   # the order check: <dir>/forward and <dir>/reverse
+#   gh workflow run e2e-nightly.yml --ref <branch> -f parity="--both-orders"   # the order check: one runner per order,
+#   gh run download <run-id> -n parity-forward -n parity-reverse                 # <dir>/forward and <dir>/reverse
 #
 # Every job here is a Windows runner (the suite builds on Linux): Playwright drives the Tauri host's page through
 # WebView2's DevTools port and cannot attach to macOS's WKWebView (e2e/fixture/shell-launch.ts; macOS is checked by
@@ -116,18 +117,26 @@ jobs:
 
   # The parity sheet (e2e/parity.e2e.ts, what `bun run parity` runs after its own build) of the named surfaces on a
   # Windows runner, against the bundle build-out made. Uploaded whether it passed or not: the e2e shards keep their
-  # captures of a failed run only.
+  # captures of a failed run only. The order check runs each order on a runner of its own: a runner has one Playwright
+  # worker, so both orders ran in turn, 17 to 26 min of capture after about 10 min of setup (25-26 Nov 2026), and run
+  # 45798443670 hit the 45 min timeout mid-capture.
   parity:
+    name: ${{ matrix.order == 'named' && 'parity' || format('parity ({0})', matrix.order) }}
     if: ${{ inputs.parity != '' }}
     needs: build-out
     runs-on: windows-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        order: ${{ fromJSON(inputs.parity == '--both-orders' && '["forward","reverse"]' || '["named"]') }}
     defaults:
       run:
         shell: bash
     env:
       SURFACES: ${{ inputs.parity }}
       FAKE_ENV: ${{ inputs.fake-env }}
+      ORDER: ${{ matrix.order }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -160,10 +169,11 @@ jobs:
           # A Windows path for the Windows bun: Git Bash would hand it a /d/a/... one.
           PARITY_OUT=$(cygpath -m "$PWD/parity-out")
           if [ "$SURFACES" = "--both-orders" ]; then
-            # The order check (scripts/parity.ts --both-orders): every surface forward and reversed, into
-            # parity-out/forward and parity-out/reverse.
+            # The order check (scripts/parity.ts --both-orders): this runner's order of every surface, into
+            # parity-out/forward or parity-out/reverse.
             OMP_GUI_PARITY="$PARITY_OUT" OMP_GUI_PARITY_ORDERS=both \
-              bunx playwright test e2e/parity.e2e.ts --trace off --reporter line --output parity-out/results
+              bunx playwright test e2e/parity.e2e.ts --grep "parity sheet, $ORDER:" --trace off --reporter line \
+              --output parity-out/results
             exit 0
           fi
           read -r -a IDS <<< "${SURFACES//,/ }"
@@ -181,7 +191,7 @@ jobs:
       - if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: parity
+          name: ${{ matrix.order == 'named' && 'parity' || format('parity-{0}', matrix.order) }}
           path: parity-out/
           if-no-files-found: ignore
           retention-days: 7
