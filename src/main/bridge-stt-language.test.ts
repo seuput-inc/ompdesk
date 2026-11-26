@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	LANGUAGE_FALLBACK_STT_MODEL,
+	STREAM_IDLE_MS,
 	SttDictation,
 	type SttModelStore,
 	SttModels,
+	type SttStreamEvents,
+	SttStreams,
 	speechLanguageOfName,
 	sttLanguageCode,
 	sttModelForLanguage,
@@ -289,5 +292,112 @@ describe("dictation's model", () => {
 			throw new Error("Failed to download speech model (onnx-community/whisper-large-v3-turbo): offline");
 		};
 		await expect(dictation.sttModel({}, null)).rejects.toThrow(/whisper-large-v3-turbo for ko speech: .*offline/);
+	});
+});
+
+describe("a live take and the model's warm-up", () => {
+	let models: FakeModels;
+	let dictation: SttDictation<null>;
+	beforeEach(() => {
+		models = new FakeModels();
+		dictation = new SttDictation<null>(() => ({ selected: PARAKEET, language: "en" }), models, []);
+	});
+
+	it("streams only to a model that is here; Korean before Whisper's download is transcribed whole", async () => {
+		expect(await dictation.streamModel({}, null)).toEqual({ modelKey: "parakeet-tdt-0.6b-v3", language: "en" });
+		expect(await dictation.streamModel({ language: "ko" }, null)).toBeNull();
+		expect(models.downloads).toEqual([]);
+	});
+
+	it("warms a model that is here once (stock's #warmModel: its downloader loads cached weights), never one to download", async () => {
+		expect(await dictation.warm({}, null)).toEqual({ warmed: true });
+		expect(await dictation.warm({}, null)).toEqual({ warmed: false });
+		expect(await dictation.warm({ language: "ko" }, null)).toEqual({ warmed: false });
+		expect(models.downloads).toEqual(["parakeet-tdt-0.6b-v3"]);
+	});
+});
+
+/** Stock's stream handle as a test double: the audio it was fed, and what its endpointer reports. */
+function fakeStream() {
+	const fed: number[] = [];
+	let events: SttStreamEvents | undefined;
+	let finish: ((text: string) => void) | undefined;
+	let cancelled = false;
+	const open = (given: SttStreamEvents) => {
+		events = given;
+		return {
+			pushAudio: (audio: Float32Array) => fed.push(audio.length),
+			stop: () => new Promise<string>(resolve => (finish = resolve)),
+			cancel: () => {
+				cancelled = true;
+			},
+		};
+	};
+	return {
+		open,
+		fed,
+		events: () => events as SttStreamEvents,
+		finish: (text: string) => finish?.(text),
+		cancelled: () => cancelled,
+	};
+}
+
+describe("a live take's words", () => {
+	it("answers each push with the committed segments, the one being spoken and how long it has been quiet", () => {
+		let now = 1_000;
+		const streams = new SttStreams(() => now);
+		const stream = fakeStream();
+		const id = streams.start(stream.open);
+		now = 4_000;
+		expect(streams.push(id, new Float32Array(1600))).toEqual({ text: "", partial: "", quietMs: 3_000 });
+		stream.events().onPartial("  hello  there");
+		now = 4_500;
+		expect(streams.push(id, new Float32Array(1600))).toEqual({ text: "", partial: "hello there", quietMs: 500 });
+		stream.events().onSegment("Hello there.");
+		stream.events().onPartial("second");
+		stream.events().onSegment("Second  part.");
+		now = 9_000;
+		expect(streams.push(id, new Float32Array(0))).toEqual({
+			text: "Hello there. Second part.",
+			partial: "",
+			quietMs: 4_500,
+		});
+		expect(stream.fed).toEqual([1600, 1600]);
+	});
+
+	it("a segment of noise clears the partial without counting as speech", () => {
+		let now = 0;
+		const streams = new SttStreams(() => now);
+		const stream = fakeStream();
+		const id = streams.start(stream.open);
+		stream.events().onPartial("hm");
+		now = 2_000;
+		stream.events().onSegment("  ");
+		now = 5_000;
+		expect(streams.push(id, new Float32Array(0))).toEqual({ text: "", partial: "", quietMs: 5_000 });
+	});
+
+	it("stops with stock's whole transcript and the language heard, and forgets the take", async () => {
+		const streams = new SttStreams();
+		const stream = fakeStream();
+		const id = streams.start(stream.open, "ko");
+		const stopped = streams.stop(id, () => {});
+		stream.finish(" Hello  there. ");
+		await expect(stopped).resolves.toEqual({ text: "Hello there.", language: "ko" });
+		expect(() => streams.push(id, new Float32Array(0))).toThrow(`No dictation stream ${id}`);
+	});
+
+	it("lets go of a take nobody feeds or stops", async () => {
+		vi.useFakeTimers();
+		const streams = new SttStreams();
+		const stream = fakeStream();
+		const id = streams.start(stream.open);
+		await vi.advanceTimersByTimeAsync(STREAM_IDLE_MS - 1);
+		streams.push(id, new Float32Array(0));
+		await vi.advanceTimersByTimeAsync(STREAM_IDLE_MS - 1);
+		expect(stream.cancelled()).toBe(false);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(stream.cancelled()).toBe(true);
+		expect(() => streams.push(id, new Float32Array(0))).toThrow();
 	});
 });

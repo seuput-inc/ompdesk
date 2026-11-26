@@ -292,7 +292,7 @@ export function InputArea() {
 		sendRef.current = send;
 	}, [send]);
 
-	const dictation = useComposerDictation({ textareaRef, placeDraft, sendRef, mountedRef });
+	const dictation = useComposerDictation({ textareaRef, placeDraft, sendRef, mountedRef, runtimeTabId });
 
 	/**
 	 * Expanded composer (TUI app.editor.external parity, GUI-native form): ⌃G
@@ -532,6 +532,8 @@ export function InputArea() {
 							fileInputRef={fileInputRef}
 							onFilesPicked={filesPicked}
 							onMic={dictation.toggle}
+							onMicDown={dictation.pressDown}
+							onMicUp={dictation.pressUp}
 							onOpenFilePicker={openFilePicker}
 							onOpenHistory={openHistorySearch}
 							onOpenSkills={openSkillPicker}

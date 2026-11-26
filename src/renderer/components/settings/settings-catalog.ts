@@ -93,6 +93,8 @@ export const CURATED_SCHEMA_ROWS: Readonly<Record<string, SettingsSectionId>> = 
 	"goal.enabled": "agent",
 	"ttsr.enabled": "agent",
 	"advisor.enabled": "agent",
+	"stt.enabled": "agent",
+	"stt.submitTrigger": "agent",
 };
 
 /** Structured settings are edited only by their dedicated editor. */
@@ -202,6 +204,24 @@ export const GUI_SEARCH_ITEMS: readonly GuiSearchItem[] = [
 		labelKey: "settings.gui.judgeAssist",
 		aliases:
 			"judge model jev decision small question notification needs you title fits preview error blank smart automation 판정 모델 판단 모델 작은 판단 질문 알림 제목 미리보기 오류 빈 페이지 스마트 자동화",
+	},
+	{
+		id: "dictationMicrophone",
+		section: "agent",
+		labelKey: "settings.dictation.microphone",
+		aliases: "microphone mic input device dictation voice test level 마이크 입력 장치 받아쓰기 음성 테스트",
+	},
+	{
+		id: "dictationTerms",
+		section: "agent",
+		labelKey: "settings.dictation.terms",
+		aliases: "dictation terms glossary vocabulary dictionary spelling names 받아쓰기 용어 사전 어휘 표기 이름",
+	},
+	{
+		id: "dictationCleanup",
+		section: "agent",
+		labelKey: "settings.dictation.cleanup",
+		aliases: "dictation cleanup tidy punctuation small model tiny smol 받아쓰기 다듬기 문장부호 작은 모델",
 	},
 	{
 		id: "autoMode",

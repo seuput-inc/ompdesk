@@ -460,6 +460,17 @@ export type RpcCommand =
 	// The model the speech's language needs (`language`: a tag; default the conversation language): starts its download
 	// into omp's model cache without waiting, so the call asks again until it answers `ready` or `failed`.
 	| { id?: string; type: "stt_prepare"; language?: string }
+	// Stock's `#warmModel`: load the language's dictation model into the speech worker when its weights are here.
+	| { id?: string; type: "stt_warm"; language?: string }
+	// A live take on stock's streaming session: `start` answers `{id}` (null while the model downloads: transcribe the
+	// take whole instead), `audio` feeds 16 kHz mono PCM16 (little-endian, base64, no header) and answers the words so
+	// far (`SttStreamWords`), `stop` answers the whole transcript, `cancel` drops it.
+	| { id?: string; type: "stt_stream_start"; language?: string }
+	| { id?: string; type: "stt_stream_audio"; streamId: string; audioBase64: string }
+	| { id?: string; type: "stt_stream_stop"; streamId: string }
+	| { id?: string; type: "stt_stream_cancel"; streamId: string }
+	// The person's opt-in cleanup of dictated words on a small model (`tiny`, then `smol`): answers `{text}`.
+	| { id?: string; type: "dictation_cleanup"; text: string; terms: string[] }
 	| { id?: string; type: "retry" }
 	/** Stock `restoreSession` (what `omp --restore` runs): go on with the turn the last process was cut off in. Main-only; the renderer never sends it. */
 	| { id?: string; type: "restore_interrupted" }
@@ -2920,9 +2931,10 @@ export interface SessionStats {
 // Voice (speech in/out)
 // ============================================================================
 
-/** Result of `transcribe_audio`: the recognized utterance. */
+/** Result of `transcribe_audio` and `stt_stream_stop`: the recognized utterance and the language it was heard in. */
 export interface TranscribeAudioResult {
 	text: string;
+	language?: string;
 }
 
 /** Result of `synthesize_speech`: local TTS output as base64 WAV (PCM16). */

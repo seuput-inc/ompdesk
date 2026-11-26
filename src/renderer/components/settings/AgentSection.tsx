@@ -6,6 +6,7 @@ import { AutoTitleRow } from "./AutoTitleRow";
 import { CompactionLimitsSection } from "./CompactionLimitsSection";
 import { ComputerUseRow } from "./ComputerUseRow";
 import { DefaultBrowserRow } from "./DefaultBrowserRow";
+import { DictationRows } from "./DictationRows";
 import { EccRow } from "./EccRow";
 import { JudgeAssistRow } from "./JudgeAssistRow";
 import { MacPermissionRows } from "./MacPermissionRows";
@@ -76,6 +77,11 @@ export function AgentSection() {
 			<SettingsSection id="settings-agent-context" title={t("settings.agent.context")}>
 				<SchemaField path="compaction.enabled" />
 				<CompactionLimitsSection />
+			</SettingsSection>
+			<SettingsSection id="settings-agent-dictation" title={t("settings.dictation.title")}>
+				<SchemaField path="stt.enabled" />
+				<SchemaField path="stt.submitTrigger" />
+				<DictationRows />
 			</SettingsSection>
 			<SettingsAdvanced>
 				<SettingsSection id="settings-agent-automation-more" scope="app" title={t("settings.agent.automation")}>

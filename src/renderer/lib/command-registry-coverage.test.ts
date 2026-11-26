@@ -153,6 +153,8 @@ const SHORTCUT_ROWS: Record<KeymapActionId, string | null> = {
 	"panel.preview": "preview",
 	"panel.files": "files",
 	hotkeys: "hotkeys",
+	// A held key: a palette row cannot hold it, and the composer's mic is the click.
+	"voice.dictate": null,
 };
 
 const row = (items: CommandMenuItem[], name: string) => items.find(item => item.name === name);

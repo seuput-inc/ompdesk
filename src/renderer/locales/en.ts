@@ -3681,6 +3681,7 @@ export const en: Record<string, string> = {
 	"hotkeys.row.hotkeys": "Keyboard shortcuts",
 	"hotkeys.row.terminalNew": "New terminal",
 	"hotkeys.row.terminalQuick": "Quick terminal",
+	"hotkeys.row.dictate": "Dictate (tap to start and stop, hold to talk)",
 	"hotkeys.row.modelPicker": "Model picker",
 	"hotkeys.row.agentHub": "Agents",
 	"hotkeys.row.windowToggle": "Show or hide the window (global)",
@@ -4762,6 +4763,7 @@ export const en: Record<string, string> = {
 	"bridgeHealth.feature.sshManage": "Add, edit or delete an SSH host",
 	"bridgeHealth.feature.sshTest": "Test an SSH connection",
 	"bridgeHealth.feature.dictation": "Dictation",
+	"bridgeHealth.feature.dictationCleanup": "Dictation cleanup",
 	"bridgeHealth.feature.readAloud": "Read aloud",
 	"bridgeHealth.feature.debug": "Debugger console",
 	"bridgeHealth.feature.transcript": "Session transcript",
@@ -5711,6 +5713,26 @@ export const en: Record<string, string> = {
 	"voice.fail.details": "Details",
 	"voice.fail.dismiss": "Dismiss",
 	"voice.menu.enable": "Turn on dictation…",
+	"voice.fail.retry": "Try again",
+	"voice.dictation.stoppedSilent": "Dictation stopped after {seconds} seconds of silence",
+	"voice.dictation.target": "Dictating into the focused field",
+	"voice.dictation.toClipboard": "The field was gone, so the words are on the clipboard",
+	"settings.dictation.title": "Dictation",
+	"settings.dictation.microphone": "Microphone",
+	"settings.dictation.microphoneDesc":
+		"Kept for this device. A microphone that is unplugged falls back to the system default.",
+	"settings.dictation.microphoneDefault": "System default",
+	"settings.dictation.microphoneUnnamed": "Microphone {number}",
+	"settings.dictation.test": "Test",
+	"settings.dictation.testStop": "Stop test",
+	"settings.dictation.testLevel": "Microphone level",
+	"settings.dictation.terms": "Terms",
+	"settings.dictation.termsDesc":
+		'Names dictation spells your way, one per line. Write "heard = Term" when the model hears something else.',
+	"settings.dictation.termsPlaceholder": "pnpm\nsuper base = Supabase",
+	"settings.dictation.cleanup": "Tidy with a small model",
+	"settings.dictation.cleanupDesc":
+		'Fixes punctuation and spoken corrections ("scratch that") on the tiny or smol model role. Your dictated words are sent to that model. Off by default.',
 	"voice.speak.failed": "Couldn't play speech",
 
 	// MCP server management (C1: add wizard, test connection, re-authorize)
@@ -7047,6 +7069,11 @@ export const en: Record<string, string> = {
 	"settings.field.compaction.enabled": "Compact automatically",
 	"settings.field.compaction.enabled.desc":
 		"When the session nears the model's context limit, older parts are summarized so work can continue.",
+	"settings.field.stt.enabled": "Dictation",
+	"settings.field.stt.enabled.desc":
+		"A mic in the composer. Hold it, or the dictation shortcut, to talk; tap to start and stop. Words show while you speak.",
+	"settings.field.stt.submitTrigger": "Send after dictating",
+	"settings.field.stt.submitTrigger.desc": "When a finished take sends the message by itself.",
 	"settings.field.tui.renderMermaid": "Let the agent draw diagrams",
 	"settings.field.tui.renderMermaid.desc":
 		"Adds Mermaid diagrams to the agent's instructions. Existing ones still render.",

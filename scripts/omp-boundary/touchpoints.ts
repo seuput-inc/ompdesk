@@ -1131,7 +1131,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"Dictation and read-aloud: stock's stt (asr-client, downloader, models) and tts (models, tts-client, wav) modules, the tts tool and the role resolver.",
+			"Dictation and read-aloud: stock's stt (asr-client's whole-clip transcribe and live startStream, downloader's download and warm, models) and tts (models, tts-client, wav) modules, the tts tool and the role resolver.",
 		files: [
 			"resources/gui-bridge/voice.ts",
 			"resources/gui-bridge/capabilities.ts",

@@ -658,6 +658,16 @@ export const KEYMAP_ACTIONS = [
 		overlaySafe: true,
 		hotkeyGroup: "view",
 	},
+	// Hold to dictate (Orca's `voice.dictation`, Auto mode): a tap starts and stops a take, a press held 300 ms records
+	// until release (`lib/dictation-press.ts`). Orca's Mod+E is the export here, so ⌥D. Handled by DictationHost, which
+	// needs the key's release; App's dispatch never sees it.
+	{
+		id: "voice.dictate",
+		labelKey: "hotkeys.row.dictate",
+		defaults: ["⌥D"],
+		overlaySafe: false,
+		hotkeyGroup: "generation",
+	},
 	{ id: "hotkeys", labelKey: "hotkeys.row.hotkeys", defaults: ["⌘/", "⌃/"], overlaySafe: true, hotkeyGroup: "view" },
 ] as const satisfies readonly KeymapAction[];
 

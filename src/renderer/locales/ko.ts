@@ -3671,6 +3671,7 @@ export const ko: Record<string, string> = {
 	"hotkeys.row.hotkeys": "키보드 단축키",
 	"hotkeys.row.terminalNew": "새 터미널",
 	"hotkeys.row.terminalQuick": "빠른 터미널",
+	"hotkeys.row.dictate": "받아쓰기 (눌러서 켜고 끄기, 누르고 있는 동안 말하기)",
 	"hotkeys.row.modelPicker": "모델 선택기",
 	"hotkeys.row.agentHub": "에이전트",
 	"hotkeys.row.windowToggle": "앱 창 표시 / 숨기기 (전역)",
@@ -4752,6 +4753,7 @@ export const ko: Record<string, string> = {
 	"bridgeHealth.feature.sshManage": "SSH 호스트 추가·수정·삭제",
 	"bridgeHealth.feature.sshTest": "SSH 연결 테스트",
 	"bridgeHealth.feature.dictation": "받아쓰기",
+	"bridgeHealth.feature.dictationCleanup": "받아쓰기 다듬기",
 	"bridgeHealth.feature.readAloud": "소리 내어 읽기",
 	"bridgeHealth.feature.debug": "디버거 콘솔",
 	"bridgeHealth.feature.transcript": "세션 기록",
@@ -5702,6 +5704,25 @@ export const ko: Record<string, string> = {
 	"voice.fail.details": "자세히",
 	"voice.fail.dismiss": "닫기",
 	"voice.menu.enable": "받아쓰기 켜기…",
+	"voice.fail.retry": "다시 시도",
+	"voice.dictation.stoppedSilent": "{seconds}초 동안 말이 없어 받아쓰기를 멈췄어요",
+	"voice.dictation.target": "포커스된 입력란에 받아쓰는 중",
+	"voice.dictation.toClipboard": "입력란이 사라져서 받아쓴 말을 클립보드에 넣었어요",
+	"settings.dictation.title": "받아쓰기",
+	"settings.dictation.microphone": "마이크",
+	"settings.dictation.microphoneDesc": "이 기기에만 저장돼요. 고른 마이크를 빼면 시스템 기본값으로 돌아가요.",
+	"settings.dictation.microphoneDefault": "시스템 기본값",
+	"settings.dictation.microphoneUnnamed": "마이크 {number}",
+	"settings.dictation.test": "테스트",
+	"settings.dictation.testStop": "테스트 멈추기",
+	"settings.dictation.testLevel": "마이크 소리 크기",
+	"settings.dictation.terms": "용어 사전",
+	"settings.dictation.termsDesc":
+		'받아쓰기가 내 표기대로 적을 이름을 한 줄에 하나씩 적어요. 모델이 다르게 알아들으면 "들린 말 = 용어"로 적어요.',
+	"settings.dictation.termsPlaceholder": "pnpm\n수파 베이스 = Supabase",
+	"settings.dictation.cleanup": "작은 모델로 다듬기",
+	"settings.dictation.cleanupDesc":
+		'tiny 또는 smol 모델 역할로 문장부호와 말로 한 정정("scratch that")을 고쳐요. 받아쓴 말이 그 모델로 보내져요. 기본은 꺼져 있어요.',
 	"voice.speak.failed": "음성을 재생하지 못했어요",
 
 	// MCP server management (C1: add wizard, test connection, re-authorize)
@@ -7030,6 +7051,11 @@ export const ko: Record<string, string> = {
 	"settings.field.compaction.enabled": "자동 압축",
 	"settings.field.compaction.enabled.desc":
 		"세션이 모델의 컨텍스트 한도에 가까워지면 이전 내용을 요약해서 계속 진행할 수 있게 해요.",
+	"settings.field.stt.enabled": "받아쓰기",
+	"settings.field.stt.enabled.desc":
+		"입력창에 마이크가 생겨요. 마이크나 받아쓰기 단축키를 누르고 있는 동안 말하고, 짧게 누르면 켜고 꺼요. 말하는 동안 글자가 보여요.",
+	"settings.field.stt.submitTrigger": "받아쓴 뒤 보내기",
+	"settings.field.stt.submitTrigger.desc": "받아쓰기가 끝나면 메시지를 저절로 보낼 때를 골라요.",
 	"settings.field.tui.renderMermaid": "에이전트가 Mermaid 다이어그램을 그리도록 허용",
 	"settings.field.tui.renderMermaid.desc":
 		"에이전트 지침에 Mermaid 다이어그램을 추가해요. 이미 있는 다이어그램은 계속 표시돼요.",

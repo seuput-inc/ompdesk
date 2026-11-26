@@ -309,6 +309,15 @@ export interface SessionRpcClient {
 	synthesizeSpeech(text: string): Promise<RpcResponse>;
 	// The model the speech's language needs: starts its download without waiting; the caller asks again.
 	sttPrepare(language?: string): Promise<RpcResponse>;
+	// Load the dictation model into the speech worker when its weights are here (stock's `#warmModel`).
+	sttWarm(): Promise<RpcResponse>;
+	// A live take: start (`{streamId}`, null to transcribe whole), feed PCM16 (answers the words so far), stop, cancel.
+	sttStreamStart(): Promise<RpcResponse>;
+	sttStreamAudio(streamId: string, audioBase64: string): Promise<RpcResponse>;
+	sttStreamStop(streamId: string): Promise<RpcResponse>;
+	sttStreamCancel(streamId: string): Promise<RpcResponse>;
+	// Opt-in cleanup of dictated words on a small model; `terms` are the glossary's spellings.
+	dictationCleanup(text: string, terms: string[]): Promise<RpcResponse>;
 }
 
 export type RpcTransport = (command: RpcCommand, timeoutMs?: number) => Promise<RpcResponse>;
@@ -687,5 +696,14 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		synthesizeSpeech: text => rpcCommand({ type: "synthesize_speech", text }, 60_000),
 		// The language's model download is polled while it runs.
 		sttPrepare: language => rpcCommand({ type: "stt_prepare", language }, 15_000),
+		sttWarm: () => rpcCommand({ type: "stt_warm" }, 15_000),
+		sttStreamStart: () => rpcCommand({ type: "stt_stream_start" }, 15_000),
+		sttStreamAudio: (streamId, audioBase64) =>
+			rpcCommand({ type: "stt_stream_audio", streamId, audioBase64 }, 15_000),
+		// The worker flushes the last segment; a long take's queued segments may still be decoding.
+		sttStreamStop: streamId => rpcCommand({ type: "stt_stream_stop", streamId }, 120_000),
+		sttStreamCancel: streamId => rpcCommand({ type: "stt_stream_cancel", streamId }),
+		// The bridge gives the model 10 s; the margin covers the hop.
+		dictationCleanup: (text, terms) => rpcCommand({ type: "dictation_cleanup", text, terms }, 15_000),
 	};
 }

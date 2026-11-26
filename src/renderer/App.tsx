@@ -11,6 +11,7 @@ import { TabSwitcher, useTabSwitcherStore } from "./components/dialogs/TabSwitch
 import { WebDeviceNotice } from "./components/dialogs/WebDeviceNotice";
 import { WebPairingDialog } from "./components/dialogs/WebPairingDialog";
 import { WorktreeLifecycleDialog } from "./components/dialogs/WorktreeLifecycleDialog";
+import { DictationHost } from "./components/dictation/DictationHost";
 import { AppShell } from "./components/layout/AppShell";
 import { DesktopSlotIndicator } from "./components/layout/DesktopSlotIndicator";
 import { FirstRunGate } from "./components/onboarding/FirstRunGate";
@@ -1003,6 +1004,7 @@ export function App() {
 			</div>
 			<SetupTakeoverHost />
 			<ToastStack />
+			<DictationHost />
 		</div>
 	);
 	return <FocusedRuntimeProvider tabId={activeTabId}>{surface}</FocusedRuntimeProvider>;

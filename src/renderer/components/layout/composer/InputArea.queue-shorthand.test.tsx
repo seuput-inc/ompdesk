@@ -1818,7 +1818,11 @@ describe("InputArea dictation", () => {
 		mic = installFakeMic();
 		await mount();
 		transcribeAudio = vi.fn(async () => ok({ text: "hello there" }));
-		Object.assign(window.omp.rpc, { transcribeAudio, getSettings: vi.fn(async () => ok({ values: {} })) });
+		Object.assign(window.omp.rpc, {
+			transcribeAudio,
+			getSettings: vi.fn(async () => ok({ values: {} })),
+			sttWarm: vi.fn(async () => ok({ warmed: false })),
+		});
 		await act(async () => {
 			useSessionStore.setState({ isStreaming: false });
 			useSettingsStore.setState({ sttEnabled: true });
@@ -1853,6 +1857,15 @@ describe("InputArea dictation", () => {
 		opened.resolve(new FakeStream());
 		await flush();
 		expect(phase()).toBe("recording");
+		// The microphone hears a tenth of a second (the take is transcribed whole: this omp has no live stream).
+		mic.context().feed(new Float32Array(1600).fill(0.1));
+	}
+
+	/** Enter ends the take; capture goes on for the stop tail, then the take is transcribed. */
+	async function endTake(): Promise<void> {
+		await windowKey("Enter");
+		await vi.waitFor(() => expect(phase()).not.toBe("recording"));
+		await flush();
 	}
 
 	afterEach(() => uninstallFakeMic());
@@ -1868,10 +1881,10 @@ describe("InputArea dictation", () => {
 		// The send button becomes "Stop and send" while the mic is open.
 		expect(document.querySelector("button[data-dictation-send]")).not.toBeNull();
 
-		await windowKey("Enter");
+		await endTake();
 		expect(transcribeAudio).toHaveBeenCalledTimes(1);
-		expect(phase()).toBeNull();
-		expect(useComposerStore.getState().draft).toBe("note: hello there ");
+		await vi.waitFor(() => expect(phase()).toBeNull());
+		await vi.waitFor(() => expect(useComposerStore.getState().draft).toBe("note: hello there "));
 		expect(prompt).not.toHaveBeenCalled();
 	});
 
@@ -1884,7 +1897,7 @@ describe("InputArea dictation", () => {
 		);
 		Object.assign(window.omp.rpc, { sttPrepare });
 		await startTake();
-		await windowKey("Enter");
+		await endTake();
 		expect(phase()).toBe("transcribing");
 		const progress = document.querySelector("[data-dictation-download]");
 		expect(progress?.getAttribute("data-dictation-download")).toBe("42");
@@ -1892,8 +1905,8 @@ describe("InputArea dictation", () => {
 
 		await act(async () => transcribed.resolve(ok({ text: "안녕하세요" })));
 		await flush();
-		expect(phase()).toBeNull();
-		expect(useComposerStore.getState().draft).toBe("안녕하세요 ");
+		await vi.waitFor(() => expect(phase()).toBeNull());
+		await vi.waitFor(() => expect(useComposerStore.getState().draft).toBe("안녕하세요 "));
 	});
 
 	it("discards the take on Esc and keeps the draft", async () => {
@@ -1943,8 +1956,7 @@ describe("InputArea dictation", () => {
 		if (!stopAndSend) throw new Error("Stop and send missing");
 		expect(stopAndSend.getAttribute("aria-label")).toBe(translate("voice.dictation.stopAndSend"));
 		await click(stopAndSend);
-		await flush();
-		expect(prompt).toHaveBeenCalledTimes(1);
+		await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
 		expect(prompt.mock.calls[0]?.[0]).toBe("hello there");
 	});
 
@@ -2023,8 +2035,8 @@ describe("InputArea dictation", () => {
 		await mountWithMic();
 		transcribeAudio.mockImplementation(async () => ({ success: false, error: "No dictation model configured" }));
 		await startTake();
-		await windowKey("Enter");
-		expect(failure()?.getAttribute("data-dictation-failure")).toBe("no-model");
+		await endTake();
+		await vi.waitFor(() => expect(failure()?.getAttribute("data-dictation-failure")).toBe("no-model"));
 		expect(failure()?.textContent).toContain(translate("voice.fail.noModel"));
 		expect(failure()?.textContent).not.toContain("No dictation model configured");
 		const open = [...document.querySelectorAll("[data-dictation-failure] button")].find(
@@ -2040,8 +2052,10 @@ describe("InputArea dictation", () => {
 		await mountWithMic();
 		transcribeAudio.mockImplementationOnce(async () => ({ success: false, error: "stt unavailable" }));
 		await startTake();
-		await windowKey("Enter");
-		expect(failure()?.textContent).toContain(translate("voice.fail.failed"));
+		await endTake();
+		await vi.waitFor(() => expect(failure()?.textContent).toContain(translate("voice.fail.failed")));
+		// The take was kept: Retry transcribes it again.
+		expect(document.querySelector("[data-dictation-retry]")).not.toBeNull();
 		expect(failure()?.textContent).not.toContain("stt unavailable");
 		await startTake();
 		expect(failure()).toBeNull();
@@ -2532,11 +2546,15 @@ describe("InputArea composer audit", () => {
 	});
 
 	it("L4: Stop and send sends a picture added while recording", async () => {
-		installFakeMic();
+		const fakeMic = installFakeMic();
 		try {
 			await mount();
 			const transcribeAudio = vi.fn(async () => ok({ text: "hello there" }));
-			Object.assign(window.omp.rpc, { transcribeAudio, getSettings: vi.fn(async () => ok({ values: {} })) });
+			Object.assign(window.omp.rpc, {
+				transcribeAudio,
+				getSettings: vi.fn(async () => ok({ values: {} })),
+				sttWarm: vi.fn(async () => ok({ warmed: false })),
+			});
 			await act(async () => useSettingsStore.setState({ sttEnabled: true }));
 			const mic = document.querySelector(
 				`button[aria-label="${translate("voice.mic.start")}"]`,
@@ -2544,26 +2562,26 @@ describe("InputArea composer audit", () => {
 			if (!mic) throw new Error("mic button missing");
 			await click(mic);
 			await flush();
+			fakeMic.context().feed(new Float32Array(1600).fill(0.1));
 			await act(async () => useComposerStore.getState().setImages([image("AQ==")]));
 			const stopAndSend = document.querySelector("button[data-dictation-send]") as unknown as TestElement | null;
 			if (!stopAndSend) throw new Error("Stop and send missing");
 			await click(stopAndSend);
-			await flush();
-			await flush();
-			expect(steer).toHaveBeenCalledWith("hello there", [image("AQ==").content]);
+			await vi.waitFor(() => expect(steer).toHaveBeenCalledWith("hello there", [image("AQ==").content]));
 		} finally {
 			uninstallFakeMic();
 		}
 	});
 
 	it("L8: closing a composer leaves another pane's dictation running", async () => {
-		installFakeMic();
+		const fakeMic = installFakeMic();
 		try {
 			await mount();
 			const transcribeAudio = vi.fn(async () => ok({ text: "other pane" }));
 			Object.assign(window.omp.rpc, { transcribeAudio });
 			const take = recordAndTranscribe();
 			await flush();
+			fakeMic.context().feed(new Float32Array(1600).fill(0.1));
 			await act(async () => root.render(<div />));
 			stopVoiceRecording();
 			await expect(take).resolves.toEqual({ text: "other pane" });

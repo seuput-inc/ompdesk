@@ -38,6 +38,10 @@ export const MODEL_COMMAND_TYPES = [
 	"guided_goal",
 	// Speech to text, text to speech and the realtime session go through a model provider.
 	"transcribe_audio",
+	// A live take: one per take, however much audio it is fed (`stt_stream_audio` below is free).
+	"stt_stream_start",
+	// The person's opt-in cleanup of dictated words: one request on a small model.
+	"dictation_cleanup",
 	"synthesize_speech",
 	"live_start",
 	// Main-side local handlers that run a model through stock `omp` (PR text, `omp commit --dry-run`).
@@ -335,8 +339,13 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"share_session",
 	"ssh_manage",
 	"ssh_test",
-	// `stt_prepare` only checks or downloads the speech model's weights, polled while they download.
+	// `stt_prepare` only checks or downloads the speech model's weights, polled while they download; `stt_warm` loads
+	// weights already here. A live take's audio, stop and cancel belong to the take `stt_stream_start` counted.
 	"stt_prepare",
+	"stt_stream_audio",
+	"stt_stream_cancel",
+	"stt_stream_stop",
+	"stt_warm",
 	"switch_session",
 	"typed_prompt",
 	// A conversation link's hover card: one bounded read of a public web page in the core, no model.
