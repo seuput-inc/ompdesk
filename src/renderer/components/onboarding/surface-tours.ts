@@ -70,4 +70,14 @@ export function useFirstVisitTour(id: SurfaceTourId, ready = true): void {
 		}, SETTLE_MS);
 		return () => clearTimeout(timer);
 	}, [id, ready, loaded, seen, busy, firstRun, takeover]);
+
+	// A surface that leaves (another page opens over it, it unmounts) ends its tour, so the card never points at
+	// controls that are gone or keeps the Escape the page in front of it is waiting for.
+	useEffect(() => {
+		if (!ready) return;
+		return () => {
+			const guide = useStarterGuideStore.getState();
+			if (guide.surfaceTour?.id === id) guide.endSurfaceTour();
+		};
+	}, [id, ready]);
 }

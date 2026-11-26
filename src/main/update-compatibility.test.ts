@@ -8,6 +8,7 @@ import {
 	lookupRelease,
 	macosForDarwin,
 	RELEASE_LOOKUP_ERROR,
+	ReleaseFeedError,
 	UPDATE_COMPATIBILITY_ERROR,
 	UPDATE_METADATA_ERROR,
 	type UpdatePlatform,
@@ -162,8 +163,8 @@ describe("released and current updater compatibility", () => {
 		await expect(current("mac", "22.0.0")).rejects.toMatchObject({
 			unsupportedSystem: { version: metadata.version, minimumMacOS: "14" },
 		});
-		const unknown = await current("mac", "invalid").catch((error: unknown) => error);
-		expect(unknown).not.toHaveProperty("unsupportedSystem");
+		await expect(current("mac", "invalid")).rejects.toBeInstanceOf(ReleaseFeedError);
+		await expect(current("mac", "invalid")).rejects.toMatchObject({ unsupportedSystem: undefined });
 	});
 
 	it.each([

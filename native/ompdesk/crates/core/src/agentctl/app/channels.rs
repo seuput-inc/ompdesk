@@ -36,6 +36,7 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("runtime:startup-mark", Risk::Never(DENY)),
     ("log:snapshot", Risk::Never(DENY)),
     ("app:quit", Risk::Tier(Sensitive, &["app.quit"])),
+    ("app:remove-from-computer", Risk::Never(DENY)),
     ("bridge-health:take", Risk::Never(DENY)),
     (
         "bridge-health:get",

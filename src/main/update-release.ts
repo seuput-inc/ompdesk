@@ -143,7 +143,7 @@ export class ReleaseFeedError extends Error {
 		super(message);
 		this.name = "ReleaseFeedError";
 		this.code = code;
-		if (unsupportedSystem) this.unsupportedSystem = unsupportedSystem;
+		this.unsupportedSystem = unsupportedSystem;
 	}
 }
 

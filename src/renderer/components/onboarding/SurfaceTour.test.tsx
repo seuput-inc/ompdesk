@@ -142,4 +142,22 @@ describe("SurfaceTour", () => {
 		expect(card()).toBeNull();
 		expect(useStarterGuideStore.getState().toursSeen).toEqual(["board"]);
 	});
+
+	it("ends, seen, when its surface leaves while it runs", async () => {
+		addTarget("<div data-board-lanes></div>");
+		await mount();
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(1000);
+		});
+		expect(card()).not.toBeNull();
+		await act(async () => {
+			root?.render(
+				<I18nProvider>
+					<SurfaceTour />
+				</I18nProvider>,
+			);
+		});
+		expect(card()).toBeNull();
+		expect(useStarterGuideStore.getState().toursSeen).toEqual(["board"]);
+	});
 });
