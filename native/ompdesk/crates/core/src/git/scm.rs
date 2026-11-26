@@ -449,10 +449,78 @@ async fn pull(
     })
 }
 
+/// HEAD and its upstream's tip, read once after Sync's fetch (and again after its pull): the pair Sync judges is the
+/// pair it pushes, so a fetch or a commit that lands meanwhile (an agent, another window) is never pushed over or
+/// pushed unseen. `remote`/`remote_ref` name where the upstream lives.
+struct Tips {
+    head: String,
+    upstream: String,
+    remote: String,
+    remote_ref: String,
+}
+
+async fn tips(git: &Git, root: &str, branch: &str) -> Result<Tips, Fault> {
+    let reference = format!("refs/heads/{branch}");
+    let named = git
+        .text(
+            root,
+            &[
+                "for-each-ref",
+                "--format=%(upstream:remotename)%00%(upstream:remoteref)",
+                &reference,
+            ],
+        )
+        .await?;
+    let no_upstream = || {
+        refuse(
+            "no_remote",
+            format!("{branch} has no upstream to sync with"),
+        )
+    };
+    let Some((remote, remote_ref)) = js_trim(&named)
+        .split_once('\0')
+        .filter(|(remote, remote_ref)| !remote.is_empty() && !remote_ref.is_empty())
+    else {
+        return Err(no_upstream());
+    };
+    // One rev-parse, both tips (`--verify` takes one name only).
+    let oids = git.raw(root, &["rev-parse", "HEAD", "@{upstream}"]).await?;
+    if oids.code != 0 {
+        return Err(no_upstream());
+    }
+    let oids = oids.text();
+    let mut oids = oids
+        .split('\n')
+        .map(js_trim)
+        .filter(|line| !line.is_empty());
+    let (Some(head), Some(upstream)) = (oids.next(), oids.next()) else {
+        return Err(no_upstream());
+    };
+    Ok(Tips {
+        head: head.to_owned(),
+        upstream: upstream.to_owned(),
+        remote: remote.to_owned(),
+        remote_ref: remote_ref.to_owned(),
+    })
+}
+
+/// Commits only `tips.head` has, and only `tips.upstream` has.
+async fn ahead_behind(git: &Git, root: &str, tips: &Tips) -> Result<(u64, u64), Fault> {
+    let range = format!("{}...{}", tips.head, tips.upstream);
+    let counts = git
+        .text(root, &["rev-list", "--left-right", "--count", &range, "--"])
+        .await?;
+    let mut counts = js_trim(&counts)
+        .split_whitespace()
+        .map(|count| count.parse::<u64>().unwrap_or(0));
+    Ok((counts.next().unwrap_or(0), counts.next().unwrap_or(0)))
+}
+
 /// Whether the branch was rewritten (rebased, amended) after it was pushed: it and its upstream both have commits of
 /// their own, and every one only the upstream has is patch-equivalent to one of HEAD's (`--cherry-mark` marks it
 /// `=`). Orca `git-upstream-status.ts:3-16,61-70`, `upstream.ts:38-64`. A log git cannot read counts as not.
-async fn upstream_rewritten(git: &Git, root: &str) -> Result<bool, Fault> {
+async fn upstream_rewritten(git: &Git, root: &str, tips: &Tips) -> Result<bool, Fault> {
+    let range = format!("{}...{}", tips.head, tips.upstream);
     let output = git
         .raw(
             root,
@@ -463,7 +531,7 @@ async fn upstream_rewritten(git: &Git, root: &str) -> Result<bool, Fault> {
                 "--format=%m %H",
                 "--cherry-mark",
                 "--right-only",
-                "HEAD...@{upstream}",
+                &range,
                 "--",
             ],
         )
@@ -480,39 +548,15 @@ async fn upstream_rewritten(git: &Git, root: &str) -> Result<bool, Fault> {
     Ok(first.is_some_and(|line| line.starts_with('=')) && marks.all(|line| line.starts_with('=')))
 }
 
-/// `push --force-with-lease` of HEAD to the upstream branch, leased on the upstream tip just fetched: a commit someone
-/// else pushed since is never overwritten.
-async fn push_with_lease(
-    git: &Git,
-    root: &str,
-    branch: &str,
-    slow: Opts<'_>,
-) -> Result<String, Fault> {
-    let reference = format!("refs/heads/{branch}");
-    let named = git
-        .text(
-            root,
-            &[
-                "for-each-ref",
-                "--format=%(upstream:remotename)%00%(upstream:remoteref)",
-                &reference,
-            ],
-        )
-        .await?;
-    let named = js_trim(&named);
-    let tip = git
-        .text(root, &["rev-parse", "--verify", "@{upstream}"])
-        .await?;
-    let (Some((remote, remote_ref)), tip) = (named.split_once('\0'), js_trim(&tip)) else {
-        return Err(refuse(
-            "no_remote",
-            format!("{branch} has no upstream to push to"),
-        ));
-    };
-    let lease = format!("--force-with-lease={remote_ref}:{tip}");
-    let target = format!("HEAD:{remote_ref}");
+/// `push --force-with-lease=<ref>:<upstream> <head>:<ref>`: exactly the commit judged goes up, and only while the
+/// remote branch is still the upstream tip judged; a commit someone else pushed since is never overwritten. Orca
+/// pushes a bare `--force-with-lease` (`main/git/remotes/remote.ts:46`), whose lease is whatever the tracking ref
+/// holds at push time.
+async fn push_leased(git: &Git, root: &str, tips: &Tips, slow: Opts<'_>) -> Result<String, Fault> {
+    let lease = format!("--force-with-lease={}:{}", tips.remote_ref, tips.upstream);
+    let target = format!("{}:{}", tips.head, tips.remote_ref);
     let output = git
-        .run(root, &["push", &lease, remote, &target], slow)
+        .run(root, &["push", &lease, &tips.remote, &target], slow)
         .await?;
     if output.code != 0 {
         return Err(push_failed(git, root, RemoteAction::Sync, &output, slow).await);
@@ -520,28 +564,29 @@ async fn push_with_lease(
     Ok(js_trim(&output.stderr).to_owned())
 }
 
-/// Sync (Orca `git-remote-sync.ts:25-92`): fetch; a branch rewritten after it was pushed goes up with
-/// `--force-with-lease`, any other pulls and then pushes only when it has commits of its own the upstream lacks.
-async fn sync(git: &Git, root: &str, branch: &str, slow: Opts<'_>) -> Result<String, Fault> {
+/// Sync (Orca `git-remote-sync.ts:25-92`): fetch; a branch rewritten after it was pushed goes up with a lease, any
+/// other pulls and then pushes only when it has commits of its own the upstream lacks. `before_push` runs between the
+/// judgment and the push (the tests' seam for a fetch or commit landing there).
+async fn sync(
+    git: &Git,
+    root: &str,
+    branch: &str,
+    slow: Opts<'_>,
+    before_push: impl FnOnce(),
+) -> Result<String, Fault> {
     let action = RemoteAction::Sync;
     let mut said = vec![fetch(git, root, action, slow).await?];
-    let head = read::head(git, root).await?;
-    if head.upstream.is_none() {
-        return Err(refuse(
-            "no_remote",
-            format!("{branch} has no upstream to sync with"),
-        ));
-    }
-    if head.ahead > 0 && head.behind > 0 && upstream_rewritten(git, root).await? {
-        said.push(push_with_lease(git, root, branch, slow).await?);
+    let judged = tips(git, root, branch).await?;
+    let (ahead, behind) = ahead_behind(git, root, &judged).await?;
+    if ahead > 0 && behind > 0 && upstream_rewritten(git, root, &judged).await? {
+        before_push();
+        said.push(push_leased(git, root, &judged, slow).await?);
     } else {
         said.push(pull(git, root, action, None, slow).await?);
-        if read::head(git, root).await?.ahead > 0 {
-            let output = git.run(root, &["push"], slow).await?;
-            if output.code != 0 {
-                return Err(push_failed(git, root, action, &output, slow).await);
-            }
-            said.push(js_trim(&output.stderr).to_owned());
+        let pulled = tips(git, root, branch).await?;
+        if ahead_behind(git, root, &pulled).await?.0 > 0 {
+            before_push();
+            said.push(push_leased(git, root, &pulled, slow).await?);
         }
     }
     said.retain(|line| !line.is_empty());
@@ -581,7 +626,7 @@ pub async fn remote(
         ));
     };
     if action == RemoteAction::Sync {
-        return Ok(said(sync(git, root, &branch, slow).await?));
+        return Ok(said(sync(git, root, &branch, slow, || {}).await?));
     }
     if action == RemoteAction::Pull {
         if head.upstream.is_none() {
@@ -1428,5 +1473,98 @@ pub(crate) mod tests {
         assert_eq!(sh(&dir, &["show", ":README.md"]), "hello");
         assert_eq!(std::fs::read(dir.join("README.md")).unwrap(), b"working\n");
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `repo(name)` published to a bare remote it tracks, and a second clone of that remote (someone else's checkout).
+    fn published(name: &str) -> (PathBuf, PathBuf, PathBuf) {
+        let dir = repo(name);
+        let parent = dir.parent().unwrap().to_path_buf();
+        let bare = parent.join(format!(
+            "ompdesk-core-scm-{name}-{}-remote.git",
+            std::process::id()
+        ));
+        let other = parent.join(format!(
+            "ompdesk-core-scm-{name}-{}-other",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&bare);
+        let _ = std::fs::remove_dir_all(&other);
+        sh(
+            &parent,
+            &["init", "--bare", "-q", "-b", "main", bare.to_str().unwrap()],
+        );
+        sh(&dir, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        sh(&dir, &["push", "-q", "-u", "origin", "main"]);
+        sh(
+            &parent,
+            &[
+                "clone",
+                "-q",
+                bare.to_str().unwrap(),
+                other.to_str().unwrap(),
+            ],
+        );
+        (dir, bare, other)
+    }
+
+    fn slow() -> Opts<'static> {
+        Opts {
+            timeout_ms: Some(60_000),
+            ..Opts::default()
+        }
+    }
+
+    /// A rewritten branch goes up leased on the upstream tip Sync judged: a commit someone pushed, and a fetch brought
+    /// into the tracking ref, between that judgment and the push is refused, never overwritten.
+    #[tokio::test]
+    async fn sync_never_force_pushes_over_a_commit_fetched_after_its_judgment() {
+        let (dir, bare, other) = published("sync-lease");
+        std::fs::write(dir.join("work.txt"), "work\n").unwrap();
+        sh(&dir, &["add", "-A"]);
+        sh(&dir, &["commit", "-qm", "work"]);
+        sh(&dir, &["push", "-q"]);
+        sh(&dir, &["commit", "-q", "--amend", "-m", "work, reworded"]);
+        let (theirs_dir, ours_dir) = (other.clone(), dir.clone());
+        let refused = sync(&git(), dir.to_str().unwrap(), "main", slow(), move || {
+            sh(&theirs_dir, &["pull", "-q", "--no-rebase"]);
+            std::fs::write(theirs_dir.join("theirs.txt"), "theirs\n").unwrap();
+            sh(&theirs_dir, &["add", "-A"]);
+            sh(&theirs_dir, &["commit", "-qm", "theirs"]);
+            sh(&theirs_dir, &["push", "-q"]);
+            sh(&ours_dir, &["fetch", "-q"]);
+        })
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(refused.code, "push_rejected");
+        let theirs = sh(&other, &["rev-parse", "HEAD"]);
+        assert_eq!(sh(&other, &["log", "-1", "--format=%s"]), "theirs");
+        assert_eq!(sh(&bare, &["rev-parse", "main"]), theirs);
+        for path in [dir, bare, other] {
+            std::fs::remove_dir_all(path).unwrap();
+        }
+    }
+
+    /// The plain push sends the commit Sync judged, not one made while it ran.
+    #[tokio::test]
+    async fn sync_pushes_the_commit_it_judged_not_a_later_one() {
+        let (dir, bare, other) = published("sync-head");
+        std::fs::write(dir.join("work.txt"), "work\n").unwrap();
+        sh(&dir, &["add", "-A"]);
+        sh(&dir, &["commit", "-qm", "work"]);
+        let judged = sh(&dir, &["rev-parse", "HEAD"]);
+        let ours_dir = dir.clone();
+        sync(&git(), dir.to_str().unwrap(), "main", slow(), move || {
+            std::fs::write(ours_dir.join("later.txt"), "later\n").unwrap();
+            sh(&ours_dir, &["add", "-A"]);
+            sh(&ours_dir, &["commit", "-qm", "later"]);
+        })
+        .await
+        .unwrap();
+        assert_eq!(sh(&bare, &["rev-parse", "main"]), judged);
+        assert_ne!(sh(&dir, &["rev-parse", "HEAD"]), judged);
+        for path in [dir, bare, other] {
+            std::fs::remove_dir_all(path).unwrap();
+        }
     }
 }
