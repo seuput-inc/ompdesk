@@ -98,6 +98,7 @@ import {
 	writeSidebarWidth,
 } from "../../../lib/sidebar-width";
 import { snapshotNs, snapshots } from "../../../lib/snapshot-cache";
+import { askTabAccount, useTabAccounts } from "../../../lib/tab-accounts";
 import { performTabClose } from "../../../lib/tab-close";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { isTabFailed } from "../../../lib/tab-signal";
@@ -773,6 +774,7 @@ export function Sidebar() {
 		return heldByWindows.filter(file => !own.has(file));
 	}, [heldByWindows, rowTabs]);
 	const archivedIds = useMemo(() => new Set(archivedSessions), [archivedSessions]);
+	const tabAccounts = useTabAccounts(s => s.accounts);
 	// Session folders main found missing on disk: git's origin only marks a gone OMPdesk worktree.
 	const goneFolders = useMemo(() => new Set(projectList.gone ?? []), [projectList.gone]);
 	const rowFacts = useMemo<SidebarFacts>(
@@ -1990,6 +1992,9 @@ export function Sidebar() {
 			worktree?.label,
 			fork?.tooltip,
 			statusLabel,
+			tab && tabAccounts[tab.id]?.length
+				? t("sidebar.row.accountTip", { account: tabAccounts[tab.id]?.join(", ") ?? "" })
+				: null,
 			target ? t("sidebar.row.repositoryTip", { name: target.name }) : null,
 			target?.head ? headWords(t, target.head).tip : null,
 			prWords,
@@ -2153,6 +2158,8 @@ export function Sidebar() {
 							// An unseen finish also bolds the title (Orca's unread card).
 							"data-unseen": lane === "done" || undefined,
 							"data-session-path": session.path,
+							// The tooltip names the account the open session runs on, read as the pointer arrives.
+							onMouseEnter: tab ? () => askTabAccount(tab.id) : undefined,
 							"data-folder-missing": folderMissing || undefined,
 							"data-session-run-child": runChild || undefined,
 							"data-flip-key": `session:${session.path}`,

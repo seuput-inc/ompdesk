@@ -5518,6 +5518,7 @@ export const ko: Record<string, string> = {
 	"sidebar.row.detachedUnknown": "분리됨",
 	"sidebar.row.unbornTip": "브랜치: {branch} (아직 커밋 없음)",
 	"sidebar.row.repositoryTip": "저장소: {name}",
+	"sidebar.row.accountTip": "계정: {account}",
 	"sidebar.clearFilter": "필터 지우기",
 	"sidebar.menu.moveUp": "위로 이동",
 	"sidebar.menu.moveDown": "아래로 이동",

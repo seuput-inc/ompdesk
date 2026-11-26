@@ -5527,6 +5527,7 @@ export const en: Record<string, string> = {
 	"sidebar.row.detachedUnknown": "Detached",
 	"sidebar.row.unbornTip": "Branch: {branch} (no commits yet)",
 	"sidebar.row.repositoryTip": "Repository: {name}",
+	"sidebar.row.accountTip": "Account: {account}",
 	"sidebar.clearFilter": "Clear filter",
 	"sidebar.menu.moveUp": "Move up",
 	"sidebar.menu.moveDown": "Move down",
