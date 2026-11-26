@@ -5,16 +5,18 @@
  * list supports but this row cannot take right now is disabled with its reason (Move to project… while a tab holds
  * the session).
  *
- * Groups, each set apart: open and view (split, new window, the open tab's split and close) · edit (rename, pin,
- * move up and down, move to project, archive, hide from agents) · show in folder · diagnostics (one item; Option/Alt
- * while choosing it saves the anonymized bundle) · delete, last. Clicking a row already opens it, so the menu has no
- * "Open" or "Open in new tab".
+ * Groups, each set apart: open and view (split, new window, the open tab's split, mark as unread and close) · edit
+ * (rename, pin, mute notifications, move up and down, move to project, archive, hide from agents) · show in folder ·
+ * diagnostics (one item; Option/Alt while choosing it saves the anonymized bundle) · delete, last. Clicking a row
+ * already opens it, so the menu has no "Open" or "Open in new tab".
  */
 import {
 	Archive,
 	ArchiveRestore,
 	ArrowDown,
 	ArrowUp,
+	Bell,
+	BellOff,
 	Columns2,
 	ExternalLink,
 	Eye,
@@ -22,6 +24,8 @@ import {
 	FileArchive,
 	FolderInput,
 	FolderSearch,
+	Link2,
+	MailCheck,
 	PanelRightClose,
 	Pencil,
 	Pin,
@@ -47,11 +51,15 @@ export interface SessionMenuFacts {
 	tabInSplit: boolean;
 	/** A split is on screen. */
 	splitShown: boolean;
+	/** That tab carries the done mark (`unreadDone`). */
+	unread: boolean;
 	/** Closing the tab leaves another one in the window. */
 	canCloseTab: boolean;
 	/** A chat: it lives in no project, so it cannot move to one. */
 	chat: boolean;
 	pinned: boolean;
+	/** Its notifications are muted (this computer's sessions only). */
+	muted: boolean;
 	archived: boolean;
 	agentHidden: boolean;
 	canMoveUp: boolean;
@@ -66,10 +74,16 @@ export interface SessionMenuActions {
 	/** The open tab, split in beside the focused one. */
 	splitTab?: (placement: "right" | "bottom") => void;
 	unsplit?: () => void;
+	/** Gives the open tab the done mark again, as if it finished unseen. */
+	markUnread?: () => void;
 	closeTab?: () => void;
 	rename?: () => void;
+	/** Opens the dialog of the links attached to it (this computer's sessions). */
+	links?: () => void;
 	/** Pins it, or lets it go when pinned. */
 	togglePin?: () => void;
+	/** Mutes its notifications (banners and phone pushes), or lets them through again. */
+	toggleMute?: () => void;
 	moveUp?: () => void;
 	moveDown?: () => void;
 	/** Opens the list of projects it can go to. */
@@ -140,6 +154,14 @@ export function sessionMenuItems({
 				icon: PanelRightClose,
 				onSelect: unsplit,
 			});
+		// A tab on screen is read the moment it is marked, so only one out of view takes the mark.
+		if (actions.markUnread && !facts.tabFocused && !facts.tabInSplit && !facts.unread)
+			view.push({
+				id: "session-mark-unread",
+				label: t("sidebar.menu.markUnread"),
+				icon: MailCheck,
+				onSelect: actions.markUnread,
+			});
 		if (closeTab && facts.canCloseTab)
 			view.push({
 				id: "session-close-tab",
@@ -155,12 +177,21 @@ export function sessionMenuItems({
 	if (facts.stored) {
 		if (actions.rename)
 			edit.push({ id: "session-rename", label: t("sidebar.rename"), icon: Pencil, onSelect: actions.rename });
+		if (actions.links)
+			edit.push({ id: "session-links", label: t("sidebar.menu.links"), icon: Link2, onSelect: actions.links });
 		if (actions.togglePin)
 			edit.push({
 				id: "session-pin",
 				label: facts.pinned ? t("sidebar.menu.unpin") : t("sidebar.menu.pin"),
 				icon: facts.pinned ? PinOff : Pin,
 				onSelect: actions.togglePin,
+			});
+		if (actions.toggleMute)
+			edit.push({
+				id: "session-mute",
+				label: facts.muted ? t("sidebar.menu.unmute") : t("sidebar.menu.mute"),
+				icon: facts.muted ? Bell : BellOff,
+				onSelect: actions.toggleMute,
 			});
 		if (actions.moveUp)
 			edit.push({

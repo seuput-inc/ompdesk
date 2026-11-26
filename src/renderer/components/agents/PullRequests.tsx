@@ -33,6 +33,7 @@ import { GithubSignIn } from "../onboarding/GithubSignIn";
 import { GithubPaused } from "./github/shared";
 import { PrCreateDialog } from "./pr/PrCreateDialog";
 import { PrDetail } from "./pr/PrDetail";
+import { PrListFilter } from "./pr/PrListFilter";
 
 const GH_INSTALL_URL = "https://cli.github.com";
 const LIST_STATES = ["open", "closed", "merged", "all"] as const;
@@ -234,6 +235,7 @@ export function PullRequests() {
 					tabs={LIST_VIEWS.map(view => ({ id: view, label: t(`prCenter.view.${view}`) }))}
 					variant="segmented"
 				/>
+				<PrListFilter />
 				<div className="ml-auto flex items-center gap-2">
 					<IconButton
 						icon={<RefreshCw />}

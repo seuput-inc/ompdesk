@@ -30,6 +30,7 @@ import type { AgentBrowserStatus, ChromiumBrowserId } from "./default-browser";
 import type { DiagnosticBundleRequest, DiagnosticBundleResult } from "./diagnostic-bundle";
 import type { DiskCareState } from "./disk-care";
 import type { ExtensionUpdateState } from "./extension-update";
+import type { GithubBranchPr } from "./github";
 import type { GithubAuthState, GithubStarState } from "./github-auth";
 import type { IpcErrorCode } from "./ipc-error-codes";
 import type { LaunchProfile } from "./launch-profile";
@@ -152,6 +153,8 @@ export const IPC_EVENTS = {
 	REMOTE_OPENED_TABS_CHANGED: "sessions:remote-opened-changed",
 	/** The session files this computer's windows' tabs hold changed (`string[]`, `SESSIONS_HELD`) */
 	SESSIONS_HELD_CHANGED: "sessions:held-changed",
+	/** A session's attached links on this computer changed (`session_link_add`/`_remove`, a delete): read them again. */
+	SESSION_LINKS_CHANGED: "sessions:links-changed",
 	/** Log line appended */
 	LOG_LINE: "log:line",
 	/** Native application menu action */
@@ -269,6 +272,8 @@ export const IPC_COMMANDS = {
 	SESSIONS_TARGETS: "sessions:targets",
 	/** Repository images by root, looked up when not cached (`string[]` → `SessionArtworks`) */
 	SESSIONS_ARTWORK: "sessions:artwork",
+	/** The pull request of a row's branch, read in its repository root (`{root, branch}` → `GithubBranchPr | null`) */
+	SESSIONS_PULL_REQUEST: "sessions:pull-request",
 	/** Save one open session's diagnostic bundle: stock's `/dump all|anon` zip plus OMPdesk's diagnostics text (`DiagnosticBundleRequest` → `DiagnosticBundleResult`) */
 	SESSIONS_DUMP_BUNDLE: "sessions:dump-bundle",
 	/** Fetch stats endpoint */
@@ -298,6 +303,14 @@ export const IPC_COMMANDS = {
 	SYSTEM_OPEN_DIALOG: "system:open-dialog",
 	/** Show notification */
 	SYSTEM_NOTIFY: "system:notify",
+	/** Whether the person is away from this computer (presence.ts: locked, or no input for 3 min); null when unknown */
+	SYSTEM_DESKTOP_AWAY: "system:desktop-away",
+	/** Settings › General's test banner: what the system did with it (`IpcNotifyTestResult`). */
+	SYSTEM_NOTIFY_TEST: "system:notify-test",
+	/** Open the system's notification settings (System Settings › Notifications, Windows Settings › Notifications). */
+	SYSTEM_NOTIFY_SETTINGS: "system:notify-settings",
+	/** A paired page's "Send a test": one push to the calling device's own subscription (`WebHost.testPush`). */
+	WEB_PUSH_TEST: "web-push:test",
 	/** Get GUI preferences */
 	PREFS_GET: "prefs:get",
 	/** Set GUI preferences */
@@ -396,6 +409,8 @@ export const IPC_COMMANDS = {
 	REORDER_TABS: "tab:reorder",
 	/** List the calling window's tabs (boot reconciliation) */
 	GET_TABS: "tab:get-all",
+	/** The tabs a person looked at after their last run ended (main's tab-attention.ts), for a page restoring its done marks */
+	TABS_SEEN_SINCE_RUN: "tab:seen-since-run",
 	/** Look up the tab/window currently attached to a session file (F-OWN double-attach guard) */
 	GET_SESSION_OWNER: "tab:get-session-owner",
 	/** Round-trip a draft through the user's $VISUAL/$EDITOR (temp file, exit-0 read-back) */
@@ -426,6 +441,8 @@ export const IPC_COMMANDS = {
 	BRIDGE_HEALTH_TAKE: "bridge-health:take",
 	/** The files waiting for space (payload: none; answer: DiskFullState) */
 	DISK_FULL_GET: "disk-full:get",
+	/** Why the control socket the `ompdesk` command reaches did not start (payload: none; answer: string or null) */
+	CONTROL_SOCKET_FAILURE: "control-socket:failure",
 	/** Cancel a tab's wait for the internet connection (payload: tab id) */
 	RESUME_CANCEL_WAIT: "resume:cancel-wait",
 	/** Stop what this launch resumed on one tab (the resuming row's Stop; payload: tab id) */
@@ -758,6 +775,12 @@ export type RuntimeErrorSource =
 	 */
 	| "sidebar"
 	/**
+	 * A finished turn's desktop notification that was not shown (`hooks/use-rpc-events.ts` `notifyRunEnd`; info):
+	 * `message` skipped, `details.reason` why (focus, app-off, setting-off, aborted, retrying, awaiting-connection,
+	 * gone, opened-by-agent, muted), `details.kind` completion or error.
+	 */
+	| "notify"
+	/**
 	 * A known session's pane shown with no rows, info level (src/renderer/hooks/session-hydration.ts
 	 * `reportEmptyTranscript`): `key` the transcript snapshot key looked up and whether the cache has it (`found`,
 	 * `foundAgeMs`), the key the tab was seeded under (`seeded`, `seededFound`, `seededAgoMs`) and the one its snapshot
@@ -851,6 +874,12 @@ export interface UpdateAuthInfo {
 	 * (`KEYCHAIN_WOULD_ASK`), so main dropped the file instead (native-rust › S › The keychain on macOS). Null when none was.
 	 */
 	droppedReason: string | null;
+	/**
+	 * The saved token is still there but this computer could not read it on the last try (the OS key store had no key
+	 * for it, or it did not decrypt): it is kept as it is, never replaced by nothing, until a new one is saved or it is
+	 * removed. Absent from an older host.
+	 */
+	unreadable?: boolean;
 }
 
 export interface UpdateAuthTestResult {
@@ -1323,6 +1352,14 @@ export interface IpcSessionsArtworkPayload {
 	device?: string;
 }
 
+export interface IpcSessionsPullRequestPayload {
+	/** The row's repository root (`SessionTargetRepository.root`). */
+	root: string;
+	/** Its checkout's branch (`SessionTargetHead` of kind `branch`). */
+	branch: string;
+	device?: string;
+}
+
 export interface IpcSessionsSearchPayload {
 	query: string;
 	scope: "local" | "global";
@@ -1350,6 +1387,18 @@ export interface IpcStatsFetchPayload {
 
 /** Why a tab notifies: a finished turn, a failed one, or a question waiting for the user. */
 export type IpcNotifyKind = "completion" | "error" | "ask";
+
+/**
+ * What became of a desktop notification: shown, left out for a muted project, dropped (a bot's quiet turn, a repeat
+ * another window already reported), or the system refuses banners.
+ */
+export type IpcNotifyResult = "shown" | "muted" | "dropped" | "blocked";
+
+/** The test banner: shown (or no word from the system, as on macOS), refused (Windows' `failed`), or none can show. */
+export type IpcNotifyTestResult = "shown" | "failed" | "unsupported";
+
+/** The test push: sent, the subscription expired (and is forgotten), the push service failed, or no subscription. */
+export type IpcPushTestResult = "sent" | "gone" | "failed" | "none";
 
 export interface IpcNotifyPayload {
 	title: string;
@@ -2376,6 +2425,8 @@ export interface OmpApi {
 		onRemoteOpenedChanged(callback: (tabs: RemoteOpenedTab[]) => void): () => void;
 		/** The session files this computer's windows' tabs hold changed (the whole list, `SESSIONS_HELD`). */
 		onHeldSessionsChanged(callback: (files: string[]) => void): () => void;
+		/** A session's attached links on this computer changed (`SESSION_LINKS_CHANGED`): read `session_links` again. */
+		onSessionLinksChanged(callback: () => void): () => void;
 		onLogBatch(callback: (batch: LogBatch) => void): () => void;
 		onMenuAction(callback: (action: MenuAction) => void): () => void;
 		onDeepLink(callback: (link: DeepLinkPayload) => void): () => void;
@@ -2416,6 +2467,10 @@ export interface OmpApi {
 	diskFull: {
 		/** The files main could not save for lack of space right now (empty once all are saved). */
 		get(): Promise<DiskFullState>;
+	};
+	controlSocket: {
+		/** Why the control socket did not start this launch (errno and what to do), or null while it runs. */
+		failure(): Promise<string | null>;
 	};
 	/** Turns that continue by themselves: after the connection returns, and after a relaunch. */
 	resume: {
@@ -2570,6 +2625,8 @@ export interface OmpApi {
 		targets(sessions: SessionTargetQuery[], device?: string): Promise<SessionTargets>;
 		/** Repository images by root, looked up where missing (bounded and cached there); null where none. */
 		artwork(roots: string[], device?: string): Promise<SessionArtworks>;
+		/** The pull request of a row's branch, read in its repository root on that computer; null: it has none. */
+		pullRequest(root: string, branch: string, device?: string): Promise<GithubBranchPr | null>;
 		/**
 		 * Save an open session's diagnostic bundle: the save dialog (on a paired web page, the computer's save sheet),
 		 * then stock's dump zip of the tab's omp plus `ompdesk-diagnostics.txt`. Failures resolve as results.
@@ -2594,6 +2651,8 @@ export interface OmpApi {
 	tabs: {
 		/** The calling window's tabs in acquisition order (boot reconciliation). */
 		list(): Promise<IpcTabInfo[]>;
+		/** The tabs a person looked at after their last run ended (main's `TabAttention`). */
+		seenSinceRun(): Promise<string[]>;
 		/**
 		 * Spawn a background tab bound to this window. Null when its sidecar cannot be created.
 		 * When `sessionPath` is already attached to a tab, resolves with
@@ -2687,7 +2746,16 @@ export interface OmpApi {
 			filters?: { name: string; extensions: string[] }[],
 			options?: { directory?: boolean; title?: string; buttonLabel?: string },
 		): Promise<string[] | null>;
-		notify(title: string, body?: string, tabId?: string, kind?: IpcNotifyKind): void;
+		/** What became of it; undefined from a page (which shows its own) or an older main. */
+		notify(title: string, body?: string, tabId?: string, kind?: IpcNotifyKind): Promise<IpcNotifyResult | undefined>;
+		/** Whether the person is away from this computer (locked, or no input for 3 min); null when it cannot be told. */
+		desktopAway(): Promise<boolean | null>;
+		/** One test banner (Settings › General); a page answers `unsupported` (its test is `testPush`). */
+		notifyTest(): Promise<IpcNotifyTestResult>;
+		/** Open the system's notification settings; nothing on a page. */
+		openNotificationSettings(): Promise<void>;
+		/** One test push to this paired device; `none` from a desktop window. */
+		testPush(): Promise<IpcPushTestResult>;
 	};
 	prefs: {
 		get(key?: string): Promise<unknown>;

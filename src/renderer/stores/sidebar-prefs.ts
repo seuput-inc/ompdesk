@@ -12,6 +12,7 @@
  */
 import { create } from "zustand";
 import {
+	type FooterPin,
 	type RailPin,
 	readSidebarPrefs,
 	SIDEBAR_PREFS_KEY,
@@ -25,22 +26,21 @@ import { PREFS_BOOT_RETRY_MS, readPref } from "../lib/prefs-read";
 import { toastError } from "./toast";
 
 /** Each pin's name, shared by its sidebar row and its Settings switch. */
-export const RAIL_PIN_LABEL_KEYS: Record<RailPin, string> = {
+export const RAIL_PIN_LABEL_KEYS: Record<FooterPin, string> = {
 	usage: "sidebar.pin.usage",
-	agents: "destination.agents",
-	stats: "destination.insights",
 	terminal: "panel.tabs.terminal",
 	diff: "panel.tabs.diff",
 	preview: "panel.tabs.preview",
 	files: "panel.tabs.files",
 	jobs: "viewSheet.jobs",
-	schedules: "settings.section.schedules",
 };
 
 interface SidebarPrefsStore extends SidebarPrefs {
 	hydrated: boolean;
 	hydrate: () => Promise<void>;
 	toggleGroupPin: (cwd: string) => Promise<void>;
+	toggleGroupMuted: (cwd: string) => Promise<void>;
+	toggleSessionMuted: (path: string) => Promise<void>;
 	toggleSessionPin: (path: string) => Promise<void>;
 	toggleAgentHidden: (path: string) => Promise<void>;
 	setGroupAlias: (cwd: string, alias: string | null) => Promise<void>;
@@ -159,6 +159,20 @@ export const useSidebarPrefs = create<SidebarPrefsStore>()((set, get) => {
 				op: "set-group-pinned",
 				cwd,
 				pinned: !state.pinnedGroups.includes(cwd),
+			})),
+
+		toggleGroupMuted: cwd =>
+			write("sidebar.muteFailed", state => ({
+				op: "set-group-muted",
+				cwd,
+				muted: !state.mutedGroups.includes(cwd),
+			})),
+
+		toggleSessionMuted: path =>
+			write("sidebar.muteFailed", state => ({
+				op: "set-session-muted",
+				path,
+				muted: !state.mutedSessions.includes(path),
 			})),
 
 		toggleSessionPin: path =>

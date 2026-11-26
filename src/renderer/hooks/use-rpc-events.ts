@@ -172,12 +172,54 @@ function openTabFrame(tabId: string): boolean {
 	return true;
 }
 
+/** Why a finished turn's banner did not show: one info line in the runtime log (source `notify`). */
+export type NotifySkip =
+	| "focus"
+	| "app-off"
+	| "setting-off"
+	| "aborted"
+	| "retrying"
+	| "awaiting-connection"
+	| "gone"
+	| "opened-by-agent"
+	| "muted"
+	| "dropped";
+
+function logNotifySkip(tabId: string, kind: NotifyKind, reason: NotifySkip): void {
+	try {
+		window.omp?.runtime?.report({
+			source: "notify",
+			message: "skipped",
+			details: { level: "info", tabId, kind, reason },
+		});
+	} catch {
+		// Diagnostics only.
+	}
+}
+
+/** The system refused banners once this launch: the window said so then, and stays quiet after. */
+let blockedToastShown = false;
+
+/**
+ * Whether the person is watching this window: it has focus and they used the computer within the last 3 minutes
+ * (main's presence read). A focused window nobody touched for that long is a desk left alone; unknown counts as
+ * watching, as before.
+ */
+export async function watchingWindow(): Promise<boolean> {
+	if (!document.hasFocus()) return false;
+	try {
+		return (await window.omp.system.desktopAway?.()) !== true;
+	} catch {
+		return true;
+	}
+}
+
 /**
  * Desktop-notification gate, mirroring the TUI's notify policy: the GUI master
  * pref (Settings → GUI, default on), then the agent's `<kind>.notify` setting
  * (read live via get_settings so edits from either the TUI or the GUI's
- * Interaction tab apply immediately), and finally window focus — never notify
- * while the user is watching.
+ * Interaction tab apply immediately), and finally whether the person watches
+ * the window — never notify while they do.
  */
 async function maybeNotify(
 	kind: NotifyKind,
@@ -187,17 +229,26 @@ async function maybeNotify(
 	command: TabCommand = (rpcCommand, timeoutMs) => window.omp.rpc.command(rpcCommand, timeoutMs),
 ): Promise<void> {
 	try {
-		if (document.hasFocus()) return;
-		if (!useUiStore.getState().notifications) return;
+		if (await watchingWindow()) return logNotifySkip(tabId, kind, "focus");
+		if (!useUiStore.getState().notifications) return logNotifySkip(tabId, kind, "app-off");
 		const key = `${kind}.notify`;
 		const res = await command({ type: "get_settings", paths: [key] });
 		const values = res.success ? (res.data as { values?: Record<string, unknown> } | undefined)?.values : undefined;
 		const setting = values?.[key];
 		const effective = typeof setting === "string" ? setting : NOTIFY_DEFAULTS[kind];
-		if (effective === "off") return;
+		if (effective === "off") return logNotifySkip(tabId, kind, "setting-off");
 		// The tab rides along so a click on the banner brings that tab forward.
-		window.omp.system.notify(title, body, tabId, kind);
+		const result = await window.omp.system.notify(title, body, tabId, kind);
+		if (result === "muted" || result === "dropped") return logNotifySkip(tabId, kind, result);
 		playNotificationSound();
+		if (result === "blocked" && !blockedToastShown) {
+			blockedToastShown = true;
+			useToastStore.getState().push({
+				variant: "warning",
+				title: translate("events.notificationsBlocked.title"),
+				message: translate("events.notificationsBlocked.body"),
+			});
+		}
 	} catch {
 		// Best-effort: a failed notification must never break event dispatch.
 	}
@@ -224,17 +275,23 @@ function awaitingConnection(tabId: string): boolean {
  * Notify a finished run: completion or error, mutually exclusive for one
  * settled run. Aborted runs are user-initiated and stay quiet, as do the
  * intermediate settles of a live auto-retry saga and a turn waiting for the connection.
+ * A finished turn of a session an agent opened is the opener's news (its done report): the person hears of it only
+ * when it failed or asks them something.
  */
 export function notifyRunEnd(
 	tabId: string,
 	outcome: { stopReason?: string; errorMessage?: unknown; reply?: string },
 ): void {
-	if (retryPendingTabs.has(tabId) || awaitingConnection(tabId)) return;
-	if (outcome.stopReason === "aborted") return;
+	const kind: NotifyKind = outcome.stopReason === "error" ? "error" : "completion";
+	if (retryPendingTabs.has(tabId)) return logNotifySkip(tabId, kind, "retrying");
+	if (awaitingConnection(tabId)) return logNotifySkip(tabId, kind, "awaiting-connection");
+	if (outcome.stopReason === "aborted") return logNotifySkip(tabId, kind, "aborted");
 	// A settle arriving after the tab closed has no runtime to query settings
 	// with — skip rather than resurrect a ghost runtime and notify a dead tab.
 	const runtime = sessionRuntime(tabId);
-	if (!runtime) return;
+	if (!runtime) return logNotifySkip(tabId, kind, "gone");
+	const openedByAgent = useTabsStore.getState().tabs.some(tab => tab.id === tabId && tab.openedBy !== undefined);
+	if (kind === "completion" && openedByAgent) return logNotifySkip(tabId, kind, "opened-by-agent");
 	const title = notificationTitle(tabId);
 	if (outcome.stopReason === "error") {
 		const message =

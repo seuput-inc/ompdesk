@@ -82,6 +82,7 @@ pub fn register(registry: &mut Registry) {
     registry.add("ssh.createKey", |call| Box::pin(create_key(call)));
     registry.add("ssh.loadKeys", |call| Box::pin(load_keys(call)));
     registry.add("ssh.forgetHostKey", |call| Box::pin(forget_host_key(call)));
+    registry.add("ssh.terminal", |call| Box::pin(terminal(call)));
 }
 
 /// A request's params; what does not read as them is refused in fixed words, which repeat nothing of the request (a
@@ -706,10 +707,29 @@ async fn load_keys(call: Call) -> Result<Reply, Fault> {
     Reply::json(&Done {})
 }
 
+/// A saved host, and how to run ssh for it: `ssh.forgetHostKey`'s and `ssh.terminal`'s params.
 #[derive(Deserialize)]
 struct ForgetParams {
     how: How,
     target: Target,
+}
+
+/// What a terminal runs to reach a saved host (Orca's plain SSH terminal, `plain-ssh-terminal`).
+#[derive(Serialize)]
+struct TerminalCommand {
+    bin: String,
+    args: Vec<String>,
+}
+
+/// `ssh -F <config>` and the host's own arguments, for a terminal of the Terminal panel to run in its PTY: the PTY asks
+/// the person whatever ssh asks (password, host key), so no askpass is granted and nothing is started here.
+async fn terminal(call: Call) -> Result<Reply, Fault> {
+    let ForgetParams { how, target } = params(&call)?;
+    let destination = target.destination()?;
+    let config = config_of(&how).await?;
+    let mut args = vec!["-F".to_owned(), config.file];
+    args.extend(destination.args());
+    Reply::json(&TerminalCommand { bin: how.ssh, args })
 }
 
 /// Drops the saved key of a host and of every ProxyJump hop on the way to it from OMPdesk's known_hosts, so the next
@@ -1150,6 +1170,44 @@ esac",
             exit["failure"],
             json!({ "kind": "dropped", "message": "ssh exited" })
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_terminal_s_ssh_reads_the_pinned_config_and_never_takes_a_hostile_host() {
+        let root = temp("terminal");
+        let (mut lines, mut write) = core().await;
+        let hostile = json!({ "name": "box", "host": "-oProxyCommand=touch pwned" });
+        send(
+            &mut write,
+            1,
+            "ssh.terminal",
+            json!({ "how": how(&root, "ssh"), "target": hostile }),
+        )
+        .await;
+        let (refused, _) = answer_to(&mut lines, 1).await;
+        assert_eq!(refused["error"]["message"], "Invalid host", "{refused}");
+        let target = json!({
+            "name": "box", "host": "box.example", "username": "me", "port": 2222,
+        });
+        send(
+            &mut write,
+            2,
+            "ssh.terminal",
+            json!({ "how": how(&root, "ssh"), "target": target }),
+        )
+        .await;
+        let (answer, events) = answer_to(&mut lines, 2).await;
+        assert!(events.is_empty(), "{events:?}");
+        let config = joined(&root, &["user", "ssh", "config"]);
+        assert_eq!(
+            answer["result"],
+            json!({
+                "bin": "ssh",
+                "args": ["-F", config, "-p", "2222", "-l", "me", "--", "box.example"],
+            })
+        );
+        assert!(Path::new(&config).exists());
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -8,6 +8,8 @@ pub const CONTROL_OFF_ENV: &str = "OMPDESK_CONTROL_OFF";
 pub const CONTROL_CALLER_ENV: &str = "OMPDESK_CALLER";
 pub const ENDPOINT_FILE: &str = "endpoint.json";
 pub const TOKEN_FILE: &str = "token";
+/// Why the running OMPdesk could not start the socket; main writes it, a start that succeeds removes it.
+pub const START_FAILURE_FILE: &str = "start-failure.txt";
 pub const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 pub const WAIT_UNTIL: &[&str] = &["idle", "blocked", "done", "any"];
 

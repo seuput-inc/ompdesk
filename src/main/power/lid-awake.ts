@@ -31,7 +31,7 @@ export interface LidBackend {
 export type LidAwakeReason = "work" | "charging" | "work-ended" | "on-battery" | "quit";
 
 export type LidAwakeLog = (
-	message: "held" | "released" | "recovered" | "skipped" | "failed",
+	message: "held" | "released" | "recovered" | "skipped" | "failed" | "restarted",
 	details: Record<string, unknown>,
 ) => void;
 

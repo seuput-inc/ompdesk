@@ -33,6 +33,7 @@ import { webRuntime } from "../../web/runtime";
 import { Button, IconButton, Skeleton, Tooltip } from "../common";
 import { PanelContainer, preloadPanelViews } from "./PanelContainer";
 import { EdgeSwipeZone, SidebarDrawer } from "./SidebarDrawer";
+import { StatusBar } from "./status-bar/StatusBar";
 // The session list's look stays on the first screen, where the list's own chunk (sidebar-chunk.ts) is not: 7.6 KB,
 // one request less for a page that waits for the list, and the stylesheet keeps its place in the cascade.
 import "../../styles/sidebar.css";
@@ -47,6 +48,7 @@ import { ViewSheetHost } from "./ViewSheetHost";
 import { WhatsNewCard } from "./WhatsNewCard";
 
 const AgentsPage = lazyChunk(() => import("../agents/AgentsPage").then(m => ({ default: m.AgentsPage })));
+const BotsPage = lazyChunk(() => import("../bots/BotsPage").then(m => ({ default: m.BotsPage })));
 const InsightsPage = lazyChunk(() => import("../insights/InsightsPage").then(m => ({ default: m.InsightsPage })));
 const SettingsPage = lazyChunk(() => import("../settings/SettingsPage").then(m => ({ default: m.SettingsPage })));
 /**
@@ -57,6 +59,7 @@ const SettingsPage = lazyChunk(() => import("../settings/SettingsPage").then(m =
 const loadedPages: Partial<Record<PageDestination, ComponentType>> = {};
 const PAGE_LOADERS: Record<PageDestination, () => Promise<ComponentType>> = {
 	agents: () => import("../agents/AgentsPage").then(m => m.AgentsPage),
+	bots: () => import("../bots/BotsPage").then(m => m.BotsPage),
 	insights: () => import("../insights/InsightsPage").then(m => m.InsightsPage),
 	settings: () => import("../settings/SettingsPage").then(m => m.SettingsPage),
 };
@@ -75,9 +78,9 @@ function preloadPage(destination: PageDestination): Promise<void> {
 function preloadForIntent(target: EventTarget | null): void {
 	const element = target instanceof Element ? target : null;
 	const destination = element
-		?.closest("[data-sidebar-destinations] [data-destination]")
+		?.closest(":is([data-sidebar-nav], [data-sidebar-destinations]) [data-destination]")
 		?.getAttribute("data-destination");
-	if (destination === "agents" || destination === "insights" || destination === "settings") {
+	if (destination === "agents" || destination === "bots" || destination === "insights" || destination === "settings") {
 		if (!loadedPages[destination]) void preloadPage(destination);
 		return;
 	}
@@ -90,6 +93,7 @@ const IDLE_PRELOAD_TIMEOUT_MS = 3000;
 
 const PAGE_LABEL_KEY: Record<PageDestination, string> = {
 	agents: "destination.agents",
+	bots: "destination.bots",
 	insights: "destination.insights",
 	settings: "destination.settings",
 };
@@ -105,7 +109,7 @@ function DestinationPage({ destination }: { destination: PageDestination }): Rea
 	const [Page] = useState<ComponentType>(
 		() =>
 			loadedPages[destination] ??
-			(destination === "agents" ? AgentsPage : destination === "insights" ? InsightsPage : SettingsPage),
+			{ agents: AgentsPage, bots: BotsPage, insights: InsightsPage, settings: SettingsPage }[destination],
 	);
 	return (
 		<div className="omp-page-in flex min-h-0 flex-1 flex-col">
@@ -153,7 +157,7 @@ function PageTopBar({ showSidebarToggle }: { showSidebarToggle: boolean }) {
 	// button and title in the slot, and the way out to the session as an icon at the right.
 	if (shellMode === "phone")
 		return (
-			<div className="omp-topbar drag-region flex h-12 shrink-0 items-center gap-1 px-3">
+			<div className="omp-topbar drag-region flex h-(--sc-topbar-h) shrink-0 items-center gap-1 px-3">
 				{showSidebarToggle && (
 					<IconButton
 						className="no-drag"
@@ -175,7 +179,7 @@ function PageTopBar({ showSidebarToggle }: { showSidebarToggle: boolean }) {
 			</div>
 		);
 	return (
-		<div className="omp-topbar drag-region flex h-12 shrink-0 items-center gap-1 px-3">
+		<div className="omp-topbar drag-region flex h-(--sc-topbar-h) shrink-0 items-center gap-1 px-3">
 			{showSidebarToggle && (
 				<IconButton
 					className="no-drag"
@@ -390,54 +394,58 @@ export function AppShell() {
 	}, [onPage]);
 
 	return (
-		<div
-			className="omp-shell flex min-w-0 flex-1"
-			// The docked panel's side for global.css, which never asks `:has(> .omp-inspector)`: a `:has()` on this root
-			// made every node streaming output inserted restyle the shell's matching descendants.
-			data-panel={panelDocked ? panelSide : undefined}
-			data-sidebar={sidebarVisible && !drawer ? "docked" : "hidden"}
-			onFocusCapture={event => preloadForIntent(event.target)}
-			onPointerOverCapture={event => preloadForIntent(event.target)}
-			onTouchStartCapture={event => preloadForIntent(event.target)}
-		>
-			{drawer
-				? drawerReady && (
-						<>
-							<SidebarDrawer />
-							<EdgeSwipeZone />
-						</>
-					)
-				: sidebarVisible && Sidebar && <Sidebar />}
-			{panel.mounted && panelSide === "left" && <PanelContainer closing={panel.closing} />}
+		// The shell over the desktop status bar (Orca's 24 px bar under the whole window; none on a phone or tablet page).
+		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
+			<div
+				className="omp-shell flex min-h-0 min-w-0 flex-1"
+				// The docked panel's side for global.css, which never asks `:has(> .omp-inspector)`: a `:has()` on this root
+				// made every node streaming output inserted restyle the shell's matching descendants.
+				data-panel={panelDocked ? panelSide : undefined}
+				data-sidebar={sidebarVisible && !drawer ? "docked" : "hidden"}
+				onFocusCapture={event => preloadForIntent(event.target)}
+				onPointerOverCapture={event => preloadForIntent(event.target)}
+				onTouchStartCapture={event => preloadForIntent(event.target)}
+			>
+				{drawer
+					? drawerReady && (
+							<>
+								<SidebarDrawer />
+								<EdgeSwipeZone />
+							</>
+						)
+					: sidebarVisible && Sidebar && <Sidebar />}
+				{panel.mounted && panelSide === "left" && <PanelContainer closing={panel.closing} />}
 
-			<main aria-label={t("shell.main")} className="omp-workspace-main relative flex min-w-0 flex-1 flex-col">
-				<div className={onPage ? "hidden" : "flex min-h-0 flex-1 flex-col"} data-session-view>
-					<TitleBar />
-					<TabHousekeeping />
-					<UpdateBanner />
-					<MailReentryNoticeGate />
-					<WhatsNewCard />
-					<SplitWorkspace />
-				</div>
-				{onPage && (
-					<section
-						aria-label={t(PAGE_LABEL_KEY[destination])}
-						className="flex min-h-0 flex-1 flex-col outline-none"
-						data-destination={destination}
-						ref={pageRef}
-						tabIndex={-1}
-					>
-						<PageTopBar showSidebarToggle={!sidebarVisible} />
-						<Suspense fallback={<PageFrameSkeleton />}>
-							<DestinationPage destination={destination} key={destination} />
-						</Suspense>
-					</section>
-				)}
-			</main>
+				<main aria-label={t("shell.main")} className="omp-workspace-main relative flex min-w-0 flex-1 flex-col">
+					<div className={onPage ? "hidden" : "flex min-h-0 flex-1 flex-col"} data-session-view>
+						<TitleBar />
+						<TabHousekeeping />
+						<UpdateBanner />
+						<MailReentryNoticeGate />
+						<WhatsNewCard />
+						<SplitWorkspace />
+					</div>
+					{onPage && (
+						<section
+							aria-label={t(PAGE_LABEL_KEY[destination])}
+							className="flex min-h-0 flex-1 flex-col outline-none"
+							data-destination={destination}
+							ref={pageRef}
+							tabIndex={-1}
+						>
+							<PageTopBar showSidebarToggle={!sidebarVisible} />
+							<Suspense fallback={<PageFrameSkeleton />}>
+								<DestinationPage destination={destination} key={destination} />
+							</Suspense>
+						</section>
+					)}
+				</main>
 
-			{panel.mounted && panelSide === "right" && <PanelContainer closing={panel.closing} />}
-			<ViewSheetHost />
-			<MissingFolderSheetHost />
+				{panel.mounted && panelSide === "right" && <PanelContainer closing={panel.closing} />}
+				<ViewSheetHost />
+				<MissingFolderSheetHost />
+			</div>
+			<StatusBar />
 		</div>
 	);
 }

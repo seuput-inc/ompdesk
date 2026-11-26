@@ -707,6 +707,11 @@ export interface TabsStore {
 	 * background run settles (running → ready while not active). */
 	applyTabStatus: (payload: IpcTabStatusPayload) => void;
 	/**
+	 * Give a tab the done mark (`unreadDone`) as if it finished unseen: the session row's "Mark as unread" and a
+	 * terminal's bell while it was off screen (`lib/terminal-bell.ts`). The next pick of the tab clears it.
+	 */
+	markUnread: (tabId: string) => void;
+	/**
 	 * Apply main's tab list for this window (GET_TABS, TAB_LIST_CHANGED): a tab another window now shows
 	 * (or stopped showing) changes `viewerCount`, a tab a viewer window was attached to appears, and one its
 	 * owner closed leaves. `closed`: this window's own tabs main closed because their session was deleted
@@ -840,6 +845,8 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		}
 		// A web page keeps its own done marks across reloads (lib/unread-marks.ts); the desktop's live in memory.
 		const savedMarks = webRuntime() ? readUnreadMarks() : null;
+		/** Tabs whose done mark came back from the page's storage: another window or page may have seen them since. */
+		const restoredMarks = new Set<string>();
 		const ghosts = get().tabs.filter(tab => tab.ghost);
 		const runReadings: IpcTabInfo[] = [];
 		set(state => {
@@ -890,6 +897,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 					!info.active &&
 					!info.visible &&
 					restoredUnread(savedMarks, info.tabId, info.status === "running");
+				if (restored) restoredMarks.add(info.tabId);
 				return restored ? { ...tab, unreadDone: true } : tab;
 			});
 			// Entries the reply doesn't know (a spawn reply raced this reconcile)
@@ -937,6 +945,18 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		});
 		// A ghost is gone by now, adopted or not: its runtime (the seeded transcript) goes with it.
 		for (const ghost of ghosts) if (!get().tabs.some(tab => tab.id === ghost.id)) deleteSessionRuntime(ghost.id);
+		// A mark the person read elsewhere since (a desktop window, another page) does not come back with the page.
+		if (restoredMarks.size > 0)
+			void window.omp?.tabs
+				?.seenSinceRun?.()
+				.then(seen => {
+					const read = new Set(seen.filter(id => restoredMarks.has(id)));
+					if (read.size === 0) return;
+					set(state => ({
+						tabs: state.tabs.map(tab => (read.has(tab.id) ? { ...tab, unreadDone: false } : tab)),
+					}));
+				})
+				.catch(() => undefined);
 		// A new runtime missed its first status. On reconnect existing runtimes may have missed the turn's end too.
 		for (const info of runReadings) {
 			const session = sessionRuntimeStore<SessionStore>(info.tabId, "session");
@@ -1223,6 +1243,11 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		}
 	},
 
+	markUnread: tabId => {
+		if (!get().tabs.some(tab => tab.id === tabId && !tab.unreadDone)) return;
+		set(state => ({ tabs: state.tabs.map(tab => (tab.id === tabId ? { ...tab, unreadDone: true } : tab)) }));
+	},
+
 	unsplit: async keepTabId => {
 		const state = get();
 		const tabId = keepTabId && state.tabs.some(tab => tab.id === keepTabId) ? keepTabId : state.activeTabId;
@@ -1428,7 +1453,10 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 			!visibleTabIds(state).includes(payload.tabId) && previous?.status === "running" && payload.status === "ready";
 		set(current => {
 			const index = current.tabs.findIndex(tab => tab.id === payload.tabId);
-			const next = projectSessionTab(payload, previous, sessionChanged, completedInBackground);
+			// A session an agent opened that finished well is its opener's news (the done report): no ✓ for the person.
+			const openerNews =
+				(payload.openedBy ?? previous?.openedBy) !== undefined && payload.lastRun?.stopReason !== "error";
+			const next = projectSessionTab(payload, previous, sessionChanged, completedInBackground && !openerNews);
 			if (index === -1) return { tabs: [...current.tabs, next] };
 			const tabs = [...current.tabs];
 			tabs[index] = next;

@@ -35,9 +35,10 @@
 	--sc-danger: #c8102e;
 	--sc-danger-fg: #ffffff;
 	--sc-info: #0a5cc2;
-	/* A session waiting on the person, and an unseen finish: hues of their own, never the accent */
+	/* A session waiting on the person, an unseen finish and work under way: hues of their own, never the accent */
 	--sc-attention: #b83c0b;
 	--sc-unread: #2563eb;
+	--sc-working: #a16207;
 	/* Elevation: Orca's three levels (a hairline lift, a floating menu, a dialog with a top highlight) */
 	--sc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
 	--sc-shadow-md: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.08);

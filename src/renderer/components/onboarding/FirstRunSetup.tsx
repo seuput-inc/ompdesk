@@ -33,6 +33,7 @@ import {
 	ErrorDetail,
 	ListRow,
 	Modal,
+	ProgressBar,
 	SettingInfo,
 	SkeletonRows,
 } from "../common";
@@ -601,6 +602,16 @@ export function FirstRunSetup() {
 				data-first-run-step={step}
 			>
 				<BrandMark size={48} />
+				{/* Orca's onboarding pill (the owner's decision, 25 Nov 2026): which of the setup's steps this is. */}
+				<ProgressBar
+					className="mt-5 w-56"
+					height={4}
+					tone="progress"
+					label={t("setup.progress", { step: step === "connect" ? 1 : 2, total: 2 })}
+					labelCase="keep"
+					value={step === "connect" ? 0.5 : 1}
+					valueText=""
+				/>
 				<h1
 					className="mt-5 text-sc-3xl font-semibold tracking-(--sc-tracking-tight) text-(--sc-text)"
 					id="first-run-title"

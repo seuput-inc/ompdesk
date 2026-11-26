@@ -28,7 +28,21 @@ export function validTerminalOperation(value: TerminalOperation): boolean {
 		return offsetsOk && waitOk && budgetOk;
 	}
 	if (value.action !== "create" && typeof value.id !== "string") return false;
-	if (value.action === "create" && value.shell !== undefined && typeof value.shell !== "string") return false;
+	if (value.action === "create") {
+		const { shell, title, ssh, program } = value;
+		if (shell !== undefined && typeof shell !== "string") return false;
+		if (title !== undefined && (typeof title !== "string" || title.length > 200)) return false;
+		if (ssh !== undefined && (typeof ssh !== "object" || ssh === null)) return false;
+		if (
+			program !== undefined &&
+			!(
+				typeof program?.path === "string" &&
+				Array.isArray(program.args) &&
+				program.args.every(arg => typeof arg === "string")
+			)
+		)
+			return false;
+	}
 	if (value.action === "create" || value.action === "resize")
 		return (
 			Number.isInteger(value.cols) &&
@@ -39,13 +53,20 @@ export function validTerminalOperation(value: TerminalOperation): boolean {
 			value.rows <= 1000
 		);
 	if (value.action === "write") return typeof value.data === "string" && value.data.length <= 1_000_000;
+	if (value.action === "rename") return typeof value.title === "string" && value.title.length <= 200;
 	return (
 		value.action === "close" ||
 		value.action === "restart" ||
 		value.action === "clear" ||
 		value.action === "claim" ||
-		value.action === "redraw"
+		value.action === "redraw" ||
+		value.action === "busy"
 	);
+}
+
+/** An operation a page or a paired device sent: valid, and never naming the program a PTY runs (main's to choose). */
+export function validPageOperation(value: TerminalOperation): boolean {
+	return validTerminalOperation(value) && !(value.action === "create" && value.program !== undefined);
 }
 
 type TerminalOwner = string | { deviceId: string; rtab: string };

@@ -6,8 +6,8 @@
  * an error. Electron-free.
  */
 import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { chmod, mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { chmod, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isRenameBlocked, RENAME_RETRY_MS } from "../../resources/gui-bridge/rename-retry";
 import { diskFull, isDiskFull } from "./disk-full";
@@ -26,6 +26,25 @@ export const DISK_FULL_RETRY_MS: readonly number[] = [5_000, 10_000, 20_000, 40_
 
 let counter = 0;
 const tempFor = (file: string): string => `${file}.${process.pid}-${counter++}.tmp`;
+const TEMP_NAME = /\.\d+-\d+\.tmp$/;
+/** A temp file this old is no write in progress: its writer was killed between the write and the rename. */
+const STALE_TEMP_MS = 24 * 60 * 60_000;
+
+/** Removes the temp files killed writers left in `dir` (not below it); returns how many went. */
+export async function sweepStaleTemps(dir: string, now = Date.now()): Promise<number> {
+	let removed = 0;
+	for (const name of await readdir(dir).catch(() => [] as string[])) {
+		if (!TEMP_NAME.test(name)) continue;
+		const path = join(dir, name);
+		const info = await stat(path).catch(() => null);
+		if (!info?.isFile() || now - info.mtimeMs < STALE_TEMP_MS) continue;
+		await rm(path, { force: true }).then(
+			() => removed++,
+			() => {},
+		);
+	}
+	return removed;
+}
 
 function stageSync(file: string, data: string, options: AtomicWriteOptions): string {
 	mkdirSync(dirname(file), { recursive: true, ...(options.dirMode === undefined ? {} : { mode: options.dirMode }) });

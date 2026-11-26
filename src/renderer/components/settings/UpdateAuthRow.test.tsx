@@ -91,4 +91,12 @@ describe("UpdateAuthRow", () => {
 		);
 		expect(container.textContent).not.toContain("Remove saved token");
 	});
+
+	it("says a saved token that cannot be read stays saved, and keeps Remove", async () => {
+		await mountRow({ state: "not-available" } as UpdateStatus, { hasStoredToken: true, unreadable: true });
+		expect(container.querySelector("[data-updates-auth-unreadable]")?.textContent).toContain(
+			"can't be read on this computer",
+		);
+		expect(container.textContent).toContain("Remove saved token");
+	});
 });

@@ -18,7 +18,7 @@ import {
 } from "./app-protocol";
 import { type CoreAsk, onCoreAsk } from "./core-asks";
 import type { PeerInfo } from "./peers-store";
-import { type LinkSlim, SLIM_LOG_NAMES, type TabHolder, tabHolderOf, WireRequest } from "./protocol";
+import { type LinkSlim, SLIM_LOG_NAMES, type TabHolder, tabHolderOf, WireCancel, WireRequest } from "./protocol";
 import type { SharingCore } from "./sharing";
 import { Link, type WireMessage } from "./wire";
 
@@ -37,7 +37,8 @@ export interface HostHello {
 export type HostMachineInfo = Pick<HostHello, "platform" | "ompVersion" | "home" | "sep">;
 
 export interface HostServices {
-	call(peer: PeerInfo, method: string, params: unknown, conn: HostConnection): Promise<unknown>;
+	/** `signal` aborts when the device gives up on the request or the link ends: a read may stop, a write never. */
+	call(peer: PeerInfo, method: string, params: unknown, conn: HostConnection, signal?: AbortSignal): Promise<unknown>;
 	disconnected(peer: PeerInfo, conn: HostConnection): void;
 }
 
@@ -100,6 +101,8 @@ class PeerConnection implements HostConnection {
 	readonly slim: LinkSlim;
 	/** The device's OMPdesk version, from its hello. */
 	readonly appVersion: string;
+	/** Requests still being answered, by id: a `cancel` frame or the link's end aborts them. */
+	readonly open = new Map<number, AbortController>();
 
 	constructor(link: Link, peer: PeerInfo, slim: LinkSlim, appVersion: string) {
 		this.link = link;
@@ -289,6 +292,8 @@ export class RemoteHost {
 	}
 
 	#disconnected(conn: PeerConnection): void {
+		for (const controller of conn.open.values()) controller.abort();
+		conn.open.clear();
 		this.#connections.delete(conn);
 		this.#opts.services.disconnected(conn.peer, conn);
 		this.#emitter.emit("connectionsChanged");
@@ -296,6 +301,11 @@ export class RemoteHost {
 
 	#onMessage(conn: PeerConnection, message: WireMessage): void {
 		// Unknown message types are ignored so a newer client can add some.
+		const cancel = WireCancel.safeParse(message);
+		if (cancel.success) {
+			conn.open.get(cancel.data.id)?.abort();
+			return;
+		}
 		const request = WireRequest.safeParse(message);
 		if (!request.success) return;
 		const { id, method, params } = request.data;
@@ -350,15 +360,21 @@ export class RemoteHost {
 
 	async #serve(conn: PeerConnection, id: number, method: string, params: unknown): Promise<void> {
 		let reply: object;
+		const controller = new AbortController();
+		conn.open.set(id, controller);
 		try {
 			const result =
 				method === DEVICE_ORDER_EXCHANGE && this.#opts.exchangeDeviceOrder
 					? await this.#opts.exchangeDeviceOrder(conn.peer, params)
-					: await this.#opts.services.call(conn.peer, method, params, conn);
+					: await this.#opts.services.call(conn.peer, method, params, conn, controller.signal);
 			reply = { t: "res", id, ok: true, result };
 		} catch (error) {
 			reply = { t: "res", id, ok: false, error: errorPayload(error) };
+		} finally {
+			if (conn.open.get(id) === controller) conn.open.delete(id);
 		}
+		// The device gave up on it: nobody waits for the answer.
+		if (controller.signal.aborted) return;
 		try {
 			conn.link.send(reply);
 		} catch (error) {

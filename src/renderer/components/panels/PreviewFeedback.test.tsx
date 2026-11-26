@@ -8,7 +8,10 @@ import {
 	type PreviewRequest,
 	type PreviewState,
 } from "../../../shared/preview";
+import { composerListening } from "../../lib/composer-handoff";
 import { I18nProvider, translate } from "../../lib/i18n";
+import { previewPageKey, useReviewNotesStore } from "../../stores/review-notes";
+import { type SessionTab, useTabsStore } from "../../stores/tabs";
 import { PreviewFeedbackBar, previewFeedbackMessage, usePreviewFeedback } from "./PreviewFeedback";
 
 const { document, window, Event, HTMLElement, Element, Node, CustomEvent } = parseHTML("<html><body></body></html>");
@@ -87,12 +90,18 @@ const button = (label: string) => {
 	return found;
 };
 
+let stopListening: (() => void) | undefined;
+
 beforeEach(() => {
 	page = vi.fn(async (request: PreviewPageRequest) =>
 		request.action === "pick" ? { selector: "#total", tag: "div", text: "42 users" } : null,
 	);
 	Object.assign(window, { omp: { preview: { page } } });
 	commands.length = 0;
+	const tab: Pick<SessionTab, "id" | "cwd" | "sessionId"> = { id: "tab-1", cwd: "/repo", sessionId: "s-1" };
+	useTabsStore.setState({ tabs: [tab as SessionTab], activeTabId: "tab-1", split: null });
+	// The tab's composer is on screen: the message reaches it as `omp:fill-composer`.
+	stopListening = composerListening("tab-1");
 });
 afterEach(async () => {
 	if (!root) return;
@@ -100,6 +109,11 @@ afterEach(async () => {
 	root = undefined;
 	await act(async () => mounted.unmount());
 	container.remove();
+});
+afterEach(() => {
+	stopListening?.();
+	useReviewNotesStore.getState().reset();
+	useTabsStore.getState().reset();
 });
 
 describe("preview feedback", () => {
@@ -109,12 +123,14 @@ describe("preview feedback", () => {
 			{ title: "Dashboard", url: "http://localhost:3000/" },
 			[
 				{
+					id: "a",
 					n: 1,
 					kind: "element",
 					elements: [{ selector: "#total", tag: "div", text: "42 users" }],
 					comment: " Bigger ",
 				},
 				{
+					id: "b",
 					n: 2,
 					kind: "region",
 					elements: [
@@ -170,10 +186,45 @@ describe("preview feedback", () => {
 				text: 'Feedback on the page "Dashboard" (omp-visual://v2-0123456789abcdef/index.html):\n1. <div> `#total` "42 users"',
 				images: [],
 				prepend: true,
+				append: false,
 				tabId: "tab-1",
 			},
 		]);
 		expect(container.querySelector("[data-preview-note]")).toBeNull();
+		expect(useReviewNotesStore.getState().notes).toEqual([]);
+	});
+
+	it("keeps a page's unsent comments while another page shows and shows them again on return (C1-78)", async () => {
+		const first = { ...EMPTY_PREVIEW, url: "http://localhost:3000/", title: "Home", activeTab: "p1" };
+		useReviewNotesStore.getState().add({
+			owner: "|s:s-1",
+			anchor: {
+				kind: "preview",
+				page: previewPageKey(first),
+				title: "Home",
+				url: first.url,
+				pick: "element",
+				elements: [{ selector: "#total", tag: "div", text: "42 users" }],
+			},
+			body: "Bigger",
+		});
+		await mount({ ...first, url: "http://localhost:3000/settings" });
+		expect(container.querySelector("[data-preview-note]")).toBeNull();
+		const rerender = async (state: PreviewState) =>
+			act(async () =>
+				root?.render(
+					<I18nProvider>
+						<Harness state={state} />
+					</I18nProvider>,
+				),
+			);
+		await rerender(first);
+		expect(container.querySelector('[data-preview-note="1"]')?.textContent).toContain("<div> 42 users");
+		await rerender({ ...first, url: "http://localhost:3000/settings" });
+		expect(container.querySelector("[data-preview-note]")).toBeNull();
+		await rerender(first);
+		expect(container.querySelector('[data-preview-note="1"]')?.textContent).toContain("<div> 42 users");
+		expect(useReviewNotesStore.getState().notes).toHaveLength(1);
 	});
 
 	it("stays out of the way on a plain page with nothing picked", async () => {

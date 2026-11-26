@@ -67,12 +67,14 @@ export type WindowNotice = "hang" | "resources" | "crash";
  */
 export function serveWindows(windows: {
 	log(wcId: number, entry: RuntimeLogReport): void;
-	notice(kind: WindowNotice): unknown;
+	notice(kind: WindowNotice, reason?: string): unknown;
 	quitAsked(asker: QuitAsker, ask: QuitAsk, approved: boolean): void;
 	saves(file: string, waiting: boolean): void;
 }): void {
 	client.on("window.log", ({ wcId, entry }: { wcId: number; entry: RuntimeLogReport }) => windows.log(wcId, entry));
-	client.handle("window.notice", ({ kind }: { kind: WindowNotice }) => windows.notice(kind));
+	client.handle("window.notice", ({ kind, reason }: { kind: WindowNotice; reason?: string | null }) =>
+		windows.notice(kind, reason ?? undefined),
+	);
 	client.on("app.quitAsked", ({ asker, ask, approved }: { asker: QuitAsker; ask: QuitAsk; approved: boolean }) =>
 		windows.quitAsked(asker, ask, approved),
 	);

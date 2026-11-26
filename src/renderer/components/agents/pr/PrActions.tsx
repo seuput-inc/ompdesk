@@ -1,35 +1,21 @@
 /**
- * Pull request actions in the PR Center detail: merge with a method
- * (merge commit, squash, rebase) behind a confirmation, edit title, body
- * and base, the conversation (comments, reviews, inline review comments)
- * and a review form (comment, approve, request changes). Everything runs
- * through `gh` in main on the active tab's repository.
+ * Pull request actions in the PR Center detail: merge with a method (merge commit, squash, rebase) behind a
+ * confirmation, or auto-merge with it once nothing blocks (`PrAutoMergeButton`), and edit title, body (Write and
+ * Preview, @mentions, pasted images) and base. Everything runs through `gh` on the active tab's repository. A fix
+ * the PR needs (its comments, its failed checks) can go to an agent session on its checkout (`handToPrCheckout`).
  */
-import { CheckCircle2, GitMerge, MessageSquare, Pencil, RefreshCw, XCircle } from "lucide-react";
-import { useCallback, useEffect, useId, useState } from "react";
-import type { RpcCommand, RpcPrComments, RpcPrDetail, RpcPrMergeMethod } from "../../../../shared/rpc-types";
-import { errorDetail } from "../../../lib/error-detail";
-import { useFocusedScope } from "../../../lib/focused-scope";
-import { formatTimeAgo } from "../../../lib/format";
+import { GitMerge, Pencil } from "lucide-react";
+import { useId, useState } from "react";
+import type { RpcCommand, RpcPrDetail, RpcPrMergeMethod } from "../../../../shared/rpc-types";
+import { handToTab } from "../../../lib/composer-handoff";
+import { uploadGithubImage } from "../../../lib/github-image";
 import { useT } from "../../../lib/i18n";
-import { lastRead, rememberRead } from "../../../lib/last-read";
-import { MarkdownRenderer } from "../../../lib/markdown";
 import { usePrCenterStore } from "../../../stores/pr-center";
+import { useTabsStore } from "../../../stores/tabs";
 import { toast, toastError } from "../../../stores/toast";
-import {
-	Badge,
-	type BadgeVariant,
-	Button,
-	Card,
-	Checkbox,
-	IconButton,
-	InlineNotice,
-	Input,
-	Modal,
-	Select,
-	Skeleton,
-	TextArea,
-} from "../../common";
+import { Button, Checkbox, Input, MarkdownComposer, Modal, Select } from "../../common";
+import { useAssignable } from "./PrPeople";
+import { PrAutoMergeButton } from "./PrStateActions";
 
 const MERGE_METHODS: RpcPrMergeMethod[] = ["merge", "squash", "rebase"];
 
@@ -43,6 +29,14 @@ async function runPr(command: RpcCommand, failure: string): Promise<boolean> {
 		toastError({ title: failure, error });
 	}
 	return false;
+}
+
+/** Open the PR's checkout session and put the prompt in its composer, unsent; nothing when the checkout failed (toasted). */
+export async function handToPrCheckout(number: number, prompt: (cwd: string) => string): Promise<void> {
+	const tabId = await usePrCenterStore.getState().checkout(number);
+	if (!tabId) return;
+	const cwd = useTabsStore.getState().tabs.find(tab => tab.id === tabId)?.cwd ?? "";
+	handToTab(tabId, { text: prompt(cwd), mode: "prepend" });
 }
 
 /** Why GitHub would refuse a merge right now, from `mergeStateStatus`; null when nothing blocks it. */
@@ -123,6 +117,9 @@ export function PrMergeButton({ detail }: { detail: RpcPrDetail }) {
 					{block && block !== "draft" && (
 						<p className="text-sc-sm text-(--sc-warning)">{t(`prCenter.merge.block.${block}`)}</p>
 					)}
+					<div className="flex flex-wrap items-center gap-2">
+						<PrAutoMergeButton detail={detail} method={method} />
+					</div>
 				</div>
 			</Modal>
 		</>
@@ -130,6 +127,7 @@ export function PrMergeButton({ detail }: { detail: RpcPrDetail }) {
 }
 
 export function PrEditButton({ detail }: { detail: RpcPrDetail }) {
+	const mentions = useAssignable();
 	const t = useT();
 	const formId = useId();
 	const [open, setOpen] = useState(false);
@@ -202,179 +200,16 @@ export function PrEditButton({ detail }: { detail: RpcPrDetail }) {
 						onInput={event => setBase(event.currentTarget.value)}
 						value={base}
 					/>
-					<TextArea
+					<MarkdownComposer
 						label={t("prCenter.bodyLabel")}
-						onChange={event => setBody(event.target.value)}
-						onInput={event => setBody(event.currentTarget.value)}
+						mentions={mentions}
+						onChange={setBody}
+						onImage={file => uploadGithubImage(file)}
 						rows={10}
 						value={body}
 					/>
 				</form>
 			</Modal>
 		</>
-	);
-}
-
-const REVIEW_STATE_TONE: Record<string, BadgeVariant> = {
-	APPROVED: "success",
-	CHANGES_REQUESTED: "error",
-};
-
-/** Conversation and review form for the selected PR. */
-export function PrConversation({ detail }: { detail: RpcPrDetail }) {
-	const t = useT();
-	const scope = useFocusedScope();
-	const { device } = scope;
-	const number = detail.number;
-	const commentsKey = `pr:comments:${scope.cwd}:${number}`;
-	const [comments, setComments] = useState<RpcPrComments | null>(
-		() => lastRead<RpcPrComments>(scope.device, commentsKey) ?? null,
-	);
-	const [error, setError] = useState<string | null>(null);
-	const [loading, setLoading] = useState(false);
-	const [text, setText] = useState("");
-	const [busy, setBusy] = useState<string | null>(null);
-
-	const load = useCallback(async () => {
-		setLoading(true);
-		setError(null);
-		try {
-			const response = await window.omp.rpc.command({ type: "pr_comments", number });
-			if (!response.success) throw new Error(response.error ?? t("rpc.failed"));
-			const data = response.data as RpcPrComments;
-			setComments(data);
-			rememberRead(device, commentsKey, data);
-		} catch (cause) {
-			setError(errorDetail(cause));
-		} finally {
-			setLoading(false);
-		}
-	}, [number, t, device, commentsKey]);
-
-	useEffect(() => {
-		setComments(lastRead<RpcPrComments>(device, commentsKey) ?? null);
-		void load();
-	}, [load, device, commentsKey]);
-
-	const submit = async (event: "comment" | "approve" | "request_changes") => {
-		setBusy(event);
-		const command: RpcCommand =
-			event === "comment"
-				? { type: "pr_comment", number, body: text }
-				: { type: "pr_review", number, event, body: text };
-		const done = await runPr(command, t("prCenter.review.failed"));
-		setBusy(null);
-		if (!done) return;
-		setText("");
-		toast({ variant: "success", message: t(`prCenter.review.done.${event}`) });
-		void load();
-		if (event !== "comment") void usePrCenterStore.getState().reloadSelected();
-	};
-
-	const open = !detail.state || detail.state === "OPEN";
-	return (
-		<section aria-label={t("prCenter.section.conversation")} className="flex flex-col gap-2">
-			<div className="flex items-center gap-2">
-				<h3 className="text-sc-sm font-semibold text-(--sc-text-secondary)">
-					{t("prCenter.section.conversation")}
-					{comments && ` (${comments.entries.length})`}
-				</h3>
-				<IconButton
-					className="ml-auto"
-					icon={<RefreshCw />}
-					label={t("common.refresh")}
-					loading={loading}
-					onClick={() => void load()}
-					size="sm"
-				/>
-			</div>
-			{error && <InlineNotice detail={error} live title={t("prCenter.review.loadFailed")} tone="danger" />}
-			{!comments && !error ? (
-				<div aria-label={t("prCenter.loading")} className="flex flex-col gap-2" role="status">
-					{[0, 1].map(index => (
-						<Card aria-hidden className="flex flex-col gap-2" key={index} padding="sm">
-							<Skeleton className="h-3 w-32" />
-							<Skeleton className="h-3 w-[80%]" />
-						</Card>
-					))}
-				</div>
-			) : comments && comments.entries.length === 0 ? (
-				<p className="text-sc-sm text-(--sc-text-muted)">{t("prCenter.review.none")}</p>
-			) : (
-				<ul className="flex flex-col gap-2">
-					{comments?.entries.map((entry, index) => (
-						<li key={`${entry.createdAt}:${index}`}>
-							<Card className="flex flex-col gap-1" padding="sm">
-								<div className="flex flex-wrap items-center gap-2 text-sc-xs text-(--sc-text-muted)">
-									<span className="text-(--sc-text-secondary)">@{entry.author}</span>
-									{entry.kind === "review" && entry.state && (
-										<Badge variant={REVIEW_STATE_TONE[entry.state] ?? "default"}>
-											{t(`prCenter.review.state.${entry.state}`)}
-										</Badge>
-									)}
-									{entry.kind === "inline" && entry.path && (
-										<span className="font-mono">
-											{entry.path}
-											{entry.line ? `:${entry.line}` : ""}
-										</span>
-									)}
-									<span className="ml-auto">{formatTimeAgo(entry.createdAt)}</span>
-								</div>
-								{entry.body.trim() && (
-									<div className="text-sc-sm">
-										<MarkdownRenderer content={entry.body} />
-									</div>
-								)}
-							</Card>
-						</li>
-					))}
-				</ul>
-			)}
-			{open && (
-				<div className="flex flex-col gap-2 pt-1">
-					<TextArea
-						aria-label={t("prCenter.review.placeholder")}
-						autoGrow
-						onChange={event => setText(event.target.value)}
-						onInput={event => setText(event.currentTarget.value)}
-						placeholder={t("prCenter.review.placeholder")}
-						rows={3}
-						value={text}
-					/>
-					<div className="flex flex-wrap justify-end gap-2">
-						<Button
-							disabled={busy !== null || !text.trim()}
-							icon={<MessageSquare />}
-							loading={busy === "comment"}
-							onClick={() => void submit("comment")}
-							size="sm"
-							variant="secondary"
-						>
-							{t("prCenter.review.comment")}
-						</Button>
-						<Button
-							disabled={busy !== null || !text.trim()}
-							icon={<XCircle />}
-							loading={busy === "request_changes"}
-							onClick={() => void submit("request_changes")}
-							size="sm"
-							variant="secondary"
-						>
-							{t("prCenter.review.requestChanges")}
-						</Button>
-						<Button
-							disabled={busy !== null}
-							icon={<CheckCircle2 />}
-							loading={busy === "approve"}
-							onClick={() => void submit("approve")}
-							size="sm"
-							variant="primary"
-						>
-							{t("prCenter.review.approve")}
-						</Button>
-					</div>
-				</div>
-			)}
-		</section>
 	);
 }

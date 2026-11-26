@@ -684,11 +684,11 @@ test("responsive smoke 1280 Windows window: the side panel's buttons sit below t
 		header.boundingBox(),
 	]);
 	if (!close || !views || !title || !box) throw new Error("expected the panel header, its title, views and close");
-	// Windows draws minimize, maximize and close in the top 48 px over the header's right end: the panel's own
-	// buttons are on the row below, the title alone in the caption band.
-	expect(title.y).toBeLessThan(box.y + 48);
-	expect(close.y).toBeGreaterThanOrEqual(box.y + 48);
-	expect(views.y).toBeGreaterThanOrEqual(box.y + 48);
+	// Windows draws minimize, maximize and close in the top 36 px (the caption band, one Orca top bar) over the
+	// header's right end: the panel's own buttons are on the row below, the title alone in the caption band.
+	expect(title.y).toBeLessThan(box.y + 36);
+	expect(close.y).toBeGreaterThanOrEqual(box.y + 36);
+	expect(views.y).toBeGreaterThanOrEqual(box.y + 36);
 	expect(close.x + close.width).toBeGreaterThan(views.x + views.width);
 	await page.context().close();
 });

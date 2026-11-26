@@ -457,6 +457,13 @@ impl Client {
                 json!({"deviceId": self.device_id, "name": name, "reason": failure.code, "wasOnlineMs": 0}),
             );
         }
+        // The host's gate refused this device by a person's choice: a timer would only be refused again, so only
+        // `connect` or a wake signal (focus, unlock, online, the node returning) tries again (Orca P100).
+        if matches!(failure.code.as_str(), "not_allowed" | "blocked") {
+            clear(&mut inner.retry);
+            self.set_state(&mut inner, LinkState::Offline);
+            return;
+        }
         let within = clock::now_ms().saturating_sub(since) < REFUSED_RETRY_WINDOW_MS;
         // Armed before `offline` is told: main may advance the test clock the moment it hears it.
         self.schedule_retry(&mut inner, refused && within);

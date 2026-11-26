@@ -52,9 +52,9 @@ export const WORK_BOARD_MIN_TRANSCRIPT = 503;
 /**
  * Whether the board docks in a pane this wide when the transcript column may narrow (below its 46rem) to make room:
  * the text keeps at least `WORK_BOARD_MIN_TRANSCRIPT` px after the board, its gap and the column's paddings.
- * Measured (web build, sidebar at its default 248 px): with the sidebar open, iPad Pro 12.9" sideways (1366) keeps
- * 763 px of text, iPad Pro 11" (1194) 601, iPad Air (1180) 588 and iPad mini (1133) 544, so all dock; a 1024 px
- * tablet (776 px pane, 441 px) keeps the strip until its sidebar folds.
+ * Measured (web build, sidebar at its default 280 px): with the sidebar open, iPad Pro 12.9" sideways (1366) keeps
+ * 731 px of text, iPad Air (1180) 556 and iPad mini (1133) 512, so all dock; a 1024 px tablet (744 px pane) keeps the
+ * strip until its sidebar folds.
  */
 export function workBoardFitsNarrowed(paneWidth: number): boolean {
 	return paneWidth - WORK_BOARD_WIDTH - WORK_BOARD_GAP - 2 * columnPad(paneWidth) >= WORK_BOARD_MIN_TRANSCRIPT;

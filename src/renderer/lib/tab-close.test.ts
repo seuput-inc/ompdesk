@@ -7,6 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { IpcSpawnTabPayload, IpcTabInfo } from "../../shared/ipc-types";
+import { useReviewNotesStore } from "../stores/review-notes";
 import { useSessionStore } from "../stores/session";
 import { type SessionTab, useTabsStore } from "../stores/tabs";
 import { useUiStore } from "../stores/ui";
@@ -102,6 +103,19 @@ describe("closeActiveTab", () => {
 		expect(closeActiveTab()).toBe("closed");
 		await vi.waitFor(() => expect(omp.tabs.close).toHaveBeenCalledWith("a"));
 		expect(useUiStore.getState().armedCloseTab).toBeNull();
+		expect(useTabsStore.getState().tabs.map(entry => entry.id)).toEqual(["b"]);
+	});
+
+	it("arms a tab with unsent review notes, and its second press drops a sessionless tab's notes with it", async () => {
+		useTabsStore.setState({ tabs: [tab("a"), tab("b")], activeTabId: "a" });
+		useReviewNotesStore
+			.getState()
+			.add({ owner: "|t:a", anchor: { kind: "diff", path: "x.ts", lines: null }, body: "n" });
+
+		expect(closeActiveTab()).toBe("armed");
+		expect(omp.tabs.close).not.toHaveBeenCalled();
+		expect(closeActiveTab()).toBe("closed");
+		await vi.waitFor(() => expect(useReviewNotesStore.getState().notes).toEqual([]));
 		expect(useTabsStore.getState().tabs.map(entry => entry.id)).toEqual(["b"]);
 	});
 

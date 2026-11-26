@@ -122,3 +122,76 @@ export function clampFontScale(percent: number): number {
 export function fontSizeFor(percent: number): number {
 	return Math.round((TERMINAL_BASE_FONT_PX * clampFontScale(percent)) / 100);
 }
+
+/** Where a device counts its key bar presses (per device: each phone learns its own hands). */
+export const KEY_USE_STORAGE = "omp.terminalKeyUse";
+
+/**
+ * The bar with the keys this device presses most first (Orca FM54 lets a person sort and hide them in settings; here
+ * the bar learns it, settings-layout-look › Minimal settings). Ties and unused keys keep the default order. The panel
+ * sorts once when the bar opens, so a key never moves under a finger.
+ */
+export function keysByUse(counts: Readonly<Record<string, number>>): TerminalKey[] {
+	return TERMINAL_KEYS.map((key, index) => ({ key, index, uses: counts[key.id] ?? 0 }))
+		.sort((a, b) => b.uses - a.uses || a.index - b.index)
+		.map(entry => entry.key);
+}
+
+export function readKeyUse(storage: Pick<Storage, "getItem"> | undefined): Record<string, number> {
+	try {
+		const parsed: unknown = JSON.parse(storage?.getItem(KEY_USE_STORAGE) ?? "{}");
+		if (!parsed || typeof parsed !== "object") return {};
+		return Object.fromEntries(
+			Object.entries(parsed).filter(
+				(entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0,
+			),
+		);
+	} catch {
+		return {};
+	}
+}
+
+export function noteKeyUse(storage: Pick<Storage, "getItem" | "setItem"> | undefined, id: string): void {
+	const counts = readKeyUse(storage);
+	counts[id] = (counts[id] ?? 0) + 1;
+	try {
+		storage?.setItem(KEY_USE_STORAGE, JSON.stringify(counts));
+	} catch {
+		// Storage may be blocked (private mode): the bar keeps its order.
+	}
+}
+
+/**
+ * macOS Option+B/F/D as readline's word motions (ESC b, ESC f, ESC d) while Option still composes text, so accents
+ * and other layouts keep working (Orca `terminal-option-shortcut-policy.ts`: with no native input-source id, Option
+ * composes and only the US Option layer's ∫ ƒ ∂ become motions). Null for any other key.
+ */
+export function optionWordMotion(event: {
+	key: string;
+	code?: string;
+	altKey: boolean;
+	metaKey: boolean;
+	ctrlKey: boolean;
+	shiftKey: boolean;
+}): string | null {
+	if (!event.altKey || event.metaKey || event.ctrlKey || event.shiftKey) return null;
+	const motion: Record<string, [string, string]> = {
+		KeyB: ["∫", `${ESC}b`],
+		KeyF: ["ƒ", `${ESC}f`],
+		KeyD: ["∂", `${ESC}d`],
+	};
+	const entry = event.code ? motion[event.code] : undefined;
+	return entry && event.key === entry[0] ? entry[1] : null;
+}
+
+/** ⌘= ⌘− ⌘0 (Ctrl on Windows) in a focused terminal: its text size, not the window's. */
+export function zoomKey(
+	event: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean },
+	mac: boolean,
+): "larger" | "smaller" | "reset" | null {
+	if ((mac ? !event.metaKey || event.ctrlKey : !event.ctrlKey || event.metaKey) || event.altKey) return null;
+	if (event.key === "=" || event.key === "+") return "larger";
+	if (event.key === "-" || event.key === "_") return "smaller";
+	if (event.key === "0") return "reset";
+	return null;
+}

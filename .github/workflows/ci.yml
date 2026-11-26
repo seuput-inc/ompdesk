@@ -273,14 +273,44 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+  # OMPdesk's native binaries for the three win-platform shards, built once per run. A native-source change
+  # misses the `ompdesk-bin` cache, and each shard built them itself: 10-11 min of shard 1's 20 (main
+  # 45678932216, 45679208132, 45686198219, cancelled at the limit). Here a miss builds and saves the cache
+  # at once (.github/actions/install), so every shard's install restores it and only checks it.
+  win-native-bin:
+    needs: gate
+    if: "!cancelled() && ((github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'release: v')) || (github.event_name == 'workflow_dispatch' && (inputs.win_platform || inputs.batch)))"
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read # the failure report reads this run's jobs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - name: Put bun's cache on the workspace volume
+        shell: bash
+        run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/install
+        with:
+          electron: "false"
+          native: "true"
+      - if: failure()
+        shell: bash
+        run: bash scripts/ci-failure.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+
   # release.yml's `win` pre-flight half: the tests outside src/renderer on
   # Windows (paths, PATH lookup, cmd.exe shims, spawn, named pipes, file modes),
   # in three shards as release.yml's `win-platform`.
   # Pushes to main and batch runs: a pull request runs Linux alone.
   win-platform:
     name: win-platform (${{ matrix.shard }}/3)
-    needs: gate
-    if: "!cancelled() && ((github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'release: v')) || (github.event_name == 'workflow_dispatch' && (inputs.win_platform || inputs.batch)))"
+    needs: [gate, win-native-bin]
+    if: "!cancelled() && needs.win-native-bin.result == 'success' && ((github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'release: v')) || (github.event_name == 'workflow_dispatch' && (inputs.win_platform || inputs.batch)))"
     runs-on: windows-latest
     timeout-minutes: 20
     permissions:

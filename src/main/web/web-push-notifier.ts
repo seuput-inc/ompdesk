@@ -2,13 +2,15 @@
  * Web Push for paired phones, driven by what tabs do (`SidecarPool.observeTabs`): a turn that settled idle (after
  * a short debounce, so a retry or a follow-up that restarts it stays quiet), a failed turn, a blocking ask, and an
  * ask that went away (answered by any window, withdrawn, its tab ended), which retracts its notification with a
- * silent `clear` push.
+ * silent `clear` push. A tab the person looked at on a desktop window or a page (`seen`) retracts its banners too.
  *
  * The rules are the desktop banners' (notification-batch.ts): ask > error > completion, one entry per tab, the first
  * event of a burst at once and one summary at the end of the 4 s window. Each device has its own window (its id is the
  * "window" of a `NotificationBatcher` kept for pushes), fed only the categories the device switched on. A device
- * with a page in the foreground is never pushed (`visible`): its page shows an in-app toast. A device that hides
- * content gets generic titles and no body. The text follows the host's UI language.
+ * with a page in the foreground is never pushed (`visible`): its page shows an in-app toast. Nothing is pushed while
+ * the person is at a desktop (`desktopAway` false, presence.ts) or about a project whose notifications are muted. A
+ * device that hides content gets generic titles and no body. The text follows the host's UI language. Every push
+ * carries the count of tabs waiting on the person, the phone's app badge.
  */
 import type { IpcTabRunOutcome } from "../../shared/ipc-types";
 import { notificationSummary } from "../../shared/notification-summary";
@@ -51,6 +53,10 @@ export interface WebPushNotifierDeps {
 	language: () => UiLanguage;
 	setTimer: (fn: () => void, ms: number) => unknown;
 	clearTimer: (handle: unknown) => void;
+	/** False while the person is at a desktop (presence.ts): nothing is pushed then. Absent or undefined: pushed. */
+	desktopAway?: () => boolean | undefined;
+	/** The tab's project has its notifications muted (its project menu): nothing about it is pushed. */
+	muted?: (tabId: string) => boolean;
 }
 
 interface OpenAsk {
@@ -84,6 +90,8 @@ export class WebPushNotifier {
 	readonly #asks = new Map<string, OpenAsk>();
 	/** The tag a device's next summary replaces (the banner it closed). */
 	readonly #replacing = new Map<number, string>();
+	/** Devices a lone banner tagged with the tab went to and no `clear` retracted yet: what `seen` must reach. */
+	readonly #bannerTo = new Map<string, Set<string>>();
 
 	constructor(deps: WebPushNotifierDeps) {
 		this.#deps = deps;
@@ -114,6 +122,7 @@ export class WebPushNotifier {
 				this.#cancelSettle(activity.tabId);
 				for (const [requestId, ask] of [...this.#asks])
 					if (ask.tabId === activity.tabId) this.#askClosed(requestId);
+				this.#bannerTo.delete(activity.tabId);
 				return;
 		}
 	}
@@ -124,6 +133,19 @@ export class WebPushNotifier {
 	 */
 	notice(tabId: string, notice: { kind: "completion" | "error"; title: string; body: string }): void {
 		this.#feed(notice.kind, tabId, notice.title, notice.body);
+	}
+
+	/**
+	 * The person looked at the tab (a focused desktop window or a visible page made it shown): its banners on the
+	 * phones are retracted and a pending summary no longer counts it. Its ask, still open, is not answered by this.
+	 */
+	seen(tabId: string): void {
+		for (const key of this.#deviceOf.keys()) this.#batcher.forget(key, tabId);
+		const devices = this.#bannerTo.get(tabId);
+		if (!devices) return;
+		this.#bannerTo.delete(tabId);
+		for (const ask of this.#asks.values()) if (ask.tabId === tabId) ask.pushedTo.clear();
+		for (const deviceId of devices) if (!this.#deps.visible(deviceId)) this.#clear(deviceId, tabId);
 	}
 
 	/** A device was revoked: its pending summary has nobody to go to. */
@@ -138,6 +160,7 @@ export class WebPushNotifier {
 			ask.pushedTo.delete(deviceId);
 			ask.fedTo.delete(deviceId);
 		}
+		for (const devices of this.#bannerTo.values()) devices.delete(deviceId);
 	}
 
 	dispose(): void {
@@ -145,6 +168,7 @@ export class WebPushNotifier {
 		this.#settling.clear();
 		this.#batcher.dispose();
 		this.#asks.clear();
+		this.#bannerTo.clear();
 	}
 
 	#cancelSettle(tabId: string): void {
@@ -208,21 +232,29 @@ export class WebPushNotifier {
 		for (const deviceId of ask.pushedTo) {
 			// Another ask of the tab still owns the tag's banner; a device looking at its page closes the banner itself.
 			if (stillAsking.has(deviceId) || this.#deps.visible(deviceId)) continue;
-			const clear: WebPushPayload = {
-				v: 1,
-				kind: "clear",
-				title: "",
-				body: "",
-				tabId: ask.tabId,
-				tag: tabTag(ask.tabId),
-				silent: true,
-			};
-			this.#push(this.#deps.devices.get(deviceId), clear, { ttl: TTL_CLEAR_S, urgency: "normal" });
+			this.#clear(deviceId, ask.tabId);
 		}
+	}
+
+	/** A silent `clear` of the tab's banner on one device. */
+	#clear(deviceId: string, tabId: string): void {
+		this.#bannerTo.get(tabId)?.delete(deviceId);
+		const clear: WebPushPayload = {
+			v: 1,
+			kind: "clear",
+			title: "",
+			body: "",
+			tabId,
+			tag: tabTag(tabId),
+			silent: true,
+		};
+		this.#push(this.#deps.devices.get(deviceId), clear, { ttl: TTL_CLEAR_S, urgency: "normal" });
 	}
 
 	/** Every device that wants `kind` and is not looking at its page gets the event into its own notification window. */
 	#feed(kind: NoticeKind, tabId: string, title: string, body: string, ask?: OpenAsk): void {
+		// The person is at a desktop, where the tab shows its state; a muted project tells nobody.
+		if (this.#deps.desktopAway?.() === false || this.#deps.muted?.(tabId)) return;
 		for (const device of this.#deps.devices.list()) {
 			const push = pushSettingsOf(device);
 			if (!push.subscription || !push.categories.includes(kind) || this.#deps.visible(device.deviceId)) continue;
@@ -278,6 +310,10 @@ export class WebPushNotifier {
 				...(notice.tabId ? { tabId: notice.tabId } : {}),
 				tag: notice.tabId ? tabTag(notice.tabId) : BATCH_TAG,
 			};
+			if (notice.tabId) {
+				const shown = this.#bannerTo.get(notice.tabId) ?? new Set<string>();
+				this.#bannerTo.set(notice.tabId, shown.add(deviceId));
+			}
 			if (info.kind === "ask" && notice.tabId) {
 				for (const ask of this.#asks.values()) if (ask.tabId === notice.tabId) ask.pushedTo.add(deviceId);
 			}
@@ -297,7 +333,9 @@ export class WebPushNotifier {
 	#push(device: WebDevice | undefined, payload: WebPushPayload, options: PushOptions): void {
 		const subscription = device && pushSettingsOf(device).subscription;
 		if (!device || !subscription) return;
-		void this.#deps.sender.send(subscription, payload, options).then(result => {
+		// The phone's app badge: the tabs that wait on the person now.
+		const badge = new Set([...this.#asks.values()].map(ask => ask.tabId)).size;
+		void this.#deps.sender.send(subscription, { ...payload, badge }, options).then(result => {
 			if (result === "gone") this.#deps.devices.forgetPushSubscription(device.deviceId, subscription.endpoint);
 		});
 	}

@@ -11,6 +11,9 @@ import { act } from "react";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { RpcGitChanges } from "../../../shared/rpc-types";
 import { I18nProvider } from "../../lib/i18n";
+import { useReviewNotesStore } from "../../stores/review-notes";
+import { setFocusedSessionRuntime } from "../../stores/session-runtime-context";
+import { type SessionTab, useTabsStore } from "../../stores/tabs";
 import { RepositoryChanges } from "./RepositoryChanges";
 
 // What the panel last read of this checkout (lib/last-read.ts): a test seeds it; nothing is written back, so the
@@ -112,6 +115,9 @@ function refreshButton(): TestElement {
 
 afterEach(async () => {
 	lastReads.value = undefined;
+	useReviewNotesStore.getState().reset();
+	useTabsStore.getState().reset();
+	setFocusedSessionRuntime(null);
 	if (root) {
 		await act(async () => {
 			root.unmount();
@@ -186,6 +192,52 @@ describe("RepositoryChanges", () => {
 		await flush();
 		// 1524 needs four digits; a three-digit gutter wrapped it onto a second line.
 		expect(document.querySelector(".omp-pane-diff")?.getAttribute("style")).toContain("--omp-gutter-digits:4");
+	});
+
+	it("takes a note on a range of the new side and lists it in the shelf, ready to send", async () => {
+		const tab: Pick<SessionTab, "id" | "cwd" | "sessionId"> = { id: "tab-1", cwd: "/work", sessionId: "s-1" };
+		useTabsStore.setState({ tabs: [tab as SessionTab], activeTabId: "tab-1", split: null });
+		setFocusedSessionRuntime("tab-1");
+		const getGitDiff = vi.fn(async (path: string) => ({
+			success: true,
+			data: {
+				path,
+				kind: "text",
+				truncated: false,
+				diff: "--- a/a.ts\n+++ b/a.ts\n@@ -1,2 +1,3 @@\n ctx\n-old\n+new\n+more\n",
+			},
+		}));
+		Object.assign(window, {
+			omp: { rpc: { getGitChanges: vi.fn(async () => ({ success: true, data: changes("a.ts") })), getGitDiff } },
+		});
+		await mount();
+		await click(queryAll("button").find(button => button.getAttribute("title") === "a.ts")!);
+		await flush();
+		// The removed line has no line on the new side to note.
+		expect(queryAll("[data-note-add]").map(button => button.getAttribute("data-note-add"))).toEqual(["1", "2", "3"]);
+		await click(document.querySelector('[data-note-add="2"]') as unknown as TestElement);
+		const shift = new Event("click", { bubbles: true, cancelable: true });
+		Object.defineProperty(shift, "shiftKey", { value: true });
+		await dispatch(document.querySelector('[data-note-add="3"]') as unknown as TestElement, shift);
+		expect(queryAll("[data-note-marked]")).toHaveLength(2);
+		const field = document.querySelector("[data-note-editor] textarea") as unknown as TestElement & { value: string };
+		expect(field.getAttribute("aria-label")).toBe("Note on Lines 2–3");
+		// React's value tracker ignores linkedom input events: call the field's onChange as typing would.
+		field.value = "Name it better";
+		const record: Record<string, unknown> = Object(field);
+		const propsKey = Object.getOwnPropertyNames(record).find(key => key.startsWith("__reactProps$"));
+		const props = propsKey ? (record[propsKey] as { onChange?: (event: object) => void }) : undefined;
+		await act(async () => props?.onChange?.({ target: field, currentTarget: field }));
+		await click(queryAll("button").find(button => button.textContent === "Save note")!);
+		expect(useReviewNotesStore.getState().notes).toMatchObject([
+			{
+				owner: "|s:s-1",
+				anchor: { kind: "diff", path: "a.ts", lines: { start: 2, end: 3 } },
+				body: "Name it better",
+			},
+		]);
+		expect(document.querySelector("[data-notes-shelf]")?.textContent).toContain("Notes");
+		expect(document.querySelector("[data-note-editor]")).toBeNull();
 	});
 	it("keeps the loaded file list on screen when a refresh fails", async () => {
 		installMockOmp(async () => ({

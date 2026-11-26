@@ -704,6 +704,31 @@ export const PR_DETAIL: RpcPrDetail = {
 	],
 };
 
+/**
+ * The GitHub center's and the PR detail's `github` answers: one host and the checkout's repository, an empty
+ * conversation and stack, no files viewed and no rows in any list; any other operation answers `{}`.
+ */
+export function githubFixture(op: string): unknown {
+	switch (op) {
+		case "hosts":
+			return { hosts: ["github.com"], repo: PR_REPO.repo };
+		case "pr_conversation":
+			return { id: "PR_412", bodyImages: {}, comments: [], reviews: [], threads: [], timeline: [] };
+		case "pr_files_viewed":
+			return { id: "PR_412", files: [] };
+		case "pr_stack":
+		case "assignable":
+		case "rate_limit":
+			return [];
+		case "pr_for_branch":
+			return null;
+		case "pr_template":
+			return { body: null };
+		default:
+			return op.endsWith("_list") ? [] : {};
+	}
+}
+
 /** What `get_advisor_stats` answers: an advisor on another vendor's model, three notes delivered (Run popover, Insights). */
 export const ADVISOR_USAGE: AdvisorUsage = {
 	configured: true,
