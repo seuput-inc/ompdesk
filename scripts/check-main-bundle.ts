@@ -510,7 +510,11 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // The session row menu's Move to <computer> (26 Nov 2026, cross-device-handoff): the item in `session-menu.ts` and the
 // call in `Sidebar.tsx`: 181 bytes over its base (e2e-nightly run 45780059698, omp/agent/cross-device-handoff at
 // 918cb6da4), added to the budget.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_255_193;
+// Bots of paired computers (27 Nov 2026, orca-bots-remote): the bots store lists each host's copy after this computer's
+// bots (`stores/bots.ts` `listedBots`), and the sidebar's Bots section names a host's bot's owner and greys it while the
+// host is away (`bots/BotOwner.tsx`, `stores/remote.ts` `useLostHosts`): 818 bytes over (2,249,448 in branch run
+// 45856181245 at 5b02a4989, whose budget was 2,248,630), added to the budget.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_256_011;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
