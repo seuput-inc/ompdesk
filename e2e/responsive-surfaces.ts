@@ -358,6 +358,14 @@ async function openWorkspaceDialog(page: Page, look: Look): Promise<void> {
 	await palette.locator('[data-command-name="switch-project"]').click();
 }
 
+/** The new task sheet through the command palette's "New task…" command (a real control on every view). */
+async function openNewTaskSheet(page: Page, look: Look): Promise<void> {
+	await clickCommandPalette(page, look);
+	const palette = page.locator('[role="dialog"]:has([data-palette-index])');
+	await palette.getByRole("combobox").fill("new-worktree-tab");
+	await palette.locator('[data-command-name="new-worktree-tab"]').click();
+}
+
 /** Put a prompt of the web host's sheet layer (`?host=1` pages) in front of the person. */
 async function hostPrompt(page: Page, prompt: Record<string, unknown>): Promise<void> {
 	await page.evaluate(prompt => {
@@ -2337,7 +2345,9 @@ export const SURFACES: readonly Surface[] = [
 						? openWorkspaceDialog(page, look)
 						: dialog.id === "dialog-model-setup"
 							? openModelSetup(page, look)
-							: ui(page, dialog.action, ...(dialog.args ?? [])),
+							: dialog.id === "dialog-worktree"
+								? openNewTaskSheet(page, look)
+								: ui(page, dialog.action, ...(dialog.args ?? [])),
 			...(dialog.id === "dialog-command-palette"
 				? { ready: "[role=dialog] [role=listbox]", parity: { session: "work" as const } }
 				: dialog.id === "dialog-workspace"
@@ -2351,7 +2361,13 @@ export const SURFACES: readonly Surface[] = [
 								ready: "[role=dialog] [data-model-setup-evidence] [aria-haspopup=listbox]",
 								parity: { session: "work" as const, after: closeOverlay },
 							}
-						: {}),
+						: dialog.id === "dialog-worktree"
+							? {
+									// The new task sheet over the work session's project, opened from the palette's command.
+									ready: "[role=dialog] [data-new-task-sheet] [data-new-task-project]",
+									parity: { session: "work" as const, after: closeOverlay },
+								}
+							: {}),
 			settle: 700,
 		}),
 	),
