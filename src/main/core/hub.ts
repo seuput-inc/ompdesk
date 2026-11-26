@@ -10,28 +10,35 @@
  * answer to a question main answered later) make the worker ping, and main fetches them on its next turn; one
  * consumer, so nothing is reordered.
  *
- * A wait that passes {@link HUB_CALL_DEADLINE_MS}, or a connection that ends, is the loss of the hub: every instance is
- * told (`lost`), the connection is dropped, and the next call opens a new one to the core then running; an instance
- * re-seeds itself there. Main's thread is never held longer than the deadline per wait.
+ * A wait the core leaves silent for {@link HUB_CALL_DEADLINE_MS}, a wait past {@link HUB_WAIT_LIMIT_MS}, or a connection
+ * that ends, is the loss of the hub: every instance is told (`lost`), the connection is dropped, and the next call opens
+ * a new one to the core then running; an instance re-seeds itself there. Main's thread is never held longer than the
+ * limit per wait.
  */
 import { Worker } from "node:worker_threads";
 import { tookHub } from "../slow-steps";
 import { CoreError, core } from "./process";
 
 /**
- * How long main's thread may wait for one answer. The hub answers from memory: measured calls take 0.03–0.2 ms, the
- * slowest rule (a 20-tab restore) a few ms. Two seconds is far past any of them and well under the hang watchdog's
- * 5 s (`HANG_TIMEOUT_MS`), so a hub that stopped answering is a lost hub, never a frozen window.
+ * How long the core may stay silent while main waits: no answer, no line, no heartbeat. The hub answers from memory:
+ * measured calls take 0.03–0.2 ms, the slowest rule (a 20-tab restore) a few ms. Two seconds of silence is far past
+ * any of them, so the core stopped answering (frozen, killed, starved): a lost hub. A core whose hub thread sits in one
+ * job (a blocking write, a slow page-in under swap) says so every 250 ms (`busy`, the core's `hub/mod.rs`), and main
+ * waits for it up to {@link HUB_WAIT_LIMIT_MS}: losing the core costs every tab's omp, the stock workers and the
+ * shells (the Mac mini, 26 Nov 2026: one stall killed the core and cut 13 running turns).
  */
 export const HUB_CALL_DEADLINE_MS = 2_000;
 
 /**
- * How long a connection's first waits may take while its worker has not reached the hub yet: the worker thread starts,
- * and the core may be starting (spawned by this very call). That is a process starting, not a hub that stopped
- * answering, and on a loaded Windows runner it took over 2 s. Still under the hang watchdog's 5 s, the owner's bound
- * on any wait of main's thread. Once connected, every wait has {@link HUB_CALL_DEADLINE_MS}.
+ * The longest main's thread waits for one answer: while its worker has not reached the hub (the worker thread starts,
+ * and the core may be starting, spawned by this very call; over 2 s on a loaded Windows runner), and while the core
+ * says its hub thread is busy. Under the hang watchdog's 5 s, the owner's bound on any wait of main's thread; a hub
+ * thread busy past it counts as hung.
  */
-export const HUB_START_DEADLINE_MS = 4_000;
+export const HUB_WAIT_LIMIT_MS = 4_000;
+
+/** How often main's blocked thread looks whether the core is still sending (the core beats every 250 ms). */
+const HUB_SLICE_MS = 250;
 
 /** Control words of the shared buffer: [state, length]; the lines follow at {@link DATA_OFFSET}. */
 export const STATE = 0;
@@ -139,7 +146,13 @@ function connect(endpoint, deadline) {
 			while ((end = partial.indexOf("\\n")) >= 0) {
 				const text = partial.slice(0, end);
 				partial = partial.slice(end + 1);
-				if (text) lines.push(JSON.parse(text));
+				if (!text) continue;
+				const line = JSON.parse(text);
+				// A heartbeat: the hub's thread has sat in one job for busy.ms; it only keeps main waiting (lossTrace).
+				if (line.busy) {
+					times[2] = line.busy.ms;
+					times[3] = line.busy.request;
+				} else lines.push(line);
 			}
 			look();
 		});
@@ -154,13 +167,14 @@ function connect(endpoint, deadline) {
 
 const queued = [];
 parentPort.on("message", message => {
-	if (message.endpoint && !socket && !connecting) connect(message.endpoint, Date.now() + ${HUB_START_DEADLINE_MS});
+	if (message.endpoint && !socket && !connecting) connect(message.endpoint, Date.now() + ${HUB_WAIT_LIMIT_MS});
 	if (message.line) {
 		if (socket) socket.write(message.line);
 		else queued.push(message.line);
 	}
 	if (message.wait !== undefined) {
 		times[1] = performance.timeOrigin + performance.now();
+		times[2] = 0;
 		waiting = message.wait;
 		look();
 	}
@@ -212,14 +226,17 @@ export class Connection {
 	readonly control: Int32Array;
 	readonly generation: number;
 	dead: CoreError | null = null;
-	/** [last line from the core, last wait the worker took]: wall times the worker writes (`lossTrace`). */
+	/**
+	 * Written by the worker (`lossTrace`): [last line from the core, last wait the worker took] as wall times, then the
+	 * core's last heartbeat in this wait (0: none): [ms its hub thread had sat in one job, main's request it was].
+	 */
 	readonly times: Float64Array;
 
 	constructor(endpoint: { address: string; token: string }, generation: number) {
 		this.generation = generation;
 		this.sab = new SharedArrayBuffer(DATA_OFFSET + INITIAL_BYTES, { maxByteLength: DATA_OFFSET + MAX_BYTES });
 		this.control = new Int32Array(this.sab, 0, 4);
-		const times = new SharedArrayBuffer(16);
+		const times = new SharedArrayBuffer(32);
 		this.times = new Float64Array(times);
 		this.worker = new Worker(WORKER, { eval: true, name: "ompdesk-hub", workerData: { sab: this.sab, times } });
 		this.worker.unref();
@@ -228,11 +245,12 @@ export class Connection {
 }
 
 /**
- * Which side of a lost wait was silent, for the `abandoned` line: whether the hub's thread took main's wait at all (a
- * starved worker or a lost message), and when the core last sent it a line (a core that stopped answering).
+ * Which side of a lost wait was silent, for the `abandoned` line: whether main's worker took the wait at all (a starved
+ * worker or a lost message), when the core last sent it a line (a core that stopped answering), and, when the core
+ * kept beating, which job its hub thread sat in (the blocking work to move off it).
  */
-function lossTrace(times: Float64Array, waitedAt: number): string {
-	const [lastLine = 0, lastWait = 0] = times;
+function lossTrace(times: Float64Array, waitedAt: number, id: number | "drain"): string {
+	const [lastLine = 0, lastWait = 0, busyMs = 0, busyRequest = 0] = times;
 	const took =
 		lastWait >= waitedAt
 			? `its thread took the wait after ${Math.round(lastWait - waitedAt)} ms`
@@ -243,7 +261,13 @@ function lossTrace(times: Float64Array, waitedAt: number): string {
 			: lastLine >= waitedAt
 				? `the core's last line came ${Math.round(lastLine - waitedAt)} ms into the wait`
 				: `the core's last line came ${Math.round(waitedAt - lastLine)} ms before the wait`;
-	return `${took}; ${line}`;
+	if (busyMs <= 0) return `${took}; ${line}`;
+	const job = busyRequest === id ? "this call" : busyRequest === 0 ? "a job of its own" : `request ${busyRequest}`;
+	return `${took}; ${line}; the core's hub thread was ${Math.round(busyMs)} ms into ${job} at its last beat`;
+}
+
+function realNow(): number {
+	return realPerformance.timeOrigin + realPerformance.now();
 }
 
 export class Hub {
@@ -260,6 +284,12 @@ export class Hub {
 	readonly #calling = new Map<number, Line | null>();
 	readonly stats: HubStats = { calls: 0, waitsUs: [], totalUs: 0, methods: new Map() };
 	measuring = process.env.OMP_GUI_HUB_STATS === "1";
+	/** Where the hub listens: the running core's, or a test's that nobody answers. */
+	readonly #endpoint: () => { address: string; token: string; generation: number };
+
+	constructor(endpoint = () => core().hubEndpoint()) {
+		this.#endpoint = endpoint;
+	}
 
 	/** A new instance id, unique in this process (the core keys instances by it); the instance is opened with {@link open}. */
 	nextId(): number {
@@ -341,7 +371,7 @@ export class Hub {
 	#connect(): Connection {
 		const current = this.#connection;
 		if (current && !current.dead) return current;
-		const endpoint = core().hubEndpoint();
+		const endpoint = this.#endpoint();
 		const connection = new Connection(endpoint, endpoint.generation);
 		connection.worker.on("message", () => this.#drain(connection));
 		connection.worker.on("error", error =>
@@ -415,16 +445,22 @@ export class Hub {
 	}
 
 	/**
-	 * Waits for the worker's hand-over: {@link HUB_CALL_DEADLINE_MS} from a wait that began connected, and while the
-	 * worker has not reached the hub, slice after slice up to {@link HUB_START_DEADLINE_MS} in all.
+	 * Waits for the worker's hand-over until the core, once the worker reached it, sent nothing (no line, no heartbeat)
+	 * for {@link HUB_CALL_DEADLINE_MS}, or the wait reached {@link HUB_WAIT_LIMIT_MS}.
 	 */
-	#block(control: Int32Array): "ok" | "not-equal" | "timed-out" {
-		// Counted in slices, never read off the clock: a test's fake clock stands still while main's thread waits.
-		for (let slice = 1; ; slice++) {
-			const connected = Atomics.load(control, CONNECTED) === 1;
-			const outcome = Atomics.wait(control, STATE, WAITING, HUB_CALL_DEADLINE_MS);
-			if (outcome !== "timed-out" || connected || slice * HUB_CALL_DEADLINE_MS >= HUB_START_DEADLINE_MS)
-				return outcome;
+	#block(connection: Connection, waitedAt: number): "ok" | "not-equal" | "silent" | "limit" {
+		const { control, times } = connection;
+		// Silent since: the wait's start, the worker's last byte from the core, or the last look before it connected.
+		let since = waitedAt;
+		// Both bounds read main's real clock (`realPerformance`, never a test's fake one) against the worker's wall times,
+		// as `lossTrace` does: a timed wait oversleeps on a loaded computer, so counting slices would pass the limit.
+		for (;;) {
+			const left = waitedAt + HUB_WAIT_LIMIT_MS - realNow();
+			if (left <= 0) return "limit";
+			const outcome = Atomics.wait(control, STATE, WAITING, Math.min(HUB_SLICE_MS, left));
+			if (outcome !== "timed-out") return outcome;
+			if (Atomics.load(control, CONNECTED) !== 1) since = realNow();
+			else if (realNow() - Math.max(since, times[0] ?? 0) >= HUB_CALL_DEADLINE_MS) return "silent";
 		}
 	}
 
@@ -433,23 +469,21 @@ export class Hub {
 		const { control, worker } = connection;
 		Atomics.store(control, STATE, WAITING);
 		// Wall time on the real clock, as the worker writes its own (`lossTrace`).
-		const waitedAt = realPerformance.timeOrigin + realPerformance.now();
+		const waitedAt = realNow();
 		worker.postMessage({ wait: id });
 		const started = this.measuring ? performance.now() : 0;
-		const outcome = this.#block(control);
+		const outcome = this.#block(connection, waitedAt);
 		if (this.measuring) {
 			const us = Math.round((performance.now() - started) * 1000);
 			this.stats.waitsUs.push(us);
 			this.stats.totalUs += us;
 		}
-		if (outcome === "timed-out") {
-			this.#lose(
-				connection,
-				new CoreError(
-					"hub_lost",
-					`the hub did not answer within ${HUB_CALL_DEADLINE_MS} ms (${lossTrace(connection.times, waitedAt)})`,
-				),
-			);
+		if (outcome === "silent" || outcome === "limit") {
+			const reason =
+				outcome === "silent"
+					? `the hub did not answer and the core sent nothing for ${HUB_CALL_DEADLINE_MS} ms`
+					: `the hub did not answer within ${HUB_WAIT_LIMIT_MS} ms`;
+			this.#lose(connection, new CoreError("hub_lost", `${reason} (${lossTrace(connection.times, waitedAt, id)})`));
 			return [];
 		}
 		const length = Atomics.load(control, LENGTH);

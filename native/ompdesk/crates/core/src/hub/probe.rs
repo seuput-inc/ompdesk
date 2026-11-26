@@ -66,6 +66,13 @@ fn probe_call(id: u64, method: &str, params: &RawValue) -> Outcome {
             out.push(&json!({"k": "mark"}));
             Outcome::done()
         }
+        // Holds the hub thread for `ms`, as a blocking write or a slow page-in would, then answers `ms`.
+        "stall" => {
+            std::thread::sleep(std::time::Duration::from_millis(
+                params["ms"].as_u64().unwrap_or(0),
+            ));
+            Outcome::ok(&params["ms"])
+        }
         // Asks main and answers what main said; then pushes `after`.
         "ask" => Outcome::Later(Box::pin(async move {
             let answer = out.ask("probe", &json!({"x": 1})).await?;
