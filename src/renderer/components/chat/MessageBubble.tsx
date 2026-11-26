@@ -2,6 +2,7 @@ import { Archive, FileText, GitBranch, MoreHorizontal, Terminal } from "lucide-r
 import type { ReactNode } from "react";
 import { memo, useId, useLayoutEffect, useRef, useState } from "react";
 import { MAIL_CUSTOM_TYPE } from "../../../../resources/gui-bridge/agent-control-contracts";
+import { A2UI_TOOL } from "../../../../resources/gui-bridge/modes/a2ui-contracts";
 import { CI_MESSAGE_TYPE } from "../../../../resources/gui-bridge/modes/ci-watch-contracts";
 import { COMPUTER_USE_NOTICE_TYPE } from "../../../../resources/gui-bridge/modes/computer-use-contracts";
 import { MEMORY_RECALL_MESSAGE_TYPE } from "../../../../resources/gui-bridge/modes/memory-recall-contracts";
@@ -36,6 +37,7 @@ import {
 	InlineNotice,
 	MenuButton,
 } from "../common";
+import { A2uiChatCard } from "../tools";
 import { isAbsoluteChatPath, referencedFiles } from "../tools/media/chat-media";
 import { ToolImage } from "../tools/media/ToolImage";
 import { type RunningIndicator, ToolCard } from "../tools/ToolCard";
@@ -727,7 +729,11 @@ export const MessageBubble = memo(function MessageBubble({
 			}
 			case "toolCall": {
 				blocks.push(
-					<ToolCardWithResult key={toolEntryKey(block)} call={block} runningIndicator={runningIndicator} />,
+					block.name === A2UI_TOOL ? (
+						<A2uiChatCard key={toolEntryKey(block)} live toolCallId={toolEntryKey(block)} />
+					) : (
+						<ToolCardWithResult key={toolEntryKey(block)} call={block} runningIndicator={runningIndicator} />
+					),
 				);
 				break;
 			}
