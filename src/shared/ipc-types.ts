@@ -23,6 +23,7 @@ import type {
 	AiMemorySweep,
 	AiMemoryWriteInput,
 } from "./ai-memory";
+import type { BotConnectorsApi } from "./bot-connectors";
 import type { BotsApi } from "./bots";
 import type { CliToolId, CliUpdateState } from "./cli-update";
 import type { CreditSpendState } from "./credit-spend";
@@ -2430,6 +2431,8 @@ export interface OmpApi {
 	schedules: SchedulesApi;
 	/** This computer's bots and their items (the Bots page; src/shared/bots.ts). */
 	bots: BotsApi;
+	/** Bots' Slack apps for their connectors (a bot's page › Connectors); tokens go one way. */
+	botConnectors: BotConnectorsApi;
 	/** This computer's mail accounts for email routines (Settings › Schedules › Email accounts); passwords go one way. */
 	mailAccounts: MailAccountsApi;
 	/** This computer's Linear and Jira connections and their work items (Agents › GitHub's source bar); tokens go one way. */

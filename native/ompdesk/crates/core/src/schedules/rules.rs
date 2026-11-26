@@ -366,12 +366,31 @@ fn event_sound(event: Option<&Value>) -> bool {
                             .all(|login| login.as_str().is_some_and(is_github_login))
                 })
             });
+            let ask = event
+                .get("ask")
+                .is_none_or(|ask| ask.as_str().is_some_and(is_bot_handle));
             is_github_repo(&text_or_empty(event.get("repo")))
                 && non_empty_subset(event.get("events"), &GITHUB_EVENT_KINDS)
                 && from
+                && ask
                 && ["contains", "label"]
                     .iter()
                     .all(|name| event.get(*name).is_none_or(short))
+        }
+        // A bot's connectors (`routines/connectors.rs`): the account main keeps, who may ask, the bot's keyword.
+        Some("slack") => account_sound(event) && askers_sound(event),
+        Some("linear") => {
+            account_sound(event)
+                && askers_sound(event)
+                && event
+                    .get("handle")
+                    .and_then(Value::as_str)
+                    .is_some_and(is_bot_handle)
+        }
+        Some("google") => {
+            account_sound(event)
+                && integer(event.get("leadMinutes"))
+                    .is_some_and(|lead| (1.0..=1440.0).contains(&lead))
         }
         Some("files") => is_absolute(&text_or_empty(event.get("path"))),
         Some("git") => {
@@ -410,6 +429,38 @@ fn event_sound(event: Option<&Value>) -> bool {
         }
         _ => false,
     }
+}
+
+/// A connector's `account`: the id of what main keeps for it.
+fn account_sound(event: &serde_json::Map<String, Value>) -> bool {
+    event
+        .get("account")
+        .and_then(Value::as_str)
+        .is_some_and(|account| !js_trim(account).is_empty() && utf16_len(account) <= 200)
+}
+
+/// A connector's `from`: who may ask (ids, logins, e-mails, names, `*` for anyone), at least one.
+fn askers_sound(event: &serde_json::Map<String, Value>) -> bool {
+    event
+        .get("from")
+        .and_then(Value::as_array)
+        .is_some_and(|from| {
+            !from.is_empty()
+                && from.len() <= VALUES_MAX
+                && from.iter().all(|person| {
+                    person.as_str().is_some_and(|person| {
+                        !js_trim(person).is_empty() && utf16_len(person) <= 200
+                    })
+                })
+        })
+}
+
+/// The name a bot is asked by (`bot:<handle>`): a-z, 0-9 and `-`, at most 40.
+fn is_bot_handle(handle: &str) -> bool {
+    (1..=40).contains(&handle.len())
+        && handle
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 /// A GitHub login: letters, digits and hyphens, at most 39, not starting with a hyphen.

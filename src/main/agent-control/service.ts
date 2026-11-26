@@ -462,6 +462,8 @@ export interface AgentControlHost {
 	setOpener?(tabId: string, openerTabId: string): void;
 	/** A paired host's bot by name (`host.bots.home`): its home chat file; the host refuses unless this computer is in its reach. */
 	botHome?(device: string, name: string): Promise<{ path: string }>;
+	/** One reply through a bot's connector (`connectorCredential`): the credential main holds for that post only. */
+	connectorCredential?(service: string, account: string): Promise<unknown>;
 	/**
 	 * Every tombstone (`deleted-sessions.ts`): when the session was deleted, from any path and any launch (the
 	 * sidebar's Delete, `/delete`, a paired device), by its file and computer, or by its saved id alone.
@@ -1252,6 +1254,11 @@ export class AgentControl {
 				coded(() => {
 					if (!host.botHome) throw new Error("Paired computers' bots are not reachable here.");
 					return host.botHome(where, name);
+				}),
+			connectorCredential: ({ service, account }: { service: string; account: string }) =>
+				coded(() => {
+					if (!host.connectorCredential) throw new Error("A bot's connectors are not available here.");
+					return host.connectorCredential(service, account);
 				}),
 			setOpener: ({ tabId, openerTabId }: { tabId: string; openerTabId: string }) =>
 				coded(() => {

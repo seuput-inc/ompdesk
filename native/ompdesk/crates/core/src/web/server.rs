@@ -49,13 +49,14 @@ const PEER_CACHE_MAX: usize = 256;
 const HOOK_PREFIX: &str = "/hooks/";
 const HOOK_BODY_MAX_BYTES: usize = 64 * 1024;
 /// The headers a sender signs a webhook call with (`schedules/hooks.rs`): such a call may come without a bearer key.
-const HOOK_SIGNATURE_HEADERS: [&str; 6] = [
+const HOOK_SIGNATURE_HEADERS: [&str; 7] = [
     "webhook-signature",
     "x-hub-signature-256",
     "sentry-hook-signature",
     "linear-signature",
     "x-pagerduty-signature",
     "stripe-signature",
+    "x-slack-signature",
 ];
 const BLOB_URL_PREFIX: &str = "/blob/";
 const MAX_CONNECTIONS_PER_DEVICE: usize = 4;
@@ -820,6 +821,18 @@ impl Edge {
         };
         match service.webhook(request).await {
             HookOutcome::Fired => Ok(send_json(202, &serde_json::json!({ "ok": true }), &[])),
+            // Slack's URL check: the challenge it sent, as it asks for it back.
+            HookOutcome::Challenge => {
+                let challenge = serde_json::from_slice::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|body| body.get("challenge")?.as_str().map(str::to_owned))
+                    .unwrap_or_default();
+                Ok(send_json(
+                    200,
+                    &serde_json::json!({ "challenge": challenge }),
+                    &[],
+                ))
+            }
             HookOutcome::Unknown => Err(fail(404, "unknown_hook")),
             HookOutcome::Denied => Err(unauthorized()),
             HookOutcome::Off => Err(fail(409, "off")),

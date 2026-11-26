@@ -625,6 +625,17 @@ impl Host {
         }
     }
 
+    /// `connectorCredential {service, account}`: what one reply through a bot's connector posts with (`slack`: the
+    /// app's bot token; `github`: main's gh runner and home; `linear`: the tracker account with its header), from
+    /// main's keystore for that post only, never kept or told.
+    pub async fn connector_credential(&self, service: &str, account: &str) -> R<Value> {
+        self.ask(
+            "connectorCredential",
+            json!({ "service": service, "account": account }),
+        )
+        .await
+    }
+
     /// `setOpener {tabId, openerTabId}`: `openerTabId` becomes `tabId`'s opener, as a session it opened would have it
     /// (the pool's `setTabOpener`, kept across a relaunch): a session handed to a bot, or one whose lost opener the call
     /// journal names (`Runtime::recover_openers`).

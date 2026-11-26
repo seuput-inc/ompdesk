@@ -15,6 +15,7 @@ use serde_json::{Map, Value, json};
 use super::hooks;
 use super::rules::{self, Zone};
 use crate::control::js::string_of_value;
+use crate::routines::connectors::{self, SlackEvent};
 use crate::server::Fault;
 
 /// Event lines kept for the run after the running one (the newest).
@@ -184,6 +185,8 @@ pub struct HookCall {
     pub bearer: Option<String>,
     pub headers: BTreeMap<String, String>,
     pub body: Vec<u8>,
+    /// A bot's Slack connector's signing secret, handed over by main with the call (its keystore holds it).
+    pub secret: Option<String>,
 }
 
 struct Active {
@@ -292,6 +295,14 @@ fn webhook_event(schedule: &Object) -> Option<&Value> {
     schedule.get("frequency")?.get("event")
 }
 
+/// A bot's Slack connector's trigger (`connectors.rs`), when the schedule is one.
+fn slack_event(schedule: &Object) -> Option<&Value> {
+    let frequency = schedule.get("frequency")?;
+    let event = frequency.get("event")?;
+    (frequency.get("kind")?.as_str()? == "event" && event.get("source")?.as_str()? == "slack")
+        .then_some(event)
+}
+
 fn webhook_event_mut(schedule: &mut Object) -> Option<&mut Object> {
     webhook_key(schedule.get("frequency"))?;
     schedule
@@ -336,6 +347,45 @@ pub(crate) fn fence_untrusted(text: &str) -> String {
         .unwrap_or_default();
     let fence = "`".repeat((longest + 1).max(3));
     format!("{UNTRUSTED_LABEL}\n{fence}text\n{text}\n{fence}")
+}
+
+/// What fired a run as it is told it: the plain lines in one fence, then each ask of a bot's connector as OMPdesk's
+/// header (where it came from, where to reply) above a fence of its words.
+fn fired_text(details: &[String]) -> String {
+    let (asks, plain): (Vec<&String>, Vec<&String>) = details
+        .iter()
+        .partition(|detail| connectors::split(detail).is_some());
+    let mut parts = Vec::new();
+    if !plain.is_empty() {
+        let plain: Vec<&str> = plain.iter().map(|line| line.as_str()).collect();
+        parts.push(fence_untrusted(&plain.join("\n")));
+    }
+    for ask in asks {
+        if let Some((header, words)) = connectors::split(ask) {
+            parts.push(format!("{header}\n{}", fence_untrusted(words)));
+        }
+    }
+    parts.join("\n\n")
+}
+
+/// Whether a routine is a bot's connector, whose source writes asks (`connectors::asked`); only its lines may carry
+/// the separator, which any other trigger's line (a webhook's pick, a mail's subject) loses, so outside words can never
+/// pass as OMPdesk's header.
+fn asks(schedule: &Object) -> bool {
+    let Some(event) = schedule
+        .get("frequency")
+        .and_then(|frequency| frequency.get("event"))
+    else {
+        return false;
+    };
+    match event.get("source").and_then(Value::as_str) {
+        Some("slack" | "linear") => true,
+        Some("github") => event
+            .get("ask")
+            .and_then(Value::as_str)
+            .is_some_and(|ask| !ask.trim().is_empty()),
+        _ => false,
+    }
 }
 
 impl Engine {
@@ -695,7 +745,12 @@ impl Engine {
     /// A routine's event: a run now, or (true) kept for one more run after the running one.
     fn take_event(&mut self, at: usize, detail: &str) -> bool {
         let id = id_of(&self.schedules[at]).to_owned();
-        let mut line = rules::one_line(detail);
+        // A connector's ask keeps its words whole (they are quoted apart, `start_run`); any other line is one line.
+        let mut line = if asks(&self.schedules[at]) && connectors::split(detail).is_some() {
+            detail.to_owned()
+        } else {
+            rules::one_line(&detail.replace(connectors::ASKED, " "))
+        };
         if line.is_empty() {
             line = "The trigger fired".into();
         }
@@ -753,6 +808,13 @@ impl Engine {
 
     fn hook(&mut self, id: &str, call: &HookCall, told: Option<&str>, now: i64) -> &'static str {
         self.now = now;
+        if let Some(event) = self
+            .find(id)
+            .and_then(|at| slack_event(&self.schedules[at]))
+            .cloned()
+        {
+            return self.slack_call(id, &event, call);
+        }
         let Some(event) = self
             .find(id)
             .and_then(|at| webhook_event(&self.schedules[at]))
@@ -766,6 +828,62 @@ impl Engine {
             return "denied";
         }
         self.hook_call(id, &event, call, false, told)
+    }
+
+    /// A Slack app's Events API call for a bot's Slack connector: signed with the app's signing secret (Slack's v0, a
+    /// five-minute window), its URL check answered (`challenge`: the edge echoes Slack's challenge), and an event
+    /// read as the Socket Mode source reads it (`connectors::slack_event`); a redelivery of an event already taken,
+    /// by Slack's `event_id`, starts nothing.
+    fn slack_call(&mut self, id: &str, event: &Value, call: &HookCall) -> &'static str {
+        let secret = call.secret.as_deref().unwrap_or_default();
+        if let Err(reason) = hooks::verify(
+            hooks::Sender::Slack,
+            secret,
+            &call.headers,
+            &call.body,
+            self.now,
+        ) {
+            self.log_call(id, "refused", Some(reason), None, false);
+            self.changed();
+            return "denied";
+        }
+        let body: Value = serde_json::from_slice(&call.body).unwrap_or(Value::Null);
+        if body.get("type").and_then(Value::as_str) == Some("url_verification") {
+            return "challenge";
+        }
+        let Some(at) = self.routine(id) else {
+            self.log_call(id, "off", None, None, false);
+            self.changed();
+            return "off";
+        };
+        let SlackEvent::Asked { id: event_id, line } = connectors::slack_event(event, &body) else {
+            self.log_call(id, "ignored", None, None, false);
+            self.changed();
+            return "ignored";
+        };
+        let delivery = format!("event:{event_id}");
+        let seen = self.delivered.entry(id.to_owned()).or_default();
+        if seen.contains(&delivery) {
+            self.log_call(id, "duplicate", None, None, false);
+            self.changed();
+            return "duplicate";
+        }
+        seen.push_back(delivery);
+        if seen.len() > DELIVERIES_KEPT {
+            seen.pop_front();
+        }
+        self.call_seq += 1;
+        let call_id = format!("call-{}-{}", self.now, self.call_seq);
+        let queued = self.take_event(at, &line);
+        let run = self.active.get(id).and_then(|active| active.run.clone());
+        let (verdict, run) = if queued {
+            ("queued", None)
+        } else {
+            ("started", run)
+        };
+        self.log_call_as(&call_id, id, verdict, None, run, false);
+        self.changed();
+        "fired"
     }
 
     /// Whether a call may start its routine: its sender's signature once a secret is set (the key alone no longer
@@ -1126,6 +1244,7 @@ impl Engine {
                         "application/json".to_owned(),
                     )]),
                     body: body.to_string().into_bytes(),
+                    secret: None,
                 };
                 // The sample's own outcome is one of its recent calls; the state it changed is told already.
                 self.hook_call(&id, &event, &call, true, None);
@@ -1736,7 +1855,10 @@ impl Engine {
         charge: Option<u64>,
         details: Option<Vec<String>>,
     ) -> String {
-        let detail = details.map(|details| details.join("\n"));
+        // What fired it as the run is told it: plain lines in one fence, a connector's asks each with OMPdesk's own
+        // header outside its fence; the record keeps the plain text.
+        let fired = details.as_deref().map(fired_text);
+        let detail = details.map(|details| details.join("\n").replace(connectors::ASKED, "\n"));
         let id = (self.ids)();
         let schedule_id = id_of(&self.schedules[at]).to_owned();
         let mut run = json!({
@@ -1764,9 +1886,9 @@ impl Engine {
                 "{prompt}\n\nA test run, replaying its last event:\n{}",
                 fence_untrusted(detail)
             ),
-            Some(detail) => format!(
+            Some(_) => format!(
                 "{prompt}\n\nWhat fired this run:\n{}",
-                fence_untrusted(detail)
+                fired.unwrap_or_default()
             ),
         };
         // A fresh run whose result goes somewhere may say there is nothing to send.

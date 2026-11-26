@@ -20,6 +20,7 @@ mod app;
 mod auto;
 mod bot_files;
 mod bots;
+mod connectors;
 mod items;
 mod review;
 mod rooms;

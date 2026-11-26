@@ -14,8 +14,8 @@
  * - Who can ask (`BotPairedServersWhoCanAsk.tsx:1-201`, `BotAccessReach.tsx`, FK-B33): the devices paired with this
  *   computer whose agents may message the bot, and the summary of who can ask it.
  *
- * Connectors (Slack, GitHub, Linear, Google) and sharing are not here: connectors come with orca-bots-connectors,
- * sharing is Orca Cloud's.
+ * - Connectors (`BotConnectors.tsx`, FS79): where people can ask the bot (its Slack app, GitHub repositories, Linear
+ *   workspace, Google calendar) and who may. Sharing is Orca Cloud's and is not here.
  */
 import { BookOpen, Brain, ChevronLeft, ChevronRight, Copy, ImageUp, Laptop, Smile, Trash2, Users } from "lucide-react";
 import { useEffect, useId, useState } from "react";
@@ -46,6 +46,7 @@ import {
 } from "../common";
 import { ModelValueSelect } from "../settings/ModelValueSelect";
 import { BotAvatar } from "./BotAvatar";
+import { BotConnectorsSection } from "./BotConnectors";
 import { openBotChat } from "./bot-launch";
 import { BOT_MASCOT_COUNT, mascotUri, rasterizePicture } from "./bot-mascots";
 
@@ -263,6 +264,8 @@ function BotSettingsRoot({
 					title={t("bots.settings.skills")}
 				/>
 			</section>
+
+			<BotConnectorsSection bot={bot} />
 
 			<section className="flex flex-col gap-2">
 				<SectionLabel>{t("bots.settings.notifications")}</SectionLabel>

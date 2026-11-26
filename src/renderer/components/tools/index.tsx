@@ -275,6 +275,7 @@ const REGISTRY: Record<string, ComponentType<ToolRendererProps>> = {
 	yield: YieldRenderer,
 	a2ui: A2uiChatCard,
 	[AGENT_CONTROL_TOOLS.schedule]: ScheduleRenderer,
+	[AGENT_CONTROL_TOOLS.bot]: BotRenderer,
 	...NOTE_DEVICES,
 };
 
@@ -293,6 +294,20 @@ function ScheduleRenderer(props: ToolRendererProps) {
 	return (
 		<Suspense fallback={null}>
 			<LazyScheduleRenderer {...props} />
+		</Suspense>
+	);
+}
+
+// Its own chunk too: a bot's Connect card carries the connectors' setup (bots/BotConnectors), off the phone's first
+// screen.
+const LazyBotRenderer = lazyChunk(() =>
+	import("./renderers/BotRenderer").then(module => ({ default: module.BotRenderer })),
+);
+
+function BotRenderer(props: ToolRendererProps) {
+	return (
+		<Suspense fallback={null}>
+			<LazyBotRenderer {...props} />
 		</Suspense>
 	);
 }

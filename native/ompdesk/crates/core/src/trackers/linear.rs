@@ -633,6 +633,29 @@ pub(super) async fn comment(
     confirm(&data, "/commentCreate/success")
 }
 
+/// What asked a bot on Linear since `since` (ISO, exclusive): comments and new issues whose text holds `keyword`
+/// (`routines/connectors.rs` `linear_asks`), and who the key's owner is, in one read.
+pub(super) async fn asks(
+    ctx: &Ctx,
+    account: &Account,
+    keyword: &str,
+    since: &str,
+) -> Result<Value, Fault> {
+    let (data, _) = gql(
+        ctx,
+        &account.id,
+        &account.authorization,
+        "query OmpdeskLinearAsks($since: DateTimeOrDuration!, $keyword: String!) { viewer { id } \
+         comments(first: 50, orderBy: createdAt, filter: { createdAt: { gt: $since }, body: { containsIgnoreCase: $keyword } }) \
+         { nodes { id body createdAt url user { id name displayName email } issue { id identifier title url } } } \
+         issues(first: 50, orderBy: createdAt, filter: { createdAt: { gt: $since }, description: { containsIgnoreCase: $keyword } }) \
+         { nodes { id identifier title url description createdAt creator { id name displayName email } } } }",
+        json!({ "since": since, "keyword": keyword }),
+    )
+    .await?;
+    Ok(data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::tests::test_item;

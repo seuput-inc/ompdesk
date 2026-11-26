@@ -37,6 +37,7 @@ import {
 	privacyPaneUrl,
 	reviewFromDevice,
 } from "../shared/agent-control";
+import { BOT_CONNECTORS_COMMAND } from "../shared/bot-connectors";
 import { BOTS_COMMAND, BOTS_FOLDER, type BotsCall } from "../shared/bots";
 import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
@@ -164,6 +165,7 @@ import {
 	readCheckoutClaims,
 	readCheckoutPlace,
 } from "./checkout-peers";
+import { type ConnectorAccounts, parseBotConnectorsRequest } from "./connector-accounts";
 import { createControlBackend } from "./control-socket/backend";
 import { controlSocketFailure, startControlSocket } from "./control-socket/index";
 import { defaultWorkspace } from "./default-workspace";
@@ -173,6 +175,7 @@ import { savedWorktreesForSpawn } from "./disk/saved-worktrees";
 import { openInExternalEditor } from "./editor";
 import { getMainLanguage, mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
+import { ghRunner, resolveBin } from "./local/git/exec";
 import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { noteTypedPrompt } from "./local/prompt-origin";
@@ -342,7 +345,9 @@ export interface IpcDeps {
 	/** The owner's mail accounts for email routines, created with the Schedules service: read per use. */
 	mailAccounts?: () => Pick<MailAccounts, "state" | "save" | "remove" | "test"> | null;
 	/** This computer's Linear and Jira connections (tracker-accounts.ts): read per use. */
-	trackerAccounts?: () => Pick<TrackerAccounts, "command" | "accounts"> | null;
+	trackerAccounts?: () => Pick<TrackerAccounts, "command" | "accounts" | "linearAccount"> | null;
+	/** Bots' Slack apps (connector-accounts.ts): read per use. */
+	connectorAccounts?: () => Pick<ConnectorAccounts, "command" | "slackTokens"> | null;
 	/** This computer's sidebar project list: it looks for new folders when the session index changes. */
 	sidebarProjects?: Pick<SidebarProjects, "schedule" | "layoutChanged">;
 	/**
@@ -1541,6 +1546,25 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		itemsFile: path.join(app.getPath("userData"), "items.json"),
 		botsRoot: path.join(os.homedir(), BOTS_FOLDER),
 		botsChanged: setBotsState,
+		// One reply through a bot's connector: the credential main holds for that post only (connectors.rs).
+		connectorCredential: async (service, account) => {
+			if (service === "slack") {
+				const tokens = deps.connectorAccounts?.()?.slackTokens(account);
+				if (!tokens) throw new Error("That Slack app is no longer kept: set it up again on the bot's page");
+				return { botToken: tokens.botToken };
+			}
+			if (service === "linear") {
+				const trackers = deps.trackerAccounts?.();
+				if (!trackers) throw new Error("Trackers are not available yet");
+				return trackers.linearAccount(account);
+			}
+			if (service === "github") {
+				const bin = await resolveBin("gh");
+				if (!bin) throw new Error("the GitHub CLI (gh) is not installed");
+				return { home: os.homedir(), runner: await ghRunner(bin) };
+			}
+			throw new Error(`No connector ${service}`);
+		},
 		sendOutboxFile: path.join(app.getPath("userData"), "send-outbox.json"),
 		attachmentsDir: path.join(app.getPath("userData"), "agent-attachments"),
 		uploads: deps.uploads,
@@ -2595,6 +2619,12 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	ipc.handle(BOTS_COMMAND, (_caller, request: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid bots request");
 		return agentControl.bots(request as BotsCall);
+	});
+	// A bot's page › Connectors: this computer's Slack apps for bots; a token goes in and never comes back out.
+	ipc.handle(BOT_CONNECTORS_COMMAND, (_caller, request: unknown) => {
+		const accounts = deps.connectorAccounts?.();
+		if (!accounts) throw new Error("Bot connectors are not available yet");
+		return accounts.command(parseBotConnectorsRequest(request));
 	});
 	// Settings › Schedules › Email accounts: this computer's own (a password goes in and never comes back out).
 	ipc.handle(MAIL_ACCOUNTS_COMMAND, async (_caller, request: unknown) => {

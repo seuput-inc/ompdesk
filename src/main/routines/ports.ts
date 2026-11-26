@@ -35,6 +35,10 @@ export interface RoutineHost {
 	git(): Promise<CoreRunner>;
 	github(): Promise<{ home: string; runner: CoreRunner | null }>;
 	email: MailAccounts["pollAccount"];
+	/** A bot's Slack connector's app-level token, for one Socket Mode connection (null: none kept). */
+	slack?(account: string): { appToken: string | null };
+	/** A bot's Linear connector's account with its header, for one read. */
+	linear?(account: string): unknown;
 	observe(wake: string | null, tell: (activity: Activity, tab?: Tab) => void): () => void;
 	/** Production uses the native defaults. A test launch may shorten the periods. */
 	timing?: Partial<

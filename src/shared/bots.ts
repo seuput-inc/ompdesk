@@ -7,8 +7,9 @@
  * bots the owner put together, talking with the owner in the group's room. The core's agent control holds all of it
  * (`native/ompdesk/crates/core/src/agentctl`); this file is the contract main, the renderer and the tests share.
  *
- * Dependency-free.
+ * Dependency-free (types aside).
  */
+import type { ScheduleEvent } from "./schedules";
 
 /**
  * Whether this build has bots: the registry and a way to make the first one (`ompdesk_bot create`, the `ompdesk bot`
@@ -302,7 +303,13 @@ export type BotsRequest =
 	/** Ends every ask still open; a member chat at work is stopped. */
 	| { action: "roomStop"; id: string }
 	/** Hand a session to a bot: the bot's home chat becomes its opener and gets `text` as mail. */
-	| { action: "handTo"; id: string; session: string; text: string };
+	| { action: "handTo"; id: string; session: string; text: string }
+	/**
+	 * A connector of the bot (`shared/bot-connectors.ts`): its routine waking the bot's home chat, saved new or, with
+	 * `schedule`, that routine of the bot changed in place (its id, so a Slack app's request URL, stays).
+	 */
+	| { action: "connect"; id: string; on: ScheduleEvent; schedule?: string }
+	| { action: "disconnect"; id: string; schedule: string };
 
 /**
  * One of a bot's own files (`SOUL.md`, `MEMORY.md`, `memory/<name>.md`, `memory/history/<name>.md`): read, or written

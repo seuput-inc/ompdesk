@@ -114,13 +114,19 @@ export interface ScheduleServiceOptions {
 	result?: (name: string, to: ScheduleResultsTo, text: string) => void;
 	/** How a schedule's precheck command runs (a shell and its `-c`, the login environment); absent: prechecks say no. */
 	shell?: () => Promise<CoreRunner>;
+	/**
+	 * A bot's Slack connector's signing secret (`account`: its Slack app), handed to the core with each call to the
+	 * connector's `/hooks/<id>` and nowhere else; null when none is kept.
+	 */
+	slackSigningSecret?: (account: string) => string | null;
 }
 
 /**
  * What a webhook call came to (`ScheduleService.webhook`): started or kept for after the running one, passed over by
- * its filters or already taken (both answered 202), or why not.
+ * its filters or already taken (both answered 202), Slack's URL check of a bot's Slack connector (`challenge`: the
+ * edge echoes its challenge), or why not.
  */
-export type WebhookOutcome = "fired" | "ignored" | "duplicate" | "unknown" | "denied" | "off";
+export type WebhookOutcome = "fired" | "ignored" | "duplicate" | "challenge" | "unknown" | "denied" | "off";
 
 /** A webhook call as the core's edge read it: the bearer key it sent (null: a sender's signature instead), its
  * headers (lowercase names, credentials left out) and its body, base64. */
@@ -149,7 +155,7 @@ interface RoutineToken {
 interface RoutineAsk {
 	token: RoutineToken;
 	ask: number;
-	kind: "git" | "github" | "email";
+	kind: "git" | "github" | "email" | "slack" | "linear";
 	account: string;
 }
 
@@ -174,6 +180,8 @@ export class ScheduleService {
 	readonly #refunds = new Map<number, () => void>();
 	#unsubscribe: (() => void)[] = [];
 	#routineHost: RoutineHost | undefined;
+	/** Each bot Slack connector's routine id and its Slack app, from the newest state (`webhook` signs with it). */
+	#slackRoutines = new Map<string, string>();
 	readonly #routineObservers = new Map<number, () => void>();
 	#tick: NodeJS.Timeout | null = null;
 	#retry: NodeJS.Timeout | null = null;
@@ -202,7 +210,15 @@ export class ScheduleService {
 			host.on(
 				"schedules.state",
 				mine<{ state: SchedulesState }>(({ state }) => {
-					if (!this.#disposed) this.#options.onState(state);
+					if (this.#disposed) return;
+					this.#slackRoutines = new Map(
+						state.schedules.flatMap(schedule =>
+							schedule.frequency.kind === "event" && schedule.frequency.event.source === "slack"
+								? [[schedule.id, schedule.frequency.event.account] as const]
+								: [],
+						),
+					);
+					this.#options.onState(state);
 				}),
 			),
 			host.on(
@@ -364,7 +380,13 @@ export class ScheduleService {
 		if (!host || this.#disposed) return;
 		let answer: { value: unknown } | { error: string };
 		try {
-			answer = { value: kind === "email" ? host.email(account) : await host[kind]() };
+			let value: unknown;
+			if (kind === "email") value = host.email(account);
+			else if (kind === "slack" || kind === "linear") {
+				if (!host[kind]) throw new Error("A bot's connectors are not available here");
+				value = kind === "slack" ? host.slack?.(account) : host.linear?.(account);
+			} else value = await host[kind]();
+			answer = { value };
 		} catch (error) {
 			answer = { error: error instanceof Error ? error.message : String(error) };
 		}
@@ -401,7 +423,10 @@ export class ScheduleService {
 	 */
 	async webhook(call: WebhookCallIn): Promise<WebhookOutcome> {
 		if (this.#disposed) return "off";
-		return this.#send<WebhookOutcome>("schedules.webhook", { ...call });
+		// A bot's Slack connector is signed with its app's secret, which main's keystore holds: it goes with this call.
+		const app = this.#slackRoutines.get(call.id);
+		const secret = app === undefined ? null : (this.#options.slackSigningSecret?.(app) ?? null);
+		return this.#send<WebhookOutcome>("schedules.webhook", { ...call, ...(secret ? { secret } : {}) });
 	}
 
 	/**

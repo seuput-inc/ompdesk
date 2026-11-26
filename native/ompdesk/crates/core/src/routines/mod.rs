@@ -9,6 +9,7 @@
 //! Nothing here logs a request: a GitHub read's failure carries gh's words with the values of gh's token variables
 //! replaced (`Gh::scrub`).
 
+pub(crate) mod connectors;
 mod files;
 pub(crate) mod github;
 mod imap;
@@ -83,6 +84,45 @@ struct ScanParams {
 
 pub fn register(registry: &mut Registry) {
     imap::register(registry);
+    // The computer woke or came back online: a bot's Slack socket waiting to reconnect goes at once.
+    registry.add("routines.wake", |_call| {
+        Box::pin(async move {
+            runtime::wake_sockets();
+            Reply::json(&Value::Null)
+        })
+    });
+    // Settings' check of a bot's Slack app before main keeps its tokens: whose workspace and bot user the bot token
+    // is (Slack's `auth.test`). The tokens come with the request and go nowhere else.
+    registry.add("connectors.slackCheck", |call| {
+        Box::pin(async move {
+            let params: Value = call.params()?;
+            let token = params["botToken"].as_str().unwrap_or_default();
+            if !token.starts_with("xoxb-") {
+                return Err(Fault::new(
+                    "invalid_params",
+                    "The bot token starts with xoxb-",
+                ));
+            }
+            let app = params["appToken"].as_str().unwrap_or_default();
+            if !app.is_empty() && !app.starts_with("xapp-") {
+                return Err(Fault::new(
+                    "invalid_params",
+                    "The app-level token starts with xapp-",
+                ));
+            }
+            let said = connectors::slack_api(token, "auth.test", &serde_json::json!({}))
+                .await
+                .map_err(|error| Fault::new("slack_refused", error))?;
+            let text = |key: &str| said[key].as_str().unwrap_or_default().to_owned();
+            Reply::json(&serde_json::json!({
+                "teamId": text("team_id"),
+                "team": text("team"),
+                "userId": text("user_id"),
+                "botId": text("bot_id"),
+                "url": text("url"),
+            }))
+        })
+    });
     registry.add("routines.github", |call| {
         Box::pin(async move {
             let params: GithubParams = call.params()?;

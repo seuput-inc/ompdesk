@@ -111,6 +111,7 @@ import { askBackgroundWork } from "./background-work";
 import { onBotsState } from "./bots";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
 import { answersWithin, ConnectivityMonitor, PROBE_TIMEOUT_MS, probeTarget, reaches } from "./connectivity";
+import { ConnectorAccounts } from "./connector-accounts";
 import { CONSOLE_POLL_MS, ConsoleWindowWatch, listConsoleWindows } from "./console-window-watch";
 import { installCliLaunchers, removeCliLaunchers } from "./control-socket/cli-install";
 import { takeHubMinute } from "./core/hub";
@@ -521,6 +522,7 @@ function firstWindowLoaded(): Promise<void> {
 let mailAccounts: MailAccounts | null = null;
 /** This computer's Linear and Jira connections (tracker-accounts.ts). */
 let trackerAccounts: TrackerAccounts | null = null;
+let connectorAccounts: ConnectorAccounts | null = null;
 /** Keep-awake while this computer's own tabs run a turn (Settings › General › Window). */
 let workAwakePolicy: KeepAwakePolicy | null = null;
 /** A charging laptop's lid close never stops work a keep-awake blocker holds (src/main/power/lid-awake.ts). */
@@ -2238,6 +2240,8 @@ app.whenReady().then(async () => {
 				.catch(error => console.error("[schedules] result not delivered:", error));
 		},
 		shell: shellRunner,
+		// A bot's Slack connector's `/hooks` call is signed with its app's secret (connector-accounts.ts).
+		slackSigningSecret: app => connectorAccounts?.slackTokens(app)?.signingSecret ?? null,
 		...(process.env.OMP_GUI_TEST_SCHEDULE_TICK_MS
 			? { tickMs: Number(process.env.OMP_GUI_TEST_SCHEDULE_TICK_MS) }
 			: {}),
@@ -2276,11 +2280,23 @@ app.whenReady().then(async () => {
 		core: async (params, timeoutMs) => (await core().call("trackers.request", params, { timeoutMs })).result,
 		proxyPref: () => prefsStore().get("proxyUrl"),
 	});
+	// Bots' Slack apps; each token is kept encrypted by the OS keystore and handed to the core per use (connector-accounts.ts).
+	connectorAccounts = new ConnectorAccounts({
+		dir: app.getPath("userData"),
+		box: secretBox,
+		core: async (method, params) => (await core().call(method, params, { timeoutMs: 30_000 })).result,
+	});
 	// Before the first window exists, so its page load is seen (it also writes the update's start mark, below).
 	const firstWindowReady = firstWindowLoaded();
 	void scheduleService
 		.start({
 			...routinePorts(sidecarPool, mailAccounts),
+			// A bot's connectors: a Slack app's app-level token for one Socket Mode connection, a Linear account per read.
+			slack: app => ({ appToken: connectorAccounts?.slackTokens(app)?.appToken ?? null }),
+			linear: account => {
+				if (!trackerAccounts) throw new Error("Trackers are not available yet");
+				return trackerAccounts.linearAccount(account);
+			},
 			file: join(app.getPath("userData"), "routine-marks.json"),
 			// A routine catching up after relaunch may open a session.
 			ready: firstWindowReady,
@@ -2352,6 +2368,10 @@ app.whenReady().then(async () => {
 			if (online) {
 				devices.wake("online");
 				wakeSshTools();
+				// A bot's Slack socket waiting to reconnect goes at once.
+				void core()
+					.call("routines.wake", {})
+					.catch(() => undefined);
 			}
 		},
 	});
@@ -2703,6 +2723,7 @@ app.whenReady().then(async () => {
 		schedules: () => scheduleService,
 		mailAccounts: () => mailAccounts,
 		trackerAccounts: () => trackerAccounts,
+		connectorAccounts: () => connectorAccounts,
 		sidebarProjects,
 		// `webHost` is created below: the prompt origins read it when a prompt is sent, never at registration.
 		promptOrigins: {

@@ -534,6 +534,9 @@ struct WebhookParams {
     headers: BTreeMap<String, String>,
     #[serde(default)]
     body: String,
+    /// A bot's Slack connector's signing secret, from main's keystore; never kept or told.
+    #[serde(default)]
+    secret: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -745,6 +748,7 @@ pub fn register(registry: &mut Registry) {
                 bearer: params.bearer,
                 headers: params.headers,
                 body,
+                secret: params.secret,
             };
             Reply::json(&service.with(|engine| engine.webhook(&params.id, &hook, now)))
         })
@@ -756,11 +760,13 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&())
         })
     });
-    // The computer woke from sleep (main's `powerMonitor` `resume`): timed starts wait for the settle.
+    // The computer woke from sleep (main's `powerMonitor` `resume`): timed starts wait for the settle, and a bot's
+    // Slack socket waiting to reconnect goes at once.
     registry.add("schedules.resumed", |call| {
         Box::pin(async move {
             let (service, now, _): (_, _, Value) = asked(&call)?;
             service.with(|engine| engine.resumed(now));
+            crate::routines::runtime::wake_sockets();
             Reply::json(&())
         })
     });

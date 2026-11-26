@@ -234,6 +234,8 @@ export interface AgentControlHostDeps {
 	botsRoot?: string | null;
 	/** The core's bots state changed: main keeps it and tells every window. */
 	botsChanged?: (state: BotsState) => void;
+	/** One reply through a bot's connector: what main holds for that post (`connectorCredential`, connectors.rs). */
+	connectorCredential?: (service: string, account: string) => Promise<unknown>;
 	/** Where the bytes of the attachments an outbox entry still owes are kept, by content; absent: in memory only. */
 	attachmentsDir?: string | null;
 	/** This computer's upload folder (`web/uploads.ts`): where a file sent to a session on this computer lands. */
@@ -1357,6 +1359,10 @@ export class AgentControlRuntime {
 			recordClosed: child => this.#recordClosed(child),
 			closedChildren: () => parseClosedChildren(deps.prefs.get(AGENT_CLOSED_CHILDREN_PREF)),
 			botsChanged: state => deps.botsChanged?.(state),
+			connectorCredential: (service, account) => {
+				if (!deps.connectorCredential) throw new Error("A bot's connectors are not available here.");
+				return deps.connectorCredential(service, account);
+			},
 			setOpener: (tabId, openerTabId) => {
 				// As a session the bot's chat opened, or one the call journal names after its opener was lost: its reports
 				// and auto-close go to that tab, across a relaunch too.

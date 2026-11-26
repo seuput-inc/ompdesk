@@ -159,7 +159,16 @@ export type ScheduleEvent =
 	 * `from` (logins; any), `contains` (in the title or text, case aside), `label` (the label added, or one the
 	 * item carries).
 	 */
-	| { source: "github"; repo: string; events: GithubEventKind[]; from?: string[]; contains?: string; label?: string }
+	| {
+			source: "github";
+			repo: string;
+			events: GithubEventKind[];
+			from?: string[];
+			contains?: string;
+			label?: string;
+			/** A bot's GitHub connector: its handle, asked by `bot:<handle>` in an issue, a PR or a comment. */
+			ask?: string;
+	  }
 	/** A file under `path` (absolute; a folder is watched with everything in it) was created, changed or removed. */
 	| { source: "files"; path: string }
 	/** New commits on a local branch of the repository at `repo` (absolute). */
@@ -177,7 +186,18 @@ export type ScheduleEvent =
 	 * An event of an ICS calendar feed (`url`, https; Google, iCloud and Outlook all publish one) about to start: fires
 	 * once per occurrence `leadMinutes` before it starts. The feed is read every `CALENDAR_POLL_MINUTES`.
 	 */
-	| { source: "calendar"; url: string; leadMinutes: number };
+	| { source: "calendar"; url: string; leadMinutes: number }
+	/**
+	 * A bot's connectors (`shared/bot-connectors.ts`), each a routine that wakes the bot's home chat. `account` names
+	 * what main keeps for it (`connector-accounts.ts`: a Slack app, a Google account; Linear: a tracker account), `from`
+	 * who may ask (`*` anyone).
+	 * - `slack`: a mention in a channel or a direct message, through Socket Mode or `POST /hooks/<id>` signed by the app.
+	 * - `linear`: a comment or a new issue saying `bot:<handle>`.
+	 * - `google`: an event of the account's primary calendar, `leadMinutes` before it starts.
+	 */
+	| { source: "slack"; account: string; from: string[] }
+	| { source: "linear"; account: string; handle: string; from: string[] }
+	| { source: "google"; account: string; leadMinutes: number };
 
 /** How often an email trigger asks its mailbox for new mail, in minutes. */
 export const EMAIL_POLL_MINUTES = 2;
@@ -413,6 +433,7 @@ export function scheduleEventProblem(event: ScheduleEvent): string | null {
 				)
 			)
 				return "from lists GitHub logins";
+			if (event.ask !== undefined && !BOT_HANDLE.test(event.ask)) return "ask is a bot's handle (a-z, 0-9, -)";
 			return [event.contains, event.label].every(
 				value => value === undefined || (typeof value === "string" && value.trim() && value.length <= 200),
 			)
@@ -447,10 +468,32 @@ export function scheduleEventProblem(event: ScheduleEvent): string | null {
 				event.leadMinutes <= CALENDAR_LEAD_MINUTES_MAX
 				? null
 				: `leadMinutes is a whole number from ${CALENDAR_LEAD_MINUTES_MIN} to ${CALENDAR_LEAD_MINUTES_MAX}`;
+		case "slack":
+		case "linear":
+		case "google": {
+			if (typeof event.account !== "string" || !event.account.trim() || event.account.length > 200)
+				return "account names what Settings keeps for the connector";
+			if (event.source === "google")
+				return Number.isInteger(event.leadMinutes) &&
+					event.leadMinutes >= CALENDAR_LEAD_MINUTES_MIN &&
+					event.leadMinutes <= CALENDAR_LEAD_MINUTES_MAX
+					? null
+					: `leadMinutes is a whole number from ${CALENDAR_LEAD_MINUTES_MIN} to ${CALENDAR_LEAD_MINUTES_MAX}`;
+			if (event.source === "linear" && !BOT_HANDLE.test(event.handle ?? "")) return "handle is a bot's handle";
+			return Array.isArray(event.from) &&
+				event.from.length > 0 &&
+				event.from.length <= 10 &&
+				event.from.every(person => typeof person === "string" && person.trim() && person.length <= 200)
+				? null
+				: "from lists who may ask (* for anyone)";
+		}
 		default:
 			return "unknown event source";
 	}
 }
+
+/** A bot's handle, as `bot:<handle>` asks it (`is_bot_handle` in the core's `schedules/rules.rs`). */
+const BOT_HANDLE = /^[a-z0-9-]{1,40}$/;
 
 function nonEmptySubset(values: unknown, allowed: readonly string[]): boolean {
 	return Array.isArray(values) && values.length > 0 && values.every(value => allowed.includes(value));
@@ -504,5 +547,11 @@ function describeEvent(event: ScheduleEvent): string {
 		}
 		case "calendar":
 			return `${event.leadMinutes} min before an event of the calendar ${event.url} starts`;
+		case "slack":
+			return `when someone asks in Slack through ${event.account}`;
+		case "linear":
+			return `when someone asks bot:${event.handle} in Linear`;
+		case "google":
+			return `${event.leadMinutes} min before each Google Calendar event`;
 	}
 }

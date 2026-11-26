@@ -204,6 +204,8 @@ impl Hooks for Relay {
                 // A call its routine's filters passed over, or a sender's retry of one already taken, is answered as
                 // taken too: the sender has nothing to send again.
                 Some("fired" | "ignored" | "duplicate") => HookOutcome::Fired,
+                // Slack's URL check of a bot's Slack connector, its signature verified: the edge echoes its challenge.
+                Some("challenge") => HookOutcome::Challenge,
                 Some("denied") => HookOutcome::Denied,
                 Some("off") => HookOutcome::Off,
                 Some("unknown") => HookOutcome::Unknown,
