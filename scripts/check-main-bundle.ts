@@ -430,7 +430,14 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // own since 26190f1da. The budget is that measure plus 80 bytes.
 // The Schedules channel names left `shared/schedules.ts` for `shared/schedule-channels.ts` (26 Nov 2026, routines),
 // so the first screen's `omp-api.ts` no longer pulls the schedule rules (cron, webhook senders, filters) with them.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_227_982;
+// All sessions (26 Nov 2026, orca-board). On the first screen: the board's destination and its window's start on it
+// (`stores/ui.ts` `openBoard`, AppShell's loader, `main.tsx` `#/board`), the sidebar's All sessions nav row (its
+// figures load as their own chunk behind Suspense), a session row's Copy title and the hover that loads its last
+// exchange (`lib/last-exchange.ts`, its own chunk), and a child's question in its opener's dock (`ChildAsks`, drawn
+// beside each pane's own card at once). The page, its peek, inbox and Resources load on intent with the other pages:
+// measured 2,230,764 (CI run 45754781110, omp/agent/orca-board at 3a021909f), 2,782 bytes over. The budget is that
+// measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_230_844;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
