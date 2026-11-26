@@ -814,6 +814,14 @@ app.whenReady().then(async () => {
 		// A freeze or a crash loop the last launches left is offered for a report once (LaunchIncidentNotice).
 		const incident = launchIncidentOf(hangReports, safeMode, Date.now());
 		if (incident) prefsStore().set(LAUNCH_INCIDENT_PREF, incident);
+		// A test run starts with every first-visit tour and feature tip seen, so no spotlight takes a spec's click or a
+		// capture's frame (stores/starter-guide.ts `seenAll`); OMP_GUI_TEST_TOURS=1 keeps them for a spec about them.
+		if (
+			process.env.OMP_GUI_HEADLESS === "1" &&
+			process.env.OMP_GUI_TEST_TOURS !== "1" &&
+			prefsStore().get("starterGuide") === undefined
+		)
+			prefsStore().set("starterGuide", { seenAll: true });
 		installHangWatchdog(postWatchdog);
 		// A slow step leaves a line (slow-steps.ts): main's blocked thread, a handler, a wait on the core, an omp's start.
 		installSlowSteps({

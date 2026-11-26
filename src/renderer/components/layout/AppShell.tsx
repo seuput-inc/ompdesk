@@ -33,6 +33,7 @@ import { webRuntime } from "../../web/runtime";
 import { preloadPromptList } from "../chat/ConversationNavigator";
 import { preloadTranscriptFind } from "../chat/TranscriptFind";
 import { Button, IconButton, Skeleton, Tooltip } from "../common";
+import { useFirstVisitTour } from "../onboarding/surface-tours";
 import { preloadComposerExtras } from "./composer/composer-extras";
 import { PanelContainer, preloadPanelViews } from "./PanelContainer";
 import { EdgeSwipeZone, SidebarDrawer } from "./SidebarDrawer";
@@ -40,6 +41,7 @@ import { StatusBar } from "./status-bar/StatusBar";
 // The session list's look stays on the first screen, where the list's own chunk (sidebar-chunk.ts) is not: 7.6 KB,
 // one request less for a page that waits for the list, and the stylesheet keeps its place in the cascade.
 import "../../styles/sidebar.css";
+import { FeatureTipCard } from "./FeatureTipCard";
 import { MailReentryNoticeGate } from "./MailReentryNoticeGate";
 import { MissingFolderSheetHost } from "./MissingFolderSheetHost";
 import { SplitWorkspace } from "./SplitWorkspace";
@@ -343,6 +345,8 @@ export function AppShell() {
 		});
 	}, [drawer]);
 	const onPage = destination !== "session";
+	// The shell's own tour: nav rows, search, sessions, status bar, side panel (on the session view).
+	useFirstVisitTour("shell", !onPage);
 	const panelOpen = !onPage && panelVisible;
 	const panelDocked = panelOpen && !compact;
 	// A closed panel stays mounted for its exit: a docked one slides out (`fast`), a sheet closes on its own (`med`).
@@ -443,6 +447,7 @@ export function AppShell() {
 						<UpdateBanner />
 						<MailReentryNoticeGate />
 						<WhatsNewCard />
+						<FeatureTipCard />
 						<SplitWorkspace />
 					</div>
 					{onPage && (

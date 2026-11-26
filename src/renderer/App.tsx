@@ -18,6 +18,7 @@ import { DesktopSlotIndicator } from "./components/layout/DesktopSlotIndicator";
 import { FirstRunGate } from "./components/onboarding/FirstRunGate";
 import { SetupTakeoverHost } from "./components/onboarding/SetupTakeover";
 import { StarterTour } from "./components/onboarding/StarterTour";
+import { SurfaceTour } from "./components/onboarding/SurfaceTour";
 import { RemoteFolderPickerHost } from "./components/remote/RemoteFolderPicker";
 import { SshPromptDialog } from "./components/settings/SshPromptDialog";
 import { useExtensionUi } from "./hooks/use-extension-ui";
@@ -103,6 +104,9 @@ import { webRuntime } from "./web/runtime";
 // only on first open instead of bloating the eager bundle.
 const FeedbackDialog = lazyChunk(() =>
 	import("./components/dialogs/FeedbackDialog").then(m => ({ default: m.FeedbackDialog })),
+);
+const CapabilitiesSheet = lazyChunk(() =>
+	import("./components/dialogs/CapabilitiesSheet").then(m => ({ default: m.CapabilitiesSheet })),
 );
 const BenchmarkDialog = lazyChunk(() =>
 	import("./components/dialogs/BenchmarkDialog").then(m => ({ default: m.BenchmarkDialog })),
@@ -257,6 +261,10 @@ export function App() {
 	const themePickerOpen = useUiStore(s => s.themePickerOpen);
 	const [themePickerMounted, setThemePickerMounted] = useState(false);
 	if (themePickerOpen && !themePickerMounted) setThemePickerMounted(true);
+	// Help › What OMPdesk can do: loaded on its first open, then mounted so it closes with its own exit.
+	const capabilitiesOpen = useUiStore(s => s.capabilitiesOpen);
+	const [capabilitiesMounted, setCapabilitiesMounted] = useState(false);
+	if (capabilitiesOpen && !capabilitiesMounted) setCapabilitiesMounted(true);
 	// The quick terminal loads xterm: only on its first open, then stays mounted so its terminals keep their screens.
 	const quickTerminalOpen = useUiStore(s => s.quickTerminalOpen);
 	const [quickTerminalMounted, setQuickTerminalMounted] = useState(false);
@@ -994,6 +1002,7 @@ export function App() {
 					</Suspense>
 				)}
 				<StarterTour />
+				<SurfaceTour />
 				<RemoteFolderPickerHost />
 				<WebPairingDialog />
 				<WebDeviceNotice />
@@ -1018,6 +1027,7 @@ export function App() {
 				) : null}
 				<Suspense fallback={null}>{importDialogOpen && <ImportForeignDialog />}</Suspense>
 				<Suspense fallback={null}>{feedbackOpen && <FeedbackDialog />}</Suspense>
+				<Suspense fallback={null}>{capabilitiesMounted && <CapabilitiesSheet />}</Suspense>
 			</div>
 			<SetupTakeoverHost />
 			<ToastStack />

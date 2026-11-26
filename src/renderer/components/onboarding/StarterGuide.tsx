@@ -43,6 +43,8 @@ export function StarterGuide({ promptSent, projectOpened }: { promptSent: boolea
 	const prompted = useSessionStore(state => state.messageCount > 0) || promptSent;
 	const split = useTabsStore(state => state.split !== null);
 	const panel = useUiStore(state => state.panelVisible);
+	// The look step (Orca's onboarding theme step, FG41: onboarding/ThemeStep.tsx) is done once the picker opened.
+	const look = useUiStore(state => state.themePickerOpen);
 	const open = useSidebarFolds(state => state.starterOpen);
 	const listId = useId();
 
@@ -70,8 +72,9 @@ export function StarterGuide({ promptSent, projectOpened }: { promptSent: boolea
 		if (projectOpened) reached.push("project");
 		if (split) reached.push("split");
 		if (panel) reached.push("panel");
+		if (look) reached.push("look");
 		useStarterGuideStore.getState().complete(reached);
-	}, [modelReady, prompted, projectOpened, split, panel]);
+	}, [modelReady, prompted, projectOpened, split, panel, look]);
 
 	if (!loaded || dismissed || firstRunActive) return null;
 
@@ -125,7 +128,12 @@ export function StarterGuide({ promptSent, projectOpened }: { promptSent: boolea
 												{t(`starter.step.${step}.hint`)}
 											</p>
 											<Button
-												onClick={() => useStarterGuideStore.getState().startTour(step)}
+												onClick={() =>
+													// The look step's control is the theme picker itself.
+													step === "look"
+														? useUiStore.getState().openThemePicker()
+														: useStarterGuideStore.getState().startTour(step)
+												}
 												size="sm"
 												variant="secondary"
 											>
