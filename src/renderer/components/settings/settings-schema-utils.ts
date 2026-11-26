@@ -67,10 +67,13 @@ const TERMINAL_DISPLAY_SETTINGS = new Set([
 	"spelling.typoDetection",
 	"spelling.autocomplete",
 	"spelling.autocorrect",
-	// Vim mode's indicator is rendered only by the TUI status line. Keeping the
-	// schema row out of the GUI prevents a control that can never affect this
-	// renderer from being advertised under a conditional gate.
+	// Vim mode's indicator, start mode, typed-command display and clipboard yanks act only in the TUI composer and
+	// status line (stock: interactive-mode, ui/composer); an rpc-ui session builds neither. Keeping the schema rows
+	// out of the GUI prevents controls that can never affect this renderer from being advertised under a gate.
 	"tui.vimModeDisplay",
+	"tui.vimShowCommand",
+	"tui.vimStartMode",
+	"tui.vimYankToClipboard",
 	"tui.mouse",
 	"tui.maxInlineImageColumns",
 	"tui.maxInlineImageRows",

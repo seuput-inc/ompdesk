@@ -93,6 +93,9 @@ const TERMINAL_DISPLAY_PATHS = new Set([
 	"spelling.autocomplete",
 	"spelling.autocorrect",
 	"tui.vimModeDisplay",
+	"tui.vimShowCommand",
+	"tui.vimStartMode",
+	"tui.vimYankToClipboard",
 	"tui.mouse",
 	"tui.maxInlineImageColumns",
 	"tui.maxInlineImageRows",
@@ -251,6 +254,7 @@ function conditionGate(condition: string | undefined): Array<{ path: string; val
 			{ path: "plan.autosave", value: true },
 		],
 		unexpectedStopDetection: [{ path: "features.unexpectedStopDetection", value: true }],
+		vimModeEnabled: [{ path: "tui.vimMode", value: true }],
 	};
 	return condition === undefined ? [] : (gates[condition] ?? []);
 }

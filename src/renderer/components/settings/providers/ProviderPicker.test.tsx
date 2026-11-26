@@ -31,7 +31,6 @@ function row(id: string, name: string, partial: Partial<ProviderInfo> = {}): Pro
 const stock = [
 	row("anthropic", "Anthropic (Claude Pro/Max)"),
 	row("deepseek", "DeepSeek"),
-	row("google-gemini-cli", "Google Cloud Code Assist (Gemini CLI)"),
 	row("groq", "Groq"),
 	row("openai-codex", "ChatGPT Plus/Pro (Codex Subscription)"),
 	row("openrouter", "OpenRouter"),
@@ -105,19 +104,18 @@ const otherIds = () =>
 	);
 
 describe("ProviderPicker featured group", () => {
-	it("puts ChatGPT, Claude, OpenRouter, Google and Grok first, everything else under Other providers", async () => {
+	it("puts ChatGPT, Claude, OpenRouter and Grok first, everything else under Other providers", async () => {
 		await mount(stock, fakeLogin());
-		expect(featuredIds()).toEqual(["openai-codex", "anthropic", "openrouter", "google-gemini-cli", "xai-oauth"]);
+		expect(featuredIds()).toEqual(["openai-codex", "anthropic", "openrouter", "xai-oauth"]);
 		const names = Array.from(document.querySelectorAll("[data-featured-provider] > button:first-child"));
 		expect(names.map(item => item.textContent)).toEqual([
 			`ChatGPT (Plus/Pro)${translate("providers.featured.subscription")}${translate("providers.featured.signIn")}`,
 			`Claude (Pro/Max)${translate("providers.featured.subscription")}${translate("providers.featured.signIn")}`,
 			`OpenRouter${translate("providers.featured.apiKey")}${translate("providers.featured.connect")}`,
-			`Gemini (CLI)${translate("providers.featured.subscription")}${translate("providers.featured.signIn")}`,
 			`Grok (SuperGrok or X Premium+)${translate("providers.featured.subscription")}${translate("providers.featured.signIn")}`,
 		]);
 		// Each card carries the brand mark.
-		expect(document.querySelectorAll("[data-featured-provider] [data-provider-mark]").length).toBe(5);
+		expect(document.querySelectorAll("[data-featured-provider] [data-provider-mark]").length).toBe(4);
 		expect(otherIds()).toEqual(["deepseek", "groq"]);
 		expect(document.body.textContent).toContain(translate("providers.other.title"));
 		// The featured group sits above the others in the document.
@@ -144,19 +142,17 @@ describe("ProviderPicker featured group", () => {
 		await click('[data-featured-provider="openai-codex"] button');
 		await click('[data-featured-provider="anthropic"] button');
 		await click('[data-featured-provider="openrouter"] button');
-		await click('[data-featured-provider="google-gemini-cli"] button');
 		await click('[data-featured-provider="xai-oauth"] button');
 		await click('[data-featured-provider="xai-oauth"] button[data-provider-connect="xai"]');
 		expect(login.start.mock.calls.map(call => call[0])).toEqual([
 			"openai-codex",
 			"anthropic",
 			"openrouter",
-			"google-gemini-cli",
 			"xai-oauth",
 			"xai",
 		]);
 		// Only Grok has both logins, so only Grok has a second action.
-		expect(document.querySelectorAll("[data-featured-provider] button").length).toBe(6);
+		expect(document.querySelectorAll("[data-featured-provider] button").length).toBe(5);
 		// The API-key action lives inside Grok's own card, not beside it.
 		const grok = document.querySelector('[data-featured-provider="xai-oauth"]');
 		expect(grok?.querySelectorAll("button").length).toBe(2);
@@ -176,7 +172,7 @@ describe("ProviderPicker featured group", () => {
 		for (const root of roots.splice(0)) await act(async () => root.unmount());
 		while (document.body.firstChild) document.body.removeChild(document.body.firstChild);
 		await mount(connected, fakeLogin(), false);
-		expect(featuredIds()).toEqual(["openai-codex", "openrouter", "google-gemini-cli", "xai-oauth"]);
+		expect(featuredIds()).toEqual(["openai-codex", "openrouter", "xai-oauth"]);
 	});
 
 	it("is a flat search result without the group while searching", async () => {
