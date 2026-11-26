@@ -486,7 +486,12 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // phone's link toast offers Open in Preview beside Open on computer (a toast's `secondAction`,
 // `web/host-ui/WebHostUi.tsx`): 1,346 bytes over main (2,232,994 in e2e-nightly run 45773210485, omp/agent/orca-preview
 // at 6db34b5b0, over main's 2,231,648), added to the budget.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_248_630;
+// A bot's living face (27 Nov 2026, orca-bots-face): the face drawn at rest where a bot has no picture, on the phone's
+// first screen through the sidebar's Bots rows (`lib/bot-face.ts`, `common/BotFace.tsx`, `bots/BotAvatar.tsx`); the rig
+// that moves it loads after the page's `load` as its own chunk (`lib/bot-face-motion.ts` and what it imports): 4,452
+// bytes over the budget of its base (2,253,082 in CI run 45852447692 at a789da035, whose budget was 2,248,630), added
+// to the budget with 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_253_162;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
