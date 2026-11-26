@@ -3,11 +3,9 @@
  * field, "n/m", previous, next and close; the count and steps over the loaded rows' text (`transcript-find.ts`), the
  * mounted rows' matches marked with CSS highlights (`::highlight(omp-find)`, `omp-find-active`).
  */
-import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
-import { isImeKeyEvent } from "../../lib/ime";
-import { IconButton, Input } from "../common";
+import { FindBar } from "../common";
 import type { TranscriptFindProps } from "./TranscriptFind";
 import { type FindHit, findHits, findScrollDelta, rowRanges, startingHit } from "./transcript-find";
 
@@ -122,69 +120,21 @@ export default function TranscriptFindBar({
 
 	const status = !query.trim() ? "" : hits.length === 0 ? t("chat.find.none") : `${active + 1}/${hits.length}`;
 	return (
-		<div
+		<FindBar
+			canStep={hits.length > 0}
 			className="omp-floating absolute top-2 right-4 z-20 flex w-80 max-w-[calc(100%-2rem)] items-center gap-1 rounded-(--sc-radius-lg) border border-(--sc-border-subtle) p-1 shadow-(--sc-shadow-md)"
+			closeLabel={t("chat.find.close")}
 			data-transcript-find
+			inputRef={inputRef}
+			label={t("chat.find.label")}
+			nextLabel={t("chat.find.next")}
+			onClose={onClose}
+			onQuery={setQuery}
+			onStep={step}
+			previousLabel={t("chat.find.previous")}
+			query={query}
 			ref={barRef}
-			role="search"
-		>
-			<div className="min-w-0 flex-1">
-				<Input
-					aria-label={t("chat.find.label")}
-					controlSize="sm"
-					leadingIcon={<Search />}
-					onChange={event => setQuery(event.target.value)}
-					onKeyDown={event => {
-						if (isImeKeyEvent(event)) return;
-						if (event.key === "Enter") {
-							event.preventDefault();
-							step(event.shiftKey ? -1 : 1);
-						} else if (event.key === "Escape") {
-							event.preventDefault();
-							event.stopPropagation();
-							onClose();
-						}
-					}}
-					placeholder={t("chat.find.label")}
-					ref={inputRef}
-					trailing={
-						<span
-							aria-live="polite"
-							className="text-sc-xs whitespace-nowrap text-(--sc-text-muted) tabular-nums"
-							data-find-status
-						>
-							{status}
-						</span>
-					}
-					value={query}
-				/>
-			</div>
-			<IconButton
-				disabled={hits.length === 0}
-				icon={<ChevronUp />}
-				label={t("chat.find.previous")}
-				onClick={() => step(-1)}
-				shortcut="⇧↵"
-				size="sm"
-				variant="ghost"
-			/>
-			<IconButton
-				disabled={hits.length === 0}
-				icon={<ChevronDown />}
-				label={t("chat.find.next")}
-				onClick={() => step(1)}
-				shortcut="↵"
-				size="sm"
-				variant="ghost"
-			/>
-			<IconButton
-				icon={<X />}
-				label={t("chat.find.close")}
-				onClick={onClose}
-				shortcut="Esc"
-				size="sm"
-				variant="ghost"
-			/>
-		</div>
+			status={status}
+		/>
 	);
 }
