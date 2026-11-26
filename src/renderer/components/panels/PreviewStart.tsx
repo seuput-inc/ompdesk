@@ -5,17 +5,19 @@
  * SSH forwards that are up on this computer (Settings › SSH), and the sites this computer's Preview visited last
  * (core `browsing.rs`), each with its ✕. Nothing at all leaves the plain "No page open" with Enter URL.
  * A paired host's tab lists its host's servers: each opens through a stand-in on this computer's loopback that the
- * host connects only to the tab's own port (`preview.hostPort`, remote/port-tunnels.ts).
+ * host connects only to the tab's own port (`preview.hostPort`, remote/port-tunnels.ts). The iOS Simulators and
+ * Android devices running on this computer open their screens (`PreviewDevice.tsx`).
  */
-import { Globe, History, Network, Server, X } from "lucide-react";
+import { Globe, History, Network, Server, Smartphone, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { type PreviewHistoryEntry, portAddress } from "../../../shared/preview";
+import { type PreviewDevice, type PreviewHistoryEntry, portAddress } from "../../../shared/preview";
 import type { SshForward } from "../../../shared/ssh-tools";
 import { hostPortUrl } from "../../lib/host-ports";
 import { useT } from "../../lib/i18n";
 import { useSessionPorts, useSessionPortsPoll } from "../../stores/session-ports";
 import { toastError } from "../../stores/toast";
 import { Button, EmptyState, IconButton, LinkButton, ListRow, SectionLabel } from "../common";
+import { useRunningDevices } from "./PreviewDevice";
 
 /** Recent sites the start page lists. */
 const RECENT_SITES = 6;
@@ -25,6 +27,7 @@ export function PreviewStart({
 	remote,
 	worktree,
 	onOpen,
+	onDevice,
 	onEnterUrl,
 }: {
 	tabId: string | null;
@@ -33,6 +36,8 @@ export function PreviewStart({
 	/** The tab's linked worktree folder, whose servers open under its own `.localhost` name. */
 	worktree: string | null;
 	onOpen: (url: string) => void;
+	/** Show a running iOS Simulator's or Android device's screen (`PreviewDeviceScreen`). */
+	onDevice: (device: PreviewDevice) => void;
 	onEnterUrl: () => void;
 }) {
 	const t = useT();
@@ -41,6 +46,7 @@ export function PreviewStart({
 	const servers = processes
 		.flatMap(process => process.ports.map(port => ({ port, name: process.name })))
 		.sort((a, b) => a.port - b.port);
+	const devices = useRunningDevices(true);
 	const [forwards, setForwards] = useState<SshForward[]>([]);
 	const [recent, setRecent] = useState<PreviewHistoryEntry[]>([]);
 	useEffect(() => {
@@ -63,7 +69,7 @@ export function PreviewStart({
 			.history({ action: "remove", url })
 			.then(readRecent)
 			.catch(() => undefined);
-	if (servers.length === 0 && upForwards.length === 0 && recent.length === 0)
+	if (servers.length === 0 && upForwards.length === 0 && recent.length === 0 && devices.length === 0)
 		return (
 			<EmptyState
 				icon={<Globe />}
@@ -128,6 +134,26 @@ export function PreviewStart({
 								</li>
 							);
 						})}
+					</ul>
+				</section>
+			)}
+			{devices.length > 0 && (
+				<section aria-labelledby="preview-start-devices" data-preview-start-devices>
+					<SectionLabel id="preview-start-devices">{t("panel.preview.start.devices")}</SectionLabel>
+					<ul className="mt-1">
+						{devices.map(device => (
+							<li key={`${device.platform}:${device.id}`}>
+								<ListRow
+									description={t(
+										device.platform === "ios" ? "panel.preview.start.ios" : "panel.preview.start.android",
+									)}
+									leading={<Smartphone aria-hidden className="size-(--sc-icon-sm)" />}
+									onClick={() => onDevice(device)}
+									size="sm"
+									title={device.name}
+								/>
+							</li>
+						))}
 					</ul>
 				</section>
 			)}

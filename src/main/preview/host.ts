@@ -20,6 +20,7 @@ import {
 	EMPTY_PREVIEW_PAGE,
 	isLoopbackUrl,
 	PREVIEW_COMMAND,
+	PREVIEW_DEVICE,
 	PREVIEW_HISTORY,
 	PREVIEW_LOAD_STALL_MS,
 	PREVIEW_PAGE,
@@ -35,6 +36,8 @@ import {
 	PREVIEW_VIEWPORTS,
 	PREVIEW_VISUALS,
 	type PreviewBounds,
+	type PreviewDevice,
+	type PreviewDeviceRequest,
 	type PreviewHistoryEntry,
 	type PreviewHistoryRequest,
 	type PreviewPageRequest,
@@ -46,6 +49,7 @@ import {
 } from "../../shared/preview";
 import { core } from "../core/process";
 import { tunnelledLoopback } from "../remote/port-tunnels";
+import { spawnPath } from "../shell-env";
 import { encodeImage, fitImage } from "../shell-host/image";
 import { applyAcceptLanguages, seedSpellchecker } from "../system-languages";
 import { type ClientWindow, isWebWindow } from "../web/client-window";
@@ -189,6 +193,19 @@ const historyRequestSchema: z.ZodType<PreviewHistoryRequest> = z.discriminatedUn
 	}),
 	z.object({ action: z.literal("remove"), url: z.string().max(4096) }),
 	z.object({ action: z.literal("clear") }),
+]);
+
+const DeviceId = z.string().min(1).max(200);
+const deviceRequestSchema: z.ZodType<PreviewDeviceRequest> = z.discriminatedUnion("action", [
+	z.object({ action: z.literal("list") }),
+	z.object({ action: z.literal("screen"), platform: z.enum(["ios", "android"]), id: DeviceId }),
+	z.object({
+		action: z.literal("tap"),
+		id: DeviceId,
+		x: z.number().int().min(0).max(100_000),
+		y: z.number().int().min(0).max(100_000),
+	}),
+	z.object({ action: z.literal("key"), id: DeviceId, key: z.enum(["back", "home", "apps"]) }),
 ]);
 
 /** One tab of a window's preview: its own sandboxed page in the window's web or visual session. */
@@ -1250,6 +1267,22 @@ export function registerPreviewHost(
 		if (!history) return request.action === "list" ? [] : null;
 		if (request.action === "list") return history.list(request.query, request.limit);
 		await (request.action === "remove" ? history.remove(request.url) : history.clear());
+		return null;
+	});
+	// This computer's running mobile devices (Orca's emulator pane): the core runs `simctl`/`adb` on the login shell's
+	// PATH; nothing is booted here (the `mobile-emulator` skill does that).
+	ipc.handle(PREVIEW_DEVICE, async (_caller, raw: unknown) => {
+		const request = deviceRequestSchema.parse(raw);
+		const path = await spawnPath();
+		if (request.action === "list")
+			return (await core().call<{ devices: PreviewDevice[] }>("emulator.devices", { path })).result.devices;
+		if (request.action === "screen") {
+			const { bin } = await core().call("emulator.screen", { path, platform: request.platform, id: request.id });
+			if (!bin) throw new Error("The device sent no picture");
+			return Buffer.from(bin).toString("base64");
+		}
+		const { action, ...params } = request;
+		await core().call(`emulator.${action}`, { path, ...params });
 		return null;
 	});
 	ipc.handle(PREVIEW_PAGE, async (caller, raw: unknown) => {

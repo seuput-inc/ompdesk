@@ -284,6 +284,7 @@ pub fn registry() -> Registry {
     crate::ipc::register(&mut registry);
     crate::visuals::register(&mut registry);
     crate::browsing::register(&mut registry);
+    crate::emulator::register(&mut registry);
     crate::web_peek::register(&mut registry);
     crate::web::bytes::register(&mut registry);
     crate::web::host::register(&mut registry);

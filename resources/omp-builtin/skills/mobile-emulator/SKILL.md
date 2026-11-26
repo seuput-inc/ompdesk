@@ -5,7 +5,7 @@ description: Use when an app change needs an iOS Simulator or Android emulator: 
 
 # Mobile emulators
 
-Drive devices with the platform tools from bash; OMPdesk adds no wrapper. Show the person what you see: save a screenshot and open it with `gui_visualize`.
+Drive devices with the platform tools from bash; OMPdesk adds no wrapper. Show the person what you see: save a screenshot and open it with `gui_visualize`. The person can also watch a running device in the Preview's start page (Devices), and tap an Android one there.
 
 ## Ownership
 

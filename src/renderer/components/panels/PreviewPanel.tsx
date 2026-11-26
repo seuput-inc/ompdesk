@@ -37,6 +37,7 @@ import {
 	PREVIEW_ZOOM_MAX,
 	PREVIEW_ZOOM_MIN,
 	type PreviewColorScheme,
+	type PreviewDevice,
 	type PreviewRequest,
 	type PreviewViewport,
 	previewAddress,
@@ -77,6 +78,7 @@ import {
 import { useFirstVisitTour } from "../onboarding/surface-tours";
 import { PreviewAuthDialog } from "./PreviewAuth";
 import { PreviewCheckNotice } from "./PreviewCheckNotice";
+import { PreviewDeviceScreen } from "./PreviewDevice";
 import { AllVisualsDialog, PreviewFeedbackBar, usePreviewFeedback } from "./PreviewFeedback";
 import { PreviewFind } from "./PreviewFind";
 import { PreviewStart } from "./PreviewStart";
@@ -152,6 +154,8 @@ export function PreviewPanel() {
 	const problemsAnchor = useRef<HTMLButtonElement>(null);
 	const [agentStarting, setAgentStarting] = useState(false);
 	const [findOpen, setFindOpen] = useState(false);
+	/** A running device whose screen shows in place of the page (Orca's emulator pane). */
+	const [device, setDevice] = useState<PreviewDevice | null>(null);
 	/** The person types into the address field: its suggestions show until they open something or leave it. */
 	const [typing, setTyping] = useState(false);
 	const command = useCallback((request: PreviewRequest) => {
@@ -159,6 +163,7 @@ export function PreviewPanel() {
 	}, []);
 	/** Open `url` from a suggestion or the start page, as the address field's Enter would. */
 	const openUrl = (url: string) => {
+		setDevice(null);
 		setInput(url);
 		setTyping(false);
 		setInvalid(false);
@@ -271,7 +276,7 @@ export function PreviewPanel() {
 	usePreviewLayout(
 		surface,
 		web,
-		visible && !remoteBlocked && Boolean(state.url) && !state.error && !state.crashed,
+		visible && !device && !remoteBlocked && Boolean(state.url) && !state.error && !state.crashed,
 		command,
 	);
 	useEffect(
@@ -411,7 +416,10 @@ export function PreviewPanel() {
 					setTyping(false);
 					const url = previewAddress(input);
 					setInvalid(!url);
-					if (url && !remoteBlocked) command({ action: "load", url });
+					if (url && !remoteBlocked) {
+						setDevice(null);
+						command({ action: "load", url });
+					}
 				}}
 			>
 				<IconButton
@@ -738,7 +746,9 @@ export function PreviewPanel() {
 				</div>
 			)}
 			<div ref={surface} className="relative min-h-0 flex-1" data-preview-surface>
-				{remoteBlocked ? (
+				{device ? (
+					<PreviewDeviceScreen active={visible} device={device} onClose={() => setDevice(null)} />
+				) : remoteBlocked ? (
 					<EmptyState icon={<Globe />} size="sm" title={t("panel.preview.remote")} />
 				) : state.crashed ? (
 					<div role="alert" className="p-4">
@@ -784,6 +794,7 @@ export function PreviewPanel() {
 					<PreviewStart
 						onEnterUrl={() => urlInput.current?.focus()}
 						onOpen={openUrl}
+						onDevice={setDevice}
 						remote={remote}
 						tabId={tabId}
 						worktree={worktree}

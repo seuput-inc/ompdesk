@@ -13,6 +13,8 @@ export const PREVIEW_HISTORY = "preview:history";
 export const PREVIEW_OPEN_FILE = "preview:open-file";
 /** Renderer → main: the address here that shows a paired host tab's dev server on a port (remote/port-tunnels.ts). */
 export const PREVIEW_HOST_PORT = "preview:host-port";
+/** Renderer → main: this computer's running iOS Simulators and Android devices, their screens and input (core `emulator.*`). */
+export const PREVIEW_DEVICE = "preview:device";
 /**
  * Web viewers only (a paired phone or tablet): its page is an offscreen page on this computer streamed as JPEG
  * frames over the socket (main/web/preview-stream.ts). `POLL` acknowledges the last frame and holds until the
@@ -229,6 +231,8 @@ export interface PreviewApi {
 	 * the host's loopback, which the host connects only to a port the tab's own processes listen on.
 	 */
 	hostPort(tabId: string, port: number): Promise<string>;
+	/** This computer's running mobile devices (Orca's emulator pane): list, a screen as PNG base64, an Android tap or key. */
+	device<R extends PreviewDeviceRequest>(request: R): Promise<PreviewDeviceResults[R["action"]]>;
 	/** The agent showed or updated a visual for a tab. */
 	onVisual(callback: (event: PreviewVisualEvent) => void): () => void;
 	/** A web viewer's streamed page (see `PREVIEW_STREAM_POLL`); a desktop window's calls are refused. */
@@ -250,6 +254,26 @@ export interface PreviewHistoryResults {
 	list: PreviewHistoryEntry[];
 	remove: null;
 	clear: null;
+}
+
+/** A running iOS Simulator or Android device on this computer. */
+export interface PreviewDevice {
+	platform: "ios" | "android";
+	id: string;
+	name: string;
+}
+export type PreviewDeviceRequest =
+	| { action: "list" }
+	| { action: "screen"; platform: PreviewDevice["platform"]; id: string }
+	/** Android only: a tap at the screen's pixel, or a hardware key. */
+	| { action: "tap"; id: string; x: number; y: number }
+	| { action: "key"; id: string; key: "back" | "home" | "apps" };
+export interface PreviewDeviceResults {
+	list: PreviewDevice[];
+	/** PNG, base64. */
+	screen: string;
+	tap: null;
+	key: null;
 }
 
 /** One JPEG frame of the viewer's offscreen page. */

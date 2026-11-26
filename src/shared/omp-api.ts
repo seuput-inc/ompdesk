@@ -141,6 +141,7 @@ import type { ModelSetupRequest, ModelSetupResearchPick, ModelSetupStatus } from
 import type { OmpUpdatedNotice, OmpUpdateState } from "./omp-update";
 import {
 	PREVIEW_COMMAND,
+	PREVIEW_DEVICE,
 	PREVIEW_HISTORY,
 	PREVIEW_HOST_PORT,
 	PREVIEW_OPEN_FILE,
@@ -264,6 +265,7 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			history: request => transport.invoke(PREVIEW_HISTORY, request),
 			openFile: (tabId, path) => transport.invoke(PREVIEW_OPEN_FILE, tabId, path),
 			hostPort: (tabId, port) => transport.invoke(PREVIEW_HOST_PORT, tabId, port),
+			device: request => transport.invoke(PREVIEW_DEVICE, request),
 			onVisual: callback => subscribe<PreviewVisualEvent>(PREVIEW_VISUAL, callback),
 			stream: {
 				poll: request => transport.invoke(PREVIEW_STREAM_POLL, request),
