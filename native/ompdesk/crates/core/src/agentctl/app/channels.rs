@@ -241,6 +241,8 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     // The owner's own Bots page; agents have ompdesk_bot and ompdesk_item.
     ("bots:command", Risk::Never(OPERATOR)),
     ("bots:state", Risk::Never(PUSH)),
+    // A bot's Slack apps and Google sign-ins hold the person's tokens; a bot asks for one with ompdesk_bot offer.
+    ("bot-connectors:command", Risk::Never(CREDENTIALS)),
     (
         "sidebar-projects:command",
         Risk::Tier(
