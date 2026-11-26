@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICES_CHANGED, WEB_DEVICES_LIST, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
 import type { AgentSessionEvent } from "../../shared/rpc-types";
+import { SCHEDULES_STATE } from "../../shared/schedules";
 import { SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "../../shared/sidebar-projects";
 import { WEB_PERMISSIONS, WEB_PROTOCOL_VERSION, type WebPermission } from "../../shared/web-protocol";
 import { core } from "../core/process";
@@ -407,6 +408,17 @@ describe("channel policy and grants", () => {
 		}
 		expect(reader.socket.frames("evt").map(e => e.ch)).toContain(SIDEBAR_PROJECTS_STATE);
 		expect(nonReader.socket.frames("evt").map(e => e.ch)).not.toContain(SIDEBAR_PROJECTS_STATE);
+	});
+
+	it("pushes a computer's schedules, webhook keys included, only to a device that may run them", async () => {
+		const admin = await rig({ grants: ["workspace", "extensions-admin"] });
+		const other = await rig({ grants: ["workspace"] });
+		for (const r of [admin, other]) {
+			r.windows.windowFor("dev1").webContents.send(SCHEDULES_STATE, { schedules: [], runs: [] });
+			await r.host.flush();
+		}
+		expect(admin.socket.frames("evt").map(e => e.ch)).toContain(SCHEDULES_STATE);
+		expect(other.socket.frames("evt").map(e => e.ch)).not.toContain(SCHEDULES_STATE);
 	});
 
 	it("lets each channel through exactly when the device holds its permission", { timeout: 60_000 }, async () => {
