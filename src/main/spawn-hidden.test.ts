@@ -21,6 +21,7 @@ const WINDOWLESS: Record<string, string> = {
 		"the NSIS setup started at an approved quit (or elevate.exe, which asks UAC for it), as electron-updater started them",
 	'src/main/updater.ts: "/bin/bash"': "the relaunch swap, macOS only",
 	'src/main/power/lid-awake-runtime.ts: "/usr/bin/caffeinate"': "macOS only",
+	'src/main/mac-tcc-watch.ts: "/bin/sh"': "the system log's TCC stream, macOS only",
 };
 
 function sources(folder: string): string[] {

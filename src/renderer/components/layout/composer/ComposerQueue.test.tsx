@@ -269,6 +269,30 @@ describe("ComposerQueuePill", () => {
 		expect(useComposerStore.getState().images).toEqual([image]);
 	});
 
+	it("hands the field over at once, before the core answers, and gives the draft back when the message went meanwhile", async () => {
+		useComposerStore.getState().setDraft("my draft");
+		await mount([queued("s1", "queued text")], []);
+		const { promise: answered, resolve } = Promise.withResolvers<unknown>();
+		command.mockImplementationOnce(() => answered);
+		queueRemove.mockImplementationOnce(async () => ok({ removed: false }));
+		getQueue.mockImplementationOnce(async () => ok({ steering: [], followUp: [] }));
+		await openPopover();
+		await click(byLabel("Edit: queued text"));
+		// What the person types next lands in the edit, never in a send beneath it (steer-send.e2e typed and pressed
+		// Enter while the hold was on its way: the send went out, then the edit overwrote the field).
+		const editing = useComposerStore.getState().editingQueued;
+		expect(editing?.original).toBe("queued text");
+		expect(useComposerStore.getState().draft).toBe("queued text");
+		expect(queueRemove).not.toHaveBeenCalled();
+		await act(async () => resolve(ok({ held: true })));
+		await flush();
+		expect(queueRemove).toHaveBeenCalledWith("s1");
+		// Stock delivered it meanwhile: there is nothing to edit, and Save or Cancel would queue nothing.
+		expect(await editing?.began).toBe(false);
+		expect(useComposerStore.getState().editingQueued).toBeNull();
+		expect(useComposerStore.getState().draft).toBe("my draft");
+	});
+
 	it("gives no Edit to a picture-only message and labels it with the picture count", async () => {
 		const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
 		await mount([], []);

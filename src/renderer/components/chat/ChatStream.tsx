@@ -13,7 +13,18 @@ import {
 	Sparkles,
 	WifiOff,
 } from "lucide-react";
-import { memo, type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+	lazy,
+	memo,
+	type RefObject,
+	Suspense,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import type { AgentMessage, MessagesPage } from "../../../shared/rpc-types";
 import { hydrateTabSession, loadOlderTranscript } from "../../hooks/session-hydration";
 import { currentShellMode } from "../../hooks/use-shell-mode";
@@ -104,6 +115,9 @@ import { ChildrenAtWork, useHasChildrenAtWork } from "./work/ChildrenAtWork";
 import { REVEAL_STEP_EVENT, type RevealStepRequest, revealStep, type StepReveal } from "./work/reveal-step";
 import { StepGroups } from "./work/StepGroups";
 import { messageTimestampMs } from "./work/work-turn";
+
+/** "Add to chat" over the transcript (Orca's selection quotes), loaded off the phone's first screen. */
+const TranscriptQuote = lazy(() => import("../panels/notes/TranscriptQuote"));
 
 // TanStack's end check needs one CSS pixel for fractional scrollTop rounding.
 // User intent is enforced separately by switching away from end anchoring.
@@ -1240,6 +1254,9 @@ function SessionTranscript() {
 				</div>
 			</div>
 			<JumpToLatest className="bottom-5" onClick={jumpToLatest} pinned={pinned} />
+			<Suspense fallback={null}>
+				<TranscriptQuote rootRef={parentRef} tabId={tabId} />
+			</Suspense>
 			<ConversationNavigator
 				activeIndex={activeConversationIndex}
 				anchors={conversationAnchors}

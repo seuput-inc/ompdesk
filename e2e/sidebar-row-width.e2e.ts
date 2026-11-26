@@ -193,7 +193,9 @@ test("a pick that changes the list's height moves no row of another project", as
 	await fs.writeFile(path.join(desktop, "prefs.json"), JSON.stringify({ language: "en", firstRunComplete: true }));
 	app = await launchApp({ project: alpha, desktop, agent, profile: root, env: { OMP_GUI_TEST_SESSION_FILES: "1" } });
 	const page = await app.firstWindow();
-	await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1280, 800));
+	// 960 tall: the nav rows and the status bar (the owner's decision, 25 Nov 2026) took ~150 px from the list, and
+	// beta's nine rows alone must fit once alpha folds, while both projects open must not.
+	await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1280, 960));
 	await page.waitForFunction(() => window.omp?.rpc != null);
 	await expect.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status).toBe("ready");
 	const rows = `[data-session-group=${cssString(beta)}] .omp-sidebar-session-row:not([data-session-path$="beta-2.jsonl"])`;

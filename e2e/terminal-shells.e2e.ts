@@ -67,7 +67,7 @@ for (const [language, theme] of variants([
 
 			// C103: + menu opens another shell.
 			await aside
-				.getByRole("button", { name: ko ? "다른 셸로 새 터미널 열기" : "New terminal with another shell" })
+				.getByRole("button", { name: ko ? "터미널을 여는 다른 방법" : "More ways to open a terminal" })
 				.click();
 			await page.getByRole("menuitem", { name: ko ? "새 터미널: zsh" : "New terminal: zsh" }).click();
 			await expect(aside.getByRole("tab")).toHaveCount(2);

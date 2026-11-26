@@ -37,6 +37,7 @@ import type { CreditSpendState } from "./credit-spend";
 import type { DiagnosticBundleRequest, DiagnosticBundleResult } from "./diagnostic-bundle";
 import type { DiskCareState } from "./disk-care";
 import type { ExtensionUpdateState } from "./extension-update";
+import type { GithubBranchPr } from "./github";
 import type { GithubAuthState, GithubStarState } from "./github-auth";
 import type {
 	AutoCloseTurn,
@@ -69,9 +70,12 @@ import type {
 	IpcModelWaitTogether,
 	IpcNotifyKind,
 	IpcNotifyPayload,
+	IpcNotifyResult,
+	IpcNotifyTestResult,
 	IpcOpenExtensionRequest,
 	IpcOpenPathResult,
 	IpcPrefsChangedPayload,
+	IpcPushTestResult,
 	IpcSessionOpenNewWindowPayload,
 	IpcSessionOwner,
 	IpcSessionsChanged,
@@ -362,6 +366,8 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				subscribe<RemoteOpenedTab[]>(IPC_EVENTS.REMOTE_OPENED_TABS_CHANGED, callback),
 			onHeldSessionsChanged: (callback: (files: string[]) => void) =>
 				subscribe<string[]>(IPC_EVENTS.SESSIONS_HELD_CHANGED, callback),
+			onSessionLinksChanged: (callback: () => void) =>
+				subscribe<undefined>(IPC_EVENTS.SESSION_LINKS_CHANGED, () => callback()),
 			onLogBatch: (callback: (batch: LogBatch) => void) => subscribe<LogBatch>(IPC_EVENTS.LOG_LINE, callback),
 			onTabBatch: (callback: (events: AgentSessionEvent[], tabId: string) => void) =>
 				subscribeTab<AgentSessionEvent[]>(IPC_EVENTS.EVENTS_BATCH, callback),
@@ -422,6 +428,9 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 		},
 		diskFull: {
 			get: () => transport.invoke(IPC_COMMANDS.DISK_FULL_GET),
+		},
+		controlSocket: {
+			failure: () => transport.invoke(IPC_COMMANDS.CONTROL_SOCKET_FAILURE),
 		},
 
 		resume: {
@@ -586,6 +595,13 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			/** Repository images by root; resolves once each was looked up (bounded, cached on that computer). */
 			artwork: (roots: string[], device?: string) =>
 				transport.invoke(IPC_COMMANDS.SESSIONS_ARTWORK, { roots, device }) as Promise<SessionArtworks>,
+			/** The pull request of a row's branch, read in its repository root on that computer (null: none). */
+			pullRequest: (root: string, branch: string, device?: string) =>
+				transport.invoke(IPC_COMMANDS.SESSIONS_PULL_REQUEST, {
+					root,
+					branch,
+					device,
+				}) as Promise<GithubBranchPr | null>,
 			saveDiagnosticBundle: (request: DiagnosticBundleRequest) =>
 				transport.invoke(IPC_COMMANDS.SESSIONS_DUMP_BUNDLE, request) as Promise<DiagnosticBundleResult>,
 			openInNewWindow: (payload: IpcSessionOpenNewWindowPayload) =>
@@ -599,6 +615,7 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 
 		tabs: {
 			list: () => transport.invoke(IPC_COMMANDS.GET_TABS) as Promise<IpcTabInfo[]>,
+			seenSinceRun: () => transport.invoke(IPC_COMMANDS.TABS_SEEN_SINCE_RUN) as Promise<string[]>,
 			spawn: (payload: IpcSpawnTabPayload) =>
 				transport.invoke(IPC_COMMANDS.SPAWN_TAB, payload) as Promise<IpcSpawnTabResult | null>,
 			close: (tabId: string, expectedTurn?: AutoCloseTurn) =>
@@ -713,9 +730,19 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				filters?: { name: string; extensions: string[] }[],
 				options?: { directory?: boolean; title?: string; buttonLabel?: string },
 			) => transport.invoke(IPC_COMMANDS.SYSTEM_OPEN_DIALOG, filters, options),
-			notify: (title: string, body?: string, tabId?: string, kind?: IpcNotifyKind) => {
-				transport.invoke(IPC_COMMANDS.SYSTEM_NOTIFY, { title, body, tabId, kind } satisfies IpcNotifyPayload);
-			},
+			/** Resolves what became of it: undefined from a page (which shows its own) or an older main. */
+			notify: (title: string, body?: string, tabId?: string, kind?: IpcNotifyKind) =>
+				transport.invoke(IPC_COMMANDS.SYSTEM_NOTIFY, {
+					title,
+					body,
+					tabId,
+					kind,
+				} satisfies IpcNotifyPayload) as Promise<IpcNotifyResult | undefined>,
+			/** Whether the person is away from this computer; null when it cannot be told (a page, an error). */
+			desktopAway: () => transport.invoke(IPC_COMMANDS.SYSTEM_DESKTOP_AWAY) as Promise<boolean | null>,
+			notifyTest: () => transport.invoke(IPC_COMMANDS.SYSTEM_NOTIFY_TEST) as Promise<IpcNotifyTestResult>,
+			openNotificationSettings: () => transport.invoke(IPC_COMMANDS.SYSTEM_NOTIFY_SETTINGS) as Promise<void>,
+			testPush: () => transport.invoke(IPC_COMMANDS.WEB_PUSH_TEST) as Promise<IpcPushTestResult>,
 		},
 
 		prefs: {

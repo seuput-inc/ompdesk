@@ -48,7 +48,7 @@ pub(crate) use decode::{Undecoded, decode};
 pub(crate) use node_fetch::node_get;
 #[cfg(test)]
 pub(crate) use public::fixture_request;
-pub(crate) use public::{public_get, public_head};
+pub(crate) use public::{Past, public_get, public_head, public_link};
 
 /// The longest answer kept. `fetch` had no bound; nothing the memory server answers comes near this.
 pub const BODY_MAX: usize = 64 * 1024 * 1024;

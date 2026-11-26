@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { readSidebarPrefs, type SidebarChange, sidebarPatch } from "./sidebar-prefs";
+import { isMutedFolder, readSidebarPrefs, type SidebarChange, sidebarPatch } from "./sidebar-prefs";
 
 /** The rows the core's owner of the blob is held to (`crates/core/src/prefs/sidebar.rs`), captured from these. */
 interface Captured {
@@ -32,5 +32,51 @@ describe("the page's sidebar rules", () => {
 			const written = Object.keys(patch).length ? { ...state, ...patch } : null;
 			expect(JSON.stringify(written), `state ${row.state} payload ${row.payload}`).toBe(JSON.stringify(row.written));
 		}
+	});
+});
+
+describe("isMutedFolder", () => {
+	it("mutes the project itself and any folder under it", () => {
+		expect(isMutedFolder(["/a/b"], {}, "/a/b")).toBe(true);
+		expect(isMutedFolder(["/a/b"], {}, "/a/b/src")).toBe(true);
+		expect(isMutedFolder(["/a/b/"], {}, "/a/b/src")).toBe(true);
+		expect(isMutedFolder([], {}, "/a/b")).toBe(false);
+	});
+
+	it("does not mute a sibling that only shares the prefix", () => {
+		expect(isMutedFolder(["/a/b"], {}, "/a/bc")).toBe(false);
+		expect(isMutedFolder(["/a/b"], {}, "/a")).toBe(false);
+	});
+
+	it("mutes a linked worktree of a muted project", () => {
+		expect(isMutedFolder(["/a/b"], { "/wt/b-x": "/a/b" }, "/wt/b-x")).toBe(true);
+		expect(isMutedFolder(["/a/b"], { "/wt/c-x": "/a/c" }, "/wt/c-x")).toBe(false);
+	});
+
+	it("reads Windows separators", () => {
+		expect(isMutedFolder(["C:\\work\\app"], {}, "C:\\work\\app\\src")).toBe(true);
+		expect(isMutedFolder(["C:\\work\\app"], {}, "C:\\work\\apple")).toBe(false);
+	});
+});
+
+describe("muted sessions and projects", () => {
+	it("reads both lists from a raw blob and nothing from a malformed one", () => {
+		const prefs = readSidebarPrefs({
+			mutedGroups: ["/a", 3, ""],
+			mutedSessions: ["/s/1.jsonl"],
+			pinnedGroups: ["/p"],
+		});
+		expect([prefs.mutedGroups, prefs.mutedSessions]).toEqual([["/a"], ["/s/1.jsonl"]]);
+		expect(readSidebarPrefs({ mutedGroups: "/a" }).mutedGroups).toEqual([]);
+	});
+
+	it("mutes and unmutes as set, never toggled: a second mute moves nothing", () => {
+		const muted = sidebarPatch(readSidebarPrefs({}), { op: "set-session-muted", path: "/s/1.jsonl", muted: true });
+		expect(muted).toEqual({ mutedSessions: ["/s/1.jsonl"] });
+		const state = readSidebarPrefs(muted);
+		expect(sidebarPatch(state, { op: "set-session-muted", path: "/s/1.jsonl", muted: true })).toEqual({});
+		expect(sidebarPatch(state, { op: "set-session-muted", path: "/s/1.jsonl", muted: false })).toEqual({
+			mutedSessions: [],
+		});
 	});
 });

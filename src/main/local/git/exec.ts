@@ -78,9 +78,13 @@ async function spawnEnv(env: Record<string, string> | undefined): Promise<NodeJS
 	return { ...withoutGitSelectors(process.env), PATH: await spawnPath(), GIT_OPTIONAL_LOCKS: "0", ...env };
 }
 
-/** Never page, never prompt for credentials from a headless GUI call; paths unquoted, no colour. */
+/**
+ * Never page, never prompt for credentials from a headless GUI call; paths unquoted, no colour. Git Credential
+ * Manager ignores the terminal guard and opens its own window, so it is told not to (`GCM_INTERACTIVE`, Orca
+ * `shared/git/commands/git-credential-prompt-env.ts:70-82`); an ssh git's `BatchMode` is the core's (`git/run.rs`).
+ */
 const GIT_ARGS = ["-c", "core.quotepath=false", "-c", "color.ui=false"];
-const GIT_ENV = { GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat", LC_ALL: "C" };
+const GIT_ENV = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GIT_PAGER: "cat", LC_ALL: "C" };
 
 /** How a git or a gh runs, as the core process is told it: the core spawns `bin` with `args` first and exactly `env`. */
 export interface CoreRunner {
@@ -117,12 +121,17 @@ export async function gitRunner(): Promise<CoreRunner> {
 	return runner;
 }
 
-/** Never prompt, never check for a newer gh, no colour. */
+/**
+ * Never prompt, never check for a newer gh, no colour. No telemetry unless the person set it: gh 2.91 turned it on and
+ * detaches `gh send-telemetry`, whose console flashes on Windows (Orca `gh-exec-file.ts:52-60`).
+ */
 const GH_ENV = { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", NO_COLOR: "1" };
 
 /** This process's rules for the gh (or, for the sign-in's git calls, the git) at `bin` that the core runs, read now. */
 export async function ghRunner(bin: string): Promise<CoreRunner> {
-	return { bin, args: [], env: await runnerEnv(GH_ENV), timeoutMs: DEFAULT_TIMEOUT_MS, maxBytes: DEFAULT_MAX_BYTES };
+	const env = await runnerEnv(GH_ENV);
+	env.GH_TELEMETRY ??= "false";
+	return { bin, args: [], env, timeoutMs: DEFAULT_TIMEOUT_MS, maxBytes: DEFAULT_MAX_BYTES };
 }
 
 /**

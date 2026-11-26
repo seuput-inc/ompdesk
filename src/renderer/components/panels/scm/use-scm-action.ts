@@ -2,12 +2,18 @@
  * One source-control mutation at a time: runs the command on the tab's
  * checkout, keeps which action is busy, toasts a failure in the UI language
  * (the typed `code` maps to `ipcError.*`), reports a stop on conflicts, and
- * reloads the panel afterwards either way.
+ * reloads the panel afterwards either way. A failed commit, push, pull, merge
+ * or replay offers to hand the failure to this session's agent (Orca's "Fix with AI").
  */
 import { useCallback, useRef, useState } from "react";
 import type { RpcCommand } from "../../../../shared/rpc-types";
+import { handToTab } from "../../../lib/composer-handoff";
+import { errorDetail } from "../../../lib/error-detail";
+import { fixableGitAction, fixGitFailurePrompt } from "../../../lib/fix-prompts";
+import { useFocusedScope } from "../../../lib/focused-scope";
 import { useT } from "../../../lib/i18n";
 import type { TabRpc } from "../../../lib/tab-rpc";
+import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { toast, toastError } from "../../../stores/toast";
 
 export interface ScmRunOptions {
@@ -26,17 +32,38 @@ export interface ScmRunner {
 
 export function useScmAction(rpc: TabRpc, onSettled: () => void): ScmRunner {
 	const t = useT();
+	const tabId = useRuntimeTabId();
+	const { cwd } = useFocusedScope();
 	const [busy, setBusy] = useState<string | null>(null);
 	const running = useRef(false);
 	const run = useCallback(
 		async <T>(key: string, command: RpcCommand, options: ScmRunOptions): Promise<T | undefined> => {
+			const fail = (error: unknown) => {
+				const action = fixableGitAction(command);
+				const output = errorDetail(error);
+				toastError({
+					title: options.failure,
+					error,
+					...(action && tabId && output
+						? {
+								// Long enough to read the failure and press the action.
+								durationMs: 15_000,
+								action: {
+									label: t("fixWithAgent.ask"),
+									run: () =>
+										handToTab(tabId, { text: fixGitFailurePrompt({ action, output, cwd }), mode: "prepend" }),
+								},
+							}
+						: {}),
+				});
+			};
 			if (running.current) return undefined;
 			running.current = true;
 			setBusy(key);
 			try {
 				const response = await rpc.command(command);
 				if (!response.success) {
-					toastError({ title: options.failure, error: response });
+					fail(response);
 					return undefined;
 				}
 				const data = response.data as T;
@@ -51,7 +78,7 @@ export function useScmAction(rpc: TabRpc, onSettled: () => void): ScmRunner {
 				}
 				return data;
 			} catch (error) {
-				toastError({ title: options.failure, error });
+				fail(error);
 				return undefined;
 			} finally {
 				running.current = false;
@@ -59,7 +86,7 @@ export function useScmAction(rpc: TabRpc, onSettled: () => void): ScmRunner {
 				onSettled();
 			}
 		},
-		[rpc, onSettled, t],
+		[rpc, onSettled, t, tabId, cwd],
 	);
 	return { busy, run };
 }

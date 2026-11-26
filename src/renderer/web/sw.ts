@@ -8,6 +8,7 @@
  * switched to a newer bundle under its feet; the first install activates at once.
  */
 import {
+	type AppBadgeLike,
 	type ClientsLike,
 	handleNotificationClick,
 	handlePush,
@@ -29,6 +30,7 @@ interface WaitableEvent {
 
 interface WorkerScope {
 	registration: PushRegistrationLike;
+	navigator: AppBadgeLike;
 	clients: ClientsLike & { claim(): Promise<void> };
 	location: { origin: string };
 	skipWaiting(): Promise<void>;
@@ -71,7 +73,7 @@ scope.addEventListener("activate", event => {
 });
 
 scope.addEventListener("push", event => {
-	event.waitUntil(handlePush(event.data, scope.registration));
+	event.waitUntil(handlePush(event.data, scope.registration, scope.navigator));
 });
 
 scope.addEventListener("notificationclick", event => {

@@ -260,7 +260,7 @@ async function ui(page: Page, action: string, ...args: unknown[]): Promise<void>
  * Show the side panel's `view` by clicks a person makes, on a real window as on the harness: the title bar's Side
  * panel button when the panel is closed, then the view's button (the panel's top bar; a phone's tab bar at its foot).
  */
-async function openPanelView(page: Page, look: Look, view: "diff" | "files"): Promise<void> {
+async function openPanelView(page: Page, look: Look, view: "diff" | "files" | "terminal"): Promise<void> {
 	const button = page
 		.locator(".omp-panel-topbar:visible, [data-panel-tabbar]:visible")
 		.getByRole("button", { name: say(look, `panel.tabs.${view}`), exact: true })
@@ -282,19 +282,29 @@ async function closePanelView(page: Page): Promise<void> {
 	if (await close.isVisible().catch(() => false)) await close.click();
 }
 
+/** Deletes the notes `panel-notes` left (each card's Delete), then closes the panel as `closePanelView`. */
+async function clearNotesAndClose(page: Page): Promise<void> {
+	const remove = page.locator("[data-notes-shelf]:visible [data-review-note] button[aria-label='Delete note']");
+	while ((await remove.count()) > 0) await remove.first().click();
+	await closePanelView(page);
+}
+
 /**
  * Open the command palette by clicks: the sidebar's search button (Command palette), behind the phone's Open menu
  * drawer where the sidebar is one.
  */
-async function clickCommandPalette(page: Page): Promise<void> {
+async function clickCommandPalette(page: Page, look: Look): Promise<void> {
 	const entry = page.locator("[data-command-center-entry]:visible").first();
 	if (!(await entry.isVisible().catch(() => false)))
-		await page.getByRole("button", { name: "Open menu", exact: true }).first().click();
+		await page
+			.getByRole("button", { name: say(look, "shell.openMenu"), exact: true })
+			.first()
+			.click();
 	await entry.click();
 }
 
-async function openWorkspaceDialog(page: Page): Promise<void> {
-	await clickCommandPalette(page);
+async function openWorkspaceDialog(page: Page, look: Look): Promise<void> {
+	await clickCommandPalette(page, look);
 	const palette = page.locator('[role="dialog"]:has([data-palette-index])');
 	await palette.getByRole("combobox").fill("switch-project");
 	await palette.locator('[data-command-name="switch-project"]').click();
@@ -347,6 +357,15 @@ async function openDrawer(page: Page, look: Look): Promise<void> {
 	if (sidebarDocked(look)) return;
 	await page.locator("button:visible:has(svg.lucide-menu)").first().click();
 	await page.locator("[data-drawer]").waitFor({ state: "visible", timeout: 10_000 });
+}
+
+/**
+ * The usage block: a desktop window's opens over its status bar from the usage summary (the owner's decision, 25 Nov
+ * 2026); a phone or tablet page keeps it in the sidebar footer.
+ */
+async function openUsage(page: Page, look: Look): Promise<void> {
+	if ((await page.locator("[data-status-bar]").count()) === 0) return openDrawer(page, look);
+	await page.locator("[data-status-usage]").click({ timeout: 15_000 });
 }
 
 /**
@@ -1273,8 +1292,8 @@ export const SURFACES: readonly Surface[] = [
 	{
 		id: "sidebar-usage",
 		area: "A",
-		title: "Session list with the usage block listing four Claude and four ChatGPT accounts, the session's own marked",
-		open: openDrawer,
+		title: "The usage block (a desktop window's status bar popover, a phone's sidebar footer) listing four Claude and four ChatGPT accounts, the session's own marked",
+		open: openUsage,
 		ready: "[data-rail-pin='usage'] [data-usage-account]",
 		// Parity only, and only over a host whose fake omp reports those accounts (`OMP_GUI_TEST_USAGE_ACCOUNTS=many`).
 		when: () => false,
@@ -1288,7 +1307,7 @@ export const SURFACES: readonly Surface[] = [
 		area: "A",
 		title: "The same usage block scrolled to its last account: the block scrolls inside its cap, the sidebar does not",
 		open: async (page, look) => {
-			await openDrawer(page, look);
+			await openUsage(page, look);
 			await page.locator("[data-sidebar-usage-scroll]").evaluate(list => {
 				list.scrollTop = list.scrollHeight;
 			});
@@ -1299,6 +1318,30 @@ export const SURFACES: readonly Surface[] = [
 			session: "work",
 			available: () => ["many", "blocked"].includes(process.env.OMP_GUI_TEST_USAGE_ACCOUNTS ?? ""),
 		},
+	},
+	{
+		id: "first-run",
+		area: "A",
+		title: "First run's provider step with Orca's step pill, in a new empty tab on a computer where nothing can serve yet",
+		// A fresh load checks the providers again, as a launch does; the step draws in a session with no transcript.
+		open: async (page, look) => {
+			await page.reload();
+			await openDrawer(page, look);
+			// This computer's project header's +, or on a paired computer's view the host project's.
+			await page
+				.locator(":is([data-sidebar-group-new], [data-device-group-new]):visible")
+				.first()
+				.click({ force: true });
+			// A phone's drawer closes onto the new tab; if it stays over it, pick its row, as a finger would.
+			const drawer = page.locator("[data-drawer]");
+			await drawer.waitFor({ state: "hidden", timeout: 5_000 }).catch(async () => {
+				await drawer.locator("button[data-roving-item]", { hasText: "New session" }).first().click();
+			});
+		},
+		ready: '[data-first-run-step="connect"] [role="progressbar"]',
+		// Parity only, and only over a host whose fake omp has no signed-in provider (`OMP_GUI_TEST_SIGNED_OUT=1`).
+		when: () => false,
+		parity: { session: "work", available: () => process.env.OMP_GUI_TEST_SIGNED_OUT === "1" },
 	},
 	{
 		id: "sidebar-family",
@@ -1482,7 +1525,7 @@ export const SURFACES: readonly Surface[] = [
 		area: "A",
 		title: "Composer holding a long multi-line draft",
 		open: async page => {
-			const input = page.locator("[data-composer-input]");
+			const input = page.locator("[data-composer-input]:visible").first();
 			await input.click();
 			await input.fill(
 				Array.from(
@@ -1490,6 +1533,13 @@ export const SURFACES: readonly Surface[] = [
 					(_, line) => `Line ${line + 1} of a long draft that wraps past the width of a narrow phone screen`,
 				).join("\n"),
 			);
+		},
+		// The draft is typed into the shown session's composer; `after` empties it again for the next surface.
+		parity: {
+			session: "work",
+			after: async page => {
+				await page.locator("[data-composer-input]:visible").first().fill("");
+			},
 		},
 	},
 	{
@@ -1533,16 +1583,48 @@ export const SURFACES: readonly Surface[] = [
 			area: "A",
 			title: `Side panel › ${panel}`,
 			open: async (page, look) => {
-				if (panel !== "diff") return ui(page, "setPanelTab", panel);
-				await openPanelView(page, look, "diff");
-				await page.locator("[data-scm-bar]:visible").first().waitFor({ timeout: 20_000 });
+				if (panel === "preview" || panel === "files") return ui(page, "setPanelTab", panel);
+				await openPanelView(page, look, panel);
+				await page
+					.locator(panel === "diff" ? "[data-scm-bar]:visible" : "[data-terminal-head]:visible")
+					.first()
+					.waitFor({ timeout: 20_000 });
 			},
+			// The terminal's sheet is ready once its first shell's tab shows (with the phone's key bar under it).
 			ready:
-				panel === "diff" ? "[data-scm-bar]:visible" : "[data-sheet-panel], [data-panel-tabbar], .omp-panel-topbar",
-			...(panel === "diff" ? { parity: { session: "work" as const, after: closePanelView } } : {}),
+				panel === "diff"
+					? "[data-scm-bar]:visible"
+					: panel === "terminal"
+						? "[data-terminal-tab]:visible"
+						: "[data-sheet-panel], [data-panel-tabbar], .omp-panel-topbar",
+			...(panel === "diff" || panel === "terminal"
+				? { parity: { session: "work" as const, after: closePanelView } }
+				: {}),
 			settle: 900,
 		}),
 	),
+	{
+		// The quick terminal (Orca's floating terminal): opened from the palette, its first shell's tab ready.
+		id: "quick-terminal",
+		area: "A",
+		title: "Quick terminal",
+		open: async (page, look) => {
+			await clickCommandPalette(page, look);
+			const palette = page.locator('[role="dialog"]:has([data-palette-index])');
+			await palette.getByRole("combobox").fill("quick-terminal");
+			await palette.locator('[data-command-name="quick-terminal"]').click();
+		},
+		ready: '[data-sheet-kind="quick-terminal"] [data-terminal-tab]',
+		// The shell takes Escape (xterm keeps it), so the sheet closes by its own ✕.
+		parity: {
+			session: "work",
+			after: async page => {
+				const close = page.locator('[data-sheet-kind="quick-terminal"] button[aria-label="Close"]').first();
+				if (await close.isVisible().catch(() => false)) await close.click();
+			},
+		},
+		settle: 900,
+	},
 	...VIEW_SHEETS.map(
 		(view): Surface => ({
 			id: `sheet-${view}`,
@@ -1570,6 +1652,32 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-file-viewer-head]",
 		parity: { session: "work", after: closePanelView },
 		settle: 1200,
+	},
+	{
+		id: "panel-notes",
+		area: "A",
+		title: "Changes › a review note on a diff line, in the notes shelf",
+		open: async (page, look) => {
+			await openPanelView(page, look, "diff");
+			await page.locator("[data-scm-bar]:visible").first().waitFor({ timeout: 20_000 });
+			await page
+				.locator(".omp-changes-list:visible")
+				.getByRole("button", { name: /^Sidebar\.tsx/ })
+				.first()
+				.click();
+			await page.locator("[data-note-add]:visible").first().click();
+			await page.locator("[data-note-editor] textarea:visible").first().fill("Keep the gap at 4.");
+			await page
+				.getByRole("button", { name: say(look, "reviewNotes.save"), exact: true })
+				.first()
+				.click();
+			await page.locator("[data-notes-shelf]:visible button[aria-expanded='false']").first().click();
+		},
+		ready: "[data-notes-shelf] [data-notes-list] [data-review-note]",
+		parity: { session: "work", after: clearNotesAndClose },
+		// The harness page has no git checkout to note on: parity only.
+		when: () => false,
+		settle: 900,
 	},
 
 	// ── Area B: Settings, centers, dialogs ────────────────────────────────────────────────────
@@ -1862,6 +1970,19 @@ export const SURFACES: readonly Surface[] = [
 		}),
 	),
 	{
+		id: "agents-pr-detail",
+		area: "B",
+		title: "Agents › Pull requests › a PR's detail (state, people, checks, files, review threads)",
+		// The list's first row, clicked as a person does (MasterDetail's list is the `nav`).
+		open: async page => {
+			await openPageTab(page, "agents", "prs");
+			await page.locator('section[data-destination="agents"] nav > ul > li button').first().click();
+		},
+		ready: "[data-pr-detail]",
+		settle: 1200,
+		parity: { session: "work" },
+	},
+	{
 		id: "stats",
 		area: "B",
 		title: "Insights › Stats (this session)",
@@ -1952,9 +2073,9 @@ export const SURFACES: readonly Surface[] = [
 			title: dialog.title,
 			open: (page, look) =>
 				dialog.id === "dialog-command-palette"
-					? clickCommandPalette(page)
+					? clickCommandPalette(page, look)
 					: dialog.id === "dialog-workspace"
-						? openWorkspaceDialog(page)
+						? openWorkspaceDialog(page, look)
 						: dialog.id === "dialog-model-setup"
 							? openModelSetup(page, look)
 							: ui(page, dialog.action, ...(dialog.args ?? [])),

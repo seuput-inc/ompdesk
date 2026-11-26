@@ -3,21 +3,36 @@
  * title/body form with an AI draft button that fills both fields from the
  * head branch's commits + diffstat (pr_draft, user-editable after), a draft
  * checkbox (applied on submit), and pr_create on submit. The head branch
- * reads from the active tab's live git status; base defaults to the repo's
- * default branch.
+ * reads from the active tab's live git status; the base is picked from the
+ * checkout's branches and starts on the repo's default branch. The body
+ * starts from the repository's pull request template when it has one.
  */
 
 import { Sparkles } from "lucide-react";
-import { useEffect, useId, useState } from "react";
-import type { RpcPrCreateResult, RpcPrDraftResult } from "../../../../shared/rpc-types";
+import { useEffect, useId, useMemo, useState } from "react";
+import type { RpcGitBranch, RpcPrCreateResult, RpcPrDraftResult } from "../../../../shared/rpc-types";
 import { useGitStatus } from "../../../hooks/use-git-status";
+import { github } from "../../../lib/github";
+import { uploadGithubImage } from "../../../lib/github-image";
 import { useT } from "../../../lib/i18n";
 import { openExternal } from "../../../lib/open-external";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { usePrCenterStore } from "../../../stores/pr-center";
 import { useSessionStore } from "../../../stores/session";
 import { toast, toastError } from "../../../stores/toast";
-import { Button, Checkbox, Input, Modal, TextArea } from "../../common";
+import { Button, Checkbox, Input, MarkdownComposer, Modal, Select } from "../../common";
+import { useAssignable } from "./PrPeople";
+
+/** Branch names a pull request can target: local ones and remote-tracking ones without their remote, once each. */
+export function baseChoices(branches: readonly RpcGitBranch[], head: string | undefined, base: string | undefined) {
+	const names = new Set<string>();
+	if (base) names.add(base);
+	for (const branch of branches) {
+		const name = branch.remote ? branch.name.replace(/^[^/]+\//, "") : branch.name;
+		if (name && name !== "HEAD" && name !== head) names.add(name);
+	}
+	return [...names];
+}
 
 export function PrCreateDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
 	const tabRpc = useTabRpc();
@@ -25,11 +40,14 @@ export function PrCreateDialog({ open, onClose }: { open: boolean; onClose: () =
 	const sidecarReady = useSessionStore(state => state.status) === "ready";
 	const repo = usePrCenterStore(state => state.repo);
 	const { status: git } = useGitStatus();
+	const mentions = useAssignable({});
 	const [title, setTitle] = useState("");
 	const [body, setBody] = useState("");
 	const [draft, setDraft] = useState(true);
 	const [drafting, setDrafting] = useState(false);
 	const [creating, setCreating] = useState(false);
+	const [branches, setBranches] = useState<RpcGitBranch[]>([]);
+	const [picked, setPicked] = useState<string | null>(null);
 	const formId = useId();
 
 	useEffect(() => {
@@ -39,10 +57,30 @@ export function PrCreateDialog({ open, onClose }: { open: boolean; onClose: () =
 		setDraft(true);
 		setDrafting(false);
 		setCreating(false);
-	}, [open]);
+		setPicked(null);
+		let active = true;
+		// Orca `pull-request-template.ts:54-61`: the template fills an empty body; one the person started stays.
+		github({ op: "pr_template" }).then(
+			result => {
+				if (active && result.body) setBody(current => current || (result.body ?? ""));
+			},
+			() => {},
+		);
+		tabRpc.command({ type: "git_branches" }).then(
+			response => {
+				if (active && response.success) setBranches(response.data as RpcGitBranch[]);
+			},
+			() => {},
+		);
+		return () => {
+			active = false;
+		};
+	}, [open, tabRpc]);
 
 	const head = git?.branch ?? undefined;
-	const base = repo?.available ? (repo.defaultBranch ?? undefined) : undefined;
+	const defaultBase = repo?.available ? (repo.defaultBranch ?? undefined) : undefined;
+	const base = picked ?? defaultBase;
+	const choices = useMemo(() => baseChoices(branches, head, defaultBase), [branches, head, defaultBase]);
 
 	const aiDraft = async () => {
 		if (!sidecarReady || drafting) return;
@@ -124,6 +162,14 @@ export function PrCreateDialog({ open, onClose }: { open: boolean; onClose: () =
 				<p className="font-mono text-sc-sm text-(--sc-text-muted)">
 					{t("prCenter.branches", { head: head ?? "?", base: base ?? "?" })}
 				</p>
+				{choices.length > 1 && (
+					<Select
+						label={t("prCenter.baseLabel")}
+						onChange={event => setPicked(event.target.value)}
+						options={choices.map(name => ({ value: name, label: name }))}
+						value={base ?? ""}
+					/>
+				)}
 				<div className="flex items-end gap-2">
 					<div className="flex-1">
 						<Input
@@ -147,9 +193,11 @@ export function PrCreateDialog({ open, onClose }: { open: boolean; onClose: () =
 						{t("prCenter.aiDraft")}
 					</Button>
 				</div>
-				<TextArea
+				<MarkdownComposer
 					label={t("prCenter.bodyLabel")}
-					onChange={event => setBody(event.target.value)}
+					mentions={mentions}
+					onChange={setBody}
+					onImage={file => uploadGithubImage(file, {})}
 					placeholder={t("prCenter.bodyPlaceholder")}
 					rows={10}
 					value={body}

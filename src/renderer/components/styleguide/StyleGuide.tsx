@@ -27,6 +27,7 @@ import {
 	MoreHorizontal,
 	Pencil,
 	Plus,
+	Quote,
 	RotateCw,
 	Search,
 	Settings,
@@ -61,6 +62,7 @@ import {
 	ErrorDetail,
 	FieldLabel,
 	FieldShell,
+	HoverCard,
 	IconButton,
 	InlineNotice,
 	Input,
@@ -72,6 +74,7 @@ import {
 	ListRow,
 	LiveSweep,
 	LiveText,
+	MarkdownComposer,
 	MasterDetail,
 	MenuButton,
 	Modal,
@@ -91,6 +94,7 @@ import {
 	SectionLabel,
 	SegmentedChoice,
 	Select,
+	SelectionActions,
 	SessionTitle,
 	SettingInfo,
 	Sheet,
@@ -382,10 +386,46 @@ const SAMPLE_TREE: TreeNode[] = [
 
 const SWAP_TITLES = ["New session", "Fix the login redirect", "Fix the login redirect loop on Safari"];
 
+/** A Markdown box with Write/Preview and an @mention list of three people. */
+function MarkdownComposerSample() {
+	const [text, setText] = useState("Looks good to me, @oc");
+	return (
+		<MarkdownComposer
+			label="Review comment"
+			mentions={["octocat", "octo-org", "monalisa"]}
+			onChange={setText}
+			value={text}
+		/>
+	);
+}
+
 /** Throws while `crash` is set, so the error boundaries' samples show their fallback on demand. */
 function CrashOnRender({ crash, children }: { crash: boolean; children: ReactNode }) {
 	if (crash) throw new Error("Unexpected payload: rows is not iterable");
 	return children;
+}
+
+/** Selection actions: select words of the paragraph and the bar offers its action above them. */
+function SelectionActionsSample() {
+	const ref = useRef<HTMLParagraphElement>(null);
+	return (
+		<>
+			<p className="max-w-md text-sc-md text-(--sc-text-secondary)" ref={ref}>
+				Select a few words of this sentence: the bar offers Add to chat beside them, once the selection settles.
+			</p>
+			<SelectionActions
+				actions={[
+					{
+						id: "quote",
+						label: "Add to chat",
+						icon: <Quote />,
+						run: text => toast({ variant: "info", message: `Quoted: ${text}` }),
+					},
+				]}
+				rootRef={ref}
+			/>
+		</>
+	);
 }
 
 /** Chips: toggles that turn on and off, removable chips whose text is its own action, a plain one. */
@@ -930,6 +970,9 @@ export default function StyleGuide() {
 						</div>
 						<div className="col-span-2">
 							<TextArea autoGrow label="Instructions" placeholder="Describe the task…" rows={2} />
+						</div>
+						<div className="col-span-3">
+							<MarkdownComposerSample />
 						</div>
 					</div>
 					<Block className="grid grid-cols-2 gap-x-10" label="Switch · SwitchField">
@@ -1738,6 +1781,18 @@ export default function StyleGuide() {
 						<Tooltip content="Tooltips show after a short hover or on keyboard focus" shortcut="⌘/">
 							<Button variant="ghost">Hover for tooltip</Button>
 						</Tooltip>
+						<HoverCard
+							content={
+								<div className="space-y-1">
+									<div className="text-sc-xs text-(--sc-text-muted)">octo/app #42 · open</div>
+									<div className="font-semibold">Show a card on a link's hover or keyboard focus</div>
+								</div>
+							}
+						>
+							<a className="self-center text-(--sc-accent) underline" href="#overlays">
+								Hover or focus for a link card
+							</a>
+						</HoverCard>
 					</div>
 					<div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] items-start gap-6 rounded-(--sc-radius-xl) bg-(--sc-surface-1) p-6">
 						<DialogSurface
@@ -1768,6 +1823,7 @@ export default function StyleGuide() {
 								<SwitchField checked label="Fast mode" onCheckedChange={() => {}} />
 								<SwitchField checked={false} label="Auto-retry" onCheckedChange={() => {}} />
 							</PopoverSurface>
+							<SelectionActionsSample />
 						</div>
 					</div>
 					<div className="h-80 overflow-hidden rounded-(--sc-radius-xl) border border-(--sc-border-subtle) bg-(--sc-overlay)">

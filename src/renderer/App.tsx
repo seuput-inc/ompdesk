@@ -41,6 +41,7 @@ import { isImeKeyEvent } from "./lib/ime";
 import { chordFromEvent, compileKeymap, KEYMAP_ACTION_BY_ID, KEYMAP_ACTIONS, type KeymapActionId } from "./lib/keymap";
 import { restoreQueuedMessages, stopFromEscape } from "./lib/messages";
 import { openNotifiedTab } from "./lib/notification-click";
+import { isNotificationTone } from "./lib/notification-sound";
 import { subscribeOmpUpdated } from "./lib/omp-update";
 import { loadOnDemandDialogs } from "./lib/on-demand-dialogs";
 import { installOutboxDelivery } from "./lib/outbox-delivery";
@@ -110,6 +111,9 @@ const ImportForeignDialog = lazyChunk(() =>
 );
 const ThemePickerDialog = lazyChunk(() =>
 	import("./components/dialogs/ThemePickerDialog").then(m => ({ default: m.ThemePickerDialog })),
+);
+const QuickTerminal = lazyChunk(() =>
+	import("./components/layout/QuickTerminal").then(m => ({ default: m.QuickTerminal })),
 );
 
 function FocusedSessionEffects() {
@@ -240,6 +244,10 @@ export function App() {
 	const themePickerOpen = useUiStore(s => s.themePickerOpen);
 	const [themePickerMounted, setThemePickerMounted] = useState(false);
 	if (themePickerOpen && !themePickerMounted) setThemePickerMounted(true);
+	// The quick terminal loads xterm: only on its first open, then stays mounted so its terminals keep their screens.
+	const quickTerminalOpen = useUiStore(s => s.quickTerminalOpen);
+	const [quickTerminalMounted, setQuickTerminalMounted] = useState(false);
+	if (quickTerminalOpen && !quickTerminalMounted) setQuickTerminalMounted(true);
 	const debugOpen = useUiStore(s => s.debugOpen);
 	const [debugMounted, setDebugMounted] = useState(false);
 	if (debugOpen && !debugMounted) setDebugMounted(true);
@@ -304,6 +312,7 @@ export function App() {
 				"notifications",
 				"notificationSound",
 				"notificationVolume",
+				"notificationTone",
 				"linkPreview",
 				"panelSide",
 				"thinkingExpanded",
@@ -353,6 +362,9 @@ export function App() {
 					!changedPreferences.has("notificationVolume")
 				) {
 					useUiStore.setState({ notificationVolume: prefs.notificationVolume });
+				}
+				if (isNotificationTone(prefs.notificationTone) && !changedPreferences.has("notificationTone")) {
+					useUiStore.setState({ notificationTone: prefs.notificationTone });
 				}
 				if ((prefs.panelSide === "left" || prefs.panelSide === "right") && !changedPreferences.has("panelSide")) {
 					useUiStore.setState({ panelSide: prefs.panelSide });
@@ -643,6 +655,15 @@ export function App() {
 				case "panel.preview":
 				case "panel.files":
 					ui.setPanelTab(migrateDefaultPanelTab(actionId.slice("panel.".length)));
+					return;
+				case "terminal.new":
+					ui.newTerminal();
+					return;
+				case "terminal.quick":
+					ui.setQuickTerminalOpen(!ui.quickTerminalOpen);
+					return;
+				case "terminal.find":
+					// The focused terminal opened its find bar before its shell saw the key; elsewhere the chord does nothing.
 					return;
 				case "hotkeys":
 					// ⌘/ or ⌃/ — Settings › Keyboard (/hotkeys parity); again returns.
@@ -960,6 +981,11 @@ export function App() {
 					</Suspense>
 				) : null}
 				<Suspense fallback={null}>{modelSetupOpen && <ModelSetupDialog />}</Suspense>
+				{quickTerminalMounted ? (
+					<Suspense fallback={null}>
+						<QuickTerminal />
+					</Suspense>
+				) : null}
 				{themePickerMounted ? (
 					<Suspense fallback={null}>
 						<ThemePickerDialog />

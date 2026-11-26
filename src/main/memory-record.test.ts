@@ -2,7 +2,15 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { describe, expect, it } from "vitest";
-import { memoryRecord, RECORD_EVERY_MS, RecordClock, type RecordTab } from "./memory-record";
+import {
+	MAIN_RISE_AFTER_MS,
+	MAIN_RISE_EVERY_MS,
+	MainRiseClock,
+	memoryRecord,
+	RECORD_EVERY_MS,
+	RecordClock,
+	type RecordTab,
+} from "./memory-record";
 import { SESSION_TAG_ENV } from "./omp-launch";
 import type { TagOwner } from "./session-processes";
 
@@ -62,5 +70,32 @@ describe("when the record is written", () => {
 		// Fine again, then short again: a new spell is recorded at once.
 		expect(clock.due(5_000 + RECORD_EVERY_MS + 5_000, false)).toBe(false);
 		expect(clock.due(5_000 + RECORD_EVERY_MS + 10_000, true)).toBe(true);
+	});
+});
+
+const MB = 1024 ** 2;
+
+describe("main's own memory rising", () => {
+	it("is due when main grew 300 MB within two minutes after the launch ramp, at most hourly", () => {
+		const clock = new MainRiseClock(0);
+		// Growth while starting is no rise.
+		expect(clock.due(60_000, 200 * MB)).toBeNull();
+		expect(clock.due(90_000, 900 * MB)).toBeNull();
+		let t = MAIN_RISE_AFTER_MS;
+		expect(clock.due(t, 900 * MB)).toBeNull();
+		// A slow climb over more than the window stays under the bar.
+		t += 150_000;
+		expect(clock.due(t, 1_100 * MB)).toBeNull();
+		t += 150_000;
+		expect(clock.due(t, 1_300 * MB)).toBeNull();
+		t += 60_000;
+		expect(clock.due(t, 1_650 * MB)).toBe(350 * MB);
+		const due = t;
+		t += 60_000;
+		expect(clock.due(t, 2_100 * MB)).toBeNull();
+		t = due + MAIN_RISE_EVERY_MS;
+		expect(clock.due(t, 2_100 * MB)).toBeNull();
+		t += 30_000;
+		expect(clock.due(t, 2_500 * MB)).toBe(400 * MB);
 	});
 });

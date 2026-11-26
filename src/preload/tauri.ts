@@ -226,8 +226,8 @@ const CAPTION_BUTTON_WIDTH = 46;
 function installCaptionButtons(): void {
 	// At once, before the first paint: the top bars' room for the buttons must not arrive after it (a layout shift).
 	const style = document.createElement("style");
-	style.textContent = `html[data-platform="win32"]:root{--sc-caption-buttons:${CAPTION_BUTTON_WIDTH * 3}px!important;--sc-caption-band:48px!important}
-[data-caption-buttons]{position:fixed;top:0;right:0;height:48px;z-index:2147483647;display:flex;-webkit-app-region:no-drag;app-region:no-drag;background:var(--omp-caption-bg,var(--sc-bg,#fff));color:var(--omp-caption-fg,var(--sc-text,#1b1b1f));font:10px "Segoe MDL2 Assets","Segoe Fluent Icons",system-ui}
+	style.textContent = `html[data-platform="win32"]:root{--sc-caption-buttons:${CAPTION_BUTTON_WIDTH * 3}px!important;--sc-caption-band:36px!important}
+[data-caption-buttons]{position:fixed;top:0;right:0;height:36px;z-index:2147483647;display:flex;-webkit-app-region:no-drag;app-region:no-drag;background:var(--omp-caption-bg,var(--sc-bg,#fff));color:var(--omp-caption-fg,var(--sc-text,#1b1b1f));font:10px "Segoe MDL2 Assets","Segoe Fluent Icons",system-ui}
 [data-caption-buttons] button{all:unset;box-sizing:border-box;width:${CAPTION_BUTTON_WIDTH}px;height:100%;display:grid;place-items:center;cursor:default;-webkit-app-region:no-drag;app-region:no-drag}
 [data-caption-buttons] button:hover{background:color-mix(in srgb,currentColor 12%,transparent)}
 [data-caption-buttons] button[data-caption="close"]:hover{background:#c42b1c;color:#fff}`;

@@ -760,6 +760,78 @@ describe("sessions.dump_bundle", () => {
 	});
 });
 
+describe("sessions.link", () => {
+	const pr = { url: "https://github.com/acme/api/pull/12", kind: "pr", repo: "acme/api", number: 12 };
+	const page = { url: "https://example.com/spec", kind: "url" };
+
+	it("attaches, lists and detaches the caller's own session's links through its tab", async () => {
+		const ports = new FakePorts();
+		ports.rpcData.session_link_add = pr;
+		ports.rpcData.session_links = { "/s/a.jsonl": [pr, page] };
+		const control = new AppControl(ports);
+
+		const added = await control.run(CALLER, "sessions.link", { add: pr.url });
+		expect(added).toBe(
+			"Linked PR acme/api#12 · https://github.com/acme/api/pull/12.\nIts links:\n- PR acme/api#12 · https://github.com/acme/api/pull/12\n- https://example.com/spec",
+		);
+		expect(ports.events.filter(event => event.kind === "toast")).toHaveLength(1);
+		await control.run(CALLER, "sessions.link", { remove: page.url });
+		ports.rpcData.session_links = {};
+		expect(await control.run(CALLER, "sessions.link", {})).toBe("The session has no links.");
+		expect(ports.rpcs).toEqual([
+			{ type: "session_link_add", url: pr.url },
+			{ type: "session_links" },
+			{ type: "session_link_remove", url: page.url },
+			{ type: "session_links" },
+			{ type: "session_links" },
+		]);
+		expect(ports.invoked).toEqual([]);
+	});
+
+	it("names a saved session by its path, and refuses one sessions.saved does not list", async () => {
+		const ports = new FakePorts();
+		ports.invoke = async (_tab, channel, args) => {
+			ports.invoked.push({ channel, args });
+			return channel === IPC_COMMANDS.SESSIONS_LIST ? [{ path: "/s/b.jsonl", title: "B" }] : [];
+		};
+		const control = new AppControl(ports);
+		await control.run(CALLER, "sessions.link", { session: "/s/b.jsonl", add: page.url });
+		expect(ports.rpcs[0]).toEqual({ type: "session_link_add", sessionPath: "/s/b.jsonl", url: page.url });
+		await expect(control.run(CALLER, "sessions.link", { session: "/s/gone.jsonl" })).rejects.toThrow(
+			"Not a saved session: /s/gone.jsonl",
+		);
+	});
+
+	it("shows each saved session's links and finds the sessions linked to a pull request", async () => {
+		const ports = new FakePorts();
+		ports.rpcData.session_links = { "/s/a.jsonl": [pr], "/s/c.jsonl": [page] };
+		ports.invoke = async (_tab, channel, args) => {
+			ports.invoked.push({ channel, args });
+			return [
+				{ path: "/s/a.jsonl", title: "A", cwd: "/r", modified: "m" },
+				{ path: "/s/b.jsonl", title: "B", cwd: "/r", modified: "m" },
+				{ path: "/s/c.jsonl", title: "C", cwd: "/r", modified: "m" },
+			];
+		};
+		const control = new AppControl(ports);
+		const all = await control.run(CALLER, "sessions.saved", {});
+		expect(all).toContain("- A · /r · m · /s/a.jsonl · links: PR acme/api#12 · https://github.com/acme/api/pull/12");
+		expect(all).toContain("- B · /r · m · /s/b.jsonl\n");
+		expect(ports.rpcs).toEqual([{ type: "session_links", all: true }]);
+		for (const link of ["acme/api#12", "https://github.com/Acme/api/pull/12/files", "ACME/API#12"])
+			expect(await control.run(CALLER, "sessions.saved", { link })).toBe(
+				"- A · /r · m · /s/a.jsonl · links: PR acme/api#12 · https://github.com/acme/api/pull/12",
+			);
+		expect(await control.run(CALLER, "sessions.saved", { link: "https://example.com/spec/" })).toContain(
+			"/s/c.jsonl",
+		);
+		expect(await control.run(CALLER, "sessions.saved", { link: "acme/api#13" })).toBe(
+			"No saved session is linked to it.",
+		);
+		await expect(control.run(CALLER, "sessions.saved", { link: "retry" })).rejects.toThrow("names no link");
+	});
+});
+
 describe("a caller tab on a paired host", () => {
 	const HOSTED = "hosted01";
 	const STUDIO = "dev-studio";

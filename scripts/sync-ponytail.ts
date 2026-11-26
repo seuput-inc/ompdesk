@@ -10,6 +10,16 @@ const SKILLS = ["ponytail", "ponytail-audit", "ponytail-debt", "ponytail-gain", 
 const ROOT = resolve(import.meta.dirname, "..");
 const MIT_TERMS_SHA256 = "fe2a9817987f862eaced948f0468c7f51d2fedfc48c5c505b246a49a3870e9a5";
 
+/** Refuses a LICENSE whose terms are not the MIT License's, word for word; the copyright line may change. */
+export function assertMitLicense(license: Buffer, what: string): void {
+	const terms = /^MIT License\n+Copyright [^\n]+\n+(Permission is hereby granted,[\s\S]*)$/.exec(
+		license.toString().replace(/\r\n/g, "\n"),
+	)?.[1];
+	if (!terms || createHash("sha256").update(terms.trim().replace(/\s+/g, " ")).digest("hex") !== MIT_TERMS_SHA256) {
+		throw new Error(`${what} license terms changed; review before distributing`);
+	}
+}
+
 export function syncPonytail(
 	source: string,
 	root: string,
@@ -40,12 +50,7 @@ export function syncPonytail(
 		throw new Error(`Expected @dietrichgebert/ponytail ${version} under MIT`);
 	}
 	const license = blob("LICENSE");
-	const terms = /^MIT License\n+Copyright [^\n]+\n+(Permission is hereby granted,[\s\S]*)$/.exec(
-		license.toString().replace(/\r\n/g, "\n"),
-	)?.[1];
-	if (!terms || createHash("sha256").update(terms.trim().replace(/\s+/g, " ")).digest("hex") !== MIT_TERMS_SHA256) {
-		throw new Error("Ponytail license terms changed; review before distributing");
-	}
+	assertMitLicense(license, "Ponytail");
 	const files = new Map([["LICENSE", license], ...skills.map(file => [file, blob(file)] as const)]);
 	const pack = join(root, "resources/omp-builtin/ponytail");
 	const hashes: Record<string, string> = {};

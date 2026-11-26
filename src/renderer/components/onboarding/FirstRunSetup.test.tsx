@@ -140,6 +140,9 @@ describe("FirstRunGate", () => {
 		);
 		expect(useFirstRunStore.getState().phase).toBe("connect");
 		expect(text()).toContain(translate("setup.title"));
+		// Orca's step pill says which step this is.
+		expect(text()).toContain(translate("setup.progress", { step: 1, total: 2 }));
+		expect(document.querySelector('[role="progressbar"]')?.getAttribute("aria-valuenow")).toBe("0.5");
 		expect(text()).toContain("Claude (Pro/Max)");
 		// The popular providers sit on top as their own mark-first group.
 		expect(document.querySelector("[data-featured-providers] [data-provider-mark]")).not.toBeNull();

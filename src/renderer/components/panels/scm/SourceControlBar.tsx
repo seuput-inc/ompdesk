@@ -2,7 +2,8 @@
  * The Changes panel's source-control row: branch picker, Pull (with the behind
  * count) and Push or Publish (with the ahead count), a menu for fetch, stash,
  * pop and undo-last-commit, and the banner of a merge, rebase, cherry-pick or
- * revert that stopped on conflicts. The list's own refresh sits in the toolbar above.
+ * revert that stopped on conflicts (which this session's agent can be asked to resolve).
+ * The list's own refresh sits in the toolbar above.
  */
 import {
 	Archive,
@@ -12,12 +13,18 @@ import {
 	CloudUpload,
 	MoreHorizontal,
 	RefreshCcw,
+	Sparkles,
 	Undo2,
 } from "lucide-react";
 import { useState } from "react";
-import type { RpcGitHead, RpcGitRemoteResult } from "../../../../shared/rpc-types";
+import { isConflictStatus } from "../../../../shared/git-status";
+import type { RpcGitChanges, RpcGitHead, RpcGitRemoteResult } from "../../../../shared/rpc-types";
+import { handToTab } from "../../../lib/composer-handoff";
+import { resolveConflictsPrompt } from "../../../lib/fix-prompts";
 import { useT } from "../../../lib/i18n";
 import type { TabRpc } from "../../../lib/tab-rpc";
+import { useRuntimeTabId } from "../../../stores/session-runtime-context";
+import { toastError } from "../../../stores/toast";
 import { Button, ConfirmDialog, InlineNotice, MenuButton } from "../../common";
 import { BranchPicker } from "./BranchPicker";
 import type { NameRequest } from "./NameDialog";
@@ -37,11 +44,27 @@ export function SourceControlBar({
 	requestName: (request: NameRequest) => void;
 }) {
 	const t = useT();
+	const tabId = useRuntimeTabId();
 	const [confirm, setConfirm] = useState<"undo" | "abort" | null>(null);
 	const { busy, run } = runner;
 	const blocked = busy !== null || head.operation !== null;
 	const remoteReason = !head.hasRemote ? t("scm.remote.none") : !head.branch ? t("scm.remote.detached") : undefined;
 	const operationLabel = head.operation ? t(`scm.operation.${head.operation}`) : "";
+	// The conflicted paths are read when asked: the panel's list may be filtered by its search.
+	const resolveWithAgent = async (target: string) => {
+		try {
+			const response = await rpc.getGitChanges();
+			if (!response.success) throw new Error(response.error ?? t("rpc.failed"));
+			const changes = response.data as RpcGitChanges;
+			const files = changes.files.filter(file => isConflictStatus(file.status)).map(file => file.path);
+			handToTab(target, {
+				text: resolveConflictsPrompt({ operation: head.operation, files, cwd: changes.root ?? "" }),
+				mode: "prepend",
+			});
+		} catch (error) {
+			toastError({ title: t("fixWithAgent.failed"), error });
+		}
+	};
 	return (
 		<>
 			<div className="flex flex-wrap items-center gap-1 border-b border-(--sc-divider) px-2 py-1.5" data-scm-bar>
@@ -171,6 +194,17 @@ export function SourceControlBar({
 				<InlineNotice
 					action={
 						<div className="flex gap-1">
+							{conflicts > 0 && tabId && (
+								<Button
+									disabled={busy !== null}
+									icon={<Sparkles />}
+									onClick={() => void resolveWithAgent(tabId)}
+									size="sm"
+									variant="secondary"
+								>
+									{t("fixWithAgent.resolveConflicts")}
+								</Button>
+							)}
 							<Button
 								disabled={busy !== null || conflicts > 0}
 								loading={busy === "continue"}

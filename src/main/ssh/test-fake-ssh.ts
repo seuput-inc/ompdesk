@@ -9,7 +9,7 @@
  * Test knobs, all files in `<dir>`: `passphrase` and `password` (required
  * answers), `leak` (exists → it prints the answers it was given to stderr and
  * exits as a refused login, which real ssh never does), `drop` (exists → a
- * running forward exits as a dropped connection), `changed` (exists → the host
+ * running forward or ports watch exits as a dropped connection), `changed` (exists → the host
  * key changed), `calls` (every argv, one JSON line each), `listings` (one line
  * per port listing, recorded before the listing is written).
  */
@@ -101,6 +101,10 @@ if (local) {
 	}, 100);
 } else if (command.length) {
 	const list = () => {
+		if (fs.existsSync(path.join(dir, "drop"))) {
+			process.stderr.write("Connection to " + host + " closed by remote host.\n");
+			process.exit(255);
+		}
 		const ports = fs.existsSync(path.join(dir, "ports")) ? fs.readFileSync(path.join(dir, "ports"), "utf8").trim().split(/\s+/).filter(Boolean) : [];
 		// Recorded before it is written: whoever has read a listing finds it counted.
 		fs.appendFileSync(path.join(dir, "listings"), "\n");

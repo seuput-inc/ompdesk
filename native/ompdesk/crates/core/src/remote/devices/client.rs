@@ -458,6 +458,12 @@ impl Client {
             );
         }
         self.set_state(&mut inner, LinkState::Offline);
+        // The host's gate refused this device by a person's choice: a timer would only be refused again, so only
+        // `connect` or a wake signal (focus, unlock, online, the node returning) tries again (Orca P100).
+        if matches!(failure.code.as_str(), "not_allowed" | "blocked") {
+            clear(&mut inner.retry);
+            return;
+        }
         let within = clock::now_ms().saturating_sub(since) < REFUSED_RETRY_WINDOW_MS;
         self.schedule_retry(&mut inner, refused && within);
     }

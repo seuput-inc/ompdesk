@@ -4,7 +4,7 @@
  * the selected host with reconnect and the server's listening ports, and
  * the questions OMPdesk's ssh asks are SshPromptDialog.tsx (mounted by App, so it stays out of this settings chunk).
  */
-import { ArrowRightLeft, Globe, KeyRound, Play, RotateCw, Square, Trash2 } from "lucide-react";
+import { ArrowRightLeft, Globe, KeyRound, Play, RotateCw, Square, SquareTerminal, Trash2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import {
 	SSH_GRACE_DEFAULT_MS,
@@ -166,10 +166,22 @@ export function SshForwardsPanel({ target }: { target: SshTarget }) {
 			className="mt-4 border-t border-(--sc-divider) pt-3"
 			data-ssh-forwards
 		>
-			<h4 className="mb-2 flex items-center gap-1.5 text-sc-sm font-semibold text-(--sc-text)">
-				<ArrowRightLeft aria-hidden className="size-(--sc-icon-sm)" />
-				{t("ssh.tools.forwards")}
-			</h4>
+			<div className="mb-2 flex items-center gap-2">
+				<h4 className="flex min-w-0 flex-1 items-center gap-1.5 text-sc-sm font-semibold text-(--sc-text)">
+					<ArrowRightLeft aria-hidden className="size-(--sc-icon-sm)" />
+					{t("ssh.tools.forwards")}
+				</h4>
+				{/* Orca's plain SSH terminal: this host in the quick terminal, its ssh asking in the PTY. */}
+				<Button
+					data-ssh-open-terminal
+					icon={<SquareTerminal />}
+					onClick={() => useUiStore.getState().newTerminal({ scratch: true, ssh: target })}
+					size="sm"
+					variant="secondary"
+				>
+					{t("ssh.tools.openTerminal")}
+				</Button>
+			</div>
 			{forwards.length > 0 && (
 				<ul className="mb-2 flex flex-col gap-1.5">
 					{forwards.map(entry => {

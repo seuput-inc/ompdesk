@@ -1,4 +1,5 @@
-//! Untrusted repository artwork never uses the trusted memory client's address/redirect policy.
+//! Untrusted repository artwork never uses the trusted memory client's address/redirect policy. A link a person
+//! hovers (`web_peek`) is read through the same checks and keeps its query.
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
@@ -8,10 +9,22 @@ pub(crate) struct PublicResponse {
     pub status: u16,
     pub body: Vec<u8>,
     pub url: Url,
+    /// The answer's `content-type` header as sent, empty when there is none.
+    pub content_type: String,
+}
+
+/// What a URL's query does: refused (artwork read from a repository's files, where a token must not leave), or kept
+/// on the first request and on every redirect (a link a person asked about, whose query is part of the page).
+#[derive(Clone, Copy, PartialEq)]
+enum Query {
+    Refuse,
+    Keep,
 }
 
 const REDIRECTS: usize = 3;
 const MAX_BYTES: usize = 512 * 1024;
+/// A picture a person asked about (an attachment) may be larger than artwork's input.
+const LINK_MAX_BYTES: usize = 5 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(4);
 
 fn public_ip(ip: IpAddr) -> bool {
@@ -40,7 +53,7 @@ fn public_ip(ip: IpAddr) -> bool {
     }
 }
 
-fn checked_url(input: &str) -> Result<Url, Failure> {
+fn checked_url(input: &str, query: Query) -> Result<Url, Failure> {
     let url = Url::parse(input).map_err(|_| Failure::Request)?;
     let port = match url.scheme() {
         "https" => 443,
@@ -50,7 +63,7 @@ fn checked_url(input: &str) -> Result<Url, Failure> {
     if !url.username().is_empty()
         || url.password().is_some()
         || url.port_or_known_default() != Some(port)
-        || url.query().is_some()
+        || (query == Query::Refuse && url.query().is_some())
         || url.fragment().is_some()
         || input.len() > 2048
     {
@@ -122,25 +135,32 @@ async fn addresses(url: &Url) -> Result<Vec<SocketAddr>, Failure> {
     checked_addresses(resolved.take(17).collect())
 }
 
-fn redirect(url: &Url, location: &str) -> Result<Url, Failure> {
+fn redirect(url: &Url, location: &str, query: Query) -> Result<Url, Failure> {
     let mut next = url.join(location).map_err(|_| Failure::Redirect)?;
-    next.set_query(None);
+    if query == Query::Refuse {
+        next.set_query(None);
+    }
     next.set_fragment(None);
     if url.scheme() == "https" && next.scheme() != "https" {
         return Err(Failure::Redirect);
     }
-    checked_url(next.as_str()).map_err(|_| Failure::Redirect)
+    checked_url(next.as_str(), query).map_err(|_| Failure::Redirect)
 }
 
 /// How a body past the cap ends: refused whole, or read up to the cap and the rest dropped unread.
 #[derive(Clone, Copy, PartialEq)]
-enum Past {
+pub(crate) enum Past {
     Refuse,
     Cut,
 }
 
-async fn fetch(input: &str, max_bytes: usize, past: Past) -> Result<PublicResponse, Failure> {
-    let mut url = checked_url(input)?;
+async fn fetch(
+    input: &str,
+    max_bytes: usize,
+    past: Past,
+    query: Query,
+) -> Result<PublicResponse, Failure> {
+    let mut url = checked_url(input, query)?;
     for hop in 0..=REDIRECTS {
         let pinned = addresses(&url).await?;
         let response = exchange_at(&url, &[], None, machine_tls, Some(&pinned), None).await?;
@@ -154,7 +174,7 @@ async fn fetch(input: &str, max_bytes: usize, past: Past) -> Result<PublicRespon
                 .get(LOCATION)
                 .and_then(|value| value.to_str().ok())
                 .ok_or(Failure::Redirect)?;
-            url = redirect(&url, location)?;
+            url = redirect(&url, location, query)?;
             continue;
         }
         if response
@@ -164,7 +184,13 @@ async fn fetch(input: &str, max_bytes: usize, past: Past) -> Result<PublicRespon
         {
             return Err(Failure::Request);
         }
-        let cap = max_bytes.min(MAX_BYTES);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_owned();
+        let cap = max_bytes;
         let body = if past == Past::Cut {
             let mut body = response.into_body();
             let mut kept = Vec::new();
@@ -184,23 +210,50 @@ async fn fetch(input: &str, max_bytes: usize, past: Past) -> Result<PublicRespon
                 .to_bytes()
                 .to_vec()
         };
-        return Ok(PublicResponse { status, body, url });
+        return Ok(PublicResponse {
+            status,
+            body,
+            url,
+            content_type,
+        });
     }
     Err(Failure::Redirect)
 }
 
 /// A credential-free, bounded public GET. No caller headers, cookies, proxies or referrer cross this boundary.
 pub(crate) async fn public_get(input: &str, max_bytes: usize) -> Result<PublicResponse, Failure> {
-    tokio::time::timeout(TIMEOUT, fetch(input, max_bytes, Past::Refuse))
-        .await
-        .map_err(|_| Failure::Connect)?
+    tokio::time::timeout(
+        TIMEOUT,
+        fetch(input, max_bytes.min(MAX_BYTES), Past::Refuse, Query::Refuse),
+    )
+    .await
+    .map_err(|_| Failure::Connect)?
 }
 
 /// `public_get` that keeps a long page's first `max_bytes` (a page's `<head>`) instead of refusing it.
 pub(crate) async fn public_head(input: &str, max_bytes: usize) -> Result<PublicResponse, Failure> {
-    tokio::time::timeout(TIMEOUT, fetch(input, max_bytes, Past::Cut))
-        .await
-        .map_err(|_| Failure::Connect)?
+    tokio::time::timeout(
+        TIMEOUT,
+        fetch(input, max_bytes.min(MAX_BYTES), Past::Cut, Query::Refuse),
+    )
+    .await
+    .map_err(|_| Failure::Connect)?
+}
+
+/// A page or picture a person asked about (a link in a conversation): the same checks as `public_get`, its query
+/// kept, the caller's own time bound. The size cap is at most 5 MiB.
+pub(crate) async fn public_link(
+    input: &str,
+    max_bytes: usize,
+    past: Past,
+    timeout: Duration,
+) -> Result<PublicResponse, Failure> {
+    tokio::time::timeout(
+        timeout,
+        fetch(input, max_bytes.min(LINK_MAX_BYTES), past, Query::Keep),
+    )
+    .await
+    .map_err(|_| Failure::Connect)?
 }
 
 #[cfg(test)]
@@ -231,6 +284,15 @@ mod tests {
             "2001:db8::1",
             "2002:7f00:1::",
             "3fff::1",
+            // CGNAT and the tailnet, multicast, and the IPv4-mapped forms of the private ranges.
+            "100.64.0.1",
+            "100.127.255.254",
+            "ff02::1",
+            "fd7a:115c:a1e0::1",
+            "::ffff:10.0.0.1",
+            "::ffff:192.168.0.1",
+            "::ffff:100.64.0.1",
+            "::ffff:169.254.169.254",
         ] {
             assert!(!public_ip(address.parse().unwrap()), "{address}");
         }
@@ -246,9 +308,14 @@ mod tests {
             "https://github.com:8443/",
             "https://github.com/image?token=secret",
         ] {
-            assert!(checked_url(url).is_err(), "{url}");
+            assert!(checked_url(url, Query::Refuse).is_err(), "{url}");
+            if !url.ends_with("?token=secret") {
+                assert!(checked_url(url, Query::Keep).is_err(), "{url}");
+            }
         }
-        assert!(checked_url("https://github.com/synthetic-owner.png").is_ok());
+        assert!(checked_url("https://github.com/synthetic-owner.png", Query::Refuse).is_ok());
+        assert!(checked_url("https://github.com/search?q=peek", Query::Keep).is_ok());
+        assert!(checked_url("https://127.0.0.1/search?q=peek", Query::Keep).is_err());
         assert!(public_ip("2606:4700:4700::1111".parse().unwrap()));
     }
 
@@ -265,20 +332,42 @@ mod tests {
     #[test]
     fn every_redirect_rejects_private_credentials_and_downgrades() {
         let base = Url::parse("https://github.com/synthetic.png").unwrap();
-        for location in [
-            "http://github.com/image",
-            "https://127.0.0.1/image",
-            "https://[::ffff:127.0.0.1]/image",
-            "https://secret@public.com/image",
-            "//metadata.google.internal/image",
-        ] {
-            assert!(redirect(&base, location).is_err(), "{location}");
+        for query in [Query::Refuse, Query::Keep] {
+            for location in [
+                "http://github.com/image",
+                "https://127.0.0.1/image",
+                "http://127.0.0.1/image",
+                "https://127.0.0.1/image?next=1",
+                "https://[::ffff:127.0.0.1]/image",
+                "https://[::ffff:7f00:1]/image",
+                "https://100.100.1.1/image",
+                "https://[fd7a:115c:a1e0::1]/image",
+                "https://169.254.169.254/latest/meta-data",
+                "https://secret@public.com/image",
+                "//metadata.google.internal/image",
+            ] {
+                assert!(redirect(&base, location, query).is_err(), "{location}");
+            }
         }
         assert_eq!(
-            redirect(&base, "https://avatars.githubusercontent.com/u/1?v=4#icon")
-                .unwrap()
-                .as_str(),
+            redirect(
+                &base,
+                "https://avatars.githubusercontent.com/u/1?v=4#icon",
+                Query::Refuse
+            )
+            .unwrap()
+            .as_str(),
             "https://avatars.githubusercontent.com/u/1"
+        );
+        assert_eq!(
+            redirect(
+                &base,
+                "https://avatars.githubusercontent.com/u/1?v=4#icon",
+                Query::Keep
+            )
+            .unwrap()
+            .as_str(),
+            "https://avatars.githubusercontent.com/u/1?v=4"
         );
     }
 
