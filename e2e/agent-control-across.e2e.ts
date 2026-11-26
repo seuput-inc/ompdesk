@@ -515,11 +515,17 @@ test.describe("on a paired device", () => {
 		// The board docks beside the transcript only with room for it (`workBoardFits`).
 		await app.app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.setContentSize(1600, 900));
 		// The opener's work board lists it like a local child: one opened-session row with its status, the device's
-		// name and its last report.
+		// name and its last report. Finished, it folds into the "1 done" row (4e95e79e2) once this window has heard its
+		// turn's end, which may come before or after this look: either way a tap on the fold shows the row.
 		const row = app.page.locator(`[data-work-board-panel] [data-board-opened="${child}"]`);
-		await expect(row).toBeVisible({ timeout: 30_000 });
-		await expect(row).toHaveAttribute("data-board-report", "done");
-		await expect(row.locator("[data-board-device]")).toHaveText("PC-B");
+		const fold = app.page.locator("[data-work-board-panel] [data-board-opened-done]");
+		await expect(async () => {
+			if (!(await row.isVisible()) && (await fold.getAttribute("data-open", { timeout: 500 })) === "false")
+				await fold.click();
+			await expect(row).toBeVisible({ timeout: 1_000 });
+			await expect(row).toHaveAttribute("data-board-report", "done", { timeout: 1_000 });
+			await expect(row.locator("[data-board-device]")).toHaveText("PC-B", { timeout: 1_000 });
+		}).toPass({ timeout: 30_000 });
 		// It is the opener's child, and its folder on PC-B is no project of the opener's: also one row of PC-B's list, the
 		// same session (`sidebarRows`, a82a6302).
 		const hostList = app.page.locator(
