@@ -506,8 +506,9 @@ export function QuietReply({ text: words }: { text: string }) {
 
 /** A note the app mailed into a bot's chat: the owner's item changes, a run result as its card, else the plain note. */
 export function BotNote({ message }: { message: AgentMessage }) {
+	const itemsHidden = useCardHidden("itemNotes");
 	const hidden = useCardHidden("runResults");
-	if (isItemMail(message)) return <ItemNote message={message} />;
+	if (isItemMail(message)) return itemsHidden ? null : <ItemNote message={message} />;
 	const details = resultDetails(message);
 	const result =
 		text(details?.from) === "ompdesk"

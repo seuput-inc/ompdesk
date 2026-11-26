@@ -129,11 +129,10 @@ function RunBotCard({
 
 /**
  * A note the app mailed into a bot's chat, drawn in the cards' own chunk (the phone's first screen stays in budget):
- * the owner's item changes, a run result (Orca's `bot-automation-result-note.ts`), or else the plain mail note.
+ * the owner's item changes, a run result (Orca's `bot-automation-result-note.ts`), or else the plain mail note. Each
+ * kind's Hide is read there.
  */
 export function ItemNote({ message }: { message: AgentMessage }) {
-	const hidden = useCardHidden("itemNotes");
-	if (hidden && isItemMail(message)) return null;
 	return (
 		<Suspense fallback={null}>
 			<LazyItemNote message={message} />
