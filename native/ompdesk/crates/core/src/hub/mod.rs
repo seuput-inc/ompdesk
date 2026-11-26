@@ -19,6 +19,10 @@
 //! and what came after it, up to the tick, in a microtask after the call returned: the order JavaScript gave a method's
 //! own code and the promise continuations it woke.
 //!
+//! **Busy.** While one job has held the hub thread for a beat (250 ms) or more, every connection's writer sends
+//! `{"busy": {ms, request}}` each beat, outside that ordered list (`busy_line`): main keeps waiting on a core that
+//! says so, up to its limit, and names the job (its request, or 0: the core's own) when it gives up.
+//!
 //! **Connection.** Main names a private socket (Unix) or pipe (Windows) and a token in the core's environment
 //! (`OMPDESK_HUB`, `OMPDESK_HUB_TOKEN`); the core listens there from its start (`listen_from_env`). The first line of a
 //! connection is `{"token": …}`; a connection without the token is closed. An instance belongs to the connection that
@@ -30,8 +34,10 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::task::{Context, Wake, Waker};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -158,6 +164,32 @@ thread_local! {
     static TASKS: RefCell<Tasks> = RefCell::default();
 }
 
+/// How often a connection tells main that the hub thread is still in one job, and how long a job runs before it does
+/// (`busy_line`): main waits past its silence deadline for a core that says so, up to its own limit
+/// (`src/main/core/hub.ts` `HUB_WAIT_LIMIT_MS`), so a job held by a blocking write or a slow page-in costs a wait,
+/// not the core; a hub thread held past that limit is still a lost core.
+const BEAT: Duration = Duration::from_millis(250);
+
+static EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
+/// When the hub thread's current job began, in ms since `EPOCH` plus one (0: it runs none).
+static BUSY_SINCE: AtomicU64 = AtomicU64::new(0);
+/// Main's request the current job runs (0: a job of the core's own: a timer, a task, a connection's bookkeeping).
+static BUSY_REQUEST: AtomicU64 = AtomicU64::new(0);
+
+fn since_epoch_ms() -> u64 {
+    u64::try_from(EPOCH.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The heartbeat a connection's writer sends while the hub thread has been in one job for a beat or more; read off
+/// the hub thread, so a job that blocks it is told while it blocks.
+fn busy_line() -> Option<String> {
+    let since = BUSY_SINCE.load(Ordering::Relaxed).checked_sub(1)?;
+    let ms = since_epoch_ms().saturating_sub(since);
+    let request = BUSY_REQUEST.load(Ordering::Relaxed);
+    (Duration::from_millis(ms) >= BEAT)
+        .then(|| format!(r#"{{"busy":{{"ms":{ms},"request":{request}}}}}"#))
+}
+
 static JOBS: LazyLock<mpsc::UnboundedSender<Job>> = LazyLock::new(|| {
     let (jobs, queue) = mpsc::unbounded_channel::<Job>();
     let started = std::thread::Builder::new()
@@ -183,16 +215,22 @@ fn run(mut queue: mpsc::UnboundedReceiver<Job>) {
     runtime.block_on(async move {
         let ready = Arc::clone(&READY);
         loop {
-            tokio::select! {
+            let job = tokio::select! {
                 biased;
                 job = queue.recv() => match job {
-                    Some(job) => job(),
+                    Some(job) => Some(job),
                     None => break,
                 },
-                () = ready.notify.notified() => {}
+                () = ready.notify.notified() => None,
+            };
+            BUSY_SINCE.store(since_epoch_ms() + 1, Ordering::Relaxed);
+            if let Some(job) = job {
+                job();
             }
             drain();
             flush();
+            BUSY_REQUEST.store(0, Ordering::Relaxed);
+            BUSY_SINCE.store(0, Ordering::Relaxed);
         }
     });
 }
@@ -515,6 +553,7 @@ struct AnswerError {
 /// Runs one request on the hub thread. Its answer is queued now (`Now`) or by its continuation (`Later`).
 fn handle(conn: ConnId, request: Request) {
     let id = request.id;
+    BUSY_REQUEST.store(id, Ordering::Relaxed);
     let outcome = match request.method.as_str() {
         "hub.open" => Outcome::Now(open(conn, &request.params)),
         "hub.call" => match params::<CallParams>(&request.params) {
@@ -623,7 +662,19 @@ where
     });
     let Ok(conn) = conn.await else { return };
     let writing = tokio::spawn(async move {
-        while let Some(mut line) = outgoing.recv().await {
+        let mut beat = tokio::time::interval(BEAT);
+        beat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            let mut line = tokio::select! {
+                line = outgoing.recv() => match line {
+                    Some(line) => line,
+                    None => break,
+                },
+                _ = beat.tick() => match busy_line() {
+                    Some(line) => line,
+                    None => continue,
+                },
+            };
             line.push('\n');
             if writer.write_all(line.as_bytes()).await.is_err() {
                 return;

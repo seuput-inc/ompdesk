@@ -473,11 +473,18 @@ export function useCompletionMenu({
 				}
 			}
 			const { matches, total } = searchMentionFiles(q, sources);
-			const items: CompletionItem[] = matches.map(({ path, label, ranges }) => ({
-				value: `${fileMentionFor(path, "")} `,
-				label,
-				highlights: ranges,
-			}));
+			// This computer's bots first (Orca lists them above the files), then the files.
+			const items: CompletionItem[] = [
+				...(composerExtras()?.botMentionItems(q, {
+					paused: t("bots.row.paused"),
+					bot: t("input.mention.bot"),
+				}) ?? []),
+				...matches.map(({ path, label, ranges }) => ({
+					value: `${fileMentionFor(path, "")} `,
+					label,
+					highlights: ranges,
+				})),
+			];
 			const lowerQuery = q.toLowerCase();
 			const sessionItems =
 				composerExtras()?.sessionMentionItems(sessions(), q, {

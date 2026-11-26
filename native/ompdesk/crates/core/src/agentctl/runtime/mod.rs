@@ -96,6 +96,8 @@ struct Rt {
     /// Debounce timers of the auto-close passes, per opener tab.
     sweep_timers: HashMap<String, JoinHandle<()>>,
     resending: bool,
+    /// A recovery of lost openers is out (`recover_openers_soon`): at most one waits on main at a time.
+    recovering: bool,
     wakes: HashMap<String, wake::Wake>,
 }
 
@@ -154,6 +156,7 @@ pub fn start(control: AgentControl, port: u64, config: RuntimeConfig) -> Arc<Run
                             pass.sweep_all();
                             pass.redeliver_mail();
                             pass.redeliver_sends();
+                            pass.recover_openers_soon();
                             pass.control.bots_tick().await;
                         });
                     }
@@ -216,6 +219,23 @@ impl Runtime {
         });
     }
 
+    /// `recover_openers` beside the pass that called it: its asks to main never hold the sweep, and a `setOpener` main
+    /// leaves unanswered keeps the next ones from piling up.
+    pub fn recover_openers_soon(self: &Arc<Self>) {
+        {
+            let mut rt = self.rt();
+            if rt.recovering {
+                return;
+            }
+            rt.recovering = true;
+        }
+        let me = self.clone();
+        tokio::spawn(async move {
+            me.recover_openers().await;
+            me.rt().recovering = false;
+        });
+    }
+
     // ---- what the opened sessions' books say ---------------------------------------------------------------------------
 
     /// The tabs that opened a session the auto-close pass may close, over every window (`#openers`). An outside
@@ -238,6 +258,41 @@ impl Runtime {
     pub fn sweep_openers(self: &Arc<Self>) {
         for opener in self.openers() {
             self.sweep_soon(&opener);
+        }
+    }
+
+    /// A tab of this computer that no opener names, while the call journal says which session's `ompdesk_session_open`
+    /// opened it (under its id now or one before a relaunch): that session's tab is its opener again (`setOpener`,
+    /// main's record and the pool's). A pool lost with the core, and a layout saved after that loss, forgot it; the
+    /// review list here never did, so a paired device's list of this computer was the only view left unnested.
+    pub async fn recover_openers(&self) {
+        let state = self.host().state();
+        let found: Vec<(String, String)> = {
+            let Some(calls) = self.control.calls() else {
+                return;
+            };
+            state
+                .tabs
+                .iter()
+                .filter(|tab| {
+                    tab.device.is_none() && !tab.viewing && state.parent_of(&tab.tab_id).is_none()
+                })
+                .filter_map(|tab| {
+                    let ids: Vec<&str> = std::iter::once(tab.tab_id.as_str())
+                        .chain(tab.former_ids.iter().map(String::as_str))
+                        .collect();
+                    let file = calls.opener_of(&ids)?;
+                    let opener = state.tabs.iter().find(|opener| {
+                        opener.device.is_none()
+                            && opener.tab_id != tab.tab_id
+                            && opener.session_path.as_deref() == Some(file.as_str())
+                    })?;
+                    Some((tab.tab_id.clone(), opener.tab_id.clone()))
+                })
+                .collect()
+        };
+        for (tab, opener) in found {
+            let _ = self.host().set_opener(&tab, &opener).await;
         }
     }
 

@@ -748,7 +748,7 @@ function DeviceSessions({
 			title,
 			auto: childParts.auto,
 			age: status !== "running" ? <TimeAgo className="text-(--sc-text-subtle)" iso={child.modified} /> : undefined,
-			device: host.name,
+			// The host's own child, under the host's own name already: no device label, as on the host's window.
 			tooltip: [
 				combinedTitle(childParts),
 				statusLabel,

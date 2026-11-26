@@ -45,6 +45,7 @@ const SECTION_ALIASES: Record<SettingsSectionId, string> = {
 	memory:
 		"memory remember pages search sessions handoff profile console password privacy delete purge lint sweep recorded 메모리 기억 페이지 검색 인계 핸드오프 프로필 개인정보 삭제",
 	schedules: "schedules scheduled runs timer cron daily interval omp -p print 예약 실행",
+	bots: "bots bot soul memory look around tidy who can ask templates 봇 소울 기억",
 	connections: "ssh remote devices tailscale tailnet host connect other computer 원격 기기 연결 테일스케일",
 	updates: "updates version upgrade omp update about this computer setup doctor",
 	advanced: "advanced other stock settings schema",

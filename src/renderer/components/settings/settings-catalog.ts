@@ -17,6 +17,7 @@ export const SETTINGS_SECTION_IDS = [
 	"permissions",
 	"workspace",
 	"schedules",
+	"bots",
 	"connections",
 	"updates",
 	"advanced",
@@ -31,7 +32,7 @@ export interface SettingsNavGroup {
 /** Left sub-nav: flat, always fully visible, grouped by who the setting is for. */
 export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
 	{ id: "app", items: ["general", "appearance", "keyboard"] },
-	{ id: "agent", items: ["models", "agent", "memory", "tools", "permissions", "workspace", "schedules"] },
+	{ id: "agent", items: ["models", "agent", "memory", "tools", "permissions", "workspace", "schedules", "bots"] },
 	{ id: "system", items: ["connections", "updates", "advanced"] },
 ];
 
@@ -51,6 +52,8 @@ export const SECTION_SCOPE: Record<SettingsSectionId, "app" | "host" | "mixed"> 
 	workspace: "host",
 	// A paired host runs its own schedules, in its folders, while its OMPdesk is open.
 	schedules: "host",
+	// Bots live on this computer (their folders are here), whichever tab is focused.
+	bots: "app",
 	// Memory runs on this computer for every omp OMPdesk starts here: a paired host's tab never moves it.
 	memory: "app",
 	connections: "mixed",

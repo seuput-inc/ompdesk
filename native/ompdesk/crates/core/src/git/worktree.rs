@@ -118,6 +118,8 @@ async fn add_worktree(
 /// A fetch of the remote default branch younger than this is not repeated (the dialog's prefetch, then its create).
 const FETCH_FRESH: Duration = Duration::from_secs(30);
 const FETCH_TIMEOUT_MS: u64 = 60_000;
+/// Each `ls-remote` of `rename_unpushed` (main's budget for the rename counts two per remote).
+const LS_REMOTE_MS: u64 = 30_000;
 
 /// Per main checkout, when its default branch was last fetched. One fetch at a time per repository: a create that
 /// follows a prefetch still running waits for it, then skips its own.
@@ -482,6 +484,8 @@ enum Mode {
     New,
     Local,
     Remote,
+    /// The local branch when it exists (a work item started again), else a new one as `New` makes it.
+    Reuse,
 }
 
 /// The branch a caller names (main checked its shape: `worktreeBranchSource`).
@@ -494,9 +498,9 @@ struct Source {
 }
 
 /// A worktree at `target` on exactly the branch the caller names: a new one (from `from`, else the create's start
-/// point), an existing
-/// local one, or a new local one tracking `<remote>/<name>`. The name is never changed: a taken, missing or invalid
-/// one is refused, and a new branch whose `worktree add` failed is deleted again.
+/// point), an existing local one, either of those as the branch exists (`reuse`), or a new local one tracking
+/// `<remote>/<name>`. The name is never changed: a taken, missing or invalid one is refused, and a new branch whose
+/// `worktree add` failed is deleted again.
 async fn add_named(
     git: &Git,
     primary: &str,
@@ -522,16 +526,14 @@ async fn add_named(
     let exists = branch_exists(git, primary, name).await?;
     let failed = |message: String| refuse("worktree_create_failed", message);
     match source.mode {
-        Mode::New => {
-            if exists {
-                return Err(failed(format!("The branch {name} already exists.")));
-            }
+        Mode::New | Mode::Reuse if !exists => {
             // Without its own `from`, a named branch starts where the create's base points (HEAD, the fetched
             // default branch or the ref), as a generated one does.
             let from = source.from.as_deref().unwrap_or(start_point);
             add_new(git, primary, base_cwd, target, name, from, checkout).await
         }
-        Mode::Local => {
+        Mode::New => Err(failed(format!("The branch {name} already exists."))),
+        Mode::Local | Mode::Reuse => {
             if !exists {
                 return Err(failed(format!("The branch {name} does not exist.")));
             }
@@ -581,32 +583,31 @@ async fn add_named(
 
 /// The branch a new task's worktree got its name for (FS91; Orca `first-work-branch-rename.ts:185-271`): the checkout
 /// at `cwd` renamed from `from` to `to` (else `to-2`… while those are taken), only while `from` is still what the
-/// checkout has out and it was never published: no upstream and no remote-tracking ref of that name on any remote.
-/// None when any of that does not hold; nothing is renamed then.
+/// checkout has out and it was never published: no upstream, no remote-tracking ref of that name, and no remote that
+/// `ls-remote` finds holding it (a remote that cannot be read counts as holding it). Main runs it under the lock its
+/// pushes take; an agent's own `git push` takes none, so the same test runs again after `git branch -m`, and a push
+/// that landed in between puts the old name back. None when any of that does not hold; nothing stays renamed then.
 pub async fn rename_unpushed(
     git: &Git,
     cwd: &str,
     from: &str,
     to: &str,
 ) -> Result<Option<String>, Fault> {
+    rename_unpushed_around(git, cwd, from, to, || {}).await
+}
+
+/// `rename_unpushed` with `between` run after the last check and before `git branch -m` (a test's push lands there).
+async fn rename_unpushed_around(
+    git: &Git,
+    cwd: &str,
+    from: &str,
+    to: &str,
+    between: impl FnOnce(),
+) -> Result<Option<String>, Fault> {
     let head = git
         .raw(cwd, &["symbolic-ref", "--quiet", "--short", "HEAD"])
         .await?;
     if head.code != 0 || js_trim(&head.text()) != from {
-        return Ok(None);
-    }
-    let upstream = format!("{from}@{{upstream}}");
-    let tracked = git
-        .raw(cwd, &["rev-parse", "--verify", "--quiet", &upstream])
-        .await?;
-    if tracked.code == 0 {
-        return Ok(None);
-    }
-    let pattern = format!("refs/remotes/*/{from}");
-    let published = git
-        .text(cwd, &["for-each-ref", "--format=%(refname)", &pattern])
-        .await?;
-    if !js_trim(&published).is_empty() {
         return Ok(None);
     }
     let valid = !to.starts_with('-')
@@ -618,22 +619,69 @@ pub async fn rename_unpushed(
     if !valid || to == from {
         return Ok(None);
     }
+    let mut candidate = None;
     for suffix in 1..=100 {
-        let candidate = if suffix == 1 {
+        let name = if suffix == 1 {
             to.to_owned()
         } else {
             format!("{to}-{suffix}")
         };
-        if candidate == from {
+        if name == from {
             return Ok(None);
         }
-        if branch_exists(git, cwd, &candidate).await? {
-            continue;
+        if !branch_exists(git, cwd, &name).await? {
+            candidate = Some(name);
+            break;
         }
-        git.text(cwd, &["branch", "-m", from, &candidate]).await?;
-        return Ok(Some(candidate));
     }
-    Ok(None)
+    let Some(candidate) = candidate else {
+        return Ok(None);
+    };
+    if published(git, cwd, from, from).await? {
+        return Ok(None);
+    }
+    between();
+    git.text(cwd, &["branch", "-m", from, &candidate]).await?;
+    // `branch -m` carries a `push -u`'s upstream over to the new name.
+    if published(git, cwd, &candidate, from).await? {
+        git.text(cwd, &["branch", "-m", &candidate, from]).await?;
+        return Ok(None);
+    }
+    Ok(Some(candidate))
+}
+
+/// Whether the branch `local` (its upstream) or the name `name` (a remote-tracking ref, or a remote's branch by
+/// `ls-remote`) was published. The network read goes last, so the local reads stay next to the rename.
+async fn published(git: &Git, cwd: &str, local: &str, name: &str) -> Result<bool, Fault> {
+    let remotes = git.text(cwd, &["remote"]).await?;
+    let head = format!("refs/heads/{name}");
+    for remote in remotes.split('\n').map(js_trim).filter(|r| !r.is_empty()) {
+        let opts = Opts {
+            timeout_ms: Some(LS_REMOTE_MS),
+            ..Opts::default()
+        };
+        match git
+            .run(cwd, &["ls-remote", "--heads", remote, &head], opts)
+            .await
+        {
+            Ok(found) if found.code == 0 && js_trim(&found.text()).is_empty() => {}
+            Ok(_) => return Ok(true),
+            Err(fault) if fault.code == "cancelled" => return Err(fault),
+            Err(_) => return Ok(true),
+        }
+    }
+    let upstream = format!("{local}@{{upstream}}");
+    let tracked = git
+        .raw(cwd, &["rev-parse", "--verify", "--quiet", &upstream])
+        .await?;
+    if tracked.code == 0 {
+        return Ok(true);
+    }
+    let pattern = format!("refs/remotes/*/{name}");
+    let tracking = git
+        .text(cwd, &["for-each-ref", "--format=%(refname)", &pattern])
+        .await?;
+    Ok(!js_trim(&tracking).is_empty())
 }
 
 #[derive(Serialize)]
@@ -1441,5 +1489,97 @@ mod add_tests {
             sh(&primary, &["rev-parse", "jinseo/eng-12-fix-login"]),
             older
         );
+    }
+
+    #[tokio::test]
+    async fn a_push_that_lands_between_the_check_and_the_rename_keeps_the_old_name() {
+        let primary = monorepo("rename-race");
+        let bare = primary.with_file_name("origin.git");
+        sh(&primary, &["init", "-q", "--bare", bare.to_str().unwrap()]);
+        sh(
+            &primary,
+            &["remote", "add", "origin", bare.to_str().unwrap()],
+        );
+        let tree = primary.with_file_name("tree");
+        let tree_path = tree.to_str().unwrap();
+        let from = "omp/gui/task-cd34";
+        sh(&primary, &["worktree", "add", "-q", "-b", from, tree_path]);
+        let git = crate::git::run::tests::git();
+
+        let raced = rename_unpushed_around(&git, tree_path, from, "omp/gui/fix-race", || {
+            sh(&tree, &["push", "-q", "-u", "origin", from]);
+        })
+        .await
+        .unwrap();
+        assert_eq!(raced, None);
+        assert_eq!(sh(&tree, &["symbolic-ref", "--short", "HEAD"]), from);
+        assert!(sh(&primary, &["branch", "--list", "omp/gui/fix-race*"]).is_empty());
+        assert_eq!(
+            sh(&tree, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+            format!("origin/{from}"),
+            "the upstream the push set stays with its branch"
+        );
+
+        // Published from elsewhere: no upstream and no remote-tracking ref here, only the remote's own branch.
+        let other = "omp/gui/task-ef56";
+        let other_tree = primary.with_file_name("tree-2");
+        let other_path = other_tree.to_str().unwrap();
+        sh(
+            &primary,
+            &["worktree", "add", "-q", "-b", other, other_path],
+        );
+        sh(
+            &primary,
+            &["push", "-q", "origin", &format!("{other}:{other}")],
+        );
+        sh(
+            &primary,
+            &["update-ref", "-d", &format!("refs/remotes/origin/{other}")],
+        );
+        let elsewhere = rename_unpushed(&git, other_path, other, "omp/gui/fix-else")
+            .await
+            .unwrap();
+        assert_eq!(elsewhere, None, "ls-remote finds the branch on origin");
+
+        let fresh = "omp/gui/task-gh78";
+        let fresh_tree = primary.with_file_name("tree-3");
+        let fresh_path = fresh_tree.to_str().unwrap();
+        sh(
+            &primary,
+            &["worktree", "add", "-q", "-b", fresh, fresh_path],
+        );
+        let renamed = rename_unpushed(&git, fresh_path, fresh, "omp/gui/fix-fresh")
+            .await
+            .unwrap();
+        assert_eq!(renamed.as_deref(), Some("omp/gui/fix-fresh"));
+    }
+
+    #[tokio::test]
+    async fn a_work_item_started_again_reuses_its_branch_where_a_new_one_is_refused() {
+        let primary = monorepo("reuse");
+        let named = |mode| {
+            let mut params = params(&primary, None, Vec::new());
+            params.source = Some(Source {
+                name: "jin/lin-12-fix-login".into(),
+                mode,
+                remote: None,
+                from: None,
+            });
+            params
+        };
+        let first = add(named(Mode::Reuse), Scope::detached()).await.unwrap();
+        let tree = PathBuf::from(&first.path);
+        sh(&tree, &["commit", "-q", "--allow-empty", "-m", "work"]);
+        let worked = sh(&tree, &["rev-parse", "HEAD"]);
+        sh(&primary, &["worktree", "remove", first.path.as_str()]);
+
+        let refused = add(named(Mode::New), Scope::detached())
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(refused.code, "worktree_create_failed");
+        let again = add(named(Mode::Reuse), Scope::detached()).await.unwrap();
+        assert_eq!(again.branch, "jin/lin-12-fix-login");
+        assert_eq!(sh(Path::new(&again.path), &["rev-parse", "HEAD"]), worked);
     }
 }

@@ -514,6 +514,7 @@ function groupToggle(cwd: string): Element {
 
 describe("Sidebar menus and pinned ordering", () => {
 	it("leads with the nav rows (Bots only once the bots feature is available) and ends with Settings and a help menu", async () => {
+		useBotsFeature.setState({ available: false });
 		installMockOmp(LIST);
 		seedStores();
 		await mount(<Sidebar />);
@@ -524,7 +525,12 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(container.querySelector("[data-sidebar-bots]")).toBeNull();
 		await act(async () => useBotsFeature.setState({ available: true }));
 		expect(navRows()).toEqual(["board", "agents", "schedules", "bots", "stats", "phone"]);
-		expect(container.querySelector("[data-sidebar-bots]")?.textContent).toContain("No bots yet");
+		// With no bot yet the section is one card that makes the first (Orca's SidebarBotsEmptyState).
+		const bots = container.querySelector("[data-sidebar-bots]");
+		expect(bots?.textContent).toContain("Your AI teammate");
+		expect([...(bots?.querySelectorAll("button") ?? [])].map(button => button.textContent)).toEqual(
+			expect.arrayContaining(["New bot", "Templates"]),
+		);
 		await fire(container.querySelector('[data-sidebar-nav-row="bots"]'), "onClick");
 		expect(useUiStore.getState().destination).toBe("bots");
 		await act(async () => useBotsFeature.setState({ available: false }));
@@ -3025,6 +3031,8 @@ describe("Sidebar families: the sessions an agent opened", () => {
 		const child = family?.querySelector("[data-sidebar-opened-session]");
 		expect(child?.textContent).toContain("Child on the host");
 		expect(child?.querySelector('[data-family-status="running"]')).not.toBeNull();
+		// The host's own child sits under the host's name already: no device label, as in the host's own window.
+		expect(child?.querySelector("[data-family-device]")).toBeNull();
 		// A row of its opener's family, not a row of the device's list beside it.
 		expect(
 			[...(device?.querySelectorAll("[data-device-session]") ?? [])].map(row => row.textContent),
@@ -4042,6 +4050,45 @@ describe("Sidebar device sections", () => {
 			expect(omp.tabs.spawn).toHaveBeenCalledWith(
 				expect.objectContaining({ cwd: APP, sessionPath: AT_WORK, device: "dev-studio" }),
 			);
+		});
+
+		it("names no device on the host's own children, and names the third computer a host's session opened one on", async () => {
+			await mountHost(hostRows(path => ({ openedBySession: path === BOSS ? null : BOSS })));
+			act(() => {
+				const remote = useRemoteStore.getState().state;
+				if (!remote) throw new Error("no remote state");
+				useRemoteStore.getState().apply({
+					...remote,
+					hosts: [
+						{
+							deviceId: "dev-studio",
+							name: "studio",
+							state: "online",
+							remoteOpened: [
+								{
+									tabId: "tz",
+									device: "dev-desk",
+									sessionPath: "C:\\s\\on-desk.jsonl",
+									cwd: "C:\\work",
+									kind: "agent",
+									openedBySession: BOSS,
+									status: "running",
+									task: "Build on the desk",
+								},
+							],
+						},
+						{ deviceId: "dev-desk", name: "desk", state: "online" },
+					],
+				});
+				useSidebarSubagentsStore.setState({ expanded: new Set([BOSS_KEY]) });
+			});
+			await flush();
+			const family = device()?.querySelector(`[data-sidebar-family="${BOSS_KEY}"]`);
+			const atWork = family?.querySelector(`[data-session-path="${AT_WORK}"]`);
+			expect(atWork).not.toBeNull();
+			expect(atWork?.querySelector("[data-family-device]")).toBeNull();
+			const onDesk = family?.querySelector('[data-session-path="C:\\\\s\\\\on-desk.jsonl"]');
+			expect(onDesk?.querySelector("[data-family-device]")?.textContent).toBe("desk");
 		});
 
 		// Only the host's live summary says the child failed (its omp is in error; no review item, no childProblem, an

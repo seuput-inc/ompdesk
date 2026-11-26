@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { JUDGE_ASSIST_NEEDS_USER, type NeedsUserResult } from "../../resources/gui-bridge/modes/judge-assist-contracts";
-import { isQuietResult } from "../shared/bots";
+import { type BotQuietKind, isQuietResult } from "../shared/bots";
 import type { IpcNotifyPayload } from "../shared/ipc-types";
 import { botOfFolder } from "./bots";
 import type { ClientWindow } from "./web/client-window";
@@ -46,6 +46,22 @@ export function quietBotTurn(turn: LastTurn | undefined): boolean {
 	return Boolean(turn?.reply && botOfFolder(turn.cwd) && isQuietResult(turn.reply));
 }
 
+/** The notice kind each per-bot notification switch (`Bot.quiet`, Settings › Bots › Notifications) silences. */
+const BOT_QUIET_KIND: Record<"ask" | "completion" | "error", BotQuietKind> = {
+	ask: "permission",
+	completion: "done",
+	error: "failed",
+};
+
+/**
+ * The owner turned this kind off for the bot whose chat the tab is (Orca's per-bot notification toggles).
+ * shortcut: the chat's folder is its last finished turn's, so an ask in a chat's very first turn still notifies; read
+ * the tab's own folder if that shows up.
+ */
+function mutedForBot(kind: "ask" | "completion" | "error", turn: LastTurn | undefined): boolean {
+	return Boolean(turn && botOfFolder(turn.cwd)?.quiet?.includes(BOT_QUIET_KIND[kind]));
+}
+
 export interface NotifyCaller {
 	readonly win: ClientWindow | null;
 	/** The Electron window of a desktop caller; null for a web caller (its page already checked its own focus). */
@@ -81,6 +97,7 @@ export function createNotifyHandler(
 		const tabId = typeof payload.tabId === "string" ? payload.tabId : undefined;
 		// Before the dedupe: a quiet turn takes no slot from a real notice.
 		if (kind === "completion" && tabId && quietBotTurn(deps.lastTurn(tabId))) return false;
+		if (kind && tabId && mutedForBot(kind, deps.lastTurn(tabId))) return false;
 		const win = caller.win;
 		const winId = win?.webContents.id ?? 0;
 		const scope = tabId && deps.isShared(tabId) ? `tab:${tabId}` : String(winId);

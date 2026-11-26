@@ -37,6 +37,10 @@ pub struct BotRecord {
     pub stale_days: Option<f64>,
     /// Its Look around schedule's id.
     pub look_around: Option<String>,
+    /// Its memory upkeep schedule's id (`tidy_memory`).
+    pub tidy: Option<String>,
+    /// Notification kinds the owner turned off for its chats: `permission`, `done`, `failed`.
+    pub quiet: Vec<String>,
     pub created_at: String,
 }
 

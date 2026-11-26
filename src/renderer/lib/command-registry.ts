@@ -105,6 +105,7 @@ export interface CommandMenuItem {
 export const COMMAND_CATEGORIES = [
 	"session",
 	"agents",
+	"bots",
 	"insights",
 	"model",
 	"providers",

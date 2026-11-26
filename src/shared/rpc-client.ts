@@ -100,7 +100,7 @@ export interface SessionRpcClient {
 			baseRef?: string;
 			branchPrefix?: string;
 			/** The exact branch instead of `<branchPrefix><name>` (`worktree_create.branch`). */
-			branch?: { name: string; mode: "new" | "local" | "remote"; remote?: string; from?: string };
+			branch?: { name: string; mode: "new" | "local" | "remote" | "reuse"; remote?: string; from?: string };
 			requestId?: string;
 			sparse?: string;
 			prepare?: boolean;

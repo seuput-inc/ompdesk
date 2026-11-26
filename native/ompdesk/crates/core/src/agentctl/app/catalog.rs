@@ -61,7 +61,7 @@ const BRIDGE_HEALTH_GET: &str = "bridge-health:get";
 pub const PANEL_TABS: [&str; 4] = ["terminal", "diff", "preview", "files"];
 /// The session views an agent may open as a sheet (the renderer's `VIEW_SHEETS`; a test keeps them equal).
 pub const VIEW_SHEETS: [&str; 5] = ["jobs", "plan", "logs", "tree", "work"];
-pub const SETTINGS_SECTIONS: [&str; 13] = [
+pub const SETTINGS_SECTIONS: [&str; 14] = [
     "general",
     "appearance",
     "keyboard",
@@ -72,6 +72,7 @@ pub const SETTINGS_SECTIONS: [&str; 13] = [
     "permissions",
     "workspace",
     "schedules",
+    "bots",
     "connections",
     "updates",
     "advanced",
@@ -180,7 +181,7 @@ pub fn shipped<P: AppPorts>() -> Registry<P> {
         action("omp_settings.set", "omp", r##"Write one stock omp setting by its exact path (find it with omp_settings.get query). value must fit the setting's type (true/false, number, one of its options, a list, or an object for a record such as retry.fallbackChains). device writes another computer's omp. One step back with app.undo. Credentials and the approval, security, memory and computer-use settings are refused."##, json!({"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":200},"value":{"type":"json"},"device":{"type":"string","minLength":1,"maxLength":200,"description":"A paired computer by name or id as ompdesk_sessions lists it, or \"local\"; omit for the omp of your own session."}},"required":["path","value"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_omp_settings_set(ctx, args))),
         action("omp.bridge_health", "omp", r##"What OMPdesk's bridge self-check found for each omp version running on the computer this session runs on (a paired host's own when it runs there): whether every OMPdesk action works with it, and each unavailable action with the omp internals it lacks."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_omp_bridge_health(ctx, args))),
         action("ui.panel", "ui", r##"Open a side panel view (terminal, diff, preview, files), open a session view as a sheet (jobs = background tasks, plan = the plan document, logs, tree = the session tree, work = the work tree), or close the panel."##, json!({"type":"object","properties":{"tab":{"type":"string","enum":["terminal","diff","preview","files","jobs","plan","logs","tree","work","close"]}},"required":["tab"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_ui_panel(ctx, args))),
-        action("ui.settings_open", "ui", r##"Open Settings at a section (for the user to look at or to finish a step only they may do)."##, json!({"type":"object","properties":{"section":{"type":"string","enum":["general","appearance","keyboard","models","agent","memory","tools","permissions","workspace","schedules","connections","updates","advanced"]},"sub":{"type":"string","maxLength":60}},"required":["section"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_ui_settings_open(ctx, args))),
+        action("ui.settings_open", "ui", r##"Open Settings at a section (for the user to look at or to finish a step only they may do)."##, json!({"type":"object","properties":{"section":{"type":"string","enum":["general","appearance","keyboard","models","agent","memory","tools","permissions","workspace","schedules","bots","connections","updates","advanced"]},"sub":{"type":"string","maxLength":60}},"required":["section"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_ui_settings_open(ctx, args))),
         action("sessions.saved", "sessions", r##"Saved sessions on the computer this session runs on (a paired host's own when it runs there): title, folder, last change, path, and the links sessions.link attached. link lists only the sessions linked to a pull request or issue (its URL or owner/repo#n) or to a page URL."##, json!({"type":"object","properties":{"scope":{"type":"string","enum":["local","global"],"description":"local: this folder's sessions; global (default): all."},"link":{"type":"string","minLength":1,"maxLength":4096,"description":"A pull request or issue URL, owner/repo#n, or a page URL: only the sessions linked to it."}},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_sessions_saved(ctx, args))),
         action("sessions.search", "sessions", r##"Search the text of saved sessions."##, json!({"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":200},"scope":{"type":"string","enum":["local","global"],"description":"local: this folder's sessions; global (default): all."}},"required":["query"],"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_sessions_search(ctx, args))),
         action("sessions.rename", "sessions", r##"Rename a saved session."##, json!({"type":"object","properties":{"sessionPath":{"type":"string","minLength":1,"maxLength":4096,"description":"Session file path (.jsonl) from sessions.saved."},"name":{"type":"string","minLength":1,"maxLength":200}},"required":["sessionPath","name"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_sessions_rename(ctx, args))),

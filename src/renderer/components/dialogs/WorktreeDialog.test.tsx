@@ -177,7 +177,7 @@ describe("the new task sheet", () => {
 		expect(create).toMatchObject({
 			name: "lin-12-fix-login",
 			baseRef: "HEAD",
-			branch: { name: "jin/lin-12-fix-login", mode: "new" },
+			branch: { name: "jin/lin-12-fix-login", mode: "reuse" },
 		});
 	});
 

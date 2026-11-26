@@ -244,6 +244,21 @@ impl CallJournal {
             .cloned()
     }
 
+    /// The session file of this computer's session whose `ompdesk_session_open` opened a tab with one of `ids` (a tab
+    /// keeps its earlier ids across relaunches), by the newest such call; None when a paired device's session made it.
+    pub fn opener_of(&self, ids: &[&str]) -> Option<String> {
+        let record = self.records.iter().rev().find(|record| {
+            record.tool == "ompdesk_session_open"
+                && record
+                    .opened
+                    .as_ref()
+                    .is_some_and(|opened| opened.iter().any(|id| ids.contains(&id.as_str())))
+        })?;
+        let mut parts = record.key.splitn(3, '\n');
+        let (device, file) = (parts.next()?, parts.next()?);
+        (device.is_empty() && !file.is_empty()).then(|| file.to_owned())
+    }
+
     /// Record a call before its effect; written before this returns.
     pub fn begin(&mut self, call: CallBegin) -> Result<(), String> {
         self.records.retain(|record| record.key != call.key);

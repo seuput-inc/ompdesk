@@ -272,6 +272,8 @@ describe("a bot chat's quiet turn", () => {
 		reach: [],
 		staleDays: 7,
 		lookAround: null,
+		tidy: null,
+		quiet: [],
 		createdAt: "2026-11-25T00:00:00.000Z",
 	};
 	beforeEach(() => setBotsState({ bots: [bot], items: [] }));
@@ -295,5 +297,15 @@ describe("a bot chat's quiet turn", () => {
 			{ winId: 1, notice: completion("t1") },
 			{ winId: 2, notice: completion("t2") },
 		]);
+	});
+
+	it("notifies nothing of a kind the owner turned off for that bot", async () => {
+		setBotsState({ bots: [{ ...bot, quiet: ["done"] }], items: [] });
+		const world = build(async () => ({ needsUser: false }));
+		world.turns.set("t1", { cwd: folder, reply: "Merged the fix." });
+		world.turns.set("t2", { cwd: "/Users/me/code/app", reply: "Merged the fix." });
+		await world.notify(caller(WIN_1), completion("t1"));
+		await world.notify(caller(WIN_2), completion("t2"));
+		expect(world.delivered).toEqual([{ winId: 2, notice: completion("t2") }]);
 	});
 });

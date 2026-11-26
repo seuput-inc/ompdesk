@@ -39,7 +39,7 @@ import {
 	parseClosedChildren,
 	sidebarViewOf,
 } from "../../shared/agent-control";
-import type { BotsRequest, BotsState } from "../../shared/bots";
+import type { BotsAnswer, BotsCall, BotsState } from "../../shared/bots";
 import type { SessionStatus } from "../../shared/control-protocol";
 import type {
 	AutoCloseTurn,
@@ -403,7 +403,7 @@ export class AgentControlRuntime {
 	}
 
 	/** The owner's change to the bots or their items (`BOTS_COMMAND`): the state after it. */
-	bots(request: BotsRequest): Promise<BotsState> {
+	bots<C extends BotsCall>(request: C): Promise<BotsAnswer<C>> {
 		return this.control.bots(request);
 	}
 
@@ -1354,7 +1354,8 @@ export class AgentControlRuntime {
 			closedChildren: () => parseClosedChildren(deps.prefs.get(AGENT_CLOSED_CHILDREN_PREF)),
 			botsChanged: state => deps.botsChanged?.(state),
 			setOpener: (tabId, openerTabId) => {
-				// As a session the bot's chat opened: its reports and auto-close go to that chat, across a relaunch too.
+				// As a session the bot's chat opened, or one the call journal names after its opener was lost: its reports
+				// and auto-close go to that tab, across a relaunch too.
 				this.#parents.set(tabId, { callerTabId: openerTabId });
 				deps.pool.setTabOpener(tabId, openerTabId);
 			},
