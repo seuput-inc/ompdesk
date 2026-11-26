@@ -457,11 +457,16 @@ async fn a_tab_no_opener_names_gets_back_the_one_the_call_journal_names() {
     kid["formerIds"] = json!(["kid-before"]);
     let mut remote = tab("remote-kid", "/s/r.jsonl");
     remote["formerIds"] = json!(["remote-before"]);
+    // A call that joined a session another window holds noted its view (a repeated call is answered by what it opened
+    // or joined): a view is never anyone's child.
+    let mut view = tab("joined-view", "/s/held.jsonl");
+    view["viewing"] = json!(true);
     let st = state(vec![
         tab("boss-now", "/s/boss.jsonl"),
         kid,
         remote,
         tab("person", "/s/p.jsonl"),
+        view,
     ]);
     let files = Files {
         calls: Some(JournalFile { file: None }),
@@ -474,6 +479,7 @@ async fn a_tab_no_opener_names_gets_back_the_one_the_call_journal_names() {
             ("\n/s/boss.jsonl\ncall-1", "kid-before"),
             // A paired device's session opened this one: no session here is its opener.
             ("dev\n/s/boss.jsonl\ncall-2", "remote-before"),
+            ("\n/s/boss.jsonl\ncall-3", "joined-view"),
         ] {
             calls
                 .begin(CallBegin {
