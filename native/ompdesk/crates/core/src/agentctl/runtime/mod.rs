@@ -151,10 +151,12 @@ pub fn start(control: AgentControl, port: u64, config: RuntimeConfig) -> Arc<Run
                         let pass = timer.clone();
                         tokio::spawn(async move {
                             let _ = pass.host().fresh().await;
-                            pass.recover_openers().await;
                             pass.sweep_all();
                             pass.redeliver_mail();
                             pass.redeliver_sends();
+                            // Its asks to main never hold the pass: a `setOpener` main does not answer waits alone.
+                            let recover = pass.clone();
+                            tokio::spawn(async move { recover.recover_openers().await });
                             pass.control.bots_tick().await;
                         });
                     }
