@@ -5,9 +5,10 @@
  * - First screen (`BotFirstScreen.tsx:100-214`, FK-B45): Create bot, Start omp, First message, each with its state;
  *   a failed first message can be sent again.
  * - Needs you (`BotNeedsYouSection.tsx:38-422`, FK-B16): its chats' own prompts (approvals first, then questions,
- *   as their rows read them), then its items set to Needs you; five rows, then Show more. Open goes to the chat.
+ *   as their rows read them), then its items set to Needs you; five rows, then Show more. A chat's row opens the
+ *   chat, an item's row its item page.
  * - Suggestions (`BotUpNextSection.tsx:263-340`, FK-B18): planned items its Look around saved; Start marks one
- *   working, Dismiss cancels it; Look now runs its Look around (or turns it on).
+ *   working, Dismiss cancels it; Look now runs its Look around (or turns it on). A row opens its item page.
  * - Automations (`BotUpcomingSection.tsx`, FK-B19): its schedules ranked failed, running, soonest (`botAutomations`);
  *   pause or resume, Run now, open in Settings › Schedules, Delete (asks first); five rows plus its own routines;
  *   "+" opens its home chat with "Set up an automation that " to finish.
@@ -41,6 +42,13 @@ import {
 import { type BotAutomation, botAutomations, useLocalSchedules } from "./bot-automations";
 import { type LaunchStep, openBotChat, sendKickoff, useBotLaunch } from "./bot-launch";
 import { openBotPage } from "./bot-page";
+import { openItem } from "./items/item-store";
+
+/** The item's own page, under the bot's Items tab. */
+function showItem(bot: Bot, item: Item): void {
+	openBotPage(bot.id, "items");
+	openItem(bot.id, item.id);
+}
 
 const ROWS = 5;
 
@@ -146,7 +154,7 @@ function NeedsYou({ bot }: { bot: Bot }) {
 				kind: "item",
 				title: item.title,
 				detail: item.question?.text ?? t("bots.needs.item"),
-				open: () => void openBotChat(bot, item.session).catch(() => {}),
+				open: () => showItem(bot, item),
 			}),
 		),
 	];
@@ -250,7 +258,7 @@ function Suggestions({ bot }: { bot: Bot }) {
 						actionsOnHover
 						description={item.description}
 						key={item.id}
-						onClick={() => void openBotChat(bot, item.session).catch(() => {})}
+						onClick={() => showItem(bot, item)}
 						size="sm"
 						title={item.title}
 					/>

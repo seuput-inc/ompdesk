@@ -4,8 +4,8 @@
  * one row per bot, each unfolding to its chats (the session rows the list draws for the bot's folder, so a chat keeps
  * its status, menu and family). Mounted only while the bots feature is available (`useBotsAvailable`).
  *
- * - "+" (Orca's :247-297): New bot, Browse templates, Import from another app. Share by link is Orca Cloud's and
- *   groups come with the room view (orca-bots-items), so neither is here.
+ * - "+" (Orca's :247-297): New bot, Browse templates, Import from another app, New group. Share by link is Orca
+ *   Cloud's, so it is not here. The bot groups follow the bots, each a row of its members' faces opening its room.
  * - Options (`BotSidebarOptionsMenu.tsx:16-90`): Sort by Manual, Agent activity, Recent or Name; Hide paused bots.
  * - A row (`BotRow.tsx:51-287`, looks C18, S7, S8, S9): the bot's face with its exception mark, its name and age, its
  *   second line (`botFacts`), the working mark or its fold strip at the end; dimmed while paused. A click opens its
@@ -33,9 +33,10 @@ import {
 	Settings2,
 	SlidersHorizontal,
 	Trash2,
+	UsersRound,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
-import type { Bot } from "../../../../shared/bots";
+import type { Bot, Room } from "../../../../shared/bots";
 import { cx } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { isImeKeyEvent } from "../../../lib/ime";
@@ -46,8 +47,9 @@ import { BotAvatar, type BotMark } from "../../bots/BotAvatar";
 import { BotHoverCard } from "../../bots/BotHoverCard";
 import { BotLineText } from "../../bots/BotLineText";
 import { openBotDialog, openBotHome } from "../../bots/bot-launch";
-import { openBotPage } from "../../bots/bot-page";
+import { openBotPage, openRoomPage } from "../../bots/bot-page";
 import { type BotFacts, foldedFaces, sortBots } from "../../bots/bot-view";
+import { GroupFaces, roomBots, roomPreview } from "../../bots/rooms/BotRoom";
 import {
 	anchorFromEvent,
 	Button,
@@ -65,6 +67,8 @@ import {
 	WorkingArc,
 } from "../../common";
 import { SidebarFoldButton } from "./SidebarFoldButton";
+
+const NO_ROOMS: Room[] = [];
 
 export interface SidebarBotEntry {
 	bot: Bot;
@@ -89,6 +93,8 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 	const view = useBotsView();
 	const command = useBotsStore(s => s.command);
 	const total = useBotsStore(s => s.state.bots.length);
+	const allBots = useBotsStore(s => s.state.bots);
+	const rooms = useBotsStore(s => s.state.rooms ?? NO_ROOMS);
 	const [renaming, setRenaming] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
 	const [menu, setMenu] = useState<{ x: number; y: number; bot: Bot } | null>(null);
@@ -272,6 +278,15 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 						icon: Download,
 						onSelect: () => openBotDialog({ kind: "import" }),
 					},
+					{
+						id: "group",
+						label: t("bots.add.group"),
+						icon: UsersRound,
+						separatorBefore: true,
+						disabled: total === 0,
+						disabledReason: t("bots.groups.needBots"),
+						onSelect: () => openBotDialog({ kind: "group" }),
+					},
 				]}
 				label={t("bots.add.label")}
 				size="sm"
@@ -422,7 +437,19 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 							</Button>
 						</div>
 					) : (
-						sorted.map(row)
+						<>
+							{sorted.map(row)}
+							{rooms.map(room => (
+								<ListRow
+									buttonProps={{ "data-bot-group-row": room.id }}
+									key={room.id}
+									leading={<GroupFaces bots={roomBots(room, allBots)} />}
+									onClick={() => openRoomPage(room.id)}
+									secondary={<span className="truncate">{roomPreview(room, allBots, t)}</span>}
+									title={room.name}
+								/>
+							))}
+						</>
 					)}
 				</div>
 			</Collapse>

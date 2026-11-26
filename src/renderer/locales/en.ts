@@ -1,4 +1,5 @@
 import { PRODUCT_REPO } from "../../shared/product-repo";
+import { botItemsEn } from "./bot-items";
 import { memoryEn } from "./memory";
 import { trackersEn } from "./trackers";
 export const en: Record<string, string> = {
@@ -8433,4 +8434,5 @@ export const en: Record<string, string> = {
 	"bots.templates.category.personal": "Personal assistant",
 	...memoryEn,
 	...trackersEn,
+	...botItemsEn,
 };

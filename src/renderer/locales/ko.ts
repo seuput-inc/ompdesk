@@ -1,4 +1,5 @@
 import { PRODUCT_REPO } from "../../shared/product-repo";
+import { botItemsKo } from "./bot-items";
 import { memoryKo } from "./memory";
 import { trackersKo } from "./trackers";
 export const ko: Record<string, string> = {
@@ -8407,4 +8408,5 @@ export const ko: Record<string, string> = {
 	"bots.templates.category.personal": "개인 비서",
 	...memoryKo,
 	...trackersKo,
+	...botItemsKo,
 };

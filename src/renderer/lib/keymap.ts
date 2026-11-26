@@ -658,6 +658,33 @@ export const KEYMAP_ACTIONS = [
 		overlaySafe: true,
 		hotkeyGroup: "view",
 	},
+	// A bot's item page (Orca's `botItem.back/previous/next`): back to the Items list, the previous and the next item in
+	// its order. Handled by the item page itself, only while focus is in it (`components/bots/items/BotItemPage.tsx`);
+	// Orca's ⌘[ and ⌥⌘↑/↓ are Back and the split panes' chords here.
+	{
+		id: "botItem.back",
+		labelKey: "hotkeys.row.botItemBack",
+		defaults: ["⌃⌘←"],
+		windowsDefaults: ["⌥⇧←"],
+		overlaySafe: false,
+		hotkeyGroup: "view",
+	},
+	{
+		id: "botItem.previous",
+		labelKey: "hotkeys.row.botItemPrevious",
+		defaults: ["⌃⌘↑"],
+		windowsDefaults: ["⌥⇧↑"],
+		overlaySafe: false,
+		hotkeyGroup: "view",
+	},
+	{
+		id: "botItem.next",
+		labelKey: "hotkeys.row.botItemNext",
+		defaults: ["⌃⌘↓"],
+		windowsDefaults: ["⌥⇧↓"],
+		overlaySafe: false,
+		hotkeyGroup: "view",
+	},
 	// Hold to dictate (Orca's `voice.dictation`, Auto mode): a tap starts and stops a take, a press held 300 ms records
 	// until release (`lib/dictation-press.ts`). Orca's Mod+E is the export here, so ⌥D. Handled by DictationHost, which
 	// needs the key's release; App's dispatch never sees it.
