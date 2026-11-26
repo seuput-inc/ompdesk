@@ -188,7 +188,8 @@ jobs:
           done
           OMP_GUI_PARITY="$PARITY_OUT" OMP_GUI_PARITY_ONLY="$ONLY" \
             bunx playwright test e2e/parity.e2e.ts --trace off --reporter line --output parity-out/results
-      - if: ${{ !cancelled() }}
+      # Also after the job's timeout: what a cut-off capture had written shows how far it got.
+      - if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.order == 'named' && 'parity' || format('parity-{0}', matrix.order) }}
