@@ -18,6 +18,8 @@
  * the checked-in files in sync with it. The in-app mark is BrandMark.tsx.
  */
 
+import bootShellGeometry from "./boot-shell-geometry.json" with { type: "json" };
+
 export interface PiOptions {
 	/** Bar width. */
 	width: number;
@@ -86,18 +88,8 @@ const PX = 512 / 16;
 
 export const BRAND_MARK = {
 	viewBox: "-256 -256 512 512",
-	full: piGeometry({
-		width: 448,
-		stroke: 76,
-		legGap: 112,
-		height: 392,
-		leftLeg: 230,
-		foot: 76,
-		footGap: 14,
-		barRadius: 38,
-		endRadius: 38,
-		cutRadius: 8,
-	}),
+	/** Also the boot shell's mark, which the Tauri host draws natively (`boot_paint.rs`) before WebView2 starts. */
+	full: piGeometry(bootShellGeometry.mark),
 	small: piGeometry({
 		width: 16 * PX,
 		stroke: 3 * PX,

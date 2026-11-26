@@ -280,26 +280,43 @@ pub fn plan(options: &Value) -> Plan {
     }
 }
 
+impl Plan {
+    /// The `win.op` that first shows the window this plan is for (none for one kept in the tray).
+    pub fn first_show(&self) -> Option<&'static str> {
+        first_show(self.presence, headless())
+    }
+}
+
 /// The window `plan` was for exists. It shows at its page's first paint, or after [`SHOW_BEFORE_PAINT`] if that comes
-/// later.
-pub fn opened(win: u64, wc: u64, plan: Plan) {
-    records().insert(
-        wc,
-        Record {
-            win,
-            slot: plan.slot,
-            mica: plan.mica,
-            presence: plan.presence,
-            opened_at: Instant::now(),
-            shown: false,
-            painted: false,
-            url: None,
-            last_reload: None,
-            hang: None,
-            last_hang_restart: None,
-            crash_offered: false,
-        },
-    );
+/// later. A window that already showed while it was being built (`boot_paint.rs`, a cold WebView2 start) counts as
+/// shown, and its first show is returned for the caller to do again through Tauri, whose own state has not seen it.
+pub fn opened(win: u64, wc: u64, plan: Plan, shown_while_built: bool) -> Option<&'static str> {
+    let mut record = Record {
+        win,
+        slot: plan.slot,
+        mica: plan.mica,
+        presence: plan.presence,
+        opened_at: Instant::now(),
+        shown: false,
+        painted: false,
+        url: None,
+        last_reload: None,
+        hang: None,
+        last_hang_restart: None,
+        crash_offered: false,
+    };
+    let early = shown_while_built
+        .then(|| record.show(headless()))
+        .flatten()
+        .map(|(_, op)| op);
+    records().insert(wc, record);
+    if let Some(op) = early {
+        log::log(
+            "window.shown_before_paint",
+            json!({"wcId": wc, "winId": win, "op": op, "ms": 0, "whileBuilt": true}),
+        );
+        return Some(op);
+    }
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(SHOW_BEFORE_PAINT).await;
         let shows = with(wc, |record| record.show_before_paint(headless())).flatten();
@@ -311,6 +328,7 @@ pub fn opened(win: u64, wc: u64, plan: Plan) {
             show_window(win, op);
         }
     });
+    None
 }
 
 /// The window closed: its slot is free and its pending restart lapses.
@@ -345,10 +363,14 @@ fn show_window(win: u64, op: &'static str) {
 }
 
 /// The page painted (`ready-to-show`): the first time, the window shows as its launch asked, unless it already showed
-/// before the paint; then how late the paint came is logged (a cold WebView2 start).
-pub fn first_paint(wc: u64) {
-    let Some((shows, late)) = with(wc, |record| record.paint(headless(), Instant::now())) else {
-        return;
+/// before the paint; then how late the paint came is logged (a cold WebView2 start). True at the first paint of a
+/// window without the Mica backdrop: its WebView, transparent over the native boot shell until now, turns opaque.
+pub fn first_paint(wc: u64) -> bool {
+    let Some((first, mica, (shows, late))) = with(wc, |record| {
+        let first = !record.painted;
+        (first, record.mica, record.paint(headless(), Instant::now()))
+    }) else {
+        return false;
     };
     if let Some(late) = late {
         log::log(
@@ -359,6 +381,7 @@ pub fn first_paint(wc: u64) {
     if let Some((win, op)) = shows {
         show_window(win, op);
     }
+    first && !mica
 }
 
 /// Saves the geometry of an app window that is closing, for the next window to open.

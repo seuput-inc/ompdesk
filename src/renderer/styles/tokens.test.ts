@@ -13,6 +13,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { DARK, LIGHT } from "../../../scripts/brand-svgs";
 import windowBackground from "../../shared/window-background.json" with { type: "json" };
 import { CHAT_TEXT_MIX, STATUS_ON_SOFT_MIX, USAGE_ALERT_FILL, USAGE_PLAIN_FILL } from "../lib/theme-contrast";
 import { SC_TOKEN_SOURCES, type ScTokenKey, scTokensFor, THEME_TOKEN_KEYS, THEMES } from "../lib/themes";
@@ -99,8 +100,12 @@ describe.each(["light", "dark"] as const)("ompdesk %s palette", scheme => {
 	});
 
 	it("is the colour the Tauri host paints a window in before its page has painted", () => {
-		// tauri-shell theme.rs reads window-background.json: a window shown before a cold WebView2 start paints.
+		// tauri-shell theme.rs reads window-background.json: a window shown before a cold WebView2 start paints, and
+		// boot_paint.rs draws the boot shell natively in these colours until then.
 		expect(windowBackground[scheme]).toBe(sc("bg"));
+		const boot = windowBackground.bootShell[scheme];
+		expect([boot.surface, boot.border, boot.field]).toEqual([sc("surface-1"), sc("border-subtle"), sc("field")]);
+		expect({ ink: boot.ink, accent: boot.accent }).toEqual(scheme === "dark" ? DARK : LIGHT);
 	});
 
 	it("keeps text at 4.5:1 on every surface", () => {

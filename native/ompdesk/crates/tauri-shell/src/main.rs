@@ -5,6 +5,8 @@ mod app_window;
 mod assets;
 #[cfg(feature = "test-automation")]
 mod automation;
+#[cfg(windows)]
+mod boot_paint;
 mod core_pages;
 mod diagnostic_bundle_name;
 mod entry;
@@ -631,7 +633,18 @@ fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
 /// The page painted: Node's `ready-to-show`, and the window's first show (app_window.rs).
 fn ready_to_show(wc: u64, win: u64) {
     win_event(win, "ready-to-show");
-    app_window::first_paint(wc);
+    // The page has its own frame now: the WebView, transparent over the native boot shell, turns opaque, so a later
+    // reload paints the background as before.
+    if app_window::first_paint(wc)
+        && cfg!(windows)
+        && let Ok(window) = window_for_win(win)
+        && let Err(error) = window.set_background_color(theme::window_background())
+    {
+        log::log(
+            "window.opaque_failed",
+            json!({"wcId": wc, "error": error.to_string()}),
+        );
+    }
 }
 /// The page's preload, or the shell's setup of the page, failed: Node's `preload-error`, and its runtime log line.
 fn preload_error(wc: u64, path: &str, error: Value) {
@@ -812,10 +825,14 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         builder = builder.position(x, y);
     }
     // Painted in the page's own background until the page paints: the window may show before it (app_window.rs
-    // `SHOW_BEFORE_PAINT`). A Mica window draws its backdrop instead.
+    // `SHOW_BEFORE_PAINT`). On Windows the WebView itself is transparent until then (the alpha only reaches the
+    // WebView), so the boot shell drawn natively under it (boot_paint.rs) shows until the page's own first frame
+    // (`ready_to_show` turns it opaque). A Mica window draws its backdrop instead.
     if !plan.mica
         && let Some(colour) = theme::window_background()
     {
+        #[cfg(windows)]
+        let colour = tauri::window::Color(colour.0, colour.1, colour.2, 0);
         builder = builder.background_color(colour);
     }
     builder = builder.min_inner_size(window_state::MIN_WIDTH, window_state::MIN_HEIGHT);
@@ -852,7 +869,23 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             return Err(failed(error));
         }
     };
-    let window = match builder.build() {
+    #[cfg(windows)]
+    let boot = if plan.mica {
+        None
+    } else {
+        boot_paint::arm(
+            wc,
+            &runtime().user_data,
+            theme::new_window_dark(),
+            boot_paint::EarlyShow::for_first_show(plan.first_show(), plan.maximize),
+        )
+    };
+    let built = builder.build();
+    #[cfg(windows)]
+    let shown_while_built = boot.is_some_and(boot_paint::Armed::finish);
+    #[cfg(not(windows))]
+    let shown_while_built = false;
+    let window = match built {
         Ok(window) => window,
         Err(error) => {
             runtime().registry.lock().expect("registry").remove(wc);
@@ -940,7 +973,11 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         _ => {}
     });
     let maximize = plan.maximize;
-    app_window::opened(win, wc, plan);
+    // A window that showed while it was built gets its first show again through Tauri, before any other op, so
+    // Tauri's visibility agrees and a later style change does not hide it.
+    if let Some(op) = app_window::opened(win, wc, plan, shown_while_built) {
+        win_op(&json!({"winId": win, "op": op, "args": {}}))?;
+    }
     if maximize {
         win_op(&json!({"winId": win, "op": "maximize", "args": {}}))?;
     }
