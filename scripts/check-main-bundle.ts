@@ -429,8 +429,9 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // The A2UI answer path (unit 4): ExtensionDialog telling an a2ui marker form from another (the contracts' marker
 // parser) and handing it to the dock row's lazy loader (the row itself is in the A2UI chunk), and the step reveal
 // finding an a2ui chat row: 2,217,814 (branch run 45712547026), 782 bytes more.
-// Both on top of the quick terminal: the measure below plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_220_831;
+// Both merged with the quick terminal: measured 2,217,549 (branch run 45727586452; main's GitHub card went lazy
+// meanwhile), inside the quick terminal's budget, which stays.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_218_955;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
