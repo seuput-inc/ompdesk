@@ -5,7 +5,7 @@
 import { create } from "zustand";
 import { useUiStore } from "./ui";
 
-export type SidebarRequest = "reveal-current" | "fold-projects" | "unfold-projects";
+export type SidebarRequest = "reveal-current" | "fold-projects" | "unfold-projects" | "clone";
 
 export const useSidebarRequest = create<{ request: SidebarRequest | null }>(() => ({ request: null }));
 

@@ -29,9 +29,11 @@ import {
 } from "lucide-react";
 import {
 	Fragment,
+	lazy,
 	type KeyboardEvent as ReactKeyboardEvent,
 	type ReactNode,
 	type PointerEvent as ReactPointerEvent,
+	Suspense,
 	useCallback,
 	useEffect,
 	useMemo,
@@ -202,6 +204,9 @@ interface WorkspaceGroup extends RowGroup {
 	/** The full path: the group header's tooltip. */
 	tooltip: string;
 }
+
+/** The palette's Clone repository… (it pulls in the GitHub center's dialog, so not on the first screen). */
+const SidebarCloneDialog = lazy(() => import("./SidebarCloneDialog"));
 
 /** A delete the row or context menu queued, awaiting the confirmation dialog. */
 type PendingDelete =
@@ -1401,8 +1406,10 @@ export function Sidebar() {
 		if (!sidebarRequest) return;
 		useSidebarRequest.setState({ request: null });
 		if (sidebarRequest === "reveal-current") revealCurrentRow();
+		else if (sidebarRequest === "clone") setCloning(true);
 		else foldEveryProject(sidebarRequest === "fold-projects");
 	}, [sidebarRequest]);
+	const [cloning, setCloning] = useState(false);
 	// After render, exactly one roving item is tabbable: the remembered one,
 	// else the current session, else the first row. Its row's ⋯ (or a section header's own action, such as the Chats
 	// section's New chat) is the next tab stop (focus-within reveals it), so Tab then Enter opens or runs it.
@@ -2583,6 +2590,11 @@ export function Sidebar() {
 					tabIndex={0}
 				/>
 			</aside>
+			{cloning && (
+				<Suspense fallback={null}>
+					<SidebarCloneDialog onClose={() => setCloning(false)} />
+				</Suspense>
+			)}
 			{/* Project menu: the one builder every computer's project headers use (project-menu.ts). */}
 			{groupMenu &&
 				(() => {
@@ -2640,6 +2652,18 @@ export function Sidebar() {
 									togglePin: then(() => useSidebarPrefs.getState().toggleGroupPin(group.cwd)),
 									toggleMute: then(() => useSidebarPrefs.getState().toggleGroupMuted(group.cwd)),
 									archiveAll: then(() => setArchived(archivable, true)),
+									...(group.missing
+										? {
+												locate: then(
+													() =>
+														void import("../../../lib/relocate-folder")
+															.then(module => module.relocateFolder({ from: group.cwd, sessions }))
+															.catch((error: unknown) =>
+																toastError({ title: t("sidebar.project.addFailed"), error }),
+															),
+												),
+											}
+										: {}),
 									remove: then(() => setPendingDelete({ kind: "group", group })),
 								},
 								t,

@@ -15,6 +15,7 @@ import {
 	ArrowUp,
 	Bell,
 	BellOff,
+	FolderSearch,
 	GitBranchPlus,
 	Pencil,
 	Pin,
@@ -45,6 +46,8 @@ export interface ProjectMenuActions {
 	moveUp?: () => void;
 	moveDown?: () => void;
 	archiveAll?: () => void;
+	/** A project whose folder is gone: find where it is now and move its sessions there. */
+	locate?: () => void;
 	/** Opens the delete confirm. */
 	remove: () => void;
 }
@@ -75,6 +78,13 @@ export function projectMenuItems({ facts, actions, t }: ProjectMenuInput): Conte
 		});
 
 	const edit: ContextMenuItem[] = [];
+	if (actions.locate)
+		edit.push({
+			id: "group-locate",
+			label: t("sidebar.menu.locateFolder"),
+			icon: FolderSearch,
+			onSelect: actions.locate,
+		});
 	if (actions.rename)
 		edit.push({ id: "group-rename", label: t("sidebar.menu.rename"), icon: Pencil, onSelect: actions.rename });
 	if (actions.moveUp)

@@ -49,7 +49,7 @@ export function SidebarRemovedProjects({ device, query }: { device?: string; que
 								<Button
 									aria-label={t("sidebar.removedProjects.showOne", { name })}
 									className="opacity-0 group-focus-within/removed:opacity-100 group-hover/removed:opacity-100 [@media(hover:none)]:opacity-100"
-									onClick={() => void useSidebarProjects.getState().restore(device, path)}
+									onClick={() => void useSidebarProjects.getState().add(device, path)}
 									size="sm"
 									variant="ghost"
 								>

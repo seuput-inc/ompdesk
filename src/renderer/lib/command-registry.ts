@@ -1581,6 +1581,12 @@ export function buildCommandMenu(ctx: CommandRegistryContext): CommandMenuItem[]
 		affordance: { kind: "action", run: () => askSidebar("unfold-projects") },
 	});
 	add({
+		name: "clone-repository",
+		label: t("sidebar.project.clone"),
+		category: "workspace",
+		affordance: { kind: "action", run: () => askSidebar("clone") },
+	});
+	add({
 		name: "toggle-thinking-blocks",
 		label: t("hotkeys.row.thinkingToggle"),
 		category: "settings",

@@ -76,8 +76,9 @@ interface SidebarProjectsStore {
 	load: (device?: string, read?: boolean) => void;
 	/** "Remove from sidebar": its sessions stay, listed under no project. */
 	remove: (device: string | undefined, path: string) => Promise<void>;
-	/** A deleted project listed again (Show in the removed list), as opening its folder would. */
-	restore: (device: string | undefined, path: string) => Promise<void>;
+	/** The person adds a folder (a dropped folder, Show in the deleted list, a moved folder found again), as opening it
+	 *  would: listed as theirs, out of the removed list. */
+	add: (device: string | undefined, path: string) => Promise<boolean>;
 	reset: () => void;
 }
 
@@ -146,16 +147,18 @@ export const useSidebarProjects = create<SidebarProjectsStore>((set, get) => {
 				toastError({ title: translate("sidebar.removeProjectFailed"), error });
 			}
 		},
-		restore: async (device, path) => {
+		add: async (device, path) => {
 			const before = get().lists[keyOf(device)] ?? EMPTY_SIDEBAR_PROJECTS;
 			// It leaves the removed list at once; the host's answer lists the project, a refusal puts it back.
 			const optimistic = { ...before, removed: before.removed.filter(entry => entry !== path) };
 			apply(device, optimistic);
 			try {
 				await run(device, { action: "add", path });
+				return true;
 			} catch (error) {
 				if (get().lists[keyOf(device)] === optimistic) apply(device, before);
-				toastError({ title: translate("sidebar.removedProjects.showFailed"), error });
+				toastError({ title: translate("sidebar.project.addFailed"), error });
+				return false;
 			}
 		},
 		reset: () => {

@@ -1449,6 +1449,18 @@ function DeviceSessions({
 								...(!editable || query
 									? {}
 									: { moveUp: () => moveGroup(group.cwd, -1), moveDown: () => moveGroup(group.cwd, 1) }),
+								...(group.missing && read
+									? {
+											locate: () =>
+												void import("../../../lib/relocate-folder")
+													.then(module =>
+														module.relocateFolder({ device: host.deviceId, from: group.cwd, sessions }),
+													)
+													.catch((error: unknown) =>
+														toastError({ title: t("sidebar.project.addFailed"), error }),
+													),
+										}
+									: {}),
 								remove: () => setPendingProject(group),
 							},
 							t,
