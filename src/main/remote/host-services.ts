@@ -84,6 +84,7 @@ import { discardOpenedWorktree, savedWorktreesForSpawn } from "../disk/saved-wor
 import { type ExtensionApplyPlan, extensionApplyDecision, mergeApplyPlans } from "../extension-reload";
 import { createWorktree, tablessWorktreeBridge } from "../local/git/worktree";
 import { noteTypedPrompt } from "../local/prompt-origin";
+import { answerSessionLinks, SessionLinksParams } from "../local/session-links";
 import type { BridgeClient } from "../local/types";
 import type { MachineServices } from "../machine-services";
 import type { ModelWaitTracker } from "../model-wait-count";
@@ -200,6 +201,7 @@ import {
 	SchedulesCommandParams,
 	SchedulesCreateParams,
 	SchedulesLogParams,
+	SESSION_LINKS_EVENT,
 	SESSIONS_CHANGED_EVENT,
 	SESSIONS_DELETED_EVENT,
 	SESSIONS_DELETED_METHOD,
@@ -1487,6 +1489,8 @@ export class LocalHostServices implements HostServices {
 				return sessionArtwork(parse(SessionArtworkParams, method, params));
 			case "sessions.pullRequest":
 				return sessionPullRequest(parse(SessionPullRequestParams, method, params));
+			case "sessions.links":
+				return answerSessionLinks(parse(SessionLinksParams, method, params).command, undefined);
 			// C114: the tab's terminals run here, in the tab's folder, with this machine's shells.
 			case "terminal.shells":
 				return detectShells();
@@ -1861,6 +1865,11 @@ export class LocalHostServices implements HostServices {
 	/** This machine's sidebar project list changed: every connected device's section for it follows. */
 	sidebarProjectsChanged(state: SidebarProjectsState): void {
 		for (const conn of this.#conns) emitSafely(conn, PROJECTS_EVENT, state);
+	}
+
+	/** A session's links here changed: every connected device's rows of this computer read them again. */
+	sessionLinksChanged(): void {
+		for (const conn of this.#conns) emitSafely(conn, SESSION_LINKS_EVENT, {});
 	}
 
 	/** This machine's reply-language setting changed: the tabs it runs for paired devices follow it. */

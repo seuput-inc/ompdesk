@@ -156,6 +156,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[C.SESSIONS_TARGETS]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_ARTWORK]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_PULL_REQUEST]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.SESSIONS_LINKS]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_DUMP_BUNDLE]: {
 		dir: "invoke",
 		permission: "workspace",

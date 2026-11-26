@@ -56,7 +56,8 @@ function install(answer: () => Promise<unknown>): void {
 	);
 	Object.assign(window, {
 		omp: {
-			rpc: { command, sessionLinks: vi.fn(async () => ({ success: true, data: {} })) },
+			rpc: { command },
+			sessions: { links: vi.fn(async () => ({})) },
 			events: { onSessionLinksChanged: () => () => {} },
 		},
 	});

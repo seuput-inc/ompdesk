@@ -22,6 +22,9 @@
  * - `sessions.targets {sessions: SessionTargetQuery[]}` → SessionTargets, `sessions.artwork {roots}` → SessionArtworks
  *   (`shared/session-target.ts`, answered by session-targets.ts); an older host answers `unsupported`
  * - `sessions.pullRequest {root, branch}` → GithubBranchPr | null: a row's branch PR, read on the host (session-targets.ts)
+ * - `sessions.links {command: SessionLinksCommand}` → the host's answer (`answerSessionLinks`): read, add or remove the
+ *   links attached to the host's sessions (local/session-links.ts); every change, from anywhere, comes as the
+ *   `host.sessionLinks.changed` event; an older host answers `unsupported`
  * - `host.fs.readBinary {rtab?, cwd?, path, maxBytes?}` → HostFsReadBinaryReply: the file
  *   viewer's bytes, base64 on the link, capped at FS_BINARY_REMOTE_MAX_BYTES by the host
  * - `host.fs.readRange {rtab?, cwd?, path, offset, length}` → HostFsReadBinaryReply: one slice of a file for a
@@ -110,7 +113,7 @@
  *
  * Events (B → A): `tab.event` (TabEventMessage), `sessions.changed` (no data), `host.ompUpdate.changed`,
  * `host.schedules.changed`, `host.projects.changed`, `host.models.changed`, `host.previewRelay`, `host.summaries`,
- * `host.sessionsDeleted` and `host.remoteOpened`.
+ * `host.sessionsDeleted`, `host.remoteOpened` and `host.sessionLinks.changed`.
  * Both sides parse what crosses the link with the schemas below.
  */
 import { z } from "zod";
@@ -232,6 +235,8 @@ export const SCHEDULES_EVENT = "host.schedules.changed";
 export const MODELS_CHANGED_EVENT = "host.models.changed";
 /** The host's sidebar project list changed (data: SidebarProjectsState); sent to every connected device. */
 export const PROJECTS_EVENT = "host.projects.changed";
+/** A session's links on the host changed (no data); sent to every connected device, whose rows read them again. */
+export const SESSION_LINKS_EVENT = "host.sessionLinks.changed";
 /**
  * Agent browsing's tunnel (`host.previewRelay.*` above). The params are strict: nothing a device sends names an address,
  * the host dials the relay it remembered for the tab. The event carries each frame the relay sent (`message`) and the

@@ -79,7 +79,7 @@ export interface SessionMenuActions {
 	markUnread?: () => void;
 	closeTab?: () => void;
 	rename?: () => void;
-	/** Opens the dialog of the links attached to it (this computer's sessions). */
+	/** Opens the dialog of the links attached to it, kept on the computer that runs it (a paired host's too). */
 	links?: () => void;
 	/** Pins it, or lets it go when pinned. */
 	togglePin?: () => void;

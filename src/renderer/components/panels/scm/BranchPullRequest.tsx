@@ -67,11 +67,12 @@ function Checks({ number }: { number: number }) {
 /**
  * No PR names this branch as its head (a fork's, a renamed branch's): the session's own linked PR when it has one
  * (Orca's "Link another PR", `presentation/review-header.tsx:115`, `empty-content.tsx:139`), else the way to link one.
+ * The links are kept on the computer that runs the session (a paired host's for its tab).
  */
 function LinkedPullRequest({ sessionPath }: { sessionPath: string }) {
 	const t = useT();
 	const scope = useFocusedScope();
-	const linked = useSessionLinks(sessionPath).find(link => link.kind === "pr");
+	const linked = useSessionLinks(sessionPath, scope.device).find(link => link.kind === "pr");
 	const [editing, setEditing] = useState(false);
 	return (
 		<div
@@ -94,7 +95,9 @@ function LinkedPullRequest({ sessionPath }: { sessionPath: string }) {
 			<LinkButton className="ml-auto shrink-0" onClick={() => setEditing(true)} tone="muted">
 				{t(linked ? "diffPanel.pr.relink" : "diffPanel.pr.link")}
 			</LinkButton>
-			{editing && <SessionLinksDialog onClose={() => setEditing(false)} sessionPath={sessionPath} />}
+			{editing && (
+				<SessionLinksDialog device={scope.device} onClose={() => setEditing(false)} sessionPath={sessionPath} />
+			)}
 		</div>
 	);
 }
@@ -109,9 +112,9 @@ export function BranchPullRequest({ branch }: { branch: string }) {
 	const live = pr?.state === "OPEN";
 	const { refresh } = load;
 	useEffect(() => (live ? pollWhileVisible(refresh, ACTIVE_REFRESH_MS) : undefined), [live, refresh]);
-	// A read that answered "no PR" on this computer's session; a failed read (no GitHub remote, no gh) says nothing.
+	// A read that answered "no PR"; a failed read (no GitHub remote, no gh) says nothing.
 	if (!pr) {
-		return pr === null && !load.loading && !load.error && sessionFile && scope.device === undefined ? (
+		return pr === null && !load.loading && !load.error && sessionFile ? (
 			<LinkedPullRequest sessionPath={sessionFile} />
 		) : null;
 	}

@@ -76,6 +76,7 @@ import type {
 	IpcOpenPathResult,
 	IpcPrefsChangedPayload,
 	IpcPushTestResult,
+	IpcSessionLinksChanged,
 	IpcSessionOpenNewWindowPayload,
 	IpcSessionOwner,
 	IpcSessionsChanged,
@@ -175,6 +176,7 @@ import type {
 } from "./rpc-types";
 import { SCHEDULES_COMMAND, SCHEDULES_LOG, SCHEDULES_STATE } from "./schedule-channels";
 import type { SchedulesState } from "./schedules";
+import type { SessionLinksCommand } from "./session-links";
 import type { VersionedSessionList } from "./session-list-delta";
 import type { SummariesChanged, VersionedSummaries } from "./session-summary";
 import type { SessionArtworks, SessionTargetQuery, SessionTargets } from "./session-target";
@@ -375,8 +377,10 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				subscribe<RemoteOpenedTab[]>(IPC_EVENTS.REMOTE_OPENED_TABS_CHANGED, callback),
 			onHeldSessionsChanged: (callback: (files: string[]) => void) =>
 				subscribe<string[]>(IPC_EVENTS.SESSIONS_HELD_CHANGED, callback),
-			onSessionLinksChanged: (callback: () => void) =>
-				subscribe<undefined>(IPC_EVENTS.SESSION_LINKS_CHANGED, () => callback()),
+			onSessionLinksChanged: (callback: (change: IpcSessionLinksChanged) => void) =>
+				subscribe<IpcSessionLinksChanged | undefined>(IPC_EVENTS.SESSION_LINKS_CHANGED, change =>
+					callback(change ?? {}),
+				),
 			onLogBatch: (callback: (batch: LogBatch) => void) => subscribe<LogBatch>(IPC_EVENTS.LOG_LINE, callback),
 			onTabBatch: (callback: (events: AgentSessionEvent[], tabId: string) => void) =>
 				subscribeTab<AgentSessionEvent[]>(IPC_EVENTS.EVENTS_BATCH, callback),
@@ -612,6 +616,8 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 					branch,
 					device,
 				}) as Promise<GithubBranchPr | null>,
+			links: (command: SessionLinksCommand, device?: string) =>
+				transport.invoke(IPC_COMMANDS.SESSIONS_LINKS, { command, device }),
 			saveDiagnosticBundle: (request: DiagnosticBundleRequest) =>
 				transport.invoke(IPC_COMMANDS.SESSIONS_DUMP_BUNDLE, request) as Promise<DiagnosticBundleResult>,
 			openInNewWindow: (payload: IpcSessionOpenNewWindowPayload) =>

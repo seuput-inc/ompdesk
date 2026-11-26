@@ -88,6 +88,7 @@ import type {
 	IpcRemoteListDirsPayload,
 	IpcRpcCommandForTabPayload,
 	IpcRpcCommandPayload,
+	IpcSessionLinksPayload,
 	IpcSessionOpenNewWindowPayload,
 	IpcSessionOwner,
 	IpcSessionsArtworkPayload,
@@ -118,6 +119,7 @@ import {
 	IPC_EVENTS,
 	type IpcInstallBrowserRelayPayload,
 	type IpcInstallBrowserRelayResult,
+	type IpcSessionLinksChanged,
 	type IpcSessionsChanged,
 } from "../shared/ipc-types";
 import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
@@ -174,13 +176,7 @@ import type { MainTextKey } from "./i18n-text";
 import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { noteTypedPrompt } from "./local/prompt-origin";
-import {
-	answerSessionLinks,
-	dropSessionLinks,
-	onSessionLinksChanged,
-	handlers as sessionLinkHandlers,
-} from "./local/session-links";
-import { LocalCommandError } from "./local/types";
+import { answerSessionLinks, dropSessionLinks, onSessionLinksChanged, SessionLinksParams } from "./local/session-links";
 import type { LogWatcher } from "./log-watcher";
 import type { MacPermissions } from "./mac-permissions";
 import { type LocalMachine, type MachineServices, machineFor as pickMachine } from "./machine-services";
@@ -769,8 +765,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		deps.sidebarProjects?.schedule();
 	};
 	// A session's links changed (a window, a phone page, an agent here or a paired device's tab here): every window and
-	// page here reads them again.
-	onSessionLinksChanged(() => everywhere(IPC_EVENTS.SESSION_LINKS_CHANGED, undefined));
+	// page here and every paired device reads them again.
+	onSessionLinksChanged(() => {
+		everywhere(IPC_EVENTS.SESSION_LINKS_CHANGED, {} satisfies IpcSessionLinksChanged);
+		remoteDevices.hostSessionLinksChanged();
+	});
 	// What every row shows of this computer's sessions: each change reaches every window and phone page here (a push no
 	// router drops for a hidden page) and every paired device; a view whose copy is on another version reads it whole.
 	deps.summaries.onChange(delta => {
@@ -916,23 +915,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				success: true,
 				data: desktopSlot.state(),
 			};
-		}
-		// A window's (or phone page's) session links are this computer's, its rows', whatever tab it shows: answered here
-		// like the slot. An agent's (no channel) go through its tab below, to the computer its session runs on.
-		if (channel !== undefined && Object.hasOwn(sessionLinkHandlers, slotCommand)) {
-			try {
-				const data = answerSessionLinks(payload.command, undefined);
-				return { id: payload.command.id, type: "response", command: slotCommand, success: true, data };
-			} catch (err) {
-				return {
-					id: payload.command.id,
-					type: "response",
-					command: slotCommand,
-					success: false,
-					error: err instanceof Error ? err.message : String(err),
-					...(err instanceof LocalCommandError ? { code: err.code } : {}),
-				};
-			}
 		}
 		// A tab whose omp is still starting (its place in the start queue, its first answer, a stalled start begun again)
 		// is waited for, not refused: a relaunch's restored tabs got "Sidecar not ready" for every read while they started.
@@ -1603,7 +1585,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// What the control service reads synchronously in main changed: its snapshot is pushed (a tab's activity, the
 	// preferences above, an outside caller and the tombstones push theirs where they happen).
 	deps.summaries.onChange(() => agentControl.control.changed());
-	deps.remoteDevices.onHostOnline(() => agentControl.control.changed());
+	deps.remoteDevices.onHostOnline(host => {
+		agentControl.control.changed();
+		// A host's links may have changed while its link was down: the windows read that host's again.
+		everywhere(IPC_EVENTS.SESSION_LINKS_CHANGED, { device: host } satisfies IpcSessionLinksChanged);
+	});
 	deps.sessionWake.current = (schedule, runId) => agentControl.wakeSession(schedule, runId);
 	deps.tabReport.current = (tabId, report) => agentControl.reportFor(tabId, report);
 	deps.agentOpening.current = () => agentControl.opening();
@@ -1765,6 +1751,14 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		const params = SessionPullRequestParams.parse({ root: payload?.root, branch: payload?.branch });
 		const device = deviceOf(payload?.device);
 		return device ? remoteDevices.request(device, "sessions.pullRequest", params) : sessionPullRequest(params);
+	});
+
+	ipc.handle(IPC_COMMANDS.SESSIONS_LINKS, async (_caller, payload: IpcSessionLinksPayload) => {
+		const params = SessionLinksParams.parse({ command: payload?.command });
+		const device = deviceOf(payload?.device);
+		return device
+			? remoteDevices.request(device, "sessions.links", params)
+			: answerSessionLinks(params.command, undefined);
 	});
 
 	// Open a session (or a fresh project window) in a NEW parallel window with

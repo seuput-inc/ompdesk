@@ -72,6 +72,7 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("sessions:targets", Risk::Never(SESSION_TOOLS)),
     ("sessions:artwork", Risk::Never(SESSION_TOOLS)),
     ("sessions:pull-request", Risk::Never(SESSION_TOOLS)),
+    ("sessions:links", Risk::Never(SESSION_TOOLS)),
     (
         "sessions:dump-bundle",
         Risk::Tier(Change, &["sessions.dump_bundle"]),
