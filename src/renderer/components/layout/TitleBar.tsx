@@ -568,7 +568,7 @@ export function TitleBar() {
 						</span>
 					</Tooltip>
 				)}
-				{!editingName && <BotHomeBanner cwd={device === undefined ? cwd : null} sessionPath={sessionPathOfTab} />}
+				{!editingName && <BotHomeBanner cwd={cwd} device={device} sessionPath={sessionPathOfTab} />}
 			</nav>
 
 			<div

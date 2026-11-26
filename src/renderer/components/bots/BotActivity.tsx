@@ -39,7 +39,7 @@ import {
 	Spinner,
 	StatusDot,
 } from "../common";
-import { type BotAutomation, botAutomations, useLocalSchedules } from "./bot-automations";
+import { type BotAutomation, botAutomations, useSchedulesOf } from "./bot-automations";
 import { type LaunchStep, openBotChat, sendKickoff, useBotLaunch } from "./bot-launch";
 import { openBotPage } from "./bot-page";
 import { openItem } from "./items/item-store";
@@ -213,7 +213,7 @@ function Suggestions({ bot }: { bot: Bot }) {
 	const lookNow = () => {
 		if (bot.lookAround)
 			void window.omp.schedules
-				.command({ action: "runNow", id: bot.lookAround })
+				.command({ action: "runNow", id: bot.lookAround }, bot.device)
 				.then(() => toast({ variant: "success", message: t("bots.suggestions.looking") }))
 				.catch((error: unknown) => toastError({ title: t("bots.suggestions.lookFailed"), error }));
 		else
@@ -270,7 +270,7 @@ function Suggestions({ bot }: { bot: Bot }) {
 
 function Automations({ bot }: { bot: Bot }) {
 	const t = useT();
-	const schedules = useLocalSchedules();
+	const schedules = useSchedulesOf(bot.device);
 	const [all, setAll] = useState(false);
 	const [deleting, setDeleting] = useState<BotAutomation | null>(null);
 	const rows = botAutomations(bot, schedules);
@@ -279,7 +279,7 @@ function Automations({ bot }: { bot: Bot }) {
 	const shown = [...own, ...(all ? others : others.slice(0, ROWS))];
 	const run = (request: Parameters<typeof window.omp.schedules.command>[0], done?: string) =>
 		void window.omp.schedules
-			.command(request)
+			.command(request, bot.device)
 			.then(() => (done ? toast({ variant: "success", message: done }) : undefined))
 			.catch((error: unknown) => toastError({ title: t("bots.automations.failed"), error }));
 	const label = (row: BotAutomation) =>
@@ -317,12 +317,15 @@ function Automations({ bot }: { bot: Bot }) {
 									onClick={() => run({ action: "runNow", id: row.schedule.id }, t("bots.automations.queued"))}
 									size="sm"
 								/>
-								<IconButton
-									icon={<ExternalLink />}
-									label={t("bots.automations.open")}
-									onClick={() => useUiStore.getState().openSettings("schedules")}
-									size="sm"
-								/>
+								{/* Settings › Schedules is this computer's: a paired host's bot's schedules are listed here only. */}
+								{!bot.device && (
+									<IconButton
+										icon={<ExternalLink />}
+										label={t("bots.automations.open")}
+										onClick={() => useUiStore.getState().openSettings("schedules")}
+										size="sm"
+									/>
+								)}
 								<IconButton
 									icon={<Trash2 />}
 									label={t("bots.automations.delete")}

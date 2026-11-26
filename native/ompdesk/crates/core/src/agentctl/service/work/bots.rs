@@ -19,6 +19,7 @@ use super::super::types::{
     BotArgs, ControlTab, ScheduleDraft, ScheduleFrequency, SendArgs, TabStatus,
 };
 use super::bot_files;
+use super::bots_share::Kind;
 use super::schedule::is_absolute;
 use crate::agentctl::journal::attachments::sha256_hex;
 use crate::agentctl::journal::bots::{BotRecord, STALE_DAYS, slug, specialty};
@@ -39,6 +40,8 @@ const LOOK_AROUND_PROMPT: &str = "Look around: read over the projects you work o
 const TIDY_PROMPT: &str = "Tidy your memory: MEMORY.md in your folder. First copy MEMORY.md as it is now to memory/history/<the local date and time as YYYY-MM-DD-HHMM>.md (make the folder). Then merge repeated lines, mark facts that changed as replaced (keep the newer one), file details into topic files memory/<topic>.md, and move lines that no longer matter to memory/archive.md. Change memory files only: no posts, no edits to projects, no sessions opened. Last, write one line per change to memory/history/<the same name>.changes.md, starting with Learned:, Merged:, Replaced:, Filed: or Archived:. Write nothing and copy nothing when there is nothing to tidy. End with NO_REPLY.";
 /// Notification kinds a bot's chats can be quiet about (`Bot.quiet`).
 const QUIET_KINDS: [&str; 3] = ["permission", "done", "failed"];
+/// What a paired device may ask of this computer's bots (`bots_from`).
+const FROM_DEVICE: [&str; 6] = ["get", "update", "delete", "item", "itemsOpened", "file"];
 
 /// A bot's own daily routine (`bot_routine`).
 #[derive(Clone, Copy)]
@@ -105,17 +108,38 @@ impl AgentControl {
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = paused;
     }
 
-    /// Something of the bots or their items changed: held mail follows the pauses, and main hears the new state.
+    /// Something of the bots or their items changed: held mail follows the pauses, paired devices hear what changed of
+    /// this computer's bots (`botsShared`, nothing when nothing they get changed), and main hears the new state.
     pub(crate) fn bots_changed(&self) {
         self.hold_paused();
-        let state = self.bots_state();
+        let own = self.own_bots_state();
+        let change = self.across().share.take(&own);
+        if let Some(change) = change {
+            self.host
+                .port()
+                .tell("botsShared", &json!({ "change": change }));
+        }
+        let state = self.with_copies(own);
         self.host
             .port()
             .tell("botsChanged", &json!({ "state": state }));
     }
 
-    /// `BotsState`: every bot with its specialty, and the items with what is read at this moment.
+    /// `BotsState`: this computer's bots and items, and (`remote`) the paired hosts' as last heard.
     pub fn bots_state(&self) -> Value {
+        self.with_copies(self.own_bots_state())
+    }
+
+    fn with_copies(&self, mut state: Value) -> Value {
+        let remote = self.across().copies.json();
+        if !remote.is_empty() {
+            state["remote"] = json!(remote);
+        }
+        state
+    }
+
+    /// This computer's bots with their specialty, and the items with what is read at this moment.
+    fn own_bots_state(&self) -> Value {
         let now = self.now();
         let bots: Vec<BotRecord> = self.bots().all().to_vec();
         let items: Vec<ItemRecord> = self.items().all(now).to_vec();
@@ -974,8 +998,139 @@ impl AgentControl {
             .await
     }
 
-    /// The owner's `BotsRequest` (Settings, the Bots page): the state after it.
+    /// The owner's `BotsRequest` (Settings, the Bots page): the state after it. A change to a paired host's bot or item
+    /// (one its copy holds, `bots_share`) goes to that host, which makes it; nothing of it is written here.
     pub async fn bots_command(&self, request: Value) -> R<Value> {
+        match self.bots_owner(&request) {
+            Some(device) => self.bots_command_on(&device, request).await,
+            None => self.own_bots_command(request).await,
+        }
+    }
+
+    /// The paired host whose bot (`update`, `delete`, `itemsOpened`, `file`) or item (`item`) the request names, when
+    /// it is not this computer's.
+    fn bots_owner(&self, request: &Value) -> Option<String> {
+        let kind = match request.get("action").and_then(Value::as_str)? {
+            "update" | "delete" | "itemsOpened" | "file" => Kind::Bots,
+            "item" => Kind::Items,
+            _ => return None,
+        };
+        let id = match request.get("id").and_then(Value::as_str) {
+            Some(id) => id,
+            None => request.get("ids")?.as_array()?.first()?.as_str()?,
+        };
+        let mine = match kind {
+            Kind::Bots => self.bots().all().iter().any(|bot| bot.id == id),
+            Kind::Items => self.items().get(id).is_some(),
+        };
+        if mine {
+            return None;
+        }
+        self.across().copies.owner(kind, id)
+    }
+
+    /// The owner's change to a bot of paired host `device`: that host makes it (`host.bots.command`) and answers its
+    /// copy after it, which replaces the one held here. Refused at once while the host is offline.
+    async fn bots_command_on(&self, device: &str, request: Value) -> R<Value> {
+        let (name, online) = self.across().copies.host(device).map_or_else(
+            || (device.to_owned(), false),
+            |copy| (copy.name.clone(), copy.online),
+        );
+        if !online {
+            return fail(format!(
+                "{name} is offline: its bots change only while it is connected."
+            ));
+        }
+        let file = request.get("action").and_then(Value::as_str) == Some("file");
+        let answer = self.host.bots_on(device, &request).await?;
+        if file {
+            return Ok(answer);
+        }
+        let applied = self
+            .across()
+            .copies
+            .apply(device, &name, true, Some(&answer));
+        if applied {
+            self.bots_changed();
+        }
+        let mut state = self.bots_state();
+        if let Some(refused) = answer.get("refused") {
+            state["refused"] = refused.clone();
+        }
+        Ok(state)
+    }
+
+    /// `host.bots.list`: this computer's bots and items as its paired devices get them (`{version, state}`). A change
+    /// found while reading (a bot wrote its soul or picture since) goes to every device first.
+    pub fn bots_share(&self) -> Value {
+        let own = self.own_bots_state();
+        let (change, whole) = {
+            let mut across = self.across();
+            let change = across.share.take(&own);
+            (change, across.share.whole())
+        };
+        if let Some(change) = change {
+            self.host
+                .port()
+                .tell("botsShared", &json!({ "change": change }));
+        }
+        whole
+    }
+
+    /// A paired device's change to one of this computer's bots (`host.bots.command`): what the owner does on the bot
+    /// page, apart from making a bot (it is made where it is to live), importing, handing over a session (R91) and
+    /// groups (each computer's own). Answers this computer's copy after it (`{version, state, refused?}`), or a file.
+    pub async fn bots_from(&self, request: Value, device_name: &str) -> R<Value> {
+        let action = request
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        if !FROM_DEVICE.contains(&action.as_str()) {
+            return fail(format!(
+                "{device_name} cannot {action} the bots of this computer."
+            ));
+        }
+        let answer = self.own_bots_command(request).await?;
+        if action == "file" {
+            return Ok(answer);
+        }
+        let mut shared = self.bots_share();
+        if let Some(refused) = answer.get("refused") {
+            shared["refused"] = refused.clone();
+        }
+        Ok(shared)
+    }
+
+    /// What main heard of paired host `device` (`botsRemote`): its whole copy or a change of it (`change`), its link up
+    /// or down (`online`), or that it is no longer paired (`forget`). `applied` false: the change is made on a version
+    /// not held here, and main reads the whole copy again.
+    pub fn bots_remote(&self, update: &Value) -> Value {
+        let device = update.get("device").and_then(Value::as_str).unwrap_or("");
+        if device.is_empty() {
+            return json!({ "applied": false });
+        }
+        let name = update.get("name").and_then(Value::as_str).unwrap_or(device);
+        let online = update.get("online").and_then(Value::as_bool) == Some(true);
+        let applied = {
+            let mut across = self.across();
+            if update.get("forget").and_then(Value::as_bool) == Some(true) {
+                across.copies.forget(device);
+                true
+            } else {
+                across
+                    .copies
+                    .apply(device, name, online, update.get("change"))
+            }
+        };
+        if applied {
+            self.bots_changed();
+        }
+        json!({ "applied": applied })
+    }
+
+    /// The owner's `BotsRequest` on this computer's own bots: the state after it.
+    async fn own_bots_command(&self, request: Value) -> R<Value> {
         let text = |key: &str| request.get(key).and_then(Value::as_str).map(str::to_owned);
         let id = text("id").unwrap_or_default();
         let mut refused: Option<&'static str> = None;

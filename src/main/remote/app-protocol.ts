@@ -65,6 +65,12 @@
  * - The host's sidebar project list (sidebar-projects.ts): `host.projects.command {request: SidebarProjectsRequest}`
  *   → SidebarProjectsState (get, add/remove a folder, or change the host's pins, order or archive).
  *   Changes made here or on a paired device push the host's current arrangement as `host.projects.changed`.
+ * - The host's bots (the core's `bots_share.rs`; a bot lives and runs on the computer that made it): `host.bots.list {}`
+ *   → SharedBots (its bots and items at one version), `host.bots.command {request: BotsCall}` → SharedBots after the
+ *   change (a `file` request answers the BotFile), made by the host's core, which refuses making, importing, handing
+ *   over and groups; an item answer counts one of the device's model requests. Each change comes as the
+ *   `host.bots.changed` event (a SharedBotsDelta on the version the device holds). `host.bots.home {name}` → the home
+ *   chat of a bot a device's agent may reach. An older host answers `unsupported`, and its bots are not listed.
  * - The host's bridge self-check (bridge-health.ts): `host.bridgeHealth.get {}` → BridgeHealthReport, the latest
  *   result per omp version the host ran in its launch, for `ompdesk_app` `omp.bridge_health` on a session there
  * - Presence (presence.ts): `presence.report {away}` → null, every `PRESENCE_REPORT_MS` while connected; a device
@@ -120,7 +126,7 @@
  *
  * Events (B → A): `tab.event` (TabEventMessage), `sessions.changed` (no data), `host.ompUpdate.changed`,
  * `host.schedules.changed`, `host.projects.changed`, `host.models.changed`, `host.previewRelay`, `host.portTunnel`,
- * `host.summaries`, `host.sessionsDeleted`, `host.remoteOpened` and `host.sessionLinks.changed`.
+ * `host.summaries`, `host.sessionsDeleted`, `host.remoteOpened`, `host.sessionLinks.changed` and `host.bots.changed`.
  * Both sides parse what crosses the link with the schemas below.
  */
 import { z } from "zod";
@@ -243,6 +249,11 @@ export const SCHEDULES_EVENT = "host.schedules.changed";
 export const MODELS_CHANGED_EVENT = "host.models.changed";
 /** The host's sidebar project list changed (data: SidebarProjectsState); sent to every connected device. */
 export const PROJECTS_EVENT = "host.projects.changed";
+/**
+ * What paired devices list of the host's bots changed (data: SharedBotsDelta on the version the device holds; a device
+ * on another version reads `host.bots.list` again); sent to every connected device. An older device drops it.
+ */
+export const BOTS_EVENT = "host.bots.changed";
 /** A session's links on the host changed (no data); sent to every connected device, whose rows read them again. */
 export const SESSION_LINKS_EVENT = "host.sessionLinks.changed";
 /**
@@ -926,6 +937,31 @@ export const SchedulesLogParams = z.object({ runId: ScheduleId });
 export const SchedulesCreateParams = z.object({ draft: ScheduleDraftSchema });
 /** `host.bots.home {name}` → `{path, name}`: one of the host's bots by name, refused unless the asking device is in its reach. */
 export const BotsHomeParams = z.object({ name: z.string().trim().min(1).max(200) });
+/**
+ * `host.bots.command {request}` → SharedBots (or a BotFile for `file`): the owner's change to one of the host's bots,
+ * made by the host's core, which refuses what a device may not do (make, import, hand over, groups).
+ */
+export const BotsCommandParams = z.object({
+	request: z.looseObject({ action: z.string().min(1).max(64), answer: z.unknown().optional() }),
+});
+/** `host.bots.list {}` reply and a `host.bots.command` one: the host's bots and items at one version. */
+export const SharedBotsSchema = z.looseObject({
+	version: z.string().min(1),
+	state: z.looseObject({
+		bots: z.array(z.looseObject({ id: z.string() })),
+		items: z.array(z.looseObject({ id: z.string() })),
+	}),
+});
+/** The `host.bots.changed` event: what changed from the version `base`. */
+export const SharedBotsDeltaSchema = z.looseObject({
+	base: z.string().min(1),
+	version: z.string().min(1),
+	set: z.looseObject({
+		bots: z.array(z.looseObject({ id: z.string() })),
+		items: z.array(z.looseObject({ id: z.string() })),
+	}),
+	remove: z.looseObject({ bots: z.array(z.string()), items: z.array(z.string()) }),
+});
 
 /** `host.schedules.command` reply and `host.schedules.changed` event: the host's schedules, runs and next starts. */
 export const SchedulesStateSchema: z.ZodType<SchedulesState> = z.object({

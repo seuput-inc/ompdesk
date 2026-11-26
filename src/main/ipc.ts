@@ -158,7 +158,7 @@ import type { AnswerStep } from "./agent-control/target-answer";
 import { quitApproved, requestQuit } from "./app-quit";
 import { Autopilot, type AutopilotCommand, type AutopilotNotice } from "./autopilot";
 import { routeHostAutopilotNotice } from "./autopilot-notice-route";
-import { setBotsState } from "./bots";
+import { type HostBots, setBotsState } from "./bots";
 import {
 	CHECKOUT_PEERS_SWEEP_MS,
 	type CheckoutMember,
@@ -370,10 +370,8 @@ export interface IpcDeps {
 	sessionWake: { current: ((schedule: Schedule, runId: string) => Promise<RunProcess>) | null };
 	/** Set once the control tools exist: a quiet note (no turn) into a session file on this computer (`ScheduleService`'s `note`). */
 	sessionNote: { current: ((session: string, text: string) => Promise<void>) | null };
-	/** Set once the control tools exist: one of this computer's bots by name for a paired device's agent (`host.bots.home`). */
-	botHome: {
-		current: ((name: string, deviceId: string, deviceName: string) => Promise<{ path: string; name: string }>) | null;
-	};
+	/** Set once the control tools exist: this computer's bots for its paired devices (`host.bots.*`) and theirs for it. */
+	hostBots: { current: HostBots | null };
 	/** Set once the control tools exist: tells a tab's opener what main saw happen to the tab (`AgentControlRuntime.reportFor`). */
 	tabReport: { current: ((tabId: string, report: { kind: "blocked"; text: string; id: string }) => void) | null };
 	/** Set once the control tools exist: an agent is opening a session that has not taken its first message (`AgentControlRuntime.opening`). */
@@ -1567,6 +1565,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		itemsFile: path.join(app.getPath("userData"), "items.json"),
 		botsRoot: path.join(os.homedir(), BOTS_FOLDER),
 		botsChanged: setBotsState,
+		// What paired devices list of this computer's bots changed: each connected one hears the change.
+		botsShared: change => remoteDevices.hostBotsChanged(change),
 		sendOutboxFile: path.join(app.getPath("userData"), "send-outbox.json"),
 		attachmentsDir: path.join(app.getPath("userData"), "agent-attachments"),
 		uploads: deps.uploads,
@@ -1649,7 +1649,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	deps.tabReport.current = (tabId, report) => agentControl.reportFor(tabId, report);
 	deps.agentOpening.current = () => agentControl.opening();
 	deps.sessionNote.current = (session, text) => agentControl.noteSession(session, text);
-	deps.botHome.current = (name, deviceId, deviceName) => agentControl.botHome(name, deviceId, deviceName);
+	deps.hostBots.current = {
+		home: (name, deviceId, deviceName) => agentControl.botHome(name, deviceId, deviceName),
+		share: () => agentControl.botsShare(),
+		from: (request, deviceName) => agentControl.botsFrom(request, deviceName),
+		remote: update => agentControl.botsRemote(update),
+	};
+	remoteDevices.botsReady();
 	// The control socket (src/main/control-socket): anything on this computer drives the same service as the tools.
 	void startControlSocket({
 		userData: app.getPath("userData"),

@@ -25,7 +25,7 @@ import { FIXTURE_NEWER_OMP_VERSION } from "./fixture/version";
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, REMOTE_LOGIN, type RemoteInstance } from "./remote-harness";
 import { crashed, type Look, panelCrash } from "./responsive-audit";
-import { PARITY_WORK_PROMPT, type ParitySession, SURFACES, type Surface } from "./responsive-surfaces";
+import { AWAY_HOST_BOT, PARITY_WORK_PROMPT, type ParitySession, SURFACES, type Surface } from "./responsive-surfaces";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
@@ -222,6 +222,45 @@ async function seedPreviewHistory(userData: string): Promise<void> {
 	await fs.writeFile(path.join(userData, "preview-history.json"), JSON.stringify({ entries }), { mode: 0o600 });
 }
 
+/** A computer away since this one last heard it, whose bot this one still lists (`<userData>/bots-remote.json`). */
+async function seedAwayHostBots(userData: string): Promise<void> {
+	const at = "2026-11-20T09:00:00.000Z";
+	const home = "/Users/someone/.omp/agent/sessions/courier/home.jsonl";
+	const bot = {
+		id: AWAY_HOST_BOT,
+		name: "Courier",
+		folder: "/Users/someone/.omp/bots/courier",
+		home,
+		sessions: [home],
+		paused: false,
+		model: null,
+		autoApprove: false,
+		reach: [],
+		staleDays: 7,
+		lookAround: null,
+		tidy: null,
+		quiet: [],
+		specialty: "Carries notes between computers.",
+		createdAt: at,
+	};
+	const item = {
+		id: "item-away-1",
+		bot: AWAY_HOST_BOT,
+		number: 1,
+		session: home,
+		title: "Pick a day for the move",
+		status: "needs_you",
+		question: { id: 1, text: "Which day?", options: ["Mon", "Tue"] },
+		links: [],
+		createdAt: at,
+		updatedAt: at,
+		events: [],
+		version: 1,
+	};
+	const copy = { device: "pc-c-away", name: "PC-C", version: "bots-away.3", state: { bots: [bot], items: [item] } };
+	await fs.writeFile(path.join(userData, "bots-remote.json"), JSON.stringify([copy]), { mode: 0o600 });
+}
+
 const dir = process.env.OMP_GUI_PARITY;
 const BLOCKED_USAGE = process.env.OMP_GUI_TEST_USAGE_ACCOUNTS === "blocked";
 const language = process.env.OMP_GUI_PARITY_LANGUAGE === "ko" ? "ko" : "en";
@@ -384,6 +423,10 @@ if (dir) {
 				for (const profile of [hostProfile, clientProfile])
 					await fs.writeFile(path.join(profile.desktop, "update-token.dropped"), "keychain-would-ask");
 			}
+			// `bot-pane-offline`: both computers kept the last copy of a third computer's bots (`bots-remote.json`, the
+			// core's `bots_share.rs`), and that computer is away, so every view lists its bot offline.
+			if (surfaces.some(surface => surface.id === "bot-pane-offline"))
+				for (const profile of [hostProfile, clientProfile]) await seedAwayHostBots(profile.desktop);
 			if (previewStart)
 				for (const profile of [hostProfile, clientProfile]) await seedPreviewHistory(profile.desktop);
 			host = await launchRemote(hostProfile);

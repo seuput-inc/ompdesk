@@ -18,7 +18,8 @@ import { openBotChat } from "./bot-launch";
 
 export function BotChats({ bot }: { bot: Bot }) {
 	const t = useT();
-	const { sessions, deleteSession, renameSession } = useSessionList("global");
+	// A paired host's bot chats there: its chats are that host's sessions.
+	const { sessions, deleteSession, renameSession } = useSessionList("global", bot.device);
 	const tabs = useTabsStore(s => s.tabs);
 	const [query, setQuery] = useState("");
 	const [renaming, setRenaming] = useState<{ path: string; name: string } | null>(null);
@@ -64,7 +65,7 @@ export function BotChats({ bot }: { bot: Bot }) {
 				chats.map(session => {
 					const home = session.path === bot.home;
 					const title = home ? t("bots.chats.home") : sessionDisplayTitle(session, "") || t("bots.chats.untitled");
-					const tab = tabs.find(entry => entry.sessionPath === session.path && !entry.device);
+					const tab = tabs.find(entry => entry.sessionPath === session.path && entry.device === bot.device);
 					if (renaming?.path === session.path)
 						return (
 							<Input

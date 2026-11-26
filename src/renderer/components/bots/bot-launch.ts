@@ -14,10 +14,11 @@ import { loadChunk } from "../../lib/chunk-load";
 import { translate } from "../../lib/i18n";
 import { useBotsStore } from "../../stores/bots";
 import type { ComposerStore } from "../../stores/composer";
+import { useRemoteStore } from "../../stores/remote";
 import { sessionRuntimeStore } from "../../stores/session-runtime-context";
 import { ensureTabRuntime } from "../../stores/tab-runtime";
 import { useTabsStore } from "../../stores/tabs";
-import { toastError } from "../../stores/toast";
+import { toast, toastError } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";
 import type { BotTemplate } from "./bot-templates";
 
@@ -222,16 +223,34 @@ export function openBotHome(bot: Bot): void {
 	void openBotChat(bot, bot.home).catch(() => {});
 }
 
-/** Opens one of the bot's chats, or a new one in its folder (`session` null); `draft` waits in its composer. */
+/**
+ * Opens one of the bot's chats, or a new one in its folder (`session` null); `draft` waits in its composer. A paired
+ * host's bot chats on that host, as a tab of it (the way its sessions open); while the host is offline nothing opens and
+ * a notice says so: the chat lives there.
+ */
 export async function openBotChat(bot: Bot, session: string | null, draft?: string): Promise<void> {
+	if (bot.device) {
+		const host = useRemoteStore.getState().state?.hosts.find(known => known.deviceId === bot.device);
+		if (host?.state !== "online") {
+			const kept = useBotsStore.getState().state.remote?.find(copy => copy.device === bot.device)?.name;
+			toast({
+				variant: "warning",
+				message: translate("bots.remote.offlineChat", { device: host?.name ?? kept ?? "" }),
+			});
+			return;
+		}
+	}
 	useUiStore.getState().closeDestination();
 	const tabs = useTabsStore.getState();
-	const held = session ? tabs.tabs.find(tab => tab.sessionPath === session && !tab.device) : undefined;
+	const held = session ? tabs.tabs.find(tab => tab.sessionPath === session && tab.device === bot.device) : undefined;
 	let tabId: string | null = held?.id ?? null;
+	const where = bot.device ? { device: bot.device } : {};
 	if (held) await tabs.switchTab(held.id);
 	else
 		tabId = await tabs.openTab(
-			session ? { cwd: bot.folder, sessionPath: session, kind: "agent" } : { cwd: bot.folder, kind: "agent" },
+			session
+				? { cwd: bot.folder, sessionPath: session, kind: "agent", ...where }
+				: { cwd: bot.folder, kind: "agent", ...where },
 		);
 	if (tabId && draft) {
 		ensureTabRuntime(tabId);

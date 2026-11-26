@@ -2140,3 +2140,127 @@ async fn a_room_asks_the_members_its_reply_mode_names_and_a_member_answers_with_
     let (text, is_error) = run(&control, "ompdesk_room", json!({ "action": "list" })).await;
     assert!(is_error && text.contains("works in a bot's chat"), "{text}");
 }
+
+#[tokio::test]
+async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_once() {
+    // The host: Ada, whose item asks the owner.
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let (host, host_asked, ada_id) = ada(9_790, &root, mails.clone(), |_, _| None).await;
+    let tool = |args: Value| host.run("bot1", "ompdesk_item", args, None);
+    assert!(
+        !tool(json!({ "action": "add", "title": "Pick a day" }))
+            .await
+            .is_error
+    );
+    let out = tool(
+        json!({ "action": "set", "item": "1", "ask": "Which day?", "options": ["Mon", "Tue"] }),
+    )
+    .await;
+    assert!(!out.is_error, "{}", out.text);
+    let item = host.items().find(&ada_id, "1").cloned().unwrap();
+    let question = item.question.as_ref().unwrap().id;
+    let whole = host.bots_share();
+    assert_eq!(whole["state"]["bots"][0]["name"], "Ada");
+    assert_eq!(whole["state"]["items"][0]["status"], "needs_you");
+    assert_eq!(whole["state"].get("rooms"), None);
+    // A round trip to the fake main: every tell before it is recorded.
+    run(&host, "ompdesk_bot", json!({ "action": "list" })).await;
+    let told_before = host_asked.lock().unwrap().len();
+
+    // The host makes a paired device's answer; sent again (a retry over the link), it changes nothing.
+    let request = json!({ "action": "item", "id": item.id, "answer": { "choice": 0, "question": question }, "requestId": "r1" });
+    let answer = host.bots_from(request.clone(), "MacBook").await.unwrap();
+    assert_eq!(answer["state"]["items"][0]["status"], "working");
+    let again = host.bots_from(request.clone(), "MacBook").await.unwrap();
+    assert_eq!(again["version"], answer["version"]);
+    let answered = host.items().get(&item.id).cloned().unwrap();
+    assert_eq!(
+        answered
+            .events
+            .iter()
+            .filter(|event| event.kind == "answered")
+            .count(),
+        1
+    );
+    assert_eq!(
+        delivered(&mails, &format!("item-{}-v{}", item.id, answered.version)),
+        1
+    );
+    // Every device heard the change as the rows it touched, on the version it held.
+    run(&host, "ompdesk_bot", json!({ "action": "list" })).await;
+    let shared: Vec<Value> = host_asked.lock().unwrap()[told_before..]
+        .iter()
+        .filter(|(method, _)| method == "botsShared")
+        .map(|(_, args)| args["change"].clone())
+        .collect();
+    assert_eq!(
+        shared.first().map(|change| &change["base"]),
+        Some(&whole["version"])
+    );
+    assert!(
+        shared
+            .iter()
+            .all(|change| change["set"]["bots"] == json!([]))
+    );
+    // A bot is made where it is to live: a device cannot make one here.
+    let refused = host
+        .bots_from(json!({ "action": "create", "name": "Cy" }), "MacBook")
+        .await
+        .unwrap_err();
+    assert!(
+        refused.message().contains("MacBook cannot create"),
+        "{}",
+        refused.message()
+    );
+    assert!(host.bot_named("Cy").is_err());
+
+    // The device: its main carries a change of the host's to it (`botsCommand`) and hands back the host's answer.
+    let carried = answer.clone();
+    let (device, device_asked) = rig(
+        9_791,
+        bot_world("/elsewhere"),
+        Caps::default(),
+        move |method, _| {
+            Ok(if method == "botsCommand" {
+                carried.clone()
+            } else {
+                Value::Null
+            })
+        },
+    );
+    let heard = device.bots_remote(
+        &json!({ "device": "dev-a", "name": "Mini", "online": true, "change": whole }),
+    );
+    assert_eq!(heard["applied"], true);
+    let state = device.bots_state();
+    assert_eq!(state["bots"], json!([]));
+    assert_eq!(state["remote"][0]["device"], "dev-a");
+    assert_eq!(state["remote"][0]["name"], "Mini");
+    assert_eq!(state["remote"][0]["bots"][0]["id"], json!(ada_id));
+    let state = device.bots_command(request.clone()).await.unwrap();
+    assert_eq!(state["remote"][0]["items"][0]["status"], "working");
+    assert!(
+        device_asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(method, args)| method == "botsCommand"
+                && args["device"] == "dev-a"
+                && args["request"]["requestId"] == "r1")
+    );
+    // The host goes offline: the last copy stays, and a change waits for nobody: it is refused at once.
+    device.bots_remote(&json!({ "device": "dev-a", "name": "Mini", "online": false }));
+    let error = device.bots_command(request).await.unwrap_err();
+    assert!(
+        error.message().contains("Mini is offline"),
+        "{}",
+        error.message()
+    );
+    let state = device.bots_state();
+    assert_eq!(state["remote"][0]["online"], false);
+    assert_eq!(state["remote"][0]["items"][0]["status"], "working");
+    // Unpaired, its copy goes.
+    device.bots_remote(&json!({ "device": "dev-a", "forget": true }));
+    assert_eq!(device.bots_state().get("remote"), None);
+}

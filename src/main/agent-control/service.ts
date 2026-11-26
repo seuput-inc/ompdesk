@@ -41,7 +41,7 @@ import type {
 	PrivacyPane,
 	SidebarView,
 } from "../../shared/agent-control";
-import type { BotsAnswer, BotsCall, BotsState } from "../../shared/bots";
+import type { BotsAnswer, BotsCall, BotsState, SharedBots, SharedBotsDelta } from "../../shared/bots";
 import type { SessionStatus } from "../../shared/control-protocol";
 import { ipcErrorCode } from "../../shared/ipc-error-codes";
 import type {
@@ -65,6 +65,7 @@ import type {
 import type { ScheduleCreated, ScheduleDraft, SchedulesRequest, SchedulesState } from "../../shared/schedules";
 import type { SessionSummary } from "../../shared/session-summary";
 import type { FamilyEdits } from "../../shared/turn-edits";
+import type { HostBotsUpdate } from "../bots";
 import { CorePort } from "../core/ports";
 import { CoreError, core } from "../core/process";
 import { RpcTimeoutError } from "../rpc-client";
@@ -462,6 +463,10 @@ export interface AgentControlHost {
 	setOpener?(tabId: string, openerTabId: string): void;
 	/** A paired host's bot by name (`host.bots.home`): its home chat file; the host refuses unless this computer is in its reach. */
 	botHome?(device: string, name: string): Promise<{ path: string }>;
+	/** The owner's change to a paired host's bot or item (`host.bots.command`): the host's copy after it, or a file. */
+	botsCommand?(device: string, request: BotsCall): Promise<unknown>;
+	/** This computer's bots changed as its paired devices see them (`botsShared`): each connected device is told. */
+	botsShared?(change: SharedBotsDelta): void;
 	/**
 	 * Every tombstone (`deleted-sessions.ts`): when the session was deleted, from any path and any launch (the
 	 * sidebar's Delete, `/delete`, a paired device), by its file and computer, or by its saved id alone.
@@ -924,6 +929,21 @@ export class AgentControl {
 		return this.#call("botHome", { name, device, deviceName });
 	}
 
+	/** This computer's bots and items as its paired devices get them (`host.bots.list`). */
+	botsShare(): Promise<SharedBots> {
+		return this.#call("botsShare", {});
+	}
+
+	/** A paired device's change to one of this computer's bots (`host.bots.command`): this computer's copy after it. */
+	botsFrom(request: unknown, deviceName: string): Promise<unknown> {
+		return this.#call("botsFrom", { request, deviceName });
+	}
+
+	/** What this computer heard of a paired host's bots; `applied` false: read its whole copy again. */
+	botsRemote(update: HostBotsUpdate): Promise<{ applied: boolean }> {
+		return this.#call("botsRemote", update as unknown as Record<string, unknown>);
+	}
+
 	/** One pass over the sessions `callerTabId` opened whose work landed. */
 	autoClose(callerTabId: string): Promise<void> {
 		return this.#call("autoClose", { callerTabId });
@@ -1253,6 +1273,11 @@ export class AgentControl {
 					if (!host.botHome) throw new Error("Paired computers' bots are not reachable here.");
 					return host.botHome(where, name);
 				}),
+			botsCommand: ({ device: where, request }: { device: string; request: BotsCall }) =>
+				coded(() => {
+					if (!host.botsCommand) throw new Error("Paired computers' bots are not reachable here.");
+					return host.botsCommand(where, request);
+				}),
 			setOpener: ({ tabId, openerTabId }: { tabId: string; openerTabId: string }) =>
 				coded(() => {
 					if (!host.setOpener) throw new Error("Handing a session to a bot is not available here.");
@@ -1284,6 +1309,7 @@ export class AgentControl {
 				told(() => host.runtime?.nextPromptChildren(tabId, children)),
 			closedChildren: ({ rows }: { rows: ClosedChild[] }) => tell(() => host.runtime?.closedChildren(rows)),
 			botsChanged: ({ state }: { state: BotsState }) => told(() => host.botsChanged?.(state)),
+			botsShared: ({ change }: { change: SharedBotsDelta }) => told(() => host.botsShared?.(change)),
 			wakeDone: ({ runId, code, error }: { runId: string; code: number | null; error?: string }) =>
 				told(() => host.runtime?.wakeDone(runId, { code, ...(error === undefined ? {} : { error }) })),
 		};

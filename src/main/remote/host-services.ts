@@ -42,6 +42,7 @@ import { z } from "zod";
 import { PROMPT_ORIGIN_HOST_ID, type PromptOriginEnv } from "../../../resources/gui-bridge/prompt-origin-contracts";
 import { ACCOUNT_ROTATION_MODES } from "../../shared/account-rotation";
 import { type AgentReviewResult, reviewUnmerged } from "../../shared/agent-control";
+import type { SharedBotsDelta } from "../../shared/bots";
 import { codedError, ipcErrorCode, isIpcErrorCode } from "../../shared/ipc-error-codes";
 import {
 	HOST_UPDATE_ACTIONS,
@@ -75,6 +76,7 @@ import { branchEvidence, branchFacts, landingFacts, mergeBranch, removeSafeWorkt
 import { type AnswerStep, TargetAnswer } from "../agent-control/target-answer";
 import { AtomicSaver } from "../atomic-file";
 import type { BackgroundWorkMember } from "../background-work";
+import type { HostBots } from "../bots";
 import type { BridgeConnectResult } from "../bridge-health";
 import type { CheckoutMember } from "../checkout-peers";
 import { controlEnvFor } from "../control-socket/env";
@@ -166,6 +168,8 @@ import {
 	AUTOPILOT_NOTICE_EVENT,
 	type AutopilotNoticeEvent,
 	BenchmarkOptionsSchema,
+	BOTS_EVENT,
+	BotsCommandParams,
 	BotsHomeParams,
 	CustomProviderInputSchema,
 	encodeBinaryRead,
@@ -335,8 +339,8 @@ export interface HostServicesDeps {
 	launchProfiles: Pick<PrefsStore, "launchProfile" | "updateLaunchProfile">;
 	/** This machine's models.yml, stats server and `omp bench`. */
 	machine: MachineServices;
-	/** One of this computer's bots by name for a device's agent: its home chat file, refused unless the device is in its reach. */
-	botHome?: (name: string, deviceId: string, deviceName: string) => Promise<{ path: string; name: string }>;
+	/** This computer's bots for its devices (`host.bots.*`): null until the control tools exist. */
+	bots?: () => HostBots | null;
 	/**
 	 * This machine's own tabs (the local pool): a session file one of them
 	 * holds is changed through that tab (a delete closes it), and a credential
@@ -1783,9 +1787,24 @@ export class LocalHostServices implements HostServices {
 			case "host.schedules.create":
 				return this.#deps.machine.createSchedule(parse(SchedulesCreateParams, method, params).draft, peer.deviceId);
 			// A device's agent asks one of this computer's bots by name (`bot:<name>@<this computer>`).
-			case "host.bots.home": {
-				if (!this.#deps.botHome) throw new Error("This computer has no bots yet");
-				return this.#deps.botHome(parse(BotsHomeParams, method, params).name, peer.deviceId, peer.name);
+			case "host.bots.home":
+				return this.#bots().home(parse(BotsHomeParams, method, params).name, peer.deviceId, peer.name);
+			// A device lists this computer's bots (orca-bots-remote): the copy it keeps, at its version.
+			case "host.bots.list":
+				return this.#bots().share();
+			// A device's change to one of this computer's bots: made here, once (a resent answer carries its request id).
+			// An answer to an item question starts a turn of the bot here, one of the device's model requests.
+			case "host.bots.command": {
+				const { request } = parse(BotsCommandParams, method, params);
+				const bots = this.#bots();
+				const change = () => bots.from(request, peer.name);
+				if (request.action !== "item" || request.answer === undefined) return change();
+				return this.#metered(
+					peer.deviceId,
+					1,
+					change,
+					answer => typeof answer === "object" && answer !== null && !("refused" in answer),
+				);
 			}
 			case "host.projects.command":
 				return this.#deps.machine.sidebarProjects(parse(ProjectsCommandParams, method, params).request);
@@ -1960,6 +1979,17 @@ export class LocalHostServices implements HostServices {
 	/** This machine's sidebar project list changed: every connected device's section for it follows. */
 	sidebarProjectsChanged(state: SidebarProjectsState): void {
 		for (const conn of this.#conns) emitSafely(conn, PROJECTS_EVENT, state);
+	}
+
+	/** What devices list of this computer's bots changed (the core's `botsShared`): every connected device follows. */
+	botsChanged(change: SharedBotsDelta): void {
+		for (const conn of this.#conns) emitSafely(conn, BOTS_EVENT, change);
+	}
+
+	#bots(): HostBots {
+		const bots = this.#deps.bots?.();
+		if (!bots) throw new Error("This computer's bots are not ready yet");
+		return bots;
 	}
 
 	/** A session's links here changed: every connected device's rows of this computer read them again. */

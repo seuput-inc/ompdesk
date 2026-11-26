@@ -29,7 +29,7 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 	const t = useT();
 	const lang = useCurrentLang();
 	const formId = useId();
-	const bots = useBotsStore(s => s.state.bots);
+	const bots = useBotsStore(s => s.state.bots).filter(bot => !bot.device);
 	const template = draft?.template;
 	const [name, setName] = useState(
 		() => draft?.name ?? (template ? freeBotName(botTemplateWords(lang, template.template.id).name, bots) : ""),

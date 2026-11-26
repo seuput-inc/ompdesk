@@ -907,8 +907,11 @@ export function Sidebar() {
 		[projectName, groupAliases],
 	);
 	const allGroups = useMemo(() => rows.allGroups.map(named), [rows, named]);
-	// A bot's folder is no project: its chats list under the bot in the Bots section.
-	const botFolders = useMemo(() => new Set(botsShown ? bots.map(bot => bot.folder) : []), [botsShown, bots]);
+	// A bot's folder on this computer is no project: its chats list under the bot in the Bots section.
+	const botFolders = useMemo(
+		() => new Set(botsShown ? bots.filter(bot => !bot.device).map(bot => bot.folder) : []),
+		[botsShown, bots],
+	);
 	const groups = useMemo(
 		() => rows.groups.filter(group => !botFolders.has(group.cwd)).map(named),
 		[rows, named, botFolders],
@@ -2552,12 +2555,15 @@ export function Sidebar() {
 	};
 
 	// The Bots section's rows: each bot with what its chats' rows say (`botFacts`) and those rows; a filter keeps a bot
-	// its name or purpose matches (all its chats) or whose chats match (only those).
+	// its name or purpose matches (all its chats) or whose chats match (only those). A paired host's bot lists no chat
+	// rows here: its chats are that host's sessions, under its own section.
 	const botEntries: SidebarBotEntry[] = botsShown
 		? bots.flatMap(bot => {
-				const all = rows.allGroups.find(group => group.cwd === bot.folder)?.sessions ?? [];
+				const chatsOf = (groups: typeof rows.groups) =>
+					bot.device ? [] : (groups.find(group => group.cwd === bot.folder)?.sessions ?? []);
+				const all = chatsOf(rows.allGroups);
 				const byName = !query || botMatches(bot, query);
-				const shown = byName ? all : (rows.groups.find(group => group.cwd === bot.folder)?.sessions ?? []);
+				const shown = byName ? all : chatsOf(rows.groups);
 				if (!byName && shown.length === 0) return [];
 				let current = false;
 				const chats: BotChatFacts[] = all.map(session => {

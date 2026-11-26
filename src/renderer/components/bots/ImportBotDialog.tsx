@@ -19,7 +19,7 @@ const OTHER = "other";
 export function ImportBotDialog({ onClose }: { onClose: () => void }) {
 	const t = useT();
 	const formId = useId();
-	const bots = useBotsStore(s => s.state.bots);
+	const bots = useBotsStore(s => s.state.bots).filter(bot => !bot.device);
 	const [sources, setSources] = useState<BotImportSource[] | null>(null);
 	const [picked, setPicked] = useState<string | null>(null);
 	const [otherFolder, setOtherFolder] = useState("");
@@ -35,7 +35,12 @@ export function ImportBotDialog({ onClose }: { onClose: () => void }) {
 				const first = found.sources[0];
 				if (first) {
 					setPicked(first.folder);
-					setName(freeBotName(first.name, useBotsStore.getState().state.bots));
+					setName(
+						freeBotName(
+							first.name,
+							useBotsStore.getState().state.bots.filter(bot => !bot.device),
+						),
+					);
 				} else setPicked(OTHER);
 			})
 			.catch(() => {

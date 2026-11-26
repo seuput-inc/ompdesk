@@ -60,10 +60,11 @@ export function useCardHidden(kind: BotCardKind | null): boolean {
 	return useHiddenCards(s => kind !== null && s.hidden.includes(kind));
 }
 
-/** Whether the tab runs in a bot's folder: its NO_REPLY turns fold (`QuietReply`). */
+/** Whether the tab runs in a bot's folder (on the computer it runs on): its NO_REPLY turns fold (`QuietReply`). */
 export function useBotChat(tabId: string | null): boolean {
 	const cwd = useTabsStore(s => (tabId ? s.tabs.find(tab => tab.id === tabId)?.cwd : undefined));
-	return useBotsStore(s => botOfFolder(s.state.bots, cwd) !== undefined);
+	const device = useTabsStore(s => (tabId ? s.tabs.find(tab => tab.id === tabId)?.device : undefined));
+	return useBotsStore(s => botOfFolder(s.state.bots, cwd, device) !== undefined);
 }
 
 const LazyBotToolCard = lazyChunk(() => import("./BotCards").then(module => ({ default: module.BotToolCard })));

@@ -19,7 +19,8 @@ import { SettingsSection } from "./SettingsLayout";
 
 export function BotsSection() {
 	const t = useT();
-	const bots = useBotsStore(s => s.state.bots);
+	// Settings are this computer's: a paired host's bots are set on their own page, which sends changes to the host.
+	const bots = useBotsStore(s => s.state.bots).filter(bot => !bot.device);
 	const shown = useSidebarFolds(s => s.navHidden.bots !== true);
 	const [open, setOpen] = useState<string | null>(null);
 	useEffect(() => ensureBots(), []);

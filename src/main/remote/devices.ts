@@ -20,6 +20,7 @@
 import { hostname } from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import type { SharedBotsDelta } from "../../shared/bots";
 import { KEEP_AWAKE_WORKING_PREF } from "../../shared/desktop-prefs";
 import { codedError, type IpcErrorCode, ipcErrorCode, isIpcErrorCode } from "../../shared/ipc-error-codes";
 import {
@@ -50,6 +51,7 @@ import {
 	SIDEBAR_PROJECTS_STATE,
 	type SidebarProjectsState,
 } from "../../shared/sidebar-projects";
+import type { HostBots, HostBotsUpdate } from "../bots";
 import type { ModelWaitTracker } from "../model-wait-count";
 import type { RelaySocket } from "../preview/relay-socket";
 import type { ResumeMarker } from "../turn-resume";
@@ -57,6 +59,7 @@ import type { WebBlocks } from "../web/blocks-store";
 import {
 	AUTOPILOT_NOTICE_EVENT,
 	AutopilotNoticeEvent,
+	BOTS_EVENT,
 	DEVICE_ORDER_CHANGED,
 	DEVICE_ORDER_EXCHANGE,
 	DEVICE_RENAME_EVENT,
@@ -91,6 +94,8 @@ import {
 	SESSIONS_DELETED_MAX_PATHS,
 	SESSIONS_DELETED_METHOD,
 	SessionsDeletedReply,
+	SharedBotsDeltaSchema,
+	SharedBotsSchema,
 	SidebarProjectsStateSchema,
 	SUMMARIES_EVENT,
 	SUMMARIES_METHOD,
@@ -191,6 +196,8 @@ export interface RemoteDevicesDeps {
 	log?: (event: string, details: Record<string, unknown>) => void;
 	/** A host link's transitions and the host role's connections (`remote-link`; no addresses or keys). */
 	logLink?: (event: string, details: Record<string, unknown>) => void;
+	/** The core's bots across paired computers: a host's copy is told to it. Null until the control tools exist. */
+	bots?: () => HostBots | null;
 }
 
 /** A host whose link is down: no summaries of it, so its rows show no live state rather than stale state. */
@@ -601,6 +608,10 @@ export class RemoteDevices {
 	async removeHost(deviceId: unknown): Promise<RemoteState> {
 		if (typeof deviceId !== "string") throw codedError("remote_unknown_device", "Unknown device");
 		this.#unlink(deviceId);
+		void this.#deps
+			.bots?.()
+			?.remote({ device: deviceId, forget: true })
+			.catch(() => {});
 		await (await this.#sharing).removeHost(deviceId);
 		this.#deps.broadcast(IPC_EVENTS.SESSIONS_CHANGED, { device: deviceId } satisfies IpcSessionsChanged);
 		return this.#broadcastState();
@@ -800,6 +811,17 @@ export class RemoteDevices {
 		this.#deps.services.schedulesChanged(state);
 	}
 
+	/** What devices list of this computer's bots changed (the core's `botsShared`): every connected device follows. */
+	hostBotsChanged(change: SharedBotsDelta): void {
+		this.#deps.services.botsChanged(change);
+	}
+
+	/** The control tools came up: every connected host's bots are read now (a link that came up first told nobody). */
+	botsReady(): void {
+		for (const [deviceId, link] of this.#links)
+			if (link.client.state === "online") void this.#readBots(deviceId, link);
+	}
+
 	/** This machine's models.yml changed by itself (a local engine): devices showing its providers read them again. */
 	hostModelsChanged(): void {
 		this.#deps.services.modelsChanged();
@@ -968,7 +990,12 @@ export class RemoteDevices {
 				link.webUrl = undefined;
 			}
 			this.#broadcastState();
-			if (state !== "online") return;
+			// The host's bots stay listed from their last copy while it is away; the copy is read again as it comes back.
+			if (state !== "online") {
+				void this.#tellBots(deviceId, { online: false });
+				return;
+			}
+			void this.#readBots(deviceId, link);
 			void this.#exchangeDeviceOrder(deviceId, link);
 			link.closes.flush(rtab => client.request("tab.close", { rtab }));
 			void this.#readSummaries(deviceId, link);
@@ -981,6 +1008,15 @@ export class RemoteDevices {
 		client.on("event", (event, data) => {
 			if (event === DEVICE_ORDER_CHANGED) {
 				void this.#exchangeDeviceOrder(deviceId, link);
+				return;
+			}
+			if (event === BOTS_EVENT) {
+				const change = SharedBotsDeltaSchema.safeParse(data);
+				if (!change.success || link.client.state !== "online") return;
+				void this.#tellBots(deviceId, { online: true, change: change.data }).then(applied => {
+					// A change on a version this computer does not hold: it missed one, so it reads the whole copy.
+					if (applied === false) void this.#readBots(deviceId, link);
+				});
 				return;
 			}
 			if (event === SESSIONS_CHANGED_EVENT) {
@@ -1096,6 +1132,29 @@ export class RemoteDevices {
 		// close() reports offline to the tabs first; they stay, showing the host as unreachable.
 		link.client.close();
 		this.#links.delete(deviceId);
+	}
+
+	/** The host's bots, whole: as the link comes up and whenever a change did not apply on the copy here. */
+	async #readBots(deviceId: string, link: HostLink): Promise<void> {
+		try {
+			const read = SharedBotsSchema.safeParse(await link.client.request<unknown>("host.bots.list", {}));
+			if (read.success && link.client.state === "online")
+				await this.#tellBots(deviceId, { online: true, change: read.data });
+		} catch {
+			// unsupported (an older host lists no bots), or the link dropped again: the next push or link-up says it.
+		}
+	}
+
+	/** Tells the core what this computer heard of host `deviceId`'s bots; null while the control tools are not up. */
+	async #tellBots(deviceId: string, update: Omit<HostBotsUpdate, "device" | "name">): Promise<boolean | null> {
+		const bots = this.#deps.bots?.();
+		if (!bots) return null;
+		const name = this.#links.get(deviceId)?.client.host.name ?? deviceId;
+		try {
+			return (await bots.remote({ device: deviceId, name, ...update })).applied;
+		} catch {
+			return null;
+		}
 	}
 
 	/**

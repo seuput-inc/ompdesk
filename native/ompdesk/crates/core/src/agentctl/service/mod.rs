@@ -203,6 +203,9 @@ pub struct Inner {
     items: Mutex<Items>,
     /// The bot groups and their rooms (`rooms.json` beside `items.json`); never held with `bots` or `items`.
     rooms: Mutex<Rooms>,
+    /// What this computer shares of its bots with paired devices, and its hosts' bots as last heard (`bots_share`);
+    /// never held with `bots`, `items` or `rooms`.
+    across: Mutex<work::bots_share::Across>,
     /// Where a new bot's folder goes (`~/.omp/bots`); None: a bot needs its folder named.
     pub(crate) bots_root: Option<PathBuf>,
     /// The send outbox, or None where main keeps none (a queued message then lives only in its omp).
@@ -264,6 +267,11 @@ impl Inner {
     /// The bot groups and their rooms.
     pub fn rooms(&self) -> MutexGuard<'_, Rooms> {
         lock(&self.rooms)
+    }
+
+    /// The bots shared with paired devices and the paired hosts' copies.
+    pub(crate) fn across(&self) -> MutexGuard<'_, work::bots_share::Across> {
+        lock(&self.across)
     }
 
     /// `Date.now()`.
@@ -359,6 +367,12 @@ impl AgentControl {
                     .items
                     .as_ref()
                     .map(|items| items.with_file_name("rooms.json")),
+            )),
+            across: Mutex::new(work::bots_share::Across::started(
+                files
+                    .items
+                    .as_ref()
+                    .map(|items| items.with_file_name("bots-remote.json")),
             )),
             bots_root: files.bots_root.clone(),
             clock,
@@ -1333,6 +1347,21 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
             args.get("device").and_then(Value::as_str),
             args.get("deviceName").and_then(Value::as_str),
         )),
+        // A paired device's change to one of this computer's bots (`host.bots.command`): this computer's copy after it.
+        "botsFrom" => reply(
+            control
+                .bots_from(
+                    args.get("request").cloned().unwrap_or(Value::Null),
+                    args.get("deviceName")
+                        .and_then(Value::as_str)
+                        .unwrap_or("A paired computer"),
+                )
+                .await,
+        ),
+        // This computer's bots as its paired devices get them (`host.bots.list`).
+        "botsShare" => Reply::json(&control.bots_share()),
+        // What main heard of a paired host's bots: a copy, a change of it, its link, or that it is no longer paired.
+        "botsRemote" => Reply::json(&control.bots_remote(&args)),
         "autoClose" => reply(
             control
                 .auto_close(&text_arg(&args, "callerTabId", method)?)

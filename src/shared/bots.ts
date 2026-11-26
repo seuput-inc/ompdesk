@@ -59,6 +59,8 @@ export interface Bot {
 	createdAt: string;
 	/** The newest item event the owner had seen when they last opened its Items tab (`itemsOpened`). */
 	itemsSeen?: number;
+	/** A paired host's bot (its device id), as this computer's views list it; absent = this computer's own. */
+	device?: string;
 }
 
 /** What a bot's chats can notify (Orca's per-bot notification toggles): an approval or question, a finished turn, a failure. */
@@ -180,6 +182,8 @@ export interface Item {
 	stale?: boolean;
 	/** Read-time: every live session it links waits for a usage limit; the earliest reset (ISO). */
 	limitUntil?: string;
+	/** A paired host's item (its device id), as this computer's views list it; absent = this computer's own. */
+	device?: string;
 }
 
 export interface BotsState {
@@ -190,6 +194,37 @@ export interface BotsState {
 	rooms?: Room[];
 	/** The owner's answer named a question the bot has since replaced: nothing was written. */
 	refused?: "question_changed";
+	/** The paired hosts' bots as this computer last heard them (absent while none is held). */
+	remote?: RemoteBots[];
+}
+
+/**
+ * A paired host's bots and items (orca-bots-remote): a bot lives and runs on the computer that made it; every
+ * computer paired to it lists it from this copy and sends its changes to that host, which makes them. The copy stays
+ * while the host is offline (`online` false), and nothing of it is written on this computer.
+ */
+export interface RemoteBots {
+	device: string;
+	/** The host's name when its copy last came. */
+	name: string;
+	online: boolean;
+	bots: Bot[];
+	items: Item[];
+}
+
+/** A computer's bots and items as its paired devices get them, at one version (`epoch.n`, a new epoch each run). */
+export interface SharedBots {
+	version: string;
+	state: Pick<BotsState, "bots" | "items">;
+	refused?: BotsState["refused"];
+}
+
+/** What changed of a computer's shared bots from `base` to `version`: rows new or different, and ids gone. */
+export interface SharedBotsDelta {
+	base: string;
+	version: string;
+	set: { bots: Bot[]; items: Item[] };
+	remove: { bots: string[]; items: string[] };
 }
 
 /** One member asked to reply to a room post: `failed` says why in `error` (a bot with no chat yet). */

@@ -12,6 +12,7 @@ import { useBotsView } from "../../stores/bots-view";
 import { Button, EmptyState, ListRow, MasterDetail, MenuButton, PageLayout, SectionLabel } from "../common";
 import { BotAvatar } from "./BotAvatar";
 import { BotLineText } from "./BotLineText";
+import { BotOwner, useOfflineBotHosts } from "./BotOwner";
 import { BotPane } from "./BotPane";
 import { openBotDialog } from "./bot-launch";
 import { useBotPage } from "./bot-page";
@@ -29,6 +30,7 @@ export function BotsPage() {
 	const view = useBotsView();
 	const facts = useBotFacts(bots);
 	useEffect(() => ensureBots(), []);
+	const lost = useOfflineBotHosts();
 	const sorted = sortBots(bots, view.sort, view.order, facts, false);
 	const bot = bots.find(known => known.id === botId) ?? null;
 	const room = rooms?.find(known => known.id === roomId) ?? null;
@@ -123,7 +125,9 @@ export function BotsPage() {
 								return (
 									<ListRow
 										buttonProps={{ "data-bots-page-row": item.id }}
-										className={item.paused ? "opacity-60" : undefined}
+										className={
+											item.paused || (item.device && lost.has(item.device)) ? "opacity-60" : undefined
+										}
 										key={item.id}
 										leading={
 											<BotAvatar
@@ -136,7 +140,16 @@ export function BotsPage() {
 										onClick={() => useBotPage.setState({ botId: item.id, roomId: null })}
 										secondary={itemFacts ? <BotLineText bot={item} line={itemFacts.line} /> : undefined}
 										selected={room === null && item.id === shown?.id}
-										title={item.name}
+										title={
+											item.device ? (
+												<span className="flex min-w-0 items-baseline gap-1.5">
+													<span className="truncate">{item.name}</span>
+													<BotOwner device={item.device} />
+												</span>
+											) : (
+												item.name
+											)
+										}
 									/>
 								);
 							}),

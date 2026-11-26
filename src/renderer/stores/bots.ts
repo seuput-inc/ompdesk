@@ -3,16 +3,20 @@
  * kept by main's `BOTS_STATE` pushes and by every change's answer. The last read paints the first frame
  * (`lib/last-read.ts`, kind `panel`), so the sidebar's Bots section and the Bots page never open empty.
  *
- * A paired computer's own window and its phone page read their own computer's bots: bots live where their folders are.
+ * Each paired host's bots come in the same state (`remote`, the copy the core keeps of each host): `state.bots` and
+ * `state.items` list them after this computer's own, each tagged with its host's `device` (orca-bots-remote). A change
+ * to one goes to its host through the core, which routes it by the bot's or item's id; nothing of it is written here.
  */
 import { create } from "zustand";
 import type { Bot, BotsRequest, BotsState } from "../../shared/bots";
+import { translate } from "../lib/i18n";
 import { lastRead, rememberRead } from "../lib/last-read";
 
 const READ_KEY = "bots";
 const EMPTY: BotsState = { bots: [], items: [] };
 
 interface BotsStore {
+	/** This computer's bots and items, then each paired host's (tagged `device`). */
 	state: BotsState;
 	/** A live read or push arrived this run (until then `state` is the last run's). */
 	live: boolean;
@@ -24,20 +28,50 @@ interface BotsStore {
 
 /** The last read without pictures: they come with the first live read and are too big for the snapshot. */
 function remembered(state: BotsState): BotsState {
-	return { ...state, bots: state.bots.map(({ picture: _picture, ...bot }) => bot) };
+	const faceless = (bots: readonly Bot[]) => bots.map(({ picture: _picture, ...bot }) => bot);
+	return {
+		...state,
+		bots: faceless(state.bots),
+		...(state.remote ? { remote: state.remote.map(host => ({ ...host, bots: faceless(host.bots) })) } : {}),
+	};
+}
+
+/** The state the views list: this computer's bots and items, then each paired host's, tagged with its device. */
+export function listedBots(state: BotsState): BotsState {
+	const remote = state.remote ?? [];
+	if (remote.length === 0) return state;
+	return {
+		...state,
+		bots: [...state.bots, ...remote.flatMap(host => host.bots.map(bot => ({ ...bot, device: host.device })))],
+		items: [...state.items, ...remote.flatMap(host => host.items.map(item => ({ ...item, device: host.device })))],
+	};
+}
+
+/** The offline host a change to a paired host's bot or item would go to (its name), else null. */
+function offlineOwner(state: BotsState, request: BotsRequest): string | null {
+	const id = "id" in request ? request.id : "ids" in request ? request.ids?.[0] : undefined;
+	if (!id) return null;
+	const device =
+		request.action === "item"
+			? state.items.find(item => item.id === id)?.device
+			: state.bots.find(bot => bot.id === id)?.device;
+	const host = device ? state.remote?.find(known => known.device === device) : undefined;
+	return host && !host.online ? host.name : null;
 }
 
 export const useBotsStore = create<BotsStore>()(set => ({
-	state: lastRead<BotsState>(undefined, READ_KEY) ?? EMPTY,
+	state: listedBots(lastRead<BotsState>(undefined, READ_KEY) ?? EMPTY),
 	live: false,
 	command: async request => {
+		const offline = offlineOwner(useBotsStore.getState().state, request);
+		if (offline) throw new Error(translate("bots.remote.offlineChange", { device: offline }));
 		const state = await window.omp.bots.command(request);
 		useBotsStore.getState().receive(state);
 		return state;
 	},
 	receive: state => {
 		rememberRead(undefined, READ_KEY, remembered(state));
-		set({ state, live: true });
+		set({ state: listedBots(state), live: true });
 	},
 	reset: () => set({ state: EMPTY, live: false }),
 }));
@@ -69,16 +103,23 @@ export function resetBotsForTest(): void {
 	useBotsStore.getState().reset();
 }
 
-/** The bot whose chats run in `cwd`. */
-export function botOfFolder(bots: readonly Bot[], cwd: string | undefined | null): Bot | undefined {
-	return cwd ? bots.find(bot => bot.folder === cwd) : undefined;
+/** The bot whose chats run in `cwd` on `device` (absent = this computer). */
+export function botOfFolder(bots: readonly Bot[], cwd: string | undefined | null, device?: string): Bot | undefined {
+	return cwd ? bots.find(bot => bot.folder === cwd && bot.device === device) : undefined;
 }
 
-/** The bot `session` (a session file) is a chat of. */
-export function botOfSession(bots: readonly Bot[], session: string | undefined | null): Bot | undefined {
-	return session ? bots.find(bot => bot.home === session || bot.sessions.includes(session)) : undefined;
+/** The bot `session` (a session file on `device`, absent = this computer) is a chat of. */
+export function botOfSession(
+	bots: readonly Bot[],
+	session: string | undefined | null,
+	device?: string,
+): Bot | undefined {
+	return session
+		? bots.find(bot => bot.device === device && (bot.home === session || bot.sessions.includes(session)))
+		: undefined;
 }
 
+/** Every bot the views list: this computer's, then each paired host's (`device` set). */
 export function useBots(): readonly Bot[] {
 	return useBotsStore(s => s.state.bots);
 }

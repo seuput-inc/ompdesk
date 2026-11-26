@@ -17,6 +17,7 @@ import { BotActivity } from "./BotActivity";
 import { BotAvatar } from "./BotAvatar";
 import { BotChats } from "./BotChats";
 import { BotLineText } from "./BotLineText";
+import { BotOwner, useBotHostName, useOfflineBotHosts } from "./BotOwner";
 import { BotSettings } from "./BotSettings";
 import { openBotHome } from "./bot-launch";
 import { type BotPageTab, useBotPage } from "./bot-page";
@@ -54,6 +55,9 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 				Date.now(),
 			).length,
 	);
+	// A paired host's bot lives there: while the host's link stays lost its page shows the last copy and says so.
+	const hostName = useBotHostName(bot.device);
+	const offline = useOfflineBotHosts().has(bot.device ?? "");
 	return (
 		<div className="flex min-h-0 min-w-0 flex-col" data-bot-pane={bot.id}>
 			{bot.paused && (
@@ -68,6 +72,11 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 					variant="warning"
 				>
 					{t("bots.paused.banner")}
+				</Banner>
+			)}
+			{offline && (
+				<Banner className="m-4 mb-0" data-bot-offline-banner variant="warning">
+					{t("bots.remote.offlineBanner", { device: hostName })}
 				</Banner>
 			)}
 			<header className="flex items-center gap-3 px-4 pt-4" data-bot-pane-header>
@@ -104,6 +113,7 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 							{bot.name}
 						</LinkButton>
 					)}
+					<BotOwner device={bot.device} />
 					<BotLineText bot={bot} className="text-sc-xs text-(--sc-text-muted)" line={facts.line} />
 				</div>
 				<Button data-bot-open-home icon={<House />} onClick={() => openBotHome(bot)} size="sm" variant="secondary">

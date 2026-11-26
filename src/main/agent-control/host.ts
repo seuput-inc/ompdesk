@@ -39,7 +39,7 @@ import {
 	parseClosedChildren,
 	sidebarViewOf,
 } from "../../shared/agent-control";
-import type { BotsAnswer, BotsCall, BotsState } from "../../shared/bots";
+import type { BotsAnswer, BotsCall, BotsState, SharedBots, SharedBotsDelta } from "../../shared/bots";
 import type { SessionStatus } from "../../shared/control-protocol";
 import type {
 	AutoCloseTurn,
@@ -68,6 +68,7 @@ import {
 import type { Schedule } from "../../shared/schedules";
 import type { SessionSummary, VersionedSummaries } from "../../shared/session-summary";
 import type { FamilyEdits } from "../../shared/turn-edits";
+import type { HostBotsUpdate } from "../bots";
 import { CoreError, core } from "../core/process";
 import { deletedSessions } from "../deleted-sessions";
 import { discardOpenedWorktree } from "../disk/saved-worktrees";
@@ -138,6 +139,8 @@ const SENT_MARKS_TIMEOUT_MS = 8_000;
 const OPENING_SETTLE_MS = 3_000;
 /** An open that never sent its first prompt (it failed, or its omp never came up) stops holding a restart after this. */
 const OPENING_MAX_MS = 5 * 60_000;
+/** A change to a paired host's bot: an item answer reaches the bot's chat there (opened when closed) before it answers. */
+const BOTS_COMMAND_TIMEOUT_MS = 60_000;
 
 async function localPathIs(path: string, kind: "file" | "directory"): Promise<boolean> {
 	try {
@@ -234,6 +237,8 @@ export interface AgentControlHostDeps {
 	botsRoot?: string | null;
 	/** The core's bots state changed: main keeps it and tells every window. */
 	botsChanged?: (state: BotsState) => void;
+	/** This computer's bots changed as its paired devices see them: every connected device is told. */
+	botsShared?: (change: SharedBotsDelta) => void;
 	/** Where the bytes of the attachments an outbox entry still owes are kept, by content; absent: in memory only. */
 	attachmentsDir?: string | null;
 	/** This computer's upload folder (`web/uploads.ts`): where a file sent to a session on this computer lands. */
@@ -415,6 +420,21 @@ export class AgentControlRuntime {
 	/** A paired device's `bot:<name>@<this computer>` (`host.bots.home`): refused unless that device may reach it. */
 	botHome(name: string, device: string, deviceName: string): Promise<{ path: string; name: string }> {
 		return this.control.botHome(name, device, deviceName);
+	}
+
+	/** This computer's bots and items as its paired devices get them (`host.bots.list`). */
+	botsShare(): Promise<SharedBots> {
+		return this.control.botsShare();
+	}
+
+	/** A paired device's change to one of this computer's bots (`host.bots.command`): this computer's copy after it. */
+	botsFrom(request: unknown, deviceName: string): Promise<unknown> {
+		return this.control.botsFrom(request, deviceName);
+	}
+
+	/** What this computer heard of a paired host's bots (its link's copy, a change, the link itself). */
+	botsRemote(update: HostBotsUpdate): Promise<{ applied: boolean }> {
+		return this.control.botsRemote(update);
 	}
 
 	/** The tab Autopilot (or anyone) opened this one for, if the control tools opened it. */
@@ -1357,6 +1377,13 @@ export class AgentControlRuntime {
 			recordClosed: child => this.#recordClosed(child),
 			closedChildren: () => parseClosedChildren(deps.prefs.get(AGENT_CLOSED_CHILDREN_PREF)),
 			botsChanged: state => deps.botsChanged?.(state),
+			botsShared: change => deps.botsShared?.(change),
+			botsCommand: (device, request) => {
+				const remote = deps.remote;
+				if (!remote) throw new Error("No paired computers here.");
+				// An answer to an item question reaches the bot's chat on the host before the host answers.
+				return remote.request<unknown>(device, "host.bots.command", { request }, BOTS_COMMAND_TIMEOUT_MS);
+			},
 			setOpener: (tabId, openerTabId) => {
 				// As a session the bot's chat opened, or one the call journal names after its opener was lost: its reports
 				// and auto-close go to that tab, across a relaunch too.

@@ -8276,6 +8276,11 @@ export const en: Record<string, string> = {
 	"bots.pane.chats": "Chats",
 	"bots.pane.settings": "Settings",
 	"bots.paused.banner": "Paused. Nothing runs for you until you turn it back on.",
+	"bots.remote.ownerOffline": "{device} · offline",
+	"bots.remote.offlineBanner":
+		"{device} is offline. This is its last copy; this bot changes and chats only while {device} is connected.",
+	"bots.remote.offlineChat": "{device} is offline. This bot's chats are on {device}; open them when it is back.",
+	"bots.remote.offlineChange": "{device} is offline. This bot lives there and changes only while it is connected.",
 	"bots.banner.open": "Open {name}'s page",
 	"bots.banner.home": "{name} · Home",
 	"bots.palette.openHome": "Open its home chat",

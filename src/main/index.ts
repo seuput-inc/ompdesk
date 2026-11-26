@@ -1015,7 +1015,7 @@ app.whenReady().then(async () => {
 	const webTabNotice: IpcDeps["webTabNotice"] = { current: null };
 	const sessionWake: IpcDeps["sessionWake"] = { current: null };
 	const sessionNote: IpcDeps["sessionNote"] = { current: null };
-	const botHome: IpcDeps["botHome"] = { current: null };
+	const hostBots: IpcDeps["hostBots"] = { current: null };
 	const tabReport: IpcDeps["tabReport"] = { current: null };
 	const agentOpening: IpcDeps["agentOpening"] = { current: null };
 	/** Tabs a lost core took that are still not ready, gathered for one notification (`recovery.stuck*`). */
@@ -1448,11 +1448,8 @@ app.whenReady().then(async () => {
 		hostName: (): string => devices.deviceName(),
 		sessionIndex,
 		agentHidden: () => agentHiddenPaths(prefs.get(AGENT_HIDDEN_PREFS_KEY)),
-		// A device's agent asking one of this computer's bots by name: the control tools answer once they exist.
-		botHome: (name, deviceId, deviceName) => {
-			if (!botHome.current) throw new Error("OMPdesk is still starting");
-			return botHome.current(name, deviceId, deviceName);
-		},
+		// Paired devices list and change this computer's bots: the control tools answer once they exist.
+		bots: () => hostBots.current,
 		sessionMoved: (from, to) => {
 			if (prefs.moveSidebarPin(from, to)) {
 				sidebarPrefsChanged();
@@ -1615,6 +1612,8 @@ app.whenReady().then(async () => {
 		loopback: !app.isPackaged && process.env.OMP_GUI_TEST_REMOTE_LOOPBACK === "1",
 		log: (message, details) => writeRuntimeLog({ source: "remote", message, details }),
 		logLink: (message, details) => writeRuntimeLog({ source: "remote-link", message, details }),
+		// A paired host's bots, listed here from the copy its link carries (the core keeps it).
+		bots: () => hostBots.current,
 	});
 	remoteDevices = devices;
 	// The core's records are mirrored before anything asks for a host's tabs or the device lists.
@@ -2668,7 +2667,7 @@ app.whenReady().then(async () => {
 		testPush: deviceId => webHost?.testPush(deviceId),
 		sessionWake,
 		sessionNote,
-		botHome,
+		hostBots,
 		tabReport,
 		agentOpening,
 		webPages: () => webHost?.windows.all() ?? [],

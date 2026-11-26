@@ -625,6 +625,16 @@ impl Host {
         }
     }
 
+    /// `botsCommand {device, request}`: the owner's change to a bot or item of paired host `device`, which that host
+    /// makes (`host.bots.command`); it answers its copy after it (`{version, state, refused?}`), or the file asked for.
+    pub async fn bots_on(&self, device: &str, request: &Value) -> R<Value> {
+        self.ask(
+            "botsCommand",
+            json!({ "device": device, "request": request }),
+        )
+        .await
+    }
+
     /// `setOpener {tabId, openerTabId}`: `openerTabId` becomes `tabId`'s opener, as a session it opened would have it
     /// (the pool's `setTabOpener`, kept across a relaunch): a session handed to a bot, or one whose lost opener the call
     /// journal names (`Runtime::recover_openers`).

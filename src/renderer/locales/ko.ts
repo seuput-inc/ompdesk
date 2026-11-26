@@ -8248,6 +8248,13 @@ export const ko: Record<string, string> = {
 	"bots.pane.chats": "채팅",
 	"bots.pane.settings": "설정",
 	"bots.paused.banner": "일시정지됨. 다시 켜기 전까지 아무것도 실행하지 않아요.",
+	"bots.remote.ownerOffline": "{device} · 오프라인",
+	"bots.remote.offlineBanner":
+		"{device}에 연결되어 있지 않아요. 마지막으로 받은 내용을 보여 줘요. 이 봇은 {device}에 연결된 동안에만 바꾸거나 대화할 수 있어요.",
+	"bots.remote.offlineChat":
+		"{device}에 연결되어 있지 않아요. 이 봇의 채팅은 {device}에 있어요. 다시 연결되면 여세요.",
+	"bots.remote.offlineChange":
+		"{device}에 연결되어 있지 않아요. 이 봇은 그 컴퓨터에 있어서 연결된 동안에만 바꿀 수 있어요.",
 	"bots.banner.open": "{name} 페이지 열기",
 	"bots.banner.home": "{name} · 홈",
 	"bots.palette.openHome": "홈 채팅 열기",

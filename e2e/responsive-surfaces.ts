@@ -1253,6 +1253,8 @@ async function expectTurnRail(page: Page, want: { first: number | { atMost: numb
 
 /** The parity work session's one prompt (parity.e2e.ts); `transcript-find` looks for it. */
 export const PARITY_WORK_PROMPT = "Show this session the same way everywhere";
+/** The bot of an away computer both parity computers kept a copy of (`bot-pane-offline`, parity.e2e.ts `seedAwayHostBots`). */
+export const AWAY_HOST_BOT = "bot-away-courier";
 
 export const SURFACES: readonly Surface[] = [
 	// ── Area A: sidebar, transcript, composer, panels ─────────────────────────────────────────
@@ -2485,6 +2487,22 @@ export const SURFACES: readonly Surface[] = [
 		settle: 600,
 		when: () => false,
 		parity: { session: "work" },
+	},
+	{
+		id: "bot-pane-offline",
+		area: "B",
+		title: "A paired computer's bot while that computer is away: greyed in the list with its owner offline, its page's notice",
+		// parity.e2e.ts seeds both computers' last copy of PC-C's bots (`seedAwayHostBots`); PC-C never comes back.
+		open: async (page, look) => {
+			await openDrawer(page, look);
+			await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+			await page.locator(`[data-bots-page-row="${AWAY_HOST_BOT}"]:visible`).first().click();
+			await page.locator('[data-bot-pane-tabs] [data-tab-id="items"]:visible').first().click();
+		},
+		ready: `[data-bot-pane="${AWAY_HOST_BOT}"] [data-bot-offline-banner]`,
+		settle: 600,
+		when: () => false,
+		parity: { session: "work", after: closeParityItems },
 	},
 	{
 		id: "bot-items",

@@ -46,12 +46,13 @@ const firstLine = (value: string): string =>
 		.find(line => line.trim())
 		?.trim() ?? "";
 
-/** The bot whose folder this chat runs in. */
+/** The bot whose folder this chat runs in, on the computer the tab runs on. */
 function useChatBot(): Bot | undefined {
 	const tabId = useRuntimeTabId();
 	const cwd = useTabsStore(s => s.tabs.find(tab => tab.id === tabId)?.cwd);
+	const device = useTabsStore(s => s.tabs.find(tab => tab.id === tabId)?.device);
 	useEffect(() => ensureBots(), []);
-	return useBotsStore(s => botOfFolder(s.state.bots, cwd));
+	return useBotsStore(s => botOfFolder(s.state.bots, cwd, device));
 }
 
 function showItem(bot: Bot, item: Item): void {
@@ -267,7 +268,9 @@ function OfferCard({ args }: { args: Record<string, unknown> }) {
 	const t = useT();
 	const name = text(args.name);
 	const purpose = text(args.text);
-	const made = useBotsStore(s => s.state.bots.find(bot => bot.name.toLowerCase() === name.toLowerCase()));
+	const made = useBotsStore(s =>
+		s.state.bots.find(bot => !bot.device && bot.name.toLowerCase() === name.toLowerCase()),
+	);
 	useEffect(() => ensureBots(), []);
 	return (
 		<div className="group/bot-card py-1" data-bot-card="botOffers" data-bot-offer={made ? "created" : "open"}>
@@ -328,7 +331,7 @@ function RequestCard({
 	const target = botTarget(toolName, args);
 	const bot = useBotsStore(s =>
 		target && !target.device
-			? s.state.bots.find(entry => entry.name.toLowerCase() === target.name.toLowerCase())
+			? s.state.bots.find(entry => !entry.device && entry.name.toLowerCase() === target.name.toLowerCase())
 			: undefined,
 	);
 	const [open, setOpen] = useState(false);
