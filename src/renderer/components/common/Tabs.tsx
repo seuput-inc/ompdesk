@@ -46,8 +46,6 @@ type DataAttributes = { [key: `data-${string}`]: string | number | boolean | und
 export type TabItem = {
 	id: string;
 	label: string;
-	/** Drawn in place of `label` (a session's name with its automatic title); `label` stays its tooltip's words. */
-	content?: ReactNode;
 	/** Optional badge count or marker rendered after the label. */
 	badge?: string | number;
 	disabled?: boolean;
@@ -76,8 +74,7 @@ export type TabItem = {
 	  }
 );
 
-/** `strip`: a window's open sessions along the title bar (Orca's tab bar), each closable, the chosen one lifted. */
-export type TabsVariant = "underline" | "segmented" | "pills" | "strip";
+export type TabsVariant = "underline" | "segmented" | "pills";
 export type TabsOrientation = "horizontal" | "vertical";
 
 /** What moved the selection: a click (or Enter/Space on a tab), or an arrow, Home or End. */
@@ -123,11 +120,6 @@ function tabBox(variant: TabsVariant, active: boolean, compact: boolean | undefi
 				: "text-(--sc-text-muted) hover:bg-(--sc-hover) hover:text-(--sc-text) active:bg-(--sc-pressed)",
 		);
 	}
-	if (variant === "strip") {
-		// Orca's session tab (`SortableTab`): a full-height box divided by a hairline, the chosen one lifted with a 2 px
-		// line along its bottom in the text colour (components.css `.omp-tab-strip-tab`).
-		return cx("omp-tab-strip-tab h-full", active && "omp-tab-strip-tab-active");
-	}
 	return cx(
 		"-mb-px border-b-2 transition-colors duration-(--sc-duration-fast)",
 		compact ? "h-8" : "h-9",
@@ -142,10 +134,10 @@ function tabBox(variant: TabsVariant, active: boolean, compact: boolean | undefi
 function tabText(variant: TabsVariant, compact: boolean | undefined): string {
 	return cx(
 		"inline-flex min-w-0 max-w-full items-center gap-1 whitespace-nowrap disabled:cursor-not-allowed disabled:opacity-50",
-		variant !== "pills" && variant !== "strip" && "font-medium",
+		variant !== "pills" && "font-medium",
 		// The track and a scrolling strip clip what sticks out of them, so the focus ring is drawn inside the tab.
 		variant !== "underline" && "focus-visible:outline-offset-[calc(-1*var(--sc-focus-width))]",
-		variant === "strip" || (compact && variant === "pills") ? "text-sc-xs" : compact ? "text-sc-sm" : "text-sc-md",
+		compact && variant === "pills" ? "text-sc-xs" : compact ? "text-sc-sm" : "text-sc-md",
 		variant === "segmented" ? "px-2.5" : variant === "pills" && !compact ? "px-3" : "px-2",
 	);
 }
@@ -243,9 +235,7 @@ export function Tabs({
 							? "inline-flex gap-0.5 rounded-(--sc-radius-md) bg-(--sc-surface-3) p-0.5"
 							: variant === "pills"
 								? "flex gap-1"
-								: variant === "strip"
-									? "flex h-full items-stretch"
-									: "flex gap-1 border-b border-(--sc-divider)"),
+								: "flex gap-1 border-b border-(--sc-divider)"),
 					className,
 				)}
 				onBlur={event => {
@@ -289,7 +279,7 @@ export function Tabs({
 							type="button"
 						>
 							{tab.leading !== undefined && <span className="inline-flex shrink-0">{tab.leading}</span>}
-							<span className="min-w-0 truncate">{tab.content ?? tab.label}</span>
+							<span className="min-w-0 truncate">{tab.label}</span>
 							{tab.badge !== undefined && (
 								<span className="ml-0.5 rounded-(--sc-radius-full) bg-(--sc-surface-3) px-1.5 text-sc-2xs tabular-nums text-(--sc-text-muted)">
 									{tab.badge}
