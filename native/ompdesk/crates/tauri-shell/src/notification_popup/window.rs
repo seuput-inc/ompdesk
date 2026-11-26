@@ -197,7 +197,22 @@ fn give_up_waiting() {
     }
 }
 
+/// `about:blank` finished loading: the page is written into it, then the cards that waited are drawn. (Tauri opens a
+/// `data:` URL only with its `webview-data-url` feature, which nothing else here needs.)
 fn page_ready() {
+    let Some(window) = with(|state| state.window.clone().filter(|_| !state.ready)) else {
+        return;
+    };
+    let page = Value::String(page_html());
+    if let Err(error) = window.eval(format!(
+        "document.open();document.write({page});document.close();"
+    )) {
+        log(
+            "notification.popup.write_failed",
+            json!({"error": error.to_string()}),
+        );
+        return;
+    }
     let early = with(|state| {
         state.ready = true;
         std::mem::take(&mut state.early)
@@ -247,23 +262,19 @@ fn act(action: Action) {
     render();
 }
 
-fn page_url() -> String {
+fn page_html() -> String {
     let icon = format!(
         "data:image/svg+xml;base64,{}",
         base64::engine::general_purpose::STANDARD.encode(ICON)
     );
-    let page = include_str!("page.html").replace("__ICON__", &icon);
-    format!(
-        "data:text/html;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(page)
-    )
+    include_str!("page.html").replace("__ICON__", &icon)
 }
 
 fn ensure_window() -> Result<(), String> {
     if with(|state| state.window.is_some()) {
         return Ok(());
     }
-    let page: url::Url = page_url().parse().map_err(|e| format!("{e}"))?;
+    let page: url::Url = "about:blank".parse().map_err(|e| format!("{e}"))?;
     let own = page.clone();
     let mut builder =
         WebviewWindowBuilder::new(&crate::runtime().app, LABEL, WebviewUrl::External(page))
