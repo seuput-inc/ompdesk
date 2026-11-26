@@ -90,6 +90,7 @@ export interface Surface {
 
 export type ParitySession =
 	| "work"
+	| "firstRun"
 	| "reply"
 	| "steer"
 	| "advisor"
@@ -2455,6 +2456,16 @@ export const SURFACES: readonly Surface[] = [
 		settle: 600,
 		when: () => false,
 		parity: { session: "work" },
+	},
+	{
+		id: "bot-first-run-chat",
+		area: "B",
+		title: "The new bot's home chat before its owner has typed: a greeting and one question",
+		open: async page => {
+			await page.getByText("Hi! What should I start on?", { exact: true }).first().waitFor();
+		},
+		when: () => false,
+		parity: { session: "firstRun", inView: '.markdown-body :text-is("Hi! What should I start on?")' },
 	},
 	{
 		id: "bot-items",

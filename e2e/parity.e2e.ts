@@ -258,6 +258,7 @@ const VIEW_LABEL: Record<View, string> = {
 interface HostSession {
 	path: string;
 	cwd: string;
+	botId?: string;
 }
 
 /** What the run wrote for one surface (`parity.json`). */
@@ -500,6 +501,29 @@ if (dir) {
 			};
 			/** B's sessions of answered turns, each made the first time a surface shows it, by title. */
 			const answered = new Map<string, HostSession>();
+			const firstRunSession = async (): Promise<HostSession> => {
+				const name = "First-run Scout";
+				const made = answered.get(name);
+				if (made) return made;
+				const cwd = path.join(parent, "first-run-scout");
+				const state = await b.evaluate(
+					([name, folder]) =>
+						window.omp.bots.command({ action: "create", name, folder, purpose: "Checks the README." }),
+					[name, cwd] as const,
+				);
+				const bot = state.bots.find(bot => bot.folder === cwd);
+				if (!bot) throw new Error("B did not create the first-run bot");
+				const tab = await b.evaluate(cwd => window.omp.tabs.spawn({ cwd, kind: "agent" }), cwd);
+				if (!tab?.tabId) throw new Error("B did not open the first-run home chat");
+				await untilAnswered(b, tab.tabId, { text: "Hi! What should I start on?" });
+				const home = (await b.evaluate(() => window.omp.bots.command({ action: "get" }))).bots.find(
+					entry => entry.id === bot.id,
+				);
+				if (!home?.home || !home.firstRun) throw new Error("The greeting is not in the first-run home chat");
+				const session = { cwd, path: home.home, botId: bot.id };
+				answered.set(name, session);
+				return session;
+			};
 			const answeredSession = async (title: string, turns: ReadonlyArray<readonly [string, string]>) => {
 				const made = answered.get(title);
 				if (made) return made;
@@ -748,11 +772,19 @@ if (dir) {
 																	])
 																: session === "board"
 																	? boardSession()
-																	: limitSession();
+																	: session === "firstRun"
+																		? firstRunSession()
+																		: limitSession();
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {
-					const { path: sessionPath } = await hostSession(session);
+					const { path: sessionPath, botId } = await hostSession(session);
+					if (botId) {
+						const toggle = b.locator("[data-sidebar-bots-toggle]:visible").first();
+						if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+						await openRow(b, b.locator(`[data-bot-entry=${cssString(botId)}]`), sessionPath);
+						return;
+					}
 					await openRow(
 						b,
 						b.locator(`.omp-sidebar-session-row[data-session-path=${cssString(sessionPath)}]`),
@@ -1057,6 +1089,10 @@ if (dir) {
 						await writeSheet(browser, surface, { local, remote, phone: phoneShot }, record.sheet);
 					}
 				});
+				if (surface.parity.session === "firstRun") {
+					const { botId } = await firstRunSession();
+					if (botId) await b.evaluate(id => window.omp.bots.command({ action: "delete", id }), botId);
+				}
 			}
 			await fs.writeFile(
 				path.join(out, "parity.json"),
