@@ -442,8 +442,10 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // `voice.dictate` key and the stream's RPC methods and strings. Loaded on use, off the first screen: the take's capture,
 // stream and whole-take transcription (`lib/dictation-live.ts`, while the microphone opens), the tidy pass and its
 // glossary (`lib/dictation-text.ts`, when a take first lands) and the window's dictation host (once dictation is on):
-// measured 2,231,148 (e2e-nightly run 45755595124), 3,166 bytes over. The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_234_090;
+// measured 2,231,148 (e2e-nightly run 45755595124), 3,166 bytes over. Both, with the title bar's tab strip gone
+// (c0ecfe18f): measured 2,231,648 (CI run 45769328347, omp/agent/orca-dictation at b85ccc38c). The budget is that
+// measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_231_728;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
