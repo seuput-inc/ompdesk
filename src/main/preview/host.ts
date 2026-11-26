@@ -45,6 +45,7 @@ import {
 	VISUAL_SCHEME,
 } from "../../shared/preview";
 import { core } from "../core/process";
+import { tunnelledLoopback } from "../remote/port-tunnels";
 import { encodeImage, fitImage } from "../shell-host/image";
 import { applyAcceptLanguages, seedSpellchecker } from "../system-languages";
 import { type ClientWindow, isWebWindow } from "../web/client-window";
@@ -513,10 +514,13 @@ export function registerPreviewHost(
 		page.state = { ...page.state, agent: { ...agent, attached: false, reconnecting: true } };
 		send(host);
 	};
-	/** The web address a web page may show, or null: http(s) only, and no loopback for a paired host's tab. */
+	/**
+	 * The web address a web page may show, or null: http(s) only, and no loopback for a paired host's tab but this
+	 * computer's stand-ins for its tabs' dev servers (remote/port-tunnels.ts).
+	 */
 	const allowed = (host: PreviewHost, url: string) => {
 		const safe = previewUrl(url);
-		return safe && !(host.remote() && isLoopbackUrl(safe)) ? safe : null;
+		return safe && !(host.remote() && isLoopbackUrl(safe) && !tunnelledLoopback(safe)) ? safe : null;
 	};
 	/**
 	 * A web address a visual's page tried to reach. It never goes there; right after the user's own click or key

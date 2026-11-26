@@ -2018,6 +2018,7 @@ export const ko: Record<string, string> = {
 	"ipcError.relay_unavailable":
 		"이 탭에서 에이전트의 브라우저가 실행 중이 아니에요. '에이전트가 이 페이지를 쓰게 하기'를 껐다가 다시 켜 주세요.",
 	"ipcError.sign_in_unavailable": "그 로그인은 더 이상 브라우저를 기다리지 않아요. 다시 시작해 주세요.",
+	"ipcError.port_unavailable": "다른 컴퓨터에서 이 세션의 어떤 프로세스도 그 포트를 더 이상 듣고 있지 않아요.",
 	"common.cancel": "취소",
 	"common.save": "저장",
 	"common.yes": "예",
@@ -5414,7 +5415,9 @@ export const ko: Record<string, string> = {
 	"panel.preview.waiting": "서버가 응답하면 다시 불러와요.",
 	"panel.preview.suggestions": "방문한 페이지",
 	"panel.preview.start.servers": "이 세션의 개발 서버",
-	"panel.preview.start.remoteServer": "이 서버는 다른 컴퓨터에서 실행 중이라 이 Preview로 열 수 없어요",
+	"panel.preview.start.remoteServer": "다른 컴퓨터에서 실행 중이에요. 연결을 거쳐 여기서 열려요",
+	"panel.preview.start.onHost": "다른 컴퓨터",
+	"panel.preview.start.remoteFailed": "다른 컴퓨터의 서버를 여기서 열지 못했어요",
 	"panel.preview.start.forwards": "SSH 포워드",
 	"panel.preview.start.forward": "{server}, 포트 {port}",
 	"panel.preview.start.recent": "최근 방문",

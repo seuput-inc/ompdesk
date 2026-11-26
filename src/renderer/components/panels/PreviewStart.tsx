@@ -4,7 +4,8 @@
  * `procs.ports` through `stores/session-ports.ts`; a linked worktree's open under its own `<name>.localhost`), the
  * SSH forwards that are up on this computer (Settings › SSH), and the sites this computer's Preview visited last
  * (core `browsing.rs`), each with its ✕. Nothing at all leaves the plain "No page open" with Enter URL.
- * A paired host's tab lists its host's servers, which this computer's Preview cannot reach: they show with the reason.
+ * A paired host's tab lists its host's servers: each opens through a stand-in on this computer's loopback that the
+ * host connects only to the tab's own port (`preview.hostPort`, remote/port-tunnels.ts).
  */
 import { Globe, History, Network, Server, X } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -12,6 +13,7 @@ import { type PreviewHistoryEntry, portAddress } from "../../../shared/preview";
 import type { SshForward } from "../../../shared/ssh-tools";
 import { useT } from "../../lib/i18n";
 import { useSessionPorts, useSessionPortsPoll } from "../../stores/session-ports";
+import { toastError } from "../../stores/toast";
 import { Button, EmptyState, IconButton, LinkButton, ListRow, SectionLabel } from "../common";
 
 /** Recent sites the start page lists. */
@@ -25,7 +27,7 @@ export function PreviewStart({
 	onEnterUrl,
 }: {
 	tabId: string | null;
-	/** The tab runs on a paired host: its servers listen on the host's loopback, which this Preview never opens. */
+	/** The tab runs on a paired host: its servers listen on the host's loopback and open here through the link. */
 	remote: boolean;
 	/** The tab's linked worktree folder, whose servers open under its own `.localhost` name. */
 	worktree: string | null;
@@ -84,10 +86,17 @@ export function PreviewStart({
 							return (
 								<li key={port}>
 									<ListRow
-										description={`${new URL(url).host} · ${name}`}
-										disabled={remote}
+										description={`${remote ? t("panel.preview.start.onHost") : new URL(url).host} · ${name}`}
 										leading={<Server aria-hidden className="size-(--sc-icon-sm)" />}
-										onClick={() => onOpen(url)}
+										onClick={() => {
+											if (!remote) onOpen(url);
+											else if (tabId)
+												window.omp.preview
+													.hostPort(tabId, port)
+													.then(onOpen, (error: unknown) =>
+														toastError({ title: t("panel.preview.start.remoteFailed"), error }),
+													);
+										}}
 										size="sm"
 										title={`:${port}`}
 										tooltip={remote ? t("panel.preview.start.remoteServer") : url}

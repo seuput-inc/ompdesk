@@ -62,6 +62,7 @@ import {
 	type RpcCommand,
 	type RpcResponse,
 	type SessionInfoUpdateFrame,
+	type SessionPortProcess,
 	type SidecarStatusPayload,
 	type SubagentFrame,
 } from "../../shared/rpc-types";
@@ -188,6 +189,12 @@ import {
 	MODELS_CHANGED_EVENT,
 	ModelOverrideInputSchema,
 	OMP_UPDATE_EVENT,
+	PORT_TUNNEL_EVENT,
+	PORT_TUNNEL_METHODS,
+	PortTunnelCloseParams,
+	PortTunnelConnectParams,
+	type PortTunnelEvent,
+	PortTunnelSendParams,
 	PREVIEW_RELAY_EVENT,
 	PREVIEW_RELAY_METHODS,
 	PROJECTS_EVENT,
@@ -227,6 +234,7 @@ import { KEPT_CALL_PREFIX, type KeptCall, KeptCalls } from "./kept-calls";
 import { createLinkEventSender, createReadEncoder, encodedReadKey, type LinkEventSender } from "./link-events";
 import type { PeerQuota } from "./peer-quota";
 import type { PeerInfo } from "./peers-store";
+import { HostPortDials } from "./port-tunnels";
 import { PreviewRelayTunnels } from "./preview-relay-tunnels";
 import type { TabHolder } from "./protocol";
 import { commandUsesModel } from "./quota-commands";
@@ -740,6 +748,8 @@ export class LocalHostServices implements HostServices {
 	readonly #connOf = new Map<string, HostConnection>();
 	/** Each tab's browser relay (`browser_relay_start`'s answer), tunnelled to the device's Preview page (`host.previewRelay.*`). */
 	readonly #relays = new PreviewRelayTunnels();
+	/** Each device connection to a tab's dev server (`host.portTunnel.*`), dialed only to the tab's own ports. */
+	readonly #ports = new HostPortDials();
 	#sessionsTimer: NodeJS.Timeout | undefined;
 	/**
 	 * Session file → the exit of the omp a device tab closed here ran it in: the device closes its tab
@@ -1528,6 +1538,32 @@ export class LocalHostServices implements HostServices {
 				this.#relays.close(this.#key(peer.deviceId, rtab));
 				return null;
 			}
+			// A device's Preview shows this tab's dev server: only a port the tab's own processes listen on, checked for
+			// each connection (see HostPortDials).
+			case PORT_TUNNEL_METHODS.connect: {
+				const { rtab, port, conn: socket } = parse(PortTunnelConnectParams, method, params);
+				const tab = this.#tab(peer, rtab);
+				await this.#ports.connect(
+					this.#key(peer.deviceId, rtab),
+					socket,
+					port,
+					conn,
+					event => pushPortEvent(conn, event),
+					() => tabListensOn(tab, port),
+				);
+				return null;
+			}
+			case PORT_TUNNEL_METHODS.send: {
+				const { rtab, conn: socket, data } = parse(PortTunnelSendParams, method, params);
+				this.#tab(peer, rtab);
+				this.#ports.send(this.#key(peer.deviceId, rtab), socket, data);
+				return null;
+			}
+			case PORT_TUNNEL_METHODS.close: {
+				const { rtab, conn: socket } = parse(PortTunnelCloseParams, method, params);
+				this.#ports.close(this.#key(peer.deviceId, rtab), socket);
+				return null;
+			}
 			// The device's browser came back to the device's own loopback with this tab's sign-in callback (sign-in-relay.ts).
 			case SIGN_IN_CALLBACK_METHOD: {
 				const { rtab, path, query } = parse(SignInCallbackParams, method, params);
@@ -1762,6 +1798,7 @@ export class LocalHostServices implements HostServices {
 		void this.#deps.machine.abortModelSetup(benchCaller(peer.deviceId));
 		// The agent's tunnel ended with the link: its relay stops too, as the device's own Take over would.
 		for (const key of this.#relays.dropConnection(conn)) this.#stopRelay(key);
+		this.#ports.dropConnection(conn);
 		for (const tab of this.#tabs.values())
 			if (tab.peerId === peer.deviceId && tab.conn === conn) this.#startGrace(tab);
 	}
@@ -1936,6 +1973,7 @@ export class LocalHostServices implements HostServices {
 		clearTimeout(this.#remoteOpenedTimer);
 		this.#remoteOpenedTimer = undefined;
 		this.#relays.dispose();
+		this.#ports.dispose();
 		this.#conns.clear();
 	}
 
@@ -3295,6 +3333,7 @@ export class LocalHostServices implements HostServices {
 			});
 		}
 		this.#relays.forget(key);
+		this.#ports.dropTab(key);
 		disposeTerminals({ deviceId: tab.peerId, rtab: tab.rtab });
 		if (runBusy(tab.run)) this.#runningChanged();
 		this.#resume?.sync();
@@ -3386,6 +3425,23 @@ function pushRelayEvent(conn: HostConnection, event: PreviewRelayEvent): boolean
 		);
 		return false;
 	}
+}
+
+/** Push one dev-server tunnel event; false when it did not go out (the link's frame cap), so the connection can end. */
+function pushPortEvent(conn: HostConnection, event: PortTunnelEvent): boolean {
+	try {
+		conn.emit(PORT_TUNNEL_EVENT, event);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** Whether one of the tab's own processes listens on `port` (its omp's own relay left out, as `get_session_ports`). */
+async function tabListensOn(tab: HostTab, port: number): Promise<boolean> {
+	const response = await tab.sidecar.rpcClient?.command({ type: "get_session_ports" }).catch(() => null);
+	const processes = response?.success && Array.isArray(response.data) ? (response.data as SessionPortProcess[]) : [];
+	return processes.some(process => process.ports.includes(port));
 }
 
 /**

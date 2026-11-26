@@ -45,10 +45,13 @@ export async function endSessionPort(tabId: string, process: SessionPortProcess)
 
 /**
  * Shows `tabId` and opens `port` in its Preview: `localhost`, or the worktree's own `<name>.localhost` for a session
- * in a linked worktree (FX25), so worktrees never share a dev server's cookies.
+ * in a linked worktree (FX25), so worktrees never share a dev server's cookies. A tab on a paired host opens through
+ * this computer's stand-in for the host's server (`preview.hostPort`).
  */
 export async function openSessionPort(tabId: string, port: number, worktreeFolder?: string | null): Promise<void> {
 	const tabs = useTabsStore.getState();
+	const remote = tabs.tabs.find(tab => tab.id === tabId)?.device;
+	const url = remote ? await window.omp.preview.hostPort(tabId, port) : portAddress(port, worktreeFolder);
 	if (tabs.activeTabId !== tabId) await tabs.switchTab(tabId);
-	useUiStore.getState().openPreview(portAddress(port, worktreeFolder));
+	useUiStore.getState().openPreview(url);
 }

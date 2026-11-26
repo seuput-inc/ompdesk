@@ -2026,6 +2026,7 @@ export const en: Record<string, string> = {
 	"ipcError.relay_unavailable":
 		"The agent's browser isn't running for this tab. Turn Let the agent use this page off and on again.",
 	"ipcError.sign_in_unavailable": "That sign-in no longer waits for the browser. Start it again.",
+	"ipcError.port_unavailable": "Nothing of this session listens on that port on the other computer anymore.",
 	"common.cancel": "Cancel",
 	"common.save": "Save",
 	"common.yes": "yes",
@@ -5423,7 +5424,9 @@ export const en: Record<string, string> = {
 	"panel.preview.waiting": "Reloads when the server responds.",
 	"panel.preview.suggestions": "Visited pages",
 	"panel.preview.start.servers": "This session's dev servers",
-	"panel.preview.start.remoteServer": "This server runs on the other computer, which this Preview can't reach",
+	"panel.preview.start.remoteServer": "Runs on the other computer; opens here through the link",
+	"panel.preview.start.onHost": "on the other computer",
+	"panel.preview.start.remoteFailed": "Couldn't open the other computer's server here",
 	"panel.preview.start.forwards": "SSH forwards",
 	"panel.preview.start.forward": "{server}, port {port}",
 	"panel.preview.start.recent": "Recent",

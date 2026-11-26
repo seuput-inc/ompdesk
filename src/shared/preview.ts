@@ -11,6 +11,8 @@ export const PREVIEW_VISUAL = "preview:visual";
 export const PREVIEW_HISTORY = "preview:history";
 /** Renderer → main: show a file of a tab's folder (an .html or .svg page) in the Preview as a visual of that tab. */
 export const PREVIEW_OPEN_FILE = "preview:open-file";
+/** Renderer → main: the address here that shows a paired host tab's dev server on a port (remote/port-tunnels.ts). */
+export const PREVIEW_HOST_PORT = "preview:host-port";
 /**
  * Web viewers only (a paired phone or tablet): its page is an offscreen page on this computer streamed as JPEG
  * frames over the socket (main/web/preview-stream.ts). `POLL` acknowledges the last frame and holds until the
@@ -206,6 +208,11 @@ export interface PreviewApi {
 	 * confined, network-less visual session the agent's `gui_visualize` uses (Orca's workspace document preview).
 	 */
 	openFile(tabId: string, path: string): Promise<void>;
+	/**
+	 * The address on this computer that shows `port` of `tabId`, a tab that runs on a paired host: a stand-in here for
+	 * the host's loopback, which the host connects only to a port the tab's own processes listen on.
+	 */
+	hostPort(tabId: string, port: number): Promise<string>;
 	/** The agent showed or updated a visual for a tab. */
 	onVisual(callback: (event: PreviewVisualEvent) => void): () => void;
 	/** A web viewer's streamed page (see `PREVIEW_STREAM_POLL`); a desktop window's calls are refused. */

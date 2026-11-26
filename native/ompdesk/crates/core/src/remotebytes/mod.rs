@@ -1,19 +1,23 @@
 //! The bytes a paired device keeps and carries for its hosts (native-rust ledger R8; was the I/O of
 //! `src/main/remote/{transcript-cache,image-blob-cache,sign-in-relay,preview-relay-tunnels}.ts`): the device's copies
 //! of its hosts' subagent journals and tail pages (`transcripts`), the pictures of those transcripts by content
-//! address (`blobs`), the stand-in on this computer's loopback for a host's browser sign-in (`signin`), and on a
-//! host, the socket to a tab's browser relay that a device's Preview page drives (`relay`).
+//! address (`blobs`), the stand-in on this computer's loopback for a host's browser sign-in (`signin`), on a
+//! host, the socket to a tab's browser relay that a device's Preview page drives (`relay`), and both ends of the byte
+//! tunnel to a host tab's dev server (`ports`).
 //!
 //! Main keeps every request on a link (ledger R1-R3), so what only the host has is asked of main: a `remotebytes.ask`
 //! event names the caller main registered (`asker`) and main answers with `remotebytes.answer`.
 //!
 //! Methods: `remotebytes.readJournal`, `remotebytes.page`, `remotebytes.keepPage`, `remotebytes.resolveBlobs`,
-//! `remotebytes.signInStart`, `remotebytes.signInReplay`, `remotebytes.signInCancel`, `remotebytes.relayOpen`, `remotebytes.answer`. Pushes: `remotebytes.signInClose`,
-//! `remotebytes.relaySend`, `remotebytes.relayClose`. Events: `remotebytes.ask` (`journal`, `blob`, `signIn`),
-//! `remotebytes.signInEnded`, `remotebytes.relay`.
+//! `remotebytes.signInStart`, `remotebytes.signInReplay`, `remotebytes.signInCancel`, `remotebytes.relayOpen`,
+//! `remotebytes.portListen`, `remotebytes.portDial`, `remotebytes.answer`. Pushes: `remotebytes.signInClose`,
+//! `remotebytes.relaySend`, `remotebytes.relayClose`, `remotebytes.portUnlisten`, `remotebytes.portSend`,
+//! `remotebytes.portClose`. Events: `remotebytes.ask` (`journal`, `blob`, `signIn`), `remotebytes.signInEnded`,
+//! `remotebytes.relay`, `remotebytes.port`.
 
 mod blobs;
 mod folder;
+mod ports;
 mod relay;
 mod signin;
 mod transcripts;
@@ -53,6 +57,13 @@ pub fn register(registry: &mut Registry) {
     registry.add("remotebytes.relayOpen", |call| Box::pin(relay::open(call)));
     registry.add_push("remotebytes.relaySend", relay::send);
     registry.add_push("remotebytes.relayClose", relay::close);
+    registry.add("remotebytes.portListen", |call| {
+        Box::pin(ports::listen(call))
+    });
+    registry.add("remotebytes.portDial", |call| Box::pin(ports::dial(call)));
+    registry.add_push("remotebytes.portUnlisten", ports::unlisten);
+    registry.add_push("remotebytes.portSend", ports::send);
+    registry.add_push("remotebytes.portClose", ports::close);
 }
 
 /// What main has not answered yet, by the ask's number.

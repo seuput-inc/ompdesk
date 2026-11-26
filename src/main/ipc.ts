@@ -127,7 +127,7 @@ import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
 import { isMacPermission } from "../shared/mac-permissions";
 import { MAIL_ACCOUNTS_COMMAND, type MailAccountDraft } from "../shared/mail-accounts";
 import { type ModelSetupRequest, parseResearchPick } from "../shared/model-setup";
-import { PREVIEW_OPEN_FILE, PREVIEW_VISUAL, type PreviewVisualEvent } from "../shared/preview";
+import { PREVIEW_HOST_PORT, PREVIEW_OPEN_FILE, PREVIEW_VISUAL, type PreviewVisualEvent } from "../shared/preview";
 import { isReplyLanguagePref, REPLY_LANGUAGE_PREF } from "../shared/reply-language";
 import type {
 	AgentMessage,
@@ -607,6 +607,15 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		if (!target || !sidecar) throw new Error("Only a tab on this computer shows its files in the Preview");
 		const { record } = await visuals.open(target.tabId, sidecar.cwd, { target: file });
 		caller.win.webContents.send(PREVIEW_VISUAL, { tabId, visualId: record.id } satisfies PreviewVisualEvent);
+	});
+	// A paired host tab's dev server in this window's Preview (Orca's paired server forwards, H105): a stand-in here
+	// whose connections the host dials only to a port the tab's own processes listen on (remote/port-tunnels.ts).
+	ipc.handle(PREVIEW_HOST_PORT, async (caller, tabId: unknown, port: unknown) => {
+		if (typeof tabId !== "string" || !Number.isInteger(port) || (port as number) < 1 || (port as number) > 65_535)
+			throw new Error("Invalid port");
+		const target = caller.win ? deps.sidecarPool.tabTarget(caller.win, tabId) : null;
+		if (!target?.device) throw new Error("Only a tab on a paired computer needs its server brought here");
+		return deps.remoteDevices.hostPort(target.device, target.tabId, port as number);
 	});
 	/** The paired host a window's running benchmark is on, so closing the window stops it there. */
 	const remoteBenchmarks = new Map<number, string>();
