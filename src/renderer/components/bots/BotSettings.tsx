@@ -37,17 +37,8 @@ import {
 	X,
 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
-import {
-	BOT_PACKAGE_SUFFIX,
-	BOT_QUIET_KINDS,
-	BOT_SKILL_PROJECTS_MAX,
-	type Bot,
-	type BotFile,
-	type BotQuietKind,
-	type BotsRequest,
-	LOOK_EVERY,
-	LOOK_FOCUS_MAX,
-} from "../../../shared/bots";
+import { BOT_PACKAGE_SUFFIX, BOT_SKILL_PROJECTS_MAX, LOOK_EVERY, LOOK_FOCUS_MAX } from "../../../shared/bot-limits";
+import { BOT_QUIET_KINDS, type Bot, type BotFile, type BotQuietKind, type BotsRequest } from "../../../shared/bots";
 import { APPROVAL_MODES } from "../../../shared/tool-approval";
 import { useT } from "../../lib/i18n";
 import { MarkdownRenderer } from "../../lib/markdown";

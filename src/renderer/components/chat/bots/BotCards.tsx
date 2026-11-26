@@ -23,6 +23,7 @@ import { CalendarClock, EyeOff, ListTodo, Moon, Send, UserRoundPlus, Wrench } fr
 import { type ReactNode, useEffect, useState } from "react";
 import { type Bot, ITEM_STATUSES, type Item, type ItemStatus } from "../../../../shared/bots";
 import type { AgentMessage } from "../../../../shared/rpc-types";
+import { parseScheduleResultNote } from "../../../../shared/schedule-result-note";
 import { cx, resultBodyText, resultDetails } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { MarkdownRenderer } from "../../../lib/markdown";
@@ -36,8 +37,9 @@ import { openBotPage } from "../../bots/bot-page";
 import { ItemStatusIcon, statusName } from "../../bots/items/ItemStatusIcon";
 import { openItem } from "../../bots/items/item-store";
 import { Badge, Button, Card, Chip, DisclosureButton, IconButton, LinkButton } from "../../common";
+import { MailNote } from "../CustomMessageCard";
 import type { BotCardKind } from "./bot-card-kind";
-import { botTarget } from "./bot-card-kind";
+import { botTarget, isItemMail, useCardHidden } from "./bot-card-kind";
 import { ensureHiddenCards, hideCardKind } from "./hidden-cards";
 
 const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
@@ -502,8 +504,21 @@ export function QuietReply({ text: words }: { text: string }) {
 
 // ---- Run results (Orca's `bot-automation-result-note.ts`) -------------------------------------------------------
 
+/** A note the app mailed into a bot's chat: the owner's item changes, a run result as its card, else the plain note. */
+export function BotNote({ message }: { message: AgentMessage }) {
+	const hidden = useCardHidden("runResults");
+	if (isItemMail(message)) return <ItemNote message={message} />;
+	const details = resultDetails(message);
+	const result =
+		text(details?.from) === "ompdesk"
+			? parseScheduleResultNote(typeof details?.text === "string" ? details.text : "")
+			: null;
+	if (!result) return <MailNote message={message} />;
+	return hidden ? null : <RunResultNote answer={result.answer} name={result.name} />;
+}
+
 /** One of the bot's automations finished: its name and the first line of its answer, opening to the whole answer. */
-export function RunResultNote({ name, answer }: { name: string; answer: string }) {
+function RunResultNote({ name, answer }: { name: string; answer: string }) {
 	const t = useT();
 	const [open, setOpen] = useState(false);
 	const first = firstLine(answer);

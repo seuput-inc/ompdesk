@@ -10,6 +10,7 @@
  * Dependency-free.
  */
 
+import type { LOOK_EVERY } from "./bot-limits";
 import type { ApprovalMode } from "./tool-approval";
 
 /**
@@ -73,11 +74,8 @@ export interface Bot {
 	itemsSeen?: number;
 }
 
-/** Look around's presets (Orca's `LOOK_AROUND_EVERY_CHOICES`). */
-export const LOOK_EVERY = ["every-4h", "every-2h", "twice-daily", "mornings"] as const;
+/** Look around's presets (`LOOK_EVERY` of `bot-limits.ts`). */
 export type LookEvery = (typeof LOOK_EVERY)[number];
-/** The longest Look around focus (Orca's `LOOK_AROUND_FOCUS_MAX_LENGTH`; the core refuses a longer one). */
-export const LOOK_FOCUS_MAX = 500;
 
 /** When a bot looks around and for what (Orca's `BotLookAround`); a new bot's is on, every 4 hours, weekdays. */
 export interface BotLookSetting {
@@ -129,8 +127,6 @@ export const BOT_QUIET_KINDS = ["permission", "done", "failed"] as const;
 export type BotQuietKind = (typeof BOT_QUIET_KINDS)[number];
 /** The longest purpose a new bot is given (Orca's `BOT_PURPOSE_MAX_LENGTH`; the core refuses a longer one). */
 export const BOT_PURPOSE_MAX = 200;
-/** Projects whose skills a bot's chats load, at most (`SKILL_PROJECTS_MAX` of the core). */
-export const BOT_SKILL_PROJECTS_MAX = 20;
 /** The largest picture the core keeps (`bot_files.rs` `PICTURE_MAX`). */
 export const BOT_PICTURE_MAX_BYTES = 512 * 1024;
 
@@ -437,9 +433,6 @@ export interface BotsApi {
 	exportPackage(request: Omit<BotExportRequest, "action">): Promise<{ file: string }>;
 	onState(callback: (state: BotsState) => void): () => void;
 }
-
-/** A bot package file's name (`bot_package.rs` writes JSON): `<name>.ompdesk-bot.json`. */
-export const BOT_PACKAGE_SUFFIX = ".ompdesk-bot.json";
 
 /**
  * Whether a bot's (or a routine's) answer is a quiet result: its last non-empty line, Markdown dressing aside

@@ -8,7 +8,8 @@ import { z } from "zod";
 import { ATTACHMENT_MAX_BYTES } from "../../../resources/gui-bridge/agent-control-contracts";
 import { AUTOPILOT_AREAS } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import { AGENT_SCHEDULE_PREFIX, type AgentControlToolName, AGENT_CONTROL_TOOLS as T } from "../../shared/agent-control";
-import { ITEM_STATUSES, LOOK_EVERY, LOOK_FOCUS_MAX } from "../../shared/bots";
+import { LOOK_EVERY, LOOK_FOCUS_MAX } from "../../shared/bot-limits";
+import { ITEM_STATUSES } from "../../shared/bots";
 import type { HostToolDefinition } from "../../shared/rpc-types";
 import {
 	GITHUB_EVENT_KINDS,
