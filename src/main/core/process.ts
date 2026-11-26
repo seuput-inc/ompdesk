@@ -280,21 +280,12 @@ if (workerData.connect) {
 	socket.write(workerData.token + "\\n");
 	write = line => socket.write(line);
 } else {
-	let child;
-	try {
-		child = require("node:child_process").spawn(workerData.spawn, ["--own"], {
-			// Its own folder, never main's: it lives as long as main, and a folder it stands in cannot be removed on Windows.
-			cwd: require("node:path").dirname(workerData.spawn),
-			stdio: ["pipe", "pipe", "pipe"],
-			windowsHide: true,
-		});
-	} finally {
-		if (workerData.spawned) {
-			const spawned = new Int32Array(workerData.spawned);
-			Atomics.store(spawned, 0, 1);
-			Atomics.notify(spawned, 0);
-		}
-	}
+	const child = require("node:child_process").spawn(workerData.spawn, ["--own"], {
+		// Its own folder, never main's: it lives as long as main, and a folder it stands in cannot be removed on Windows.
+		cwd: require("node:path").dirname(workerData.spawn),
+		stdio: ["pipe", "pipe", "pipe"],
+		windowsHide: true,
+	});
 	child.stdout.on("data", data);
 	child.stderr.on("data", chunk => parentPort.postMessage({ log: chunk.toString("utf8").trimEnd() }));
 	child.stdin.on("error", () => {});
@@ -305,26 +296,9 @@ if (workerData.connect) {
 parentPort.on("message", line => write(line));
 `;
 
-/**
- * How long main's thread waits for the owner worker to spawn `ompdesk-core --own` on Windows. libuv there makes the
- * child's ends of a spawn's stdio pipes inheritable until its CreateProcess returned, and starts every process with
- * inheritance on, with no lock between threads: `--own` spawned beside a spawn of main's inherited that child's pipe
- * ends and held them for its life, so the child's output never ended and main's `execFileSync` of it never returned
- * (win-platform, 26 Nov 2026). Main spawns nothing while it waits; the worker's start and one CreateProcess take far
- * less, and a worker that never gets there only costs the wait.
- */
-const OWN_SPAWN_WAIT_MS = 10_000;
-
 /** Main's link to the core's owner, over a worker thread (`OWNER_WORKER`). */
 function ownerLink(target: OwnerTarget, log: (line: string) => void): CoreOwner {
-	const spawned = "spawn" in target && process.platform === "win32" ? new SharedArrayBuffer(4) : null;
-	const worker = new Worker(OWNER_WORKER, {
-		eval: true,
-		name: "ompdesk-core-owner",
-		workerData: spawned ? { ...target, spawned } : target,
-	});
-	if (spawned && Atomics.wait(new Int32Array(spawned), 0, 0, OWN_SPAWN_WAIT_MS) === "timed-out")
-		log(`the core's owner was not spawned within ${OWN_SPAWN_WAIT_MS / 1000} s; main goes on beside its spawn`);
+	const worker = new Worker(OWNER_WORKER, { eval: true, name: "ompdesk-core-owner", workerData: target });
 	const listeners = new Map<string, Set<(data: unknown) => void>>();
 	const pending = new Map<number, PromiseWithResolvers<unknown>>();
 	let next = 0;

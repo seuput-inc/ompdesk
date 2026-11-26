@@ -19,6 +19,17 @@ fn main() -> ExitCode {
     }
     // The owner joins no job: the cores it starts must not die with it, but end with their stdin's end.
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "--own") {
+        // Whatever else the spawn handed this process (another child's pipe ends, on Windows) stays with this first
+        // process, which exits now; the owner runs on with its stdio alone (`sys::relaunch_with_only_stdio`).
+        #[cfg(windows)]
+        if std::env::args_os().nth(2).is_none() {
+            match ompdesk_core::relaunch_with_only_stdio(&["--own", "stdio-only"]) {
+                Ok(()) => std::process::exit(0),
+                Err(error) => {
+                    eprintln!("ompdesk-core --own: runs as started, not relaunched: {error}")
+                }
+            }
+        }
         std::process::exit(ompdesk_core::owner::serve_stdio());
     }
     // An ssh the core started runs this binary as its `SSH_ASKPASS` helper.

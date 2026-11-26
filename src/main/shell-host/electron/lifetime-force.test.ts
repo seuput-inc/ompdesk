@@ -57,7 +57,9 @@ it.each(["socket", "stdin", "both"] as const)(
 		let owners = 0;
 		const ownerServer = createServer(socket => {
 			sockets.add(socket);
-			const own = spawn(nativeBinPath("ompdesk-core"), ["--own"], {
+			// `stdio-only`: served in this process as the shell serves its owner, not relaunched (ompdesk-core main.rs),
+			// so its exit is the owner's end.
+			const own = spawn(nativeBinPath("ompdesk-core"), ["--own", "stdio-only"], {
 				stdio: ["pipe", "pipe", "pipe"],
 				windowsHide: true,
 			});
