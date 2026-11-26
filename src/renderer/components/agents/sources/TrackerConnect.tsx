@@ -74,7 +74,11 @@ export function TrackerConnectForm({
 						type="password"
 						value={apiKey}
 					/>
-					<LinkButton onClick={() => openExternal(LINEAR_KEYS_URL)} tone="accent">
+					<LinkButton
+						className="self-start text-sc-sm"
+						onClick={() => openExternal(LINEAR_KEYS_URL)}
+						tone="accent"
+					>
 						{t("trackers.linear.keyLink")}
 					</LinkButton>
 				</>
@@ -124,7 +128,11 @@ export function TrackerConnectForm({
 						value={token}
 					/>
 					{authType === "cloud" && (
-						<LinkButton onClick={() => openExternal(ATLASSIAN_TOKENS_URL)} tone="accent">
+						<LinkButton
+							className="self-start text-sc-sm"
+							onClick={() => openExternal(ATLASSIAN_TOKENS_URL)}
+							tone="accent"
+						>
 							{t("trackers.jira.tokenLink")}
 						</LinkButton>
 					)}

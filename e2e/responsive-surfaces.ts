@@ -2231,7 +2231,14 @@ export const SURFACES: readonly Surface[] = [
 			title: `Agents › ${tab}`,
 			// Live, Pull requests and GitHub open through the palette and their tab (real controls), so the parity sheet
 			// takes them.
-			open: tab === "definitions" ? page => ui(page, "openAgents", tab) : page => openPageTab(page, "agents", tab),
+			open:
+				tab === "definitions"
+					? page => ui(page, "openAgents", tab)
+					: async page => {
+							await openPageTab(page, "agents", tab);
+							// The source bar keeps the last source a person chose; a source surface may have run first.
+							if (tab === "github") await page.locator('[data-work-source="github"]').click();
+						},
 			settle: 900,
 			...(tab === "definitions" ? {} : { parity: { session: "work" as const } }),
 		}),
@@ -2258,6 +2265,7 @@ export const SURFACES: readonly Surface[] = [
 		title: "Agents › GitHub › Projects (the account's projects)",
 		open: async page => {
 			await openPageTab(page, "agents", "github");
+			await page.locator('[data-work-source="github"]').click();
 			await page.locator('[data-github-center] [role="tab"][data-tab-id="projects"]').click();
 		},
 		ready: "[data-project-list]",
