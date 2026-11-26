@@ -102,6 +102,7 @@ export type ParitySession =
 	| "cut"
 	| "stress"
 	| "schedule"
+	| "connector"
 	| "board";
 
 /** The fake omp's voice script (`voiceScript`, e2e/fixture/rpc-ui.ts); e2e/parity.e2e.ts names the file. */
@@ -2456,8 +2457,7 @@ export const SURFACES: readonly Surface[] = [
 		when: () => false,
 		parity: { session: "work" },
 	},
-	// A bot's connectors (orca-bots-connectors): its page's Settings › Connectors, the "Add to <bot>" catalog and two of
-	// its setup sheets. The bot needs no home chat for these: a missing one shows as the dialog's warning banner.
+	// The setup sheets need no home chat: a missing one shows as the dialog's warning banner.
 	...(
 		[
 			["bot-connectors", "The bot page's Settings › Connectors: the empty row and its Add button", null, null],
@@ -2469,9 +2469,21 @@ export const SURFACES: readonly Surface[] = [
 			],
 			[
 				"bot-connector-slack",
-				"Connect Slack: Socket Mode or request URL, the manifest, the tokens and who can ask",
+				"Connect Slack: Socket Mode or request URL, the manifest, credential import and who can ask",
 				"slack",
 				"[data-connector-setup='slack']",
+			],
+			[
+				"bot-connector-github",
+				"Connect GitHub: repository and who can ask",
+				"github",
+				"[data-connector-setup='github']",
+			],
+			[
+				"bot-connector-linear",
+				"Connect Linear: workspace and who can ask",
+				"linear",
+				"[data-connector-setup='linear']",
 			],
 			[
 				"bot-connector-google",
@@ -2504,6 +2516,23 @@ export const SURFACES: readonly Surface[] = [
 			parity: { session: "work", ...(step === null ? {} : { after: closeOverlay }) },
 		}),
 	),
+	{
+		id: "bot-connector-offer",
+		area: "A",
+		title: "A bot offers a Slack connection in its chat; only its own computer manages credentials",
+		open: async page => {
+			await showTurn(page, "fixture connector offer");
+			const card = page.locator(".omp-execution-group").last();
+			const head = card.locator(".omp-execution-group-header").first();
+			if ((await head.count()) > 0 && (await head.getAttribute("aria-expanded")) !== "true") await head.click();
+			const step = card.locator(".omp-tool-card button[aria-expanded]").first();
+			if ((await step.getAttribute("aria-expanded")) !== "true") await step.click();
+			await page.locator("[data-connector-offer='slack']").scrollIntoViewIfNeeded();
+		},
+		ready: "[data-connector-offer='slack']",
+		when: () => false,
+		parity: { session: "connector", inView: "[data-connector-offer='slack']" },
+	},
 	{
 		id: "bot-items",
 		area: "B",

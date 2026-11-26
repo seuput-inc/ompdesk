@@ -4831,36 +4831,46 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			appendMessage(answer);
 			write({ type: "message_end", message: answer });
 			endTurn([user, call, ...results, answer]);
-		} else if (message === "fixture bot cards") {
+		} else if (message === "fixture bot cards" || message === "fixture connector offer") {
 			// A bot's chat cards (FC70, FC71, FC76): it offers a new bot, asks the parity bot something and adds an MCP
 			// server that needs a sign-in; each call ends as stock's host tools answer them.
-			const steps = [
-				{
-					id: "fixture-bot-offer",
-					name: "ompdesk_bot",
-					args: {
-						action: "offer",
-						name: "Release watch",
-						text: "Watches the release branch and says what broke.",
-					},
-					text: "Offered the bot Release watch: the owner sees a card with Create bot in this chat.",
-				},
-				{
-					id: "fixture-bot-ask",
-					name: "ompdesk_session_send",
-					args: { session: "bot:Parity bot", message: "Which surfaces changed since yesterday?" },
-					text: "Sent to the bot Parity bot's home chat.",
-				},
-				{
-					id: "fixture-bot-tool",
-					name: "ompdesk_app",
-					args: {
-						action: "extensions.install_mcp",
-						args: { name: "tracker", transport: "http", url: "https://mcp.example.test" },
-					},
-					text: 'Added the MCP server tracker. It needs a sign-in: run extensions.mcp_sign_in with name "tracker".',
-				},
-			];
+			const connector = message === "fixture connector offer";
+			const steps = connector
+				? [
+						{
+							id: "fixture-connector",
+							name: "ompdesk_bot",
+							args: { action: "offer_connector", service: "slack" },
+							text: "Showed your owner a Connect card for slack in this chat; they finish the setup on it. Do not ask them for a token.",
+						},
+					]
+				: [
+						{
+							id: "fixture-bot-offer",
+							name: "ompdesk_bot",
+							args: {
+								action: "offer",
+								name: "Release watch",
+								text: "Watches the release branch and says what broke.",
+							},
+							text: "Offered the bot Release watch: the owner sees a card with Create bot in this chat.",
+						},
+						{
+							id: "fixture-bot-ask",
+							name: "ompdesk_session_send",
+							args: { session: "bot:Parity bot", message: "Which surfaces changed since yesterday?" },
+							text: "Sent to the bot Parity bot's home chat.",
+						},
+						{
+							id: "fixture-bot-tool",
+							name: "ompdesk_app",
+							args: {
+								action: "extensions.install_mcp",
+								args: { name: "tracker", transport: "http", url: "https://mcp.example.test" },
+							},
+							text: 'Added the MCP server tracker. It needs a sign-in: run extensions.mcp_sign_in with name "tracker".',
+						},
+					];
 			const call: AgentMessage = {
 				role: "assistant",
 				timestamp: Date.now(),
@@ -4890,7 +4900,12 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			});
 			const answer: AgentMessage = {
 				role: "assistant",
-				content: [{ type: "text", text: "Offered Release watch, asked Parity bot and added the tracker." }],
+				content: [
+					{
+						type: "text",
+						text: connector ? "Offered Slack." : "Offered Release watch, asked Parity bot and added the tracker.",
+					},
+				],
 				timestamp: Date.now(),
 				provider: model.provider,
 				model: model.id,

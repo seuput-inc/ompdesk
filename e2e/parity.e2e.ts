@@ -483,8 +483,8 @@ if (dir) {
 					.toBe(sessionPath);
 			};
 			/** A tab of B's on a session of its own, named `title` once its omp is up. */
-			const titledTab = async (title: string): Promise<string> => {
-				const tabId = (await b.evaluate(cwd => window.omp.tabs.spawn({ cwd }), work.cwd))?.tabId ?? "";
+			const titledTab = async (title: string, cwd = work.cwd): Promise<string> => {
+				const tabId = (await b.evaluate(folder => window.omp.tabs.spawn({ cwd: folder }), cwd))?.tabId ?? "";
 				if (!tabId) throw new Error(`B opened no tab for ${title}`);
 				await expect
 					.poll(
@@ -500,10 +500,14 @@ if (dir) {
 			};
 			/** B's sessions of answered turns, each made the first time a surface shows it, by title. */
 			const answered = new Map<string, HostSession>();
-			const answeredSession = async (title: string, turns: ReadonlyArray<readonly [string, string]>) => {
+			const answeredSession = async (
+				title: string,
+				turns: ReadonlyArray<readonly [string, string]>,
+				cwd = work.cwd,
+			) => {
 				const made = answered.get(title);
 				if (made) return made;
-				const tabId = await titledTab(title);
+				const tabId = await titledTab(title, cwd);
 				let sessionPath = "";
 				for (const [message, answer] of turns) {
 					await b.evaluate(([id, sent]) => window.omp.rpc.commandForTab(id, { type: "prompt", message: sent }), [
@@ -530,7 +534,7 @@ if (dir) {
 						)
 						.not.toBe("");
 				}
-				const session = { path: sessionPath, cwd: work.cwd };
+				const session = { path: sessionPath, cwd };
 				answered.set(title, session);
 				return session;
 			};
@@ -711,44 +715,62 @@ if (dir) {
 				answered.set("Parity board", session);
 				return session;
 			};
+			const connectorSession = async (): Promise<HostSession> => {
+				const folder = await b.evaluate(async () => {
+					const bot =
+						(await window.omp.bots.command({ action: "get" })).bots[0] ??
+						(
+							await window.omp.bots.command({
+								action: "create",
+								name: "Parity bot",
+								purpose: "Checks the connector card.",
+							})
+						).bots[0];
+					if (!bot) throw new Error("No parity bot");
+					return bot.folder;
+				});
+				return answeredSession("Parity connector", [["fixture connector offer", "Offered Slack."]], folder);
+			};
 			/** B's `session` as it is when a view shows it. */
 			const hostSession = async (session: ParitySession): Promise<HostSession> =>
-				session === "work"
-					? work
-					: session === "reply"
-						? replySession()
-						: session === "steer"
-							? steerSession()
-							: session === "advisor"
-								? // A session of its own too: a turn more in the reply session shifts what its other surfaces reach.
-									answeredSession("Parity advisor", [["fixture advisor note", "Advisor note delivered."]])
-								: session === "ci"
-									? answeredSession("Parity CI", [["fixture ci note", "Pushed main."]])
-									: session === "a2ui"
-										? answeredSession("Parity A2UI", [["fixture a2ui show", "A2UI surface shown."]])
-										: session === "a2uiForm"
-											? answeredSession("Parity A2UI form", [
-													["Show me the contact form", "Local fixture reply"],
-												])
-											: session === "turns"
-												? turnsSession()
-												: session === "long"
-													? longSession()
-													: session === "cut"
-														? cutSession()
-														: session === "stress"
-															? // The harness's stress turn as one turn of a session of its own (fake omp: `STRESS_PROMPT`).
-																answeredSession("Parity stress", [
-																	[STRESS_PROMPT, "Here is the unbroken link"],
-																])
-															: session === "schedule"
-																? // An agent's ompdesk_schedule create of a webhook routine (`reply-schedule-card`).
-																	answeredSession("Parity schedule", [
-																		["fixture schedule card", "Webhook routine saved."],
+				session === "connector"
+					? connectorSession()
+					: session === "work"
+						? work
+						: session === "reply"
+							? replySession()
+							: session === "steer"
+								? steerSession()
+								: session === "advisor"
+									? // A session of its own too: a turn more in the reply session shifts what its other surfaces reach.
+										answeredSession("Parity advisor", [["fixture advisor note", "Advisor note delivered."]])
+									: session === "ci"
+										? answeredSession("Parity CI", [["fixture ci note", "Pushed main."]])
+										: session === "a2ui"
+											? answeredSession("Parity A2UI", [["fixture a2ui show", "A2UI surface shown."]])
+											: session === "a2uiForm"
+												? answeredSession("Parity A2UI form", [
+														["Show me the contact form", "Local fixture reply"],
+													])
+												: session === "turns"
+													? turnsSession()
+													: session === "long"
+														? longSession()
+														: session === "cut"
+															? cutSession()
+															: session === "stress"
+																? // The harness's stress turn as one turn of a session of its own (fake omp: `STRESS_PROMPT`).
+																	answeredSession("Parity stress", [
+																		[STRESS_PROMPT, "Here is the unbroken link"],
 																	])
-																: session === "board"
-																	? boardSession()
-																	: limitSession();
+																: session === "schedule"
+																	? // An agent's ompdesk_schedule create of a webhook routine (`reply-schedule-card`).
+																		answeredSession("Parity schedule", [
+																			["fixture schedule card", "Webhook routine saved."],
+																		])
+																	: session === "board"
+																		? boardSession()
+																		: limitSession();
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {

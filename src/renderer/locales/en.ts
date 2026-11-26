@@ -8518,6 +8518,7 @@ export const en: Record<string, string> = {
 	"bots.connectors.google.gmailFromHint": "Part of a sender's address; empty: every new mail.",
 	"bots.connectors.offer.title": "Connect a service",
 	"bots.connectors.offer.connect": "Connect {service}",
+	"bots.connectors.offer.onHost": "To connect {service}, open this chat on the computer running the bot.",
 	"bots.access.title": "Who can ask",
 	"bots.access.onlyYou": "Only you",
 	"bots.access.summaryYou": "Only you can ask {bot}.",

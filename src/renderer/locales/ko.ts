@@ -8490,6 +8490,7 @@ export const ko: Record<string, string> = {
 	"bots.connectors.google.gmailFromHint": "보낸 사람 주소의 일부. 비워 두면 모든 새 메일.",
 	"bots.connectors.offer.title": "서비스 연결",
 	"bots.connectors.offer.connect": "{service} 연결",
+	"bots.connectors.offer.onHost": "{service}에 연결하려면 봇을 실행하는 컴퓨터에서 이 대화를 여세요.",
 	"bots.access.title": "물어볼 수 있는 사람",
 	"bots.access.onlyYou": "나만",
 	"bots.access.summaryYou": "{bot}에게는 나만 물어볼 수 있어요.",
