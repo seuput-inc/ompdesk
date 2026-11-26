@@ -87,7 +87,7 @@ fn main() -> io::Result<()> {
                 Path::new(params["rendererRoot"].as_str().unwrap()),
                 params["packaged"].as_bool().unwrap(),
                 params["windows"].as_bool().unwrap(),
-                params["headless"].as_str().map(std::ffi::OsStr::new),
+                params["headless"].as_str() == Some("1"),
             ),
             "hang.consume" => marker::consume_reports(Path::new(params["path"].as_str().unwrap())),
             "app.diagnosticBundleFileName" => {

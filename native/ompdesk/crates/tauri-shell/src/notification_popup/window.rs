@@ -224,6 +224,9 @@ fn ensure_window() -> Result<(), String> {
     #[cfg(windows)]
     {
         let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+        // The styles the popup needs, whatever tao makes of `focusable(false)` and `skip_taskbar(true)`.
+        shell_core::sys::winops::set_focusable(hwnd, false);
+        shell_core::sys::winops::set_skip_taskbar(hwnd, true);
         shell_core::sys::winops::set_round_corners(hwnd);
         let (no_activate, tool_window, topmost) = shell_core::sys::winops::unobtrusive_flags(hwnd);
         log(
