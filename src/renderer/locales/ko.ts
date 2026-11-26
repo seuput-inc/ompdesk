@@ -193,6 +193,8 @@ export const ko: Record<string, string> = {
 	"worktreeClose.forceDelete": "강제 삭제 (변경 사항 버림)",
 	"worktreeClose.keep": "유지하고 닫기",
 	"worktreeClose.removeFailed": "워크트리를 제거하지 못했어요",
+	"worktreeClose.atRiskBody":
+		"git 상태는 깨끗하지만, 이 워크트리를 지우면 git이 추적하지 않는 작업도 함께 지워져요. 다른 곳에 사본이 없는 git 무시 파일이나 서브모듈 체크아웃이에요.",
 
 	// Per-session worktrees (worktree.onStart / worktree.onExit, omp 18.8.6+)
 	"worktreeLifecycle.startTitle": "이 세션용 워크트리를 만들까요?",

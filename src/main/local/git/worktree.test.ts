@@ -71,6 +71,39 @@ describe("removeWorktree", () => {
 		await removeWorktree({ path: old.path }, bridge, outside);
 		expect(await pathExists(old.path)).toBe(false);
 	});
+	it("refuses an unforced delete that would lose an ignored file, and deletes once the main checkout has its copy", async () => {
+		await initRepo(outside);
+		await fs.writeFile(path.join(outside, ".gitignore"), ".env.local\n");
+		gitSync(outside, "add", ".gitignore");
+		gitSync(outside, "commit", "-q", "-m", "ignore");
+		const wt = await stockShapedWorktree(outside, root, "local-files");
+		await fs.writeFile(path.join(wt.path, ".env.local"), "TOKEN=mine\n");
+		await expect(removeWorktree({ path: wt.path }, bridge, outside)).rejects.toMatchObject({
+			code: "worktree_dirty",
+			message: expect.stringContaining(".env.local"),
+		});
+		expect(await fs.readFile(path.join(wt.path, ".env.local"), "utf8")).toBe("TOKEN=mine\n");
+		// The same bytes in the main checkout, as worktree seeding copies them: nothing is lost.
+		await fs.writeFile(path.join(outside, ".env.local"), "TOKEN=mine\n");
+		await removeWorktree({ path: wt.path }, bridge, outside);
+		expect(await pathExists(wt.path)).toBe(false);
+	});
+	it("refuses an unforced delete of a submodule checkout whose edits the person's ignore setting hides", async () => {
+		const sub = path.join(scratch, "projects", "lib");
+		await initRepo(sub);
+		await initRepo(outside);
+		gitSync(outside, "-c", "protocol.file.allow=always", "submodule", "--quiet", "add", sub, "lib");
+		gitSync(outside, "commit", "-q", "-m", "submodule");
+		const wt = await stockShapedWorktree(outside, root, "with-sub");
+		gitSync(wt.path, "-c", "protocol.file.allow=always", "submodule", "--quiet", "update", "--init");
+		gitSync(wt.path, "config", "submodule.lib.ignore", "all");
+		await fs.writeFile(path.join(wt.path, "lib", "wip.txt"), "submodule work\n");
+		await expect(removeWorktree({ path: wt.path }, bridge, outside)).rejects.toMatchObject({
+			code: "worktree_dirty",
+			message: expect.stringContaining("submodule"),
+		});
+		expect(await fs.readFile(path.join(wt.path, "lib", "wip.txt"), "utf8")).toBe("submodule work\n");
+	});
 	// A hosted runner's TEMP is an 8.3 short path (C:\Users\RUNNER~1\…); git answers with the long one. The caller's
 	// spelling of the main checkout is the one its tabs and sessions use, so it comes back as given.
 	it.skipIf(process.platform !== "win32")(

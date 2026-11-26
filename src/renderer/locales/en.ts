@@ -196,6 +196,8 @@ export const en: Record<string, string> = {
 	"worktreeClose.forceDelete": "Force delete (discard changes)",
 	"worktreeClose.keep": "Keep & close",
 	"worktreeClose.removeFailed": "Couldn't remove worktree",
+	"worktreeClose.atRiskBody":
+		"Git's status is clean, but deleting this worktree would also delete work it doesn't track: files git ignores that exist nowhere else, or submodule checkouts.",
 
 	// Per-session worktrees (worktree.onStart / worktree.onExit, omp 18.8.6+)
 	"worktreeLifecycle.startTitle": "Create a worktree for this session?",

@@ -209,4 +209,14 @@ describe("removeSafeWorktree", () => {
 
 		expect(await removeSafeWorktree({ path: repo, branch: "main", baseCwd: repo })).toBeNull();
 	});
+
+	it("keeps a landed, clean worktree holding an ignored file no other copy has", async () => {
+		const wt = await agentWorktree("ignored");
+		await commitIn(wt.path, ".gitignore", "*.local\n");
+		await mergeBranch(wt, "Worker");
+		await fs.writeFile(path.join(wt.path, "dev.local"), "rows\n");
+		expect(await removeSafeWorktree(wt)).toBeNull();
+		expect(await fs.readFile(path.join(wt.path, "dev.local"), "utf8")).toBe("rows\n");
+		expect(gitSync(repo, "branch", "--list", wt.branch)).toContain(wt.branch);
+	});
 });

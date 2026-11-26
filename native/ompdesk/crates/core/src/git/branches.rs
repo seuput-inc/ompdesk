@@ -873,8 +873,9 @@ pub struct SafeRemoval {
 }
 
 /// `git worktree remove` without `--force` of `path`, only when git lists it as a linked worktree of the repository at
-/// `base_cwd` (the primary checkout never goes); git itself refuses one with uncommitted or untracked files or locked.
-/// The primary checkout's path when the worktree went.
+/// `base_cwd` (the primary checkout never goes); git itself refuses one with uncommitted or untracked files or locked,
+/// and this one with files git ignores that no other copy holds (git would delete them unasked). The primary
+/// checkout's path when the worktree went.
 pub async fn remove_linked(git: &Git, base_cwd: &str, path: &str) -> Result<Option<String>, Fault> {
     let listed = text(git, base_cwd, &["worktree", "list", "--porcelain"]).await?;
     let entries: Vec<String> = listed
@@ -895,7 +896,11 @@ pub async fn remove_linked(git: &Git, base_cwd: &str, path: &str) -> Result<Opti
     let Some((primary, linked)) = listed.split_first() else {
         return Ok(None);
     };
-    if !linked.contains(&wanted) {
+    if !linked.contains(&wanted)
+        || super::worktree::removal_risk(git, &wanted, primary)
+            .await?
+            .is_some()
+    {
         return Ok(None);
     }
     let removed = super::worktree::git_remove(git, primary, &[], &wanted, slow()).await?;

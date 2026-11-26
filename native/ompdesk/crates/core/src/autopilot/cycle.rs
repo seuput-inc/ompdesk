@@ -1605,7 +1605,8 @@ impl Coordinator {
         }
     }
 
-    /// `git worktree remove` (no force) when the child's branch is merged into the run's and its tree is clean.
+    /// `git worktree remove` (no force) when the child's branch is merged into the run's, its tree is clean and no
+    /// ignored file or submodule checkout would go with it (`removal_risk`).
     async fn remove_child_worktree(&self, run: &Arc<Run>, child: &Child) {
         let (Some(worktree), Some(branch)) = (&child.worktree, &child.branch) else {
             return;
@@ -1631,6 +1632,13 @@ impl Coordinator {
             .await
             .ok();
         if dirty.is_none_or(|dirty| dirty.code != 0 || !js_trim(&dirty.text()).is_empty()) {
+            return;
+        }
+        let Ok(primary) = crate::git::read::primary_root(&git, worktree).await else {
+            return;
+        };
+        let risk = crate::git::worktree::removal_risk(&git, worktree, &primary).await;
+        if !matches!(risk, Ok(None)) {
             return;
         }
         let _ = crate::git::worktree::git_remove(&git, &root, &[], worktree, slow()).await;
