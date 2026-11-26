@@ -107,7 +107,7 @@ test("real omp: inspector shows the per-turn prompt sections; Preview offers a w
 		const aside = page.locator("aside[data-docked]");
 		await pressShortcutUntilVisible(page, "ControlOrMeta+j", aside);
 		await aside.getByRole("button", { name: "Preview", exact: true }).click();
-		await expect(page.getByRole("textbox", { name: "Preview URL" })).toHaveValue("http://localhost:4795/");
+		await expect(page.getByRole("combobox", { name: "Preview URL" })).toHaveValue("http://localhost:4795/");
 	} finally {
 		await exitApp(app);
 		await fs.rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

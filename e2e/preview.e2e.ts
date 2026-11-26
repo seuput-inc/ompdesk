@@ -72,8 +72,8 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 		await aside.getByRole("button", { name: "Preview", exact: true }).click();
 		await expect(aside.locator(".omp-panel-topbar button")).toHaveCount(5);
 		await expect(aside.locator("form").getByRole("button", { name: "Open in browser", exact: true })).toBeVisible();
-		await page.getByRole("textbox", { name: "Preview URL" }).fill(url);
-		await page.getByRole("textbox", { name: "Preview URL" }).press("Enter");
+		await page.getByRole("combobox", { name: "Preview URL" }).fill(url);
+		await page.getByRole("combobox", { name: "Preview URL" }).press("Enter");
 		await expect(page.locator("[data-preview-status]")).toHaveText("Local preview fixture");
 		const preferred = await app.evaluate(({ app }) => app.getPreferredSystemLanguages());
 		expect(preferred.length).toBeGreaterThan(0);
@@ -99,8 +99,8 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 		).toBe(false);
 		// The application menu's edit commands (Cmd/Ctrl+A, C, V, X, Z) act on the Preview view that holds the window's
 		// native keyboard focus, as Electron's menu roles act on the focused webContents, not on the window's own page.
-		await page.getByRole("textbox", { name: "Preview URL" }).fill(`${url}edit`);
-		await page.getByRole("textbox", { name: "Preview URL" }).press("Enter");
+		await page.getByRole("combobox", { name: "Preview URL" }).fill(`${url}edit`);
+		await page.getByRole("combobox", { name: "Preview URL" }).press("Enter");
 		await expect(page.locator("[data-preview-status]")).toHaveText("Edit fixture");
 		// The Preview page is the shell's own Chromium page, not one of the app WebView's targets: Playwright cannot
 		// hold it, so the page is driven through its webContents in main (typed text and focus as the page receives them).
@@ -128,8 +128,8 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 		await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.selectAll());
 		await onEditPage({ run: "text", text: "x" });
 		await expect.poll(fieldValue).toBe("x");
-		await page.getByRole("textbox", { name: "Preview URL" }).fill(url);
-		await page.getByRole("textbox", { name: "Preview URL" }).press("Enter");
+		await page.getByRole("combobox", { name: "Preview URL" }).fill(url);
+		await page.getByRole("combobox", { name: "Preview URL" }).press("Enter");
 		await expect(page.locator("[data-preview-status]")).toHaveText("Local preview fixture");
 		const palette = page.getByRole("dialog").getByRole("combobox");
 		await pressShortcutUntilVisible(page, "ControlOrMeta+k", palette);
@@ -197,7 +197,7 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 				path.join(screenshotDir, `preview-page-${theme}.png`),
 				Buffer.from(nativeCapture, "base64"),
 			);
-			const addressBar = page.getByRole("textbox", { name: "Preview URL" });
+			const addressBar = page.getByRole("combobox", { name: "Preview URL" });
 			await addressBar.fill(`${url}slow`);
 			await addressBar.press("Enter");
 			await expect(page.locator("[data-preview-status]")).toHaveText("Loading…");
