@@ -474,7 +474,13 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // Both tours' cards, the tip row, the sheet and the desktop-only notices load as their own chunks: 2,863 bytes
 // (2,235,624 on CI run 45786852939, omp/agent/orca-onboarding on fbe7b7b8d, against the 2,232,761 its base measured),
 // added to the budget.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_241_921;
+// Bot items, groups and chat cards (26 Nov 2026, orca-bots-items): the sidebar's group rows (`bots/rooms/room-faces.tsx`),
+// the item page's three rebindable keys (`lib/keymap.ts`), the Bots page's room place (`bots/bot-page.ts`) and what
+// decides a chat's bot card and its Hide (`chat/bots/bot-card-kind.tsx`, `hidden-cards.ts`, read by `ToolCard`,
+// `MessageBubble` and `ChatStream`, all on the phone's first screen). The cards, the Items tab, the item page and the
+// room load later (`chat/bots/BotCards.tsx` lazy, `BotsPage` lazy): 5,283 bytes over the budget of its base (2,242,025
+// in branch run 45815652051 at 21739cea5, whose budget was 2,236,742), added to the budget with 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_247_284;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
