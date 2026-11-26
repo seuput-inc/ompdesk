@@ -40,6 +40,7 @@ import {
 } from "react";
 import { reviewUnmerged } from "../../../../shared/agent-control";
 import { SIDEBAR_WIDTH } from "../../../../shared/boot-shell-geometry";
+import { itemsNeedingYou } from "../../../../shared/bots";
 import { ipcErrorCode } from "../../../../shared/ipc-error-codes";
 import type { HostView, SessionInfo } from "../../../../shared/ipc-types";
 import { autopilotRunOf, worktreeKindOf, worktreeLabel } from "../../../../shared/project-origin";
@@ -98,6 +99,7 @@ import { useTabRpc } from "../../../lib/tab-rpc";
 import { isTabFailed } from "../../../lib/tab-signal";
 import { pickWorkspaceDirectory } from "../../../lib/workspace-dirs";
 import { ensureAgentReviewSubscription, useAgentReviewStore } from "../../../stores/agent-review";
+import { ensureBots, useBotsStore } from "../../../stores/bots";
 import { type BranchRow, branchPrOf, branchPrTone, useBranchPrs, watchBranchPrs } from "../../../stores/branch-prs";
 import { ensureClosedChildren, useClosedChildrenStore } from "../../../stores/closed-children";
 import { useComposerStore } from "../../../stores/composer";
@@ -117,6 +119,8 @@ import { type SessionTab, tabAutoTitle, useTabsStore } from "../../../stores/tab
 import { toast, toastError } from "../../../stores/toast";
 import { type PanelTab, useUiStore } from "../../../stores/ui";
 import { startInstall, useInstallOffered } from "../../../web/install-ui";
+import { openBotDialog } from "../../bots/bot-launch";
+import { type BotChatFacts, botFacts, botMatches } from "../../bots/bot-view";
 import {
 	anchorFromEvent,
 	Badge,
@@ -152,7 +156,7 @@ import { projectMenuItems } from "./project-menu";
 import { RAIL_PIN_ICONS } from "./rail-pin-icons";
 import { logSelection, useRowSelection } from "./row-selection";
 import { SessionStatusLane } from "./SessionStatusLane";
-import { SidebarBots } from "./SidebarBots";
+import { type SidebarBotEntry, SidebarBots } from "./SidebarBots";
 import { SidebarChats } from "./SidebarChats";
 import { SidebarDeviceSections } from "./SidebarDeviceSections";
 import { SidebarDeviceSection, SidebarLocalHeader } from "./SidebarDevices";
@@ -410,7 +414,16 @@ export function Sidebar() {
 	const tabRpc = useTabRpc();
 	const t = useT();
 	const keymapOverrides = useUiStore(state => state.keymapOverrides);
+	// Hiding the Bots nav row from this device's sidebar hides the Bots section too (Settings › Bots shows it again):
+	// then a bot's chats list under its folder as any project's.
 	const botsAvailable = useBotsAvailable();
+	const botsNavHidden = useSidebarFolds(state => state.navHidden.bots === true);
+	const botsShown = botsAvailable && !botsNavHidden;
+	const bots = useBotsStore(state => state.state.bots);
+	const botItems = useBotsStore(state => state.state.items);
+	useEffect(() => {
+		if (botsShown) ensureBots();
+	}, [botsShown]);
 	// Each shown row's branch PR (stores/branch-prs.ts): this render collects the rows, the effect after it paces reads.
 	const branchPrs = useBranchPrs(state => state.prs);
 	// Links a person or an agent attached to this computer's sessions: said in each row's tooltip.
@@ -850,7 +863,12 @@ export function Sidebar() {
 		[projectName, groupAliases],
 	);
 	const allGroups = useMemo(() => rows.allGroups.map(named), [rows, named]);
-	const groups = useMemo(() => rows.groups.map(named), [rows, named]);
+	// A bot's folder is no project: its chats list under the bot in the Bots section.
+	const botFolders = useMemo(() => new Set(botsShown ? bots.map(bot => bot.folder) : []), [botsShown, bots]);
+	const groups = useMemo(
+		() => rows.groups.filter(group => !botFolders.has(group.cwd)).map(named),
+		[rows, named, botFolders],
+	);
 	const projectDropped = useSidebarListMotion(
 		localMotionRef,
 		groups.map(group => group.cwd),
@@ -2131,6 +2149,45 @@ export function Sidebar() {
 		);
 	};
 
+	// The Bots section's rows: each bot with what its chats' rows say (`botFacts`) and those rows; a filter keeps a bot
+	// its name or purpose matches (all its chats) or whose chats match (only those).
+	const botEntries: SidebarBotEntry[] = botsShown
+		? bots.flatMap(bot => {
+				const all = rows.allGroups.find(group => group.cwd === bot.folder)?.sessions ?? [];
+				const byName = !query || botMatches(bot, query);
+				const shown = byName ? all : (rows.groups.find(group => group.cwd === bot.folder)?.sessions ?? []);
+				if (!byName && shown.length === 0) return [];
+				let current = false;
+				const chats: BotChatFacts[] = all.map(session => {
+					const state = sessionRowState(session);
+					if (state.isCurrent) current = true;
+					return {
+						path: session.path,
+						title: sessionDisplayTitle(session, ""),
+						modified: session.modified,
+						waiting: state.waitingLabel,
+						running: state.running,
+						failed: state.failed,
+						unread: state.done,
+					};
+				});
+				const needing = itemsNeedingYou(
+					botItems.filter(item => item.bot === bot.id),
+					null,
+					Date.now(),
+				).length;
+				return [
+					{
+						bot,
+						facts: botFacts(bot, chats, needing),
+						chats: shown.map(session => renderSessionRow(session, true)),
+						chatCount: shown.length,
+						current,
+					},
+				];
+			})
+		: [];
+
 	// This device's own list; once a host is paired it is one of the device sections, under its own header.
 	const localList = (
 		<>
@@ -2192,7 +2249,7 @@ export function Sidebar() {
 							</Button>
 						</div>
 					))}
-				<NewTaskRows except={groups.map(group => group.cwd)} />
+				<NewTaskRows except={groups.map(group => group.cwd)} sections={sectionHosts.map(host => host.deviceId)} />
 				{groups.length > 0 && (
 					<DndContext collisionDetection={closestCenter} onDragEnd={onProjectDragEnd} sensors={projectSensors}>
 						<SortableContext items={groups.map(group => group.cwd)} strategy={verticalListSortingStrategy}>
@@ -2372,7 +2429,7 @@ export function Sidebar() {
 					data-sidebar-held-back={rowsHeldBack}
 				>
 					<SidebarHoldContext.Provider value={pointing}>
-						{botsAvailable && <SidebarBots />}
+						{botsShown && <SidebarBots entries={botEntries} filtering={query.length > 0} />}
 						{/* One tree whether or not a host is paired, so pairing (or the host list's first read at launch)
 					    never remounts this device's list. */}
 						<SidebarDeviceSections
@@ -2577,6 +2634,18 @@ export function Sidebar() {
 								setMoveMenu(sessionMenu);
 								setSessionMenu(null);
 							},
+							// A bot's own chat is not handed to a bot; a session on a paired host has no opener here (R91).
+							...(botsShown && !botFolders.has(session.cwd) && session.device === undefined
+								? {
+										handToBot: then(() =>
+											openBotDialog({
+												kind: "hand",
+												tabId: targetTab?.id ?? "",
+												title: sessionDisplayTitle(session, ""),
+											}),
+										),
+									}
+								: {}),
 							toggleArchive: then(() => setArchived([session], !archivedIds.has(session.id))),
 							...(session.device === undefined
 								? {

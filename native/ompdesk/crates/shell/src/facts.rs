@@ -31,14 +31,22 @@ mod app_icon;
 
 impl Launch {
     fn app_icon(&self) -> Value {
+        let headless = std::env::var_os("OMP_GUI_HEADLESS").is_some_and(|value| value == "1");
         app_icon::fact(
             &self.resources,
             &self.renderer_root,
             self.packaged,
             cfg!(windows),
-            std::env::var_os("OMP_GUI_HEADLESS").as_deref(),
+            headless && !test_notification_popup(),
         )
     }
+}
+
+/// A test run that watches OMPdesk's own notification popup (`OMP_GUI_HEADLESS=1` and
+/// `OMP_GUI_TEST_NOTIFICATION_POPUP=1`): Node sends its notifications, and the popup takes them without ever showing.
+pub fn test_notification_popup() -> bool {
+    let on = |name: &str| std::env::var_os(name).is_some_and(|value| value == "1");
+    on("OMP_GUI_HEADLESS") && on("OMP_GUI_TEST_NOTIFICATION_POPUP")
 }
 
 /// The locale Chromium reports as `app.getLocale()` for an OS locale tag (`ko-KR` → `ko`, `en-AU` → `en-GB`).
@@ -179,18 +187,18 @@ mod tests {
             Path::new(launch.app_icon()["path"].as_str().unwrap()),
             Path::new("installation/resources/app-icon.png")
         );
-        for (windows, headless, expected) in [
-            (true, None, "appIcon"),
-            (false, None, "systemIcon"),
-            (true, Some("1"), "off"),
-            (false, Some("1"), "off"),
+        for (windows, quiet, expected) in [
+            (true, false, "appIcon"),
+            (false, false, "systemIcon"),
+            (true, true, "off"),
+            (false, true, "off"),
         ] {
             let fact = app_icon::fact(
                 &launch.resources,
                 &launch.renderer_root,
                 launch.packaged,
                 windows,
-                headless.map(std::ffi::OsStr::new),
+                quiet,
             );
             assert_eq!(fact["notifications"], expected);
         }

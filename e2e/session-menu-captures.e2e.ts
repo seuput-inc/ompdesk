@@ -152,7 +152,10 @@ for (const language of ["en", "ko"] as const)
 				edits[1],
 				// Muting is this computer's own: a host's session has no such item.
 				text("sidebar.menu.mute"),
-				...edits.slice(2),
+				...edits.slice(2, 5),
+				// Handing over is this computer's own: its bots are (components/bots/HandToBotDialog.tsx).
+				text("bots.hand.menu"),
+				edits[5],
 				text("sidebar.menu.hideFromAgents"),
 				text("sidebar.menu.copyTitle"),
 				text("sidebar.menu.reveal"),

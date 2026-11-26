@@ -29,8 +29,8 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd,
 
 /**
  * B's `gh`: signed in, the project's repository `o/r` with one open PR whose detail has a file, a passing check and an
- * open review thread, one open issue and one project (`agents-prs`, `agents-pr-detail`, `agents-github`,
- * `agents-github-projects`). The project's own branch
+ * open review thread, one open issue with its detail and one project (`agents-prs`, `agents-pr-detail`, `agents-github`,
+ * `agents-github-projects`, `agents-issue-detail`, `agents-issue-start`). The project's own branch
  * has no PR (`--head`), so the sidebar rows show none and the Changes panel offers to link one.
  */
 async function writeParityGh(bin: string): Promise<void> {
@@ -121,6 +121,7 @@ async function writeParityGh(bin: string): Promise<void> {
 			`"pr view"*comments,reviews*) cat "${bin}/comments.json" ;;`,
 			`"pr view"*) cat "${bin}/view.json" ;;`,
 			`"pr diff"*) cat "${bin}/pr.diff" ;;`,
+			`"issue view"*) echo '{"number":12,"title":"Closed PRs keep their session row","state":"OPEN","author":{"login":"reviewer"},"labels":[{"name":"bug"}],"comments":[],"updatedAt":"2026-11-20T09:00:00Z","url":"https://github.com/o/r/issues/12","body":"A session whose pull request closed still shows the PR beside its row."}' ;;`,
 			`"issue list"*) echo '[{"number":12,"title":"Closed PRs keep their session row","state":"OPEN","author":{"login":"reviewer"},"labels":[{"name":"bug"}],"comments":[],"updatedAt":"2026-11-20T09:00:00Z","url":"https://github.com/o/r/issues/12"}]' ;;`,
 			`"label list"*|"release list"*|"run list"*|"workflow list"*|"repo list"*) echo '[]' ;;`,
 			"*) exit 1 ;;",
@@ -610,6 +611,39 @@ if (dir) {
 				answered.set("Parity long", session);
 				return session;
 			};
+			/**
+			 * A session of its own whose board has every zone but Needs you (`board-strip*`): a todo list with two
+			 * instructions since it changed (`fixture todo behind`), a turn that fixed a failing test (`fixture turn
+			 * recovered`) and subagents left at work (`fixture:subagents`) for the rest of the run. Each view reads them
+			 * from the host (`get_state`, `get_subagents`, the transcript). Nothing waits on Escape, which each view presses
+			 * before it shows a session (`openRow`): it would answer a question and stop a running turn (the first capture,
+			 * run 45778111707, left its turn held open, and `board-strip-open` showed it interrupted).
+			 */
+			const boardSession = async (): Promise<HostSession> => {
+				const made = answered.get("Parity board");
+				if (made) return made;
+				const tabId = await titledTab("Parity board");
+				for (const [message, answer] of [
+					["fixture todo behind", "Local fixture reply"],
+					["fixture turn recovered", "The tests pass now."],
+				] as const) {
+					await b.evaluate(([id, sent]) => window.omp.rpc.commandForTab(id, { type: "prompt", message: sent }), [
+						tabId,
+						message,
+					] as const);
+					await untilAnswered(b, tabId, { text: answer, after: message });
+				}
+				await b.evaluate(
+					id => window.omp.rpc.commandForTab(id, { type: "bash", command: "fixture:subagents" }),
+					tabId,
+				);
+				const sessionPath =
+					(await b.evaluate(() => window.omp.tabs.list())).find(entry => entry.tabId === tabId)?.sessionPath ?? "";
+				if (!sessionPath) throw new Error("the board session has no file");
+				const session = { path: sessionPath, cwd: work.cwd };
+				answered.set("Parity board", session);
+				return session;
+			};
 			/** B's `session` as it is when a view shows it. */
 			const hostSession = async (session: ParitySession): Promise<HostSession> =>
 				session === "work"
@@ -639,7 +673,9 @@ if (dir) {
 															answeredSession("Parity schedule", [
 																["fixture schedule card", "Webhook routine saved."],
 															])
-														: limitSession();
+														: session === "board"
+															? boardSession()
+															: limitSession();
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {

@@ -95,6 +95,7 @@ import { SessionLiveTitle, sessionLive } from "../SessionLiveTitle";
 import { childFoldSignal, type FoldSignal, type FoldSummary, foldSummary } from "./fold-summary";
 import { hostSectionSummary, remoteOpenedTab, summaryRowState } from "./host-row-state";
 import { useHostWorkspace } from "./host-workspace";
+import { NewTaskRows } from "./NewTaskRows";
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
 import { deleteProject, isStoredRow } from "./project-delete";
 import { projectMenuItems } from "./project-menu";
@@ -409,12 +410,18 @@ export function SidebarDeviceSection({
 						query={query}
 						read={online && !pending}
 					/>
-				) : host.state === "connecting" ? (
-					<p className="flex items-center gap-2 px-2.5 py-1.5 text-sc-xs text-(--sc-text-muted)">
-						<Spinner size="sm" />
-						{stateLabel}
-					</p>
-				) : null}
+				) : (
+					<>
+						{host.state === "connecting" && (
+							<p className="flex items-center gap-2 px-2.5 py-1.5 text-sc-xs text-(--sc-text-muted)">
+								<Spinner size="sm" />
+								{stateLabel}
+							</p>
+						)}
+						{/* No rows while the link is down: the host's tasks still show, so a failed one can be closed. */}
+						<NewTaskRows device={host.deviceId} />
+					</>
+				)}
 			</Collapse>
 		</section>
 	);
@@ -1356,6 +1363,7 @@ function DeviceSessions({
 		<div className="space-y-px" ref={motionRef}>
 			{reorder.status}
 			{dialog}
+			<NewTaskRows device={host.deviceId} except={projectPaths} />
 			<DndContext collisionDetection={closestCenter} onDragEnd={onGroupDragEnd} sensors={groupSensors}>
 				<SortableContext items={projectPaths} strategy={verticalListSortingStrategy}>
 					{groups.map(group => {
@@ -1466,6 +1474,7 @@ function DeviceSessions({
 										</div>
 										<Collapse open={!groupCollapsed}>
 											<div className="space-y-px">
+												<NewTaskRows cwd={group.cwd} device={host.deviceId} />
 												{group.sessions.map(session => renderRow(session))}
 												<SidebarLooseChildren
 													foldKey={`device-group:${host.deviceId}:${group.cwd}`}

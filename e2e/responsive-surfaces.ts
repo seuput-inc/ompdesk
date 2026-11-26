@@ -98,7 +98,8 @@ export type ParitySession =
 	| "long"
 	| "cut"
 	| "stress"
-	| "schedule";
+	| "schedule"
+	| "board";
 
 /** The fake omp's voice script (`voiceScript`, e2e/fixture/rpc-ui.ts); e2e/parity.e2e.ts names the file. */
 async function scriptVoice(script: Record<string, unknown>): Promise<void> {
@@ -366,6 +367,41 @@ async function openNewTaskSheet(page: Page, look: Look): Promise<void> {
 	await palette.locator('[data-command-name="new-worktree-tab"]').click();
 }
 
+/**
+ * A new task that fails at its worktree's create, from the sheet (worktree on, a typed name, a base ref no repository
+ * has): its sidebar row stays, failed, with Retry and Close, and nothing was made (no fetch, no name step, no session).
+ */
+async function failNewTask(page: Page, look: Look): Promise<void> {
+	await openNewTaskSheet(page, look);
+	const sheet = page.locator("[role=dialog]:has([data-new-task-sheet])");
+	await sheet.locator("[data-new-task-project]").waitFor({ timeout: 15_000 });
+	await sheet.locator("input[maxlength='41']").fill("parity missing base");
+	await sheet.locator("[data-worktree-base] label").nth(2).click();
+	await sheet.locator("[data-worktree-base] input[list]").fill("no-such-base");
+	await sheet.locator("button[type=submit]").click();
+	await sheet.waitFor({ state: "detached", timeout: 15_000 });
+	// A phone's palette opened from its drawer, which stays open behind the sheet.
+	if (!(await page.locator("[data-drawer]").isVisible())) await openDrawer(page, look);
+}
+
+/** Closes every failed new task row `failNewTask` left (each row's Close; a phone's drawer is still open). */
+async function dismissNewTasks(page: Page): Promise<void> {
+	for (const close of await page.locator("[data-new-task-close]:visible").all()) await close.click();
+	await page.locator("[data-new-task]").first().waitFor({ state: "detached", timeout: 10_000 });
+}
+
+/** Agents › GitHub › Issues with the parity sheet's one issue open (B's `gh`, e2e/parity.e2e.ts `writeParityGh`). */
+async function openIssueDetail(page: Page): Promise<void> {
+	await openPageTab(page, "agents", "github");
+	await page
+		.locator("[data-github-center] li")
+		.filter({ hasText: "Closed PRs keep their session row" })
+		.locator("button")
+		.first()
+		.click({ timeout: 15_000 });
+	await page.locator("[data-github-issue-start]").waitFor({ state: "visible", timeout: 15_000 });
+}
+
 /** Put a prompt of the web host's sheet layer (`?host=1` pages) in front of the person. */
 async function hostPrompt(page: Page, prompt: Record<string, unknown>): Promise<void> {
 	await page.evaluate(prompt => {
@@ -386,6 +422,19 @@ const isPhone = (look: Look): boolean => look.width < 600;
  * window from 1100 dock it beside a column narrowed for it.
  */
 const boardIsStrip = (look: Look): boolean => look.width < 1100;
+/**
+ * The busy board a board surface waits for, as a strip (`chip`) or docked. The harness's `?board=busy` lands its
+ * turn, question and goal together 1.5 s after boot (dev-harness/boot.ts), so there both wait for the question; the
+ * parity sheet's `board` session asks none (the Escape each view presses before it shows a session would answer it),
+ * so there they wait for its running work.
+ */
+function busyBoard(page: Page): { chip: Locator; docked: Locator } {
+	const harness = page.url().includes("board=busy");
+	return {
+		chip: page.locator(harness ? "[data-work-chip][data-state='waiting']" : "[data-work-chip]").first(),
+		docked: page.locator(`.omp-work-board-slot [data-board-section='${harness ? "needs" : "now"}']`).first(),
+	};
+}
 /** The host's sheets are the paired web page's (`WebHostUi` renders nothing in the desktop app). */
 const webPage = (look: Look): boolean => look.device !== "electron";
 
@@ -413,6 +462,19 @@ async function openDrawer(page: Page, look: Look): Promise<void> {
 	if (sidebarDocked(look)) return;
 	await page.locator("button:visible:has(svg.lucide-menu)").first().click();
 	await page.locator("[data-drawer]").waitFor({ state: "visible", timeout: 10_000 });
+}
+
+/** The view's own computer has a bot to show: "Parity bot", made through the app's own bots API when it has none. */
+async function ensureParityBot(page: Page): Promise<void> {
+	await page.evaluate(async () => {
+		const state = await window.omp.bots.command({ action: "get" });
+		if (state.bots.length === 0)
+			await window.omp.bots.command({
+				action: "create",
+				name: "Parity bot",
+				purpose: "Keeps an eye on the parity sheet.",
+			});
+	});
 }
 
 /**
@@ -879,6 +941,7 @@ export const SETTINGS_SECTIONS = [
 	"permissions",
 	"workspace",
 	"schedules",
+	"bots",
 	"connections",
 	"updates",
 	"advanced",
@@ -1427,14 +1490,19 @@ export const SURFACES: readonly Surface[] = [
 		title: "Work board strip (busy session, ?board=busy), expanded: under the header on a phone, above the composer elsewhere, where the pane cannot dock the board (docked: board-strip-open)",
 		query: "&board=busy",
 		when: boardIsStrip,
-		open: async page => {
-			// The busy fixture's turn, question and goal land 1.5 s after boot (dev-harness/boot.ts).
-			const chip = page.locator("[data-work-chip][data-state='waiting']");
-			await chip.waitFor({ state: "visible", timeout: 15_000 });
+		open: async (page, look) => {
+			const { chip, docked } = busyBoard(page);
+			await chip.or(docked).first().waitFor({ state: "visible", timeout: 15_000 });
+			// A window wide enough docks the board (the parity sheet's): the side panel takes its place, so the strip shows.
+			if ((await chip.count()) === 0) {
+				await openPanelView(page, look, "diff");
+				await chip.waitFor({ state: "visible", timeout: 15_000 });
+			}
 			if ((await chip.getAttribute("aria-expanded")) !== "true") await chip.click();
 		},
 		ready: "[data-work-strip-panel]",
 		settle: 600,
+		parity: { session: "board", after: closePanelView },
 	},
 	{
 		id: "board-strip-open",
@@ -1442,8 +1510,7 @@ export const SURFACES: readonly Surface[] = [
 		title: "Work board strip with every zone opened from its summary line: the rows a phone reaches with a tap more",
 		query: "&board=busy",
 		open: async page => {
-			const chip = page.locator("[data-work-chip][data-state='waiting']");
-			const docked = page.locator(".omp-work-board-slot [data-board-section='needs']");
+			const { chip, docked } = busyBoard(page);
 			await chip.or(docked).first().waitFor({ state: "visible", timeout: 15_000 });
 			if ((await chip.count()) === 0) return;
 			if ((await chip.getAttribute("aria-expanded")) !== "true") await chip.click();
@@ -1454,6 +1521,7 @@ export const SURFACES: readonly Surface[] = [
 		},
 		ready: "[data-work-board-panel]",
 		settle: 600,
+		parity: { session: "board" },
 	},
 	{
 		id: "sidebar",
@@ -2116,6 +2184,55 @@ export const SURFACES: readonly Surface[] = [
 		when: () => false,
 		parity: { session: "work", after: closeOverlay },
 	},
+	// Bots (orca-bots-ui): each view reads the bots of its own computer (a bot lives where its folder is), so `open`
+	// first makes "Parity bot" there when it has none; the sections and their order are what must agree.
+	{
+		id: "sidebar-bots",
+		area: "A",
+		title: "The sidebar's Bots section: the header with its options and +, a bot's row with its second line",
+		open: async (page, look) => {
+			await ensureParityBot(page);
+			await openDrawer(page, look);
+			const toggle = page.locator("[data-sidebar-bots-toggle]:visible").first();
+			if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+		},
+		ready: "[data-sidebar-bots] [data-bot-row]",
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "bot-pane",
+		area: "B",
+		title: "The Bots page: the bots' list and a bot's page (header, Activity, Chats, Settings tabs)",
+		open: async (page, look) => {
+			await ensureParityBot(page);
+			await openDrawer(page, look);
+			await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+			// A phone shows the list first: the bot's row opens its page.
+			const row = page.locator("[data-bots-page-row]:visible").first();
+			if ((await page.locator("[data-bot-pane]:visible").count()) === 0) await row.click();
+		},
+		ready: "[data-bot-pane] [data-bot-activity]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "settings-bots",
+		area: "B",
+		title: "Settings › Bots: the sidebar switch and this computer's bots",
+		open: async (page, look) => {
+			await ensureParityBot(page);
+			await openDrawer(page, look);
+			await page.locator('[data-destination="settings"]').first().click();
+			const nav = page.locator('[data-settings-section="bots"]');
+			await nav.waitFor({ state: "visible", timeout: 15_000 });
+			await nav.click();
+		},
+		ready: "[data-settings-page] [data-settings-bots]",
+		when: () => false,
+		parity: { session: "work" },
+	},
 	{
 		id: "board-all",
 		area: "B",
@@ -2284,6 +2401,30 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-pr-detail]",
 		settle: 1200,
 		parity: { session: "work" },
+	},
+	{
+		id: "agents-issue-detail",
+		area: "B",
+		title: "Agents › GitHub › an issue's detail, its Start a task button first",
+		open: openIssueDetail,
+		ready: "[data-github-issue] [data-github-issue-start]",
+		settle: 900,
+		// Parity only: the issue comes from B's `gh`, which the harness page has not.
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "agents-issue-start",
+		area: "B",
+		title: "The new task sheet an issue's Start a task opens: its branch name and prompt filled from the issue",
+		open: async page => {
+			await openIssueDetail(page);
+			await page.locator("[data-github-issue-start]").click();
+		},
+		ready: "[role=dialog] [data-new-task-sheet] [data-new-task-project]",
+		settle: 700,
+		when: () => false,
+		parity: { session: "work", after: closeOverlay },
 	},
 	{
 		id: "stats",
@@ -2470,11 +2611,28 @@ export const SURFACES: readonly Surface[] = [
 		title: "A session row's action menu",
 		open: async (page, look) => {
 			await openDrawer(page, look);
+			// The shown session's row where the list marks one, so every parity view opens the work session's menu (a
+			// paired computer's window lists its own sessions above the host's).
+			const rows = page.locator(".omp-list-row:has([data-sidebar-row-menu])");
+			await rows.first().waitFor({ state: "attached", timeout: 15_000 });
+			const shown = rows.and(page.locator("[data-active='true']")).first();
+			const row = (await shown.count()) > 0 ? shown : rows.first();
 			// A mouse shows the row's ⋯ on hover; a finger always has it.
-			const row = page.locator(".omp-list-row:has([data-sidebar-row-menu])").first();
 			if ((look.device ?? "touch") !== "touch") await row.hover();
 			await row.locator("[data-sidebar-row-menu]").first().click();
 		},
+		ready: "[role='menu'] [role='menuitem']",
+		parity: { session: "work", after: closeOverlay },
+	},
+	{
+		id: "sidebar-new-task-row",
+		area: "A",
+		title: "A new task's sidebar row after its worktree's create failed: the reason, Retry and Close",
+		open: failNewTask,
+		ready: "[data-new-task][data-new-task-state='failed']",
+		// Parity only: the harness page has no repository to cut a worktree from.
+		when: () => false,
+		parity: { session: "work", after: dismissNewTasks },
 	},
 	{
 		id: "sidebar-project-menu",

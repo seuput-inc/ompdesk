@@ -41,7 +41,7 @@ import type {
 	PrivacyPane,
 	SidebarView,
 } from "../../shared/agent-control";
-import type { BotsRequest, BotsState } from "../../shared/bots";
+import type { BotsAnswer, BotsCall, BotsState } from "../../shared/bots";
 import type { SessionStatus } from "../../shared/control-protocol";
 import { ipcErrorCode } from "../../shared/ipc-error-codes";
 import type {
@@ -905,8 +905,8 @@ export class AgentControl {
 		return this.#call("liveReview", { callerTabId, last, ...(only ? { only: [...only] } : {}) });
 	}
 
-	/** The owner's change to the bots or their items (`BotsRequest`): the state after it. */
-	bots(request: BotsRequest): Promise<BotsState> {
+	/** The owner's change to the bots or their items, one of a bot's files or the import sources (`BotsCall`). */
+	bots<C extends BotsCall>(request: C): Promise<BotsAnswer<C>> {
 		return this.#call("bots", request as unknown as Record<string, unknown>);
 	}
 

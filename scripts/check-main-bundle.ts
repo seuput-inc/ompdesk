@@ -453,7 +453,15 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // task's exact branch (`stores/new-tasks.ts`, `worktreeCreate`'s `branch`); the channel names sit in
 // `shared/tracker-channels.ts` so the tracker rules stay with the source bar's lazy chunks: measured 2,232,761
 // (e2e-nightly run 45779116807, omp/agent/orca-trackers at c149c5843). The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_232_841;
+// A paired host's task in its own section and a failed task's reason (`NewTaskRows` in `SidebarDevices.tsx`,
+// `errorDetail`), and an auto-grow field that follows a value set by code: 87 bytes (2,232,472 on e2e-nightly run
+// 45785242603, omp/agent/board-parity at 8ebe6c326, against the 2,232,385 its base measured), added to the budget.
+// The sidebar's Bots section (26 Nov 2026, orca-bots-ui: `SidebarBots.tsx`, the bots store, a bot row's facts and its
+// hover card; the sidebar is the phone's first screen, and a section that loads later would pop in). The dialogs, the
+// bot page, the templates and their words load later (OnDemandDialogs, `BotsPage` lazy, `bot-launch` imports the
+// templates on a template's create): 3,814 bytes measured over main (branch run 45779653731 on 9878bdec4), added to the
+// budget.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_236_742;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

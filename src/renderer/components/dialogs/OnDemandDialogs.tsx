@@ -5,6 +5,7 @@
  * agent opens (asks, plan approval, worktree prompts, SSH prompts) stay in App.
  */
 import { useUiStore } from "../../stores/ui";
+import { BotDialogs } from "../bots/BotDialogs";
 import { ActiveToolsDialog } from "./ActiveToolsDialog";
 import { BranchPickerDialog } from "./BranchPickerDialog";
 import { BtwDialog } from "./BtwDialog";
@@ -45,6 +46,7 @@ export function OnDemandDialogs() {
 			<ShareSessionDialog />
 			<ForceToolDialog />
 			<HandoffDialog />
+			<BotDialogs />
 			<WorkspaceDialog
 				intent={workspaceIntent ?? "switch"}
 				onClose={() => useUiStore.getState().closeProjectPicker()}

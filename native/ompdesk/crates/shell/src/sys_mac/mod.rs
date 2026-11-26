@@ -8,6 +8,7 @@ pub mod desk;
 pub mod dialogs;
 pub mod keychain;
 pub mod menu;
+pub mod popup_panel;
 pub mod shellops;
 pub mod system;
 pub mod toast;
