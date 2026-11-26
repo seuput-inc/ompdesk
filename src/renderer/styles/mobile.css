@@ -183,6 +183,7 @@ html[data-input="touch"]
 	:is(
 		.omp-session-sidebar [data-workspace-group],
 		.omp-session-sidebar [data-destination],
+		.omp-session-sidebar [data-sidebar-nav-row],
 		.omp-session-sidebar .omp-family-row,
 		.omp-list-row,
 		.settings-field-row

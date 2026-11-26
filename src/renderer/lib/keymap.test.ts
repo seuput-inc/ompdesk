@@ -334,6 +334,8 @@ describe("shortcut labels", () => {
 		expect(ariaKeyShortcut("⌥A", "mac")).toBe("Alt+A");
 		expect(ariaKeyShortcut("⇧⌘T", "mac")).toBe("Shift+Meta+T");
 		expect(ariaKeyShortcut("⇧⌘T", "windows")).toBe("Control+Shift+T");
+		expect(ariaKeyShortcut("⌥↑", "mac")).toBe("Alt+ArrowUp");
+		expect(ariaKeyShortcut("⌘⎋", "mac")).toBe("Meta+Escape");
 		expect(ariaKeyShortcut("not a chord", "mac")).toBeUndefined();
 	});
 
