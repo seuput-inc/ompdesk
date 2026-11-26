@@ -6,7 +6,8 @@
  *   a failed first message can be sent again.
  * - Needs you (`BotNeedsYouSection.tsx:38-422`, FK-B16): its chats' own prompts (approvals first, then questions,
  *   as their rows read them), then its items set to Needs you; five rows, then Show more. A chat's row opens the
- *   chat, an item's row its item page.
+ *   chat, an item's row its item page. Above them, people asking through one of its connectors without being on
+ *   its list (Orca's Request access, `bot-access-request.ts:95-107`), each with Allow (they join the list) and Decline.
  * - Suggestions (`BotUpNextSection.tsx:263-340`, FK-B18): planned items its Look around saved; Start marks one
  *   working, Dismiss cancels it; Look now runs its Look around (or turns it on). A row opens its item page.
  * - Automations (`BotUpcomingSection.tsx`, FK-B19): its schedules ranked failed, running, soonest (`botAutomations`);
@@ -17,10 +18,12 @@
  */
 import { Check, CircleAlert, CircleDashed, Clock, ExternalLink, Play, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { type WaitingAsker, waitingAskers } from "../../../shared/bot-connectors";
 import { type Bot, type BotFile, type Item, itemsNeedingYou } from "../../../shared/bots";
 import type { AskKind } from "../../lib/attention";
 import { formatClock } from "../../lib/format";
 import { useT } from "../../lib/i18n";
+import { openExternal } from "../../lib/open-external";
 import { sessionRun } from "../../lib/session-run";
 import { useBotsStore } from "../../stores/bots";
 import { tabSummary, useHostedSessionsStore } from "../../stores/hosted-sessions";
@@ -39,7 +42,7 @@ import {
 	Spinner,
 	StatusDot,
 } from "../common";
-import { type BotAutomation, botAutomations, useLocalSchedules } from "./bot-automations";
+import { type BotAutomation, botAutomations, isBotSchedule, useLocalSchedules } from "./bot-automations";
 import { type LaunchStep, openBotChat, sendKickoff, useBotLaunch } from "./bot-launch";
 import { openBotPage } from "./bot-page";
 import { openItem } from "./items/item-store";
@@ -123,7 +126,12 @@ function NeedsYou({ bot }: { bot: Bot }) {
 	const items = useBotsStore(s => s.state.items);
 	const tabs = useTabsStore(s => s.tabs);
 	const summaries = useHostedSessionsStore(s => s.summaries);
+	const schedules = useLocalSchedules();
 	const [all, setAll] = useState(false);
+	const askers = waitingAskers(
+		schedules.schedules.filter(schedule => isBotSchedule(bot, schedule)),
+		schedules.asking,
+	);
 	const chats = [bot.home, ...bot.sessions.filter(session => session !== bot.home)].filter(
 		(session): session is string => Boolean(session),
 	);
@@ -163,9 +171,12 @@ function NeedsYou({ bot }: { bot: Bot }) {
 	const shown = all ? rows : rows.slice(0, Math.max(ROWS, approvals));
 	return (
 		<section aria-label={t("bots.needs.title")} className="flex flex-col gap-1" data-bot-needs-you>
-			<SectionLabel count={rows.length}>{t("bots.needs.title")}</SectionLabel>
+			<SectionLabel count={rows.length + askers.length}>{t("bots.needs.title")}</SectionLabel>
+			{askers.map(waiting => (
+				<AccessAsk bot={bot} key={`${waiting.connector.schedule.id}:${waiting.asker.person}`} waiting={waiting} />
+			))}
 			{rows.length === 0 ? (
-				<EmptyState size="row" title={t("bots.needs.none")} />
+				askers.length === 0 && <EmptyState size="row" title={t("bots.needs.none")} />
 			) : (
 				<>
 					{shown.map(row => (
@@ -192,6 +203,54 @@ function NeedsYou({ bot }: { bot: Bot }) {
 				</>
 			)}
 		</section>
+	);
+}
+
+/** Someone who asked the bot through a connector without being on its list: Allow adds them, Decline stops asking. */
+function AccessAsk({ bot, waiting }: { bot: Bot; waiting: WaitingAsker }) {
+	const t = useT();
+	const [busy, setBusy] = useState(false);
+	const { connector, asker } = waiting;
+	const service = t(`bots.connectors.service.${connector.service}`);
+	const answer = (allow: boolean) => {
+		setBusy(true);
+		window.omp.schedules
+			.command({ action: "answerAsker", id: connector.schedule.id, person: asker.person, allow })
+			.then(() => {
+				setBusy(false);
+				if (allow) toast({ variant: "success", message: t("bots.needs.accessAllowed", { name: asker.name }) });
+			})
+			.catch((error: unknown) => {
+				setBusy(false);
+				toastError({ title: t("bots.needs.accessFailed"), error });
+			});
+	};
+	return (
+		<ListRow
+			actions={
+				<>
+					{asker.link && (
+						<IconButton
+							icon={<ExternalLink />}
+							label={t("bots.needs.accessOpen", { service })}
+							onClick={() => openExternal(asker.link ?? "")}
+							size="sm"
+						/>
+					)}
+					<Button disabled={busy} onClick={() => answer(false)} size="sm" variant="ghost">
+						{t("bots.needs.accessDecline")}
+					</Button>
+					<Button disabled={busy} onClick={() => answer(true)} size="sm" variant="primary">
+						{t("bots.needs.accessAllow")}
+					</Button>
+				</>
+			}
+			description={t("bots.needs.accessDetail", { service, name: bot.name })}
+			leading={<StatusDot decorative tone="attention" />}
+			rowProps={{ "data-bot-access-ask": connector.service }}
+			size="sm"
+			title={t("bots.needs.access", { name: asker.name, service })}
+		/>
 	);
 }
 

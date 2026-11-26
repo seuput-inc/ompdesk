@@ -35,7 +35,7 @@ pub(crate) const REPLY_MARK: &str = "via OMPdesk";
 /// The most a reply posts (Orca `connector-turn-activity-contract.ts:10`, 32 KiB).
 const REPLY_MAX: usize = 32 * 1024;
 /// Anyone may ask.
-const ANYONE: &str = "*";
+pub(crate) const ANYONE: &str = "*";
 
 /// The words of an asked event, ready for the engine: OMPdesk's header, then someone's words.
 pub(crate) fn asked(header: &str, words: &str) -> String {
@@ -84,6 +84,19 @@ pub(crate) fn people(event: &Value) -> Vec<String> {
         .collect()
 }
 
+/// Someone not in a connector's `from` who asked the bot (Orca's Request access, `shared/bots/bot-access-request.ts`):
+/// the owner allows them (`person` joins `from`) or declines, on the bot's Needs you. What the connector vouches for
+/// leads (`person`: a Slack member id, a GitHub login, a Linear e-mail or id); `name` and `place` are only shown.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub(crate) struct AccessAsk {
+    pub person: String,
+    pub name: String,
+    /// Where they asked, in words, and its link when the service has one.
+    pub place: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub link: String,
+}
+
 // ---- Slack --------------------------------------------------------------------------------------------------------
 
 /// What a Slack event (an `event_callback` body, the same over Socket Mode and HTTP) is to a bot's connector.
@@ -91,7 +104,9 @@ pub(crate) fn people(event: &Value) -> Vec<String> {
 pub(crate) enum SlackEvent {
     /// Asked: Slack's `event_id` (a retry repeats it) and the line its run is told.
     Asked { id: String, line: String },
-    /// Not for the bot, or from someone it does not take asks from.
+    /// Asked by someone not in `from`: nothing runs, the owner is asked to let them in.
+    Refused { id: String, ask: AccessAsk },
+    /// Not for the bot.
     Passed,
 }
 
@@ -129,7 +144,24 @@ pub(crate) fn slack_event(event: &Value, body: &Value) -> SlackEvent {
         return SlackEvent::Passed;
     }
     if !allowed(&people(event), &[&user]) {
-        return SlackEvent::Passed;
+        let team = text(body, "team_id");
+        return SlackEvent::Refused {
+            id,
+            ask: AccessAsk {
+                person: user.clone(),
+                name: user,
+                place: if direct {
+                    "Slack, a direct message".to_owned()
+                } else {
+                    format!("Slack, a mention in channel {channel}")
+                },
+                link: if team.is_empty() {
+                    String::new()
+                } else {
+                    format!("https://app.slack.com/client/{team}/{channel}")
+                },
+            },
+        };
     }
     // A mention's text starts with the bot's own `<@U…>`; the rest is what was asked.
     let words = text(said, "text");
@@ -170,10 +202,17 @@ pub(crate) struct LinearAsk {
     pub line: String,
 }
 
+/// What one Linear read found: the asks to run, oldest first, and who asked without being in `from`.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct LinearRead {
+    pub asks: Vec<LinearAsk>,
+    pub refused: Vec<AccessAsk>,
+}
+
 /// The new asks of one Linear read (`trackers::linear_asks`: comments and new issues holding the bot's keyword), from
 /// someone in `from` (`me` is the key's owner), oldest first; ids in `seen` and the bot's own replies are passed over.
 /// Who wrote it, the issue's title and the text are someone's words; identifiers, links and the handle are Linear's.
-pub(crate) fn linear_asks(event: &Value, data: &Value, seen: &[String]) -> Vec<LinearAsk> {
+pub(crate) fn linear_asks(event: &Value, data: &Value, seen: &[String]) -> LinearRead {
     let text = |value: &Value, path: &str| {
         value
             .pointer(path)
@@ -213,16 +252,36 @@ pub(crate) fn linear_asks(event: &Value, data: &Value, seen: &[String]) -> Vec<L
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "someone".to_owned())
     };
+    // Linear's e-mail leads: a name or a display name can be edited and repeated (Orca `accessRequestIdentity`).
+    let refusal = |person: Option<&Value>, place: String, link: String| {
+        let person = person?;
+        let email = text(person, "/email");
+        let id = text(person, "/id");
+        let vouched = if email.is_empty() { id } else { email };
+        (!vouched.is_empty()).then(|| AccessAsk {
+            person: vouched,
+            name: name(Some(person)),
+            place,
+            link,
+        })
+    };
     let mut asks = Vec::new();
+    let mut refused = Vec::new();
     for comment in nodes("/comments/nodes") {
         let (id, body) = (text(&comment, "/id"), text(&comment, "/body"));
         let issue = text(&comment, "/issue/id");
-        if id.is_empty()
-            || issue.is_empty()
-            || seen.contains(&id)
-            || body.contains(REPLY_MARK)
-            || !may_ask(comment.get("user"))
-        {
+        if id.is_empty() || issue.is_empty() || seen.contains(&id) || body.contains(REPLY_MARK) {
+            continue;
+        }
+        if !may_ask(comment.get("user")) {
+            refused.extend(refusal(
+                comment.get("user"),
+                format!(
+                    "Linear, a comment on {}",
+                    text(&comment, "/issue/identifier")
+                ),
+                text(&comment, "/url"),
+            ));
             continue;
         }
         let target = Target::Linear {
@@ -248,11 +307,15 @@ pub(crate) fn linear_asks(event: &Value, data: &Value, seen: &[String]) -> Vec<L
     }
     for issue in nodes("/issues/nodes") {
         let (id, body) = (text(&issue, "/id"), text(&issue, "/description"));
-        if id.is_empty()
-            || seen.contains(&id)
-            || body.contains(REPLY_MARK)
-            || !may_ask(issue.get("creator"))
-        {
+        if id.is_empty() || seen.contains(&id) || body.contains(REPLY_MARK) {
+            continue;
+        }
+        if !may_ask(issue.get("creator")) {
+            refused.extend(refusal(
+                issue.get("creator"),
+                format!("Linear, the new issue {}", text(&issue, "/identifier")),
+                text(&issue, "/url"),
+            ));
             continue;
         }
         let target = Target::Linear {
@@ -277,7 +340,7 @@ pub(crate) fn linear_asks(event: &Value, data: &Value, seen: &[String]) -> Vec<L
         });
     }
     asks.sort_by(|a, b| a.at.cmp(&b.at));
-    asks
+    LinearRead { asks, refused }
 }
 
 // ---- where a reply goes -------------------------------------------------------------------------------------------
@@ -584,9 +647,22 @@ mod tests {
     #[test]
     fn only_the_people_listed_ask_and_never_a_bot_or_an_edit() {
         let routine = json!({ "source": "slack", "account": "a", "from": ["U1"] });
-        let stranger =
+        let mut stranger =
             slack(json!({ "type": "app_mention", "user": "U2", "channel": "C", "ts": "1" }));
-        assert_eq!(slack_event(&routine, &stranger), SlackEvent::Passed);
+        stranger["team_id"] = json!("T1");
+        // Someone not listed runs nothing; the owner is asked to let them in.
+        assert_eq!(
+            slack_event(&routine, &stranger),
+            SlackEvent::Refused {
+                id: "Ev1".into(),
+                ask: AccessAsk {
+                    person: "U2".into(),
+                    name: "U2".into(),
+                    place: "Slack, a mention in channel C".into(),
+                    link: "https://app.slack.com/client/T1/C".into(),
+                },
+            }
+        );
         let bot = slack(
             json!({ "type": "message", "channel_type": "im", "user": "U1", "bot_id": "B", "channel": "D", "ts": "1" }),
         );
@@ -692,7 +768,8 @@ mod tests {
                   "url": "https://linear.app/i2", "creator": person("V", "") }
             ] }
         });
-        let asks = linear_asks(&routine, &data, &["c0".to_owned()]);
+        let read = linear_asks(&routine, &data, &["c0".to_owned()]);
+        let asks = &read.asks;
         let ids: Vec<&str> = asks.iter().map(|ask| ask.id.as_str()).collect();
         assert_eq!(ids, ["c1", "c2", "i2"]);
         let (header, words) = split(&asks[0].line).expect("asked");
@@ -702,5 +779,15 @@ mod tests {
         );
         assert_eq!(words, "From: NA\nIssue: Crash\n\nbot:helper first");
         assert!(asks[2].line.contains("linear:linear-a/i2"));
+        // The stranger asks to be let in, by the e-mail Linear vouches for; the bot's own reply asks nothing.
+        assert_eq!(
+            read.refused,
+            [AccessAsk {
+                person: "s@x.test".into(),
+                name: "NS".into(),
+                place: "Linear, a comment on ".into(),
+                link: String::new(),
+            }]
+        );
     }
 }

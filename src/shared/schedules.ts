@@ -309,6 +309,22 @@ export interface SchedulesState {
 	nextRuns: Record<string, string | null>;
 	/** A webhook routine's recent calls, newest first, by schedule id (`WEBHOOK_CALLS_KEPT` each). */
 	calls?: Record<string, WebhookCall[]>;
+	/** Who asked a bot's connector without being in its `from`, newest first, by schedule id (`answerAsker`). */
+	asking?: Record<string, ConnectorAsker[]>;
+}
+
+/** Someone not in a bot's connector's `from` who asked it (the core's `connectors::AccessAsk`). */
+export interface ConnectorAsker {
+	/** What joins `from` when allowed: a Slack member id, a GitHub login, a Linear e-mail or id. */
+	person: string;
+	name: string;
+	/** Where they asked, in English words from the core (`Slack, a direct message`). */
+	place: string;
+	link?: string;
+	/** ISO time of their latest ask. */
+	at: string;
+	/** The owner declined: kept so a next ask does not ask again. */
+	declined?: boolean;
 }
 
 export type SchedulesRequest =
@@ -326,7 +342,9 @@ export type SchedulesRequest =
 	/** Calls must carry `sender`'s signature made with `secret` (kept by the core, never sent back); null: no signature. */
 	| { action: "setSecret"; id: string; sender: WebhookSender | null; secret?: string }
 	/** Settings' Send test call: the routine's own hook called with a sample body, past the key and signature check. */
-	| { action: "sampleCall"; id: string };
+	| { action: "sampleCall"; id: string }
+	/** The owner's answer to someone asking a bot's connector: allowed, they join its `from`. This computer only. */
+	| { action: "answerAsker"; id: string; person: string; allow: boolean };
 
 /** A new schedule's id as the save that made it reported it, with the state after it. */
 export interface ScheduleCreated {

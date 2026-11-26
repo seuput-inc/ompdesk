@@ -136,17 +136,18 @@ async fn session(
             Some("hello") => context.failure(key, None),
             Some("disconnect") => return Ok(()),
             Some("events_api") => {
-                if let SlackEvent::Asked { id, line } =
-                    connectors::slack_event(event, &envelope["payload"])
-                    && !seen.contains(&id)
-                {
-                    seen.push_back(id);
-                    if seen.len() > SEEN_MAX {
-                        seen.pop_front();
+                match connectors::slack_event(event, &envelope["payload"]) {
+                    SlackEvent::Asked { id, line } if !seen.contains(&id) => {
+                        seen.push_back(id);
+                        if seen.len() > SEEN_MAX {
+                            seen.pop_front();
+                        }
+                        if !context.publish(json!({}), &[line]) {
+                            return Ok(());
+                        }
                     }
-                    if !context.publish(json!({}), &[line]) {
-                        return Ok(());
-                    }
+                    SlackEvent::Refused { ask, .. } => context.access_asked(&[ask]),
+                    _ => {}
                 }
                 if let Some(envelope_id) = envelope.get("envelope_id").and_then(Value::as_str) {
                     let ack = json!({ "envelope_id": envelope_id }).to_string();

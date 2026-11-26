@@ -140,6 +140,8 @@ pub struct Filters {
     contains: Option<String>,
     label: Option<String>,
     ask: Option<String>,
+    /// Who asked a bot's connector without being in `from`, since the last `take_refused`.
+    refused: std::sync::Mutex<Vec<connectors::AccessAsk>>,
 }
 
 impl Filters {
@@ -163,7 +165,18 @@ impl Filters {
             contains: text("contains"),
             label: text("label"),
             ask: text("ask").map(|handle| connectors::keyword(&handle)),
+            refused: Default::default(),
         }
+    }
+
+    /// Who asked without being in `from` (a bot's connector only), each once, since the last call.
+    pub fn take_refused(&self) -> Vec<connectors::AccessAsk> {
+        std::mem::take(
+            &mut *self
+                .refused
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()),
+        )
     }
 
     /// The line a bot's connector run is told of a new row it passed (`ask`): GitHub's place and link and where to
@@ -256,6 +269,30 @@ impl Filters {
                 && (words("title").contains(keyword) || words("body").contains(keyword))
                 && !words("body").contains(&connectors::REPLY_MARK.to_lowercase())
         });
+        if self.ask.is_some() && asked && contains && label && !from && !by.is_empty() {
+            let login = match optional(optional(row, "user"), "login") {
+                Js::Val(Value::String(login)) => login.clone(),
+                _ => by.clone(),
+            };
+            let what = match kind {
+                Kind::Comment => "a comment",
+                Kind::PullRequest => "a new pull request",
+                _ => "a new issue",
+            };
+            let mut refused = self
+                .refused
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            refused.push(connectors::AccessAsk {
+                name: format!("@{login}"),
+                person: login,
+                place: format!("GitHub, {what}"),
+                link: match optional(row, "html_url") {
+                    Js::Val(Value::String(link)) => link.clone(),
+                    _ => String::new(),
+                },
+            });
+        }
         from && contains && label && asked
     }
 }
@@ -1014,6 +1051,17 @@ mod tests {
             .map(|row| filters.pass(Kind::Comment, *row, ""))
             .collect();
         assert_eq!(passed, [true, false, false, false]);
+        // Eve, not listed, asked: the owner is asked to let her in; Ann's own words and replies ask nothing.
+        assert_eq!(
+            filters.take_refused(),
+            [connectors::AccessAsk {
+                person: "eve".into(),
+                name: "@eve".into(),
+                place: "GitHub, a comment".into(),
+                link: "c4".into(),
+            }]
+        );
+        assert!(filters.take_refused().is_empty());
         let line = filters.asked(Kind::Comment, "o/r", rows[0]).expect("asked");
         let (header, words) = connectors::split(&line).expect("split");
         assert_eq!(

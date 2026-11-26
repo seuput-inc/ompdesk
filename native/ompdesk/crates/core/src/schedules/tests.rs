@@ -1341,3 +1341,74 @@ fn a_slack_connector_takes_signed_asks_once_and_answers_slacks_url_check() {
     assert_eq!(play.hook(&id, &slack_call("shh", 0, &stranger)), "ignored");
     assert_eq!(play.launches.len(), 1);
 }
+
+#[test]
+fn someone_not_listed_asks_the_owner_once_and_an_allow_lets_them_in() {
+    let mut play = Play::new(0);
+    let id = slack_routine(&mut play);
+    let ask = |user: &str, event: &str| {
+        format!(
+            r#"{{"type":"event_callback","team_id":"T1","event_id":"{event}","event":{{"type":"app_mention","user":"{user}","channel":"C9","ts":"5.1","text":"<@UB> hi"}}}}"#
+        )
+    };
+    let asking = |play: &Play| {
+        play.engine.state()["asking"][&id]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        play.hook(&id, &slack_call("shh", 0, &ask("U2", "Ev1"))),
+        "ignored"
+    );
+    assert_eq!(
+        play.hook(&id, &slack_call("shh", 0, &ask("U2", "Ev2"))),
+        "ignored"
+    );
+    let waiting = asking(&play);
+    assert_eq!(waiting.len(), 1, "{waiting:?}");
+    assert_eq!(waiting[0]["person"], "U2");
+    assert_eq!(waiting[0]["link"], "https://app.slack.com/client/T1/C9");
+    assert!(play.launches.is_empty());
+    // Declined: their next ask asks nothing.
+    assert_eq!(
+        play.hook(&id, &slack_call("shh", 0, &ask("U3", "Ev3"))),
+        "ignored"
+    );
+    let deny =
+        serde_json::json!({"action": "answerAsker", "id": id, "person": "U3", "allow": false});
+    assert!(play.run(deny).is_ok());
+    assert_eq!(
+        play.hook(&id, &slack_call("shh", 0, &ask("U3", "Ev4"))),
+        "ignored"
+    );
+    let rows = asking(&play);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["person"], "U3");
+    assert_eq!(rows[0]["declined"], true);
+    // Allowed: they join who can ask, and their next ask runs.
+    let allow =
+        serde_json::json!({"action": "answerAsker", "id": id, "person": "U2", "allow": true});
+    assert!(play.run(allow).is_ok());
+    let schedule = play.engine.state()["schedules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|schedule| schedule["id"] == id.as_str())
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        schedule["frequency"]["event"]["from"],
+        serde_json::json!(["U1", "U2"])
+    );
+    assert!(asking(&play).iter().all(|row| row["person"] != "U2"));
+    assert_eq!(
+        play.hook(&id, &slack_call("shh", 0, &ask("U2", "Ev5"))),
+        "fired"
+    );
+    assert_eq!(play.launches.len(), 1);
+    // Asked about again once it is gone: no such request.
+    let again =
+        serde_json::json!({"action": "answerAsker", "id": id, "person": "U2", "allow": true});
+    assert!(play.run(again).is_err());
+}

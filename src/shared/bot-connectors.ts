@@ -9,7 +9,7 @@
  * OS keystore and never sent back to a window, an agent or a log. Linear uses a Settings › Trackers account; GitHub
  * the person's own `gh`.
  */
-import type { Schedule, ScheduleEvent } from "./schedules";
+import type { ConnectorAsker, Schedule, ScheduleEvent, SchedulesState } from "./schedules";
 
 export const BOT_CONNECTOR_SERVICES = ["slack", "github", "linear", "google"] as const;
 export type BotConnectorService = (typeof BOT_CONNECTOR_SERVICES)[number];
@@ -117,6 +117,31 @@ export function connectorOf(schedule: Schedule): BotConnector | null {
 		default:
 			return null;
 	}
+}
+
+/** Someone waiting for the owner to let them ask through one of the bot's connectors. */
+export interface WaitingAsker {
+	connector: Extract<BotConnector, { from: string[] }>;
+	asker: ConnectorAsker;
+}
+
+/**
+ * The access asks of these schedules still waiting on the owner (Orca's Request access, `bot-access-request.ts`): not
+ * declined, and not let in since (a person the connector now lists, or a connector open to anyone), newest first.
+ */
+export function waitingAskers(schedules: readonly Schedule[], asking: SchedulesState["asking"]): WaitingAsker[] {
+	const waiting: WaitingAsker[] = [];
+	for (const schedule of schedules) {
+		const connector = connectorOf(schedule);
+		if (!connector || connector.service === "google" || connector.service === "gmail") continue;
+		const from = connector.from.map(person => person.trim().toLowerCase());
+		if (from.includes(ANYONE)) continue;
+		for (const asker of asking?.[schedule.id] ?? []) {
+			if (asker.declined || from.includes(asker.person.toLowerCase())) continue;
+			waiting.push({ connector, asker });
+		}
+	}
+	return waiting.toSorted((a, b) => Date.parse(b.asker.at) - Date.parse(a.asker.at));
 }
 
 /**

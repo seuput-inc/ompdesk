@@ -48,6 +48,8 @@ const KEY_OVERLAP_MS: i64 = DAY_MS;
 const FOLD_MS: i64 = 60_000;
 /// The longest signing secret kept.
 const SECRET_MAX_CHARS: usize = 500;
+/// People a bot's connector remembers asking to be let in (open or declined), newest first.
+const ASKERS_KEPT: usize = 20;
 
 /// Whether an answer is a quiet result: its last non-empty line, Markdown dressing aside (a heading's or a list's
 /// mark, `*`, `_`, backticks, `~` around it, a period after it), is `NO_REPLY`. The same rule as `isQuietResult` in
@@ -256,6 +258,9 @@ pub struct Engine {
     settle_until: i64,
     /// A webhook routine's recent calls, newest first, by schedule id (`SchedulesState.calls`).
     calls: HashMap<String, Vec<Object>>,
+    /// Who asked a bot's connector without being in its `from`, newest first, by schedule id
+    /// (`SchedulesState.asking`): `{person, name, place, link?, at, declined?}`.
+    asking: HashMap<String, Vec<Object>>,
     /// The delivery ids each webhook routine took, oldest first (FX4).
     delivered: HashMap<String, VecDeque<String>>,
     /// Where a firing call's body is saved (the run logs' folder); none in a test.
@@ -419,6 +424,7 @@ impl Engine {
             closed: false,
             settle_until: 0,
             calls: HashMap::new(),
+            asking: HashMap::new(),
             delivered: HashMap::new(),
             hook_dir: None,
             call_seq: 0,
@@ -471,7 +477,8 @@ impl Engine {
         self.paused = paused;
         self.schedules = schedules;
         self.runs = runs;
-        self.calls = self.read_calls(stored);
+        self.calls = self.read_per_schedule(stored, "calls", CALLS_KEPT);
+        self.asking = self.read_per_schedule(stored, "asking", ASKERS_KEPT);
         let ended = Value::String(rules::iso(now));
         for run in &mut self.runs {
             if text(run, "status") == Some("running") {
@@ -648,48 +655,56 @@ impl Engine {
             "runs": self.runs,
             "nextRuns": next_runs,
         });
-        if let Some(calls) = self.calls_value() {
+        if let Some(calls) = self.per_schedule(&self.calls) {
             state["calls"] = calls;
+        }
+        if let Some(asking) = self.per_schedule(&self.asking) {
+            state["asking"] = asking;
         }
         state
     }
 
-    /// The recent webhook calls by schedule, in the schedules' order; none while no routine has one.
-    fn calls_value(&self) -> Option<Value> {
-        let calls: Object = self
+    /// A record kept by schedule (recent calls, access asks), in the schedules' order; none while no routine has one.
+    fn per_schedule(&self, map: &HashMap<String, Vec<Object>>) -> Option<Value> {
+        let kept: Object = self
             .schedules
             .iter()
             .filter_map(|schedule| {
                 let id = id_of(schedule);
-                let calls = self.calls.get(id).filter(|calls| !calls.is_empty())?;
-                Some((id.to_owned(), json!(calls)))
+                let rows = map.get(id).filter(|rows| !rows.is_empty())?;
+                Some((id.to_owned(), json!(rows)))
             })
             .collect();
-        (!calls.is_empty()).then_some(Value::Object(calls))
+        (!kept.is_empty()).then_some(Value::Object(kept))
     }
 
-    /// The recent calls a journal kept, for the routines it holds.
-    fn read_calls(&self, stored: Option<&str>) -> HashMap<String, Vec<Object>> {
+    /// A record by schedule a journal kept under `key`, for the routines it holds, at most `keep` rows each.
+    fn read_per_schedule(
+        &self,
+        stored: Option<&str>,
+        key: &str,
+        keep: usize,
+    ) -> HashMap<String, Vec<Object>> {
         let Some(parsed) = stored.and_then(|stored| {
             serde_json::from_str::<Value>(&crate::json::whole_surrogates(stored)).ok()
         }) else {
             return HashMap::new();
         };
-        let Some(kept) = parsed.get("calls").and_then(Value::as_object) else {
+        let Some(kept) = parsed.get(key).and_then(Value::as_object) else {
             return HashMap::new();
         };
         kept.iter()
             .filter(|(id, _)| self.find(id).is_some())
-            .map(|(id, calls)| {
-                let calls = calls
+            .map(|(id, rows)| {
+                let rows = rows
                     .as_array()
                     .into_iter()
                     .flatten()
                     .filter_map(Value::as_object)
-                    .take(CALLS_KEPT)
+                    .take(keep)
                     .cloned()
                     .collect();
-                (id.clone(), calls)
+                (id.clone(), rows)
             })
             .collect()
     }
@@ -701,8 +716,11 @@ impl Engine {
             "schedules": self.schedules,
             "runs": self.runs,
         });
-        if let Some(calls) = self.calls_value() {
+        if let Some(calls) = self.per_schedule(&self.calls) {
             stored["calls"] = calls;
+        }
+        if let Some(asking) = self.per_schedule(&self.asking) {
+            stored["asking"] = asking;
         }
         // `JSON.stringify(stored, null, 2)`.
         serde_json::to_string_pretty(&stored).unwrap_or_default()
@@ -726,6 +744,89 @@ impl Engine {
             && !self.paused
             && !self.closed)
             .then_some(at)
+    }
+
+    /// Someone not in a bot's connector's `from` asked it (`connectors::AccessAsk`): the owner sees them on the bot's
+    /// Needs you until they allow or decline (`answerAsker`). Asking again moves them to the top; a declined person
+    /// is not asked about again; someone listed since asks nothing. Whether anything changed.
+    pub(crate) fn access_asked(&mut self, id: &str, asks: &[connectors::AccessAsk]) -> bool {
+        let Some(at) = self.find(id) else {
+            return false;
+        };
+        let from = self.schedules[at]
+            .get("frequency")
+            .and_then(|frequency| frequency.get("event"))
+            .map(connectors::people)
+            .unwrap_or_default();
+        let at_iso = rules::iso(self.now);
+        let rows = self.asking.entry(id.to_owned()).or_default();
+        let mut changed = false;
+        for ask in asks {
+            if ask.person.is_empty() || connectors::allowed(&from, &[&ask.person]) {
+                continue;
+            }
+            let known = rows.iter().position(|row| {
+                text(row, "person").is_some_and(|person| person.eq_ignore_ascii_case(&ask.person))
+            });
+            if let Some(known) = known {
+                if rules::truthy(rows[known].get("declined")) {
+                    continue;
+                }
+                rows.remove(known);
+            }
+            let Value::Object(mut row) = json!(ask) else {
+                continue;
+            };
+            row.insert("at".into(), at_iso.clone().into());
+            rows.insert(0, row);
+            rows.truncate(ASKERS_KEPT);
+            changed = true;
+        }
+        changed
+    }
+
+    /// `access_asked` from a routine's trigger, told at once.
+    pub(crate) fn asked_access(&mut self, id: &str, asks: &[connectors::AccessAsk], now: i64) {
+        self.now = now;
+        if self.access_asked(id, asks) {
+            self.changed();
+        }
+    }
+
+    /// The owner's answer to someone asking a bot's connector (`answerAsker`): allowed, they join its `from`
+    /// (Orca `grantAccessRequest`, `bot-access-request.ts:95-107`) and the routine's trigger restarts with them;
+    /// declined, they stay remembered so their next ask does not ask the owner again.
+    fn answer_asker(&mut self, at: usize, person: &str, allow: bool) -> Result<(), Fault> {
+        let id = id_of(&self.schedules[at]).to_owned();
+        let rows = self.asking.entry(id).or_default();
+        let known = rows
+            .iter()
+            .position(|row| text(row, "person") == Some(person))
+            .ok_or_else(|| fault("That request is no longer waiting"))?;
+        if !allow {
+            rows[known].insert("declined".into(), true.into());
+            return Ok(());
+        }
+        rows.remove(known);
+        let event = self.schedules[at]
+            .get_mut("frequency")
+            .and_then(|frequency| frequency.get_mut("event"))
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| fault("Only a bot's connector takes people"))?;
+        let from = event
+            .entry("from")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if let Value::Array(from) = from
+            && !from.iter().any(|known| {
+                known.as_str().is_some_and(|known| {
+                    known.eq_ignore_ascii_case(person) || known == connectors::ANYONE
+                })
+            })
+        {
+            from.push(person.into());
+        }
+        self.reschedule(at);
+        Ok(())
     }
 
     /// An event schedule's trigger fired (`detail`: one English line saying what happened). Starts a run now, or keeps
@@ -856,10 +957,19 @@ impl Engine {
             self.changed();
             return "off";
         };
-        let SlackEvent::Asked { id: event_id, line } = connectors::slack_event(event, &body) else {
-            self.log_call(id, "ignored", None, None, false);
-            self.changed();
-            return "ignored";
+        let (event_id, line) = match connectors::slack_event(event, &body) {
+            SlackEvent::Asked { id, line } => (id, line),
+            SlackEvent::Refused { ask, .. } => {
+                self.log_call(id, "ignored", Some("not in who can ask"), None, false);
+                self.access_asked(id, &[ask]);
+                self.changed();
+                return "ignored";
+            }
+            SlackEvent::Passed => {
+                self.log_call(id, "ignored", None, None, false);
+                self.changed();
+                return "ignored";
+            }
         };
         let delivery = format!("event:{event_id}");
         let seen = self.delivered.entry(id.to_owned()).or_default();
@@ -1225,6 +1335,14 @@ impl Engine {
             Some("setSecret") => {
                 let at = named(self)?;
                 self.set_secret(at, request.get("sender"), request.get("secret"))?;
+            }
+            Some("answerAsker") => {
+                let at = named(self)?;
+                let person = request
+                    .get("person")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                self.answer_asker(at, person, request.get("allow") == Some(&Value::Bool(true)))?;
             }
             Some("sampleCall") => {
                 let at = named(self)?;
@@ -2318,6 +2436,7 @@ impl Engine {
         self.pending.remove(&id);
         self.chain.remove(&id);
         self.delivered.remove(&id);
+        self.asking.remove(&id);
         if let Some(calls) = self.calls.remove(&id) {
             self.remove_bodies(calls.iter().map(|call| id_of(call).to_owned()).collect());
         }

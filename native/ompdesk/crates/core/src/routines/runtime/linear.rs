@@ -58,7 +58,8 @@ pub(super) async fn run(
         match read {
             Ok(data) => {
                 context.failure(&key, None);
-                let asks = connectors::linear_asks(event, &data, &seen);
+                let connectors::LinearRead { asks, refused } =
+                    connectors::linear_asks(event, &data, &seen);
                 for path in ["/comments/nodes", "/issues/nodes"] {
                     for node in data
                         .pointer(path)
@@ -81,6 +82,7 @@ pub(super) async fn run(
                 if !context.publish(json!({ "since": since, "seen": seen }), &lines) {
                     return;
                 }
+                context.access_asked(&refused);
             }
             Err(error) => context.failure(&key, Some(&error)),
         }
