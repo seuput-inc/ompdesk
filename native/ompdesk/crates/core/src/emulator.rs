@@ -83,9 +83,11 @@ async fn run(bin: &str, args: &[&str], path: &str, max: usize) -> Result<Vec<u8>
     let finished = async {
         let mut out = Vec::new();
         let mut err = Vec::new();
+        let mut out_limited = (&mut stdout).take(max as u64 + 1);
+        let mut err_limited = (&mut stderr).take(64 * 1024);
         let (read, _) = tokio::join!(
-            (&mut stdout).take(max as u64 + 1).read_to_end(&mut out),
-            (&mut stderr).take(64 * 1024).read_to_end(&mut err),
+            out_limited.read_to_end(&mut out),
+            err_limited.read_to_end(&mut err),
         );
         read.map_err(|error| failed(error.to_string()))?;
         if out.len() > max {
