@@ -1621,9 +1621,24 @@ async fn an_item_reads_stale_snoozed_and_limited_from_what_it_links() {
         json!({ "at": 1_800_000_000_000.0, "attempt": 1, "limit": true });
     crate::ports::apply_state(control.host.port(), 1, &world.to_string()).unwrap();
     let read = control.read_item(&control.host.state(), Some(&bot), &item, now);
-    assert_eq!(read.stale, Some(true));
+    // A snoozed item is never stale.
+    assert_eq!(read.stale, None);
     assert!(item.snoozed(now));
     assert_eq!(read.links[0].state.as_deref(), Some("done"));
+    // Awake, In progress with no live worker, it is; Planned waits three times as long; Needs you does not wait.
+    let awake = |status: &str| crate::agentctl::journal::items::ItemRecord {
+        status: status.into(),
+        snoozed_until: None,
+        ..item.clone()
+    };
+    let stale = |status: &str| {
+        control
+            .read_item(&control.host.state(), Some(&bot), &awake(status), now)
+            .stale
+    };
+    assert_eq!(stale("working"), Some(true));
+    assert_eq!(stale("planned"), None);
+    assert_eq!(stale("needs_you"), Some(true));
     assert_eq!(
         read.limit_until.as_deref(),
         Some(&*crate::aimemory::value::iso(1_800_000_000_000))
@@ -1852,4 +1867,260 @@ async fn the_owners_create_carries_the_purpose_and_a_refused_seed_makes_no_bot()
         .await
         .unwrap();
     assert_eq!(soul["content"], json!("# Rex\n\nReviews pull requests.\n"));
+}
+
+#[tokio::test]
+async fn an_answer_names_its_question_and_a_resent_comment_posts_once() {
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let (control, _, bot_id) = ada(9_720, &root, mails.clone(), |_, _| None).await;
+    let tool = |args: Value| control.run("bot1", "ompdesk_item", args, None);
+    assert!(
+        !tool(json!({ "action": "add", "title": "Plan the trip" }))
+            .await
+            .is_error
+    );
+    let out = tool(json!({
+        "action": "set",
+        "item": "1",
+        "ask": "Two things first.",
+        "asks": [
+            { "question": "Which day?", "options": ["Mon", "Tue"], "recommended": 1 },
+            { "question": "Who comes?", "options": ["Ann", "Bo"], "multi": true }
+        ]
+    }))
+    .await;
+    assert!(!out.is_error, "{}", out.text);
+    let item = control.items().find(&bot_id, "1").cloned().unwrap();
+    let question = item.question.clone().unwrap();
+    assert_eq!(item.status, "needs_you");
+    assert_eq!(question.decisions.len(), 2);
+    let asked = item
+        .events
+        .iter()
+        .rfind(|event| event.kind == "asked")
+        .unwrap();
+    assert_eq!(
+        question.id, asked.id,
+        "the question names the event that asked it"
+    );
+    assert!(asked.text.as_deref().unwrap().contains("2. Who comes?"));
+    // A comment sent twice with one request id is one comment and one mail.
+    for _ in 0..2 {
+        control
+            .bots_command(
+                json!({ "action": "item", "id": item.id, "comment": "soon", "requestId": "r1" }),
+            )
+            .await
+            .unwrap();
+    }
+    let commented = control.items().get(&item.id).cloned().unwrap();
+    assert_eq!(commented.version, item.version + 1);
+    assert_eq!(
+        delivered(&mails, &format!("item-{}-v{}", item.id, commented.version)),
+        1
+    );
+    // The bot asks again: an answer to the first question is refused and writes nothing.
+    tool(
+        json!({ "action": "set", "item": "1", "ask": "Rather Friday?", "options": ["Yes", "No"] }),
+    )
+    .await;
+    let again = control.items().get(&item.id).cloned().unwrap();
+    assert_ne!(again.question.as_ref().unwrap().id, question.id);
+    let state = control
+        .bots_command(json!({ "action": "item", "id": item.id, "answer": { "text": "Mon", "question": question.id } }))
+        .await
+        .unwrap();
+    assert_eq!(state["refused"], json!("question_changed"));
+    assert_eq!(
+        control.items().get(&item.id).unwrap().version,
+        again.version
+    );
+    // An answer to the question it names goes through and starts a turn.
+    let state = control
+        .bots_command(json!({ "action": "item", "id": item.id, "answer": { "choice": 0, "question": again.question.as_ref().unwrap().id } }))
+        .await
+        .unwrap();
+    assert_eq!(state.get("refused"), None);
+    let answered = control.items().get(&item.id).cloned().unwrap();
+    assert_eq!(answered.status, "working");
+    let event = answered
+        .events
+        .iter()
+        .rfind(|event| event.kind == "answered")
+        .unwrap();
+    assert_eq!(event.text.as_deref(), Some("Yes"));
+    assert_eq!(
+        event.question,
+        again.question.as_ref().map(|question| question.id)
+    );
+    assert_eq!(
+        delivered(&mails, &format!("item-{}-v{}", item.id, answered.version)),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_move_of_several_items_is_one_mail_and_waiting_says_what_it_waits_on() {
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let (control, asked, bot_id) = ada(9_721, &root, mails.clone(), |_, _| None).await;
+    for title in ["One", "Two"] {
+        control
+            .run(
+                "bot1",
+                "ompdesk_item",
+                json!({ "action": "add", "title": title }),
+                None,
+            )
+            .await;
+    }
+    let id = |number: &str| control.items().find(&bot_id, number).unwrap().id.clone();
+    let (one, two) = (id("1"), id("2"));
+    control
+        .bots_command(json!({ "action": "item", "ids": [one, two], "status": "waiting", "wait": "the vendor" }))
+        .await
+        .unwrap();
+    for id in [&one, &two] {
+        let item = control.items().get(id).cloned().unwrap();
+        assert_eq!(item.status, "waiting");
+        assert_eq!(item.wait.as_ref().unwrap().text, "the vendor");
+        let moved = item
+            .events
+            .iter()
+            .rfind(|event| event.kind == "status")
+            .unwrap();
+        assert_eq!(moved.from.as_deref(), Some("planned"));
+        assert_eq!(moved.note.as_deref(), Some("the vendor"));
+    }
+    let mailed: Vec<Value> = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(method, _)| method == "mail")
+        .map(|(_, args)| args.clone())
+        .collect();
+    assert_eq!(mailed.len(), 1, "one mail for both items");
+    assert_eq!(
+        mailed[0]["details"]["id"],
+        json!(format!("item-{one}-v2+2"))
+    );
+    // Waiting again edits what it waits on.
+    control
+        .bots_command(json!({ "action": "item", "id": one, "status": "waiting", "wait": "QA" }))
+        .await
+        .unwrap();
+    let item = control.items().get(&one).cloned().unwrap();
+    assert_eq!(item.wait.as_ref().unwrap().text, "QA");
+    let edit = item
+        .events
+        .iter()
+        .rfind(|event| event.kind == "status")
+        .unwrap();
+    assert_eq!(
+        (edit.from.as_deref(), edit.note.as_deref()),
+        (Some("waiting"), Some("QA"))
+    );
+    // A snooze alone keeps the status and mails nobody; opening the Items tab moves the seen mark.
+    let before = mails.lock().unwrap().len();
+    control
+        .bots_command(json!({ "action": "item", "id": two, "snoozeUntil": "2099-01-01T09:00:00Z" }))
+        .await
+        .unwrap();
+    assert_eq!(mails.lock().unwrap().len(), before);
+    assert_eq!(control.items().get(&two).unwrap().status, "waiting");
+    control
+        .bots_command(json!({ "action": "itemsOpened", "id": bot_id }))
+        .await
+        .unwrap();
+    let newest = control.items().newest_event(&bot_id);
+    assert!(newest > 0);
+    assert_eq!(control.bot_named("Ada").unwrap().items_seen, newest);
+}
+
+#[tokio::test]
+async fn a_room_asks_the_members_its_reply_mode_names_and_a_member_answers_with_ompdesk_room() {
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let (control, _, ada_id) = ada(9_722, &root, mails.clone(), |_, _| None).await;
+    assert!(
+        !run(
+            &control,
+            "ompdesk_bot",
+            json!({ "action": "create", "name": "Bo" })
+        )
+        .await
+        .1
+    );
+    let state = control
+        .bots_command(json!({ "action": "roomCreate", "name": "Team", "bots": ["Ada", "Bo"] }))
+        .await
+        .unwrap();
+    let room = state["rooms"][0].clone();
+    let room_id = room["id"].as_str().unwrap().to_owned();
+    assert_eq!(room["replyMode"], json!("all"));
+    assert_eq!(room["members"].as_array().unwrap().len(), 2);
+    // The owner's post asks everyone; Bo has no chat yet, so its ask fails and says why. A resend posts once.
+    for _ in 0..2 {
+        control
+            .bots_command(
+                json!({ "action": "roomPost", "id": room_id, "text": "Plans?", "messageId": "m1" }),
+            )
+            .await
+            .unwrap();
+    }
+    let room = control.rooms().find(&room_id).cloned().unwrap();
+    assert_eq!(room.messages.len(), 1);
+    let turns = &room.messages[0].turns;
+    assert_eq!(
+        turns
+            .iter()
+            .map(|turn| turn.state.as_str())
+            .collect::<Vec<_>>(),
+        ["asked", "failed"]
+    );
+    assert_eq!(delivered(&mails, &format!("room-{room_id}-1-{ada_id}")), 1);
+    // Ada answers in the room, handing over to Bo by name.
+    let out = control
+        .run(
+            "bot1",
+            "ompdesk_room",
+            json!({ "action": "post", "room": "team", "text": "Ask @Bo." }),
+            None,
+        )
+        .await;
+    assert!(
+        !out.is_error && out.text.contains("asked Bo"),
+        "{}",
+        out.text
+    );
+    let room = control.rooms().find(&room_id).cloned().unwrap();
+    assert_eq!(room.messages[0].turns[0].state, "replied");
+    assert_eq!(room.messages[1].author, ada_id);
+    assert_eq!(room.messages[1].hops, 1);
+    let listed = control
+        .run("bot1", "ompdesk_room", json!({ "action": "list" }), None)
+        .await;
+    assert!(
+        listed.text.contains("Team") && listed.text.contains("with Bo"),
+        "{}",
+        listed.text
+    );
+    // Only @mentions: a post naming nobody asks nobody.
+    control
+        .bots_command(json!({ "action": "roomUpdate", "id": room_id, "replyMode": "mentions" }))
+        .await
+        .unwrap();
+    control
+        .bots_command(json!({ "action": "roomPost", "id": room_id, "text": "FYI" }))
+        .await
+        .unwrap();
+    assert!(
+        control.rooms().find(&room_id).unwrap().messages[2]
+            .turns
+            .is_empty()
+    );
+    // A session that is no bot's chat has no rooms.
+    let (text, is_error) = run(&control, "ompdesk_room", json!({ "action": "list" })).await;
+    assert!(is_error && text.contains("works in a bot's chat"), "{text}");
 }

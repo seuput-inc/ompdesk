@@ -1141,6 +1141,13 @@ impl AgentControl {
         if outcome == Posted::Delivered {
             self.arrive(&to);
         }
+        // A session a bot's item links says how its work ended: the item's Activity shows it.
+        if to_parent
+            && matches!(outcome, Posted::Delivered | Posted::Queued)
+            && (kind_name == "done" || kind_name == "blocked")
+        {
+            self.item_worker_report(caller, kind_name, &args.text);
+        }
         if let Some(parent) = &parent {
             self.host.review_changed(parent);
         }

@@ -53,6 +53,11 @@ const BOT_NAME_MAX = 80;
 const ITEM_TITLE_MAX = 200;
 const ITEM_DESCRIPTION_MAX = 20_000;
 const ITEM_TEXT_MAX = 8_000;
+/** Questions one ask holds and one question's words, at most (`DECISIONS_MAX`, `DECISION_MAX` in the core). */
+const ITEM_ASKS_MAX = 5;
+const ITEM_ASK_MAX = 500;
+/** One room post, at most (`POST_MAX` in the core's `work/rooms.rs`). */
+const ROOM_POST_MAX = 20_000;
 
 const SESSION = {
 	type: "string",
@@ -763,7 +768,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Bot item",
 		description:
 			"Keep a bot's work and its questions to the owner as items (a bot's chat only).\n" +
-			"Items are what a bot works on for its owner and what it needs from them, numbered per bot; the owner sees them on the Bots page. add {title, description?, done_means?, status?} (status planned by default); set {item, …}: status (planned, working, waiting, needs_you, done, canceled), title, description, ask with options and recommended (a question only the owner can answer: the item waits on them, and their answer arrives here as a message that starts a turn), wait and until (what it waits on outside you and the owner), snooze_until (hidden until then; \"\" wakes it); comment {item, text}; done {item, note?} and cancel {item, note?} close it (a line goes into memory/journal/YYYY-MM.md in the bot's folder); link {item, url | file | session | pr}; list {status?} (open ones by default); show {item}. item is its number or id. The owner's changes reach you as notes, once each. See skill://ompdesk/references/bots.md.",
+			"Items are what a bot works on for its owner and what it needs from them, numbered per bot; the owner sees them on the Bots page. add {title, description?, done_means?, status?} (status planned by default); set {item, …}: status (planned, working, waiting, needs_you, done, canceled), title, description, ask with options and recommended (a question only the owner can answer: the item waits on them, and their answer arrives here as a message that starts a turn), or asks (up to 5 questions at once, each with its options; ask is then the words around them), wait and until (what it waits on outside you and the owner), snooze_until (hidden until then; \"\" wakes it); comment {item, text}; done {item, note?} and cancel {item, note?} close it (a line goes into memory/journal/YYYY-MM.md in the bot's folder); link {item, url | file | session | pr}; list {status?} (open ones by default); show {item}. item is its number or id. The owner's changes reach you as notes, once each. See skill://ompdesk/references/bots.md.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -808,6 +813,40 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				file: { type: "string", description: "link: an absolute path." },
 				session: { type: "string", description: "link: a session (id or tab id)." },
 				pr: { type: "string", description: "link: a pull request URL or owner/repo#n." },
+				asks: {
+					type: "array",
+					maxItems: ITEM_ASKS_MAX,
+					description: "set: several questions for the owner at once; the item becomes needs_you.",
+					items: {
+						type: "object",
+						properties: {
+							question: { type: "string", maxLength: ITEM_ASK_MAX },
+							options: { type: "array", maxItems: 8, items: { type: "string" } },
+							recommended: { type: "integer", minimum: 0, description: "The option you recommend (0-based)." },
+							multi: { type: "boolean", description: "The owner may pick several options." },
+						},
+						required: ["question"],
+						additionalProperties: false,
+					},
+				},
+			},
+			required: ["action"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: T.room,
+		label: "Bot room",
+		description:
+			"Talk with the other bots of a group and its owner in the group's room (a bot's chat only).\n" +
+			"A group is bots the owner put together; its room is where the owner posts and members answer. When the owner's post or another member's @mention asks you, a message says so: answer with post {room, text}, or post nothing when you have nothing to add. @Name in your post asks that member to answer too. list shows your groups; read {room, limit?} shows the newest posts (20 by default). room is its id or name. See skill://ompdesk/references/bots.md.",
+		parameters: {
+			type: "object",
+			properties: {
+				action: { type: "string", enum: ["list", "read", "post"] },
+				room: { type: "string", description: "read, post: the room's id or its group's name." },
+				text: { type: "string", maxLength: ROOM_POST_MAX, description: "post: what you say in the room." },
+				limit: { type: "integer", minimum: 1, maximum: 200, description: "read: how many of the newest posts." },
 			},
 			required: ["action"],
 			additionalProperties: false,
@@ -1212,6 +1251,28 @@ export const ARGS = {
 			file: z.string().trim().min(1).max(4096).optional(),
 			session: sessionArg.optional(),
 			pr: z.string().trim().min(1).max(4096).optional(),
+			asks: z
+				.array(
+					z
+						.object({
+							question: z.string().trim().min(1).max(ITEM_ASK_MAX),
+							options: z.array(z.string().trim().min(1).max(200)).max(8).optional(),
+							recommended: z.number().int().min(0).max(7).optional(),
+							multi: z.boolean().optional(),
+						})
+						.strict(),
+				)
+				.min(1)
+				.max(ITEM_ASKS_MAX)
+				.optional(),
+		})
+		.strict(),
+	[T.room]: z
+		.object({
+			action: z.enum(["list", "read", "post"]),
+			room: z.string().trim().min(1).max(200).optional(),
+			text: z.string().trim().min(1).max(ROOM_POST_MAX).optional(),
+			limit: z.number().int().min(1).max(200).optional(),
 		})
 		.strict(),
 } as const;
