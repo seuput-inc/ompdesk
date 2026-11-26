@@ -8108,6 +8108,7 @@ export const en: Record<string, string> = {
 	"bots.chats.deleteFailed": "Couldn't delete the chat",
 	"bots.chats.replying": "Replying…",
 	"bots.chats.open": "Open",
+	"bots.settings.listTitle": "Bot list",
 	"bots.settings.sectionDescription": "This computer's bots. Each one's settings are also on its page.",
 	"bots.settings.showInSidebar": "Show bots in the sidebar",
 	"bots.settings.showInSidebarHint": "On this device. Off, a bot's chats list under its folder like a project's.",

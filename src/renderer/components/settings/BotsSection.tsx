@@ -47,7 +47,7 @@ export function BotsSection() {
 			description={t("bots.settings.sectionDescription")}
 			id="settings-bots"
 			scope="app"
-			title={t("destination.bots")}
+			title={t("bots.settings.listTitle")}
 		>
 			<SwitchField
 				checked={shown}

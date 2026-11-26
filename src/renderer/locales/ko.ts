@@ -8083,6 +8083,7 @@ export const ko: Record<string, string> = {
 	"bots.chats.deleteFailed": "채팅을 삭제하지 못했어요",
 	"bots.chats.replying": "답하는 중…",
 	"bots.chats.open": "열림",
+	"bots.settings.listTitle": "봇 목록",
 	"bots.settings.sectionDescription": "이 컴퓨터의 봇이에요. 각 봇의 설정은 봇 페이지에도 있어요.",
 	"bots.settings.showInSidebar": "사이드바에 봇 보이기",
 	"bots.settings.showInSidebarHint": "이 기기에만 적용돼요. 끄면 봇의 채팅이 프로젝트처럼 폴더 아래에 보여요.",
