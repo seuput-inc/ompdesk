@@ -569,10 +569,26 @@ export type RpcCommand =
 			branch?: { name: string; mode: "new" | "local" | "remote"; remote?: string; from?: string };
 			/** One per dialog opening: a retried request (an answer lost on the way) gets the same worktree, never a second one. */
 			requestId?: string;
+			/** A preset of the repository's `.ompdesk/sparse`: only its folders are checked out. */
+			sparse?: string;
+			/** False: no seed or setup hook now; the caller runs `worktree_prepare` as its own step. */
+			prepare?: boolean;
 	  }
 	| { id?: string; type: "worktree_remove"; path: string; force?: boolean }
 	// The worktree dialog fetches the remote default branch when it opens, so a `default`-based create finds it fresh.
 	| { id?: string; type: "worktree_prefetch"; baseCwd?: string }
+	// The seed and setup hook of a worktree `worktree_create {prepare: false}` made (`RpcWorktreePrepared`).
+	| { id?: string; type: "worktree_prepare"; baseCwd: string; path: string }
+	// The repository's sparse checkout presets (`RpcSparsePreset[]`).
+	| { id?: string; type: "worktree_sparse_presets"; baseCwd?: string }
+	// A setup hook drafted from another tool's config, when the repository has none (`RpcSetupDraft | null`).
+	| { id?: string; type: "worktree_setup_draft"; baseCwd?: string }
+	// Saves the person's setup hook in the main checkout; refused (`setup_exists`) over an existing one.
+	| { id?: string; type: "worktree_setup_save"; baseCwd?: string; text: string }
+	// A short name for a new task from its first prompt, by the session's title model (`{title: string | null}`).
+	| { id?: string; type: "worktree_name_suggest"; text: string }
+	// The tab's own placeholder branch renamed while never published (`{branch: string | null}`, FS91).
+	| { id?: string; type: "worktree_rename_branch"; from: string; to: string }
 	// Orphaned worktrees: OMPdesk-made linked worktrees no open session uses, listed for the repository of the tab's
 	// cwd; removal re-checks everything and only takes a landed or untouched one (`LocalCommandError` codes
 	// `not_orphan`, `not_removable`).
@@ -1403,6 +1419,27 @@ export interface RpcWorktreeCreateResult {
 	setup?: WorktreeSetupReport;
 	/** Present for base `default`: what fetching the remote default branch first brought, or why it could not. */
 	base?: WorktreeBaseFetch;
+}
+
+/** worktree_prepare: what the seed and the setup hook did (each absent when the repository has neither file). */
+export type RpcWorktreePrepared = Pick<RpcWorktreeCreateResult, "seed" | "setup">;
+
+/** worktree_sparse_presets: one `[name]` of the repository's `.ompdesk/sparse` and its folders. */
+export interface RpcSparsePreset {
+	name: string;
+	folders: string[];
+}
+
+/**
+ * worktree_setup_draft: a setup hook drafted from another tool's config (`source`, read from `file` in the main
+ * checkout): its `commands`, and the hook's text for the computer it would run on, saved as `script`.
+ */
+export interface RpcSetupDraft {
+	source: string;
+	file: string;
+	commands: string[];
+	script: string;
+	text: string;
 }
 
 /** `ref`: `origin/<default>`; `behind`: commits the fetch brought (`subjects`: the newest three); `fetched` false when a fetch under 30 s old was reused or it failed. */

@@ -127,6 +127,13 @@ export interface GuiDisplayPreferences {
 	mobileEnterSends?: boolean | null;
 }
 
+/** What opens the new task sheet with: its project, and a name and first prompt to start from. */
+export interface NewTaskSheetContext {
+	baseCwd?: string;
+	name?: string;
+	prompt?: string;
+}
+
 interface UiStore {
 	displayPreferences: GuiDisplayPreferences;
 	sidebarVisible: boolean;
@@ -222,10 +229,9 @@ interface UiStore {
 	/** A provider whose card Providers & accounts should show: it scrolls to the card and clears this. A new object per ask, so asking again for the same provider shows it again. */
 	providerFocus: { id: string } | null;
 	renameDialogOpen: boolean;
-	/** Worktree-create dialog (plan/20): non-null opens it; baseCwd pins the
-	 * repo when invoked from a Sidebar group (default = active session cwd); `name` fills in a name typed elsewhere
-	 * (the session picker's create row). */
-	worktreeDialog: { baseCwd?: string; name?: string } | null;
+	/** The new task sheet (`dialogs/WorktreeDialog.tsx`): non-null opens it. `baseCwd` pins the project (a Sidebar
+	 * group; default the active session's folder); `name` and `prompt` fill it (a GitHub issue or pull request). */
+	worktreeDialog: NewTaskSheetContext | null;
 	/** Close-time cleanup prompt for a worktree-bound tab (plan/20): the tab
 	 * awaiting the user's delete/keep decision before closeTab proceeds. */
 	worktreeClosePrompt: { tabId: string } | null;
@@ -381,7 +387,7 @@ interface UiStore {
 	closeProviderForm: () => void;
 	openRenameDialog: () => void;
 	closeRenameDialog: () => void;
-	openWorktreeDialog: (context?: { baseCwd?: string; name?: string }) => void;
+	openWorktreeDialog: (context?: NewTaskSheetContext) => void;
 	closeWorktreeDialog: () => void;
 	openWorktreeClosePrompt: (tabId: string) => void;
 	closeWorktreeClosePrompt: () => void;

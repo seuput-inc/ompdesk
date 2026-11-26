@@ -897,7 +897,7 @@ const DIALOG_FLAGS: ReadonlyArray<{ id: string; action: string; args?: unknown[]
 	{ id: "dialog-benchmark", action: "openBenchmark", title: "Model benchmark" },
 	{ id: "dialog-model-setup", action: "openModelSetup", title: "Model setup assistant" },
 	{ id: "dialog-debug", action: "openDebug", title: "Debug console" },
-	{ id: "dialog-worktree", action: "openWorktreeDialog", title: "New worktree" },
+	{ id: "dialog-worktree", action: "openWorktreeDialog", title: "New task" },
 ];
 
 /**

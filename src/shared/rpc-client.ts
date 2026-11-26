@@ -95,10 +95,28 @@ export interface SessionRpcClient {
 	getGitDiff(path: string, against?: string): Promise<RpcResponse>;
 	worktreeCreate(
 		name: string,
-		options?: { baseCwd?: string; baseRef?: "HEAD" | "default"; branchPrefix?: string; requestId?: string },
+		options?: {
+			baseCwd?: string;
+			baseRef?: string;
+			branchPrefix?: string;
+			requestId?: string;
+			sparse?: string;
+			prepare?: boolean;
+		},
 	): Promise<RpcResponse>;
+	/** The seed and setup hook of a worktree `worktreeCreate(…, {prepare: false})` made (`RpcWorktreePrepared`). */
+	worktreePrepare(baseCwd: string, path: string): Promise<RpcResponse>;
 	/** Fetches the remote default branch ahead of a `default`-based create; its answer is only informative. */
 	worktreePrefetch(baseCwd?: string): Promise<RpcResponse>;
+	/** The repository's `.ompdesk/sparse` presets (`RpcSparsePreset[]`). */
+	worktreeSparsePresets(baseCwd?: string): Promise<RpcResponse>;
+	/** A setup hook drafted from another tool's config (`RpcSetupDraft | null`). */
+	worktreeSetupDraft(baseCwd?: string): Promise<RpcResponse>;
+	worktreeSetupSave(baseCwd: string | undefined, text: string): Promise<RpcResponse>;
+	/** A short name for a new task from its first prompt (`{title: string | null}`). */
+	worktreeNameSuggest(text: string): Promise<RpcResponse>;
+	/** The tab's own placeholder branch `from` renamed to `to` while never published (`{branch: string | null}`). */
+	worktreeRenameBranch(from: string, to: string): Promise<RpcResponse>;
 	worktreeRemove(path: string, force?: boolean): Promise<RpcResponse>;
 	prRepo(): Promise<RpcResponse>;
 	/**
@@ -360,8 +378,10 @@ const RPC_COMMAND_TIMEOUTS: Record<string, number> = {
 	// (src/main/local/git/{worktree,pr}.ts), or the renderer reports a failure
 	// while the worktree, checkout, or PR still lands.
 	worktree_create: 1_260_000,
+	worktree_prepare: 420_000,
 	worktree_prefetch: 480_000,
-	worktree_remove: 360_000,
+	worktree_remove: 480_000,
+	worktree_name_suggest: 60_000,
 	// `worktree add`, the archive copied back, then seeding and the setup hook (as worktree_create).
 	restore_saved_worktree: 960_000,
 	pr_repo: 120_000,
@@ -524,8 +544,18 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 				baseRef: options?.baseRef,
 				...(options?.branchPrefix ? { branchPrefix: options.branchPrefix } : {}),
 				...(options?.requestId ? { requestId: options.requestId } : {}),
+				...(options?.sparse ? { sparse: options.sparse } : {}),
+				...(options?.prepare === false ? { prepare: false } : {}),
 			}),
+		worktreePrepare: (baseCwd, path) => rpcCommand({ type: "worktree_prepare", baseCwd, path }),
 		worktreePrefetch: baseCwd => rpcCommand({ type: "worktree_prefetch", ...(baseCwd ? { baseCwd } : {}) }),
+		worktreeSparsePresets: baseCwd =>
+			rpcCommand({ type: "worktree_sparse_presets", ...(baseCwd ? { baseCwd } : {}) }),
+		worktreeSetupDraft: baseCwd => rpcCommand({ type: "worktree_setup_draft", ...(baseCwd ? { baseCwd } : {}) }),
+		worktreeSetupSave: (baseCwd, text) =>
+			rpcCommand({ type: "worktree_setup_save", text, ...(baseCwd ? { baseCwd } : {}) }),
+		worktreeNameSuggest: text => rpcCommand({ type: "worktree_name_suggest", text }),
+		worktreeRenameBranch: (from, to) => rpcCommand({ type: "worktree_rename_branch", from, to }),
 		worktreeRemove: (path, force) => rpcCommand({ type: "worktree_remove", path, force }),
 		prRepo: () => rpcCommand({ type: "pr_repo" }),
 		prList: (state, limit, view, background, filter) =>

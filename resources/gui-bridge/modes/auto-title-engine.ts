@@ -578,6 +578,19 @@ export const handlers: AutoTitleMethods = {
 		await attach(session, env);
 		return regenerate(session);
 	},
+	/**
+	 * The new task sheet's name suggestion (Orca FB40, `SmartWorkspaceNameField.tsx`): the title a first message `text`
+	 * would get, by the same title model and shortening as the session's first title, written nowhere.
+	 */
+	suggest_title: async (params, env) => {
+		const raw = params && typeof params === "object" && "text" in params ? params.text : undefined;
+		const text = typeof raw === "string" ? raw.trim() : "";
+		if (!text) return { title: null };
+		const session = env.session() as unknown as TitleSession;
+		await applyTitleLanguage(session);
+		requests++;
+		return { title: (await concise(session, await session.generateTitle(text), () => text)) || null };
+	},
 };
 
 /** Tests: back to the spawn-time state. */

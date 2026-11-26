@@ -145,6 +145,7 @@ import { SessionLiveTitle, sessionLive } from "../SessionLiveTitle";
 import { openedChildCounts, openedChildRows } from "../work-board/opened-children";
 import { childFoldSignal, type FoldSignal, foldSummary, sessionFoldSignal } from "./fold-summary";
 import { remoteOpenedTab, summaryRowState } from "./host-row-state";
+import { NewTaskRows } from "./NewTaskRows";
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
 import { deleteProject, isStoredRow } from "./project-delete";
 import { projectMenuItems } from "./project-menu";
@@ -2119,6 +2120,7 @@ export function Sidebar() {
 						    install with hundreds of sessions must not build the full DOM per debounced refresh just to hide it. */}
 						<Collapse open={!groupCollapsed}>
 							<div className="space-y-px" data-session-group={group.cwd} data-state="expanded">
+								<NewTaskRows cwd={group.cwd} />
 								{group.sessions.map(session => renderSessionRow(session, true))}
 								<SidebarLooseChildren foldKey={`group:${group.cwd}`} opened={loose} />
 							</div>
@@ -2190,6 +2192,7 @@ export function Sidebar() {
 							</Button>
 						</div>
 					))}
+				<NewTaskRows except={groups.map(group => group.cwd)} />
 				{groups.length > 0 && (
 					<DndContext collisionDetection={closestCenter} onDragEnd={onProjectDragEnd} sensors={projectSensors}>
 						<SortableContext items={groups.map(group => group.cwd)} strategy={verticalListSortingStrategy}>
