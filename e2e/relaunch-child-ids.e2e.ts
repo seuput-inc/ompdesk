@@ -208,7 +208,6 @@ test("a message a busy child had not read survives a relaunch, its done report r
 		const child = async (page: Page, id: string) => (await tabs(page)).find(tab => tab.tabId === id);
 		await expect.poll(async () => (await child(first.page, oldId))?.status, { timeout: 60_000 }).toBe("running");
 		await expect.poll(async () => (await child(first.page, oldId))?.sessionPath ?? "").not.toBe("");
-		const childPath = (await child(first.page, oldId))?.sessionPath ?? "";
 		// The opener's next message waits in the child's omp, unread while its turn stands in a call.
 		const queued = await call(profile, first.page, opener, "ompdesk_session_send", {
 			session: oldId,
@@ -218,50 +217,20 @@ test("a message a busy child had not read survives a relaunch, its done report r
 		expect(queued.text).toContain("Dispatch d2");
 		await quit(first.app);
 		current = undefined;
-		const layoutAtQuit: unknown = await fs
-			.readFile(path.join(profile.desktop, "prefs.json"), "utf8")
-			.then(text => JSON.parse(text).tabLayouts ?? null)
-			.catch(error => ({ readError: String(error) }));
 
 		// The relaunch ends that omp and what it held: the message reaches the child's new omp, once.
 		const second = await launch(profile);
 		current = second.app;
-		let lastTabs = await tabs(second.page);
-		const boss = lastTabs.find(tab => tab.active)?.tabId ?? "";
-		// The window lists its restored tabs as they come up; the child's is not necessarily there at the first read.
-		try {
-			await expect
-				.poll(
-					async () => {
-						lastTabs = await tabs(second.page);
-						return lastTabs.find(tab => tab.sessionPath === childPath)?.tabId ?? "";
-					},
-					{ timeout: 30_000 },
-				)
-				.not.toBe("");
-		} catch (error) {
-			await test.info().attach("restored-child.json", {
-				contentType: "application/json",
-				body: JSON.stringify({
-					expectedPath: childPath,
-					tabs: lastTabs.map(({ tabId, status, sessionPath }) => ({
-						tabId,
-						status,
-						sessionPath: sessionPath ?? null,
-					})),
-					layoutAtQuit,
-				}),
-			});
-			throw error;
-		}
-		const kid = (await tabs(second.page)).find(tab => tab.sessionPath === childPath)?.tabId ?? "";
-		expect(kid).not.toBe(oldId);
+		const boss = (await tabs(second.page)).find(tab => tab.active)?.tabId ?? "";
 		await expect
 			.poll(async () => (await marked("[ompdesk dispatch d2:", "agent_control.aside")).length, { timeout: 60_000 })
 			.toBe(2);
 		await expect.poll(async () => (await marked("[ompdesk dispatch d2:")).length, { timeout: 60_000 }).toBe(1);
 
-		// It finishes with Result: ok: main's done report reaches the opener's new tab.
+		// It finishes with Result: ok: main's done report reaches the opener's new tab. Nothing holds the child's turn
+		// (interrupted turns stay stopped), so it runs the message, reports done and closes by itself (auto_close.rs)
+		// within seconds of its restore, often before this window's tab list is first read: its new id is read from the
+		// report's `from`, the tab it had, as send-outbox-remote.e2e.ts does.
 		const doneMails = async () => {
 			const page = await second.page.evaluate(
 				id => window.omp.rpc.commandForTab(id, { type: "get_transcript_page", fromEnd: true, limit: 50 }),
@@ -279,6 +248,9 @@ test("a message a busy child had not read survives a relaunch, its done report r
 		};
 		try {
 			await expect.poll(async () => (await doneMails()).length, { timeout: 60_000 }).toBe(1);
+			const kid = String((await doneMails())[0]?.details?.from ?? "");
+			expect(kid).not.toBe("");
+			expect(kid).not.toBe(oldId);
 		} catch (error) {
 			// Where the report stopped: sent by main to an omp (a `agent_control.mail` frame the fake recorded), in the
 			// opener's transcript under another shape, or never made (the tabs and their states say whose turn is where).
@@ -286,9 +258,7 @@ test("a message a busy child had not read survives a relaunch, its done report r
 			const mail = frames
 				.filter(frame => frame.type === "agent_control.mail")
 				.map(frame => JSON.stringify(frame.details ?? {}).slice(0, 160));
-			const states = (await tabs(second.page)).map(
-				tab => `${tab.tabId === boss ? "boss" : tab.tabId === kid ? "kid" : "?"}:${tab.status}`,
-			);
+			const states = (await tabs(second.page)).map(tab => `${tab.tabId === boss ? "boss" : "?"}:${tab.status}`);
 			// The last frames the fake omps recorded, one short line each: what the kid ran after the relaunch, what was
 			// asked of main (host tool calls) and what reached the boss's omp.
 			const trail = frames.slice(-40).map(frame => JSON.stringify(frame).slice(0, 140));
