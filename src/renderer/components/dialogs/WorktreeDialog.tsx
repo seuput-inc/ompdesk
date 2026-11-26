@@ -379,7 +379,11 @@ export function WorktreeDialog() {
 					rows={3}
 					value={prompt}
 				/>
-				<div className="flex flex-wrap items-center gap-1.5" style={{ "--hit-gap-x": "6px" } as CSSProperties}>
+				{/* On touch each button's reach stops half way to the worktree switch's row (the form's 12 px gap). */}
+				<div
+					className="flex flex-wrap items-center gap-1.5"
+					style={{ "--hit-gap-x": "6px", "--hit-gap-y": "12px" } as CSSProperties}
+				>
 					<Button
 						icon={<Paperclip />}
 						onClick={() => fileInput.current?.click()}
@@ -419,22 +423,20 @@ export function WorktreeDialog() {
 				</label>
 				<Collapse open={worktree}>
 					<div className="flex flex-col gap-3 pl-6">
-						<div className="flex items-end gap-1">
-							<div className="min-w-0 flex-1">
-								<Input
-									label={t("worktree.nameLabel")}
-									maxLength={41}
-									onChange={event => setName(event.target.value)}
-									placeholder={t("newTask.namePlaceholder")}
-									value={name}
+						<Input
+							label={t("worktree.nameLabel")}
+							maxLength={41}
+							onChange={event => setName(event.target.value)}
+							placeholder={t("newTask.namePlaceholder")}
+							trailing={
+								<AutoTitleButton
+									onClick={() => void suggest()}
+									pending={suggesting}
+									unavailableReason={prompt.trim() ? undefined : t("newTask.suggestNeedsPrompt")}
 								/>
-							</div>
-							<AutoTitleButton
-								onClick={() => void suggest()}
-								pending={suggesting}
-								unavailableReason={prompt.trim() ? undefined : t("newTask.suggestNeedsPrompt")}
-							/>
-						</div>
+							}
+							value={name}
+						/>
 						{name.trim() && nameValid && (
 							<p className="text-sc-sm text-(--sc-text-muted)">
 								{t("worktree.branchPreview", {
