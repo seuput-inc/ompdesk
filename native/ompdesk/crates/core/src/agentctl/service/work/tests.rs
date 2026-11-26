@@ -2143,7 +2143,9 @@ async fn a_room_asks_the_members_its_reply_mode_names_and_a_member_answers_with_
 }
 
 /// A fake main whose bot chat's bridge answers `agent_control_bot` with what `facts` holds now.
-fn chat_facts(facts: &Arc<Mutex<Value>>) -> impl Fn(&str, &Value) -> Option<Value> + Send + 'static {
+fn chat_facts(
+    facts: &Arc<Mutex<Value>>,
+) -> impl Fn(&str, &Value) -> Option<Value> + Send + 'static {
     let facts = facts.clone();
     move |method, args| {
         (method == "command" && args["command"]["type"] == "agent_control_bot")
@@ -2166,7 +2168,12 @@ fn bot_calls(asked: &Asked) -> Vec<(Value, Value)> {
                 && args["tabId"] == "bot1"
                 && args["command"]["type"] == "agent_control_bot"
         })
-        .map(|(_, args)| (args["command"]["context"].clone(), args["command"]["kickoff"].clone()))
+        .map(|(_, args)| {
+            (
+                args["command"]["context"].clone(),
+                args["command"]["kickoff"].clone(),
+            )
+        })
         .collect()
 }
 
@@ -2194,9 +2201,17 @@ async fn a_new_bot_speaks_first_once_and_its_first_run_ends_with_the_owners_firs
     assert_eq!(mail["tabId"], "bot1");
     assert_eq!(mail["details"]["kind"], "question");
     assert_eq!(mail["delivery"]["triggerTurn"], true);
-    assert!(mail["content"].as_str().unwrap().contains("you were just created"));
+    assert!(
+        mail["content"]
+            .as_str()
+            .unwrap()
+            .contains("you were just created")
+    );
     let calls = bot_calls(&asked);
-    assert_eq!(calls[0].0["bot"]["firstRun"], true, "the home chat carries the first-run rules");
+    assert_eq!(
+        calls[0].0["bot"]["firstRun"], true,
+        "the home chat carries the first-run rules"
+    );
     // It answered: asked again (the kickoff was not answered at the first look), it is not sent twice.
     *facts.lock().unwrap() = said(0, false, "spoke");
     control.bots_tick().await;
@@ -2221,32 +2236,50 @@ async fn a_new_bot_speaks_first_once_and_its_first_run_ends_with_the_owners_firs
     crate::ports::apply_state(control.host.port(), 3, &world.to_string()).unwrap();
     control.bots_tick().await;
     assert_eq!(bot_calls(&asked).len(), before + 1);
-    assert!(control.bot_named("Ada").unwrap().first_run, "omp still says a turn runs");
+    assert!(
+        control.bot_named("Ada").unwrap().first_run,
+        "omp still says a turn runs"
+    );
     *facts.lock().unwrap() = said(1, false, "spoke");
     control.bots_tick().await;
     let bot = control.bot_named("Ada").unwrap();
     assert!(!bot.first_run, "the owner's first turn ended");
     assert_eq!(bot.kickoffs.len(), 1);
     control.bots_tick().await;
-    assert_eq!(bot_calls(&asked).last().unwrap().0["bot"]["firstRun"], false);
+    assert_eq!(
+        bot_calls(&asked).last().unwrap().0["bot"]["firstRun"],
+        false
+    );
     // Nothing is retried once first run is over.
     assert!(!control.kickoff_retry(&id, true).await.unwrap());
 }
 
 #[tokio::test]
-async fn a_bot_made_with_a_purpose_still_runs_first_run_and_one_the_owner_wrote_to_first_gets_no_kickoff() {
+async fn a_bot_made_with_a_purpose_still_runs_first_run_and_one_the_owner_wrote_to_first_gets_no_kickoff()
+{
     let root = Scratch::new();
     let mails = Mails::default();
     let facts = Arc::new(Mutex::new(said(1, false, "none")));
     let (control, _asked, _id) = ada(9_731, &root, mails.clone(), chat_facts(&facts)).await;
     let state = control
-        .bots_command(json!({ "action": "create", "name": "Cy", "purpose": "Keeps the changelog honest." }))
+        .bots_command(
+            json!({ "action": "create", "name": "Cy", "purpose": "Keeps the changelog honest." }),
+        )
         .await
         .unwrap();
     let cy = control.bot_named("Cy").unwrap();
     assert!(Path::new(&cy.folder).join("SOUL.md").is_file());
-    assert!(cy.first_run, "SOUL.md written from the purpose does not end first run");
-    let listed = state["bots"].as_array().unwrap().iter().find(|bot| bot["name"] == "Cy").cloned().unwrap();
+    assert!(
+        cy.first_run,
+        "SOUL.md written from the purpose does not end first run"
+    );
+    let listed = state["bots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|bot| bot["name"] == "Cy")
+        .cloned()
+        .unwrap();
     assert_eq!(listed["firstRun"], true);
     // Ada's home chat already holds the owner's message: no kickoff, and its turn has ended.
     control.bots_tick().await;
@@ -2279,13 +2312,21 @@ async fn a_kickoff_that_ended_silent_is_sent_again_once_by_itself_and_on_each_tr
     assert!(control.kickoff_retry(&id, true).await.unwrap());
     assert_eq!(control.bot_named("Ada").unwrap().kickoffs.len(), 3);
     // Not while it speaks, a turn runs, or once the owner wrote.
-    for facts_now in [said(0, false, "spoke"), said(0, true, "silent"), said(1, false, "silent"), said(0, false, "queued")] {
+    for facts_now in [
+        said(0, false, "spoke"),
+        said(0, true, "silent"),
+        said(1, false, "silent"),
+        said(0, false, "queued"),
+    ] {
         *facts.lock().unwrap() = facts_now;
         assert!(!control.kickoff_retry(&id, true).await.unwrap());
     }
     // Two opens at once send one: the attempt is claimed in the record before the mail goes.
     *facts.lock().unwrap() = said(0, false, "silent");
-    let (one, two) = tokio::join!(control.kickoff_retry(&id, true), control.kickoff_retry(&id, true));
+    let (one, two) = tokio::join!(
+        control.kickoff_retry(&id, true),
+        control.kickoff_retry(&id, true)
+    );
     assert_eq!(u8::from(one.unwrap()) + u8::from(two.unwrap()), 1);
     let bot = control.bot_named("Ada").unwrap();
     assert_eq!(bot.kickoffs.len(), 4);

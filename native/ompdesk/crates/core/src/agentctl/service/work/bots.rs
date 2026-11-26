@@ -1009,7 +1009,8 @@ impl AgentControl {
                 let bot =
                     self.create_bot(&text("name").unwrap_or_default(), text("folder").as_deref())?;
                 if kickoff.is_some() {
-                    self.bots().change(&bot.id, |record| record.kickoff = kickoff);
+                    self.bots()
+                        .change(&bot.id, |record| record.kickoff = kickoff);
                 }
                 let skills = request
                     .get("skills")
