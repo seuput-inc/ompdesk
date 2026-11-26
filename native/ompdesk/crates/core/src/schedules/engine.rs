@@ -16,6 +16,7 @@ use super::hooks;
 use super::rules::{self, Zone};
 use crate::control::js::string_of_value;
 use crate::routines::connectors::{self, SlackEvent};
+use crate::routines::slack_mirror;
 use crate::server::Fault;
 
 /// Event lines kept for the run after the running one (the newest).
@@ -50,6 +51,8 @@ const FOLD_MS: i64 = 60_000;
 const SECRET_MAX_CHARS: usize = 500;
 /// People a bot's connector remembers asking to be let in (open or declined), newest first.
 const ASKERS_KEPT: usize = 20;
+/// Thread chats a bot's Slack connector remembers, newest first: an older thread asks in a new chat.
+const THREADS_KEPT: usize = 200;
 
 /// Whether an answer is a quiet result: its last non-empty line, Markdown dressing aside (a heading's or a list's
 /// mark, `*`, `_`, backticks, `~` around it, a period after it), is `NO_REPLY`. The same rule as `isQuietResult` in
@@ -199,6 +202,8 @@ struct Active {
     charge: Option<u64>,
     /// What the run is told: the schedule's prompt, with what fired it.
     prompt: String,
+    /// A Slack connector's run: the thread it answers (`slack_mirror::thread_key`), whose chat it wakes.
+    thread: Option<String>,
 }
 
 /// A start waiting for main's answer about its charge.
@@ -261,6 +266,9 @@ pub struct Engine {
     /// Who asked a bot's connector without being in its `from`, newest first, by schedule id
     /// (`SchedulesState.asking`): `{person, name, place, link?, at, declined?}`.
     asking: HashMap<String, Vec<Object>>,
+    /// A Slack connector's thread chats, by schedule id (`SchedulesState.threads`, `routines/slack_mirror.rs`):
+    /// `{key, session?, at, mirror?, chosen?, external?, blocked?, posts?}`, one per (app, channel, root ts).
+    threads: HashMap<String, Vec<Object>>,
     /// The delivery ids each webhook routine took, oldest first (FX4).
     delivered: HashMap<String, VecDeque<String>>,
     /// Where a firing call's body is saved (the run logs' folder); none in a test.
@@ -425,6 +433,7 @@ impl Engine {
             settle_until: 0,
             calls: HashMap::new(),
             asking: HashMap::new(),
+            threads: HashMap::new(),
             delivered: HashMap::new(),
             hook_dir: None,
             call_seq: 0,
@@ -479,6 +488,7 @@ impl Engine {
         self.runs = runs;
         self.calls = self.read_per_schedule(stored, "calls", CALLS_KEPT);
         self.asking = self.read_per_schedule(stored, "asking", ASKERS_KEPT);
+        self.threads = self.read_per_schedule(stored, "threads", THREADS_KEPT);
         let ended = Value::String(rules::iso(now));
         for run in &mut self.runs {
             if text(run, "status") == Some("running") {
@@ -661,6 +671,9 @@ impl Engine {
         if let Some(asking) = self.per_schedule(&self.asking) {
             state["asking"] = asking;
         }
+        if let Some(threads) = self.per_schedule(&self.threads) {
+            state["threads"] = threads;
+        }
         state
     }
 
@@ -721,6 +734,9 @@ impl Engine {
         }
         if let Some(asking) = self.per_schedule(&self.asking) {
             stored["asking"] = asking;
+        }
+        if let Some(threads) = self.per_schedule(&self.threads) {
+            stored["threads"] = threads;
         }
         // `JSON.stringify(stored, null, 2)`.
         serde_json::to_string_pretty(&stored).unwrap_or_default()
@@ -1686,6 +1702,7 @@ impl Engine {
                 stop_requested: false,
                 charge: Some(self.last_ask),
                 prompt: String::new(),
+                thread: None,
             },
         );
         self.outs.push(Out::Reserve {
@@ -1807,6 +1824,7 @@ impl Engine {
                 stop_requested: false,
                 charge: None,
                 prompt: String::new(),
+                thread: None,
             },
         );
         self.held.insert(
@@ -1976,6 +1994,15 @@ impl Engine {
         // What fired it as the run is told it: plain lines in one fence, a connector's asks each with OMPdesk's own
         // header outside its fence; the record keeps the plain text.
         let fired = details.as_deref().map(fired_text);
+        // A Slack connector's asks wake their thread's chat (one thread per run, `after_run`); a test run wakes home.
+        let thread = (trigger == Trigger::Event && slack_event(&self.schedules[at]).is_some())
+            .then(|| {
+                details
+                    .as_ref()?
+                    .first()
+                    .and_then(|line| slack_mirror::thread_key(line))
+            })
+            .flatten();
         let detail = details.map(|details| details.join("\n").replace(connectors::ASKED, "\n"));
         let id = (self.ids)();
         let schedule_id = id_of(&self.schedules[at]).to_owned();
@@ -2031,6 +2058,7 @@ impl Engine {
                 stop_requested: false,
                 charge,
                 prompt: prompt.clone(),
+                thread,
             },
         );
         self.record(run);
@@ -2086,12 +2114,101 @@ impl Engine {
         let active = self.active.get(&id);
         let prompt = active.map(|active| active.prompt.clone());
         told.insert("prompt".into(), prompt.into());
+        // A Slack thread's run wakes that thread's chat, or opens one for a thread asked the first time (main's
+        // `wakeSession` without a session to wake, with `thread`): never the bot's home chat.
+        if let Some(key) = active.and_then(|active| active.thread.clone()) {
+            let known = self
+                .threads
+                .get(&id)
+                .and_then(|rows| {
+                    rows.iter()
+                        .find(|row| text(row, "key") == Some(key.as_str()))
+                })
+                .and_then(|row| text(row, "session"))
+                .map(str::to_owned);
+            match known {
+                Some(session) => told.insert("wakeSession".into(), session.into()),
+                None => told.shift_remove("wakeSession"),
+            };
+            told.insert("thread".into(), key.into());
+        }
         self.outs.push(Out::Start {
             run: run.to_owned(),
             schedule: Value::Object(told),
             wake,
             charge: active.and_then(|active| active.charge),
         });
+    }
+
+    /// Main opened the chat a Slack thread's run woke (`schedules.threadChat`): that thread's asks wake it from now on.
+    pub fn thread_chat(&mut self, run: &str, session: &str, now: i64) {
+        self.now = now;
+        let Some(id) = self.running(run) else {
+            return;
+        };
+        let Some(key) = self
+            .active
+            .get(&id)
+            .and_then(|active| active.thread.clone())
+        else {
+            return;
+        };
+        let rows = self.threads.entry(id).or_default();
+        match rows
+            .iter_mut()
+            .find(|row| text(row, "key") == Some(key.as_str()))
+        {
+            Some(row) => {
+                row.insert("session".into(), session.into());
+            }
+            None => {
+                let mut row = Object::new();
+                row.insert("key".into(), key.into());
+                row.insert("session".into(), session.into());
+                row.insert("at".into(), rules::iso(now).into());
+                rows.insert(0, row);
+                rows.truncate(THREADS_KEPT);
+            }
+        }
+        self.changed();
+    }
+
+    /// The thread chat a session is, by schedule id: what the owner types in it posts to that thread. None for any
+    /// other session, the bot's home chat among them.
+    pub fn thread_of_session(&self, session: &str) -> Option<(String, Object)> {
+        self.schedules.iter().find_map(|schedule| {
+            let id = id_of(schedule);
+            slack_event(schedule)?;
+            let row = self
+                .threads
+                .get(id)?
+                .iter()
+                .find(|row| text(row, "session") == Some(session))?;
+            Some((id.to_owned(), row.clone()))
+        })
+    }
+
+    /// A thread chat's row, changed by `change` (its mirror switch, what Slack said of it, one of its posts).
+    pub fn change_thread(&mut self, id: &str, key: &str, change: impl FnOnce(&mut Object)) -> bool {
+        let Some(row) = self
+            .threads
+            .get_mut(id)
+            .and_then(|rows| rows.iter_mut().find(|row| text(row, "key") == Some(key)))
+        else {
+            return false;
+        };
+        change(row);
+        self.changed();
+        true
+    }
+
+    /// A thread chat's row as it is now.
+    pub fn thread_row(&self, id: &str, key: &str) -> Option<Object> {
+        self.threads
+            .get(id)?
+            .iter()
+            .find(|row| text(row, "key") == Some(key))
+            .cloned()
     }
 
     /// Main started the run: a wake-up writes its log line, a stop asked for meanwhile goes out.
@@ -2289,6 +2406,23 @@ impl Engine {
             self.chain.remove(id);
             return;
         };
+        // A Slack connector answers each thread in that thread's own chat: one run takes one thread's asks, the
+        // others wait for the next. Its loop guard is Slack's own (an app's posts never ask, `slack_event`), so its
+        // runs in a row are no chain.
+        if slack_event(&self.schedules[at]).is_some() {
+            let first = details
+                .first()
+                .and_then(|line| slack_mirror::thread_key(line));
+            let (now, later): (Vec<String>, Vec<String>) = details
+                .into_iter()
+                .partition(|line| slack_mirror::thread_key(line) == first);
+            if !later.is_empty() {
+                self.pending.insert(id.to_owned(), later);
+            }
+            self.start_event(at, now);
+            self.changed();
+            return;
+        }
         let chain = self.chain.get(id).copied().unwrap_or(0) + 1;
         if chain >= self.limits.chain_limit {
             self.schedules[at].insert("enabled".into(), false.into());
@@ -2437,6 +2571,7 @@ impl Engine {
         self.chain.remove(&id);
         self.delivered.remove(&id);
         self.asking.remove(&id);
+        self.threads.remove(&id);
         if let Some(calls) = self.calls.remove(&id) {
             self.remove_bodies(calls.iter().map(|call| id_of(call).to_owned()).collect());
         }

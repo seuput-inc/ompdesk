@@ -15,6 +15,7 @@ pub(crate) mod github;
 pub(crate) mod google;
 mod imap;
 pub(crate) mod runtime;
+pub(crate) mod slack_mirror;
 pub(crate) mod text;
 
 use serde::{Deserialize, Serialize};

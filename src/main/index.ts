@@ -2242,6 +2242,8 @@ app.whenReady().then(async () => {
 		shell: shellRunner,
 		// A bot's Slack connector's `/hooks` call is signed with its app's secret (connector-accounts.ts).
 		slackSigningSecret: app => connectorAccounts?.slackTokens(app)?.signingSecret ?? null,
+		// A bot's Slack thread chat posts the owner's words with its app's bot token (schedules.ts `mirror`).
+		slackBotToken: app => connectorAccounts?.slackTokens(app)?.botToken ?? null,
 		...(process.env.OMP_GUI_TEST_SCHEDULE_TICK_MS
 			? { tickMs: Number(process.env.OMP_GUI_TEST_SCHEDULE_TICK_MS) }
 			: {}),

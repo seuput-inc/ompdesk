@@ -311,7 +311,47 @@ export interface SchedulesState {
 	calls?: Record<string, WebhookCall[]>;
 	/** Who asked a bot's connector without being in its `from`, newest first, by schedule id (`answerAsker`). */
 	asking?: Record<string, ConnectorAsker[]>;
+	/** A bot's Slack connector's thread chats, newest first, by schedule id (the core's `routines/slack_mirror.rs`). */
+	threads?: Record<string, SlackThreadChat[]>;
 }
+
+/**
+ * One Slack thread's (or direct message's) own chat of a bot (Orca's per-thread chats, `slack-mirror-state.ts`): what
+ * the owner types there posts back to its thread while it is set to.
+ */
+export interface SlackThreadChat {
+	/** `<app>:<channel>:<root ts>`: a thread is its app, channel and root ts, never the ts alone. */
+	key: string;
+	/** Its session file, once its first ask opened it. */
+	session?: string;
+	/** ISO time its first ask came. */
+	at: string;
+	/** The owner's switch; absent reads on. */
+	mirror?: boolean;
+	/** The owner turned it on themselves (a Slack Connect thread posts only then). */
+	chosen?: boolean;
+	/** Slack Connect (reaches outside the workspace); absent until Slack was asked, at the first post. */
+	external?: boolean;
+	/** What Slack refused, which stops posting until the owner turns it on again. */
+	blocked?: "thread_unavailable" | "not_in_channel";
+	/** What became of the owner's messages, newest first. */
+	posts?: SlackMirrorPost[];
+}
+
+export interface SlackMirrorPost {
+	id: string;
+	text: string;
+	state: "posting" | "posted" | "failed";
+	at: string;
+	/** Slack's ts of a posted one (Delete from Slack). */
+	ts?: string;
+	error?: string;
+}
+
+/** The owner's change of a thread chat's mirror (main adds the app's token for the one call that needs it). */
+export type SlackMirrorAction =
+	| { op: "set"; id: string; key: string; on: boolean }
+	| { op: "retry" | "dismiss" | "delete"; id: string; key: string; post: string };
 
 /** Someone not in a bot's connector's `from` who asked it (the core's `connectors::AccessAsk`). */
 export interface ConnectorAsker {
@@ -344,7 +384,9 @@ export type SchedulesRequest =
 	/** Settings' Send test call: the routine's own hook called with a sample body, past the key and signature check. */
 	| { action: "sampleCall"; id: string }
 	/** The owner's answer to someone asking a bot's connector: allowed, they join its `from`. This computer only. */
-	| { action: "answerAsker"; id: string; person: string; allow: boolean };
+	| { action: "answerAsker"; id: string; person: string; allow: boolean }
+	/** A bot's Slack thread chat's mirror (main adds the app's token; never from a paired device). This computer only. */
+	| ({ action: "mirror" } & SlackMirrorAction);
 
 /** A new schedule's id as the save that made it reported it, with the state after it. */
 export interface ScheduleCreated {

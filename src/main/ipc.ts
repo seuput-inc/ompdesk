@@ -341,7 +341,7 @@ export interface IpcDeps {
 	/** A preference was written through PREFS_SET (main-side effects such as keep-awake). */
 	onPrefChanged?: (key: string) => void;
 	/** The Schedules service, created later than the handlers: read per use. */
-	schedules?: () => Pick<ScheduleService, "command" | "create" | "prune"> | null;
+	schedules?: () => Pick<ScheduleService, "command" | "create" | "prune" | "mirror" | "mirrorAction"> | null;
 	/** The owner's mail accounts for email routines, created with the Schedules service: read per use. */
 	mailAccounts?: () => Pick<MailAccounts, "state" | "save" | "remove" | "test"> | null;
 	/** This computer's Linear and Jira connections (tracker-accounts.ts): read per use. */
@@ -1227,6 +1227,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			// while the person was in the session are listed to it now (agent-control/pending-cleanups.ts).
 			if (channel !== undefined && personsPrompt(cmd)) {
 				if (issuerTabId) agentControl.personTyped(issuerTabId);
+				// A bot's Slack thread chat posts the owner's words back to its thread (schedules.ts `mirror`); the
+				// bot's home chat and every other session post nothing.
+				const typedIn = issuerTabId && !sidecar.device ? sidecarPool.sessionFileOf(issuerTabId) : undefined;
+				const typed = "message" in cmd && typeof cmd.message === "string" ? cmd.message : undefined;
+				if (typedIn && typed) void deps.schedules?.()?.mirror(typedIn, typed);
 				if (!sidecar.device)
 					await noteTypedPrompt(
 						client,

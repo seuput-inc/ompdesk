@@ -38,6 +38,7 @@ mod engine;
 mod hooks;
 mod launch;
 mod marks;
+mod mirror;
 pub(crate) mod rules;
 #[cfg(test)]
 mod tests;
@@ -731,6 +732,7 @@ async fn closed(call: Call) -> Result<Reply, Fault> {
 }
 
 pub fn register(registry: &mut Registry) {
+    mirror::register(registry);
     registry.add("schedules.open", |call| {
         Box::pin(async move { open(&call) })
     });

@@ -155,6 +155,7 @@ export const GITHUB_ASK_EVENTS = ["issue", "pull_request", "comment"] as const;
  * named after the bot that hears mentions and direct messages and posts replies, over Socket Mode. To have Slack call
  * a request URL instead (the person's own tunnel to this computer's `/hooks/<id>`), they turn Socket Mode off and set
  * that URL under Event Subscriptions after the connector is saved, once its signing secret lets the URL check through.
+ * `channels:read` and `groups:read` let a thread chat ask whether its channel is a Slack Connect one before it posts.
  */
 export function slackManifest(name: string): string {
 	const display = name.trim().slice(0, 35) || "Bot";
@@ -168,7 +169,17 @@ export function slackManifest(name: string): string {
 			bot_user: { display_name: display, always_online: true },
 		},
 		oauth_config: {
-			scopes: { bot: ["app_mentions:read", "chat:write", "im:history", "im:read", "im:write"] },
+			scopes: {
+				bot: [
+					"app_mentions:read",
+					"channels:read",
+					"chat:write",
+					"groups:read",
+					"im:history",
+					"im:read",
+					"im:write",
+				],
+			},
 		},
 		settings: {
 			event_subscriptions: { bot_events: ["app_mention", "message.im"] },

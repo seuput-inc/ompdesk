@@ -96,6 +96,8 @@ struct Play {
     /// A device's requests left; none: no limit.
     left: Option<u64>,
     launches: Vec<(String, String, bool)>,
+    /// What each start told main of its schedule (a Slack thread's `wakeSession` and `thread`).
+    told: Vec<Value>,
     refunds: u64,
     journals: Vec<String>,
     /// What a run now answered once main had said whether it may be charged.
@@ -123,6 +125,7 @@ impl Play {
             next_tick: start + TICK_MS,
             left: None,
             launches: Vec::new(),
+            told: Vec::new(),
             refunds: 0,
             journals: Vec::new(),
             answered: None,
@@ -174,6 +177,7 @@ impl Play {
                     } => {
                         let prompt = schedule["prompt"].as_str().unwrap().to_owned();
                         self.launches.push((run.clone(), prompt, wake));
+                        self.told.push(schedule.clone());
                         self.engine.started(&run, self.now);
                     }
                     // The fake run ends as a stopped supervisor does.
@@ -1411,4 +1415,73 @@ fn someone_not_listed_asks_the_owner_once_and_an_allow_lets_them_in() {
     let again =
         serde_json::json!({"action": "answerAsker", "id": id, "person": "U2", "allow": true});
     assert!(play.run(again).is_err());
+}
+
+#[test]
+fn each_slack_thread_asks_in_its_own_chat_kept_by_channel_and_ts_across_a_relaunch() {
+    let mut play = Play::new(0);
+    let event = serde_json::json!({"source": "slack", "account": "slack-a", "from": ["U1"]});
+    let mut connector = draft(serde_json::json!({"kind": "event", "event": event}));
+    connector["wakeSession"] = "/bot/home.jsonl".into();
+    let id = play.engine.create(&connector, None, play.now).unwrap();
+    play.settle();
+    // Two channels whose threads have the same root ts.
+    let ask = |channel: &str, event: &str| {
+        format!(
+            r#"{{"type":"event_callback","event_id":"{event}","event":{{"type":"app_mention","user":"U1","channel":"{channel}","ts":"5.1","text":"<@UB> hi"}}}}"#
+        )
+    };
+    assert_eq!(
+        play.hook(&id, &slack_call("shh", 0, &ask("C1", "Ev1"))),
+        "fired"
+    );
+    // A thread asked the first time opens a chat of its own: no session to wake, never the home chat.
+    assert_eq!(play.told[0]["thread"], "slack-a:C1:5.1");
+    assert!(play.told[0].get("wakeSession").is_none());
+    let first = play.launches[0].0.clone();
+    play.engine.thread_chat(&first, "/bot/c1.jsonl", play.now);
+    // The other channel's ask waits for the running one, then wakes a chat of its own.
+    assert_eq!(
+        play.hook(&id, &slack_call("shh", 0, &ask("C2", "Ev2"))),
+        "fired"
+    );
+    assert_eq!(play.launches.len(), 1);
+    play.end_last(Some(0), None);
+    assert_eq!(play.told[1]["thread"], "slack-a:C2:5.1");
+    assert!(play.told[1].get("wakeSession").is_none());
+    let second = play.launches[1].0.clone();
+    play.engine.thread_chat(&second, "/bot/c2.jsonl", play.now);
+    play.settle();
+    play.end_last(Some(0), None);
+    play.relaunch(60_000);
+    // After a relaunch each thread still wakes its own chat.
+    assert_eq!(
+        play.hook(&id, &slack_call("shh", 0, &ask("C2", "Ev3"))),
+        "fired"
+    );
+    assert_eq!(play.told[2]["wakeSession"], "/bot/c2.jsonl");
+    play.end_last(Some(0), None);
+    assert_eq!(
+        play.hook(&id, &slack_call("shh", 0, &ask("C1", "Ev4"))),
+        "fired"
+    );
+    assert_eq!(play.told[3]["wakeSession"], "/bot/c1.jsonl");
+    // What the owner types in a thread's chat posts to that thread only; the home chat is no thread's.
+    let thread = |session: &str| {
+        play.engine
+            .thread_of_session(session)
+            .and_then(|(_, row)| row.get("key").and_then(Value::as_str).map(str::to_owned))
+    };
+    assert_eq!(thread("/bot/c1.jsonl").as_deref(), Some("slack-a:C1:5.1"));
+    assert_eq!(thread("/bot/c2.jsonl").as_deref(), Some("slack-a:C2:5.1"));
+    assert_eq!(thread("/bot/home.jsonl"), None);
+    // A test run wakes the home chat as before.
+    play.end_last(Some(0), None);
+    assert!(
+        play.run(serde_json::json!({"action": "runNow", "id": id}))
+            .is_ok()
+    );
+    let test = play.told.last().unwrap();
+    assert_eq!(test["wakeSession"], "/bot/home.jsonl");
+    assert!(test.get("thread").is_none());
 }
