@@ -596,6 +596,14 @@ async function openHelpItem(page: Page, look: Look, name: string): Promise<void>
 	await page.locator(":is([role=menuitem], button):visible", { hasText: name }).first().click();
 }
 
+/** The changelog opens on its newest release: its body is not scrolled (its first focus once scrolled to a link). */
+async function changelogAtTop(page: Page): Promise<void> {
+	const notes = page.locator("[role=dialog] [data-changelog-notes]").first();
+	await notes.waitFor({ state: "visible", timeout: 15_000 });
+	const top = await notes.evaluate(element => element.closest("[data-dialog-body]")?.scrollTop ?? 0);
+	if (top > 0) throw new Error(`the changelog opened scrolled ${Math.round(top)} px down`);
+}
+
 /**
  * The release before the newest in the shipped changelog: what `whatsNewSeenVersion` holds after an update by one
  * version (read as e2e/starter-guide.e2e.ts reads it).
@@ -2885,7 +2893,7 @@ export const SURFACES: readonly Surface[] = [
 								: dialog.id === "dialog-feedback"
 									? openHelpItem(page, look, "Send feedback")
 									: dialog.id === "dialog-changelog"
-										? openHelpItem(page, look, say(look, "help.whatsNew"))
+										? openHelpItem(page, look, say(look, "help.whatsNew")).then(() => changelogAtTop(page))
 										: dialog.id === "dialog-whats-new"
 											? // The card's See details: the one control that opens a version's notes.
 												showWhatsNewCard(page).then(() =>

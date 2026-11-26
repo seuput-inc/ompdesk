@@ -69,7 +69,9 @@ export function ChangelogDialog() {
 			title={version && whatsNew ? t("whatsNew.title", { version }) : t("changelog.title")}
 		>
 			{markdown === null ? null : (
-				<div className="outline-none" data-changelog-notes ref={notesRef} tabIndex={-1}>
+				// The dialog's first focus (use-modal-layer `firstFocus`): its first link sits releases down, and
+				// focusing it opened Help › What's new scrolled away from the newest release.
+				<div className="outline-none" data-changelog-notes data-dialog-autofocus ref={notesRef} tabIndex={-1}>
 					<MarkdownRenderer content={displayReleaseHeadings(notes ?? changelogReleases(markdown, lang), lang)} />
 				</div>
 			)}
