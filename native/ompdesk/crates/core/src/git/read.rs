@@ -311,26 +311,26 @@ pub async fn fingerprint(git: &Git, cwd: &str, known: Option<&str>) -> Result<Fi
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ChangedFile {
-    path: String,
+    pub(super) path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    old_path: Option<String>,
-    status: String,
+    pub(super) old_path: Option<String>,
+    pub(super) status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    added: Option<u64>,
+    pub(super) added: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    removed: Option<u64>,
+    pub(super) removed: Option<u64>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Changes {
-    is_repo: bool,
-    root: Option<String>,
-    base: Option<String>,
-    files: Vec<ChangedFile>,
-    truncated: bool,
+    pub(super) is_repo: bool,
+    pub(super) root: Option<String>,
+    pub(super) base: Option<String>,
+    pub(super) files: Vec<ChangedFile>,
+    pub(super) truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    head: Option<Head>,
+    pub(super) head: Option<Head>,
 }
 
 /// Net changes from HEAD to the checkout `cwd` is in, untracked files included, with its head.
@@ -516,9 +516,18 @@ fn inspect(root: &str, absolute: &str) -> Result<OnDisk, Fault> {
     }
 }
 
-/// One changed path's diff against HEAD; never follows a symlink out of the checkout.
-pub async fn diff(git: &Git, cwd: &str, file_path: &str) -> Result<Diff, Fault> {
-    let changes = changes(git, cwd).await?;
+/// One changed path's diff against HEAD, or against `against` (a commit: the Changes panel's base range, whose files
+/// `compare::changes_since` lists); never follows a symlink out of the checkout.
+pub async fn diff(
+    git: &Git,
+    cwd: &str,
+    file_path: &str,
+    against: Option<&str>,
+) -> Result<Diff, Fault> {
+    let changes = match against {
+        Some(commit) => super::compare::changes_since(git, cwd, commit).await?,
+        None => changes(git, cwd).await?,
+    };
     let entry = changes
         .files
         .iter()

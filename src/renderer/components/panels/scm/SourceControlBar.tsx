@@ -1,10 +1,12 @@
 /**
  * The Changes panel's source-control row: branch picker, Pull (with the behind
- * count), Sync (fetch, then pull and push, or a leased force push of a branch
- * rebased after it was pushed) and Push or Publish (with the ahead count), a menu
- * for fetch, stash, pop and undo-last-commit, and the banner of a merge, rebase,
- * cherry-pick or revert that stopped on conflicts (which this session's agent can
- * be asked to resolve). The list's own refresh sits in the toolbar above.
+ * count; a branch diverged from its upstream asks whether to merge or rebase,
+ * with the commands shown to copy), Sync (fetch, then pull and push, or a leased
+ * force push of a branch rebased after it was pushed) and Push or Publish (with
+ * the ahead count), a menu for fetch, stash, pop and undo-last-commit, and the
+ * banner of a merge, rebase, cherry-pick or revert that stopped (continue, skip a
+ * commit, abort, review the conflicts here or ask this session's agent).
+ * The list's own refresh sits in the toolbar above.
  */
 import {
 	Archive,
@@ -27,10 +29,16 @@ import { useT } from "../../../lib/i18n";
 import type { TabRpc } from "../../../lib/tab-rpc";
 import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { toastError } from "../../../stores/toast";
-import { Button, ConfirmDialog, InlineNotice, MenuButton } from "../../common";
+import { Button, ConfirmDialog, CopyButton, InlineNotice, MenuButton, Modal } from "../../common";
 import { BranchPicker } from "./BranchPicker";
 import type { NameRequest } from "./NameDialog";
 import type { ScmRunner } from "./use-scm-action";
+
+/** The commands a diverged Pull offers, as the person could type them (Orca `pull-policy-error-notice.tsx`). */
+const PULL_POLICIES = [
+	{ rebase: false, command: "git pull --no-rebase" },
+	{ rebase: true, command: "git pull --rebase" },
+] as const;
 
 export function SourceControlBar({
 	rpc,
@@ -38,17 +46,28 @@ export function SourceControlBar({
 	conflicts,
 	runner,
 	requestName,
+	onReview,
 }: {
 	rpc: TabRpc;
 	head: RpcGitHead;
 	conflicts: number;
 	runner: ScmRunner;
 	requestName: (request: NameRequest) => void;
+	/** Opens the conflict review of the stopped operation. */
+	onReview?: () => void;
 }) {
 	const t = useT();
 	const tabId = useRuntimeTabId();
 	const [confirm, setConfirm] = useState<"undo" | "abort" | null>(null);
 	const { busy, run } = runner;
+	// A Pull of a branch that diverged from its upstream asks how to join them first (FR30).
+	const [diverged, setDiverged] = useState(false);
+	const pull = (rebase?: boolean) =>
+		void run(
+			"pull",
+			{ type: "git_remote", action: "pull", ...(rebase === undefined ? {} : { rebase }) },
+			{ failure: t("scm.remote.pullFailed") },
+		);
 	const blocked = busy !== null || head.operation !== null;
 	const remoteReason = !head.hasRemote ? t("scm.remote.none") : !head.branch ? t("scm.remote.detached") : undefined;
 	const operationLabel = head.operation ? t(`scm.operation.${head.operation}`) : "";
@@ -76,9 +95,7 @@ export function SourceControlBar({
 						disabled={blocked || remoteReason !== undefined || !head.upstream}
 						icon={<ArrowDown />}
 						loading={busy === "pull"}
-						onClick={() =>
-							void run("pull", { type: "git_remote", action: "pull" }, { failure: t("scm.remote.pullFailed") })
-						}
+						onClick={() => (head.ahead > 0 && head.behind > 0 ? setDiverged(true) : pull())}
 						size="sm"
 						title={
 							remoteReason ??
@@ -215,6 +232,11 @@ export function SourceControlBar({
 				<InlineNotice
 					action={
 						<div className="flex gap-1">
+							{conflicts > 0 && onReview && (
+								<Button disabled={busy !== null} onClick={onReview} size="sm" variant="secondary">
+									{t("scm.conflicts.review")}
+								</Button>
+							)}
 							{conflicts > 0 && tabId && (
 								<Button
 									disabled={busy !== null}
@@ -241,6 +263,23 @@ export function SourceControlBar({
 							>
 								{t("scm.operation.continue")}
 							</Button>
+							{head.operation !== "merge" && (
+								<Button
+									disabled={busy !== null}
+									loading={busy === "skip"}
+									onClick={() =>
+										void run(
+											"skip",
+											{ type: "git_operation", action: "skip" },
+											{ failure: t("scm.operation.skipFailed") },
+										)
+									}
+									size="sm"
+									variant="ghost"
+								>
+									{t("scm.operation.skip")}
+								</Button>
+							)}
 							<Button disabled={busy !== null} onClick={() => setConfirm("abort")} size="sm" variant="ghost">
 								{t("scm.operation.abort")}
 							</Button>
@@ -281,6 +320,47 @@ export function SourceControlBar({
 				}
 				warning={confirm === "undo" && head.upstream && head.ahead === 0 ? t("scm.undoCommitPushed") : undefined}
 			/>
+			<Modal
+				footer={
+					<>
+						<Button onClick={() => setDiverged(false)} variant="ghost">
+							{t("common.cancel")}
+						</Button>
+						{PULL_POLICIES.map(policy => (
+							<Button
+								key={policy.command}
+								onClick={() => {
+									setDiverged(false);
+									pull(policy.rebase);
+								}}
+								variant={policy.rebase ? "primary" : "secondary"}
+							>
+								{policy.rebase ? t("scm.remote.pullRebase") : t("scm.remote.pullMerge")}
+							</Button>
+						))}
+					</>
+				}
+				onClose={() => setDiverged(false)}
+				open={diverged}
+				size="sm"
+				title={t("scm.remote.divergedTitle")}
+			>
+				<div className="flex flex-col gap-3" data-pull-policy>
+					<p className="text-sc-md leading-relaxed text-(--sc-text-secondary)">
+						{t("scm.remote.divergedBody", {
+							upstream: head.upstream ?? "",
+							ahead: head.ahead,
+							behind: head.behind,
+						})}
+					</p>
+					{PULL_POLICIES.map(policy => (
+						<div className="flex items-center gap-2" key={policy.command}>
+							<code className="min-w-0 flex-1 truncate font-mono text-sc-sm">{policy.command}</code>
+							<CopyButton label={t("scm.remote.copyCommand")} text={policy.command} />
+						</div>
+					))}
+				</div>
+			</Modal>
 		</>
 	);
 }

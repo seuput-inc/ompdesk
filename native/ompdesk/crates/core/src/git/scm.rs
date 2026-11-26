@@ -403,11 +403,13 @@ async fn push_failed(
     fault
 }
 
-/// `git pull`, merging a divergent branch unless the person set `pull.rebase`/`pull.ff`.
+/// `git pull`: `rebase` is the person's answer to a diverged branch (Orca `pull-policy-error-notice.tsx`); without one,
+/// a divergent branch merges unless the person set `pull.rebase`/`pull.ff`.
 async fn pull(
     git: &Git,
     root: &str,
     action: RemoteAction,
+    rebase: Option<bool>,
     slow: Opts<'_>,
 ) -> Result<String, Fault> {
     // Without the user's own pull.rebase/pull.ff, git refuses a divergent pull; merge then, like a plain
@@ -418,8 +420,11 @@ async fn pull(
         .code
         == 0;
     let mut args = vec!["pull", "--no-edit"];
-    if !configured {
-        args.push("--no-rebase");
+    match rebase {
+        Some(true) => args.push("--rebase"),
+        Some(false) => args.push("--no-rebase"),
+        None if !configured => args.push("--no-rebase"),
+        None => {}
     }
     let opts = Opts {
         env: &[("GIT_EDITOR", "true")],
@@ -530,7 +535,7 @@ async fn sync(git: &Git, root: &str, branch: &str, slow: Opts<'_>) -> Result<Str
     if head.ahead > 0 && head.behind > 0 && upstream_rewritten(git, root).await? {
         said.push(push_with_lease(git, root, branch, slow).await?);
     } else {
-        said.push(pull(git, root, action, slow).await?);
+        said.push(pull(git, root, action, None, slow).await?);
         if read::head(git, root).await?.ahead > 0 {
             let output = git.run(root, &["push"], slow).await?;
             if output.code != 0 {
@@ -543,10 +548,12 @@ async fn sync(git: &Git, root: &str, branch: &str, slow: Opts<'_>) -> Result<Str
     Ok(said.join("\n"))
 }
 
+/// `rebase`: how a Pull joins a diverged branch (none: the person's config, else a merge).
 pub async fn remote(
     git: &Git,
     root: &str,
     action: RemoteAction,
+    rebase: Option<bool>,
     slow_ms: u64,
 ) -> Result<Remote, Fault> {
     let head = read::head(git, root).await?;
@@ -583,7 +590,7 @@ pub async fn remote(
                 format!("{branch} has no upstream to pull from"),
             ));
         }
-        return Ok(said(pull(git, root, action, slow).await?));
+        return Ok(said(pull(git, root, action, rebase, slow).await?));
     }
     if head.upstream.is_some() {
         let output = git.run(root, &["push"], slow).await?;
@@ -644,6 +651,7 @@ pub async fn stash(
 #[serde(rename_all = "lowercase")]
 pub enum OperationAction {
     Continue,
+    Skip,
     Abort,
 }
 
@@ -660,9 +668,19 @@ pub async fn operation(
             "No merge, rebase, cherry-pick or revert is in progress",
         ));
     };
-    if action == OperationAction::Abort {
-        git.text(root, &[operation, "--abort"]).await?;
-        return Ok(CLEAN);
+    match action {
+        OperationAction::Abort => {
+            git.text(root, &[operation, "--abort"]).await?;
+            return Ok(CLEAN);
+        }
+        // A merge has no commit to leave out.
+        OperationAction::Skip if operation == "merge" => {
+            return Err(refuse("git_failed", "A merge has no commit to skip"));
+        }
+        OperationAction::Skip => {
+            return run_may_conflict(git, root, &[operation, "--skip"], slow_ms, None).await;
+        }
+        OperationAction::Continue => {}
     }
     if conflict_count(git, root).await? > 0 {
         return Err(refuse(
@@ -671,6 +689,57 @@ pub async fn operation(
         ));
     }
     run_may_conflict(git, root, &[operation, "--continue"], slow_ms, None).await
+}
+
+/// A rebase onto the base: where it stopped, and whether the uncommitted work it set aside came back.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Rebased {
+    conflicts: usize,
+    /// The rebase landed but the uncommitted work did not reapply cleanly; git kept it in the stash.
+    autostash_kept: bool,
+}
+
+/// `git rebase --autostash <base>` (Orca `git-remote-sync.ts:93-135`, `base-rebase-control.tsx`): uncommitted work is
+/// set aside and put back. A stop on conflicts is the operation banner's to continue, skip or abort.
+pub async fn rebase_onto(
+    git: &Git,
+    root: &str,
+    base: &str,
+    slow_ms: u64,
+) -> Result<Rebased, Fault> {
+    let spec = format!("{base}^{{commit}}");
+    let named = git
+        .raw(root, &["rev-parse", "--verify", "--quiet", &spec])
+        .await?;
+    if base.starts_with('-') || named.code != 0 {
+        return Err(refuse(
+            "invalid_name",
+            format!("{base} names no commit in this repository"),
+        ));
+    }
+    let args = ["rebase", "--autostash", base];
+    let opts = Opts {
+        timeout_ms: Some(slow_ms),
+        env: &[("GIT_EDITOR", "true")],
+        ..Opts::default()
+    };
+    let output = git.run(root, &args, opts).await?;
+    if output.code == 0 {
+        let said = format!("{}\n{}", output.text(), output.stderr).to_ascii_lowercase();
+        return Ok(Rebased {
+            conflicts: 0,
+            autostash_kept: said.contains("autostash") && said.contains("conflict"),
+        });
+    }
+    let conflicts = conflict_count(git, root).await?;
+    if conflicts > 0 {
+        return Ok(Rebased {
+            conflicts,
+            autostash_kept: false,
+        });
+    }
+    Err(failure(&args, &output))
 }
 
 #[derive(Serialize)]
@@ -855,13 +924,15 @@ async fn commit_url(git: &Git, root: &str) -> Result<Option<String>, Fault> {
     Ok(base.map(|base| format!("{base}/commit/{{sha}}")))
 }
 
-/// `limit` and `skip` as the page sent them (JSON numbers), `query` as main trimmed it (none when empty).
+/// `limit` and `skip` as the page sent them (JSON numbers), `query` as main trimmed it (none when empty). `branch`:
+/// none for HEAD's history, `--all` for every ref's, else one ref that names a commit.
 pub async fn log(
     git: &Git,
     root: &str,
     limit: Option<f64>,
     skip: Option<f64>,
     query: Option<&str>,
+    branch: Option<&str>,
 ) -> Result<Log, Fault> {
     if !has_head(git, root).await? {
         return Ok(Log {
@@ -875,10 +946,29 @@ pub async fn log(
     let mut args = vec![
         "log".to_owned(),
         format!("--format={LOG_FORMAT}"),
+        // Children before parents, so the page's graph lanes never run upward.
+        "--topo-order".into(),
         "-n".into(),
         parse::js_number(limit + 1.0),
         format!("--skip={}", parse::js_number(skip)),
     ];
+    let revision = match branch {
+        None => None,
+        Some("--all") => Some("--all".to_owned()),
+        Some(name) => {
+            if name.is_empty() || name.starts_with('-') {
+                return Err(refuse("invalid_name", format!("Invalid branch: {name}")));
+            }
+            let spec = format!("{name}^{{commit}}");
+            let found = git
+                .raw(root, &["rev-parse", "--verify", "--quiet", &spec])
+                .await?;
+            if found.code != 0 {
+                return Err(refuse("invalid_name", format!("No such branch: {name}")));
+            }
+            Some(js_trim(&found.text()).to_owned())
+        }
+    };
     let grep = |query: &str| {
         [
             "--regexp-ignore-case".to_owned(),
@@ -903,6 +993,10 @@ pub async fn log(
             Some(sha) => args.extend(["--no-walk".to_owned(), sha]),
             None => args.extend(grep(query)),
         }
+    }
+    // A commit id found by the query is the whole answer; otherwise the walk starts at the branch asked for.
+    if !args.iter().any(|arg| arg == "--no-walk") {
+        args.extend(revision);
     }
     let args = strs(&args);
     let (output, url) = tokio::try_join!(git.text(root, &args), commit_url(git, root))?;

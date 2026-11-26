@@ -289,6 +289,13 @@ async function clearNotesAndClose(page: Page): Promise<void> {
 	await closePanelView(page);
 }
 
+/** Puts the Changes panel back on its changed-files source (`panel-graph` left it on Commits), then closes it. */
+async function closeCommitHistory(page: Page): Promise<void> {
+	const source = page.locator("[data-commit-history]:visible select:not([data-history-branch])").first();
+	if (await source.isVisible().catch(() => false)) await source.selectOption("repository");
+	await closePanelView(page);
+}
+
 /**
  * Open the command palette by clicks: the sidebar's search button (Command palette), behind the phone's Open menu
  * drawer where the sidebar is one.
@@ -1678,6 +1685,40 @@ export const SURFACES: readonly Surface[] = [
 		// The harness page has no git checkout to note on: parity only.
 		when: () => false,
 		settle: 900,
+	},
+	{
+		id: "panel-graph",
+		area: "A",
+		title: "Changes › Commits with All branches: graph lanes beside the rows",
+		open: async (page, look) => {
+			await openPanelView(page, look, "diff");
+			await page.locator("[data-scm-bar]:visible").first().waitFor({ timeout: 20_000 });
+			await page
+				.getByRole("combobox", { name: say(look, "diffPanel.title"), exact: true })
+				.first()
+				.selectOption("commits");
+			await page.locator("[data-history-branch]:visible").first().selectOption("--all");
+		},
+		ready: "[data-commit-history] [data-graph-lanes]",
+		parity: { session: "work", after: closeCommitHistory },
+		settle: 900,
+	},
+	{
+		id: "panel-blame",
+		area: "A",
+		title: "Files viewer with Blame on: the commit that last changed each run of lines",
+		open: async (page, look) => {
+			await openPanelView(page, look, "files");
+			await page.getByLabel(say(look, "filesPanel.search"), { exact: true }).first().fill("Sidebar.tsx");
+			await page
+				.getByRole("treeitem", { name: /Sidebar\.tsx/ })
+				.first()
+				.click();
+			await page.locator("[data-blame-toggle]:visible").first().click();
+		},
+		ready: "[data-code-view] [data-blame-line]",
+		parity: { session: "work", after: closePanelView },
+		settle: 1200,
 	},
 
 	// ── Area B: Settings, centers, dialogs ────────────────────────────────────────────────────

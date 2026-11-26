@@ -856,13 +856,8 @@ pub async fn snapshot(
     }
     let status = status.text();
     let head = rev_parse(git, &worktree.path, "HEAD").await?;
-    // A removal goes forced, so what status cannot show (submodule checkouts, ignored files kept nowhere else) asks.
-    let dirty = !status.is_empty() || {
-        let primary = read::primary_root(git, &worktree.path).await?;
-        removal_risk(git, &worktree.path, &primary).await?.is_some()
-    };
     let state = State {
-        dirty,
+        dirty: !status.is_empty(),
         moved,
         off_branch: head.as_ref().is_some_and(|head| *head != tip),
     };

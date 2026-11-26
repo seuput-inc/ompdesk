@@ -17,7 +17,7 @@ import { FigureModeToggle } from "../../chat/Figure";
 import { MermaidBlock } from "../../chat/MermaidBlock";
 import { IconButton, ListRow, ZoomableImage } from "../../common";
 import { FileSelectionActions } from "../notes/FileSelection";
-import { CodeView, useWrapToggle } from "./CodeView";
+import { CodeView, useBlameToggle, useWrapToggle } from "./CodeView";
 import { parseDelimited } from "./delimited";
 import { fileExtension } from "./file-kind";
 import { HexView } from "./HexView";
@@ -76,6 +76,7 @@ function TextFileFrame({
 export function CodeFileView({ path, tabId, line }: TextViewProps) {
 	const t = useT();
 	const { wrap, toggle } = useWrapToggle();
+	const blame = useBlameToggle(path);
 	const log = fileExtension(path) === "log";
 	return (
 		<TextFileFrame
@@ -91,11 +92,22 @@ export function CodeFileView({ path, tabId, line }: TextViewProps) {
 						<AnsiText text={content} />
 					</pre>
 				) : (
-					<CodeView code={content} language={languageFromPath(path)} targetLine={line} wrap={wrap} />
+					<CodeView
+						blame={blame.blame}
+						code={content}
+						language={languageFromPath(path)}
+						targetLine={line}
+						wrap={wrap}
+					/>
 				)
 			}
 			tabId={tabId}
-			toolbar={<ViewerToolbar label={t("fileViewer.toolbar")}>{toggle}</ViewerToolbar>}
+			toolbar={
+				<ViewerToolbar label={t("fileViewer.toolbar")}>
+					{toggle}
+					{blame.toggle}
+				</ViewerToolbar>
+			}
 		/>
 	);
 }

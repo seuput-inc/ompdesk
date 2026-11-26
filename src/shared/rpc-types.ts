@@ -530,7 +530,18 @@ export type RpcCommand =
 	// edits with them. Answered in main from the session's own transcript.
 	| { id?: string; type: "get_turn_edits" }
 	| { id?: string; type: "get_git_fingerprint"; root?: string }
-	| { id?: string; type: "get_git_diff"; path: string }
+	| { id?: string; type: "get_git_diff"; path: string; against?: string }
+	// The Files viewer's Blame toggle (core git/blame.rs): `path` relative to the tab's folder. Answered in main.
+	| { id?: string; type: "get_git_blame"; path: string }
+	// The Changes panel's "Against base" range (core git/compare.rs): null without a base that shares history.
+	| { id?: string; type: "get_git_compare" }
+	// A changed picture as `against` (else HEAD) holds it at `path` (a rename's origin): the image diff's before side.
+	| { id?: string; type: "get_git_image"; path: string; against?: string }
+	// The repositories inside the tab's folder when it is no repository itself (core git/nested.rs). The Changes panel's
+	// commands then name one with `repo` (its folder relative to the tab's), which main checks is a checkout inside it.
+	| { id?: string; type: "get_nested_repos" }
+	// Pins the repository's base (`ompdesk.baseRef` in its config); null goes back to the automatic one.
+	| { id?: string; type: "git_set_base"; base: string | null }
 	| {
 			id?: string;
 			type: "worktree_create";
@@ -601,9 +612,14 @@ export type RpcCommand =
 	| { id?: string; type: "git_commit_message" }
 	| { id?: string; type: "git_last_commit_message" }
 	| { id?: string; type: "git_undo_commit" }
-	| { id?: string; type: "git_remote"; action: "push" | "pull" | "fetch" | "sync" }
+	// `rebase`: how a Pull joins a branch that diverged from its upstream (the diverged-pull choice); none = git's config.
+	| { id?: string; type: "git_remote"; action: "push" | "pull" | "fetch" | "sync"; rebase?: boolean }
 	| { id?: string; type: "git_stash"; action: "push" | "pop"; message?: string }
-	| { id?: string; type: "git_operation"; action: "continue" | "abort" }
+	| { id?: string; type: "git_operation"; action: "continue" | "skip" | "abort" }
+	// `git rebase --autostash <base>`: the Changes panel's "Rebase onto base" (core scm.rs rebase_onto).
+	| { id?: string; type: "git_rebase_onto"; base: string }
+	// One conflicted file of a stopped operation: keep HEAD's side, the incoming side, or both, then stage it.
+	| { id?: string; type: "git_resolve_conflict"; path: string; side: "ours" | "theirs" | "both" }
 	| { id?: string; type: "git_branches" }
 	| {
 			id?: string;
@@ -614,7 +630,8 @@ export type RpcCommand =
 			base?: string;
 			force?: boolean;
 	  }
-	| { id?: string; type: "git_log"; limit?: number; skip?: number; query?: string }
+	// `branch`: "--all" for every ref's history, one branch name, or none for HEAD's.
+	| { id?: string; type: "git_log"; limit?: number; skip?: number; query?: string; branch?: string }
 	| { id?: string; type: "git_commit_detail"; sha: string }
 	| { id?: string; type: "git_commit_diff"; sha: string; path: string }
 	| {
@@ -1201,6 +1218,34 @@ export interface RpcGitChanges {
 	head?: RpcGitHead;
 }
 
+/** `get_git_compare`: the checkout against its base, from the merge-base (`base`), committed and uncommitted alike. */
+export interface RpcGitCompare extends RpcGitChanges {
+	/** The ref compared against (`origin/main`). */
+	baseRef: string;
+	/** Why this base: the repository's pick, the branch's upstream (another branch), or the remote's default branch. */
+	source: "pinned" | "upstream" | "default";
+	/** The repository's pick, also when it no longer resolves. */
+	pinned?: string;
+	/** HEAD the range was read at. */
+	headOid: string;
+	/** Commits HEAD has that the base lacks, and the reverse. */
+	ahead: number;
+	behind: number;
+	/** Files that would conflict when the base's commits come in (`merge-tree`, only when both sides moved). */
+	conflicts: string[];
+}
+
+/** `get_git_image`: the before side of a changed picture as a data URL; null when that commit holds no such picture. */
+export interface RpcGitImage {
+	before: string | null;
+}
+
+/** `get_nested_repos`: repository folders relative to the tab's, shallow first; `truncated` when the walk stopped early. */
+export interface RpcNestedRepos {
+	repos: string[];
+	truncated: boolean;
+}
+
 /** `get_git_unlanded`: what a branch has not landed in the default branch yet (git/unlanded.ts). */
 export interface RpcGitUnlanded {
 	branch: string;
@@ -1235,6 +1280,12 @@ export interface RpcGitRemoteResult {
 /** git_branch merge / git_operation / git_history_action results that may stop on conflicts. */
 export interface RpcGitMutationResult {
 	conflicts: number;
+}
+
+/** git_rebase_onto result: where it stopped, and whether the uncommitted work it set aside stayed in the stash. */
+export interface RpcGitRebased {
+	conflicts: number;
+	autostashKept: boolean;
 }
 
 export interface RpcGitBranch {
@@ -1275,6 +1326,23 @@ export interface RpcGitLog {
 export interface RpcGitCommitDetail extends RpcGitCommit {
 	body: string;
 	files: { path: string; oldPath?: string; status: string; added?: number; removed?: number }[];
+}
+
+/** `get_git_blame`: each commit once, and per line (`lines[i]` is line `i + 1`) the index of the one that last changed it. */
+export interface RpcGitBlame {
+	commits: {
+		sha: string;
+		shortSha: string;
+		author: string;
+		/** Author time, epoch milliseconds. */
+		date: number;
+		summary: string;
+		/** The working tree's own change, not committed yet. */
+		uncommitted: boolean;
+	}[];
+	lines: number[];
+	/** The file is longer than the lines answered. */
+	truncated: boolean;
 }
 
 export interface RpcGitDiff {

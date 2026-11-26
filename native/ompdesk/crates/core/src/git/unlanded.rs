@@ -31,7 +31,10 @@ async fn rev_parse(git: &Git, root: &str, args: &[&str]) -> Result<Option<String
 }
 
 /// The ref a branch lands in and its short name: `origin/main` lands in `main`.
-async fn landing_target(git: &Git, root: &str) -> Result<Option<(String, String)>, Fault> {
+pub(super) async fn landing_target(
+    git: &Git,
+    root: &str,
+) -> Result<Option<(String, String)>, Fault> {
     let remote_head = rev_parse(
         git,
         root,

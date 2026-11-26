@@ -154,7 +154,7 @@ describe("RepositoryChanges", () => {
 		const first = queryAll("button").find(button => button.getAttribute("title") === "src/a.ts")!;
 		await click(first);
 		await flush();
-		expect(getGitDiff).toHaveBeenCalledWith("src/a.ts");
+		expect(getGitDiff).toHaveBeenCalledWith("src/a.ts", undefined);
 		// The open file is the list's current item, not a toggle a screen reader reads as "pressed".
 		const opened = document.querySelector('button[title="src/a.ts"]');
 		expect(opened?.getAttribute("aria-current")).toBe("true");
@@ -167,7 +167,7 @@ describe("RepositoryChanges", () => {
 		const next = queryAll("button").find(button => button.getAttribute("aria-label") === "Next file")!;
 		await click(next);
 		await flush();
-		expect(getGitDiff).toHaveBeenLastCalledWith("src/b.ts");
+		expect(getGitDiff).toHaveBeenLastCalledWith("src/b.ts", undefined);
 		const back = queryAll("button").find(button => button.getAttribute("aria-label") === "Back to changed files")!;
 		await click(back);
 		expect(document.querySelector(".omp-changes-preview")).toBeNull();

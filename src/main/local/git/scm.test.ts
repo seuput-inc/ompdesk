@@ -6,8 +6,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { core } from "../../core/process";
 import { CreditSpendRefusal } from "../../omp-launch";
 import { RM_TEMP } from "../../test-fake-omp";
-import type { OmpRuntime } from "../types";
-import { getGitChanges, getGitDiff, repoRoot } from "./changes";
+import { handlers } from "../git";
+import type { LocalCommandContext, OmpRuntime } from "../types";
+import { getGitChanges, getGitCompare, getGitDiff, repoRoot } from "./changes";
 import { coreGit, REPO_LOCK_HOLD_MS, withRepoLock } from "./exec";
 import { isValidRefName } from "./parse";
 import * as scm from "./scm";
@@ -356,6 +357,79 @@ describe("remote", () => {
 		await scm.remote(root, "sync");
 		expect(gitSync(path.join(dir, "remote.git"), "rev-parse", "main")).toBe(gitSync(root, "rev-parse", "HEAD"));
 		expect(gitSync(root, "log", "-1", "--format=%s")).toBe("work, reworded");
+	});
+});
+
+describe("against base, rebase onto it, and conflicts", () => {
+	const commitFile = async (file: string, text: string, message: string) => {
+		await fs.writeFile(path.join(root, file), text);
+		gitSync(root, "add", file);
+		gitSync(root, "commit", "-qm", message);
+	};
+
+	it("lists everything since the merge-base with the base, pins a base, and rebases onto it", async () => {
+		gitSync(root, "branch", "trunk");
+		gitSync(root, "checkout", "-q", "-b", "work");
+		await commitFile("work.txt", "work\n", "work");
+		await fs.writeFile(path.join(root, "loose.txt"), "loose\n");
+		const range = await getGitCompare(root);
+		expect(range).toMatchObject({ source: "default", baseRef: "main", ahead: 1, behind: 0, conflicts: [] });
+		expect(range?.files.map(file => file.path)).toEqual(["work.txt", "loose.txt"]);
+		expect((await getGitDiff(root, "work.txt", range?.base ?? undefined)).diff).toContain("+work");
+
+		gitSync(root, "checkout", "-q", "trunk");
+		await commitFile("trunk.txt", "trunk\n", "trunk");
+		gitSync(root, "checkout", "-q", "work");
+		await scm.setBase(root, "trunk");
+		expect(await getGitCompare(root)).toMatchObject({ source: "pinned", baseRef: "trunk", ahead: 1, behind: 1 });
+		await expect(scm.setBase(root, "-x")).rejects.toMatchObject({ code: "invalid_name" });
+
+		expect(await scm.rebaseOnto(root, "trunk")).toEqual({ conflicts: 0, autostashKept: false });
+		expect(await getGitCompare(root)).toMatchObject({ ahead: 1, behind: 0 });
+		// The uncommitted file came back after the rebase set it aside.
+		expect(await fs.readFile(path.join(root, "loose.txt"), "utf8")).toBe("loose\n");
+		await scm.setBase(root, null);
+		expect(await getGitCompare(root)).toMatchObject({ source: "default" });
+	});
+
+	it("names the files a rebase onto the base would conflict in, then settles one by side", async () => {
+		await commitFile("same.txt", "base\n", "base");
+		gitSync(root, "checkout", "-q", "-b", "work");
+		await commitFile("same.txt", "ours\n", "ours");
+		gitSync(root, "checkout", "-q", "main");
+		await commitFile("same.txt", "theirs\n", "theirs");
+		gitSync(root, "checkout", "-q", "work");
+		expect(await getGitCompare(root)).toMatchObject({ conflicts: ["same.txt"] });
+
+		expect(await scm.rebaseOnto(root, "main")).toMatchObject({ conflicts: 1 });
+		await scm.resolveConflict(root, "same.txt", "both");
+		expect(await fs.readFile(path.join(root, "same.txt"), "utf8")).toBe("theirs\nours\n");
+		expect(await statusOf("same.txt")).not.toMatch(/U/);
+		await expect(scm.resolveConflict(root, "same.txt", "ours")).rejects.toThrow();
+		await scm.operation(root, "abort");
+	});
+});
+
+describe("a folder that holds several repositories", () => {
+	it("lists them and runs a section's git in the one it names, never outside the folder", async () => {
+		const folder = path.join(dir, "folder");
+		await initRepo(path.join(folder, "app"));
+		await initRepo(path.join(folder, "libs", "core"));
+		await fs.mkdir(path.join(folder, "node_modules", "dep", ".git"), { recursive: true });
+		const ctx = { cwd: folder } as LocalCommandContext;
+		expect(await handlers.get_nested_repos?.({ type: "get_nested_repos" }, ctx)).toEqual({
+			repos: ["app", "libs/core"],
+			truncated: false,
+		});
+		await fs.writeFile(path.join(folder, "libs", "core", "new.txt"), "x");
+		const changes = (await handlers.get_git_changes?.({ type: "get_git_changes", repo: "libs/core" }, ctx)) as {
+			files: { path: string }[];
+		};
+		expect(changes.files.map(file => file.path)).toEqual(["new.txt"]);
+		for (const repo of ["../repo", "libs", path.join(folder, "app")])
+			await expect(handlers.get_git_changes?.({ type: "get_git_changes", repo }, ctx)).rejects.toMatchObject({
+				code: "invalid_path",
+			});
 	});
 });
 

@@ -91,7 +91,8 @@ export interface SessionRpcClient {
 	getGitUnlanded(): Promise<RpcResponse>;
 	/** `root`: the worktree root the last `getGitChanges` reported, which spares main a `rev-parse` per poll. */
 	getGitFingerprint(root?: string): Promise<RpcResponse>;
-	getGitDiff(path: string): Promise<RpcResponse>;
+	/** `against`: the base range's merge-base (`get_git_compare`); without it the diff is against HEAD. */
+	getGitDiff(path: string, against?: string): Promise<RpcResponse>;
 	worktreeCreate(
 		name: string,
 		options?: { baseCwd?: string; baseRef?: "HEAD" | "default"; branchPrefix?: string; requestId?: string },
@@ -379,9 +380,12 @@ const RPC_COMMAND_TIMEOUTS: Record<string, number> = {
 	git_remote: 960_000,
 	git_stash: 360_000,
 	git_operation: 360_000,
+	git_rebase_onto: 360_000,
+	git_resolve_conflict: 70_000,
 	git_branches: 70_000,
 	git_branch: 360_000,
 	git_log: 130_000,
+	get_git_blame: 70_000,
 	git_commit_detail: 70_000,
 	git_commit_diff: 70_000,
 	git_history_action: 360_000,
@@ -501,7 +505,7 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		getGitChanges: () => rpcCommand({ type: "get_git_changes" }),
 		getGitUnlanded: () => rpcCommand({ type: "get_git_unlanded" }),
 		getGitFingerprint: root => rpcCommand({ type: "get_git_fingerprint", ...(root ? { root } : {}) }),
-		getGitDiff: path => rpcCommand({ type: "get_git_diff", path }),
+		getGitDiff: (path, against) => rpcCommand({ type: "get_git_diff", path, ...(against ? { against } : {}) }),
 		// Worktree and PR commands run in main; RPC_COMMAND_TIMEOUTS holds their budgets.
 		worktreeCreate: (name, options) =>
 			rpcCommand({

@@ -1,5 +1,7 @@
 /** Git / worktree / PR / source-control commands (rpc-map §5), answered in main over the git and gh CLIs. */
 
+import * as path from "node:path";
+import { promises as fs } from "original-fs";
 import type { RpcPrListFilter } from "../../shared/rpc-types";
 import {
 	archiveBeforeRemove,
@@ -9,8 +11,17 @@ import {
 } from "../disk/saved-worktrees";
 import { gitFingerprints } from "../git-fingerprints";
 import { listOrphanWorktrees, removeOrphanWorktree, sessionOpenFolders } from "../worktree-orphans";
-import { getGitChanges, getGitDiff, getGitStatus, primaryRoot } from "./git/changes";
+import {
+	getGitChanges,
+	getGitCompare,
+	getGitDiff,
+	getGitImage,
+	getGitStatus,
+	primaryRoot,
+	repoRoot,
+} from "./git/changes";
 import { githubCommand } from "./git/github";
+import { getNestedRepos } from "./git/nested";
 import {
 	prCheckout,
 	prComment,
@@ -56,7 +67,10 @@ export const handlers: Record<string, LocalHandler> = {
 	get_git_unlanded: (_command, ctx) => getGitUnlanded(ctx.cwd),
 	// One watch per checkout for the whole app answers every window's and tab's check (git-fingerprints.ts).
 	get_git_fingerprint: (command, ctx) => gitFingerprints.read(ctx.cwd, str(command.root)),
-	get_git_diff: (command, ctx) => getGitDiff(ctx.cwd, str(command.path) ?? ""),
+	get_git_diff: (command, ctx) => getGitDiff(ctx.cwd, str(command.path) ?? "", str(command.against)),
+	get_git_compare: (_command, ctx) => getGitCompare(ctx.cwd),
+	get_git_image: (command, ctx) => getGitImage(ctx.cwd, str(command.path) ?? "", str(command.against)),
+	git_set_base: (command, ctx) => scm.setBase(ctx.cwd, str(command.base) ?? null),
 	worktree_create: (command, ctx) => {
 		const requestId = str(command.requestId);
 		return createWorktree(
@@ -155,9 +169,18 @@ export const handlers: Record<string, LocalHandler> = {
 		scm.remote(
 			ctx.cwd,
 			command.action === "push" || command.action === "pull" || command.action === "sync" ? command.action : "fetch",
+			typeof command.rebase === "boolean" ? command.rebase : undefined,
 		),
 	git_stash: (command, ctx) => scm.stash(ctx.cwd, command.action === "pop" ? "pop" : "push", str(command.message)),
-	git_operation: (command, ctx) => scm.operation(ctx.cwd, command.action === "abort" ? "abort" : "continue"),
+	git_operation: (command, ctx) =>
+		scm.operation(ctx.cwd, command.action === "abort" ? "abort" : command.action === "skip" ? "skip" : "continue"),
+	git_rebase_onto: (command, ctx) => scm.rebaseOnto(ctx.cwd, str(command.base) ?? ""),
+	git_resolve_conflict: (command, ctx) =>
+		scm.resolveConflict(
+			ctx.cwd,
+			str(command.path) ?? "",
+			command.side === "theirs" ? "theirs" : command.side === "both" ? "both" : "ours",
+		),
 	git_branches: (_command, ctx) => scm.branches(ctx.cwd),
 	git_branch: (command, ctx) =>
 		scm.branch(ctx.cwd, {
@@ -173,7 +196,10 @@ export const handlers: Record<string, LocalHandler> = {
 			limit: typeof command.limit === "number" ? command.limit : undefined,
 			skip: typeof command.skip === "number" ? command.skip : undefined,
 			query: str(command.query),
+			branch: str(command.branch),
 		}),
+	// The Files viewer's Blame toggle (FR87): the file the tab's folder holds, run in that folder.
+	get_git_blame: (command, ctx) => scm.blame(ctx.cwd, str(command.path) ?? ""),
 	git_commit_detail: (command, ctx) => scm.commitDetail(ctx.cwd, str(command.sha) ?? ""),
 	git_commit_diff: (command, ctx) => scm.commitDiff(ctx.cwd, str(command.sha) ?? "", str(command.path) ?? ""),
 	git_history_action: (command, ctx) => {
@@ -198,4 +224,60 @@ export const handlers: Record<string, LocalHandler> = {
 			name: str(command.name),
 		});
 	},
+	// The repositories inside a folder that is not one (core git/nested.rs): one Changes section each (FR40, FB45).
+	get_nested_repos: (_command, ctx) => getNestedRepos(ctx.cwd),
 };
+
+/**
+ * The Changes panel's commands that may name one repository inside the tab's folder (`repo`, relative to it) when that
+ * folder holds several checkouts: each section reads and changes its own repository. Anything else keeps the tab's own.
+ */
+const NESTED_COMMANDS = [
+	"get_git_status",
+	"get_git_changes",
+	"get_git_fingerprint",
+	"get_git_diff",
+	"get_git_compare",
+	"get_git_image",
+	"get_git_blame",
+	"git_set_base",
+	"git_stage",
+	"git_unstage",
+	"git_discard",
+	"git_commit",
+	"git_commit_message",
+	"git_last_commit_message",
+	"git_undo_commit",
+	"git_remote",
+	"git_stash",
+	"git_operation",
+	"git_rebase_onto",
+	"git_resolve_conflict",
+	"git_branches",
+	"git_branch",
+	"git_log",
+	"git_commit_detail",
+	"git_commit_diff",
+	"git_history_action",
+] as const;
+
+/** `repo` under `cwd`: a relative folder that is a checkout's own root, reached through no link out of `cwd`. */
+async function nestedFolder(cwd: string, repo: unknown): Promise<string> {
+	const refuse = () => new LocalCommandError(`Not a repository inside ${cwd}: ${String(repo)}`, "invalid_path");
+	if (typeof repo !== "string" || !repo || path.isAbsolute(repo) || repo.split(/[/\\]/).includes("..")) throw refuse();
+	const [base, folder] = await Promise.all([fs.realpath(cwd), fs.realpath(path.join(cwd, repo))]).catch(() => {
+		throw refuse();
+	});
+	const root = await repoRoot(folder);
+	if (!folder.startsWith(base + path.sep) || !root || (await fs.realpath(root)) !== folder) throw refuse();
+	return folder;
+}
+
+for (const type of NESTED_COMMANDS) {
+	const handler = handlers[type];
+	if (!handler) continue;
+	handlers[type] = async (command, ctx) =>
+		command.repo === undefined
+			? handler(command, ctx)
+			: handler(command, { ...ctx, cwd: await nestedFolder(ctx.cwd, command.repo) });
+}

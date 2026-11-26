@@ -29,7 +29,10 @@ export function fixableGitAction(command: RpcCommand): string | null {
 		case "git_stash":
 			return command.action === "pop" ? "stash pop" : null;
 		case "git_operation":
+			if (command.action === "skip") return "--skip of the stopped operation";
 			return command.action === "continue" ? "--continue of the stopped operation" : null;
+		case "git_rebase_onto":
+			return `rebase onto ${command.base}`;
 		case "git_history_action":
 			if (command.action === "cherry_pick") return "cherry-pick";
 			if (command.action === "revert") return "revert";
