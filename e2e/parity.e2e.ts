@@ -610,6 +610,42 @@ if (dir) {
 				answered.set("Parity long", session);
 				return session;
 			};
+			/**
+			 * A session of its own whose board has every zone but Needs you (`board-strip*`): a todo list with two
+			 * instructions since it changed (`fixture todo behind`), then a turn left running on its test rerun (`fixture
+			 * turn recovered live`) with subagents at work (`fixture:subagents`), for the rest of the run. Each view reads
+			 * them from the host (`get_state`, `get_subagents`, the transcript). No question: the Escape each view presses
+			 * before it shows a session (`openRow`) would answer it.
+			 */
+			const boardSession = async (): Promise<HostSession> => {
+				const made = answered.get("Parity board");
+				if (made) return made;
+				const tabId = await titledTab("Parity board");
+				await b.evaluate(
+					id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "fixture todo behind" }),
+					tabId,
+				);
+				await untilAnswered(b, tabId);
+				for (const command of [
+					{ type: "prompt", message: "fixture turn recovered live" },
+					{ type: "bash", command: "fixture:subagents" },
+				] as const)
+					await b.evaluate(([id, sent]) => window.omp.rpc.commandForTab(id, sent), [tabId, command] as const);
+				let sessionPath = "";
+				await expect
+					.poll(
+						async () => {
+							const tab = (await b.evaluate(() => window.omp.tabs.list())).find(entry => entry.tabId === tabId);
+							sessionPath = tab?.status === "running" ? (tab.sessionPath ?? "") : "";
+							return sessionPath;
+						},
+						{ timeout: 30_000 },
+					)
+					.not.toBe("");
+				const session = { path: sessionPath, cwd: work.cwd };
+				answered.set("Parity board", session);
+				return session;
+			};
 			/** B's `session` as it is when a view shows it. */
 			const hostSession = async (session: ParitySession): Promise<HostSession> =>
 				session === "work"
@@ -639,7 +675,9 @@ if (dir) {
 															answeredSession("Parity schedule", [
 																["fixture schedule card", "Webhook routine saved."],
 															])
-														: limitSession();
+														: session === "board"
+															? boardSession()
+															: limitSession();
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {

@@ -98,7 +98,8 @@ export type ParitySession =
 	| "long"
 	| "cut"
 	| "stress"
-	| "schedule";
+	| "schedule"
+	| "board";
 
 /** The fake omp's voice script (`voiceScript`, e2e/fixture/rpc-ui.ts); e2e/parity.e2e.ts names the file. */
 async function scriptVoice(script: Record<string, unknown>): Promise<void> {
@@ -386,6 +387,19 @@ const isPhone = (look: Look): boolean => look.width < 600;
  * window from 1100 dock it beside a column narrowed for it.
  */
 const boardIsStrip = (look: Look): boolean => look.width < 1100;
+/**
+ * The busy board a board surface waits for, as a strip (`chip`) or docked. The harness's `?board=busy` lands its
+ * turn, question and goal together 1.5 s after boot (dev-harness/boot.ts), so there both wait for the question; the
+ * parity sheet's `board` session asks none (the Escape each view presses before it shows a session would answer it),
+ * so there they wait for its running work.
+ */
+function busyBoard(page: Page): { chip: Locator; docked: Locator } {
+	const harness = page.url().includes("board=busy");
+	return {
+		chip: page.locator(harness ? "[data-work-chip][data-state='waiting']" : "[data-work-chip]").first(),
+		docked: page.locator(`.omp-work-board-slot [data-board-section='${harness ? "needs" : "now"}']`).first(),
+	};
+}
 /** The host's sheets are the paired web page's (`WebHostUi` renders nothing in the desktop app). */
 const webPage = (look: Look): boolean => look.device !== "electron";
 
@@ -1427,14 +1441,19 @@ export const SURFACES: readonly Surface[] = [
 		title: "Work board strip (busy session, ?board=busy), expanded: under the header on a phone, above the composer elsewhere, where the pane cannot dock the board (docked: board-strip-open)",
 		query: "&board=busy",
 		when: boardIsStrip,
-		open: async page => {
-			// The busy fixture's turn, question and goal land 1.5 s after boot (dev-harness/boot.ts).
-			const chip = page.locator("[data-work-chip][data-state='waiting']");
-			await chip.waitFor({ state: "visible", timeout: 15_000 });
+		open: async (page, look) => {
+			const { chip, docked } = busyBoard(page);
+			await chip.or(docked).first().waitFor({ state: "visible", timeout: 15_000 });
+			// A window wide enough docks the board (the parity sheet's): the side panel takes its place, so the strip shows.
+			if ((await chip.count()) === 0) {
+				await openPanelView(page, look, "diff");
+				await chip.waitFor({ state: "visible", timeout: 15_000 });
+			}
 			if ((await chip.getAttribute("aria-expanded")) !== "true") await chip.click();
 		},
 		ready: "[data-work-strip-panel]",
 		settle: 600,
+		parity: { session: "board", after: closePanelView },
 	},
 	{
 		id: "board-strip-open",
@@ -1442,8 +1461,7 @@ export const SURFACES: readonly Surface[] = [
 		title: "Work board strip with every zone opened from its summary line: the rows a phone reaches with a tap more",
 		query: "&board=busy",
 		open: async page => {
-			const chip = page.locator("[data-work-chip][data-state='waiting']");
-			const docked = page.locator(".omp-work-board-slot [data-board-section='needs']");
+			const { chip, docked } = busyBoard(page);
 			await chip.or(docked).first().waitFor({ state: "visible", timeout: 15_000 });
 			if ((await chip.count()) === 0) return;
 			if ((await chip.getAttribute("aria-expanded")) !== "true") await chip.click();
@@ -1454,6 +1472,7 @@ export const SURFACES: readonly Surface[] = [
 		},
 		ready: "[data-work-board-panel]",
 		settle: 600,
+		parity: { session: "board" },
 	},
 	{
 		id: "sidebar",
@@ -2470,11 +2489,18 @@ export const SURFACES: readonly Surface[] = [
 		title: "A session row's action menu",
 		open: async (page, look) => {
 			await openDrawer(page, look);
+			// The shown session's row where the list marks one, so every parity view opens the work session's menu (a
+			// paired computer's window lists its own sessions above the host's).
+			const rows = page.locator(".omp-list-row:has([data-sidebar-row-menu])");
+			await rows.first().waitFor({ state: "attached", timeout: 15_000 });
+			const shown = rows.and(page.locator("[data-active='true']")).first();
+			const row = (await shown.count()) > 0 ? shown : rows.first();
 			// A mouse shows the row's ⋯ on hover; a finger always has it.
-			const row = page.locator(".omp-list-row:has([data-sidebar-row-menu])").first();
 			if ((look.device ?? "touch") !== "touch") await row.hover();
 			await row.locator("[data-sidebar-row-menu]").first().click();
 		},
+		ready: "[role='menu'] [role='menuitem']",
+		parity: { session: "work", after: closeOverlay },
 	},
 	{
 		id: "sidebar-project-menu",
