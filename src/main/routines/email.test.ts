@@ -121,9 +121,10 @@ describe("the email trigger", () => {
 	});
 
 	it("fires only mail matching its filters: a plus-address, a DMARC-passed sender, words in the subject", async () => {
-		const { imap, fired, polls, polled } = await rig({ to: "owner+ci@", from: "ann@", subject: "deploy" });
+		const { imap, fired, polls, polled } = await rig({ to: "owner+ci@", from: "ann@example.com", subject: "deploy" });
 		await polls(2);
-		const passed = "Authentication-Results: mx.example.com; spf=pass; dmarc=pass (p=none) header.from=example.com";
+		// The fake server is 127.0.0.1: only an Authentication-Results under that id is the receiver's.
+		const passed = "Authentication-Results: 127.0.0.1; spf=pass; dmarc=pass (p=none) header.from=example.com";
 		imap.mail.push(
 			mail(1, ["From: ann@example.com", "To: owner@example.com", "Subject: deploy please", passed]),
 			mail(2, ["From: carl@example.com", "To: owner+ci@example.com", "Subject: deploy please", passed]),
@@ -132,7 +133,7 @@ describe("the email trigger", () => {
 			// A forged From: the receiving server's own (topmost) result says DMARC failed; the pass below it is the
 			// sender's own writing.
 			mail(5, [
-				"Authentication-Results: mx.example.com; dmarc=fail (p=reject) header.from=example.com",
+				"Authentication-Results: 127.0.0.1; dmarc=fail (p=reject) header.from=example.com",
 				"Authentication-Results: forged.example; dmarc=pass",
 				"From: ann@example.com",
 				"To: owner+ci@example.com",

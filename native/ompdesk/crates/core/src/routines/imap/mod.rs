@@ -56,6 +56,13 @@ pub(super) struct Mailbox {
     tls: Option<Arc<ClientConfig>>,
 }
 
+impl Mailbox {
+    /// The server the mailbox is read from: whose `Authentication-Results` a routine trusts.
+    pub(in crate::routines) fn host(&self) -> &str {
+        &self.host
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MailCursor {
     pub validity: i64,
