@@ -97,6 +97,7 @@ import { isSidebarDrawerMode, migrateDefaultPanelTab, useUiStore } from "./store
 import { checkForUpdatesInPlace, subscribeUpdaterStatus } from "./stores/updater";
 import { FileEditReporter } from "./web/FileEditReporter";
 import { WebHostUi } from "./web/host-ui/WebHostUi";
+import { webRuntime } from "./web/runtime";
 
 // Heavy overlays code-split: they render null while closed, so they download
 // only on first open instead of bloating the eager bundle.
@@ -106,6 +107,8 @@ const FeedbackDialog = lazyChunk(() =>
 const BenchmarkDialog = lazyChunk(() =>
 	import("./components/dialogs/BenchmarkDialog").then(m => ({ default: m.BenchmarkDialog })),
 );
+// Its own chunk: a desktop window loads it at start, a phone's page never does.
+const PetOverlay = lazyChunk(() => import("./components/pet/PetOverlay").then(m => ({ default: m.PetOverlay })));
 const ModelSetupDialog = lazyChunk(() =>
 	import("./components/settings/model-setup/ModelSetupDialog").then(m => ({ default: m.ModelSetupDialog })),
 );
@@ -985,6 +988,11 @@ export function App() {
 				<WhatsNewNotice />
 				<MacosRequirementNotice />
 				<LaunchIncidentNotice />
+				{webRuntime() === null && (
+					<Suspense fallback={null}>
+						<PetOverlay />
+					</Suspense>
+				)}
 				<StarterTour />
 				<RemoteFolderPickerHost />
 				<WebPairingDialog />

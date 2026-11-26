@@ -1,0 +1,59 @@
+/* The desktop pet (components/pet/PetOverlay.tsx): one loop per state on the figure, the custom sprite strip stepping
+   through its frames. Transform only, on the loop token and curve; reduced motion rests both (still poses), a drag
+   holds them (Orca's PetOverlay.tsx:339-342). */
+.omp-pet-figure {
+	transform-origin: 50% 100%;
+}
+.omp-pet[data-pet-state="idle"] .omp-pet-figure {
+	animation: omp-pet-breathe calc(var(--sc-motion-loop) * 10) var(--sc-ease-loop) infinite alternate;
+}
+.omp-pet[data-pet-state="working"] .omp-pet-figure {
+	animation: omp-pet-bob calc(var(--sc-motion-loop) * 1.5) var(--sc-ease-loop) infinite alternate;
+}
+.omp-pet[data-pet-state="waiting"] .omp-pet-figure {
+	animation: omp-pet-sway calc(var(--sc-motion-loop) * 2) var(--sc-ease-loop) infinite alternate;
+}
+.omp-pet[data-pet-state="done"] .omp-pet-figure {
+	animation: omp-pet-hop calc(var(--sc-motion-loop) * 3) var(--sc-ease-loop) 3;
+}
+.omp-pet-strip {
+	animation: omp-pet-strip calc(var(--sc-motion-loop) * 0.4 * var(--pet-frames)) steps(var(--pet-frames)) infinite;
+}
+.omp-pet[data-dragging] :is(.omp-pet-figure, .omp-pet-strip) {
+	animation-play-state: paused;
+}
+
+@keyframes omp-pet-breathe {
+	to {
+		transform: scale(1.03, 0.97);
+	}
+}
+@keyframes omp-pet-bob {
+	to {
+		transform: translateY(-4px);
+	}
+}
+@keyframes omp-pet-sway {
+	from {
+		transform: rotate(-6deg);
+	}
+	to {
+		transform: rotate(6deg);
+	}
+}
+@keyframes omp-pet-hop {
+	50% {
+		transform: translateY(-8px);
+	}
+}
+@keyframes omp-pet-strip {
+	to {
+		transform: translateX(-100%);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.omp-pet[data-pet-state] :is(.omp-pet-figure, .omp-pet-strip) {
+		animation: none;
+	}
+}

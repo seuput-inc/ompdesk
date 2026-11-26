@@ -3331,6 +3331,22 @@ export const ko: Record<string, string> = {
 	"launchIncident.unstableTitle": "OMPdesk가 계속 시작에 실패함",
 	"launchIncident.report": "보고…",
 
+	"pet.state.waiting": "데스크톱 펫: 답을 기다리는 세션이 있어요",
+	"pet.state.working": "데스크톱 펫: 에이전트가 일하고 있어요",
+	"pet.state.done": "데스크톱 펫: 방금 턴이 끝났어요",
+	"pet.state.idle": "데스크톱 펫: 실행 중인 작업이 없어요",
+	"pet.menu": "데스크톱 펫",
+	"pet.chooseSprite": "스프라이트 고르기…",
+	"pet.useDefaultSprite": "기본 스프라이트 쓰기",
+	"pet.hide": "펫 숨기기",
+	"pet.spriteFailed": "이 스프라이트는 쓸 수 없어요",
+	"pet.spriteProblem.type": "PNG, GIF, WebP 이미지를 골라 주세요.",
+	"pet.spriteProblem.size": "이미지가 {max}KB를 넘어요. 더 작은 이미지를 골라 주세요.",
+	"pet.spriteProblem.unreadable": "이 파일을 이미지로 읽지 못했어요.",
+	"settings.gui.desktopPet": "데스크톱 펫",
+	"settings.gui.desktopPetDesc":
+		"창 안의 작은 캐릭터가 답을 기다리는 세션, 일하는 에이전트, 방금 끝난 턴을 알려 줘요. 원하는 곳으로 끌어 옮기고, 오른쪽 클릭으로 숨기거나 내 스프라이트를 고를 수 있어요.",
+
 	"stats.frustration.annoyed": "짜증",
 	"stats.frustration.atAssistant": "어시스턴트 대상",
 	"stats.frustration.angry": "분노",

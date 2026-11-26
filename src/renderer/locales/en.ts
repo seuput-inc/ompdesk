@@ -3342,6 +3342,22 @@ export const en: Record<string, string> = {
 	"launchIncident.unstableTitle": "OMPdesk kept failing to start",
 	"launchIncident.report": "Report…",
 
+	"pet.state.waiting": "Desktop pet: a session needs you",
+	"pet.state.working": "Desktop pet: an agent is working",
+	"pet.state.done": "Desktop pet: a turn just finished",
+	"pet.state.idle": "Desktop pet: nothing is running",
+	"pet.menu": "Desktop pet",
+	"pet.chooseSprite": "Choose sprite…",
+	"pet.useDefaultSprite": "Use default sprite",
+	"pet.hide": "Hide pet",
+	"pet.spriteFailed": "Can't use this sprite",
+	"pet.spriteProblem.type": "Choose a PNG, GIF or WebP image.",
+	"pet.spriteProblem.size": "The image is over {max} KB. Choose a smaller one.",
+	"pet.spriteProblem.unreadable": "This file couldn't be read as an image.",
+	"settings.gui.desktopPet": "Desktop pet",
+	"settings.gui.desktopPetDesc":
+		"A small figure in the window that shows when a session needs you, an agent is working or a turn just finished. Drag it anywhere; right-click it to hide it or choose your own sprite.",
+
 	"stats.frustration.annoyed": "Annoyed",
 	"stats.frustration.atAssistant": "At the assistant",
 	"stats.frustration.angry": "Angry",
