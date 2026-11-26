@@ -86,4 +86,6 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(windows)]
-pub use sys::{end_children_with_this_process, ensure_console, relaunch_with_only_stdio};
+pub use sys::{
+    close_inherited_handles, end_children_with_this_process, ensure_console, stdio_not_inherited,
+};

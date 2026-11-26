@@ -19,16 +19,18 @@ fn main() -> ExitCode {
     }
     // The owner joins no job: the cores it starts must not die with it, but end with their stdin's end.
     if std::env::args_os().nth(1).is_some_and(|arg| arg == "--own") {
-        // Whatever else the spawn handed this process (another child's pipe ends, on Windows) stays with this first
-        // process, which exits now; the owner runs on with its stdio alone (`sys::relaunch_with_only_stdio`).
+        // Another child's pipe or file main's thread was spawning when its worker spawned this one, which would keep
+        // that child's output open for as long as main runs; then this one's own stdio, which no core needs. Only the
+        // control of `tests/own_stdio.rs` (`keep-inherited`) keeps them.
         #[cfg(windows)]
-        if std::env::args_os().nth(2).is_none() {
-            match ompdesk_core::relaunch_with_only_stdio(&["--own", "stdio-only"]) {
-                Ok(()) => std::process::exit(0),
-                Err(error) => {
-                    eprintln!("ompdesk-core --own: runs as started, not relaunched: {error}")
-                }
+        if std::env::args_os()
+            .nth(2)
+            .is_none_or(|arg| arg != "keep-inherited")
+        {
+            if let Err(error) = ompdesk_core::close_inherited_handles() {
+                eprintln!("ompdesk-core --own: inherited handles stay open: {error}");
             }
+            ompdesk_core::stdio_not_inherited();
         }
         std::process::exit(ompdesk_core::owner::serve_stdio());
     }

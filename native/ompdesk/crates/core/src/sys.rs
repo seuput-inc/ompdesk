@@ -709,207 +709,97 @@ pub fn stdio_not_inherited() {
     }
 }
 
-/// Starts this binary again with `args` and hands the new process this one's stdin, stdout and stderr and no other
-/// handle (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`); the caller then exits. libuv starts a process with every inheritable
+/// Closes every inheritable pipe or file handle of this process but its stdin, stdout and stderr, and returns how
+/// many; run first thing, before this process opens anything of its own. libuv starts a process with every inheritable
 /// handle of its parent, and on Windows a spawn's pipe ends are inheritable until its CreateProcess returned, with no
-/// lock between threads: main's worker that spawns `--own` beside a spawn on main's own thread handed `--own` that
-/// other child's pipe ends, and `--own` lives as long as main, so that child's output never ended and main's
-/// `execFileSync` of it never returned (win-platform, 26 Nov 2026). This first process holds what it was handed only
-/// until it exits.
+/// lock between threads: main's worker that spawns `ompdesk-core --own` beside a spawn on main's own thread handed
+/// `--own` that other child's pipe ends, and `--own` lives as long as main, so that child's output never ended and
+/// main's `execFileSync` of it never returned (win-platform, 26 Nov 2026). A redirect to a file leaks the same way and
+/// keeps the file from being deleted. Consoles, NUL and objects that are no file are left as they are.
 #[cfg(windows)]
-pub fn relaunch_with_only_stdio(args: &[&str]) -> std::io::Result<()> {
+pub fn close_inherited_handles() -> std::io::Result<usize> {
     use std::ffi::c_void;
-    use std::os::windows::ffi::OsStrExt;
     type Handle = *mut c_void;
+    const PROCESS_HANDLE_INFORMATION: u32 = 51;
+    const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004_u32 as i32;
     const STD_INPUT_HANDLE: u32 = -10_i32 as u32;
     const STD_OUTPUT_HANDLE: u32 = -11_i32 as u32;
     const STD_ERROR_HANDLE: u32 = -12_i32 as u32;
     const HANDLE_FLAG_INHERIT: u32 = 0x1;
-    const STARTF_USESTDHANDLES: u32 = 0x100;
-    const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x0008_0000;
-    const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x2_0002;
-    #[repr(C)]
-    struct StartupInfo {
-        cb: u32,
-        reserved: *mut u16,
-        desktop: *mut u16,
-        title: *mut u16,
-        x: u32,
-        y: u32,
-        x_size: u32,
-        y_size: u32,
-        x_chars: u32,
-        y_chars: u32,
-        fill: u32,
-        flags: u32,
-        show: u16,
-        reserved_size: u16,
-        reserved_data: *mut u8,
-        stdin: Handle,
-        stdout: Handle,
-        stderr: Handle,
-    }
-    #[repr(C)]
-    struct StartupInfoEx {
-        startup: StartupInfo,
-        attributes: *mut c_void,
-    }
-    #[repr(C)]
-    struct ProcessInformation {
-        process: Handle,
-        thread: Handle,
-        process_id: u32,
-        thread_id: u32,
+    const FILE_TYPE_DISK: u32 = 1;
+    const FILE_TYPE_PIPE: u32 = 3;
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn NtQueryInformationProcess(
+            process: Handle,
+            class: u32,
+            info: *mut c_void,
+            size: u32,
+            returned: *mut u32,
+        ) -> i32;
     }
     #[link(name = "kernel32")]
     unsafe extern "system" {
+        fn GetCurrentProcess() -> Handle;
         fn GetStdHandle(which: u32) -> Handle;
-        fn SetHandleInformation(handle: Handle, mask: u32, flags: u32) -> i32;
-        fn InitializeProcThreadAttributeList(
-            list: *mut c_void,
-            count: u32,
-            flags: u32,
-            size: *mut usize,
-        ) -> i32;
-        fn UpdateProcThreadAttribute(
-            list: *mut c_void,
-            flags: u32,
-            attribute: usize,
-            value: *mut c_void,
-            size: usize,
-            previous: *mut c_void,
-            returned: *mut usize,
-        ) -> i32;
-        fn DeleteProcThreadAttributeList(list: *mut c_void);
-        fn CreateProcessW(
-            application: *const u16,
-            command: *mut u16,
-            process_attrs: *mut c_void,
-            thread_attrs: *mut c_void,
-            inherit: i32,
-            flags: u32,
-            environment: *mut c_void,
-            directory: *const u16,
-            startup: *mut StartupInfo,
-            process: *mut ProcessInformation,
-        ) -> i32;
+        fn GetHandleInformation(handle: Handle, flags: *mut u32) -> i32;
+        fn GetFileType(handle: Handle) -> u32;
         fn CloseHandle(handle: Handle) -> i32;
     }
-    let stdio = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE].map(|which| {
-        // SAFETY: one of the three constants; returns this process's handle, null or INVALID_HANDLE_VALUE.
-        let handle = unsafe { GetStdHandle(which) };
-        if handle.is_null() || handle as isize == -1 {
-            std::ptr::null_mut()
-        } else {
-            handle
-        }
-    });
-    // The list names each handle once (a repeat fails the update) and only live ones, each inheritable.
-    let mut handles: Vec<Handle> = Vec::new();
-    for handle in stdio.into_iter().filter(|handle| !handle.is_null()) {
-        if handles.contains(&handle) {
+    // `PROCESS_HANDLE_SNAPSHOT_INFORMATION`: the count, a reserved word, then the entries
+    // (`PROCESS_HANDLE_TABLE_ENTRY_INFO`: the handle, two counts, then four 32-bit fields).
+    let mut words = 512;
+    let snapshot = loop {
+        let mut buffer = vec![0usize; words];
+        let mut needed = 0;
+        // SAFETY: the buffer is writable for the size passed; `GetCurrentProcess` is a pseudo-handle.
+        let status = unsafe {
+            NtQueryInformationProcess(
+                GetCurrentProcess(),
+                PROCESS_HANDLE_INFORMATION,
+                buffer.as_mut_ptr().cast(),
+                u32::try_from(words * size_of::<usize>()).unwrap_or(u32::MAX),
+                &mut needed,
+            )
+        };
+        if status == STATUS_INFO_LENGTH_MISMATCH {
+            words = (needed as usize)
+                .div_ceil(size_of::<usize>())
+                .max(words * 2);
             continue;
         }
-        // SAFETY: `handle` is a live standard handle of this process; only its inherit flag changes.
-        if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) } == 0 {
-            return Err(std::io::Error::last_os_error());
+        if status < 0 {
+            return Err(std::io::Error::other(format!(
+                "NtQueryInformationProcess(ProcessHandleInformation) failed: {status:#x}"
+            )));
         }
-        handles.push(handle);
-    }
-    if handles.is_empty() {
-        return Err(std::io::Error::other("no standard handle to hand on"));
-    }
-    let exe = std::env::current_exe()?;
-    let application: Vec<u16> = exe.as_os_str().encode_wide().chain([0]).collect();
-    // Its own path quoted (a path holds no quote), then arguments that need no quoting.
-    let mut command: Vec<u16> = "\"".encode_utf16().collect();
-    command.extend(exe.as_os_str().encode_wide());
-    command.push(u16::from(b'"'));
-    for arg in args {
-        command.push(u16::from(b' '));
-        command.extend(arg.encode_utf16());
-    }
-    command.push(0);
-    let mut size = 0;
-    // SAFETY: the null probe only writes the size the list needs.
-    unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut size) };
-    let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>())];
-    let list: *mut c_void = storage.as_mut_ptr().cast();
-    // SAFETY: `storage` is aligned and as large as Windows asked for.
-    if unsafe { InitializeProcThreadAttributeList(list, 1, 0, &mut size) } == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: the list was initialized above and `handles` outlives CreateProcessW below.
-    let updated = unsafe {
-        UpdateProcThreadAttribute(
-            list,
-            0,
-            PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-            handles.as_mut_ptr().cast(),
-            std::mem::size_of_val(handles.as_slice()),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        )
+        break buffer;
     };
-    let mut info = ProcessInformation {
-        process: std::ptr::null_mut(),
-        thread: std::ptr::null_mut(),
-        process_id: 0,
-        thread_id: 0,
-    };
-    let created = updated != 0 && {
-        let mut startup = StartupInfoEx {
-            startup: StartupInfo {
-                cb: std::mem::size_of::<StartupInfoEx>() as u32,
-                reserved: std::ptr::null_mut(),
-                desktop: std::ptr::null_mut(),
-                title: std::ptr::null_mut(),
-                x: 0,
-                y: 0,
-                x_size: 0,
-                y_size: 0,
-                x_chars: 0,
-                y_chars: 0,
-                fill: 0,
-                flags: STARTF_USESTDHANDLES,
-                show: 0,
-                reserved_size: 0,
-                reserved_data: std::ptr::null_mut(),
-                stdin: stdio[0],
-                stdout: stdio[1],
-                stderr: stdio[2],
-            },
-            attributes: list,
-        };
-        // SAFETY: every pointer is live for the call: the NUL-terminated application and command, the startup info
-        // with its initialized attribute list; null environment and directory keep this process's own.
-        unsafe {
-            CreateProcessW(
-                application.as_ptr(),
-                command.as_mut_ptr(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                1,
-                EXTENDED_STARTUPINFO_PRESENT,
-                std::ptr::null_mut(),
-                std::ptr::null(),
-                &mut startup.startup,
-                &mut info,
-            ) != 0
+    let stride = (3 * size_of::<usize>() + 16) / size_of::<usize>();
+    // SAFETY: `GetStdHandle` takes one of the three constants and only reads this process's table.
+    let stdio = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
+        .map(|which| unsafe { GetStdHandle(which) });
+    let mut closed = 0;
+    for entry in snapshot[2..].chunks_exact(stride).take(snapshot[0]) {
+        let handle = entry[0] as Handle;
+        if stdio.contains(&handle) {
+            continue;
         }
-    };
-    let error = std::io::Error::last_os_error();
-    // SAFETY: the list was initialized above and nothing uses it after this.
-    unsafe { DeleteProcThreadAttributeList(list) };
-    if !created {
-        return Err(error);
+        let mut flags = 0;
+        // SAFETY: `handle` is in this process's table; both calls only read it (GetFileType takes no file lock: the
+        // C runtime calls it on every handle a process starts with).
+        let file = unsafe {
+            GetHandleInformation(handle, &mut flags) != 0 && flags & HANDLE_FLAG_INHERIT != 0
+        } && matches!(
+            unsafe { GetFileType(handle) },
+            FILE_TYPE_DISK | FILE_TYPE_PIPE
+        );
+        // SAFETY: an inherited handle nothing in this process opened or uses yet.
+        if file && unsafe { CloseHandle(handle) } != 0 {
+            closed += 1;
+        }
     }
-    // SAFETY: a successful CreateProcessW returned these two handles, owned here and used no further.
-    unsafe {
-        CloseHandle(info.thread);
-        CloseHandle(info.process);
-    }
-    Ok(())
+    Ok(closed)
 }
 
 /// Whether any instance of the named pipe `name` is still open, connected or not. `WaitNamedPipeW` connects nothing:

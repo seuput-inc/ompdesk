@@ -1,13 +1,13 @@
-//! `ompdesk-core --own` keeps only its stdio of what its starter handed it. On Windows a process starts with every
+//! `ompdesk-core --own` keeps none of the pipes its starter happened to hand it. On Windows a process starts with every
 //! inheritable handle of its parent, and libuv's spawn makes a child's pipe ends inheritable until its CreateProcess
-//! returned: main's worker spawning `--own` beside a spawn of main's thread handed `--own` that other child's pipe
-//! ends, so that child's output never ended while main lived (`sys::relaunch_with_only_stdio`).
+//! returned: main's worker spawning `--own` beside a spawn of main's thread handed `--own` that other child's pipe ends,
+//! so that child's output never ended while main lived (`sys::close_inherited_handles`).
 #![cfg(windows)]
 #![allow(unsafe_code)]
 
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::windows::io::AsRawHandle;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdout, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ unsafe extern "system" {
     fn SetHandleInformation(handle: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
 }
 
-/// A pipe whose write end is inheritable, as another child's is while its spawn runs, and the read end's EOF.
+/// A pipe whose write end is inheritable, as another child's is while its spawn runs, and its read end's EOF.
 fn stray_pipe() -> (mpsc::Receiver<()>, std::io::PipeWriter) {
     let (mut read, write) = std::io::pipe().expect("a pipe");
     // SAFETY: `write` is a live handle of this process; only its inherit flag changes.
@@ -33,26 +33,39 @@ fn stray_pipe() -> (mpsc::Receiver<()>, std::io::PipeWriter) {
     (end, write)
 }
 
-fn owner(args: &[&str]) -> Child {
-    Command::new(env!("CARGO_BIN_EXE_ompdesk-core"))
-        .args(args)
+/// An owner started as main starts it, with `extra` after `--own`; its stdout as lines.
+fn owner(extra: &[&str]) -> (Child, BufReader<ChildStdout>) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ompdesk-core"))
+        .arg("--own")
+        .args(extra)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .expect("ompdesk-core --own starts")
+        .expect("ompdesk-core --own starts");
+    let stdout = BufReader::new(child.stdout.take().expect("stdout"));
+    (child, stdout)
 }
 
-/// Ends an owner through its stdin and waits until its stdout ends: the owner itself, wherever it runs, is gone.
-fn end(mut owner: Child) {
+/// The owner still serves: a request gets its answer.
+fn answers(owner: &mut Child, stdout: &mut BufReader<ChildStdout>) {
+    let stdin = owner.stdin.as_mut().expect("stdin");
+    stdin
+        .write_all(b"{\"id\":1,\"method\":\"no.such\"}\n")
+        .expect("the owner reads");
+    let mut line = String::new();
+    stdout.read_line(&mut line).expect("the owner answers");
+    assert!(
+        line.contains("\"unsupported\""),
+        "unexpected answer {line:?}"
+    );
+}
+
+/// Ends an owner through its stdin and waits until its stdout ends.
+fn end(mut owner: Child, mut stdout: BufReader<ChildStdout>) {
     drop(owner.stdin.take());
     let mut sink = Vec::new();
-    owner
-        .stdout
-        .take()
-        .expect("stdout")
-        .read_to_end(&mut sink)
-        .expect("its stdout ends");
+    stdout.read_to_end(&mut sink).expect("its stdout ends");
     owner.wait().expect("exits");
 }
 
@@ -60,26 +73,27 @@ fn end(mut owner: Child) {
 fn a_pipe_inheritable_while_the_owner_starts_is_not_held_by_the_owner() {
     // One test, not two: a pipe made inheritable here would reach any process another test thread starts meanwhile.
 
-    // The control: an owner served where it started (`stdio-only` skips the relaunch) holds the stray pipe it got.
+    // The control: an owner that keeps what it inherited (`keep-inherited`) holds the stray pipe open.
     let (ended, write) = stray_pipe();
-    let held = owner(&["--own", "stdio-only"]);
+    let (mut held, mut out) = owner(&["keep-inherited"]);
     drop(write);
+    answers(&mut held, &mut out);
     assert!(
         ended.recv_timeout(Duration::from_millis(500)).is_err(),
         "the control owner did not hold the inheritable pipe: the test no longer reproduces the leak"
     );
-    end(held);
+    end(held, out);
     ended
         .recv_timeout(Duration::from_secs(10))
         .expect("the pipe ends with the owner that held it");
 
-    // `--own` as main starts it: the relaunched owner runs on, and the pipe ends while it does.
+    // `--own` as main starts it: the pipe ends while the owner runs on.
     let (ended, write) = stray_pipe();
-    let running = owner(&["--own"]);
+    let (mut running, mut out) = owner(&[]);
     drop(write);
-    // Its stdin is still open, so the owner still runs while the pipe ends.
     ended
         .recv_timeout(Duration::from_secs(10))
-        .expect("the owner main started kept another process's pipe open");
-    end(running);
+        .expect("the owner kept another process's pipe open");
+    answers(&mut running, &mut out);
+    end(running, out);
 }
