@@ -1,7 +1,7 @@
 /** Git / worktree / PR / source-control commands (rpc-map §5), answered in main over the git and gh CLIs. */
 
+import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { promises as fs } from "original-fs";
 import type { RpcPrListFilter } from "../../shared/rpc-types";
 import {
 	archiveBeforeRemove,
