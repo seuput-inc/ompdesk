@@ -553,11 +553,12 @@ mod tests {
                 machine.commit_bytes <= machine.commit_limit_bytes,
                 "{machine:?}"
             );
-            // The System object's counter is on every Windows; a computer may have no PhysicalDisk object.
-            assert!(
-                machine.run_queue.is_some_and(|queue| queue >= 0.0),
-                "{machine:?}"
-            );
+            // The System object's counter is on every Windows, but a look PDH has no value for leaves it out (ci
+            // 45794591115); the counter is kept, so a later look reads it. A computer may have no PhysicalDisk object.
+            let run_queue = (0..5).fold(machine.run_queue, |queue, _| {
+                queue.or_else(|| crate::sys::queues().run_queue)
+            });
+            assert!(run_queue.is_some_and(|queue| queue >= 0.0), "{machine:?}");
             assert!(
                 machine.disk_queue.is_none_or(|queue| queue >= 0.0),
                 "{machine:?}"
