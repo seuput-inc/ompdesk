@@ -153,7 +153,15 @@ test("muting from the gear closes the card and holds the next notification", asy
 	);
 	expect(Number(muted?.until) - Date.now()).toBeGreaterThan(59 * 60_000);
 
+	// The mute holds at admission: main answers `dropped`, so no card, no banner and no chime from the page.
 	await fixtureCommand(front, "fixture:finish");
-	await expect.poll(routes).toEqual(["hidden", "muted"]);
+	await expect
+		.poll(async () =>
+			(await readRecords(path.join(desktop, "logs", "gui-runtime.jsonl")).catch(() => []))
+				.filter(record => record.source === "notify" && record.message === "skipped")
+				.map(record => record.details),
+		)
+		.toContainEqual(expect.objectContaining({ tabId: front, reason: "dropped" }));
+	expect(await routes()).toEqual(["hidden"]);
 	await expect(card).toHaveCount(0);
 });

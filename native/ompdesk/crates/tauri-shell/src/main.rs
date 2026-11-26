@@ -1298,7 +1298,7 @@ fn dispatch(call: host::Call) {
             .notify_triage
             .lock()
             .expect("notification triage")
-            .admit(&call.params);
+            .admit(&call.params, notification_popup::window::muted());
         match plan {
             Some(plan) => call.ok(plan),
             None => call.err("invalid", "invalid notification admission"),
@@ -1613,6 +1613,10 @@ fn ensure_current(identity: Identity) -> Result<(), Value> {
 
 #[tauri::command]
 async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Result<Value, Value> {
+    // The notification popup's page is written from a fixed document and asks only by navigation (window.rs).
+    if webview.label() == notification_popup::window::LABEL {
+        return Err(json!({"code":"denied","message":"the notification popup has no IPC"}));
+    }
     let url = webview
         .url()
         .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;

@@ -25,7 +25,7 @@ use crate::log::log;
 use crate::native_chrome::notification::{self, emit};
 use crate::{entry, system, theme, tray, ui};
 
-const LABEL: &str = "notification-popup";
+pub const LABEL: &str = "notification-popup";
 const TICK_MS: i64 = 500;
 const ICON: &str = include_str!("../../../../../../resources/brand/mark-tile-small.svg");
 
@@ -72,8 +72,8 @@ pub fn install() {
     notification::set_popup(notification::Popup { show, close });
 }
 
-/// Whether the gear's mute holds now.
-fn muted() -> bool {
+/// Whether the gear's mute holds now (also read by `app.admitNotification`). Any thread.
+pub fn muted() -> bool {
     MUTE_UNTIL.load(Ordering::Relaxed) > crate::wall_clock_ms()
 }
 
