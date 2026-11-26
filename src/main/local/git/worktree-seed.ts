@@ -91,6 +91,16 @@ export async function runWorktreeHook(
 	return found ? runFoundHook(hook, { primary, worktree, cwd, timeoutMs }, found, currentStepSignal()) : null;
 }
 
+/** Whether the repository has a script for `hook` (the worktree's own or the main checkout's); runs nothing. */
+export async function hasWorktreeHook(hook: WorktreeHook, primary: string, worktree: string): Promise<boolean> {
+	const found = await coreGit<{ script: string } | null>(
+		"git.worktreeHook",
+		{ primary, worktree, script: WORKTREE_HOOK_SCRIPTS[hook], log: `ompdesk-worktree-${hook}.log` },
+		1,
+	).catch(() => null);
+	return found !== null;
+}
+
 /**
  * The repository's archive hook before a removal of `worktree` (the person's Remove, an agent session's safe removal,
  * disk care's sweep, an orphan's and an unused open's; stock's `worktree.onExit` removal runs none): null when it has
