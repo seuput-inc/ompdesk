@@ -75,6 +75,8 @@ for (const language of ["en", "ko"] as const)
 			text("sidebar.menu.moveDown"),
 			text("sidebar.menu.moveToProject"),
 			text("sidebar.menu.archive"),
+			text("sidebar.menu.emoji"),
+			text("sidebar.menu.setParent"),
 		];
 		const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-session-menu-")));
 		let host: RemoteInstance | null = null;
