@@ -283,8 +283,6 @@ pub enum Action {
     Mute(i64),
     /// "Notification settings…".
     Settings,
-    /// The page was written and runs: cards can be drawn.
-    Ready,
 }
 
 pub const SCHEME: &str = "ompdesk-popup";
@@ -306,7 +304,6 @@ pub fn action(url: &url::Url) -> Option<Action> {
         "menu" => Some(Action::Menu),
         "mute" => number("until").map(Action::Mute),
         "settings" => Some(Action::Settings),
-        "ready" => Some(Action::Ready),
         _ => None,
     }
 }
@@ -483,7 +480,6 @@ mod tests {
             Some(Action::Mute(1_800_000_000_000))
         );
         assert_eq!(parse("ompdesk-popup:settings"), Some(Action::Settings));
-        assert_eq!(parse("ompdesk-popup:ready"), Some(Action::Ready));
         assert_eq!(parse("ompdesk-popup:open?id=7"), None);
         assert_eq!(parse("ompdesk-popup:click?id=x"), None);
         assert_eq!(parse("ompdesk-popup:click?id=-1"), None);

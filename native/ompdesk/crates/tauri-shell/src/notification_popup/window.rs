@@ -201,9 +201,10 @@ fn give_up_waiting() {
     }
 }
 
-/// Writes the page into the window's `about:blank` until the page says it is ready (`ompdesk-popup:ready`). Tauri opens
-/// a `data:` URL only with its `webview-data-url` feature, and reports no load of the first `about:blank`, so the shell
-/// writes again every 250 ms: a script sent before the webview has its document is lost.
+/// Writes the page into the window's `about:blank` until the page answers that it runs (`window.render` exists).
+/// Tauri opens a `data:` URL only with its `webview-data-url` feature and reports no load of the first `about:blank`,
+/// so the shell writes again every 250 ms: a script sent before the webview has its document is lost. The answer is the
+/// script's own result, not a timer or a navigation of the page's, which a page that is not on screen may hold back.
 fn write_page() {
     let Some((window, tries)) = with(|state| {
         if state.ready {
@@ -215,9 +216,15 @@ fn write_page() {
         return;
     };
     let page = Value::String(page_html());
-    if let Err(error) = window.eval(format!(
-        "if(!window.render){{document.open();document.write({page});document.close();}}"
-    )) {
+    let script = format!(
+        "(()=>{{if(!window.render){{document.open();document.write({page});document.close();}}return typeof window.render;}})()"
+    );
+    let answered = window.eval_with_callback(script, |answer: String| {
+        if answer.contains("function") {
+            ui::post(page_ready);
+        }
+    });
+    if let Err(error) = answered {
         log(
             "notification.popup.write_failed",
             json!({"try": tries, "error": error.to_string()}),
@@ -281,7 +288,6 @@ fn act(action: Action) {
             }
             entry::menu_action("open-settings");
         }
-        Action::Ready => return page_ready(),
     }
     render();
 }

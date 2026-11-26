@@ -59,17 +59,20 @@ async function nameTab(tabId: string, title: string): Promise<void> {
 	await expect(page.locator(`[data-session-path="tab:${tabId}"]`)).toContainText(title);
 }
 
-/** The popup's page, once the shell has made it. */
+/** The popup's page, once the shell has written it; a failure names every page the connection sees. */
 async function popupPage(): Promise<Page> {
 	let found: Page | undefined;
 	await expect
 		.poll(async () => {
+			const seen: string[] = [];
 			for (const candidate of app.windows()) {
-				if ((await candidate.title().catch(() => "")) === "OMPdesk notifications") found = candidate;
+				const title = await candidate.title().catch((error: unknown) => `(no title: ${String(error)})`);
+				if (title === "OMPdesk notifications") found = candidate;
+				seen.push(`${candidate.url()} ${title}`);
 			}
-			return found != null;
+			return found ? "found" : seen;
 		})
-		.toBe(true);
+		.toBe("found");
 	return found as Page;
 }
 
