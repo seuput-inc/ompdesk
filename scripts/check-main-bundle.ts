@@ -512,7 +512,10 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // `ompdesk_bot` card and the schedule words of the Slack, Linear and Google sources: 565 bytes (2,242,386 on CI run
 // 45825849277, omp/agent/orca-bots-connectors at 479259a12, against the 2,241,821 its base dbf19b611 measured in CI run
 // 45822927576), added to the budget.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_255_577;
+// A bot's Slack thread chats (27 Nov 2026, orca-bots-connectors-3): the transcript asks whether its tab is a bot's chat
+// and loads the thread's mirror bar (`bots/SlackThreadBar.tsx`) only then: 228 bytes (2,249,423 on CI run 45862814930,
+// omp/agent/orca-bots-connectors-3 at 19469ad9e), added to the budget with 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_255_885;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
