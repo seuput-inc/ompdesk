@@ -1989,6 +1989,10 @@ export const SURFACES: readonly Surface[] = [
 			await openPanelView(page, look, "preview");
 			for (const section of ["servers", "devices", "recent"])
 				await page.locator(`[data-preview-start-${section}]:visible`).first().waitFor({ timeout: 30_000 });
+			// The address keeps a readable width beside the row's buttons, a phone's too (Orca's floor: 120 px).
+			const field = page.locator("[data-preview-panel] input[inputmode='url']:visible").first();
+			const width = (await field.boundingBox())?.width ?? 0;
+			if (width < 120) throw new Error(`the Preview's address field is ${Math.round(width)} px wide`);
 		},
 		ready: "[data-preview-start]:visible",
 		// The audits' harness page has no session processes, devices or history; the parity sheet starts them.
