@@ -1661,9 +1661,11 @@ export const SURFACES: readonly Surface[] = [
 			await page.keyboard.press(mac ? "Meta+f" : "Control+f");
 			await page.locator("[data-transcript-find] input").fill("fixture reply");
 		},
-		ready: '[data-transcript-find] [data-find-status]:text-matches("^1/")',
+		// Any match: surfaces earlier in the order add answered turns to the work session, and a new query starts at the
+		// first match at or below the reader's row (ui-parity.md › transcript-find).
+		ready: '[data-transcript-find] [data-find-status]:text-matches("^[1-9][0-9]*/")',
 		settle: 400,
-		// Parity only: a real window's ⌘F over the work session's one answered turn.
+		// Parity only: a real window's ⌘F over the work session's answered turns.
 		when: () => false,
 		parity: { session: "work", after: closeOverlay },
 	},
