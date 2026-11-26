@@ -12,7 +12,13 @@ import { codedError, ipcErrorCode } from "../shared/ipc-error-codes";
 import { core } from "./core/process";
 import { deletedSessions, initDeletedSessions } from "./deleted-sessions";
 import { handOffParts } from "./session-handoff";
-import { type HandOffDeps, handOffSession, reconcileHandOffs, type SessionTabs } from "./session-mutations";
+import {
+	HANDOFF_RETRY_MS,
+	type HandOffDeps,
+	handOffSession,
+	reconcileHandOffs,
+	type SessionTabs,
+} from "./session-mutations";
 
 const FILE = "2026-11-26T00-00-00-000Z_s1.jsonl";
 const PICTURE = Buffer.from("a picture");
@@ -223,6 +229,32 @@ describe("handOffSession", () => {
 		const late = await state.held[0]?.().catch((error: unknown) => error);
 		expect(late).toMatchObject({ code: "handoff_aborted" });
 		expect(runnable()).toEqual(["a"]);
+	});
+
+	it("asks again while the other computer stays connected but its answer is late", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const { request } = link();
+			let late = true;
+			// The commit lands but its answer is too late, and so is the first question that follows.
+			const slow: HandOffDeps["request"] = async (host, method, params) => {
+				if (late && method === "sessions.handoff.commit") {
+					await request(host, method, params);
+					throw new Error("The request timed out");
+				}
+				if (late && method === "sessions.handoff.abort") throw new Error("The request timed out");
+				return request(host, method, params);
+			};
+			const refused = await handOffSession(tabs(), a.file, "host-b", deps(slow)).catch((error: unknown) => error);
+			expect(ipcErrorCode(refused)).toBe("handoff_pending");
+			expect(runnable()).toEqual(["b"]);
+			late = false;
+			await vi.advanceTimersByTimeAsync(HANDOFF_RETRY_MS);
+			await vi.waitFor(() => expect(existsSync(a.file)).toBe(false));
+			expectMoved();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("a commit sent twice lands one session", async () => {

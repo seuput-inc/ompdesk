@@ -196,9 +196,17 @@ export interface HandOffDeps {
 export const HANDOFF_PART_BYTES = 4 * 1024 * 1024;
 /** One request of a hand-over, as long as an upload's (`HOST_UPLOAD_TIMEOUT_MS`). */
 export const HANDOFF_TIMEOUT_MS = 2 * 60_000;
+/**
+ * How long a pending transfer waits before it asks again when the other computer is connected but did not answer (its
+ * one lock held by a long copy, say): a link that comes up asks at once (`reconcileHandOffs`), one that stayed up would
+ * never ask again.
+ */
+export const HANDOFF_RETRY_MS = 60_000;
 
 /** Transfers this process is settling now: a link coming up does not ask about them meanwhile. */
 const settling = new Set<string>();
+/** The transfers that ask again after `HANDOFF_RETRY_MS`, by id. */
+const retries = new Map<string, ReturnType<typeof setTimeout>>();
 
 type Settled = { state: "moved"; sessionPath: string } | { state: "aborted" } | { state: "pending" };
 
@@ -234,6 +242,15 @@ async function settleHandOff(pending: PendingHandoff, deps: HandOffDeps): Promis
 		answer = await deps.request(pending.device, "sessions.handoff.abort", { id: pending.id }, HANDOFF_TIMEOUT_MS);
 	} catch (error) {
 		deps.log?.("pending", { device: pending.device, session: fileName(pending.path), reason: reasonOf(error) });
+		const code = ipcErrorCode(error);
+		if (code !== "remote_offline" && code !== "remote_unknown_device" && !retries.has(pending.id)) {
+			const timer = setTimeout(() => {
+				retries.delete(pending.id);
+				void reconcileHandOffs(pending.device, deps).catch(() => {});
+			}, HANDOFF_RETRY_MS);
+			timer.unref?.();
+			retries.set(pending.id, timer);
+		}
 		return { state: "pending" };
 	}
 	const reply = (answer ?? {}) as { state?: unknown; sessionPath?: unknown };
