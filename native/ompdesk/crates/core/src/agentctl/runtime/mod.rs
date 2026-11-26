@@ -96,6 +96,8 @@ struct Rt {
     /// Debounce timers of the auto-close passes, per opener tab.
     sweep_timers: HashMap<String, JoinHandle<()>>,
     resending: bool,
+    /// A recovery of lost openers is out (`recover_openers_soon`): at most one waits on main at a time.
+    recovering: bool,
     wakes: HashMap<String, wake::Wake>,
 }
 
@@ -154,9 +156,7 @@ pub fn start(control: AgentControl, port: u64, config: RuntimeConfig) -> Arc<Run
                             pass.sweep_all();
                             pass.redeliver_mail();
                             pass.redeliver_sends();
-                            // Its asks to main never hold the pass: a `setOpener` main does not answer waits alone.
-                            let recover = pass.clone();
-                            tokio::spawn(async move { recover.recover_openers().await });
+                            pass.recover_openers_soon();
                             pass.control.bots_tick().await;
                         });
                     }
@@ -216,6 +216,23 @@ impl Runtime {
         tokio::spawn(async move {
             let _ = me.control.redeliver_sends().await;
             me.rt().resending = false;
+        });
+    }
+
+    /// `recover_openers` beside the pass that called it: its asks to main never hold the sweep, and a `setOpener` main
+    /// leaves unanswered keeps the next ones from piling up.
+    pub fn recover_openers_soon(self: &Arc<Self>) {
+        {
+            let mut rt = self.rt();
+            if rt.recovering {
+                return;
+            }
+            rt.recovering = true;
+        }
+        let me = self.clone();
+        tokio::spawn(async move {
+            me.recover_openers().await;
+            me.rt().recovering = false;
         });
     }
 
