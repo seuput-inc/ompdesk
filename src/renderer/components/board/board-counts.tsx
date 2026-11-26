@@ -6,10 +6,12 @@
  */
 import { useMemo } from "react";
 import type { VersionedSummaries } from "../../../shared/session-summary";
+import { useT } from "../../lib/i18n";
 import { sessionRun } from "../../lib/session-run";
 import { LOCAL_SUMMARIES, useHostedSessionsStore } from "../../stores/hosted-sessions";
 import { usePairedHosts } from "../../stores/remote";
 import { type SessionTab, useTabsStore } from "../../stores/tabs";
+import { Badge } from "../common";
 import { workingAgentCount } from "../layout/live-work";
 
 export interface BoardCounts {
@@ -51,5 +53,31 @@ export function useBoardCounts(): BoardCounts {
 				new Set([LOCAL_SUMMARIES, ...hosts.filter(host => host.state === "online").map(host => host.deviceId)]),
 			),
 		[summaries, tabs, hosts],
+	);
+}
+
+/** The board entry's figures: sessions that need the person (attention) and sessions at work; nothing when none. */
+export function BoardNavCounts() {
+	const t = useT();
+	const { needs, working } = useBoardCounts();
+	if (needs === 0 && working === 0) return null;
+	return (
+		<span
+			className="flex shrink-0 items-center gap-1"
+			data-board-nav-counts
+			title={t("board.nav.counts", { needs, working })}
+		>
+			<span className="sr-only">{t("board.nav.counts", { needs, working })}</span>
+			{needs > 0 && (
+				<Badge aria-hidden variant="attention">
+					{needs}
+				</Badge>
+			)}
+			{working > 0 && (
+				<Badge aria-hidden variant="muted">
+					{working}
+				</Badge>
+			)}
+		</span>
 	);
 }

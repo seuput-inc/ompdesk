@@ -44,7 +44,6 @@ import { DEVICE_COLORS, type DeviceColorChoice, deviceColorOf } from "../../../l
 import { saveDiagnosticBundle } from "../../../lib/diagnostic-bundle";
 import { basename, copyText, formatClock } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
-import { lastExchangeWords, readLastExchange } from "../../../lib/last-exchange";
 import { openExternal } from "../../../lib/open-external";
 import { moveInOrder, reorderProjects } from "../../../lib/project-order";
 import { laneState } from "../../../lib/session-lane";
@@ -1133,13 +1132,19 @@ function DeviceSessions({
 						"data-roving-item": `device-session:${host.deviceId}:${session.path}`,
 						// As on this computer's rows (Sidebar.tsx): the last exchange joins the native tooltip on hover.
 						onPointerEnter: event => {
-							const exchange = readLastExchange({
-								tabId: tab?.id,
-								sessionPath: session.path,
-								device: host.deviceId,
-								stamp: session.modified,
-							});
-							if (exchange) event.currentTarget.title = `${rowTip}\n\n${lastExchangeWords(t, exchange)}`;
+							const row = event.currentTarget;
+							void import("../../../lib/last-exchange").then(
+								({ rowTipWithExchange }) => {
+									const tip = rowTipWithExchange(t, rowTip, {
+										tabId: tab?.id,
+										sessionPath: session.path,
+										device: host.deviceId,
+										stamp: session.modified,
+									});
+									if (tip) row.title = tip;
+								},
+								() => undefined,
+							);
 						},
 						onKeyDown: event => {
 							// Alt+↑/↓ moves the row in its list, as on this computer's own rows.

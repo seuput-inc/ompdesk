@@ -71,7 +71,6 @@ import { copyText, cx, formatClock } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { isImeKeyEvent } from "../../../lib/ime";
 import { actionKbd, onEscape } from "../../../lib/keymap";
-import { lastExchangeWords, readLastExchange } from "../../../lib/last-exchange";
 import { reorderProjects, withLocalProjectOrder } from "../../../lib/project-order";
 import { useProjectNames, useWorktreeKindLabels } from "../../../lib/project-origin";
 import { sessionForkOrigin } from "../../../lib/session-fork";
@@ -1839,15 +1838,22 @@ export function Sidebar() {
 						tabIndex,
 						"data-roving-item": key,
 						onFocus: () => setFocusKey(key),
-						// The last exchange joins the native tooltip on hover only, since reading it for every row on each
-						// render would parse every transcript snapshot; React leaves the attribute until the row's text changes.
+						// The last exchange joins the native tooltip on hover only (lib/last-exchange.ts, its own chunk), since
+						// reading it for every row on each render would parse every transcript snapshot; React leaves the
+						// attribute until the row's text changes.
 						onPointerEnter: event => {
-							const exchange = readLastExchange({
-								tabId: tab?.id,
-								sessionPath: session.path,
-								stamp: session.modified,
-							});
-							if (exchange) event.currentTarget.title = `${rowTip}\n\n${lastExchangeWords(t, exchange)}`;
+							const row = event.currentTarget;
+							void import("../../../lib/last-exchange").then(
+								({ rowTipWithExchange }) => {
+									const tip = rowTipWithExchange(t, rowTip, {
+										tabId: tab?.id,
+										sessionPath: session.path,
+										stamp: session.modified,
+									});
+									if (tip) row.title = tip;
+								},
+								() => undefined,
+							);
 						},
 						onKeyDown: event => {
 							if (opensMenu(event)) {

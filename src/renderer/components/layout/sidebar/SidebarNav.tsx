@@ -6,16 +6,21 @@
  * this device's sidebar; Customize sidebar shows it again (`navHidden`, device-local).
  */
 import { BarChart3, Bot, BotMessageSquare, CalendarClock, Columns3, type LucideIcon, Smartphone } from "lucide-react";
-import { type KeyboardEvent as ReactKeyboardEvent, useState } from "react";
+import { type KeyboardEvent as ReactKeyboardEvent, Suspense, useState } from "react";
 import { useBotsAvailable } from "../../../lib/bots-source";
+import { lazyChunk } from "../../../lib/chunk-load";
 import { cx } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { actionKbd } from "../../../lib/keymap";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { useUiStore } from "../../../stores/ui";
 import { webRuntime } from "../../../web/runtime";
-import { useBoardCounts } from "../../board/board-counts";
-import { anchorFromEvent, Badge, Button, ContextMenu, type ContextMenuAnchor, Kbd } from "../../common";
+import { anchorFromEvent, Button, ContextMenu, type ContextMenuAnchor, Kbd } from "../../common";
+
+// Its own chunk: the sidebar is on a phone's first screen, the figures are not needed for its first frame.
+const BoardNavCounts = lazyChunk(() =>
+	import("../../board/board-counts").then(module => ({ default: module.BoardNavCounts })),
+);
 
 export const SIDEBAR_NAV = ["board", "agents", "schedules", "bots", "stats", "phone"] as const;
 export type SidebarNavRow = (typeof SIDEBAR_NAV)[number];
@@ -65,32 +70,6 @@ export const SIDEBAR_NAV_ROWS: Record<SidebarNavRow, NavRowSpec> = {
 	},
 };
 
-/** The board entry's figures: sessions that need the person (attention) and sessions at work; nothing when none. */
-function BoardNavCounts() {
-	const t = useT();
-	const { needs, working } = useBoardCounts();
-	if (needs === 0 && working === 0) return null;
-	return (
-		<span
-			className="flex shrink-0 items-center gap-1"
-			data-board-nav-counts
-			title={t("board.nav.counts", { needs, working })}
-		>
-			<span className="sr-only">{t("board.nav.counts", { needs, working })}</span>
-			{needs > 0 && (
-				<Badge aria-hidden variant="attention">
-					{needs}
-				</Badge>
-			)}
-			{working > 0 && (
-				<Badge aria-hidden variant="muted">
-					{working}
-				</Badge>
-			)}
-		</span>
-	);
-}
-
 /** The rows this view can offer at all (before the person's own hiding). */
 export function useOfferedNavRows(): SidebarNavRow[] {
 	const bots = useBotsAvailable();
@@ -139,7 +118,11 @@ export function SidebarNav() {
 						variant="ghost"
 					>
 						<span className="min-w-0 flex-1 truncate text-left">{t(labelKey)}</span>
-						{row === "board" && <BoardNavCounts />}
+						{row === "board" && (
+							<Suspense fallback={null}>
+								<BoardNavCounts />
+							</Suspense>
+						)}
 						{shortcut && <Kbd className="omp-sidebar-kbd" shortcut={shortcut} />}
 					</Button>
 				);

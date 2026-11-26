@@ -39,17 +39,31 @@ export function lastExchange(messages: readonly AgentMessage[]): LastExchange | 
 	return reply ? { reply } : null;
 }
 
-/** The exchange as tooltip lines: "You: …" then "Reply: …". */
-export function lastExchangeWords(
+/** A session as the window holds it: its tab here, its file and computer, and the row's last-modified time. */
+export interface ExchangeSource {
+	tabId?: string;
+	sessionPath: string;
+	device?: string;
+	stamp?: string;
+}
+
+/**
+ * A session row's native tooltip with the last exchange after it ("You: …", "Reply: …"), or null when the window holds
+ * none. The sidebar loads this module on a row's first hover and sets the title then (no-loading-screens: the rows are
+ * on a phone's first screen; reading it on every render would parse every snapshot).
+ */
+export function rowTipWithExchange(
 	t: (key: string, params?: Record<string, string | number>) => string,
-	exchange: LastExchange,
-): string {
-	return [
+	rowTip: string,
+	session: ExchangeSource,
+): string | null {
+	const exchange = readLastExchange(session);
+	if (!exchange) return null;
+	const lines = [
 		exchange.prompt ? t("lastExchange.prompt", { text: exchange.prompt }) : null,
 		exchange.reply ? t("lastExchange.reply", { text: exchange.reply }) : null,
-	]
-		.filter(Boolean)
-		.join("\n");
+	];
+	return `${rowTip}\n\n${lines.filter(Boolean).join("\n")}`;
 }
 
 /** Snapshot reads parse a whole stored page: one per session file and journal stamp. */
@@ -59,12 +73,7 @@ const snapshotReads = new Map<string, LastExchange | null>();
  * The last exchange this window holds of a session: its tab's transcript, else its snapshot (read once per `stamp`,
  * the row's last-modified time).
  */
-export function readLastExchange(session: {
-	tabId?: string;
-	sessionPath: string;
-	device?: string;
-	stamp?: string;
-}): LastExchange | null {
+export function readLastExchange(session: ExchangeSource): LastExchange | null {
 	const live = session.tabId
 		? sessionRuntimeStore<MessagesStore>(session.tabId, "messages")?.getState().messages
 		: undefined;
