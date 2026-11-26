@@ -8,7 +8,7 @@ import {
 	Connection,
 	DATA_OFFSET,
 	HUB_CALL_DEADLINE_MS,
-	HUB_START_DEADLINE_MS,
+	HUB_WAIT_LIMIT_MS,
 	Hub,
 	type HubInstanceHandler,
 	type HubItem,
@@ -178,11 +178,30 @@ describe("the hub connection", () => {
 		const started = performance.now();
 		expect(() => hub.call(instance.id, "stall", { ms: 8_000 })).toThrow(CoreError);
 		const blocked = performance.now() - started;
-		expect(blocked).toBeGreaterThanOrEqual(HUB_START_DEADLINE_MS - 50);
-		expect(blocked).toBeLessThan(HUB_START_DEADLINE_MS + 1_000);
+		expect(blocked).toBeGreaterThanOrEqual(HUB_WAIT_LIMIT_MS - 50);
+		expect(blocked).toBeLessThan(HUB_WAIT_LIMIT_MS + 1_000);
 		expect(instance.lost.map(error => error.code)).toEqual(["hub_lost"]);
 		// The trace names the job the hub's thread sat in: main's own call.
-		expect(instance.lost[0]?.message).toMatch(/the hub's thread was \d+ ms into this call/);
+		expect(instance.lost[0]?.message).toMatch(/the core's hub thread was \d+ ms into this call/);
+	}, 15_000);
+
+	it("never holds main past the wait's limit, nor the hang watchdog's 5 s, while its worker reaches no hub", () => {
+		const dir = mkdtempSync(join(tmpdir(), "hub-none-"));
+		const address =
+			process.platform === "win32"
+				? `\\\\.\\pipe\\ompdesk-hub-none-${process.pid}-${Date.now()}`
+				: join(dir, "none.sock");
+		// Generation -1: no core of this process is abandoned for it.
+		const hub = new Hub(() => ({ address, token: "t", generation: -1 }));
+		const started = performance.now();
+		try {
+			expect(() => hub.barrier()).toThrow(CoreError);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+		const blocked = performance.now() - started;
+		expect(blocked).toBeLessThan(HUB_WAIT_LIMIT_MS + 500);
+		expect(blocked).toBeLessThan(5_000);
 	}, 15_000);
 
 	it("never hands a question of the next core the answer to one the lost core asked", async () => {
