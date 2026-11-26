@@ -38,6 +38,7 @@ import { readFileSync } from "node:fs";
 import { basename, isAbsolute, normalize, relative } from "node:path";
 import { z } from "zod";
 import type { LeftProcess, LeftProcesses, OutputPeer } from "../../resources/gui-bridge/restart-core";
+import type { SessionUse } from "../shared/ipc-types";
 import { writeFileAtomicDeferred } from "./atomic-file";
 import { core } from "./core/process";
 import { SESSION_TAG_ENV } from "./omp-launch";
@@ -445,6 +446,60 @@ export class SessionProcesses {
 			...(record.device !== undefined ? { device: record.device } : {}),
 			...(pid !== undefined ? { pid } : {}),
 		}));
+	}
+
+	/**
+	 * What each live session holds now (after Orca's resource usage, `status-bar/resources/*`, FB100/FS101): its
+	 * processes, its omp first, from one listing, the largest session first. Null when the core cannot list in time.
+	 */
+	async use(list: () => Promise<TaggedProcess[] | null> = listTaggedProcesses): Promise<SessionUse[] | null> {
+		const rows = await list();
+		if (!rows) return null;
+		const byTag = new Map<string, TaggedProcess[]>();
+		for (const row of rows) {
+			if (!row.tag || this.#entries.get(row.tag)?.state !== "live") continue;
+			byTag.set(row.tag, [...(byTag.get(row.tag) ?? []), row]);
+		}
+		const use: SessionUse[] = [];
+		for (const [tag, processes] of byTag) {
+			const entry = this.#entries.get(tag);
+			if (!entry) continue;
+			const { record, pid } = entry;
+			const listed = processes
+				.map(row => ({
+					pid: row.pid,
+					name: row.name,
+					bytes: row.bytes,
+					...(row.startedMs !== undefined ? { startedMs: row.startedMs } : {}),
+					omp: row.pid === pid,
+				}))
+				.sort((a, b) => Number(b.omp) - Number(a.omp) || b.bytes - a.bytes);
+			use.push({
+				...(pid !== undefined ? { ompPid: pid } : {}),
+				cwd: record.cwd,
+				...(record.sessionPath !== undefined ? { sessionPath: record.sessionPath } : {}),
+				...(record.device !== undefined ? { device: record.device } : {}),
+				bytes: listed.reduce((sum, row) => sum + row.bytes, 0),
+				processes: listed,
+			});
+		}
+		return use.sort((a, b) => b.bytes - a.bytes);
+	}
+
+	/**
+	 * The person's Stop on one process of a live session (the session whose omp is `ompPid`), never that omp itself:
+	 * ended by pid and start, so a pid the OS gave a later process is never touched; stock's own workers are kept.
+	 */
+	async endProcess(ompPid: number, pid: number, startedMs: number): Promise<boolean> {
+		if (pid === ompPid) return false;
+		const entry = [...this.#entries.values()].find(candidate => candidate.pid === ompPid);
+		if (entry?.state !== "live") return false;
+		try {
+			const result = await this.#endOnly([entry.record.tag], [{ pid, startedMs }]);
+			return result.ended.some(ended => ended.pid === pid);
+		} catch {
+			return false;
+		}
 	}
 
 	/** Resolves once every end under way has settled (tests). */

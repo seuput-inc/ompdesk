@@ -47,6 +47,7 @@ import {
 	boardLanes,
 	matchesBoard,
 } from "./board-cards";
+import { ResourcesView } from "./ResourcesView";
 import { SessionPeekSheet } from "./SessionPeekSheet";
 import { useBoardComputers } from "./use-board";
 
@@ -172,6 +173,7 @@ export function BoardPage() {
 					tabs={[
 						{ id: "board", label: t("board.view.board") },
 						{ id: "inbox", label: t("board.view.inbox") },
+						{ id: "resources", label: t("board.view.resources") },
 					]}
 					variant="underline"
 				/>
@@ -179,77 +181,93 @@ export function BoardPage() {
 			title={t("destination.board")}
 		>
 			<div className="flex min-h-0 flex-1 flex-col" data-board-page={view}>
-				<div className="flex shrink-0 flex-wrap items-center gap-2 px-6 py-3 min-[1280px]:px-10">
-					<div className="w-64 max-w-full">
-						<SearchField
-							label={t("board.search")}
-							onValueChange={query => setFilter(current => ({ ...current, query }))}
-							placeholder={t("board.search")}
-							value={filter.query}
-						/>
-					</div>
-					<div className="flex flex-wrap items-center gap-1 [--hit-gap-x:2px] [--hit-gap-y:2px]" data-board-chips>
-						{projects.map(name => (
-							<Chip
-								data-board-chip="project"
-								key={`project:${name}`}
-								onPressedChange={() =>
-									setFilter(current => ({ ...current, projects: toggled(current.projects, name) }))
-								}
-								pressed={filter.projects.includes(name)}
-							>
-								{name}
-							</Chip>
-						))}
-						{remote.length > 0 &&
-							[{ device: "", name: t("board.thisComputer") }, ...remote].map(computer => (
-								<Chip
-									data-board-chip="computer"
-									key={`computer:${computer.device}`}
-									onPressedChange={() =>
-										setFilter(current => ({
-											...current,
-											computers: toggled(current.computers, computer.device ?? ""),
-										}))
-									}
-									pressed={filter.computers.includes(computer.device ?? "")}
-								>
-									{computer.name}
-								</Chip>
-							))}
-					</div>
-					{view === "inbox" && (
-						<SegmentedChoice
-							aria-label={t("board.group.label")}
-							className="ml-auto"
-							fit="content"
-							onChange={setGroup}
-							optionAttr="data-board-group"
-							options={[
-								{ value: "none", label: t("board.group.none") },
-								{ value: "lane", label: t("board.group.lane") },
-								{ value: "project", label: t("board.group.project") },
-								...(remote.length > 0
-									? [{ value: "computer" as const, label: t("board.group.computer") }]
-									: []),
-							]}
-							value={group}
-						/>
-					)}
-				</div>
-				{cards.length === 0 ? (
-					<EmptyState size="md" title={t("board.noSessions")} />
-				) : view === "board" ? (
-					<BoardLanes
-						cards={shown}
-						onClose={close}
-						onOpen={open}
-						onPeek={peekCard}
-						projectOf={projectOf}
-						titleOf={titleOf}
+				{view === "resources" ? (
+					<ResourcesView
+						titleOf={use => {
+							const card = cards.find(
+								entry => entry.device === undefined && entry.sessionPath === use.sessionPath,
+							);
+							return card ? titleOf(card).title : projectOf(use.cwd);
+						}}
 					/>
 				) : (
-					<InboxList cards={shown} group={group} onPeek={peekCard} projectOf={projectOf} titleOf={titleOf} />
+					<>
+						<div className="flex shrink-0 flex-wrap items-center gap-2 px-6 py-3 min-[1280px]:px-10">
+							<div className="w-64 max-w-full">
+								<SearchField
+									label={t("board.search")}
+									onValueChange={query => setFilter(current => ({ ...current, query }))}
+									placeholder={t("board.search")}
+									value={filter.query}
+								/>
+							</div>
+							<div
+								className="flex flex-wrap items-center gap-1 [--hit-gap-x:2px] [--hit-gap-y:2px]"
+								data-board-chips
+							>
+								{projects.map(name => (
+									<Chip
+										data-board-chip="project"
+										key={`project:${name}`}
+										onPressedChange={() =>
+											setFilter(current => ({ ...current, projects: toggled(current.projects, name) }))
+										}
+										pressed={filter.projects.includes(name)}
+									>
+										{name}
+									</Chip>
+								))}
+								{remote.length > 0 &&
+									[{ device: "", name: t("board.thisComputer") }, ...remote].map(computer => (
+										<Chip
+											data-board-chip="computer"
+											key={`computer:${computer.device}`}
+											onPressedChange={() =>
+												setFilter(current => ({
+													...current,
+													computers: toggled(current.computers, computer.device ?? ""),
+												}))
+											}
+											pressed={filter.computers.includes(computer.device ?? "")}
+										>
+											{computer.name}
+										</Chip>
+									))}
+							</div>
+							{view === "inbox" && (
+								<SegmentedChoice
+									aria-label={t("board.group.label")}
+									className="ml-auto"
+									fit="content"
+									onChange={setGroup}
+									optionAttr="data-board-group"
+									options={[
+										{ value: "none", label: t("board.group.none") },
+										{ value: "lane", label: t("board.group.lane") },
+										{ value: "project", label: t("board.group.project") },
+										...(remote.length > 0
+											? [{ value: "computer" as const, label: t("board.group.computer") }]
+											: []),
+									]}
+									value={group}
+								/>
+							)}
+						</div>
+						{cards.length === 0 ? (
+							<EmptyState size="md" title={t("board.noSessions")} />
+						) : view === "board" ? (
+							<BoardLanes
+								cards={shown}
+								onClose={close}
+								onOpen={open}
+								onPeek={peekCard}
+								projectOf={projectOf}
+								titleOf={titleOf}
+							/>
+						) : (
+							<InboxList cards={shown} group={group} onPeek={peekCard} projectOf={projectOf} titleOf={titleOf} />
+						)}
+					</>
 				)}
 			</div>
 			{peek && <SessionPeekSheet card={peek} onClose={() => setPeekKey(null)} onOpen={open} title={titleOf(peek)} />}

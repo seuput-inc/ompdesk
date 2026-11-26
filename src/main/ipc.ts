@@ -109,6 +109,7 @@ import type {
 	NotificationClickPayload,
 	SessionContentMatch,
 	SessionKind,
+	SessionUse,
 } from "../shared/ipc-types";
 import {
 	HOST_UPDATE_ACTIONS,
@@ -329,6 +330,12 @@ export interface IpcDeps {
 	 * of another app): the phones' upload folder (web/uploads.ts), its limits and its 24-hour lifetime.
 	 */
 	uploads?: Pick<UploadStore, "attachHere" | "goneIn">;
+	/** All sessions › Resources: what each live session holds, a process's Stop, a quiet tab's omp given back now. */
+	resources?: {
+		use(): Promise<SessionUse[] | null>;
+		endProcess(ompPid: number, pid: number, startedMs: number): Promise<boolean>;
+		giveBack(tabId: string): Promise<"released" | "busy">;
+	};
 	/** A preference was written through PREFS_SET (main-side effects such as keep-awake). */
 	onPrefChanged?: (key: string) => void;
 	/** The Schedules service, created later than the handlers: read per use. */
@@ -1815,6 +1822,18 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	ipc.handle(
 		IPC_COMMANDS.BOARD_OPEN_WINDOW,
 		async () => (await deps.spawnWindow(undefined, undefined, undefined, undefined, "board")) !== null,
+	);
+
+	// All sessions › Resources (Orca's resource usage and sleep): what each live session holds, a process's Stop, and a
+	// quiet tab's omp given back now (index.ts wires them to SessionProcesses, the pool and idle release's rule).
+	ipc.handle(IPC_COMMANDS.RESOURCES_READ, async () => (await deps.resources?.use()) ?? null);
+	ipc.handle(IPC_COMMANDS.RESOURCES_END_PROCESS, async (_caller, payload: unknown) => {
+		const { ompPid, pid, startedMs } = (payload ?? {}) as Record<string, unknown>;
+		if (!Number.isInteger(ompPid) || !Number.isInteger(pid) || typeof startedMs !== "number") return false;
+		return (await deps.resources?.endProcess(ompPid as number, pid as number, startedMs)) ?? false;
+	});
+	ipc.handle(IPC_COMMANDS.RESOURCES_GIVE_BACK, async (_caller, tabId: unknown) =>
+		typeof tabId === "string" && deps.resources ? deps.resources.giveBack(tabId) : "busy",
 	);
 
 	// ========================================================================

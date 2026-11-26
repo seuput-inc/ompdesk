@@ -171,6 +171,9 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		mode: "web",
 		web: "A page is one window: the board shows no such button there, and the page answers false",
 	},
+	[C.RESOURCES_READ]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.RESOURCES_END_PROCESS]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.RESOURCES_GIVE_BACK]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSION_CONSUME_PENDING]: {
 		dir: "invoke",
 		permission: "workspace",

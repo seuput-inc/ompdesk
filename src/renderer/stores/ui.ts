@@ -89,11 +89,11 @@ export type PageDestination = Exclude<Destination, "session">;
 export type AgentsTab = "live" | "definitions" | "prs" | "github";
 export type InsightsTab = "stats" | "usage";
 export type InsightsStatsScope = "session" | "all";
-/** The all-sessions page's two views: the lanes, or one list by latest activity. */
-export type BoardView = "board" | "inbox";
+/** The all-sessions page's views: the lanes, one list by latest activity, and what each session holds. */
+export type BoardView = "board" | "inbox" | "resources";
 const AGENTS_TABS: readonly string[] = ["live", "definitions", "prs", "github"] satisfies AgentsTab[];
 const INSIGHTS_TABS: readonly string[] = ["stats", "usage"] satisfies InsightsTab[];
-const BOARD_VIEWS: readonly string[] = ["board", "inbox"] satisfies BoardView[];
+const BOARD_VIEWS: readonly string[] = ["board", "inbox", "resources"] satisfies BoardView[];
 /** Settings section a cold ⌘, lands on (SettingsPage maps legacy ids). */
 const DEFAULT_SETTINGS_TAB = "general";
 /** Documents whose rendered/source choice the Files viewer remembers. */

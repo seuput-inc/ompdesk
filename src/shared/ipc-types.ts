@@ -399,6 +399,10 @@ export const IPC_COMMANDS = {
 	SESSION_OPEN_NEW_WINDOW: "session:open-new-window",
 	/** A new window that opens on the all-sessions board (its tab is the usual empty start tab) */
 	BOARD_OPEN_WINDOW: "board:open-window",
+	/** What each live session holds (processes, bytes), its Stop per process, and giving a quiet tab's omp back */
+	RESOURCES_READ: "resources:read",
+	RESOURCES_END_PROCESS: "resources:end-process",
+	RESOURCES_GIVE_BACK: "resources:give-back",
 	/** Fresh window pulls the session it was opened for (one-shot) */
 	SESSION_CONSUME_PENDING: "session:consume-pending",
 	/** Spawn a tab (own sidecar) bound to the calling window */
@@ -2151,6 +2155,33 @@ export interface SessionInfo {
 	heldOnHost?: true;
 }
 
+/** One process a session's tab started (or its omp), as the All sessions page's Resources view lists it. */
+export interface SessionUseProcess {
+	pid: number;
+	name: string;
+	/** Resident bytes. */
+	bytes: number;
+	/** When it started (ms since the epoch); the person's Stop names it with the pid. */
+	startedMs?: number;
+	/** The session's omp itself, which has no Stop. */
+	omp: boolean;
+}
+
+/** What one live session holds on this computer (`RESOURCES_READ`, `SessionProcesses.use`). */
+export interface SessionUse {
+	/** Its tab's omp now: what the person's Stop and Give back name the session by. */
+	ompPid?: number;
+	/** Its tab here, and whether that tab may give its omp back now (quiet, nothing it started still runs). */
+	tabId?: string;
+	quiet?: boolean;
+	cwd: string;
+	sessionPath?: string;
+	/** The paired device this computer runs it for. */
+	device?: string;
+	bytes: number;
+	processes: SessionUseProcess[];
+}
+
 // ============================================================================
 // Remote Devices Types
 // ============================================================================
@@ -2649,6 +2680,12 @@ export interface OmpApi {
 		openInNewWindow(payload: IpcSessionOpenNewWindowPayload): Promise<boolean>;
 		/** A new window that opens on the all-sessions board; false on a phone's page (a page is one window). */
 		openBoardWindow(): Promise<boolean>;
+		/** What each live session holds on this computer now; null when the processes cannot be listed in time. */
+		use(): Promise<SessionUse[] | null>;
+		/** End one process a session started (never its omp); true when it ended. */
+		endProcess(ompPid: number, pid: number, startedMs: number): Promise<boolean>;
+		/** Give a quiet tab's omp back now; `busy` when something in it still runs. */
+		giveBack(tabId: string): Promise<"released" | "busy">;
 		/** One-shot: the session this window was opened to display, if any. */
 		consumePendingOpen(): Promise<string | null>;
 		/** One computer's session summaries: this computer's, or a paired host's (null while not known). */

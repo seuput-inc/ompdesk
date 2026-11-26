@@ -52,6 +52,25 @@ pub struct Node {
     x: bool,
 }
 
+impl Node {
+    /// Bytes under this directory: its files and every folder below, a hard link once (as the walk).
+    pub fn total(&self) -> u64 {
+        fn sum<'a>(node: &'a Node, counted: &mut HashSet<&'a str>) -> u64 {
+            let mut bytes = node.f;
+            for (key, size) in node.h.iter().flatten() {
+                if counted.insert(key.as_str()) {
+                    bytes += size;
+                }
+            }
+            for child in node.d.values() {
+                bytes += sum(child, counted);
+            }
+            bytes
+        }
+        sum(self, &mut HashSet::new())
+    }
+}
+
 /// An inode the TypeScript wrote as a JavaScript number, past 2^53 rounded (and possibly past `u64`).
 fn lenient_u64<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
     let number = serde_json::Number::deserialize(deserializer)?;
@@ -132,6 +151,9 @@ pub struct Measured {
     pub bytes: u64,
     #[serde(flatten)]
     pub work: Work,
+    /// Each folder right under the target and the bytes under it (none for a file).
+    #[serde(skip)]
+    pub children: Vec<(String, u64)>,
 }
 
 /// A process-wide count of file system calls in flight.
@@ -539,6 +561,14 @@ pub fn bytes(id: Option<u64>, target: &str, reuse: bool, scope: &Scope) -> Resul
     };
     let read_before = reading.as_ref().map_or(0.0, |r| r.read_before);
     let Walked { bytes, root, work } = measure(Path::new(target), old, read_before, scope)?;
+    let children = match &root {
+        Root::Tree(node) => node
+            .d
+            .iter()
+            .map(|(name, child)| (name.clone(), child.total()))
+            .collect(),
+        Root::Bytes(_) => Vec::new(),
+    };
     if let Some(reading) = reading.filter(|_| reuse) {
         reading
             .next
@@ -546,7 +576,11 @@ pub fn bytes(id: Option<u64>, target: &str, reuse: bool, scope: &Scope) -> Resul
             .unwrap_or_else(PoisonError::into_inner)
             .insert(target.to_owned(), root);
     }
-    Ok(Measured { bytes, work })
+    Ok(Measured {
+        bytes,
+        work,
+        children,
+    })
 }
 
 /// Keeps what the reading measured for the next run (0600 in a 0700 folder, replaced atomically, never after a
@@ -594,6 +628,22 @@ mod tests {
         measure(target, None, 0.0, &Scope::detached())
             .unwrap()
             .bytes
+    }
+
+    #[test]
+    fn names_each_folder_under_the_target_with_what_it_holds() {
+        let dir = tree("children");
+        write(&dir, "a/one.txt", 40_000);
+        write(&dir, "a/deep/two.txt", 40_000);
+        write(&dir, "b/three.txt", 4_000);
+        write(&dir, "loose.txt", 4_000);
+        let measured = bytes(None, &dir.to_string_lossy(), false, &Scope::detached()).unwrap();
+        let children: BTreeMap<_, _> = measured.children.into_iter().collect();
+        assert_eq!(children.keys().collect::<Vec<_>>(), ["a", "b"]);
+        assert_eq!(children["a"], full(&dir.join("a")));
+        assert_eq!(children["b"], full(&dir.join("b")));
+        assert!(measured.bytes >= children["a"] + children["b"]);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// `du -sk`, which also counts directories' own blocks (none on APFS).

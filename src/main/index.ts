@@ -126,6 +126,7 @@ import { applyLaunchDecision, type LaunchDecision, softwareCompositing } from ".
 import { installHangWatchdog, markMainStep } from "./hang-watchdog";
 import { startLowDiskWatch } from "./health-watch";
 import { getMainLanguage, mainT } from "./i18n";
+import { canGiveBack } from "./idle-release";
 import { startupCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
 import { shellRunner } from "./local/git/exec";
@@ -142,7 +143,7 @@ import { installMainFailureLogging } from "./main-failures";
 import { McpHub } from "./mcp-hub";
 import { onMcpChange } from "./mcp-live";
 import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
-import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading } from "./memory-sampler";
+import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading, watchProcesses } from "./memory-sampler";
 import { startMemoryWatch } from "./memory-watch";
 import { configureNativeBin, nativeBinPath } from "./native-bin";
 import { quietBotTurn } from "./notify-triage";
@@ -2568,6 +2569,23 @@ app.whenReady().then(async () => {
 		uploads: {
 			attachHere: (name, bytes) => hostUploads().attachHere(name, bytes),
 			goneIn: (text, cwd) => hostUploads().goneIn(text, cwd),
+		},
+		resources: {
+			use: async () => {
+				const use = await sessionProcesses.use();
+				if (!use) return null;
+				const tabs = sidecarPool.memoryTabs();
+				return use.map(entry => {
+					const tab = tabs.find(candidate => candidate.pid !== undefined && candidate.pid === entry.ompPid);
+					return tab ? { ...entry, tabId: tab.tabId, quiet: tab.quiet } : entry;
+				});
+			},
+			endProcess: (ompPid, pid, startedMs) => sessionProcesses.endProcess(ompPid, pid, startedMs),
+			giveBack: async tabId => {
+				const tab = sidecarPool.memoryTabs().find(candidate => candidate.tabId === tabId);
+				if (!canGiveBack(tab, await watchProcesses())) return "busy";
+				return (await sidecarPool.releaseIdle(tabId)) ? "released" : "busy";
+			},
 		},
 		schedules: () => scheduleService,
 		mailAccounts: () => mailAccounts,

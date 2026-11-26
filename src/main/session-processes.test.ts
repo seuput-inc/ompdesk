@@ -608,3 +608,38 @@ describe("which tags end, and when", () => {
 		expect(String(end?.details.found)).toContain('"pid":20');
 	});
 });
+
+describe("what each live session holds (All sessions › Resources)", () => {
+	it("groups the listing by session, its omp first, and stops only another process of a live session", async () => {
+		const endOnly = vi.fn(async (_tags: readonly string[], only: ReadonlyArray<{ pid: number }>) => ({
+			ended: only.map(({ pid }) => ({ pid, name: "next-server", bytes: 0, forced: false })),
+			left: [],
+			kept: [],
+			own: [],
+		}));
+		const sessions = registry(false, { endOnly });
+		const big = sessions.open({ cwd: "/work/big", sessionPath: "/s/big.jsonl" });
+		big.setPid(100);
+		const small = sessions.open({ cwd: "/work/small" });
+		small.setPid(200);
+		const use = await sessions.use(async () => [
+			{ pid: 100, ppid: 1, bytes: 300, name: "bun", tag: big.tag },
+			{ pid: 101, ppid: 100, bytes: 900, name: "next-server", tag: big.tag, startedMs: 5 },
+			{ pid: 200, ppid: 1, bytes: 250, name: "bun", tag: small.tag },
+			{ pid: 300, ppid: 1, bytes: 9_000, name: "elsewhere" },
+		]);
+		expect(use?.map(session => [session.sessionPath, session.ompPid, session.bytes])).toEqual([
+			["/s/big.jsonl", 100, 1_200],
+			[undefined, 200, 250],
+		]);
+		expect(use?.[0]?.processes.map(process => [process.pid, process.omp])).toEqual([
+			[100, true],
+			[101, false],
+		]);
+		expect(await sessions.endProcess(100, 100, 1)).toBe(false);
+		expect(await sessions.endProcess(999, 101, 5)).toBe(false);
+		expect(endOnly).not.toHaveBeenCalled();
+		expect(await sessions.endProcess(100, 101, 5)).toBe(true);
+		expect(endOnly).toHaveBeenCalledWith([big.tag], [{ pid: 101, startedMs: 5 }]);
+	});
+});
