@@ -270,7 +270,8 @@ pub fn place(
     })
 }
 
-/// What the page asks, by navigating to `ompdesk-popup:<action>?…` (cancelled by the shell).
+/// What the page asks, by setting its title to `ompdesk-popup:<action>?…&n=<count>` (the shell reads title changes;
+/// the page has no IPC, and a WebView2 page's navigation to an unknown scheme never reaches the shell).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     /// The card was clicked: open its session.
@@ -283,6 +284,8 @@ pub enum Action {
     Mute(i64),
     /// "Notification settings…".
     Settings,
+    /// The page was written and runs: cards can be drawn.
+    Ready,
 }
 
 pub const SCHEME: &str = "ompdesk-popup";
@@ -304,6 +307,7 @@ pub fn action(url: &url::Url) -> Option<Action> {
         "menu" => Some(Action::Menu),
         "mute" => number("until").map(Action::Mute),
         "settings" => Some(Action::Settings),
+        "ready" => Some(Action::Ready),
         _ => None,
     }
 }
@@ -480,6 +484,11 @@ mod tests {
             Some(Action::Mute(1_800_000_000_000))
         );
         assert_eq!(parse("ompdesk-popup:settings"), Some(Action::Settings));
+        assert_eq!(
+            parse("ompdesk-popup:close?id=7&n=3"),
+            Some(Action::Close(7))
+        );
+        assert_eq!(parse("ompdesk-popup:ready?n=1"), Some(Action::Ready));
         assert_eq!(parse("ompdesk-popup:open?id=7"), None);
         assert_eq!(parse("ompdesk-popup:click?id=x"), None);
         assert_eq!(parse("ompdesk-popup:click?id=-1"), None);

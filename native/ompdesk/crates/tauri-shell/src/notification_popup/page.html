@@ -91,8 +91,13 @@ body {
 <div id="stack" role="status" aria-live="polite"></div>
 <script>
 "use strict";
-// The shell reads and cancels these navigations (notification_popup/mod.rs `action`).
-const go = (action, query = "") => { location.href = `ompdesk-popup:${action}${query}`; };
+// The page has no IPC: it asks through its title, which the shell reads (notification_popup/mod.rs `action`). The
+// count keeps two equal asks two title changes.
+let asked = 0;
+const go = (action, query = "") => {
+	asked += 1;
+	document.title = `ompdesk-popup:${action}?${query ? `${query}&` : ""}n=${asked}`;
+};
 const GEAR = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v1.8M8 12.7v1.8M14.5 8h-1.8M3.3 8H1.5M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3M12.6 12.6l-1.3-1.3M4.7 4.7 3.4 3.4"/></svg>';
 const CROSS = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
 let known = new Set();
@@ -123,8 +128,8 @@ function card({ id, title, body }, state) {
 	const gear = tool("gear", state.labels.options, GEAR, () => go("menu"));
 	gear.setAttribute("aria-haspopup", "menu");
 	gear.setAttribute("aria-expanded", String(state.menu));
-	row.append(element("div", "icon"), text, gear, tool("close", state.labels.close, CROSS, () => go("close", `?id=${id}`)));
-	row.addEventListener("click", () => go("click", `?id=${id}`));
+	row.append(element("div", "icon"), text, gear, tool("close", state.labels.close, CROSS, () => go("close", `id=${id}`)));
+	row.addEventListener("click", () => go("click", `id=${id}`));
 	return row;
 }
 
@@ -146,8 +151,8 @@ function menu(labels) {
 		button.addEventListener("click", onClick);
 		box.append(button);
 	};
-	item(labels.muteHour, () => go("mute", `?until=${Date.now() + 3_600_000}`));
-	item(labels.muteTomorrow, () => go("mute", `?until=${tomorrowMorning()}`));
+	item(labels.muteHour, () => go("mute", `until=${Date.now() + 3_600_000}`));
+	item(labels.muteTomorrow, () => go("mute", `until=${tomorrowMorning()}`));
 	item(labels.settings, () => go("settings"));
 	return box;
 }
@@ -169,6 +174,7 @@ window.render = state => {
 	known = new Set(state.cards.map(item => item.id));
 	document.getElementById("stack").replaceChildren(...rows);
 };
+go("ready");
 </script>
 </body>
 </html>

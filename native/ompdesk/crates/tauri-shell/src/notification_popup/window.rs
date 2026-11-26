@@ -201,10 +201,10 @@ fn give_up_waiting() {
     }
 }
 
-/// Writes the page into the window's `about:blank` until the page answers that it runs (`window.render` exists).
-/// Tauri opens a `data:` URL only with its `webview-data-url` feature and reports no load of the first `about:blank`,
-/// so the shell writes again every 250 ms: a script sent before the webview has its document is lost. The answer is the
-/// script's own result, not a timer or a navigation of the page's, which a page that is not on screen may hold back.
+/// Writes the page into the window's `about:blank` until the page runs. Tauri opens a `data:` URL only with its
+/// `webview-data-url` feature and reports no load of the first `about:blank`, so the shell writes again every 250 ms:
+/// a script sent before the webview has its document is lost. The page says it runs twice over, by the write script's
+/// result and by its title (`ompdesk-popup:ready`), whichever reaches the shell first.
 fn write_page() {
     let Some((window, tries)) = with(|state| {
         if state.ready {
@@ -219,9 +219,14 @@ fn write_page() {
     let script = format!(
         "(()=>{{if(!window.render){{document.open();document.write({page});document.close();}}return typeof window.render;}})()"
     );
-    let answered = window.eval_with_callback(script, |answer: String| {
+    let answered = window.eval_with_callback(script, move |answer: String| {
         if answer.contains("function") {
             ui::post(page_ready);
+        } else {
+            log(
+                "notification.popup.write_answer",
+                json!({"try": tries, "answer": answer}),
+            );
         }
     });
     if let Err(error) = answered {
@@ -288,6 +293,7 @@ fn act(action: Action) {
             }
             entry::menu_action("open-settings");
         }
+        Action::Ready => return page_ready(),
     }
     render();
 }
@@ -320,14 +326,18 @@ fn ensure_window() -> Result<(), String> {
             .shadow(true)
             .disable_drag_drop_handler()
             .theme(theme::for_new_window())
-            .on_navigation(move |url| {
-                if let Some(action) = super::action(url) {
+            // Only the blank page the shell writes into; the page asks through its title (`super::action`).
+            .on_navigation(move |url| *url == own)
+            .on_new_window(|_, _| NewWindowResponse::Deny)
+            .on_document_title_changed(|_, title| {
+                if let Some(action) = title
+                    .parse::<url::Url>()
+                    .ok()
+                    .and_then(|url| super::action(&url))
+                {
                     ui::post(move || act(action));
-                    return false;
                 }
-                *url == own
-            })
-            .on_new_window(|_, _| NewWindowResponse::Deny);
+            });
     if let Some(colour) = theme::window_background() {
         builder = builder.background_color(colour);
     }
