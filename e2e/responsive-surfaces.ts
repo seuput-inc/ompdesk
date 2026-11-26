@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import type { Locator, Page } from "@playwright/test";
+import { STRESS_PROMPT } from "../src/renderer/dev-harness/fixture";
 import { en } from "../src/renderer/locales/en";
 import { ko } from "../src/renderer/locales/ko";
 import type { RpcCommand } from "../src/shared/rpc-types";
@@ -86,7 +87,17 @@ export interface Surface {
 	};
 }
 
-export type ParitySession = "work" | "reply" | "steer" | "advisor" | "ci" | "limit" | "turns" | "long" | "cut";
+export type ParitySession =
+	| "work"
+	| "reply"
+	| "steer"
+	| "advisor"
+	| "ci"
+	| "limit"
+	| "turns"
+	| "long"
+	| "cut"
+	| "stress";
 
 /** The fake omp's voice script (`voiceScript`, e2e/fixture/rpc-ui.ts); e2e/parity.e2e.ts names the file. */
 async function scriptVoice(script: Record<string, unknown>): Promise<void> {
@@ -1446,14 +1457,34 @@ export const SURFACES: readonly Surface[] = [
 		title: "Transcript scrolled to its first turn",
 		open: showTranscriptStart,
 		ready: '.omp-transcript-scroll [data-index="0"]',
+		// A 44-turn session: its first turn is a scroll away from where it opens.
+		parity: { session: "turns" },
 	},
 	{
 		id: "transcript-stress",
 		area: "A",
 		title: "Transcript at the stress turns: long URL, wide table, long code line, diff, mermaid, long tool paths",
-		open: page => showTurn(page, "Show me everything that tends to overflow on a phone."),
-		ready: '.omp-user-bubble:has-text("Show me everything that tends to overflow on a phone.")',
+		open: page => showTurn(page, STRESS_PROMPT),
+		ready: `.omp-user-bubble:has-text("${STRESS_PROMPT}")`,
 		settle: 900,
+		// B's "Parity stress" session, whose one turn the fake omp answers with the harness's stress reply.
+		parity: { session: "stress" },
+	},
+	// Find in the conversation (⌘F, chat/TranscriptFind.tsx): the bar over the transcript, its count, the marked match.
+	{
+		id: "transcript-find",
+		area: "A",
+		title: "Find in the conversation: the bar at the transcript's top right with its count",
+		open: async page => {
+			const mac = await page.evaluate(() => /Mac/.test(navigator.platform));
+			await page.keyboard.press(mac ? "Meta+f" : "Control+f");
+			await page.locator("[data-transcript-find] input").fill("fixture reply");
+		},
+		ready: '[data-transcript-find] [data-find-status]:text-matches("^1/")',
+		settle: 400,
+		// Parity only: a real window's ⌘F over the work session's one answered turn.
+		when: () => false,
+		parity: { session: "work", after: closeOverlay },
 	},
 	// The turn rail in the transcript's left gutter (ConversationNavigator). A phone's page does not draw it (its CSS
 	// hides it below a wide workspace), so there the capture is the transcript alone; the ticks are mounted all the same.
@@ -1548,13 +1579,20 @@ export const SURFACES: readonly Surface[] = [
 	{
 		id: "composer-at-menu",
 		area: "A",
-		title: "@ file menu",
+		title: "@ menu: files, then this session's opened sessions and this project's others",
 		open: async page => {
-			const input = page.locator("[data-composer-input]");
+			const input = page.locator("[data-composer-input]:visible").first();
 			await input.fill("");
 			await input.pressSequentially("@", { delay: 30 });
 		},
 		ready: '.omp-composer-anchor [role="listbox"]',
+		parity: {
+			session: "work",
+			after: async page => {
+				await page.keyboard.press("Escape");
+				await page.locator("[data-composer-input]:visible").first().fill("");
+			},
+		},
 	},
 	{
 		id: "composer-long-draft",
@@ -2001,10 +2039,16 @@ export const SURFACES: readonly Surface[] = [
 		id: "settings-list",
 		area: "B",
 		title: "Settings section list (a phone's first page)",
-		open: async page => {
-			await ui(page, "openSettings");
+		open: async (page, look) => {
+			// The harness opens it through its store; a real window or page through the sidebar's Settings entry.
+			if (await page.evaluate(() => Boolean(window.__stores))) await ui(page, "openSettings");
+			else {
+				await openDrawer(page, look);
+				await page.locator('[data-destination="settings"]').first().click();
+			}
 		},
 		ready: "[data-settings-page]",
+		parity: { session: "work" },
 	},
 	{
 		id: "settings-connections-pwa",

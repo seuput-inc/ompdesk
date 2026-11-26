@@ -16,7 +16,7 @@ import { useToastStore } from "../stores/toast";
 import { useUiStore } from "../stores/ui";
 import { routeCommands } from "../test-support/route-commands";
 import { withGuiCommands } from "./command-registry";
-import { planComposerSubmit, settleComposerResponse } from "./composer-submit";
+import { compactRequest, planComposerSubmit, settleComposerResponse } from "./composer-submit";
 import { translate } from "./i18n";
 
 function success(data: unknown): RpcResponse {
@@ -169,6 +169,51 @@ describe("planComposerSubmit", () => {
 		expect(omp.rpc.prompt).not.toHaveBeenCalled();
 		expect(omp.rpc.steer).not.toHaveBeenCalled();
 		expect(omp.rpc.followUp).not.toHaveBeenCalled();
+	});
+
+	const compactCommand = {
+		name: "compact",
+		description: "Manually compact the session context",
+		subcommands: [{ name: "soft" }, { name: "remote" }, { name: "snapcompact" }, { name: "handoff" }],
+	};
+
+	it("sends /compact <focus> through the compact RPC with the focus as its instructions", async () => {
+		const omp = installMockOmp();
+		const submit = planComposerSubmit({
+			message: "/compact keep the API decisions",
+			images: [],
+			isStreaming: false,
+			commands: [compactCommand],
+		});
+		if (submit.kind !== "send") throw new Error("expected send");
+		await submit.request();
+		expect(omp.rpc.compact).toHaveBeenCalledWith("keep the API decisions");
+		expect(omp.rpc.prompt).not.toHaveBeenCalled();
+	});
+
+	it("leaves /compact <mode> … to stock's slash command, and focus text alone while stock's commands are unknown", () => {
+		expect(compactRequest("/compact snapcompact", [compactCommand])).toBeUndefined();
+		expect(compactRequest("/compact Soft keep the tests", [compactCommand])).toBeUndefined();
+		expect(compactRequest("/compact keep the tests", [])).toBeUndefined();
+		expect(compactRequest("/compact", [])).toEqual({});
+		expect(compactRequest("/compactor x", [compactCommand])).toBeUndefined();
+	});
+
+	it("says nothing was compacted instead of failing, and keeps no draft", async () => {
+		const omp = installMockOmp();
+		omp.rpc.compact.mockResolvedValueOnce({
+			type: "response",
+			command: "compact",
+			success: false,
+			error: "Nothing to compact (session too small)",
+		});
+		const submit = planComposerSubmit({ message: "/compact", images: [], isStreaming: false, commands: [] });
+		if (submit.kind !== "send") throw new Error("expected send");
+		const response = await submit.request();
+		expect(response.success).toBe(true);
+		expect(useToastStore.getState().toasts.map(({ variant, message }) => ({ variant, message }))).toEqual([
+			{ variant: "info", message: "Nothing to compact" },
+		]);
 	});
 
 	it("steers a running turn with plain text, never the follow-up lane", async () => {

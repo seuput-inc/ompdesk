@@ -45,6 +45,13 @@ export const DATA_OFFSET = 16;
 const INITIAL_BYTES = 1 << 16;
 const MAX_BYTES = 1 << 30;
 
+/**
+ * The process's own clock, kept from load: a test's fake timers replace `globalThis.performance` (with the faked
+ * `Date`'s epoch as its origin), and a lost wait's trace compares main's time with the times the worker writes on its
+ * own, unfaked clock (`lossTrace`).
+ */
+const realPerformance = performance;
+
 const WORKER = `
 const { parentPort, workerData } = require("node:worker_threads");
 const net = require("node:net");
@@ -425,8 +432,8 @@ export class Hub {
 	#wait(connection: Connection, id: number | "drain"): Line[] {
 		const { control, worker } = connection;
 		Atomics.store(control, STATE, WAITING);
-		// Wall time, as the worker writes its own (`lossTrace`); a test's fake clock moves neither.
-		const waitedAt = performance.timeOrigin + performance.now();
+		// Wall time on the real clock, as the worker writes its own (`lossTrace`).
+		const waitedAt = realPerformance.timeOrigin + realPerformance.now();
 		worker.postMessage({ wait: id });
 		const started = this.measuring ? performance.now() : 0;
 		const outcome = this.#block(control);

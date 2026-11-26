@@ -20,6 +20,7 @@ import { useTabRpc } from "../../../lib/tab-rpc";
 import type { SessionStore } from "../../../stores/session";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
 import { toast, toastError } from "../../../stores/toast";
+import { composerExtras } from "./composer-extras";
 
 /** A large paste waiting for its form: the paste already happened, the menu only picks how it goes in. */
 export interface PendingPaste {
@@ -252,6 +253,23 @@ export function useComposerPaste({
 			if (lines.some(line => !names.has(line) && !names.has(line.split(/[\\/]/).at(-1) ?? "")))
 				pasteText(pasted, true);
 			void attachFiles(files);
+			return;
+		}
+		// One URL over selected words links them (`[words](url)`); a rich copy keeps its links as Markdown. Both wait for
+		// their module (composer-extras.ts, loaded when the composer took focus); before it a paste is plain text.
+		const links = composerExtras();
+		const el = textareaRef.current;
+		const selected = el ? el.value.slice(el.selectionStart, el.selectionEnd) : "";
+		const link = links && selected ? links.linkedSelectionText(selected, pasted) : null;
+		if (link) {
+			e.preventDefault();
+			pasteText(link, true);
+			return;
+		}
+		const linked = links ? links.withPastedLinks(pasted, e.clipboardData.getData("text/html")) : pasted;
+		if (linked !== pasted) {
+			e.preventDefault();
+			pasteText(linked, true);
 			return;
 		}
 		if (pasted && pasteText(pasted, false)) e.preventDefault();

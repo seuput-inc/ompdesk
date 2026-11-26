@@ -207,7 +207,7 @@ function carryGhostComposer(ghostId: string, tabId: string): void {
 	if (!from || !to) return;
 	const held = to.getState();
 	if (from.draft !== "" && held.draft === "") held.setDraft(from.draft);
-	if (from.images.length > 0 && held.images.length === 0) held.setImages(from.images);
+	if (from.pictureSlots.length > 0 && held.pictureSlots.length === 0) held.setPictureSlots(from.pictureSlots);
 }
 
 // Focus routing is window-global. Serialize changes so rapid tab clicks cannot
@@ -793,7 +793,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 					(!info || tabSessionChanged(tab, info)) &&
 					(Boolean(
 						composer?.draft ||
-							composer?.images.length ||
+							composer?.pictureSlots.length ||
 							composer?.sending ||
 							composer?.submissionUncertain ||
 							composer?.cancelSubmit ||
@@ -1832,6 +1832,7 @@ export function restoreTabComposer(
 		useComposerStore.setState(current => ({
 			draft: prependToDraft(draft, current.draft),
 			images: [...images, ...current.images],
+			pictureSlots: [...images, ...current.pictureSlots],
 		}));
 		return;
 	}
@@ -1839,6 +1840,7 @@ export function restoreTabComposer(
 	composer.setState(current => ({
 		draft: prependToDraft(draft, current.draft),
 		images: [...images, ...current.images],
+		pictureSlots: [...images, ...current.pictureSlots],
 	}));
 }
 

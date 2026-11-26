@@ -11,10 +11,14 @@ import { composerEnterNewline, noteHardwareKey } from "../../../lib/hardware-key
 import { isImeKeyEvent } from "../../../lib/ime";
 import { chordFromEvent, PLATFORM } from "../../../lib/keymap";
 import { listboxTarget } from "../../../lib/listbox-nav";
+import { resumeRestoredQueue } from "../../../lib/messages";
 import { dropReferencedPastes, releasePaste, widenToPasteMarkers } from "../../../lib/paste-blobs";
 import type { TabRpc } from "../../../lib/tab-rpc";
-import type { ComposerImage } from "../../../stores/composer";
+import { type ComposerImage, useComposerStore } from "../../../stores/composer";
+import { useQueueStore } from "../../../stores/queue";
+import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useUiStore } from "../../../stores/ui";
+import { useQueueActions } from "../../panels/use-queue-actions";
 import { chipIndexForCode, type NextPromptChipsHandle } from "./NextPromptChips";
 import { plannedDeletion } from "./paste-marker-edit";
 import { arrowKeepsMenu } from "./use-completion-menu";
@@ -59,7 +63,8 @@ export function useComposerKeys({
 }: {
 	rpc: TabRpc;
 	text: string;
-	images: readonly ComposerImage[];
+	/** Only its count is read: an Esc with nothing typed and no picture slot stops at once. */
+	images: { readonly length: number };
 	setImages: (next: ComposerImage[]) => void;
 	textareaRef: RefObject<HTMLTextAreaElement | null>;
 	placeDraft: (next: string, caret: number) => void;
@@ -95,6 +100,24 @@ export function useComposerKeys({
 	queueEdit: { cancel: () => void } | null;
 }): ComposerKeys {
 	const { menu, setMenu } = menuHandle;
+	// ⌘↵ / Ctrl+↵ on an empty field sends the head of what waits now (Orca's `chordSteersHead`): the first follow-up
+	// joins the running turn as Steer now does, and with no turn running the Stop's held messages resume as the
+	// tray's Resume does.
+	const queueActions = useQueueActions();
+	const tabId = useRuntimeTabId();
+	const firstFollowUp = useQueueStore(state => state.followUp[0]?.id ?? null);
+	const heldByStop = useComposerStore(state => state.restoredQueue.length > 0);
+	const sendQueuedHead = (): boolean => {
+		if (runActive && firstFollowUp && queueActions.ready) {
+			queueActions.steerNow(firstFollowUp);
+			return true;
+		}
+		if (!runActive && heldByStop) {
+			void resumeRestoredQueue(rpc, tabId);
+			return true;
+		}
+		return false;
+	};
 	/** First Esc of a double-Esc, and whether its "Esc again" hint shows. */
 	const escArmedAt = useRef<number | null>(null);
 	const [escHint, setEscHint] = useState(false);
@@ -370,6 +393,8 @@ export function useComposerKeys({
 			e.preventDefault();
 			// A held Enter sends once, never again on auto-repeat.
 			if (e.repeat) return;
+			if ((e.metaKey || e.ctrlKey) && !queueEdit && text.trim() === "" && images.length === 0 && sendQueuedHead())
+				return;
 			// ⌘↵ collapses the expanded composer only once the draft went out.
 			if (send() && expanded) collapse();
 		}

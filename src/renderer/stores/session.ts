@@ -62,12 +62,15 @@ export interface SessionStore {
 	retryInfo: { attempt: number; maxAttempts: number; delayMs: number; errorMessage: string; startedAt: number } | null;
 	/** Live compaction window: auto (auto_compaction_start → auto_compaction_end) carries the TUI
 	 * loader's reason/action for the inline status row; `manual` is a /compact (`compact`) or
-	 * handoff (`handoff`) the GUI started, held for as long as its request runs, and `cancelling`
-	 * once the reader stopped it. `startedAt` is the client clock when it opened: the row's elapsed time. */
+	 * handoff (`handoff`), either one this window started (`local`, held for as long as its request
+	 * runs) or one stock announced (`manual_compaction_start` → `_end`: another window, a paired
+	 * device, the phone, an agent), and `cancelling` once the reader stopped it. `startedAt` is the
+	 * client clock when it opened: the row's elapsed time. */
 	compactionInfo: {
 		reason: "threshold" | "overflow" | "idle" | "incomplete" | "manual";
 		action: string;
 		cancelling?: boolean;
+		local?: boolean;
 		startedAt: number;
 	} | null;
 	/** The compactions of this session this window watched run to their end, oldest first: the finished

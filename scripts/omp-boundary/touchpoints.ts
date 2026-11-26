@@ -410,6 +410,8 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"message_end",
 			"prompt_result",
 			"session_settled",
+			"manual_compaction_start",
+			"manual_compaction_end",
 			"available_commands_update",
 			"command_output",
 			"session_info_update",

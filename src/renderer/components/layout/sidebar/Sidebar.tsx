@@ -232,7 +232,7 @@ function activeTabUntouched(): boolean {
 		queue.steering.length === 0 &&
 		queue.followUp.length === 0 &&
 		composer.draft.trim().length === 0 &&
-		composer.images.length === 0
+		composer.pictureSlots.length === 0
 	);
 }
 

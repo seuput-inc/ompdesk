@@ -30,7 +30,10 @@ import { useSessionStore } from "../../stores/session";
 import { useTabsStore } from "../../stores/tabs";
 import { type PageDestination, setSidebarDrawerMode, useUiStore } from "../../stores/ui";
 import { webRuntime } from "../../web/runtime";
+import { preloadPromptList } from "../chat/ConversationNavigator";
+import { preloadTranscriptFind } from "../chat/TranscriptFind";
 import { Button, IconButton, Skeleton, Tooltip } from "../common";
+import { preloadComposerExtras } from "./composer/composer-extras";
 import { PanelContainer, preloadPanelViews } from "./PanelContainer";
 import { EdgeSwipeZone, SidebarDrawer } from "./SidebarDrawer";
 import { StatusBar } from "./status-bar/StatusBar";
@@ -85,6 +88,9 @@ function preloadForIntent(target: EventTarget | null): void {
 		return;
 	}
 	if (element?.closest('[data-tour="panel"], [data-rail-pin]')) void preloadPanelViews();
+	// The composer's `@` sessions and paste links, before the first `@` or paste lands in it.
+	else if (element?.closest("[data-composer-input]")) void preloadComposerExtras();
+	else if (element?.closest("[data-prompt-list]")) void preloadPromptList();
 }
 /** How long a paired web page lets its first screen settle before the idle preloads start. */
 const WEB_PRELOAD_DELAY_MS = 5000;
@@ -369,6 +375,9 @@ export function AppShell() {
 					void (webRuntime()?.linkAnswered() ?? Promise.resolve()).then(() => {
 						for (const page of ["settings", "agents", "insights"] as const) void preloadPage(page);
 						void preloadPanelViews().catch(() => {});
+						void preloadComposerExtras();
+						void preloadTranscriptFind();
+						void preloadPromptList();
 					});
 				}, IDLE_PRELOAD_TIMEOUT_MS);
 			},

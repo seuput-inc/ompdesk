@@ -230,14 +230,14 @@ function clearScreen(view: TerminalMount): void {
 
 /** The keymap's terminal actions a focused terminal takes before its shell sees the key. */
 let compiledKeymap: { overrides: KeymapOverrides; map: Map<string, string> } | null = null;
-function terminalAction(event: KeyboardEvent): "terminal.find" | "terminal.new" | "terminal.quick" | null {
+function terminalAction(event: KeyboardEvent): "find" | "terminal.new" | "terminal.quick" | null {
 	const chord = chordFromEvent(event);
 	if (!chord) return null;
 	const overrides = useUiStore.getState().keymapOverrides;
 	if (compiledKeymap?.overrides !== overrides)
 		compiledKeymap = { overrides, map: compileKeymap(KEYMAP_ACTIONS, overrides) };
 	const action = compiledKeymap.map.get(chord);
-	return action === "terminal.find" || action === "terminal.new" || action === "terminal.quick" ? action : null;
+	return action === "find" || action === "terminal.new" || action === "terminal.quick" ? action : null;
 }
 
 /** One notice per page when a program's OSC 52 copy could not reach the clipboard. */
@@ -405,7 +405,7 @@ export function TerminalViewport({
 			view.terminal.attachCustomKeyEventHandler(event => {
 				if (event.type !== "keydown") return true;
 				const action = terminalAction(event);
-				if (action === "terminal.find") {
+				if (action === "find") {
 					event.preventDefault();
 					setFinding(true);
 					return false;
@@ -660,7 +660,7 @@ export function TerminalViewport({
 								id: "find",
 								label: t("panel.terminal.find.open"),
 								icon: Search,
-								shortcut: actionKbd("terminal.find", useUiStore.getState().keymapOverrides) || undefined,
+								shortcut: actionKbd("find", useUiStore.getState().keymapOverrides) || undefined,
 								onSelect: () => setFinding(true),
 							},
 						]

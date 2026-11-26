@@ -417,7 +417,18 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // terminal port, 26 Nov 2026; the saved-command store and parser load with the palette, the sheet and xterm on first
 // open), on top of the review notes: measured 2,218,875 (local build of omp/agent/orca-terminal rebased on 73923cfad),
 // 2,857 bytes over. The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_218_955;
+// The conversation's reading and writing extras (26 Nov 2026, orca-chat-reading). On the first screen, because the
+// first paint of a session draws them: a restored draft's pictures as ordered slots with their kept-file references
+// (`stores/composer.ts`, `draft-persistence.ts`, `use-composer-draft.ts`; a slot is a thumbnail, a still placeholder or
+// the "Attach again" chip inside the one picture strip), a long prompt's fold (`MessageBubble`), the rail's "Your
+// messages" button, the Find bar's listener (`TranscriptFind`), the transcript's Backspace and paste keys, the
+// composer's ⌘↵, the manual compaction events (a compaction under way when the page loads) and their strings. The
+// no-op notice is one branch of the compact call. Loaded idle after start (AppShell), off the first screen and drawn
+// from their loaded module: the Find bar (`TranscriptFindBar`), the rail's list (`PromptListPanel`), and the `@`
+// menu's sessions and paste links (`composer-extras.ts`, also on the composer's focus): measured 2,227,902 (local build
+// of omp/agent/orca-chat-reading rebased on be4a4064f), 9,027 bytes over main's budget, of which about 290 are main's
+// own since 26190f1da. The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_227_982;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

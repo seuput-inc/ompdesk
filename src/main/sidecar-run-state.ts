@@ -21,7 +21,7 @@ export interface RunState {
 	saga?: IpcRetrySaga;
 	/** The saga's coalesced agent_end arrived while the retry was still outstanding. */
 	endedWhileRetrying: boolean;
-	/** Automatic compaction state once observed since the spawn; true blocks session mutation. */
+	/** Compaction state (automatic, or a manual pass anyone asked for) once observed since the spawn; true blocks session mutation. */
 	compacting?: boolean;
 	/**
 	 * When the current turn started (its agent_start, this process's clock), kept while background work follows it;
@@ -168,9 +168,11 @@ export function applyRunEvent(run: RunState, event: AgentSessionEvent, now = Dat
 			return failedAfterEnd;
 		}
 		case "auto_compaction_start":
+		case "manual_compaction_start":
 			run.compacting = true;
 			return false;
 		case "auto_compaction_end":
+		case "manual_compaction_end":
 			run.compacting = false;
 			return false;
 		default:

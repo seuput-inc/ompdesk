@@ -8,9 +8,11 @@
  * folder draft written before this page loaded is taken (`since`), so a second new tab in the same
  * folder never copies the draft another open tab is typing, and the first tab to take it claims it.
  *
- * Only the text is kept, folded pastes expanded (their blobs live in memory); pictures are not. The
- * newest {@link MAX_DRAFTS} drafts stay; a sent or cleared draft is dropped at once.
+ * Folded pastes are expanded; pictures are filed by opaque ID, never as bytes in localStorage.
+ * The newest {@link MAX_DRAFTS} entries stay; a sent, cleared or evicted draft releases its pictures.
  */
+import type { OmpApi } from "../../../../shared/ipc-types";
+import type { ComposerImage, DraftPictureRef, DraftPictureSlot } from "../../../stores/composer";
 
 const STORAGE_KEY = "omp.composerDrafts";
 const MAX_DRAFTS = 50;
@@ -36,8 +38,44 @@ interface SavedDraft {
 	text: string;
 	at: number;
 	session?: string;
-	/** Pictures the draft held when it was filed (not kept). */
-	images?: number;
+	images?: DraftPictureRef[];
+}
+
+type PictureFiles = OmpApi["draftPictures"];
+type PictureError = (name: string, error: unknown) => void;
+// A paired page files no picture on the computer: each would go up twice, once for the draft and once when sent, on a
+// phone's data and its daily upload quota. Its pictures live in the page, which no automatic reload drops
+// (`pageSafeMoment`); one reloaded by hand restores each as the "Attach again" chip.
+const pictureFiles = () =>
+	typeof window === "undefined" || window.document?.documentElement.dataset.platform === "web"
+		? undefined
+		: window.omp?.draftPictures;
+const reportError: PictureError = (name, error) => console.warn("Draft picture:", name, error);
+const pictureRefs = new WeakMap<ComposerImage, DraftPictureRef>();
+const failedPuts = new WeakSet<ComposerImage>();
+
+function pictureRef(slot: DraftPictureSlot): DraftPictureRef {
+	if ("ref" in slot) return slot.ref;
+	const held = slot.draftRef ?? pictureRefs.get(slot);
+	if (held) return held;
+	const mimeType = slot.content.mimeType;
+	const ref = { id: crypto.randomUUID(), name: slot.name || `image.${mimeType.split("/")[1] || "png"}`, mimeType };
+	pictureRefs.set(slot, ref);
+	return ref;
+}
+
+function isPictureRef(value: unknown): value is DraftPictureRef {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		"id" in value &&
+		typeof value.id === "string" &&
+		"name" in value &&
+		typeof value.name === "string" &&
+		"mimeType" in value &&
+		typeof value.mimeType === "string" &&
+		value.mimeType.startsWith("image/")
+	);
 }
 
 /** Where a draft is filed; undefined until the session is known. */
@@ -61,12 +99,12 @@ function readAll(storage: Storage): Record<string, SavedDraft> {
 			if (!("text" in value) || typeof value.text !== "string" || !("at" in value) || typeof value.at !== "number")
 				continue;
 			const session = "session" in value && typeof value.session === "string" ? value.session : undefined;
-			const images = "images" in value && typeof value.images === "number" ? value.images : 0;
+			const images = "images" in value && Array.isArray(value.images) ? value.images.filter(isPictureRef) : [];
 			drafts[key] = {
 				text: value.text,
 				at: value.at,
 				...(session === undefined ? {} : { session }),
-				...(images > 0 ? { images } : {}),
+				...(images.length ? { images } : {}),
 			};
 		}
 		return drafts;
@@ -75,69 +113,98 @@ function readAll(storage: Storage): Record<string, SavedDraft> {
 	}
 }
 
-function writeAll(storage: Storage, drafts: Record<string, SavedDraft>): void {
+/** Remove a file only after the last reference (including a folder alias) was successfully unfiled. */
+function writeAll(
+	storage: Storage,
+	before: Record<string, SavedDraft>,
+	drafts: Record<string, SavedDraft>,
+	files: PictureFiles | undefined,
+	onError: PictureError,
+): boolean {
 	const newest = Object.entries(drafts)
 		.sort(([, a], [, b]) => b.at - a.at)
 		.slice(0, MAX_DRAFTS);
 	try {
 		if (newest.length === 0) storage.removeItem(STORAGE_KEY);
 		else storage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(newest)));
+		const kept = new Set(newest.flatMap(([, draft]) => draft.images?.map(ref => ref.id) ?? []));
+		for (const old of Object.values(before)) {
+			for (const { id, name } of old.images ?? []) {
+				if (kept.has(id)) continue;
+				kept.add(id);
+				void files?.remove(id).catch(error => onError(name, error));
+			}
+		}
+		return true;
 	} catch {
 		// Storage full or unavailable: the draft stays in memory for this window's life.
+		return false;
 	}
 }
 
-/**
- * File `text` under its keys; an empty text drops them. A session's earlier folder draft goes either way.
- * `images`: how many pictures the draft held (they are not kept; the next restore says so). A text past
- * {@link MAX_DRAFT_CHARS} is not kept ("tooLarge": the caller says so once). Nothing is written when the
- * draft is what is already filed (a pagehide and a visibilitychange flush the same text twice).
- */
+/** Save metadata synchronously (also on pagehide); write the bytes only for newly filed pictures. */
 export function saveDraft(
 	storage: Storage,
 	keys: DraftKeys,
 	text: string,
-	now = Date.now(),
-	images = 0,
+	{
+		now = Date.now(),
+		pictures = [],
+		files = pictureFiles(),
+		onError = reportError,
+	}: { now?: number; pictures?: readonly DraftPictureSlot[]; files?: PictureFiles; onError?: PictureError } = {},
 ): "saved" | "cleared" | "tooLarge" {
-	const drafts = readAll(storage);
-	const current = drafts[keys.session];
-	if (text.length > MAX_DRAFT_CHARS) {
-		// The earlier, smaller draft is stale now; keep nothing rather than an old text under a new one.
-		if (current) {
-			delete drafts[keys.session];
-			writeAll(storage, drafts);
+	const before = readAll(storage);
+	const current = before[keys.session];
+	const tooLarge = text.length > MAX_DRAFT_CHARS;
+	const keep = !tooLarge && (text.trim() !== "" || pictures.length > 0);
+	const refs = keep ? pictures.map(pictureRef) : [];
+	const unchanged =
+		keep &&
+		current?.text === text &&
+		(current.images?.length ?? 0) === refs.length &&
+		refs.every((ref, i) => current.images?.[i]?.id === ref.id);
+	if (!unchanged) {
+		const drafts = { ...before };
+		for (const [key, saved] of Object.entries(drafts)) if (saved.session === keys.session) delete drafts[key];
+		delete drafts[keys.session];
+		if (keep) {
+			const draft = { text, at: now, ...(refs.length ? { images: refs } : {}) };
+			drafts[keys.session] = draft;
+			if (keys.folder !== undefined) drafts[keys.folder] = { ...draft, session: keys.session };
 		}
-		return "tooLarge";
+		if (!writeAll(storage, before, drafts, files, onError)) return tooLarge ? "tooLarge" : keep ? "saved" : "cleared";
 	}
-	if (text.trim() && current && current.text === text && (current.images ?? 0) === images) return "saved";
-	for (const [key, saved] of Object.entries(drafts)) if (saved.session === keys.session) delete drafts[key];
-	delete drafts[keys.session];
-	if (text.trim()) {
-		drafts[keys.session] = { text, at: now, ...(images > 0 ? { images } : {}) };
-		if (keys.folder !== undefined) drafts[keys.folder] = { text, at: now, session: keys.session };
+	if (keep && files) {
+		const held = new Set(current?.images?.map(ref => ref.id));
+		for (const slot of pictures) {
+			if (!("content" in slot)) continue;
+			const ref = pictureRef(slot);
+			if (held.has(ref.id) && !failedPuts.has(slot)) continue;
+			failedPuts.delete(slot);
+			void files.put(ref.id, slot.content).catch(error => {
+				failedPuts.add(slot);
+				onError(ref.name, error);
+			});
+		}
 	}
-	writeAll(storage, drafts);
-	return text.trim() ? "saved" : "cleared";
-}
-
-/** How many pictures the session's filed draft held (they did not survive the reload). */
-export function draftImagesLost(storage: Storage, keys: DraftKeys): number {
-	return readAll(storage)[keys.session]?.images ?? 0;
+	return tooLarge ? "tooLarge" : keep ? "saved" : "cleared";
 }
 
 /**
  * The session's own draft, else a folder draft written before `since` (claimed: it moves to this
  * session, so no other tab takes it too).
  */
-export function loadDraft(storage: Storage, keys: DraftKeys, since: number, now = Date.now()): string | undefined {
+export function loadDraft(storage: Storage, keys: DraftKeys, since: number, now = Date.now()): SavedDraft | undefined {
 	const drafts = readAll(storage);
 	const own = drafts[keys.session];
-	if (own?.text.trim()) return own.text;
+	if (own) return own;
 	const folder = keys.folder === undefined ? undefined : drafts[keys.folder];
-	if (keys.folder === undefined || !folder?.text.trim() || folder.at >= since) return undefined;
-	delete drafts[keys.folder];
-	drafts[keys.session] = { text: folder.text, at: now };
-	writeAll(storage, drafts);
-	return folder.text;
+	if (keys.folder === undefined || !folder || folder.at >= since) return undefined;
+	const moved = { ...drafts };
+	delete moved[keys.folder];
+	const draft = { text: folder.text, at: now, images: folder.images };
+	moved[keys.session] = draft;
+	writeAll(storage, drafts, moved, pictureFiles(), reportError);
+	return draft;
 }

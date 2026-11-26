@@ -327,6 +327,8 @@ function projectEvents(events: AgentSessionEvent[]): ProjectedEvent[] {
 			case "tool_execution_end":
 			case "auto_compaction_start":
 			case "auto_compaction_end":
+			case "manual_compaction_start":
+			case "manual_compaction_end":
 				kept.push({ type: event.type });
 				break;
 			case "agent_end": {

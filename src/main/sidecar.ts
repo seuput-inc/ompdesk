@@ -166,6 +166,8 @@ const AGENT_EVENT_TYPES: Record<string, true> = {
 	tool_execution_end: true,
 	auto_compaction_start: true,
 	auto_compaction_end: true,
+	manual_compaction_start: true,
+	manual_compaction_end: true,
 	auto_retry_start: true,
 	auto_retry_end: true,
 	retry_fallback_applied: true,

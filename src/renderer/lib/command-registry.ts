@@ -934,7 +934,12 @@ export function buildCommandMenu(ctx: CommandRegistryContext): CommandMenuItem[]
 		affordance: {
 			kind: "action",
 			run: async () => {
-				const { response: res, cancelled } = await runManualMaintenance("compact", () => ctx.rpc.compact());
+				const {
+					response: res,
+					cancelled,
+					skipped,
+				} = await runManualMaintenance("compact", () => ctx.rpc.compact());
+				if (skipped) return;
 				if (cancelled) {
 					toast({ variant: "info", message: t("command.compactCancelled") });
 					return;
