@@ -187,7 +187,7 @@ pub fn describe_frequency(frequency: &ScheduleFrequency) -> String {
         ScheduleFrequency::Once { at } => format!("once at {at}"),
         ScheduleFrequency::Cron { expr } => format!("on cron \"{expr}\""),
         ScheduleFrequency::Event { event, by } => with_deadline(
-            match event {
+            match &**event {
                 ScheduleEvent::Webhook { signed_by, .. } => match signed_by {
                     Some(sender) => format!("on a webhook call signed by {sender}"),
                     None => "on a webhook call".to_owned(),

@@ -880,7 +880,7 @@ pub enum ScheduleFrequency {
         expr: String,
     },
     Event {
-        event: ScheduleEvent,
+        event: Box<ScheduleEvent>,
         /// A wait's deadline (ISO): it runs once, on its event or then.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         by: Option<String>,

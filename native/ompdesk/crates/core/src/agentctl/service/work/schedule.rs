@@ -552,7 +552,10 @@ impl AgentControl {
                 lead_minutes: lead_minutes.unwrap_or(10),
             },
         };
-        Ok(Some(ScheduleFrequency::Event { event, by }))
+        Ok(Some(ScheduleFrequency::Event {
+            event: Box::new(event),
+            by,
+        }))
     }
 
     /// The card a new schedule raises while "Let agents manage other sessions" is off, and every precheck raises:

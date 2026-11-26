@@ -470,11 +470,10 @@ pub fn schedule_state(row: &ScheduleRow) -> String {
 /// How to call a webhook trigger: the path and the key it answers to.
 pub fn webhook_line(row: &ScheduleRow) -> String {
     use super::types::{ScheduleEvent, ScheduleFrequency as Frequency};
-    let Frequency::Event {
-        event: ScheduleEvent::Webhook { key, signed_by, .. },
-        ..
-    } = &row.frequency
-    else {
+    let Frequency::Event { event, .. } = &row.frequency else {
+        return String::new();
+    };
+    let ScheduleEvent::Webhook { key, signed_by, .. } = &**event else {
         return String::new();
     };
     // A signed hook takes its sender's signature only: the key alone starts nothing.
