@@ -46,6 +46,7 @@ import { lazyChunk } from "../../lib/chunk-load";
 import { resultDetails, sanitizeToolText } from "../../lib/format";
 import { translate } from "../../lib/i18n";
 import { decodeXdevPayload, xdevDispatch, xdevInnerResult, xdevWriteTarget } from "../../lib/xdev";
+import { Skeleton } from "../common";
 import { editArgumentPaths, editArgumentSummary } from "./edit-args";
 import { AskRenderer } from "./renderers/AskRenderer";
 import { AstEditRenderer } from "./renderers/AstEditRenderer";
@@ -272,6 +273,7 @@ const REGISTRY: Record<string, ComponentType<ToolRendererProps>> = {
 	reject: (props: ToolRendererProps) => <ResolveRenderer {...props} operation="reject" />,
 	think: ThinkRenderer,
 	yield: YieldRenderer,
+	a2ui: A2uiChatCard,
 	[AGENT_CONTROL_TOOLS.schedule]: ScheduleRenderer,
 	...NOTE_DEVICES,
 };
@@ -313,6 +315,33 @@ function GithubRenderer(props: ToolRendererProps) {
 	return (
 		<Suspense fallback={null}>
 			<LazyGithubRenderer {...props} />
+		</Suspense>
+	);
+}
+
+// Its own chunk too: the A2UI engine (web_core, zod) and its views load with the first card that needs them. One loader
+// for both places it draws, since what this file adds runs on the phone's first screen.
+const a2uiChunk = () => import("./renderers/A2uiRenderer");
+const LazyA2uiCard = lazyChunk(() => a2uiChunk().then(module => ({ default: module.A2uiCard })));
+const LazyA2uiWaiting = lazyChunk(() => a2uiChunk().then(module => ({ default: module.A2uiWaiting })));
+
+/**
+ * An `a2ui` call's card: `live`, its own row in the chat under the work card (the one that may answer); otherwise the
+ * step's folded body, drawn inert. While the chunk loads, a block in the card's place, never a spinner.
+ */
+export function A2uiChatCard({ toolCallId, live }: { toolCallId?: string; live?: boolean }) {
+	return toolCallId ? (
+		<Suspense fallback={<Skeleton className="h-24 w-full" />}>
+			<LazyA2uiCard live={live} toolCallId={toolCallId} />
+		</Suspense>
+	) : null;
+}
+
+/** The dock's row while an `a2ui` call waits for the person (ExtensionDialog); its chunk is the card's. */
+export function A2uiWaitingRow(props: { callId: string; onSkip: () => void; remaining: number | null }) {
+	return (
+		<Suspense fallback={null}>
+			<LazyA2uiWaiting {...props} />
 		</Suspense>
 	);
 }
@@ -433,6 +462,7 @@ const VIBE: ToolMeta = { label: "vibe", icon: Sparkles, activity: "other" };
 /** Human label + kind icon per tool name; unknown tools keep their raw name and a wrench. */
 const TOOL_META: Record<string, ToolMeta> = {
 	read: { label: "read", icon: FileText, activity: "read" },
+	a2ui: { label: "a2ui", icon: AppWindow, activity: "other" },
 	write: { label: "write", icon: FilePlus2, activity: "edit" },
 	edit: { label: "edit", icon: Pencil, activity: "edit" },
 	apply_patch: { label: "apply_patch", icon: Pencil, activity: "edit" },

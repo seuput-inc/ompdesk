@@ -470,6 +470,7 @@ export function ToolCard({
 							<Renderer
 								args={args}
 								result={entry?.result}
+								toolCallId={toolCallId}
 								isError={isError}
 								isPartial={isPartial}
 								partialResult={partialResult}

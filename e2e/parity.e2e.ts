@@ -21,6 +21,7 @@ import { type Browser, chromium, devices, expect, type Locator, type Page, test 
 import { STRESS_PROMPT } from "../src/renderer/dev-harness/fixture";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
 import { writeShellBin, writeShellGh } from "./fixture/shell-gh";
+import { FIXTURE_NEWER_OMP_VERSION } from "./fixture/version";
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, REMOTE_LOGIN, type RemoteInstance } from "./remote-harness";
 import { crashed, type Look, panelCrash } from "./responsive-audit";
@@ -342,6 +343,12 @@ if (dir) {
 		try {
 			const ghBin = path.join(parent, "ghbin");
 			await writeParityGh(ghBin);
+			// `settings-omp-tested`: the line naming the tested omp shows only beside another omp than the tested one, and the
+			// fake omp runs the floor, which is the tested omp (src/shared/omp-tested.json). B's omp runs the next release.
+			const hostOmpVersion = path.join(parent, "host-omp-version");
+			if (surfaces.some(surface => surface.id === "settings-omp-tested")) {
+				await fs.writeFile(hostOmpVersion, `${FIXTURE_NEWER_OMP_VERSION}\n`);
+			}
 			// `preview-start`, `preview-device`: both computers see the same emulator (each lists its own devices).
 			const previewStart = process.env.OMP_GUI_TEST_PREVIEW_START === "1";
 			if (previewStart) android = await fakeAndroidDevice(parent, browser);
@@ -357,6 +364,7 @@ if (dir) {
 					OMP_GUI_START_SLOW_MS: "1500",
 					OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1",
 					PATH: `${devicePath}${ghBin}${path.delimiter}${process.env.PATH}`,
+					OMP_GUI_TEST_VERSION_FILE: hostOmpVersion,
 				},
 			});
 			await seedProject(hostProfile.project);
@@ -716,25 +724,31 @@ if (dir) {
 									answeredSession("Parity advisor", [["fixture advisor note", "Advisor note delivered."]])
 								: session === "ci"
 									? answeredSession("Parity CI", [["fixture ci note", "Pushed main."]])
-									: session === "turns"
-										? turnsSession()
-										: session === "long"
-											? longSession()
-											: session === "cut"
-												? cutSession()
-												: session === "stress"
-													? // The harness's stress turn as one turn of a session of its own (fake omp: `STRESS_PROMPT`).
-														answeredSession("Parity stress", [
-															[STRESS_PROMPT, "Here is the unbroken link"],
-														])
-													: session === "schedule"
-														? // An agent's ompdesk_schedule create of a webhook routine (`reply-schedule-card`).
-															answeredSession("Parity schedule", [
-																["fixture schedule card", "Webhook routine saved."],
-															])
-														: session === "board"
-															? boardSession()
-															: limitSession();
+									: session === "a2ui"
+										? answeredSession("Parity A2UI", [["fixture a2ui show", "A2UI surface shown."]])
+										: session === "a2uiForm"
+											? answeredSession("Parity A2UI form", [
+													["Show me the contact form", "Local fixture reply"],
+												])
+											: session === "turns"
+												? turnsSession()
+												: session === "long"
+													? longSession()
+													: session === "cut"
+														? cutSession()
+														: session === "stress"
+															? // The harness's stress turn as one turn of a session of its own (fake omp: `STRESS_PROMPT`).
+																answeredSession("Parity stress", [
+																	[STRESS_PROMPT, "Here is the unbroken link"],
+																])
+															: session === "schedule"
+																? // An agent's ompdesk_schedule create of a webhook routine (`reply-schedule-card`).
+																	answeredSession("Parity schedule", [
+																		["fixture schedule card", "Webhook routine saved."],
+																	])
+																: session === "board"
+																	? boardSession()
+																	: limitSession();
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {

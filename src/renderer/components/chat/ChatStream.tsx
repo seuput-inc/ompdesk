@@ -1073,6 +1073,19 @@ function SessionTranscript() {
 			if (!request || request.tabId !== tabId) return;
 			const { rows: current, rowKeys: keys } = revealRows.current;
 			const index = current.findIndex(row => row.kind === "process" && row.toolCallIds.includes(request.key));
+			// An `a2ui` call is a chat row of its own (docs/design/a2ui.md §2): the dock's jump brings it into view.
+			if (index < 0) {
+				const own = current.findIndex(
+					row =>
+						row.kind === "message" &&
+						Array.isArray(row.message.content) &&
+						row.message.content.some(block => block.type === "toolCall" && toolEntryKey(block) === request.key),
+				);
+				if (own >= 0) {
+					jumpToConversation(own);
+					return;
+				}
+			}
 			const rowKey = index < 0 ? undefined : keys[index];
 			// Not inside a work card (full transcript detail lists tool cards as rows): show it where it is.
 			if (rowKey === undefined) {
