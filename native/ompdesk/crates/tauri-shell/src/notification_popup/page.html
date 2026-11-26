@@ -169,6 +169,8 @@ window.render = state => {
 	known = new Set(state.cards.map(item => item.id));
 	document.getElementById("stack").replaceChildren(...rows);
 };
+// The shell wrote this page into about:blank; once the write has finished it may draw.
+setTimeout(() => go("ready"));
 </script>
 </body>
 </html>

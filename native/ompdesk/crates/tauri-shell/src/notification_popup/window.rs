@@ -16,7 +16,7 @@ use std::time::Instant;
 use base64::Engine;
 use serde_json::{Value, json};
 use shell_core::notify_spec::ToastSpec;
-use tauri::webview::{NewWindowResponse, PageLoadEvent};
+use tauri::webview::NewWindowResponse;
 use tauri::{WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use super::{Action, CARD_HEIGHT, Card, Host, READY_MS, Route, Stack, WIDTH};
@@ -27,6 +27,7 @@ use crate::{entry, system, theme, tray, ui};
 
 pub const LABEL: &str = "notification-popup";
 const TICK_MS: i64 = 500;
+const WRITE_RETRY_MS: u64 = 250;
 const ICON: &str = include_str!("../../../../../../resources/brand/mark-tile-small.svg");
 
 #[derive(Default)]
@@ -35,7 +36,10 @@ struct State {
     /// The macOS panel holding the page.
     #[cfg(target_os = "macos")]
     panel: isize,
+    /// The page said it is up (`ompdesk-popup:ready`).
     ready: bool,
+    /// Times `write_page` sent the page.
+    writes: u32,
     /// A test run's popup: never on screen, no sound, no countdown.
     hidden: bool,
     stack: Stack,
@@ -197,26 +201,45 @@ fn give_up_waiting() {
     }
 }
 
-/// `about:blank` finished loading: the page is written into it, then the cards that waited are drawn. (Tauri opens a
-/// `data:` URL only with its `webview-data-url` feature, which nothing else here needs.)
-fn page_ready() {
-    let Some(window) = with(|state| state.window.clone().filter(|_| !state.ready)) else {
+/// Writes the page into the window's `about:blank` until the page says it is ready (`ompdesk-popup:ready`). Tauri opens
+/// a `data:` URL only with its `webview-data-url` feature, and reports no load of the first `about:blank`, so the shell
+/// writes again every 250 ms: a script sent before the webview has its document is lost.
+fn write_page() {
+    let Some((window, tries)) = with(|state| {
+        if state.ready {
+            return None;
+        }
+        state.writes += 1;
+        Some((state.window.clone()?, state.writes))
+    }) else {
         return;
     };
     let page = Value::String(page_html());
     if let Err(error) = window.eval(format!(
-        "document.open();document.write({page});document.close();"
+        "if(!window.render){{document.open();document.write({page});document.close();}}"
     )) {
         log(
             "notification.popup.write_failed",
-            json!({"error": error.to_string()}),
+            json!({"try": tries, "error": error.to_string()}),
         );
-        return;
     }
+    if u64::from(tries) * WRITE_RETRY_MS < READY_MS {
+        ui::post_delayed(WRITE_RETRY_MS as i64, write_page);
+    }
+}
+
+/// The page is up: the cards that waited are drawn.
+fn page_ready() {
     let early = with(|state| {
+        if state.ready {
+            return None;
+        }
         state.ready = true;
-        std::mem::take(&mut state.early)
+        Some(std::mem::take(&mut state.early))
     });
+    let Some(early) = early else {
+        return;
+    };
     log("notification.popup.ready", json!({"early": early.len()}));
     for (spec, _) in early {
         admit(&spec);
@@ -258,6 +281,7 @@ fn act(action: Action) {
             }
             entry::menu_action("open-settings");
         }
+        Action::Ready => return page_ready(),
     }
     render();
 }
@@ -297,12 +321,7 @@ fn ensure_window() -> Result<(), String> {
                 }
                 *url == own
             })
-            .on_new_window(|_, _| NewWindowResponse::Deny)
-            .on_page_load(|_, payload| {
-                if payload.event() == PageLoadEvent::Finished {
-                    ui::post(page_ready);
-                }
-            });
+            .on_new_window(|_, _| NewWindowResponse::Deny);
     if let Some(colour) = theme::window_background() {
         builder = builder.background_color(colour);
     }
@@ -342,6 +361,7 @@ fn ensure_window() -> Result<(), String> {
         );
     }
     with(|state| state.window = Some(window));
+    write_page();
     Ok(())
 }
 
