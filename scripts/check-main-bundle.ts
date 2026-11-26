@@ -507,7 +507,11 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // meanwhile), inside the quick terminal's budget, which stays.
 // The A2UI stack merged with main at b90e7549d: measured 2,254,932 (CI run 45868553036, omp/agent/a2ui-u4-2 at
 // 33356584c), 1,850 bytes over main's 2,253,082. The budget is that measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_255_012;
+// Sort and Hide sleeping (26 Nov 2026, orca-sidebar-sort): the session list's header options (`SidebarOptions`), the
+// "N sleeping" line (`SidebarSleeping`), the sort and sleep rules in `sidebarRows` and the minute clock they read are
+// on the phone's first screen: 2,247,759 bytes in branch run 45838019432 at ef8cfafa5 over its base's budget of
+// 2,247,284, so 555 bytes with the 80 added to the budget.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_255_567;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
