@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.146.0] - 2026-11-26
+
+창이 늦게 그려져도 먼저 나타나고, 제목 표시줄의 탭 줄과 하단 상태 줄, 새 사이드바 모양, PR·리뷰·터미널 기능이 더해졌습니다.
+
+- 첫 화면을 그리는 데 오래 걸려도 앱 창이 테마 배경으로 먼저 나타납니다(Windows에서 창이 한동안 보이지 않던 문제).
+- 데스크톱 창 제목 표시줄에 세션 탭 줄이, 아래에 사용량·연결된 컴퓨터·앱 업데이트를 보여 주는 상태 줄이 생겼습니다.
+- 사이드바 행이 더 가벼운 모양이 되었고, 작업 중인 세션은 왼쪽 상태 표시로 알려 줍니다. 휴대폰의 버튼과 칩은 44px로 누르기 쉬워졌습니다.
+- 알림은 지금 보고 있는 곳과 이미 본 것에 맞춰 옵니다.
+- diff, Markdown, Preview에 남긴 리뷰 메모와 선택한 글을 한 번에 에이전트에게 보낼 수 있고, 실패한 git 작업·충돌·PR 검사·리뷰 댓글을 에이전트에게 맡길 수 있습니다.
+- GitHub: PR 동작, 리뷰 스레드, 사람과 라벨, 검사 결과, 세션과 PR 연결이 생겼습니다.
+- 터미널: 찾기, 메뉴, 이름, 링크, 분할, 저장한 명령, 메모가 있는 빠른 터미널, SSH 호스트 터미널, 터미널에서 이어 하기가 생겼습니다. 명령이 실행 중일 때만 닫기를 확인합니다.
+- 대기 중인 메시지의 Edit이 쓰다 만 입력을 잃거나 바꾸는 중인 메시지를 따로 보이던 문제를 고쳤습니다.
+- git이 사람의 입력을 기다리며 멈추지 않고, 버리기는 체크아웃 안의 파일만 지웁니다.
+- 연결된 컴퓨터가 포기한 요청은 호스트에서도 멈추고, 연결 재시도가 더 안정적입니다.
+- Jakub Krehel의 인터페이스 스킬 팩이 기본으로 들어갑니다.
+- omp 19.2에서 사라진 Gemini 로그인 카드와 터미널 전용 vim 설정을 화면에서 뺐습니다.
+
+알려진 문제: macOS 입력창에서 오른쪽 방향키를 누르면 아이콘 같은 글자가 들어가는 문제를 조사하고 있습니다.
+
+<!-- en -->
+
+The window shows before a slow first paint, and a title-bar tab strip, a status bar, a new sidebar look and PR, review and terminal tools arrive.
+
+- The app window appears in its theme's background even when the first paint is slow (on Windows it could stay invisible for a while).
+- The desktop window gains a session tab strip in its title bar and a status bar with usage, paired computers and app updates.
+- Sidebar rows take a lighter look, and a working session shows in a leading status lane. Phone buttons and chips are 44 px.
+- Notifications follow where you are and what you have already seen.
+- Review notes on a diff, Markdown or Preview and selected text go to the agent as one message, and a failed git action, conflicts, failed PR checks or review comments can be handed to an agent.
+- GitHub: PR actions, review threads, people and labels, checks, and sessions linked to their pull requests.
+- Terminal: find, menus, names, links, split, saved commands, a quick terminal with notes, SSH host terminals and continue-in-terminal. Closing asks only while a command runs.
+- Edit on a queued message no longer loses a half-typed draft or shows the message being replaced twice.
+- git never waits on a person, and a discard removes only what is inside the checkout.
+- A request a paired computer gives up on stops at the host, and link retries are steadier.
+- Jakub Krehel's interface skills ship as a built-in pack.
+- The Gemini sign-in card and terminal-only vim settings that omp 19.2 dropped are gone from the GUI.
+
+Known issue: on macOS, the Right arrow key in the composer can insert an icon-like glyph; under investigation.
+
 ## [0.145.0] - 2026-11-26
 
 대기 중인 메시지를 고치면 사라지거나 편집이 막히던 문제를 고쳤고, 봇과 일정, 터미널 복구, 오류 안내가 좋아졌습니다.

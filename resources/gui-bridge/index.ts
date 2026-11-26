@@ -21,6 +21,7 @@ import { isMainThread } from "node:worker_threads";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { ALL_FEATURES, type AreaFailure, type FeatureId, mergeAreaFailures, UnsupportedOmpError } from "./capabilities";
 import { probe } from "./health";
+import { A2UI_ENABLED } from "./modes/a2ui-contracts";
 import { bindEnv } from "./modes/shared";
 import type { RoleSettings } from "./ompdesk-roles";
 import type { BridgeEnv, BridgeEvent, BridgeMethods } from "./types";
@@ -391,9 +392,11 @@ export default async function guiBridge(pi: ExtensionAPI): Promise<void> {
 		.then(module => module.settleOmpdeskRoles(pi.pi.Settings.instance as unknown as RoleSettings))
 		.catch(err => pi.logger.error("gui-bridge: OMPdesk roles failed", { error: String(err) }));
 	// The main agent's `a2ui` tool, before stock builds the session (modes/a2ui.ts says why it is not an area hook).
-	await import("./modes/a2ui")
-		.then(module => module.registerA2ui(pi))
-		.catch(err => pi.logger.error("gui-bridge: a2ui tool failed", { error: String(err) }));
+	// Gated: an agent offered surfaces no window draws would wait on a form nobody can answer.
+	if (A2UI_ENABLED || process.env.OMP_GUI_TEST_A2UI === "1")
+		await import("./modes/a2ui")
+			.then(module => module.registerA2ui(pi))
+			.catch(err => pi.logger.error("gui-bridge: a2ui tool failed", { error: String(err) }));
 
 	const loading = firstUse.promise.then(() => loadMethods(pi));
 	// Requests rethrow a failed table; this logs it once, and a rebind then installs nothing.

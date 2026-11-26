@@ -8,6 +8,9 @@
  * not know the marker shows it as an ordinary one-field ask; its free text comes back as `{text}`.
  */
 
+/** Off until the renderer that draws its surfaces ships; `OMP_GUI_TEST_A2UI=1` turns the tool on for tests. */
+export const A2UI_ENABLED = false;
+
 export const A2UI_TOOL = "a2ui";
 export const A2UI_CATALOG_ID = "https://github.com/seuput-inc/ompdesk/a2ui/v1";
 export const A2UI_MARKER_ATTRIBUTE = "data-ompdesk-a2ui";
