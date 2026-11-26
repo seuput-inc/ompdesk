@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { MAIL_CUSTOM_TYPE } from "../../resources/gui-bridge/agent-control-contracts";
 import { BOT_ENTRY, BOT_NOTE_TYPE, type BotContext } from "../../resources/gui-bridge/modes/bots-contracts";
 import {
 	botNote,
 	botSection,
+	chatFacts,
 	latestBot,
 	OWNER_REMINDER,
 	ownerPrompt,
@@ -11,7 +13,7 @@ import {
 import { NO_REPLY } from "../shared/bots";
 
 const context = (over: Partial<BotContext> = {}): BotContext => ({
-	bot: { id: "b1", name: "Scout", paused: false, folder: "/Users/me/.omp/bots/scout" },
+	bot: { id: "b1", name: "Scout", paused: false, folder: "/Users/me/.omp/bots/scout", firstRun: false },
 	items: [{ number: 1, title: "Triage CI", status: "working" }],
 	needsYou: [],
 	live: [],
@@ -31,11 +33,20 @@ describe("a bot chat's prompt section", () => {
 		expect(first).not.toContain("first run");
 	});
 
-	it("carries the first-run rules until SOUL.md exists", () => {
-		const text = botSection(context().bot, null);
-		expect(text).toContain("This is your first run");
-		expect(text).toContain("write SOUL.md in your folder");
-		expect(botSection(context().bot, "")).toContain("This is your first run");
+	it("carries the first-run rules while the core says the first run lasts, SOUL.md or not", () => {
+		const first = { ...context().bot, firstRun: true };
+		// A bot made with a purpose has SOUL.md from the start: first run still runs (Orca bot-preamble.ts:94-102).
+		for (const soul of [null, "Keeps the changelog honest."]) {
+			const text = botSection(first, soul);
+			expect(text).toContain("First run");
+			expect(text).toContain("a greeting that ends with your one first question");
+			expect(text).toContain("do one small real piece of the work now, and show the result");
+			expect(text).toContain("Then write SOUL.md in your folder");
+		}
+		// Ended by the owner's first turn, not by SOUL.md: without the flag a missing SOUL.md only asks for one.
+		const after = botSection(context().bot, null);
+		expect(after).not.toContain("First run");
+		expect(after).toContain("There is no SOUL.md in your folder yet");
 	});
 
 	it("keeps memory in MEMORY.md, one fact per line, and ends a turn with nothing to say in NO_REPLY", () => {
@@ -112,5 +123,37 @@ describe("the turn note", () => {
 		expect(ownerPrompt("<ompdesk-mail from=x>done</ompdesk-mail>")).toBe(false);
 		expect(ownerPrompt("[ompdesk request r1] status?")).toBe(false);
 		expect(ownerPrompt("  ")).toBe(false);
+	});
+});
+
+describe("what a first-run home chat tells the core", () => {
+	const kickoff = { type: "custom_message", customType: MAIL_CUSTOM_TYPE, details: { id: "kickoff-a-1" } };
+	const answer = (content: unknown) => ({ type: "message", message: { role: "assistant", content } });
+
+	it("follows the kickoff it names: not held, waiting, answered without a word, or spoken", () => {
+		expect(chatFacts([], "kickoff-a-1", false).kickoff).toBe("none");
+		expect(chatFacts([kickoff], undefined, false).kickoff).toBe("none");
+		expect(chatFacts([kickoff], "kickoff-a-1", true)).toEqual({ ownerTurns: 0, streaming: true, kickoff: "queued" });
+		// A turn that only called a tool, or failed, said nothing.
+		const toolOnly = answer([{ type: "toolCall", id: "c1", name: "read", arguments: {} }]);
+		expect(chatFacts([kickoff, toolOnly, answer([])], "kickoff-a-1", false).kickoff).toBe("silent");
+		expect(chatFacts([kickoff, toolOnly, answer("Hi! What should I start on?")], "kickoff-a-1", false).kickoff).toBe(
+			"spoke",
+		);
+		// An answer before the kickoff is not its answer.
+		expect(chatFacts([answer("earlier"), kickoff], "kickoff-a-1", false).kickoff).toBe("queued");
+	});
+
+	it("counts only what the owner typed as the owner's turns", () => {
+		const branch = [
+			kickoff,
+			answer("Hi! What should I start on?"),
+			{
+				type: "message",
+				message: { role: "user", content: '<ompdesk-agent-message from="x">hi</ompdesk-agent-message>' },
+			},
+			owner("Check the README"),
+		];
+		expect(chatFacts(branch, "kickoff-a-1", false).ownerTurns).toBe(1);
 	});
 });

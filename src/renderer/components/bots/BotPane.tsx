@@ -32,6 +32,13 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 	// A bot writes its picture and soul with its own tools: the page reads them again whenever it shows another bot.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the read is per bot shown
 	useEffect(() => refreshBots(), [bot.id]);
+	// The page opens (at launch too): a first message whose turn ended without a word gets its one retry from the core
+	// (Orca's `bots-kickoff.ts:44-77`), which checks the chat again first.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: once per bot shown
+	useEffect(() => {
+		if (bot.firstRun && bot.kickoffSilent && bot.kickoffs?.length === 1)
+			void command({ action: "kickoff", id: bot.id }).catch(() => {});
+	}, [bot.id]);
 	const setPaused = (paused: boolean) =>
 		void command({ action: "update", id: bot.id, paused }).catch((error: unknown) =>
 			toastError({ title: t("bots.pause.failed"), error }),

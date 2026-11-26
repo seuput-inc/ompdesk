@@ -3,6 +3,7 @@
 //! parity suite at cutover) and of the pure cuts (`turnEdits`, `costSplitOf`, the command timeouts) against tables
 //! captured from the TypeScript (`captured.json`).
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
@@ -2139,4 +2140,156 @@ async fn a_room_asks_the_members_its_reply_mode_names_and_a_member_answers_with_
     // A session that is no bot's chat has no rooms.
     let (text, is_error) = run(&control, "ompdesk_room", json!({ "action": "list" })).await;
     assert!(is_error && text.contains("works in a bot's chat"), "{text}");
+}
+
+/// A fake main whose bot chat's bridge answers `agent_control_bot` with what `facts` holds now.
+fn chat_facts(facts: &Arc<Mutex<Value>>) -> impl Fn(&str, &Value) -> Option<Value> + Send + 'static {
+    let facts = facts.clone();
+    move |method, args| {
+        (method == "command" && args["command"]["type"] == "agent_control_bot")
+            .then(|| json!({ "success": true, "data": facts.lock().unwrap().clone() }))
+    }
+}
+
+fn said(owner_turns: u64, streaming: bool, kickoff: &str) -> Value {
+    json!({ "changed": false, "ownerTurns": owner_turns, "streaming": streaming, "kickoff": kickoff })
+}
+
+/// The bot contexts handed to `bot1`, oldest first, and the kickoff each asked about.
+fn bot_calls(asked: &Asked) -> Vec<(Value, Value)> {
+    asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(method, args)| {
+            method == "command"
+                && args["tabId"] == "bot1"
+                && args["command"]["type"] == "agent_control_bot"
+        })
+        .map(|(_, args)| (args["command"]["context"].clone(), args["command"]["kickoff"].clone()))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_new_bot_speaks_first_once_and_its_first_run_ends_with_the_owners_first_turn() {
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let facts = Arc::new(Mutex::new(said(0, false, "none")));
+    let (control, asked, id) = ada(9_730, &root, mails.clone(), chat_facts(&facts)).await;
+    // Orca bot-new-record.ts:36: every new bot starts in its first run.
+    assert!(control.bot_named("Ada").unwrap().first_run);
+    control.bots_tick().await;
+    let bot = control.bot_named("Ada").unwrap();
+    assert_eq!(bot.kickoffs.len(), 1, "the home chat is sent the kickoff");
+    let kickoff = bot.kickoffs[0].clone();
+    assert!(kickoff.starts_with("kickoff-"), "{kickoff}");
+    assert_eq!(delivered(&mails, &kickoff), 1);
+    let mail = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(method, args)| method == "mail" && args["details"]["id"] == kickoff)
+        .map(|(_, args)| args.clone())
+        .unwrap();
+    assert_eq!(mail["tabId"], "bot1");
+    assert_eq!(mail["details"]["kind"], "question");
+    assert_eq!(mail["delivery"]["triggerTurn"], true);
+    assert!(mail["content"].as_str().unwrap().contains("you were just created"));
+    let calls = bot_calls(&asked);
+    assert_eq!(calls[0].0["bot"]["firstRun"], true, "the home chat carries the first-run rules");
+    // It answered: asked again (the kickoff was not answered at the first look), it is not sent twice.
+    *facts.lock().unwrap() = said(0, false, "spoke");
+    control.bots_tick().await;
+    control.bots_tick().await;
+    let bot = control.bot_named("Ada").unwrap();
+    assert_eq!(bot.kickoffs, vec![kickoff.clone()]);
+    assert!(bot.first_run && !bot.kickoff_silent);
+    assert_eq!(bot_calls(&asked).last().unwrap().1, json!(kickoff));
+    // The owner's first turn runs: nothing is asked while main says it is at work, and first run lasts.
+    let folder = root.0.join("ada").to_string_lossy().into_owned();
+    let mut world = bot_world(&folder);
+    world["tabs"][1]["busy"] = json!(true);
+    crate::ports::apply_state(control.host.port(), 2, &world.to_string()).unwrap();
+    *facts.lock().unwrap() = said(1, true, "spoke");
+    let before = bot_calls(&asked).len();
+    control.bots_tick().await;
+    assert_eq!(bot_calls(&asked).len(), before);
+    assert!(control.bot_named("Ada").unwrap().first_run);
+    // A turn ended there (main's last run moved): asked again; omp still says a turn runs, so asked at the next pass.
+    world["tabs"][1]["busy"] = json!(false);
+    world["tabs"][1]["lastRun"] = json!({ "id": 1, "stopReason": "stop" });
+    crate::ports::apply_state(control.host.port(), 3, &world.to_string()).unwrap();
+    control.bots_tick().await;
+    assert_eq!(bot_calls(&asked).len(), before + 1);
+    assert!(control.bot_named("Ada").unwrap().first_run, "omp still says a turn runs");
+    *facts.lock().unwrap() = said(1, false, "spoke");
+    control.bots_tick().await;
+    let bot = control.bot_named("Ada").unwrap();
+    assert!(!bot.first_run, "the owner's first turn ended");
+    assert_eq!(bot.kickoffs.len(), 1);
+    control.bots_tick().await;
+    assert_eq!(bot_calls(&asked).last().unwrap().0["bot"]["firstRun"], false);
+    // Nothing is retried once first run is over.
+    assert!(!control.kickoff_retry(&id, true).await.unwrap());
+}
+
+#[tokio::test]
+async fn a_bot_made_with_a_purpose_still_runs_first_run_and_one_the_owner_wrote_to_first_gets_no_kickoff() {
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let facts = Arc::new(Mutex::new(said(1, false, "none")));
+    let (control, _asked, _id) = ada(9_731, &root, mails.clone(), chat_facts(&facts)).await;
+    let state = control
+        .bots_command(json!({ "action": "create", "name": "Cy", "purpose": "Keeps the changelog honest." }))
+        .await
+        .unwrap();
+    let cy = control.bot_named("Cy").unwrap();
+    assert!(Path::new(&cy.folder).join("SOUL.md").is_file());
+    assert!(cy.first_run, "SOUL.md written from the purpose does not end first run");
+    let listed = state["bots"].as_array().unwrap().iter().find(|bot| bot["name"] == "Cy").cloned().unwrap();
+    assert_eq!(listed["firstRun"], true);
+    // Ada's home chat already holds the owner's message: no kickoff, and its turn has ended.
+    control.bots_tick().await;
+    let ada = control.bot_named("Ada").unwrap();
+    assert!(ada.kickoffs.is_empty());
+    assert!(!ada.first_run);
+}
+
+#[tokio::test]
+async fn a_kickoff_that_ended_silent_is_sent_again_once_by_itself_and_on_each_try_again() {
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let facts = Arc::new(Mutex::new(said(0, false, "none")));
+    let (control, _asked, id) = ada(9_732, &root, mails.clone(), chat_facts(&facts)).await;
+    control.bots_tick().await;
+    // Its turn ended without a word: the next look says so, and the page offers Try again.
+    *facts.lock().unwrap() = said(0, false, "silent");
+    control.bots_tick().await;
+    assert!(control.bot_named("Ada").unwrap().kickoff_silent);
+    // The page opens: one retry, a new fingerprint.
+    assert!(control.kickoff_retry(&id, false).await.unwrap());
+    let bot = control.bot_named("Ada").unwrap();
+    assert_eq!(bot.kickoffs.len(), 2);
+    assert_ne!(bot.kickoffs[0], bot.kickoffs[1]);
+    assert!(!bot.kickoff_silent);
+    assert_eq!(delivered(&mails, &bot.kickoffs[1]), 1);
+    // Opened again: Orca retries by itself only once.
+    assert!(!control.kickoff_retry(&id, false).await.unwrap());
+    // The owner's Try again sends it whenever it ended silent.
+    assert!(control.kickoff_retry(&id, true).await.unwrap());
+    assert_eq!(control.bot_named("Ada").unwrap().kickoffs.len(), 3);
+    // Not while it speaks, a turn runs, or once the owner wrote.
+    for facts_now in [said(0, false, "spoke"), said(0, true, "silent"), said(1, false, "silent"), said(0, false, "queued")] {
+        *facts.lock().unwrap() = facts_now;
+        assert!(!control.kickoff_retry(&id, true).await.unwrap());
+    }
+    // Two opens at once send one: the attempt is claimed in the record before the mail goes.
+    *facts.lock().unwrap() = said(0, false, "silent");
+    let (one, two) = tokio::join!(control.kickoff_retry(&id, true), control.kickoff_retry(&id, true));
+    assert_eq!(u8::from(one.unwrap()) + u8::from(two.unwrap()), 1);
+    let bot = control.bot_named("Ada").unwrap();
+    assert_eq!(bot.kickoffs.len(), 4);
+    for kickoff in &bot.kickoffs {
+        assert_eq!(delivered(&mails, kickoff), 1, "{kickoff}");
+    }
 }

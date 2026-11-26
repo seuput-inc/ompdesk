@@ -8272,6 +8272,8 @@ export const ko: Record<string, string> = {
 	"bots.first.start": "홈 채팅에서 omp 시작",
 	"bots.first.message": "첫 메시지",
 	"bots.first.retry": "다시 시도",
+	"bots.first.silent": "첫 턴을 아무 말 없이 끝냈어요.",
+	"bots.first.retryFailed": "첫 메시지를 다시 보내지 못했어요",
 	"bots.needs.title": "확인할 것",
 	"bots.needs.none": "확인할 것이 없어요.",
 	"bots.needs.open": "열기",

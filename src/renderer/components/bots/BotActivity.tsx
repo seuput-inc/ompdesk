@@ -2,8 +2,8 @@
  * A bot's Activity (Orca's `BotActivityPanel.tsx:191-251`): the first screen while a new bot starts, then what needs
  * the person, what it suggests, its automations and its memory's last tidy-up.
  *
- * - First screen (`BotFirstScreen.tsx:100-214`, FK-B45): Create bot, Start omp, First message, each with its state;
- *   a failed first message can be sent again.
+ * - First screen (`BotFirstScreen.tsx:100-214`, FK-B45): Create bot, Start omp, First message (the core's kickoff),
+ *   each with its state; a first message whose turn ended without a word has Try again (`bot-kickoff-retry.ts`).
  * - Needs you (`BotNeedsYouSection.tsx:38-422`, FK-B16): its chats' own prompts (approvals first, then questions,
  *   as their rows read them), then its items set to Needs you; five rows, then Show more. A chat's row opens the
  *   chat, an item's row its item page.
@@ -40,7 +40,7 @@ import {
 	StatusDot,
 } from "../common";
 import { type BotAutomation, botAutomations, useLocalSchedules } from "./bot-automations";
-import { type LaunchStep, openBotChat, sendKickoff, useBotLaunch } from "./bot-launch";
+import { type LaunchStep, openBotChat, retryKickoff, useBotLaunch } from "./bot-launch";
 import { openBotPage } from "./bot-page";
 import { openItem } from "./items/item-store";
 
@@ -71,15 +71,24 @@ function StepMark({ step }: { step: LaunchStep }) {
 	return <CircleDashed aria-hidden className="size-4 text-(--sc-text-subtle)" />;
 }
 
-/** While a bot made here starts: its steps, until its first chat exists and its first message went out. */
+/**
+ * While a new bot's first run starts: its steps, until its home chat exists and its first message (the core's kickoff)
+ * went out; and whenever that first message got no word, with Try again.
+ */
 function BotFirstScreen({ bot }: { bot: Bot }) {
 	const t = useT();
 	const launch = useBotLaunch(s => s.launches[bot.id]);
-	if (!launch || (bot.home && launch.first !== "failed" && launch.first !== "running")) return null;
+	const [retrying, setRetrying] = useState(false);
+	const sent = (bot.kickoffs?.length ?? 0) > 0;
+	const silent = bot.kickoffSilent === true;
+	if (!bot.firstRun || (!silent && (!launch || (bot.home && sent)))) return null;
 	const steps: { label: string; step: LaunchStep }[] = [
 		{ label: t("bots.first.create"), step: "done" },
-		{ label: t("bots.first.start"), step: launch.start },
-		...(launch.first === "skipped" ? [] : [{ label: t("bots.first.message"), step: launch.first }]),
+		{ label: t("bots.first.start"), step: launch?.start ?? "done" },
+		{
+			label: t("bots.first.message"),
+			step: silent ? "failed" : sent ? "done" : bot.home ? "running" : "pending",
+		},
 	];
 	return (
 		<section aria-label={t("bots.first.title")} className="flex flex-col gap-2" data-bot-first-screen>
@@ -92,13 +101,17 @@ function BotFirstScreen({ bot }: { bot: Bot }) {
 					</li>
 				))}
 			</ol>
-			{launch.error && <p className="text-sc-xs text-(--sc-danger)">{launch.error}</p>}
-			{launch.first === "failed" && launch.tabId && launch.kickoff && (
+			{launch?.error && <p className="text-sc-xs text-(--sc-danger)">{launch.error}</p>}
+			{silent && <p className="text-sc-xs text-(--sc-text-muted)">{t("bots.first.silent")}</p>}
+			{silent && (
 				<Button
 					className="self-start"
+					data-bot-kickoff-retry
 					icon={<RotateCcw />}
+					loading={retrying}
 					onClick={() => {
-						if (launch.tabId && launch.kickoff) void sendKickoff(bot.id, launch.tabId, launch.kickoff);
+						setRetrying(true);
+						void retryKickoff(bot.id).finally(() => setRetrying(false));
 					}}
 					size="sm"
 					variant="secondary"

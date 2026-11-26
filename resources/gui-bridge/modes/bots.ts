@@ -3,17 +3,19 @@
  * control-tools.md › Bots, items and rooms). Main hands every bot chat it sees its payload (`agent_control.bot`: the
  * bot, its open items, what waits on the owner, its other chats at work) whenever that changed; this module
  * - keeps the newest payload as a journal entry (`ompdesk.bot`), so a restarted omp still knows it is a bot,
- * - adds the `ompdesk-bot` section (who it is, its rules, its `SOUL.md` or the first-run rules) to the main agent's
- *   prompts: the same text turn after turn while the name, folder and soul stay,
+ * - adds the `ompdesk-bot` section (who it is, its rules, its `SOUL.md`, and in a first-run home chat the first-run
+ *   rules) to the main agent's prompts: the same text turn after turn while the name, folder, first run and soul stay,
  * - starts a turn with one `ompdesk.bot-note` message when the digest differs from the newest one the model holds,
- *   and on every fifth turn the owner typed, with the reminder to put open questions on items.
+ *   and on every fifth turn the owner typed, with the reminder to put open questions on items,
+ * - answers what the branch says for the core's first run (`BotChatFacts`: the owner's turns, whether a turn runs,
+ *   what became of the kickoff the call names).
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { guard } from "../health";
 import { type JournalEntry, type PromptSectionHost, registerPromptSection } from "../prompt-sections";
 import { BOT_ENTRY, BOT_METHOD, BOT_NOTE_TYPE, BOT_SECTION_ID, SOUL_FILE } from "./bots-contracts";
-import { botNote, botSection, latestBot, parseBotContext, sameBot } from "./bots-core";
+import { botNote, botSection, chatFacts, latestBot, parseBotContext, sameBot } from "./bots-core";
 
 /** The slice of omp's ExtensionAPI this module uses (no omp imports, like prompt-sections.ts). */
 interface BotHost extends PromptSectionHost {
@@ -61,6 +63,7 @@ export function install(pi: BotHost): void {
 }
 
 interface BotSession {
+	isStreaming: boolean;
 	sessionManager: {
 		getBranch(): readonly JournalEntry[];
 		appendCustomEntry(customType: string, data: unknown): unknown;
@@ -68,13 +71,20 @@ interface BotSession {
 }
 
 export const methods = guard("bots", {
-	/** `BotContext` → `{changed}`: journaled only when it says something the newest entry does not. */
+	/**
+	 * `BotContext` and `kickoff?` → `{changed}` and `BotChatFacts`: journaled only when it says something the newest
+	 * entry does not.
+	 */
 	[BOT_METHOD]: async (params, env) => {
 		const context = parseBotContext(params);
 		if (!context) throw new Error(`${BOT_METHOD} needs a bot with an id, a name and a folder`);
-		const manager = (env.session() as unknown as BotSession).sessionManager;
-		if (sameBot(latestBot(manager.getBranch()), context)) return { changed: false };
+		const session = env.session() as unknown as BotSession;
+		const manager = session.sessionManager;
+		const branch = manager.getBranch();
+		const kickoff = (params as { kickoff?: unknown } | null)?.kickoff;
+		const facts = chatFacts(branch, typeof kickoff === "string" ? kickoff : undefined, session.isStreaming === true);
+		if (sameBot(latestBot(branch), context)) return { changed: false, ...facts };
 		manager.appendCustomEntry(BOT_ENTRY, context);
-		return { changed: true };
+		return { changed: true, ...facts };
 	},
 });

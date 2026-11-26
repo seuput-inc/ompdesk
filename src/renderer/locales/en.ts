@@ -8299,6 +8299,8 @@ export const en: Record<string, string> = {
 	"bots.first.start": "Start omp in its home chat",
 	"bots.first.message": "First message",
 	"bots.first.retry": "Try again",
+	"bots.first.silent": "It ended its first turn without a word.",
+	"bots.first.retryFailed": "Could not send the first message again",
 	"bots.needs.title": "Needs you",
 	"bots.needs.none": "Nothing needs you.",
 	"bots.needs.open": "Open",

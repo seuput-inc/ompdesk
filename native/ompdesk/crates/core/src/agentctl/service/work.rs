@@ -19,6 +19,7 @@
 mod app;
 mod auto;
 mod bot_files;
+mod bot_first_run;
 mod bots;
 mod items;
 mod review;
