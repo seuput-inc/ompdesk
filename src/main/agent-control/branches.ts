@@ -13,7 +13,7 @@
 import type { RpcRemoteCopy, RpcSafeRemoval, WorktreeSetupReport } from "../../shared/rpc-types";
 import { CoreError } from "../core/process";
 import { coreGit } from "../local/git/exec";
-import { runWorktreeHook } from "../local/git/worktree-seed";
+import { archiveHookRefusal, runWorktreeHook } from "../local/git/worktree-seed";
 import type { BeforeRemove } from "../worktree-orphans";
 
 /** The worktree binding of a tab (`IpcTabWorktree`): the checkout, its branch and the repo it forked from. */
@@ -177,12 +177,15 @@ export type WorktreeRemoval = "removed" | "branch-kept" | null;
  * that was not pulled, or squash-merged. A branch something moved meanwhile stays (`branch-kept`), and so does one
  * `keepBranch` asks to keep. Its copy on origin goes once its tip is in `origin/<base>` (judged against origin alone,
  * deleted with a lease on that tip), `keepBranch` or not; a network failure keeps it and says so. Null when anything
- * held the worktree back.
+ * held the worktree back: also the repository's archive hook (`archiveHookRefusal`), which runs only for a worktree
+ * the same judge would take, and whose failure keeps it.
  */
-export function removeSafeWorktree(
+export async function removeSafeWorktree(
 	worktree: WorktreeRef,
 	options: { keepBranch?: boolean } = {},
 ): Promise<RpcSafeRemoval | null> {
+	const facts = await landingFacts(worktree).catch(() => null);
+	if (facts?.landed && facts.clean && (await archiveHookRefusal(worktree.baseCwd, worktree.path))) return null;
 	return branchGit(
 		"git.removeSafeWorktree",
 		{ worktree, keepBranch: options.keepBranch === true },

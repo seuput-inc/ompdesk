@@ -21,7 +21,7 @@ import type { SavedWorktree, SavedWorktreeRestore } from "../../shared/disk-care
 import { discardNewWorktree, type WorktreeRef, type WorktreeRemoval } from "../agent-control/branches";
 import { CoreError } from "../core/process";
 import { coreGit, coreGitAnswer, coreHeld } from "../local/git/exec";
-import { prepareWorktree } from "../local/git/worktree-seed";
+import { archiveHookRefusal, prepareWorktree } from "../local/git/worktree-seed";
 import { LocalCommandError } from "../local/types";
 import { ompsExitedIn } from "../omp-exits";
 import type { BeforeRemove } from "../worktree-orphans";
@@ -210,8 +210,9 @@ async function archiveIgnoredData(
 }
 
 /**
- * The `prepare` of every landed-worktree removal (`removeOrphanWorktree`): keeps one a known process works in, then
- * archives what no tool makes again and records it once the folder went. `measured` hears each worktree's size.
+ * The `prepare` of every landed-worktree removal (`removeOrphanWorktree`): keeps one a known process works in, runs the
+ * repository's archive hook (`archiveHookRefusal`; a failure keeps it), then archives what no tool makes again and
+ * records it once the folder went. `measured` hears each worktree's size.
  */
 export function archiveBeforeRemove(
 	saved: SavedWorktreeStore,
@@ -222,6 +223,8 @@ export function archiveBeforeRemove(
 		if (folders !== null && processInside(worktree.path, folders)) throw new KeepWorktree("a process works in it");
 		const operation = await inProgressOperation(worktree.path);
 		if (operation) throw new KeepWorktree(`a git operation is half done (${operation})`);
+		const hookRefusal = await archiveHookRefusal(worktree.repo, worktree.path);
+		if (hookRefusal) throw new KeepWorktree(hookRefusal);
 		const files = await readWorktreeFiles(worktree.path);
 		measured?.set(worktree.path, await diskBytes(worktree.path));
 		const record = await archiveIgnoredData(

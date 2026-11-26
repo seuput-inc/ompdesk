@@ -130,7 +130,12 @@ import { canGiveBack } from "./idle-release";
 import { startupCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
 import { shellRunner } from "./local/git/exec";
-import { createWorktree, stockWorktreeLocation, tablessWorktreeBridge } from "./local/git/worktree";
+import {
+	createWorktree,
+	setRecordedFoldersSource,
+	stockWorktreeLocation,
+	tablessWorktreeBridge,
+} from "./local/git/worktree";
 import { renameStoredSession } from "./local/session-files";
 import { LocalEngines, localEngineSettings } from "./local-engines";
 import { LogWatcher } from "./log-watcher";
@@ -1410,6 +1415,7 @@ app.whenReady().then(async () => {
 	// Orphaned worktrees (worktree-orphans.ts): a folder is open when a tab of this computer or a tab it hosts for a
 	// paired device runs in it (`hostServices.workspaceDirs()` is the cwd of every hosted tab, a superset of its `summarySources()`).
 	setOpenFoldersSource(() => [...sidecarPool.workspaceDirs(), ...hostServices.workspaceDirs()]);
+	setRecordedFoldersSource(async () => (await sessionIndex.listKnown())?.map(info => info.cwd) ?? []);
 	let hostOmpVersion: string | null = null;
 	void systemOmp().then(resolution => {
 		if (resolution.ok) hostOmpVersion = resolution.runtime.version;
