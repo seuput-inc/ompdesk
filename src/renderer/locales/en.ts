@@ -172,6 +172,12 @@ export const en: Record<string, string> = {
 	"sidebar.deleteArchivedMessage": "Delete all {count} archived sessions listed here, with their transcripts.",
 	"sidebar.menu.openSplit": "Open in split view",
 	"sidebar.menu.moveToProject": "Move to project…",
+	"sidebar.menu.handOff": "Move to {device}",
+	"sidebar.menu.handOffAny": "Move to another computer",
+	"sidebar.handOff.noneOnline": "No paired computer is connected",
+	"sidebar.handOff.moving": "Moving to {device}…",
+	"sidebar.handOff.done": "Moved to {device}",
+	"sidebar.handOff.failed": "Couldn't move the session",
 	"sidebar.menu.links": "Link a PR or issue…",
 	"sidebar.links.title": "Session links",
 	"sidebar.links.description":
@@ -1925,6 +1931,10 @@ export const en: Record<string, string> = {
 	"prefs.unreadable": "Your saved settings couldn't be read, so this change was not saved.",
 	"ipcError.invalid_session_path": "That session file isn't valid.",
 	"ipcError.session_running": "The session is still running. Stop it first, then try again.",
+	"ipcError.handoff_project_missing": "That computer has no folder for this project. Open the project there first.",
+	"ipcError.handoff_pending":
+		"The other computer stopped answering. The session waits, running nowhere, until it answers.",
+	"ipcError.handoff_failed": "The session couldn't be moved and stays on this computer.",
 	"ipcError.session_delete_cancelled": "An extension cancelled the deletion.",
 	"ipcError.session_name_empty": "Enter a session name.",
 	"ipcError.session_starting": "The session is still starting. Try again in a moment.",

@@ -2948,6 +2948,25 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work", after: dismissNewTasks },
 	},
 	{
+		id: "sidebar-session-menu",
+		area: "A",
+		title: "The shown session's row menu: Move to <computer> on this computer's rows while a paired computer is connected",
+		open: async (page, look) => {
+			await openDrawer(page, look);
+			const sessionPath = (await page.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.sessionPath;
+			if (!sessionPath) throw new Error("no open session to find its row by");
+			const file = JSON.stringify(sessionPath);
+			const row = page.locator(`[data-session-path=${file}], [data-device-session=${file}]`).first();
+			if ((look.device ?? "touch") !== "touch") await row.hover();
+			await row.locator("[data-sidebar-row-menu]").first().click();
+		},
+		ready: "[role='menu'] [role='menuitem']",
+		// Parity only: B also uses A, so B's own rows (its window, its phone) offer Move to PC-A; A's view of B's row is
+		// a host's, which has no such item. The audits' harness page pairs no computer.
+		when: () => false,
+		parity: { session: "work", pairedBack: true, after: closeOverlay },
+	},
+	{
 		id: "sidebar-project-menu",
 		area: "A",
 		title: "A project header's action menu: its one Delete last",

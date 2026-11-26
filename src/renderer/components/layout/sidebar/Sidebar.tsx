@@ -1185,6 +1185,25 @@ export function Sidebar() {
 			archived,
 		);
 	};
+	/**
+	 * Hand a stored session to a paired computer (main's `handOffSession`): it runs there from now on, so the tab here
+	 * opens it on that computer.
+	 */
+	const handOffStoredSession = async (session: SidebarSession, host: { id: string; name: string }) => {
+		toast({ message: t("sidebar.handOff.moving", { device: host.name }) });
+		try {
+			const moved = await window.omp.sessions.handOff(session.path, host.id);
+			toast({ variant: "success", message: t("sidebar.handOff.done", { device: host.name }) });
+			void openTab({
+				cwd: moved.cwd,
+				sessionPath: moved.sessionPath,
+				kind: session.kind ?? "agent",
+				device: moved.device,
+			});
+		} catch (error) {
+			toastError({ title: t("sidebar.handOff.failed"), error });
+		}
+	};
 	/** Move a stored session's file to another project folder (stock SessionManager.moveTo in main). */
 	const moveStoredSession = async (session: SidebarSession, target: string) => {
 		setMoveMenu(null);
@@ -1933,6 +1952,21 @@ export function Sidebar() {
 					? {
 							toggleAgentHidden: then(() => void useSidebarPrefs.getState().toggleAgentHidden(session.path)),
 							links: then(() => setLinksFor(session.path)),
+							// Only where this computer is paired with another; offline ones are left out.
+							...(hosts.length > 0
+								? {
+										handOff: {
+											hosts: hosts
+												.filter(host => host.state === "online")
+												.map(host => ({ id: host.deviceId, name: host.name })),
+											run: (id: string) =>
+												then(() => {
+													const host = hosts.find(view => view.deviceId === id);
+													if (host) void handOffStoredSession(session, { id, name: host.name });
+												})(),
+										},
+									}
+								: {}),
 							...(session.liveTabId === undefined
 								? {
 										setEmoji: then(() =>

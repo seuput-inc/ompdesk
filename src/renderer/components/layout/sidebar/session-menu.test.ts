@@ -248,6 +248,38 @@ describe("sessionMenuItems", () => {
 			false,
 		);
 	});
+
+	it("offers one Move to <computer> per connected paired computer after Archive, held back while the session runs", () => {
+		const run = vi.fn();
+		const handOff = {
+			hosts: [
+				{ id: "mini", name: "Mac mini" },
+				{ id: "pc", name: "Desktop" },
+			],
+			run,
+		};
+		const items = build({}, { ...every, handOff });
+		const at = items.findIndex(item => item.id === "session-archive");
+		expect(items.slice(at + 1, at + 3).map(item => [item.id, item.label])).toEqual([
+			["session-hand-off-mini", "sidebar.menu.handOff:Mac mini"],
+			["session-hand-off-pc", "sidebar.menu.handOff:Desktop"],
+		]);
+		items[at + 2]?.onSelect();
+		expect(run).toHaveBeenCalledWith("pc");
+		const busy = build({ busy: true, hasTab: true }, { ...every, handOff }).find(
+			item => item.id === "session-hand-off-mini",
+		);
+		expect(busy).toMatchObject({ disabled: true, disabledReason: "sidebar.menu.taskRunning" });
+		// Paired, but none connected: one item that says why it cannot be taken.
+		const none = build({}, { ...every, handOff: { hosts: [], run } }).filter(item =>
+			item.id.startsWith("session-hand-off"),
+		);
+		expect(none).toMatchObject([
+			{ id: "session-hand-off", disabled: true, disabledReason: "sidebar.handOff.noneOnline" },
+		]);
+		// A list that cannot hand off (a paired host's rows) has no such item at all.
+		expect(ids({}).some(id => id.startsWith("session-hand-off"))).toBe(false);
+	});
 });
 
 describe("pickedMenuItems", () => {

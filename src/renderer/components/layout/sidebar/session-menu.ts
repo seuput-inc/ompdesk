@@ -8,8 +8,9 @@
  * Groups, each set apart: open and view (split, new window, the open tab's split, mark as unread and close) · ports
  * (each port the tab's processes listen on: open it in the Preview, stop its process; Orca's worktree card ports,
  * `WorktreeCardPorts.tsx:127-238`) · edit (rename, pin, mute notifications, move up and down, move to project,
- * archive, hide from agents) · show in folder · diagnostics (one item; Option/Alt while choosing it saves the
- * anonymized bundle) · delete, last. Clicking a row already opens it, so the menu has no "Open" or "Open in new tab".
+ * archive, move to another computer, hide from agents) · show in folder · diagnostics (one item; Option/Alt while
+ * choosing it saves the anonymized bundle) · delete, last. Clicking a row already opens it, so the menu has no "Open"
+ * or "Open in new tab".
  */
 import {
 	Archive,
@@ -32,6 +33,7 @@ import {
 	Link2,
 	type LucideIcon,
 	MailCheck,
+	MonitorUp,
 	Network,
 	PanelRightClose,
 	Pencil,
@@ -106,6 +108,11 @@ export interface SessionMenuActions {
 	handToBot?: () => void;
 	/** Archives it, or restores it when archived. */
 	toggleArchive?: () => void;
+	/**
+	 * Hands it to a paired computer (this computer's sessions): `hosts` are the ones connected now; none connected
+	 * leaves one disabled item that says so.
+	 */
+	handOff?: { hosts: readonly { id: string; name: string }[]; run: (host: string) => void };
 	toggleAgentHidden?: () => void;
 	/** Copies its title as the row shows it. */
 	copyTitle?: () => void;
@@ -301,6 +308,27 @@ export function sessionMenuItems({
 							onSelect: actions.toggleArchive,
 						},
 			);
+		if (actions.handOff) {
+			const { hosts, run } = actions.handOff;
+			if (hosts.length === 0)
+				edit.push({
+					id: "session-hand-off",
+					label: t("sidebar.menu.handOffAny"),
+					icon: MonitorUp,
+					disabled: true,
+					disabledReason: t("sidebar.handOff.noneOnline"),
+					onSelect: () => {},
+				});
+			for (const host of hosts)
+				edit.push({
+					id: `session-hand-off-${host.id}`,
+					label: t("sidebar.menu.handOff", { device: host.name }),
+					icon: MonitorUp,
+					disabled: facts.busy,
+					disabledReason: t("sidebar.menu.taskRunning"),
+					onSelect: () => run(host.id),
+				});
+		}
 		if (actions.setEmoji)
 			edit.push({ id: "session-emoji", label: t("sidebar.menu.emoji"), icon: Smile, onSelect: actions.setEmoji });
 		if (actions.setParent && !facts.chat)

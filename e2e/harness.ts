@@ -46,6 +46,7 @@ export async function fixtureOmp(dir: string): Promise<string> {
 			exports: {
 				"./session/history-storage": "./history-storage.ts",
 				"./session/session-listing": "./session-store.ts",
+				"./session/session-manager": "./session-store.ts",
 				"./session/session-storage": "./session-store.ts",
 				"./session/session-loader": "./session-store.ts",
 				"./session/transcript/transcript-entry": "./session-store.ts",
