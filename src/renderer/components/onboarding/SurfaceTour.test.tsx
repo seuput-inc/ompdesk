@@ -160,4 +160,18 @@ describe("SurfaceTour", () => {
 		expect(card()).toBeNull();
 		expect(useStarterGuideStore.getState().toursSeen).toEqual(["board"]);
 	});
+
+	it("leaves the keyboard to the app: nothing in the card takes focus and no dialog holds the shortcuts", async () => {
+		addTarget("<div data-board-lanes></div>");
+		const focus = vi.spyOn(HTMLElement.prototype, "focus");
+		await mount();
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(1000);
+		});
+		expect(card()).not.toBeNull();
+		expect(focus.mock.contexts.filter(node => card()?.contains(node as Node))).toEqual([]);
+		focus.mockRestore();
+		// App's shortcut guard and dialog-layer read any [role=dialog] as a modal that owns the keyboard.
+		expect(document.querySelector('[role="dialog"]')).toBeNull();
+	});
 });

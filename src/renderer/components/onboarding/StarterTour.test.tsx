@@ -78,11 +78,11 @@ afterEach(async () => {
 });
 
 describe("StarterTour", () => {
-	it("spotlights the step's real control and names it in a labelled dialog", async () => {
+	it("spotlights the step's real control and names it in a labelled region", async () => {
 		addTarget("<div class='omp-composer-input'></div>", { left: 400, top: 640, width: 600, height: 60 });
 		useStarterGuideStore.getState().startTour("prompt");
 		await mount();
-		expect(card()?.getAttribute("role")).toBe("dialog");
+		expect(card()?.getAttribute("role")).toBe("region");
 		expect(card()?.textContent).toContain(translate("starter.step.prompt.title"));
 		expect(card()?.textContent).toContain(translate("starter.step.prompt.tour"));
 		expect(document.querySelector("[data-starter-tour-root]")?.getAttribute("data-target-found")).toBe("true");

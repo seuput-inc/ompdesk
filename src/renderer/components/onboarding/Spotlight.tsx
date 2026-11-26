@@ -133,14 +133,16 @@ export function Spotlight({
 					}}
 				/>
 			)}
-			{/* controls-ok: a non-modal tour card beside a spotlight hole that lets clicks through to the app; Modal and Sheet trap focus and block the page */}
+			{/* A region, not a dialog: the card is non-modal, and the app reads any `[role=dialog]` as one that owns the
+			    keyboard (App's shortcut guard, dialog-layer's top layer), so a tour would silence ⌘T and every other
+			    shortcut while it shows. */}
 			<div
 				aria-describedby={bodyId}
 				aria-labelledby={titleId}
 				className="omp-starter-tour-card"
 				data-placement={placement ? "anchored" : "center"}
 				data-starter-tour
-				role="dialog"
+				role="region"
 				{...cardAttrs}
 				style={
 					placement

@@ -49,8 +49,8 @@ function SurfaceTourCard({ id, step }: { id: SurfaceTourId; step: number }) {
 							{t("tour.skip")}
 						</Button>
 					)}
+					{/* No autoFocus: this tour arrives uninvited, so a person typing in the composer keeps their field. */}
 					<Button
-						autoFocus
 						onClick={() =>
 							last ? end() : useStarterGuideStore.getState().setSurfaceTourStep(shown[position + 1])
 						}
