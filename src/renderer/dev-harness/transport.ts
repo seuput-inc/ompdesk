@@ -50,7 +50,7 @@ import { SCHEDULES_COMMAND, SCHEDULES_LOG } from "../../shared/schedule-channels
 import { readSidebarPrefs, SIDEBAR_PREFS_KEY, type SidebarChange, sidebarPatch } from "../../shared/sidebar-prefs";
 import { SIDEBAR_PROJECTS_COMMAND, type SidebarProjectsRequest } from "../../shared/sidebar-projects";
 import type { TerminalLeaseState, TerminalOperation, TerminalSnapshot } from "../../shared/terminal-types";
-import { TRACKERS_COMMAND } from "../../shared/trackers";
+import { TRACKERS_COMMAND } from "../../shared/tracker-channels";
 import {
 	ADVISOR_USAGE,
 	CONTEXT_INSPECT,

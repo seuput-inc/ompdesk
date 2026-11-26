@@ -52,7 +52,7 @@ import {
 	SSH_TOOLS_PROMPTS,
 	SSH_TOOLS_STATE,
 } from "../../shared/ssh-tools";
-import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND } from "../../shared/trackers";
+import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND } from "../../shared/tracker-channels";
 import type { WebPermission } from "../../shared/web-protocol";
 
 /** Every channel between a page and main. */

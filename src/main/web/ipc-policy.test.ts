@@ -15,7 +15,7 @@ import * as preview from "../../shared/preview";
 import * as schedules from "../../shared/schedule-channels";
 import * as sidebarProjects from "../../shared/sidebar-projects";
 import * as sshTools from "../../shared/ssh-tools";
-import * as trackers from "../../shared/trackers";
+import * as trackers from "../../shared/tracker-channels";
 import { IPC_POLICY, type IpcChannel } from "./ipc-policy";
 
 const MAIN = path.join(__dirname, "..");

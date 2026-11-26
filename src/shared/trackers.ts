@@ -7,11 +7,6 @@
  * agent or a log. A paired phone reads the host's lists; the token stays on the host.
  */
 
-/** Reads and item actions (`workspace`). */
-export const TRACKERS_COMMAND = "trackers:command";
-/** Connecting and removing an account (`accounts-admin`). */
-export const TRACKERS_ACCOUNTS = "trackers:accounts";
-
 export const TRACKER_PROVIDERS = ["linear", "jira"] as const;
 export type TrackerProvider = (typeof TRACKER_PROVIDERS)[number];
 

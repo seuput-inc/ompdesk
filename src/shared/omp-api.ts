@@ -189,7 +189,8 @@ import {
 	type SshPrompt,
 	type SshToolsState,
 } from "./ssh-tools";
-import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND, type TrackersApi } from "./trackers";
+import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND } from "./tracker-channels";
+import type { TrackersApi } from "./trackers";
 
 /** How `window.omp` reaches main: Electron's `ipcRenderer`, or a web device's socket. */
 export interface OmpTransport {

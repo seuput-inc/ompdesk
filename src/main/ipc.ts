@@ -141,7 +141,7 @@ import { SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import { SIDEBAR_PROJECTS_COMMAND } from "../shared/sidebar-projects";
 import { parseTerminalCommands, TERMINAL_COMMANDS_PREF } from "../shared/terminal-commands";
 import { SCRATCH_TERMINAL_TAB } from "../shared/terminal-types";
-import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND } from "../shared/trackers";
+import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND } from "../shared/tracker-channels";
 import { isUiLanguage } from "../shared/ui-language";
 import {
 	findChromiumBrowsers,
