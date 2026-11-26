@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.148.0] - 2026-11-27
+
+Preview가 에뮬레이터 화면과 프로젝트 파일을 보여 주고, 연결된 컴퓨터에서 호스트 세션에 PR을 연결할 수 있게 되었으며, 봇이 살아 있는 얼굴을 갖습니다.
+
+- Preview: 실행 중인 iOS 시뮬레이터나 Android 기기 화면을 보여 주고, 에이전트가 에뮬레이터를 다루는 스킬이 들어갑니다. 에이전트가 페이지를 누르는 위치가 보이고, 영역 스크린샷에 그림을 그려 입력창으로 보낼 수 있습니다.
+- Preview: 프로젝트의 HTML·SVG 파일 열기, 페이지 도구와 시작 페이지, 기록, 개발 서버 다시 시도, 서버 로그인 요청이 생겼습니다. 연결된 컴퓨터에서 호스트 탭의 개발 서버를 이 컴퓨터의 Preview로 열고, 휴대폰의 링크 알림에서 누른 링크도 Preview로 엽니다.
+- 세션의 프로세스가 열어 둔 포트를 보고, 열거나 멈출 수 있습니다.
+- 연결된 컴퓨터에서도 호스트 세션에 PR·이슈를 연결하고 볼 수 있습니다.
+- 봇은 사진이 없으면 살아 있는 얼굴로 나타납니다.
+- 앱을 다시 켠 뒤, 부모가 아직 메시지를 보낼 자식 세션이 저절로 닫히던 문제를 고쳤습니다.
+- 작업판의 쉬는 레인 이름을 '쉬는 중'으로 바꿨습니다.
+
+<!-- en -->
+
+The Preview shows emulator screens and project files, a paired computer can link PRs to a host's sessions, and bots get a living face.
+
+- Preview: shows a running iOS Simulator's or Android device's screen, with a skill for the agent to drive emulators. It shows where the agent's mouse lands, and a region screenshot can be drawn on before it goes to the composer.
+- Preview: opens a project's HTML or SVG file, adds page tools, a start page, history, dev-server retry and a server sign-in prompt. A paired computer opens a host tab's dev server in its own Preview, and a link tapped in the phone's link toast opens there too.
+- A session's listening ports are listed, with open and stop.
+- A paired computer reads and changes a host session's PR and issue links.
+- A bot without a picture wears a living face.
+- After a relaunch, a child its opener still owes a message is no longer closed on its own.
+- The board's idle lane reads 쉬는 중.
+
 ## [0.147.0] - 2026-11-26
 
 알림이 OMPdesk 자체 팝업으로 뜨고, 사이드바·새 작업·받아쓰기·일정·GitHub와 이슈 트래커 기능이 크게 늘었으며, 바쁜 순간에 앱 내부가 재시작되던 문제를 고쳤습니다.
