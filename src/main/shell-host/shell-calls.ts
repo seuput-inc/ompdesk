@@ -30,7 +30,7 @@ interface AsyncForms {
 	powerMonitor: {
 		getSystemIdleTimeAsync(): Promise<number>;
 		desktopAway(): boolean | undefined;
-		on(event: "desktop-away", listener: (away: boolean) => void): unknown;
+		on(event: "desktop-away", listener: (away: boolean | undefined) => void): unknown;
 	};
 	systemPreferences: {
 		isTrustedAccessibilityClientAsync(prompt: boolean): Promise<boolean>;
@@ -94,7 +94,7 @@ export function desktopAway(): boolean | undefined {
 }
 
 /** Each change of `desktopAway()`. */
-export function onDesktopAwayChange(listener: (away: boolean) => void): void {
+export function onDesktopAwayChange(listener: (away: boolean | undefined) => void): void {
 	shim().powerMonitor.on("desktop-away", listener);
 }
 

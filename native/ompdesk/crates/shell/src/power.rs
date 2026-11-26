@@ -3,7 +3,8 @@
 //!
 //! Away (was `src/main/presence.ts`' `readDesktopAway` over Electron's `getSystemIdleState`; after Orca's desktop-away
 //! state, stablyai/orca `src/main/notifications/desktop-away-state.ts`, MIT, re-implemented): the screen is locked, or
-//! no keyboard or mouse input for `DESKTOP_AWAY_SECONDS`. `power.desktopAway` answers it now and the event
+//! no keyboard or mouse input for `DESKTOP_AWAY_SECONDS`; present with input within that time; unknown (null) when the
+//! idle time cannot be read, which never silences a phone. `power.desktopAway` answers it now and the event
 //! `power.desktopAway {away}` tells each change (read every 3 s with the network, `system.rs`), for the paired phones'
 //! pushes and the presence a paired computer reports to its hosts.
 
@@ -32,12 +33,15 @@ fn event(name: &str) {
     host::event("power.event", json!({ "name": name }));
 }
 
-fn away(locked: bool, idle_seconds: u64) -> bool {
-    locked || idle_seconds >= DESKTOP_AWAY_SECONDS
+fn away(locked: bool, idle_seconds: Option<u64>) -> Option<bool> {
+    if locked {
+        return Some(true);
+    }
+    idle_seconds.map(|idle| idle >= DESKTOP_AWAY_SECONDS)
 }
 
-/// Whether the person is away from this computer now. Any thread.
-pub fn desktop_away() -> bool {
+/// Whether the person is away from this computer now; none when it cannot be told. Any thread.
+pub fn desktop_away() -> Option<bool> {
     away(LOCKED.load(Ordering::Relaxed), system::idle_seconds())
 }
 
@@ -84,7 +88,7 @@ pub fn message(msg: Msg) {
 pub fn handle(call: Call) {
     match call.method.as_str() {
         "power.idleTime" => {
-            let seconds = system::idle_seconds();
+            let seconds = system::idle_seconds().unwrap_or(0);
             call.ok(json!({ "seconds": seconds }));
         }
         "power.desktopAway" => call.ok(json!({ "away": desktop_away() })),
@@ -127,9 +131,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn away_when_locked_or_idle_past_the_threshold_present_otherwise() {
-        assert!(away(true, 0));
-        assert!(away(false, DESKTOP_AWAY_SECONDS));
-        assert!(!away(false, DESKTOP_AWAY_SECONDS - 1));
+    fn present_with_recent_input_away_when_locked_or_long_idle_unknown_when_unreadable() {
+        assert_eq!(away(false, Some(0)), Some(false));
+        assert_eq!(away(false, Some(DESKTOP_AWAY_SECONDS - 1)), Some(false));
+        assert_eq!(away(false, Some(DESKTOP_AWAY_SECONDS)), Some(true));
+        assert_eq!(away(true, Some(0)), Some(true));
+        assert_eq!(away(true, None), Some(true));
+        assert_eq!(away(false, None), None);
     }
 }

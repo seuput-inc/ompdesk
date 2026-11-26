@@ -335,8 +335,8 @@ when no item has that label; any other run answers `unsupported`.
 | `theme.changed` (event) | shell→Node | `{dark, highContrast, inverted, reducedMotion, system?}` | OS change or `setSource` effect; mirrors `nativeTheme.shouldUseDarkColors`, `systemPreferences.getAnimationSettings()`. `system?` is `{dark, highContrast, inverted}` as the OS itself reports (a forced source hides it from the effective facts): the shim answers `themeSource = "system"` from it at once. A shell that sends none is read as the OS's facts while the source is `system` |
 | `power.event` (event) | shell→Node | `{name: "suspend"\|"resume"\|"lock-screen"\|"unlock-screen"\|"on-ac"\|"on-battery"\|"shutdown", onBattery?: boolean}` | `on-ac`/`on-battery` update the mirrored `isOnBatteryPower()` |
 | `power.idleTime` | Node | `{}` | `{seconds}` — idle input time (`GetLastInputInfo` / `CGEventSourceSecondsSinceLastEventType`) |
-| `power.desktopAway` | Node | `{}` | `{away}`: the screen locked, or no input for 180 s |
-| `power.desktopAway` (event) | shell→Node | `{away}` | each change, read every 3 s with `net.online`; the shim's `powerMonitor.desktopAway()` |
+| `power.desktopAway` | Node | `{}` | `{away}`: `true` the screen locked or no input for 180 s, `false` input within that time, `null` when the idle time cannot be read |
+| `power.desktopAway` (event) | shell→Node | `{away}` | each change, read every 3 s with `net.online`; the shim's `powerMonitor.desktopAway()` (`null` reads `undefined`) |
 | `power.blockerStart` | Node | `{id, type: "prevent-app-suspension"\|"prevent-display-sleep"}` | `{}` — `id` is Node's (Electron's `start()` returns it at once) |
 | `power.blockerStop` | Node | `{id}` | `{}` |
 | `shortcut.register` | Node | `{accelerator}` | `{registered: boolean}` — CEF only; Node no longer asks. Tauri registers the window shortcut (`CommandOrControl+Shift+O`, `window.toggle`) itself at start and toggles the windows (`entry.rs`). |

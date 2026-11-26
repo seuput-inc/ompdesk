@@ -1687,15 +1687,19 @@ describe("menus, dialogs and the small modules", () => {
 		// Whether the person is away is the shell's read: unknown until it says, then each change it tells.
 		const presence = powerMonitor as unknown as { desktopAway(): boolean | undefined };
 		expect(presence.desktopAway()).toBeUndefined();
-		const changes: boolean[] = [];
-		powerMonitor.on("desktop-away" as never, (away: boolean) => changes.push(away));
+		const changes: (boolean | undefined)[] = [];
+		powerMonitor.on("desktop-away" as never, (away: boolean | undefined) => changes.push(away));
 		await shell.event("power.desktopAway", { away: false });
 		await settle();
 		expect(presence.desktopAway()).toBe(false);
 		await shell.event("power.desktopAway", { away: true });
 		await settle();
 		expect(presence.desktopAway()).toBe(true);
-		expect(changes).toEqual([false, true]);
+		// The shell could not read the idle time: unknown again, which never silences a phone.
+		await shell.event("power.desktopAway", { away: null });
+		await settle();
+		expect(presence.desktopAway()).toBeUndefined();
+		expect(changes).toEqual([false, true, undefined]);
 		const id = powerSaveBlocker.start("prevent-app-suspension");
 		expect(powerSaveBlocker.isStarted(id)).toBe(true);
 		powerSaveBlocker.stop(id);

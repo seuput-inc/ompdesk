@@ -307,9 +307,9 @@ export function createDesktopModules(host: Host, deps: { focusedWindowId(): numb
 		else if (battery !== undefined) onBattery = battery;
 		powerMonitor.emit(name, makeEvent());
 	});
-	client.on("power.desktopAway", ({ away }: { away: boolean }) => {
-		desktopAway = away;
-		powerMonitor.emit("desktop-away", away);
+	client.on("power.desktopAway", ({ away }: { away: boolean | null }) => {
+		desktopAway = typeof away === "boolean" ? away : undefined;
+		powerMonitor.emit("desktop-away", desktopAway);
 	});
 	client.call<{ away?: unknown }>("power.desktopAway").then(
 		({ away }) => {
