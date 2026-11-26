@@ -41,6 +41,8 @@ async function botWithQuestion(a: Page): Promise<{ id: string; home: string; fol
 			(await a.evaluate(() => window.omp.tabs.list())).some(tab => tab.tabId === tabId && tab.status === "ready"),
 		"the bot's chat never became ready",
 	);
+	// A chat with a turn in it: the host's session list holds only sessions with content, as the sidebar does.
+	await a.evaluate(id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "Hello, Courier" }), tabId);
 	const tool = (args: Record<string, unknown>) =>
 		a.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
 			tabId,
