@@ -47,6 +47,8 @@ export interface DiagnosticsInput {
 	paired?: PairedVersions | null;
 	/** How the window draws: a bug seen only in software rendering or under Reduce motion is told apart by it. */
 	display?: DiagnosticsDisplay | null;
+	/** Callers a given-up hub call cut off since main started (main-failures.ts); none: the line is left out. */
+	cutOffCallers?: number;
 }
 
 export interface DiagnosticsDisplay {
@@ -121,6 +123,9 @@ export function buildDiagnosticsReport(input: DiagnosticsInput): string {
 					`Display: ${input.display.rendering} rendering, Reduce motion ${input.display.reducedMotion === null ? "unknown" : input.display.reducedMotion ? "on" : "off"}`,
 				]
 			: []),
+		...(input.cutOffCallers
+			? [`Hub calls given up that cut off their caller (core kept): ${input.cutOffCallers}`]
+			: []),
 		"",
 		"## Machine setup",
 		...setupLines(setup),
@@ -156,6 +161,7 @@ export interface DiagnosticsDeps {
 	pairedVersions?: () => PairedVersions | null;
 	/** How the window draws (software rendering, Reduce motion). */
 	display?: () => Promise<DiagnosticsDisplay>;
+	cutOffCallers?: () => number;
 	now?: () => Date;
 }
 
@@ -169,6 +175,7 @@ export async function currentDiagnosticsReport(deps: DiagnosticsDeps): Promise<s
 		probeLines: await deps.readLog("probes"),
 		paired: deps.pairedVersions?.() ?? null,
 		display: deps.display ? await deps.display().catch(() => null) : null,
+		cutOffCallers: deps.cutOffCallers?.() ?? 0,
 	});
 }
 

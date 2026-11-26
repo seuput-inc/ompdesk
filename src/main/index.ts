@@ -155,7 +155,7 @@ import { FOLDER_ACCESS_NOTICE_PREF, FULL_DISK_ACCESS_PANE, watchTccPrompts } fro
 import { LocalMachine } from "./machine-services";
 import { MachineState } from "./machine-state";
 import { MailAccounts } from "./mail-accounts";
-import { installMainFailureLogging } from "./main-failures";
+import { cutOffCallers, installMainFailureLogging } from "./main-failures";
 import { McpHub } from "./mcp-hub";
 import { onMcpChange } from "./mcp-live";
 import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
@@ -1901,6 +1901,7 @@ app.whenReady().then(async () => {
 					? systemPreferences.getAnimationSettings().prefersReducedMotion
 					: null,
 		}),
+		cutOffCallers,
 	};
 	registerDiagnosticsIpc(ipc, diagnostics);
 	registerDiagnosticBundleIpc(ipc, {

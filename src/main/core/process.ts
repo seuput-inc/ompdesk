@@ -766,6 +766,15 @@ export function isCoreShutdown(error: unknown): boolean {
 }
 
 /**
+ * Whether `error` is a hub call main gave up (`hub_unknown`, `core/hub.ts`): the core lives and may still carry the call
+ * out. A caller on a timer or a listener drops it and waits for its next turn; one that does not is handled as one `hub`
+ * line by main's last-resort handlers (main-failures.ts), never by ending main.
+ */
+export function isHubGivenUp(error: unknown): boolean {
+	return error instanceof CoreError && error.code === "hub_unknown";
+}
+
+/**
  * The refusal `#start` throws once `shutdown` ran. Main's hub and pool frames take nine of V8's default ten (the 0.134.0
  * quit logged 6,175 of it with every caller cut off), so it keeps enough frames to name who called.
  */
