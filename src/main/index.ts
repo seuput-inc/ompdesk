@@ -2098,7 +2098,9 @@ app.whenReady().then(async () => {
 		logDir: join(app.getPath("userData"), "schedule-runs"),
 		launch: launchScheduledRun,
 		onState: state => {
-			for (const win of BrowserWindow.getAllWindows()) {
+			// A paired phone's page shows this computer's Settings › Schedules too: without the push a run it started read
+			// "Running" until a reload (parity schedule-runs, run 45730681219).
+			for (const win of [...BrowserWindow.getAllWindows(), ...(webHost?.windows.all() ?? [])]) {
 				if (!win.isDestroyed()) win.webContents.send(SCHEDULES_STATE, state);
 			}
 			// Devices showing this computer's schedules (Settings › Schedules on a tab here) follow.
