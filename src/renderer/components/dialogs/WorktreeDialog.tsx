@@ -423,20 +423,25 @@ export function WorktreeDialog() {
 				</label>
 				<Collapse open={worktree}>
 					<div className="flex flex-col gap-3 pl-6">
-						<Input
-							label={t("worktree.nameLabel")}
-							maxLength={41}
-							onChange={event => setName(event.target.value)}
-							placeholder={t("newTask.namePlaceholder")}
-							trailing={
-								<AutoTitleButton
-									onClick={() => void suggest()}
-									pending={suggesting}
-									unavailableReason={prompt.trim() ? undefined : t("newTask.suggestNeedsPrompt")}
+						{/* The suggest button's reach stops half way to the field (the row's 8 px gap), or a tablet tap on the
+						    field's right edge was the button's. Beside the field, not inside it: on a phone the button is 44 px
+						    high over a 36 px field. */}
+						<div className="flex items-end gap-2" style={{ "--hit-gap-x": "8px" } as CSSProperties}>
+							<div className="min-w-0 flex-1">
+								<Input
+									label={t("worktree.nameLabel")}
+									maxLength={41}
+									onChange={event => setName(event.target.value)}
+									placeholder={t("newTask.namePlaceholder")}
+									value={name}
 								/>
-							}
-							value={name}
-						/>
+							</div>
+							<AutoTitleButton
+								onClick={() => void suggest()}
+								pending={suggesting}
+								unavailableReason={prompt.trim() ? undefined : t("newTask.suggestNeedsPrompt")}
+							/>
+						</div>
 						{name.trim() && nameValid && (
 							<p className="text-sc-sm text-(--sc-text-muted)">
 								{t("worktree.branchPreview", {
