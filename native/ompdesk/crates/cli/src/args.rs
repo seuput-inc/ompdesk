@@ -1484,6 +1484,13 @@ mod tests {
                 ),
             ),
             (
+                &["bot", "rename", "Ops", "Opal"],
+                tool(
+                    "ompdesk_bot",
+                    json!({ "action": "rename", "bot": "Ops", "name": "Opal" }),
+                ),
+            ),
+            (
                 &["bot", "hand", "Ops", "s1", "take it"],
                 tool(
                     "ompdesk_bot",
@@ -1809,7 +1816,9 @@ mod tests {
             (&["bot"], Some("bot needs ACTION")),
             (
                 &["bot", "explode"],
-                Some("--action is one of create, list, pause, resume, set, look-around, hand"),
+                Some(
+                    "--action is one of create, list, pause, resume, set, rename, look-around, hand",
+                ),
             ),
             (&["bot", "hand", "Ops", "s"], Some("bot hand needs TEXT")),
             (&["bot", "list", "x"], Some("bot list takes no argument")),
