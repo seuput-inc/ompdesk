@@ -40,8 +40,9 @@ async function filesUnder(dir: string, prefix = ""): Promise<string[]> {
 	let entries: Dirent[];
 	try {
 		entries = await readdir(dir, { withFileTypes: true });
-	} catch {
-		return [];
+	} catch (error) {
+		if (!prefix && error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+		throw error;
 	}
 	const files: string[] = [];
 	for (const entry of entries) {
@@ -63,8 +64,11 @@ export async function handOffParts(sessionPath: string, blobsDir: string): Promi
 	for (const hash of new Set(Array.from(journal.matchAll(BLOB_REF), match => match[1] ?? ""))) {
 		const file = path.join(blobsDir, hash);
 		const size = await stat(file).then(
-			info => (info.isFile() ? info.size : null),
-			() => null,
+			info => info.size,
+			(error: unknown) => {
+				if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
+				throw error;
+			},
 		);
 		if (size !== null) parts.push(filePart(`blobs/${hash}`, file, size));
 	}

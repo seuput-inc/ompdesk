@@ -150,6 +150,11 @@ fn an_abort_is_kept_and_a_late_part_or_commit_is_refused() {
     );
     assert_eq!(state(&world), State::Aborted);
     assert!(!staging(&world.user_data, ID).exists());
+    let mut record = Record::load(&world.user_data).unwrap();
+    for n in 0..2_001 {
+        record.set(&format!("later-{n}"), "macbook", State::Aborted);
+    }
+    record.save().unwrap();
     // A commit that was on its way when the sender called it off, read after a restart of this computer too.
     let refused = commit(&landing(&world, "macbook")).unwrap_err();
     assert_eq!(refused.code, "handoff_aborted");

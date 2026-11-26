@@ -23,7 +23,6 @@ At no time can both computers run the session, and once the link stays up and bo
 ## Out of scope
 
 - A second hand-over of the same session (a new id), and B handing it back to A.
-- The 2000-settled-records trim on B (`MAX_SETTLED`): an aborted id trimmed away loses its fence.
 - Damaged records, `transfer.from` mismatches, part offsets, blob hashes, `session_exists` from another session, the project folder lookup.
 - Stock's `deleteSession` and the device tabs closing.
 

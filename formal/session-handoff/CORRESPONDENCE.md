@@ -30,7 +30,7 @@ Sync commit: 9e6706aaa948e11f0848764449ebc46f12711921 plus the uncommitted F1/F2
 - B's record writes in put, commit (`committing`) and abort are atomic renames (`write_atomic_if`) and either happen or fail the step. The `done` save may fail (`let _ =`), and so may the staging removal after an abort; both are modeled as free choices.
 - Requests B already received survive a link drop or an A restart (`SUBSET toB`). A B restart loses them all.
 - One transfer id and one part. More parts repeat `BPut`. A part arriving out of order is refused by offset, which is not modeled.
-- The B-side fence holds only while B keeps the aborted record. `MAX_SETTLED` (2000) trims the oldest settled ids, which is not modeled.
+- Other transfers cannot change a terminal decision for this id. B retains both `done` and `aborted` on disk; neither ages out.
 
 ## Granularity
 

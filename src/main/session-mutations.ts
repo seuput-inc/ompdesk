@@ -254,7 +254,7 @@ async function settleHandOff(pending: PendingHandoff, deps: HandOffDeps): Promis
 		return { state: "pending" };
 	}
 	const reply = (answer ?? {}) as { state?: unknown; sessionPath?: unknown };
-	if (reply.state === "moved" && typeof reply.sessionPath === "string") {
+	if (reply.state === "moved" && typeof reply.sessionPath === "string" && reply.sessionPath.length > 0) {
 		await finishHandOff(pending, reply.sessionPath, deps);
 		return { state: "moved", sessionPath: reply.sessionPath };
 	}
@@ -309,6 +309,8 @@ export async function handOffSession(
 					let offset = 0;
 					do {
 						const bytes = await part.read(offset, Math.min(HANDOFF_PART_BYTES, part.size - offset));
+						if (bytes.length === 0 && offset < part.size)
+							throw new Error(`The session file changed while it was being transferred: ${part.rel}`);
 						await deps.request(
 							host,
 							"sessions.handoff.put",
@@ -325,6 +327,7 @@ export async function handOffSession(
 					{ id: pending.id, fileName: session, cwd: folder },
 					HANDOFF_TIMEOUT_MS,
 				));
+				if (typeof to !== "string" || to.length === 0) throw new Error("The host did not confirm a session path");
 			} catch (error) {
 				const settled = await settleHandOff(pending, deps);
 				if (settled.state === "moved") {

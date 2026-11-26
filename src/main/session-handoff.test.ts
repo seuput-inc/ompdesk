@@ -179,6 +179,23 @@ describe("handOffSession", () => {
 		expect(deletedSessions().list()).toEqual([]);
 	});
 
+	it("keeps the original when a file ends before all of its advertised bytes cross", async () => {
+		const io = deps(link().request);
+		const parts = await io.parts(a.file);
+		io.parts = async () => parts.map(part => ({ ...part, size: part.size + 1 }));
+		await expect(handOffSession(tabs(), a.file, "host-b", io)).rejects.toThrow(/changed/);
+		expect(runnable()).toEqual(["a"]);
+		expect(existsSync(target())).toBe(false);
+	});
+
+	it("does not erase the original for a commit answer without the landing path", async () => {
+		const { request } = link();
+		const incomplete: HandOffDeps["request"] = async <T>(host: string, method: string, params: unknown) =>
+			(method === "sessions.handoff.commit" ? {} : await request(host, method, params)) as T;
+		await expect(handOffSession(tabs(), a.file, "host-b", deps(incomplete))).rejects.toThrow(/confirm/);
+		expect(runnable()).toEqual(["a"]);
+	});
+
 	it("a lost answer to the commit still ends with the session on the other computer once", async () => {
 		const { state, request } = link();
 		state.loses.add("sessions.handoff.commit");

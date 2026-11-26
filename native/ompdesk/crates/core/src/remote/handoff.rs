@@ -37,8 +37,6 @@ const RECORD: &str = "session-handoffs-in.json";
 const STAGING: &str = "handoff-in";
 /// One file of a transfer at most (a journal, an artifact, a blob).
 const MAX_FILE_BYTES: u64 = 1 << 30;
-/// Settled transfers kept; the oldest go first. Pending ones always stay.
-const MAX_SETTLED: usize = 2000;
 /// Folders a sender's project is looked for in, at most.
 const MAX_CANDIDATES: usize = 256;
 
@@ -61,7 +59,6 @@ enum State {
 struct Transfer {
     /// The device that sent it: only it may commit or abort it.
     from: String,
-    at: f64,
     state: State,
 }
 
@@ -92,28 +89,13 @@ impl Record {
             id.to_owned(),
             Transfer {
                 from: from.to_owned(),
-                at: now_ms(),
                 state,
             },
         );
     }
 
-    /// Written before the step it records is answered; an error means the step did not happen.
-    fn save(&mut self) -> Result<(), Fault> {
-        let settled =
-            |transfer: &Transfer| matches!(transfer.state, State::Done { .. } | State::Aborted);
-        let mut old: Vec<(f64, String)> = self
-            .transfers
-            .iter()
-            .filter(|(_, transfer)| settled(transfer))
-            .map(|(id, transfer)| (transfer.at, id.clone()))
-            .collect();
-        if old.len() > MAX_SETTLED {
-            old.sort_by(|a, b| a.0.total_cmp(&b.0));
-            for (_, id) in old.iter().take(old.len() - MAX_SETTLED) {
-                self.transfers.remove(id);
-            }
-        }
+    /// Keep every terminal decision: a sender can reconnect after arbitrarily many other transfers.
+    fn save(&self) -> Result<(), Fault> {
         let bytes = serde_json::to_vec(&self.transfers)
             .map_err(|error| Fault::new("internal", error.to_string()))?;
         write_atomic_if(&self.file, &bytes, Some(0o600), 0o700, &|| true).map(|_| ())
@@ -124,12 +106,6 @@ static LOCK: LazyLock<Mutex<()>> = LazyLock::new(Mutex::default);
 
 fn lock() -> MutexGuard<'static, ()> {
     LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn now_ms() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |since| since.as_millis() as f64)
 }
 
 fn io_fault(error: &std::io::Error, path: &Path) -> Fault {
