@@ -1003,11 +1003,23 @@ if (dir) {
 					expect(await phone.evaluate(id => window.omp.tabs.close(id), tabId)).toBe(true);
 					sleepingFile = file;
 				}
+				// Its tab's omp may still write the file as it exits: set the time again until B's list reads it old. A
+				// turn of the work session makes main read the sessions again.
 				const asleepSince = new Date(Date.now() - 2 * 60 * 60_000);
 				await fs.utimes(sleepingFile, asleepSince, asleepSince);
-				// A turn of the work session makes main read the sessions again.
 				await b.evaluate(id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "hello" }), start);
 				await untilAnswered(b, start, { after: "hello" });
+				await expect
+					.poll(
+						async () => {
+							await fs.utimes(sleepingFile, asleepSince, asleepSince);
+							const rows = await b.evaluate(() => window.omp.sessions.list("global"));
+							const modified = rows.find(row => row.path === sleepingFile)?.modified ?? "";
+							return Date.parse(modified) < Date.now() - 60 * 60_000;
+						},
+						{ timeout: 60_000, intervals: [1_000] },
+					)
+					.toBe(true);
 			};
 
 			const records: SurfaceRecord[] = [];

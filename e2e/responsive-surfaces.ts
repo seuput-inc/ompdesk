@@ -467,7 +467,7 @@ const keyboardLook = (look: Look): boolean => (look.device ?? "touch") === "touc
 const sidebarDocked = (look: Look): boolean => look.width >= 800 && look.height >= 500;
 
 async function openDrawer(page: Page, look: Look): Promise<void> {
-	if (sidebarDocked(look)) return;
+	if (sidebarDocked(look) || (await page.locator("[data-drawer]").isVisible())) return;
 	await page.locator("button:visible:has(svg.lucide-menu)").first().click();
 	await page.locator("[data-drawer]").waitFor({ state: "visible", timeout: 10_000 });
 }
