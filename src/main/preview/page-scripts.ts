@@ -48,7 +48,8 @@ if (!globalThis.__ompdesk) {
 	style.textContent =
 		".box{position:fixed;border:2px solid #4f6bed;background:rgba(79,107,237,.12);border-radius:2px;pointer-events:none}" +
 		".pin{position:fixed;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:#4f6bed;color:#fff;font:600 11px/18px system-ui,sans-serif;text-align:center;transform:translate(-50%,-50%);pointer-events:none}" +
-		".layer{position:fixed;inset:0;cursor:crosshair;pointer-events:auto}";
+		".layer{position:fixed;inset:0;cursor:crosshair;pointer-events:auto}" +
+		".cursor{position:fixed;left:0;top:0;width:22px;height:22px;pointer-events:none;transition:transform .18s ease-out;filter:drop-shadow(0 0 6px rgba(79,107,237,.8))}";
 	shadow.append(style);
 	const mount = () => {
 		if (!host.isConnected) document.documentElement.append(host);
@@ -196,6 +197,29 @@ if (!globalThis.__ompdesk) {
 		pins(list) {
 			pinList = list;
 			drawPins();
+			return null;
+		},
+		// The agent's pointer where its last mouse event landed (CSS pixels of the viewport); null hides it at once.
+		cursor(point) {
+			let node = shadow.querySelector(".cursor");
+			if (!point) {
+				if (node) node.style.visibility = "hidden";
+				return null;
+			}
+			mount();
+			if (!node) {
+				const svg = "http://www.w3.org/2000/svg";
+				node = document.createElementNS(svg, "svg");
+				node.setAttribute("class", "cursor");
+				node.setAttribute("viewBox", "0 0 22 22");
+				const arrow = document.createElementNS(svg, "path");
+				for (const [name, value] of [["d", "M2 2l7 18 2.6-7.4L19 10z"], ["fill", "#4f6bed"], ["stroke", "#fff"], ["stroke-width", "1.5"], ["stroke-linejoin", "round"]])
+					arrow.setAttribute(name, value);
+				node.append(arrow);
+				shadow.append(node);
+			}
+			node.style.visibility = "visible";
+			node.style.transform = "translate(" + (point.x - 2) + "px," + (point.y - 2) + "px)";
 			return null;
 		},
 		highlight(selector) {

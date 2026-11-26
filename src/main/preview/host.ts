@@ -63,6 +63,15 @@ import type { VisualPages, VisualStore } from "./visuals";
 
 /** Activity marks and console problems reach the panel at most this often. */
 const AGENT_ACTIVITY_MS = 250;
+/** A screenshot waits at most this long for the agent's pointer to leave the page (a paused page never answers). */
+const CURSOR_HIDE_WAIT_MS = 300;
+
+/** Where a CDP `Input.dispatchMouseEvent` lands, in the viewport's CSS pixels. */
+function mousePoint(params: unknown): { x: number; y: number } | null {
+	if (!params || typeof params !== "object") return null;
+	const { x, y } = params as { x?: unknown; y?: unknown };
+	return typeof x === "number" && typeof y === "number" && Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
 /** Tabs a page may open itself within `PAGE_OPENS_WINDOW_MS`; more in that time are refused (a popup storm). */
 const PAGE_OPENS_PER_WINDOW = 4;
 const PAGE_OPENS_WINDOW_MS = 2000;
@@ -483,6 +492,7 @@ export function registerPreviewHost(
 		link.extension.dispose();
 		link.socket.close();
 		link.page.state = { ...link.page.state, agent: null };
+		void runOnPage(link.page, pageCall("cursor", null));
 		send(host);
 	};
 	/**
@@ -1055,13 +1065,27 @@ export function registerPreviewHost(
 				message => {
 					if (socket.isOpen) socket.send(JSON.stringify(message));
 				},
-				// "" = the agent let go of the debugger; the mark keeps its last action.
-				method => {
+				// "" = the agent let go of the debugger; the mark keeps its last action. Its mouse events move the pointer
+				// drawn on the page (Orca's agent cursor); a screenshot waits until that pointer is out of the picture.
+				(method, params, sessionId) => {
+					if (method === "Input.dispatchMouseEvent" && !sessionId) {
+						const point = mousePoint(params);
+						if (point) void runOnPage(page, pageCall("cursor", point));
+					}
+					const hold =
+						method === "Page.captureScreenshot" || method === ""
+							? Promise.race([
+									runOnPage(page, pageCall("cursor", null)),
+									new Promise(resolve => setTimeout(resolve, CURSOR_HIDE_WAIT_MS)),
+								]).then(() => {})
+							: undefined;
 					if (method) latest = method;
-					if (pending) return;
-					const wait = AGENT_ACTIVITY_MS - (Date.now() - lastPublished);
-					if (wait <= 0) flushActivity();
-					else pending = setTimeout(flushActivity, wait);
+					if (!pending) {
+						const wait = AGENT_ACTIVITY_MS - (Date.now() - lastPublished);
+						if (wait <= 0) flushActivity();
+						else pending = setTimeout(flushActivity, wait);
+					}
+					return hold;
 				},
 				// This computer's own addresses are never the host agent's to open (the Preview's rule for a host's tab).
 				{ blockLoopback: remote },

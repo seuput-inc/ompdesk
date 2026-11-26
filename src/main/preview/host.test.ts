@@ -112,6 +112,14 @@ class FakeContents extends EventEmitter {
 		return "Mozilla/5.0 Chrome/140.0.0.0 Electron";
 	}
 	readonly capturePage = vi.fn(async () => pngCapture());
+	/** OMPdesk's page tools (`page-scripts.ts`), run in their own world. */
+	readonly executeJavaScriptInIsolatedWorld = vi.fn(async (_world: number, _scripts: { code: string }[]) => null);
+	/** The page-tool calls made so far, as `method(args)` with the prelude cut off. */
+	pageCalls(): string[] {
+		return this.executeJavaScriptInIsolatedWorld.mock.calls.map(
+			([, [script]]) => script?.code.slice(script.code.lastIndexOf("globalThis.__ompdesk[")) ?? "",
+		);
+	}
 	close(): void {
 		this.closed = true;
 	}
@@ -846,6 +854,52 @@ describe("agent browsing on a paired host's tab", () => {
 			{ url: "https://example.org/" },
 			undefined,
 		);
+	});
+
+	it("draws the agent's pointer where its mouse events land and takes it out of its screenshots (FT65)", async () => {
+		const { socket, opening } = open();
+		const { ask, pages } = remoteWindow(socket);
+		await ask({ action: "load", url: "https://example.com/" });
+		opening.resolve();
+		await ask(RELAY);
+		const [page] = pages();
+		if (!page) throw new Error("No page");
+		const cursorCalls = () => page.pageCalls().filter(call => call.includes('["cursor"]'));
+		socket.push({ t: "rpc", id: 1, op: "attach" });
+		socket.push({
+			t: "rpc",
+			id: 2,
+			op: "send",
+			method: "Input.dispatchMouseEvent",
+			params: { type: "mousePressed", x: 120, y: 48, button: "left" },
+		});
+		await vi.waitFor(() => expect(socket.frames().at(-1)).toMatchObject({ id: 2, ok: true }));
+		expect(cursorCalls()).toEqual(['globalThis.__ompdesk["cursor"](...[{"x":120,"y":48}])']);
+		// The screenshot is taken only after the pointer was hidden.
+		const order: string[] = [];
+		page.executeJavaScriptInIsolatedWorld.mockImplementationOnce(async () => {
+			order.push("hidden");
+			return null;
+		});
+		page.debugger.sendCommand.mockImplementationOnce(async () => {
+			order.push("captured");
+			return {};
+		});
+		socket.push({ t: "rpc", id: 3, op: "send", method: "Page.captureScreenshot", params: {} });
+		await vi.waitFor(() => expect(socket.frames().at(-1)).toMatchObject({ id: 3, ok: true }));
+		expect(order).toEqual(["hidden", "captured"]);
+		expect(cursorCalls().at(-1)).toBe('globalThis.__ompdesk["cursor"](...[null])');
+		// A mouse event inside a frame's own session has that frame's coordinates: no pointer for it.
+		socket.push({
+			t: "rpc",
+			id: 4,
+			op: "send",
+			sessionId: "frame",
+			method: "Input.dispatchMouseEvent",
+			params: { type: "mouseMoved", x: 1, y: 1 },
+		});
+		await vi.waitFor(() => expect(socket.frames().at(-1)).toMatchObject({ id: 4 }));
+		expect(cursorCalls()).toHaveLength(2);
 	});
 
 	it("never lets the host's agent open this computer's own addresses", async () => {
