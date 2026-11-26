@@ -118,8 +118,8 @@ async function handed(profile: RemoteProfile, dispatch: string): Promise<number>
 	).length;
 }
 
-/** The done reports the opener's session holds, by dispatch. */
-async function doneReports(page: Page, opener: string): Promise<string[]> {
+/** The done reports the opener's session holds, in order: the dispatch each answers and the tab that sent it. */
+async function doneMail(page: Page, opener: string): Promise<{ dispatch: string; from: string }[]> {
 	const transcript = await page.evaluate(
 		id => window.omp.rpc.commandForTab(id, { type: "get_transcript_page", fromEnd: true, limit: 100 }),
 		opener,
@@ -129,7 +129,12 @@ async function doneReports(page: Page, opener: string): Promise<string[]> {
 			?.messages ?? [];
 	return messages
 		.filter(message => message.customType === "ompdesk.mail" && message.details?.kind === "done")
-		.map(message => String(message.details?.dispatch));
+		.map(message => ({ dispatch: String(message.details?.dispatch), from: String(message.details?.from) }));
+}
+
+/** The done reports the opener's session holds, by dispatch. */
+async function doneReports(page: Page, opener: string): Promise<string[]> {
+	return (await doneMail(page, opener)).map(mail => mail.dispatch);
 }
 
 interface Paired {
@@ -242,43 +247,20 @@ for (const resume of [true, false])
 		const opener = (await tabs(a)).find(tab => tab.active && tab.device === undefined)?.tabId ?? "";
 		expect(opener).not.toBe("");
 		let kid = "";
-		// Without the resume nothing holds the child's turn: A hands both follow-ups to B's new omp, which runs them at once,
-		// and the child's tab is done and gone within seconds of its restore (CI repeats, 2 of 30 and two nightlies: the
-		// final tab list held only the opener, whose last reply read the done report from the child's tab). It is read often
-		// and only for its id; where the test holds the turn (`resume`) it must also be up. The child is the tab that is not
-		// the opener: its session path may not be on the restored tab yet when it is first listed.
-		const seen: string[] = [];
-		try {
+		if (resume) {
+			// The quit left the child's turn running on B, in the omp that holds both: its restored tab stays up, and A
+			// hands neither again. The child is the tab that is not the opener: its session path may not be on the restored
+			// tab yet when it is first listed.
 			await expect
 				.poll(
 					async () => {
-						const list = await tabs(a);
-						const summary = JSON.stringify(
-							list.map(tab => [
-								tab.tabId === opener,
-								tab.device !== undefined,
-								tab.status,
-								tab.sessionPath === childPath,
-							]),
-						);
-						if (seen.at(-1) !== summary) seen.push(summary);
-						kid = list.find(tab => tab.tabId !== opener)?.tabId ?? kid;
-						return kid;
+						const child = (await tabs(a)).find(tab => tab.tabId !== opener);
+						kid = child?.tabId ?? "";
+						return child?.status;
 					},
-					{ timeout: 60_000, intervals: [25, 50, 100] },
+					{ timeout: 60_000 },
 				)
-				.not.toBe("");
-		} catch (error) {
-			await test.info().attach("relaunched-tabs.txt", { body: seen.join("\n") });
-			throw error;
-		}
-		if (resume)
-			await expect
-				.poll(async () => (await tabs(a)).find(tab => tab.tabId === kid)?.status, { timeout: 60_000 })
 				.toMatch(/^(ready|running)$/);
-
-		if (resume) {
-			// The quit left the child's turn running on B, in the omp that holds both: A hands neither again.
 			await a.waitForTimeout(3_000);
 			expect([await handed(hostProfile, "d2"), await handed(hostProfile, "d3")]).toEqual([1, 1]);
 			expect(await journaled(childPath)).toEqual(["d1"]);
@@ -295,7 +277,12 @@ for (const resume of [true, false])
 		expect(await journaled(childPath)).toEqual(["d1", "d2", "d3"]);
 		expect(await doneReports(a, opener)).toEqual(["d3"]);
 
-		// The id A's agent was given before the relaunch still names the child.
+		// The id A's agent was given before the relaunch still names the child. Without the resume nothing held the child's
+		// turn: B's new omp ran both follow-ups at once, and the child's tab, done with `Result: ok`, closed by itself
+		// (`auto_close.rs`) within a second of its restore, often before the test's first look at the tab list (nightly
+		// 45767457980: every read listed only the opener). Its done report names the tab it had.
+		if (!resume) kid = (await doneMail(a, opener))[0]?.from ?? "";
+		expect(kid).not.toBe("");
 		expect(kid).not.toBe(oldId);
 		const call = await controlToolCaller(a, clientProfile.record, opener);
 		const next = await call("ompdesk_session_send", { session: oldId, message: "And E" });
