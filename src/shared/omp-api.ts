@@ -77,6 +77,7 @@ import type {
 	IpcPrefsChangedPayload,
 	IpcPushTestResult,
 	IpcRemoveFromComputerResult,
+	IpcSessionHandOffResult,
 	IpcSessionLinksChanged,
 	IpcSessionOpenNewWindowPayload,
 	IpcSessionOwner,
@@ -615,6 +616,12 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				transport.invoke(IPC_COMMANDS.SESSIONS_MESSAGES, { sessionPath, device }) as Promise<AgentMessage[]>,
 			move: (sessionPath: string, cwd: string, device?: string) =>
 				transport.invoke(IPC_COMMANDS.SESSIONS_MOVE, { sessionPath, cwd, device }) as Promise<string>,
+			/** Hand this computer's stored session to the paired computer `device` (id or name): where it lives now. */
+			handOff: (sessionPath: string, device: string) =>
+				transport.invoke(IPC_COMMANDS.SESSIONS_HAND_OFF, {
+					sessionPath,
+					device,
+				}) as Promise<IpcSessionHandOffResult>,
 			/** What each row's session works in (`session-target.ts`), read on the computer that runs it. */
 			targets: (sessions: SessionTargetQuery[], device?: string) =>
 				transport.invoke(IPC_COMMANDS.SESSIONS_TARGETS, { sessions, device }) as Promise<SessionTargets>,

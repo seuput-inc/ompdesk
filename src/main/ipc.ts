@@ -89,11 +89,13 @@ import type {
 	IpcRemoveFromComputerResult,
 	IpcRpcCommandForTabPayload,
 	IpcRpcCommandPayload,
+	IpcSessionHandOffResult,
 	IpcSessionLinksPayload,
 	IpcSessionOpenNewWindowPayload,
 	IpcSessionOwner,
 	IpcSessionsArtworkPayload,
 	IpcSessionsDeletePayload,
+	IpcSessionsHandOffPayload,
 	IpcSessionsListPayload,
 	IpcSessionsMessagesPayload,
 	IpcSessionsMovePayload,
@@ -206,8 +208,16 @@ import { writeRuntimeLog } from "./runtime-log";
 import { normalizeRuntimeErrorReport } from "./runtime-log-core";
 import { fileNameOf, readRemoteFile, type SaveCopyRemote, saveCopy } from "./save-copy";
 import type { RunProcess, ScheduleService } from "./schedules";
+import { handOffDeps } from "./session-handoff";
 import type { SessionIndex } from "./session-index";
-import { deleteSession, moveSession, onSessionDeleted, recordSessionDelete, renameSession } from "./session-mutations";
+import {
+	deleteSession,
+	handOffSession,
+	moveSession,
+	onSessionDeleted,
+	recordSessionDelete,
+	renameSession,
+} from "./session-mutations";
 import type { SessionSummaries } from "./session-summaries";
 import {
 	SessionArtworkParams,
@@ -1762,6 +1772,30 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			return moved;
 		});
 	});
+
+	// Hand this computer's stored session to a paired computer (session-mutations.ts `handOffSession`): the person's
+	// row menu, a phone page of this computer and the control tools' `sessions.hand_off`.
+	ipc.handle(
+		IPC_COMMANDS.SESSIONS_HAND_OFF,
+		async (_caller, payload: IpcSessionsHandOffPayload): Promise<IpcSessionHandOffResult> => {
+			if (typeof payload.sessionPath !== "string" || !payload.sessionPath.endsWith(".jsonl"))
+				throw codedError("invalid_session_path", "Invalid session path");
+			const named = typeof payload.device === "string" ? payload.device.trim() : "";
+			const host = remoteDevices
+				.state()
+				.hosts.find(view => view.deviceId === named || view.name === named)?.deviceId;
+			if (!host) throw codedError("remote_unknown_device", "No paired computer goes by that name");
+			const moved = await handOffSession(
+				sidecarPool,
+				payload.sessionPath,
+				host,
+				handOffDeps({ devices: remoteDevices, sessionIndex }),
+				deps.hostedTabs,
+			);
+			remoteDevices.hostSessionsStale(host);
+			return { device: host, ...moved };
+		},
+	);
 
 	// What each row's session works in, read on the computer that runs it (session-targets.ts).
 	ipc.handle(IPC_COMMANDS.SESSIONS_TARGETS, async (_caller, payload: IpcSessionsTargetsPayload) => {

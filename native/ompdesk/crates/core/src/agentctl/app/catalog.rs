@@ -25,6 +25,7 @@ const SESSIONS_LIST: &str = "sessions:list";
 const SESSIONS_SEARCH: &str = "sessions:search";
 const SESSIONS_RENAME: &str = "sessions:rename";
 const SESSIONS_DELETE: &str = "sessions:delete";
+const SESSIONS_HAND_OFF: &str = "sessions:hand-off";
 const SESSIONS_DUMP_BUNDLE: &str = "sessions:dump-bundle";
 const HOST_DESKTOP_GET: &str = "host-desktop:get";
 const HOST_DESKTOP_UPDATE: &str = "host-desktop:update";
@@ -188,6 +189,8 @@ pub fn shipped<P: AppPorts>() -> Registry<P> {
         action("sessions.link", "sessions", r##"Attach a link to a saved session (a pull request, an issue or any https page), detach one, and list its links; they show on its sidebar row and in sessions.saved. Without add or remove it only lists."##, json!({"type":"object","properties":{"session":{"type":"string","minLength":1,"maxLength":4096,"description":"Session file path (.jsonl) from sessions.saved. Default: this session."},"add":{"type":"string","minLength":1,"maxLength":4096,"description":"An https URL to attach."},"remove":{"type":"string","minLength":1,"maxLength":4096,"description":"An attached URL to detach."}},"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_sessions_link(ctx, args))),
         action("sessions.delete", "sessions", r##"Delete a saved session file for good."##, json!({"type":"object","properties":{"sessionPath":{"type":"string","minLength":1,"maxLength":4096,"description":"Session file path (.jsonl) from sessions.saved."}},"required":["sessionPath"],"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_sessions_delete(ctx, args)))
             .manage(Manage::Always { reason: r##"deleting a saved session is irreversible"##, when: None }),
+        action("sessions.hand_off", "sessions", r##"Move a saved session of this computer to a paired computer (to: its name or deviceId, from remote.devices): its file goes there and it runs there from then on. Refused while it runs, or when that computer has no folder of its project."##, json!({"type":"object","properties":{"sessionPath":{"type":"string","minLength":1,"maxLength":4096,"description":"Session file path (.jsonl) from sessions.saved."},"to":{"type":"string","minLength":1,"maxLength":128,"description":"The paired computer: its name or deviceId, from remote.devices."}},"required":["sessionPath","to"],"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_sessions_hand_off(ctx, args)))
+            .manage(Manage::Lifts(r##"the session is not lost: it can be handed back"##)),
         action("sessions.dump_bundle", "sessions", r##"Save a diagnostic bundle as a zip file and return its path: stock's /dump archive of an open session plus OMPdesk's own diagnostics text. Anonymized by default (message contents redacted); pass anonymized:false only when the person asked for the raw transcript. Writes to path, else the Downloads folder. Needs the session open in a tab; defaults to this session."##, json!({"type":"object","properties":{"session":{"type":"string","minLength":1,"maxLength":4096,"description":"Session file path (.jsonl) of an open session, from sessions.saved. Default: this session. A session the person hid from agents is refused."},"anonymized":{"type":"boolean","description":"Default true: stock's /dump anon. false: /dump all, the raw transcript."},"path":{"type":"string","minLength":1,"maxLength":4096,"description":"Absolute path of the zip to write (.zip is added when missing). Default: the Downloads folder."}},"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_sessions_dump_bundle(ctx, args))),
         action("ui.open_system_privacy", "ui", r##"Open a macOS Privacy & Security pane in System Settings (Accessibility, Screen Recording, ...). It only opens the pane: the person toggles the switch, you cannot. macOS only."##, json!({"type":"object","properties":{"pane":{"type":"string","enum":["accessibility","screen_recording","input_monitoring","automation","full_disk_access","files_and_folders","microphone","camera"]}},"required":["pane"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_ui_open_system_privacy(ctx, args))),
         action("sidebar.projects", "sidebar", r##"The projects listed in the sidebar of the computer this session runs on (a paired host's own when it runs there): folder path, name, and whether the folder is gone; for this computer also its pin and its own name. Use the paths with the other sidebar.* actions."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_sidebar_projects(ctx, args))),
@@ -1877,6 +1880,31 @@ async fn h_sessions_delete<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done {
         "Deleted.",
         "Deleted a saved session",
         "저장된 세션 삭제",
+        arg(&args, "sessionPath"),
+    ))
+}
+
+async fn h_sessions_hand_off<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done {
+    if ctx.device().is_some() {
+        return Err(refusal(
+            "Only a session of this computer can be handed on; this session runs on a paired host, so the person moves its sessions there.",
+        ));
+    }
+    let to = arg(&args, "to");
+    let moved = ctx
+        .invoke(
+            SESSIONS_HAND_OFF,
+            vec![json!({"sessionPath": arg(&args, "sessionPath"), "device": to})],
+        )
+        .await?;
+    let path = moved
+        .get("sessionPath")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    Ok(ActionResult::changed(
+        format!("Moved to {to}; it runs there now as {path}."),
+        "Moved a saved session to another computer",
+        "저장된 세션을 다른 컴퓨터로 옮김",
         arg(&args, "sessionPath"),
     ))
 }

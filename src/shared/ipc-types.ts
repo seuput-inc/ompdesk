@@ -279,6 +279,8 @@ export const IPC_COMMANDS = {
 	SESSIONS_MESSAGES: "sessions:messages",
 	/** Move a stored session (no tab holds it) to another project folder */
 	SESSIONS_MOVE: "sessions:move",
+	/** Hand a stored session of this computer to a paired computer (`IpcSessionsHandOffPayload` → its path there) */
+	SESSIONS_HAND_OFF: "sessions:hand-off",
 	/** What each listed session works in: repository, HEAD, cached image (`SessionTargetQuery[]` → `SessionTargets`) */
 	SESSIONS_TARGETS: "sessions:targets",
 	/** Repository images by root, looked up when not cached (`string[]` → `SessionArtworks`) */
@@ -667,6 +669,12 @@ export type RuntimeErrorSource =
 	 * name (`session`) and a refusal's code or a failure's message (`reason`).
 	 */
 	| "session-delete"
+	/**
+	 * One hand-over of this computer's session to a paired computer (src/main/session-mutations.ts `handOffSession`):
+	 * `message` is moved, refused, pending or failed; `details` the computer (`device`), the file's name (`session`)
+	 * and a refusal's code or a failure's message (`reason`).
+	 */
+	| "session-handoff"
 	/**
 	 * One Stop that reached an omp (src/main/turn-stop-log.ts): `message` is who asked (`window`, `web-device`,
 	 * `desktop-device`, `agent-control`, `autopilot`, `desktop-slot`, `quit`, `turn-resume`); `details` the command,
@@ -1370,6 +1378,20 @@ export interface IpcSessionsMovePayload {
 	/** Absolute target project folder on the session's device. */
 	cwd: string;
 	device?: string;
+}
+
+export interface IpcSessionsHandOffPayload {
+	/** A stored session of this computer. */
+	sessionPath: string;
+	/** The paired computer it goes to, by id or by its name. */
+	device: string;
+}
+
+/** Where a handed session lives now: its computer's id, its path and its folder there. */
+export interface IpcSessionHandOffResult {
+	device: string;
+	sessionPath: string;
+	cwd: string;
 }
 
 export interface IpcSessionsTargetsPayload {
@@ -2707,6 +2729,11 @@ export interface OmpApi {
 		messages(sessionPath: string, device?: string): Promise<AgentMessage[]>;
 		/** Move a stored session to `cwd`; resolves with its new path. */
 		move(sessionPath: string, cwd: string, device?: string): Promise<string>;
+		/**
+		 * Hand this computer's stored session to the paired computer `device` (id or name); resolves with where it lives
+		 * now. Refused while it runs or when that computer has no folder of its project (`handoff_project_missing`).
+		 */
+		handOff(sessionPath: string, device: string): Promise<IpcSessionHandOffResult>;
 		/**
 		 * What each listed session works in (`session-target.ts`), resolved on the computer that runs it (`device`),
 		 * keyed by session file. Answers from cached facts: an image not looked up yet is left absent.

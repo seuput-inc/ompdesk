@@ -83,6 +83,7 @@ import { deletedSessions } from "../deleted-sessions";
 import { deliverOnce } from "../delivery-ledger";
 import { discardOpenedWorktree, savedWorktreesForSpawn } from "../disk/saved-worktrees";
 import { type ExtensionApplyPlan, extensionApplyDecision, mergeApplyPlans } from "../extension-reload";
+import { coreGit } from "../local/git/exec";
 import { createWorktree, tablessWorktreeBridge } from "../local/git/worktree";
 import { noteTypedPrompt } from "../local/prompt-origin";
 import { answerSessionLinks, SessionLinksParams } from "../local/session-links";
@@ -98,6 +99,7 @@ import type { SessionIndex } from "../session-index";
 import { SessionListShare } from "../session-list-share";
 import {
 	deleteSession,
+	HANDOFF_PART_BYTES,
 	moveSession,
 	recordSessionDelete,
 	renameSession,
@@ -388,6 +390,11 @@ export interface HostServicesDeps {
 	/** Where a device's attached files land (`host.files.upload`): the phones' upload folder, same limits and lifetime. */
 	uploads?: Pick<UploadStore, "store" | "writeOptions">;
 	/**
+	 * This computer's profile folder, where sessions handed here from a paired device are staged and recorded (the
+	 * core's remote/handoff.rs); absent: a hand-over is refused `unsupported`.
+	 */
+	handoffDir?: string;
+	/**
 	 * Where the control calls a device's session made while the device was away wait for it (kept-calls.ts); absent:
 	 * nothing is kept and such a call waits for the device.
 	 */
@@ -587,6 +594,21 @@ const SessionPathParams = z.object({ sessionPath: SessionPath });
 const SessionFolderParams = z.object({ sessionPath: SessionPath, restore: z.boolean().optional() });
 const RenameParams = z.object({ sessionPath: SessionPath, name: z.string() });
 const MoveParams = z.object({ sessionPath: SessionPath, cwd: AbsolutePath });
+/** A hand-over's id, the sender's own random one (`handOffSession`). */
+const HandoffId = z.string().regex(/^[A-Za-z0-9-]{8,64}$/);
+/** The sender's folder may be another system's path, so only this computer's candidates are held to absolute. */
+const HandoffFolderParams = z.object({ cwd: z.string().min(1).max(4096), origin: z.string().max(2048).nullable() });
+const HandoffPutParams = z.object({
+	id: HandoffId,
+	rel: z.string().min(1).max(1024),
+	offset: z.number().int().min(0),
+	dataBase64: z
+		.string()
+		.max(Math.ceil(HANDOFF_PART_BYTES / 3) * 4)
+		.regex(/^[A-Za-z0-9+/]*={0,2}$/),
+});
+const HandoffCommitParams = z.object({ id: HandoffId, fileName: z.string().min(1).max(255), cwd: AbsolutePath });
+const HandoffIdParams = z.object({ id: HandoffId });
 /** fs reads root at the tab's cwd; `cwd` covers a tab the host has not opened yet. */
 const FsRoot = { rtab: Rtab.optional(), cwd: AbsolutePath.optional() };
 const FsListParams = z.object({
@@ -1493,6 +1515,42 @@ export class LocalHostServices implements HostServices {
 				this.#deps.sessionMoved?.(sessionPath, moved);
 				return moved;
 			}
+			// A session the device hands to this computer (session-mutations.ts `handOffSession`, the core's
+			// remote/handoff.rs): this computer's folder of its project, its parts, the commit, and the device asking who
+			// owns it (an abort that is kept unless the commit landed).
+			case "sessions.handoff.folder": {
+				const { cwd, origin } = parse(HandoffFolderParams, method, params);
+				const listed = await this.#deps.machine.sidebarProjects({ action: "get" }).catch(() => null);
+				const candidates = (listed?.projects ?? [])
+					.filter(project => !project.missing)
+					.map(project => project.path);
+				return coreGit<{ folder: string | null }>(
+					"remote.handoff.folder",
+					{ cwd, origin, candidates },
+					Math.min(candidates.length + 1, 8),
+				);
+			}
+			case "sessions.handoff.put": {
+				const { dataBase64, ...part } = parse(HandoffPutParams, method, params);
+				return this.#handoff("remote.handoff.put", peer, part, Buffer.from(dataBase64, "base64"));
+			}
+			case "sessions.handoff.commit": {
+				const { id, fileName, cwd } = parse(HandoffCommitParams, method, params);
+				const where = await stockHelperRequest<{ sessionDir: string; blobsDir: string }>("sessions.handoff_paths", {
+					cwd,
+				});
+				const landed = await this.#handoff<{ sessionPath: string }>("remote.handoff.commit", peer, {
+					id,
+					fileName,
+					cwd,
+					sessionDir: where.sessionDir,
+					blobsDir: where.blobsDir,
+				});
+				this.#deps.sessionIndex.relist();
+				return landed;
+			}
+			case "sessions.handoff.abort":
+				return this.#handoff("remote.handoff.abort", peer, parse(HandoffIdParams, method, params));
 			case "sessions.targets":
 				return sessionTargets(parse(SessionTargetsParams, method, params));
 			case "sessions.artwork":
@@ -3298,6 +3356,18 @@ export class LocalHostServices implements HostServices {
 		} catch (error) {
 			if (error instanceof UploadError)
 				throw codedError(error.status === 413 ? "file_too_large" : "upload_refused", error.message);
+			throw error;
+		}
+	}
+
+	/** One step of a session the device `peer` hands here, by the core under this computer's profile. */
+	async #handoff<T>(method: string, peer: PeerInfo, params: object, bin?: Buffer): Promise<T> {
+		const userData = this.#deps.handoffDir;
+		if (!userData) throw codedError("unsupported", "This computer does not take sessions from other computers");
+		try {
+			return (await core().call<T>(method, { ...params, userData, from: peer.deviceId }, bin ? { bin } : {})).result;
+		} catch (error) {
+			if (error instanceof CoreError && isIpcErrorCode(error.code)) throw codedError(error.code, error.message);
 			throw error;
 		}
 	}

@@ -11,7 +11,7 @@
  */
 import { codedError, ipcErrorCode } from "../shared/ipc-error-codes";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
-import { deletedSessions } from "./deleted-sessions";
+import { deletedSessions, type PendingHandoff } from "./deleted-sessions";
 import type { RpcClient } from "./rpc-client";
 import type { SidecarPool } from "./sidecar-pool";
 
@@ -163,4 +163,195 @@ export async function moveSession(
 ): Promise<string> {
 	if (tabs.sessionOwner(sessionPath, device)) throw codedError("session_open_in_tab", "Session is open in a tab");
 	return moveStored();
+}
+
+// ---- handing a session to a paired computer ------------------------------------------------------------------------
+
+/** One file of a session as it crosses: the journal, a file of its artifacts folder, a picture blob it names. */
+export interface HandOffPart {
+	/** `session.jsonl`, `artifacts/<path with />` or `blobs/<sha256>`: where the receiver stages it. */
+	rel: string;
+	size: number;
+	read(offset: number, length: number): Promise<Uint8Array>;
+}
+
+export interface HandOffDeps {
+	/** One request to the paired computer `host` over its link (`RemoteDevices.request`). */
+	request<T>(host: string, method: string, params: unknown, timeoutMs?: number): Promise<T>;
+	/** The folder the session works in (its header's `cwd`). */
+	recordedCwd(sessionPath: string): Promise<string | null>;
+	/** That folder's `origin` (`remote.handoff.origin`): the project's identity on the other computer. */
+	origin(cwd: string): Promise<string | null>;
+	/** What crosses (`session-handoff-parts.ts`). */
+	parts(sessionPath: string): Promise<HandOffPart[]>;
+	/** Stock's delete of this computer's copy once the other computer took it (the index's `deleteSession`). */
+	removeStored(sessionPath: string): Promise<void>;
+	/** The session list reads again: a pending session leaves it, one given back returns. */
+	relist(): void;
+	/** One line per hand-over in the runtime log (source `session-handoff`). */
+	log?(outcome: "moved" | "refused" | "pending" | "failed", details: Record<string, string>): void;
+}
+
+/** One part's bytes at most: 4 MiB, a 5.6 MB base64 frame, well under the link's 16 MiB cap. */
+export const HANDOFF_PART_BYTES = 4 * 1024 * 1024;
+/** One request of a hand-over, as long as an upload's (`HOST_UPLOAD_TIMEOUT_MS`). */
+export const HANDOFF_TIMEOUT_MS = 2 * 60_000;
+
+/** Transfers this process is settling now: a link coming up does not ask about them meanwhile. */
+const settling = new Set<string>();
+
+type Settled = { state: "moved"; sessionPath: string } | { state: "aborted" } | { state: "pending" };
+
+function reasonOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function fileName(sessionPath: string): string {
+	return sessionPath.split(/[\\/]/).at(-1) ?? sessionPath;
+}
+
+/** The other computer took the session: the tombstone names where, then this computer's copy goes. */
+async function finishHandOff(pending: PendingHandoff, to: string, deps: HandOffDeps): Promise<void> {
+	deletedSessions().settleHandoff(pending.path, pending.id, to);
+	try {
+		await deps.removeStored(pending.path);
+	} catch (error) {
+		// The tombstone already keeps the file from running here; only the disk space stays.
+		deps.log?.("failed", { session: fileName(pending.path), reason: `left its copy: ${reasonOf(error)}` });
+	}
+	for (const listener of deletedListeners) listener(pending.path, undefined);
+	deps.log?.("moved", { device: pending.device, session: fileName(pending.path) });
+}
+
+/**
+ * Who owns a pending transfer: the other computer answers `moved` when it committed it, and otherwise records it
+ * aborted before it answers, so no part or commit of it lands afterwards. Only that answer gives the session back
+ * here; an unreachable computer leaves it pending (the file kept, nothing running it) until the next ask.
+ */
+async function settleHandOff(pending: PendingHandoff, deps: HandOffDeps): Promise<Settled> {
+	let answer: unknown;
+	try {
+		answer = await deps.request(pending.device, "sessions.handoff.abort", { id: pending.id }, HANDOFF_TIMEOUT_MS);
+	} catch (error) {
+		deps.log?.("pending", { device: pending.device, session: fileName(pending.path), reason: reasonOf(error) });
+		return { state: "pending" };
+	}
+	const reply = (answer ?? {}) as { state?: unknown; sessionPath?: unknown };
+	if (reply.state === "moved" && typeof reply.sessionPath === "string") {
+		await finishHandOff(pending, reply.sessionPath, deps);
+		return { state: "moved", sessionPath: reply.sessionPath };
+	}
+	if (reply.state !== "aborted") return { state: "pending" };
+	deletedSessions().settleHandoff(pending.path, pending.id);
+	deps.relist();
+	return { state: "aborted" };
+}
+
+/**
+ * Hand this computer's stored session to the paired computer `host`; resolves to its path and folder there. Refused, with
+ * nothing changed, while it runs or when `host` has no folder of its project. Then the tabs holding it close, the
+ * transfer is recorded pending (from here on the session reads as deleted to every revival path, and its file stays),
+ * its files cross and `host` commits them. Any failure asks `host` to call the transfer off: the session is this
+ * computer's again only once `host` confirms it, it is `host`'s when `host` had committed it, and it stays pending
+ * when `host` cannot be reached (`handoff_pending`; `reconcileHandOffs` asks again when its link is back).
+ */
+export async function handOffSession(
+	tabs: SessionTabs,
+	sessionPath: string,
+	host: string,
+	deps: HandOffDeps,
+	deviceTabs?: DeviceSessionTabs,
+): Promise<{ sessionPath: string; cwd: string }> {
+	const key = JSON.stringify([null, sessionPath]);
+	deleting.set(key, (deleting.get(key) ?? 0) + 1);
+	const session = fileName(sessionPath);
+	try {
+		if (deletedSessions().has(sessionPath))
+			throw codedError("session_deleted", "The session was deleted or handed to another computer");
+		const cwd = await deps.recordedCwd(sessionPath);
+		if (!cwd) throw codedError("invalid_session_path", "Invalid session path");
+		const origin = await deps.origin(cwd);
+		const { folder } = await deps.request<{ folder: string | null }>(host, "sessions.handoff.folder", {
+			cwd,
+			origin,
+		});
+		if (!folder) throw codedError("handoff_project_missing", `That computer has no folder for ${fileName(cwd)}`);
+		if (tabs.sessionRunning(sessionPath, undefined))
+			throw codedError("session_running", "Session is currently running");
+		const tellDevices = deviceTabs ? await deviceTabs.closeSessionTabs(sessionPath) : undefined;
+		if (!(await tabs.closeSessionTab(sessionPath, undefined)))
+			throw codedError("session_running", "Session is currently running");
+		const pending: PendingHandoff = { path: sessionPath, id: crypto.randomUUID(), device: host };
+		deletedSessions().beginHandoff(pending.path, pending.id, host);
+		settling.add(pending.id);
+		deps.relist();
+		try {
+			let to: string;
+			try {
+				for (const part of await deps.parts(sessionPath)) {
+					let offset = 0;
+					do {
+						const bytes = await part.read(offset, Math.min(HANDOFF_PART_BYTES, part.size - offset));
+						await deps.request(
+							host,
+							"sessions.handoff.put",
+							{ id: pending.id, rel: part.rel, offset, dataBase64: Buffer.from(bytes).toString("base64") },
+							HANDOFF_TIMEOUT_MS,
+						);
+						offset += bytes.length;
+						if (bytes.length === 0) break;
+					} while (offset < part.size);
+				}
+				({ sessionPath: to } = await deps.request<{ sessionPath: string }>(
+					host,
+					"sessions.handoff.commit",
+					{ id: pending.id, fileName: session, cwd: folder },
+					HANDOFF_TIMEOUT_MS,
+				));
+			} catch (error) {
+				const settled = await settleHandOff(pending, deps);
+				if (settled.state === "moved") {
+					tellDevices?.();
+					return { sessionPath: settled.sessionPath, cwd: folder };
+				}
+				deps.log?.("failed", { device: host, session, reason: reasonOf(error) });
+				if (settled.state === "pending")
+					throw codedError(
+						"handoff_pending",
+						`The other computer stopped answering; the session waits until it does (${reasonOf(error)})`,
+					);
+				throw codedError("handoff_failed", reasonOf(error));
+			}
+			await finishHandOff(pending, to, deps);
+			tellDevices?.();
+			return { sessionPath: to, cwd: folder };
+		} finally {
+			settling.delete(pending.id);
+		}
+	} catch (error) {
+		const code = ipcErrorCode(error);
+		if (code && code !== "handoff_failed" && code !== "handoff_pending")
+			deps.log?.("refused", { device: host, session, reason: code });
+		throw error;
+	} finally {
+		const remaining = (deleting.get(key) ?? 1) - 1;
+		if (remaining === 0) deleting.delete(key);
+		else deleting.set(key, remaining);
+	}
+}
+
+/**
+ * Settle every transfer to `host` still pending (its link came up, or this computer restarted mid-transfer): taken,
+ * given back, or still pending when `host` does not answer.
+ */
+export async function reconcileHandOffs(host: string, deps: HandOffDeps): Promise<void> {
+	for (const pending of deletedSessions().pendingHandoffs()) {
+		if (pending.device !== host || settling.has(pending.id)) continue;
+		settling.add(pending.id);
+		try {
+			await settleHandOff(pending, deps);
+		} finally {
+			settling.delete(pending.id);
+		}
+	}
 }

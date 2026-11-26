@@ -182,9 +182,10 @@ import { layoutsToSave } from "./saved-layouts";
 import { ompRunLauncher, ScheduleService } from "./schedules";
 import type { SecretBox } from "./secret-files";
 import { whenSessionFree } from "./session-free";
+import { handOffDeps } from "./session-handoff";
 import { SessionIndex } from "./session-index";
 import { SessionKindStore } from "./session-kinds";
-import { onSessionDeleted, setSessionDeleteLog } from "./session-mutations";
+import { onSessionDeleted, reconcileHandOffs, setSessionDeleteLog } from "./session-mutations";
 import { listTaggedProcesses, SESSION_PROCESSES_FILE, SessionProcesses } from "./session-processes";
 import { defaultScratchRoot, SESSION_SCRATCH_FILE, SessionScratch } from "./session-scratch";
 import { SessionSummaries, type SummarySource } from "./session-summaries";
@@ -1442,6 +1443,8 @@ app.whenReady().then(async () => {
 		get uploads() {
 			return hostUploads();
 		},
+		// Sessions a paired computer hands here are staged and recorded under the profile (the core's remote/handoff.rs).
+		handoffDir: app.getPath("userData"),
 		// `devices` is created below; a host tab only opens once it serves connections.
 		hostName: (): string => devices.deviceName(),
 		sessionIndex,
@@ -2134,6 +2137,17 @@ app.whenReady().then(async () => {
 					details: { level: "warn", device: host, error: error instanceof Error ? error.message : String(error) },
 				}),
 			);
+	});
+	// A hand-over of this computer's session to that host still pending (its answer was lost, or this computer
+	// restarted mid-transfer): ask it who owns the session now (session-mutations.ts `reconcileHandOffs`).
+	devices.onHostOnline(host => {
+		void reconcileHandOffs(host, handOffDeps({ devices, sessionIndex })).catch((error: unknown) =>
+			writeRuntimeLog({
+				source: "session-handoff",
+				message: "failed",
+				details: { device: host, reason: error instanceof Error ? error.message : String(error) },
+			}),
+		);
 	});
 	aiMemorySync.start();
 	registerAiMemoryIpc(ipc, aiMemory, {

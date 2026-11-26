@@ -70,6 +70,10 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("sessions:search", Risk::Tier(Read, &["sessions.search"])),
     ("sessions:messages", Risk::Never(SESSION_TOOLS)),
     ("sessions:move", Risk::Never(SESSION_TOOLS)),
+    (
+        "sessions:hand-off",
+        Risk::Tier(Sensitive, &["sessions.hand_off"]),
+    ),
     ("sessions:targets", Risk::Never(SESSION_TOOLS)),
     ("sessions:artwork", Risk::Never(SESSION_TOOLS)),
     ("sessions:pull-request", Risk::Never(SESSION_TOOLS)),

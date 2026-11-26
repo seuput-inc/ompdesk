@@ -1927,7 +1927,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "helper",
 		contract: "internal",
 		summary:
-			"Session lease and move: `parseTitleSlotFromContent`, `tryAcquireSessionLease` and `SessionManager.open/moveTo/close`; a session is opened only once another omp let go of it.",
+			"Session lease, move and hand-over: `parseTitleSlotFromContent`, `tryAcquireSessionLease`, `SessionManager.open/moveTo/close`, and where a session handed from a paired computer lands (`SessionManager.getDefaultSessionDir`, `getBlobsDir`); a session is opened only once another omp let go of it.",
 		files: [
 			"resources/gui-bridge/stock-helper/sessions.ts",
 			"resources/gui-bridge/capabilities.ts",
@@ -1937,9 +1937,12 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"@oh-my-pi/pi-coding-agent/session/session-storage",
 			"@oh-my-pi/pi-coding-agent/session/session-title-slot",
 			"@oh-my-pi/pi-coding-agent/session/session-manager",
+			"@oh-my-pi/pi-utils",
 			"parseTitleSlotFromContent",
 			"tryAcquireSessionLease",
 			"SessionManager.moveTo",
+			"SessionManager.getDefaultSessionDir",
+			"getBlobsDir",
 		],
 		tests: ["src/main/session-free-stock.test.ts", "src/main/stock-helper-sessions.test.ts"],
 	},
