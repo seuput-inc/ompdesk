@@ -397,6 +397,8 @@ export const IPC_COMMANDS = {
 	FS_REVEAL_COPY: "fs:reveal-copy",
 	/** Open a session (or a fresh window) in a new parallel window with its own sidecar */
 	SESSION_OPEN_NEW_WINDOW: "session:open-new-window",
+	/** A new window that opens on the all-sessions board (its tab is the usual empty start tab) */
+	BOARD_OPEN_WINDOW: "board:open-window",
 	/** Fresh window pulls the session it was opened for (one-shot) */
 	SESSION_CONSUME_PENDING: "session:consume-pending",
 	/** Spawn a tab (own sidecar) bound to the calling window */
@@ -2645,6 +2647,8 @@ export interface OmpApi {
 		 * call resolves true — the session is foregrounded either way.
 		 */
 		openInNewWindow(payload: IpcSessionOpenNewWindowPayload): Promise<boolean>;
+		/** A new window that opens on the all-sessions board; false on a phone's page (a page is one window). */
+		openBoardWindow(): Promise<boolean>;
 		/** One-shot: the session this window was opened to display, if any. */
 		consumePendingOpen(): Promise<string | null>;
 		/** One computer's session summaries: this computer's, or a paired host's (null while not known). */

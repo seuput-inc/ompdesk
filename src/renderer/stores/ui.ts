@@ -84,13 +84,16 @@ export function withFileTab(tabs: FileTab[], path: string, keep: boolean): FileT
  * What fills the main area: the open session (transcript + composer) or one
  * of the destination pages. The sidebar stays visible for all of them.
  */
-export type Destination = "session" | "agents" | "bots" | "insights" | "settings";
+export type Destination = "session" | "agents" | "board" | "bots" | "insights" | "settings";
 export type PageDestination = Exclude<Destination, "session">;
 export type AgentsTab = "live" | "definitions" | "prs" | "github";
 export type InsightsTab = "stats" | "usage";
 export type InsightsStatsScope = "session" | "all";
+/** The all-sessions page's two views: the lanes, or one list by latest activity. */
+export type BoardView = "board" | "inbox";
 const AGENTS_TABS: readonly string[] = ["live", "definitions", "prs", "github"] satisfies AgentsTab[];
 const INSIGHTS_TABS: readonly string[] = ["stats", "usage"] satisfies InsightsTab[];
+const BOARD_VIEWS: readonly string[] = ["board", "inbox"] satisfies BoardView[];
 /** Settings section a cold ⌘, lands on (SettingsPage maps legacy ids). */
 const DEFAULT_SETTINGS_TAB = "general";
 /** Documents whose rendered/source choice the Files viewer remembers. */
@@ -187,6 +190,7 @@ interface UiStore {
 	/** What the main area shows: the session or a destination page. */
 	destination: Destination;
 	agentsTab: AgentsTab;
+	boardView: BoardView;
 	insightsTab: InsightsTab;
 	insightsStatsScope: InsightsStatsScope;
 	settingsTab: string;
@@ -311,6 +315,8 @@ interface UiStore {
 	/** Back to the session view (Esc on a page, selecting a session). */
 	closeDestination: () => void;
 	openAgents: (tab?: AgentsTab) => void;
+	/** The all-sessions page (board or inbox). */
+	openBoard: (view?: BoardView) => void;
 	/** The Bots page (only reachable while `useBotsAvailable`, lib/bots-source.ts). */
 	openBots: () => void;
 	openInsights: (tab?: InsightsTab, scope?: InsightsStatsScope) => void;
@@ -482,6 +488,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 	modelPickerOpen: false,
 	destination: "session",
 	agentsTab: "live",
+	boardView: "board",
 	insightsTab: "stats",
 	insightsStatsScope: "session",
 	settingsTab: DEFAULT_SETTINGS_TAB,
@@ -611,12 +618,16 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 		else if (destination === "agents")
 			get().openAgents(section && AGENTS_TABS.includes(section) ? (section as AgentsTab) : undefined);
 		else if (destination === "bots") get().openBots();
+		else if (destination === "board")
+			get().openBoard(section && BOARD_VIEWS.includes(section) ? (section as BoardView) : undefined);
 		else get().openInsights(section && INSIGHTS_TABS.includes(section) ? (section as InsightsTab) : undefined);
 	},
 	closeDestination: () => transitionView(() => set({ destination: "session" })),
 	openAgents: tab =>
 		transitionView(() => set(state => ({ destination: "agents", agentsTab: tab ?? state.agentsTab }))),
 	openBots: () => transitionView(() => set({ destination: "bots" })),
+	openBoard: view =>
+		transitionView(() => set(state => ({ destination: "board", boardView: view ?? state.boardView }))),
 	openInsights: (tab, scope) =>
 		transitionView(() =>
 			set(state => ({

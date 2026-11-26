@@ -648,6 +648,7 @@ async function spawnWindow(
 	pendingSessionPath?: string,
 	kind?: SessionKind,
 	device?: string,
+	page?: "board",
 ): Promise<BrowserWindow | null> {
 	// An approved quit has torn the services down (or is doing so): a window built now has nothing to run on, and
 	// restoring the layout on it would drop what a disposed `RemoteDevices` cannot open from the saved session.
@@ -674,7 +675,8 @@ async function spawnWindow(
 		win.close();
 		return null;
 	}
-	const restoreSavedLayout = cwd === undefined && pendingSessionPath === undefined && kind === undefined;
+	const restoreSavedLayout =
+		cwd === undefined && pendingSessionPath === undefined && kind === undefined && page === undefined;
 	if (restoreSavedLayout) {
 		const [saved] = readSavedTabLayouts();
 		if (saved) {
@@ -687,7 +689,7 @@ async function spawnWindow(
 	const target = resolveWindowSpawnTarget(cwd, pendingSessionPath, kind, fallback, work);
 	// The tab's omp starts on the session file (`--session`), as a tab spawn's does: the renderer's boot switch it
 	// used to wait for never ran in a window whose tab list had not named its tab yet.
-	const win = windowManager.createWindow({ cwd: target.cwd });
+	const win = windowManager.createWindow({ cwd: target.cwd, ...(page ? { page } : {}) });
 	const sidecar = sidecarPool.acquire(
 		target.cwd,
 		win,

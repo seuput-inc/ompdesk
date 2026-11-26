@@ -2109,6 +2109,19 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work", after: closeOverlay },
 	},
 	{
+		id: "board-all",
+		area: "B",
+		title: "All sessions: the sidebar's All sessions row opens the board of every session in four lanes",
+		open: async (page, look) => {
+			await openDrawer(page, look);
+			await page.locator('[data-sidebar-nav-row="board"]:visible').first().click();
+		},
+		ready: "[data-board-lanes] [data-board-lane='idle']",
+		// Parity only: the board reads a computer's session lists, which the audits' harness page does not run.
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
 		id: "settings-computer-use",
 		area: "B",
 		title: "Settings › Agent behavior, scrolled to Computer use engine and the macOS permission rows under it",

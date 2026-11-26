@@ -9,6 +9,7 @@ import { lazyChunk, watchChunkFailures } from "./lib/chunk-load";
 import { getCurrentLanguage, I18nProvider, loadLocale } from "./lib/i18n";
 import { loadMotionPlay } from "./lib/motion";
 import { installGlobalRuntimeErrorHandlers, reportRuntimeError } from "./lib/runtime-errors";
+import { useUiStore } from "./stores/ui";
 import "./styles/global.css";
 import "./styles/tokens.css";
 import "./styles/theme-dark.css";
@@ -57,6 +58,8 @@ if (shellStream) {
 // A tab's last known transcript page paints as soon as the tab is known (lib/transcript-snapshot.ts): the tabs of
 // the last run (lib/tab-snapshot.ts) are in the store before the first render, so their rows are too.
 installTranscriptSeeding();
+// A window main opened for the all-sessions board (`#/board`, BOARD_OPEN_WINDOW) starts on it.
+if (window.location.hash === "#/board") useUiStore.setState({ destination: "board" });
 // Looping cues step at ten frames a second while the window is on screen but not focused (lib/cue-clock.ts); loaded
 // after the first screen, which it never changes.
 void import("./lib/cue-clock").then(({ installCueClock }) => installCueClock());

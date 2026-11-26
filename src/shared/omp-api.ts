@@ -608,6 +608,8 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				transport.invoke(IPC_COMMANDS.SESSIONS_DUMP_BUNDLE, request) as Promise<DiagnosticBundleResult>,
 			openInNewWindow: (payload: IpcSessionOpenNewWindowPayload) =>
 				transport.invoke(IPC_COMMANDS.SESSION_OPEN_NEW_WINDOW, payload) as Promise<boolean>,
+			/** A new window that opens on the all-sessions board (false on a phone's page: a page is one window). */
+			openBoardWindow: () => transport.invoke(IPC_COMMANDS.BOARD_OPEN_WINDOW) as Promise<boolean>,
 			consumePendingOpen: () => transport.invoke(IPC_COMMANDS.SESSION_CONSUME_PENDING) as Promise<string | null>,
 			summaries: (device?: string) =>
 				transport.invoke(IPC_COMMANDS.SESSION_SUMMARIES, device) as Promise<VersionedSummaries | null>,

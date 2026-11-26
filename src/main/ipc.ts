@@ -1810,6 +1810,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return (await deps.spawnWindow(folder?.folder ?? cwd, sessionPath, kind, device)) !== null;
 	});
 
+	// The all-sessions board in a window of its own (Orca's pop-out dashboard): a new window on its usual start tab
+	// that opens on the board page.
+	ipc.handle(
+		IPC_COMMANDS.BOARD_OPEN_WINDOW,
+		async () => (await deps.spawnWindow(undefined, undefined, undefined, undefined, "board")) !== null,
+	);
+
 	// ========================================================================
 	// Session tabs — in-window parallel sessions. Each tab owns a pooled
 	// sidecar bound to the CALLING window (no new BrowserWindow); the pool

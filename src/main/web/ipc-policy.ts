@@ -165,6 +165,12 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		mode: "web",
 		web: "Open as a new tab on this device (a web page is one window)",
 	},
+	[C.BOARD_OPEN_WINDOW]: {
+		dir: "invoke",
+		permission: "workspace",
+		mode: "web",
+		web: "A page is one window: the board shows no such button there, and the page answers false",
+	},
 	[C.SESSION_CONSUME_PENDING]: {
 		dir: "invoke",
 		permission: "workspace",

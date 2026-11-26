@@ -1,10 +1,11 @@
 /**
  * The sidebar's nav rows (Orca's `SidebarNav`, the owner's decision of 25 Nov 2026): under the search line, one row per
- * place the app goes besides a session: Agents, Schedules, Bots (only while the bots feature is available,
- * `useBotsAvailable`), Stats and Phone (pairing a phone; not on the phone's own page). A row's right click (long press,
- * Shift+F10) hides it from this device's sidebar; Customize sidebar shows it again (`navHidden`, device-local).
+ * place the app goes besides a session: All sessions (the board, with how many sessions need the person and work now;
+ * Orca's dashboard entry), Agents, Schedules, Bots (only while the bots feature is available, `useBotsAvailable`), Stats
+ * and Phone (pairing a phone; not on the phone's own page). A row's right click (long press, Shift+F10) hides it from
+ * this device's sidebar; Customize sidebar shows it again (`navHidden`, device-local).
  */
-import { BarChart3, Bot, BotMessageSquare, CalendarClock, type LucideIcon, Smartphone } from "lucide-react";
+import { BarChart3, Bot, BotMessageSquare, CalendarClock, Columns3, type LucideIcon, Smartphone } from "lucide-react";
 import { type KeyboardEvent as ReactKeyboardEvent, useState } from "react";
 import { useBotsAvailable } from "../../../lib/bots-source";
 import { cx } from "../../../lib/format";
@@ -13,20 +14,27 @@ import { actionKbd } from "../../../lib/keymap";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { useUiStore } from "../../../stores/ui";
 import { webRuntime } from "../../../web/runtime";
-import { anchorFromEvent, Button, ContextMenu, type ContextMenuAnchor, Kbd } from "../../common";
+import { useBoardCounts } from "../../board/board-counts";
+import { anchorFromEvent, Badge, Button, ContextMenu, type ContextMenuAnchor, Kbd } from "../../common";
 
-export const SIDEBAR_NAV = ["agents", "schedules", "bots", "stats", "phone"] as const;
+export const SIDEBAR_NAV = ["board", "agents", "schedules", "bots", "stats", "phone"] as const;
 export type SidebarNavRow = (typeof SIDEBAR_NAV)[number];
 
 interface NavRowSpec {
 	labelKey: string;
 	icon: LucideIcon;
 	/** The `data-destination` a page row carries (AppShell preloads its page when a pointer reaches it). */
-	destination?: "agents" | "bots" | "insights";
+	destination?: "agents" | "board" | "bots" | "insights";
 	open: () => void;
 }
 
 export const SIDEBAR_NAV_ROWS: Record<SidebarNavRow, NavRowSpec> = {
+	board: {
+		labelKey: "destination.board",
+		icon: Columns3,
+		destination: "board",
+		open: () => useUiStore.getState().openBoard(),
+	},
 	agents: {
 		labelKey: "destination.agents",
 		icon: Bot,
@@ -56,6 +64,32 @@ export const SIDEBAR_NAV_ROWS: Record<SidebarNavRow, NavRowSpec> = {
 		open: () => useUiStore.getState().openSettings("connections:mobile-web"),
 	},
 };
+
+/** The board entry's figures: sessions that need the person (attention) and sessions at work; nothing when none. */
+function BoardNavCounts() {
+	const t = useT();
+	const { needs, working } = useBoardCounts();
+	if (needs === 0 && working === 0) return null;
+	return (
+		<span
+			className="flex shrink-0 items-center gap-1"
+			data-board-nav-counts
+			title={t("board.nav.counts", { needs, working })}
+		>
+			<span className="sr-only">{t("board.nav.counts", { needs, working })}</span>
+			{needs > 0 && (
+				<Badge aria-hidden variant="attention">
+					{needs}
+				</Badge>
+			)}
+			{working > 0 && (
+				<Badge aria-hidden variant="muted">
+					{working}
+				</Badge>
+			)}
+		</span>
+	);
+}
 
 /** The rows this view can offer at all (before the person's own hiding). */
 export function useOfferedNavRows(): SidebarNavRow[] {
@@ -105,6 +139,7 @@ export function SidebarNav() {
 						variant="ghost"
 					>
 						<span className="min-w-0 flex-1 truncate text-left">{t(labelKey)}</span>
+						{row === "board" && <BoardNavCounts />}
 						{shortcut && <Kbd className="omp-sidebar-kbd" shortcut={shortcut} />}
 					</Button>
 				);

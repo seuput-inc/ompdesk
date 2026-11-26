@@ -51,6 +51,7 @@ import { ViewSheetHost } from "./ViewSheetHost";
 import { WhatsNewCard } from "./WhatsNewCard";
 
 const AgentsPage = lazyChunk(() => import("../agents/AgentsPage").then(m => ({ default: m.AgentsPage })));
+const BoardPage = lazyChunk(() => import("../board/BoardPage").then(m => ({ default: m.BoardPage })));
 const BotsPage = lazyChunk(() => import("../bots/BotsPage").then(m => ({ default: m.BotsPage })));
 const InsightsPage = lazyChunk(() => import("../insights/InsightsPage").then(m => ({ default: m.InsightsPage })));
 const SettingsPage = lazyChunk(() => import("../settings/SettingsPage").then(m => ({ default: m.SettingsPage })));
@@ -62,6 +63,7 @@ const SettingsPage = lazyChunk(() => import("../settings/SettingsPage").then(m =
 const loadedPages: Partial<Record<PageDestination, ComponentType>> = {};
 const PAGE_LOADERS: Record<PageDestination, () => Promise<ComponentType>> = {
 	agents: () => import("../agents/AgentsPage").then(m => m.AgentsPage),
+	board: () => import("../board/BoardPage").then(m => m.BoardPage),
 	bots: () => import("../bots/BotsPage").then(m => m.BotsPage),
 	insights: () => import("../insights/InsightsPage").then(m => m.InsightsPage),
 	settings: () => import("../settings/SettingsPage").then(m => m.SettingsPage),
@@ -83,7 +85,13 @@ function preloadForIntent(target: EventTarget | null): void {
 	const destination = element
 		?.closest(":is([data-sidebar-nav], [data-sidebar-destinations]) [data-destination]")
 		?.getAttribute("data-destination");
-	if (destination === "agents" || destination === "bots" || destination === "insights" || destination === "settings") {
+	if (
+		destination === "agents" ||
+		destination === "board" ||
+		destination === "bots" ||
+		destination === "insights" ||
+		destination === "settings"
+	) {
 		if (!loadedPages[destination]) void preloadPage(destination);
 		return;
 	}
@@ -99,6 +107,7 @@ const IDLE_PRELOAD_TIMEOUT_MS = 3000;
 
 const PAGE_LABEL_KEY: Record<PageDestination, string> = {
 	agents: "destination.agents",
+	board: "destination.board",
 	bots: "destination.bots",
 	insights: "destination.insights",
 	settings: "destination.settings",
@@ -115,7 +124,9 @@ function DestinationPage({ destination }: { destination: PageDestination }): Rea
 	const [Page] = useState<ComponentType>(
 		() =>
 			loadedPages[destination] ??
-			{ agents: AgentsPage, bots: BotsPage, insights: InsightsPage, settings: SettingsPage }[destination],
+			{ agents: AgentsPage, board: BoardPage, bots: BotsPage, insights: InsightsPage, settings: SettingsPage }[
+				destination
+			],
 	);
 	return (
 		<div className="omp-page-in flex min-h-0 flex-1 flex-col">
