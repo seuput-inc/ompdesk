@@ -135,10 +135,11 @@ fn wanted(message: &MailMessage, own_address: &str, options: &Options) -> bool {
         }
     }
     let has = |name, needle: &String| field(name).to_lowercase().contains(needle);
+    // A From line alone can be forged: it counts only on mail the receiving server says passed DMARC (FX6 (a)).
     options
         .from
         .as_ref()
-        .is_none_or(|needle| has("from", needle))
+        .is_none_or(|needle| has("from", needle) && dmarc_passed(field("authentication-results")))
         && options
             .subject
             .as_ref()
@@ -157,6 +158,17 @@ fn wanted(message: &MailMessage, own_address: &str, options: &Options) -> bool {
             }
             recipients.to_lowercase().contains(needle)
         })
+}
+
+/// Whether the receiving server's `Authentication-Results` (the topmost one, `imap::mime` keeps it alone) holds
+/// `dmarc=pass`: after the authserv-id, each `;` part is a method's result (RFC 8601).
+fn dmarc_passed(results: &str) -> bool {
+    results.split(';').skip(1).any(|part| {
+        let part = js_trim(part).to_lowercase();
+        part.strip_prefix("dmarc=")
+            .and_then(|rest| rest.split(|c: char| is_js_space(c) || c == '(').next())
+            == Some("pass")
+    })
 }
 
 fn addresses(value: &str) -> impl Iterator<Item = &str> {
@@ -222,10 +234,34 @@ mod tests {
                 ("from".into(), "Ann <ANN@example.invalid>".into()),
                 ("cc".into(), "Owner+Ci@example.invalid".into()),
                 ("subject".into(), "Deploy v2 please".into()),
+                (
+                    "authentication-results".into(),
+                    "mx.example.invalid; spf=pass smtp.mailfrom=example.invalid; DMARC=pass (p=none) header.from=example.invalid".into(),
+                ),
             ]),
             snippet: "hello".into(),
         };
         assert!(wanted(&message, "owner@example.invalid", &options));
+        // A From the receiving server did not see pass DMARC is no sender: a spoof fires nothing.
+        for results in [
+            "mx.example.invalid; spf=pass; dmarc=fail (p=reject) header.from=example.invalid",
+            "mx.example.invalid; none",
+            "dmarc=pass",
+            "",
+        ] {
+            let mut spoof = MailMessage {
+                uid: 2,
+                headers: message.headers.clone(),
+                snippet: String::new(),
+            };
+            spoof
+                .headers
+                .insert("authentication-results".into(), results.into());
+            assert!(
+                !wanted(&spoof, "owner@example.invalid", &options),
+                "{results}"
+            );
+        }
         message
             .headers
             .insert("auto-submitted".into(), " auto-replied ".into());

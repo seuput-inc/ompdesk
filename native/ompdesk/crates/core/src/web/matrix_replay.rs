@@ -22,8 +22,8 @@ use super::assets::Assets;
 use super::auth::{Policy, base64url, lenient_base64};
 use super::body::Out;
 use super::deps::{
-    Blobs, BoxFuture, Connection, Desktop, HookOutcome, Hooks, PairingDetails, PairingOutcome,
-    Peer, Router, Upload, UploadFailure, Uploads, Whois,
+    Blobs, BoxFuture, Connection, Desktop, HookOutcome, HookRequest, Hooks, PairingDetails,
+    PairingOutcome, Peer, Router, Upload, UploadFailure, Uploads, Whois,
 };
 use super::devices::{DEFAULT_GRANTS, Device, MemoryBlocks, MemoryDevices};
 use super::hex;
@@ -168,14 +168,47 @@ impl Desktop for Fakes {
     }
 }
 
+/// The words the TypeScript service told a run of a webhook call's body (one line, the first 400 characters): the
+/// capture's effects name the body by them. The edge hands the whole body over now (`HookRequest`).
+fn told(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let mut collapsed = String::with_capacity(text.len());
+    let mut in_space = false;
+    for c in text.chars() {
+        if super::auth::js_space(c) {
+            if !in_space {
+                collapsed.push(' ');
+            }
+            in_space = true;
+        } else {
+            collapsed.push(c);
+            in_space = false;
+        }
+    }
+    let text = collapsed.trim_matches(super::auth::js_space);
+    if text.is_empty() {
+        return "Webhook call with no body".to_owned();
+    }
+    let mut units = 0;
+    let head: String = text
+        .chars()
+        .take_while(|c| {
+            units += c.len_utf16();
+            units <= 800
+        })
+        .take(400)
+        .collect();
+    format!("Webhook call: {head}")
+}
+
 impl Hooks for Fakes {
-    fn webhook(&self, id: &str, bearer: &str, detail: &str) -> BoxFuture<'_, HookOutcome> {
+    fn webhook(&self, request: HookRequest) -> BoxFuture<'_, HookOutcome> {
         self.recorder.effects.lock().unwrap().hooks.push(vec![
-            id.to_owned(),
-            bearer.to_owned(),
-            detail.to_owned(),
+            request.id.clone(),
+            request.bearer.clone().unwrap_or_default(),
+            told(&request.body),
         ]);
-        let outcome = match id {
+        let outcome = match request.id.as_str() {
             "fire" => HookOutcome::Fired,
             "deny" => HookOutcome::Denied,
             "off" => HookOutcome::Off,

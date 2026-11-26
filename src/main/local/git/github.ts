@@ -14,6 +14,7 @@ import {
 	GITHUB_HOST_PATTERN,
 	GITHUB_IMAGE_MAX_BYTES,
 	GITHUB_IMAGE_TYPES,
+	GITHUB_LOGIN_PATTERN,
 	GITHUB_REACTIONS,
 	GITHUB_REPO_NAME_PATTERN,
 	GITHUB_REPO_PATTERN,
@@ -41,7 +42,7 @@ const id = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const text = z.string().max(65_536);
 const title = z.string().trim().min(1).max(256);
 /** A GitHub login (a user can be assigned or asked to review). */
-const login = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/);
+const login = z.string().regex(GITHUB_LOGIN_PATTERN);
 /** A GraphQL node id (`PRRT_kwDO…`, `IC_kwDO…`). */
 const nodeId = z.string().regex(/^[A-Za-z0-9_=-]{1,200}$/);
 const people = z.object({

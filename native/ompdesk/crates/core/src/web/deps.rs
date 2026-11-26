@@ -74,9 +74,18 @@ pub enum HookOutcome {
     Unavailable,
 }
 
-/// The schedule service that answers `POST /hooks/<id>`; the bearer is compared there, in constant time.
+/// One `POST /hooks/<id>` as read: the bearer key it sent (none when it sent a sender's signature instead), its
+/// headers (lowercase names, credentials left out) and its whole body.
+pub struct HookRequest {
+    pub id: String,
+    pub bearer: Option<String>,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+/// The schedule service that answers `POST /hooks/<id>`; the key or the signature is checked there, in constant time.
 pub trait Hooks: Send + Sync {
-    fn webhook(&self, id: &str, bearer: &str, detail: &str) -> BoxFuture<'_, HookOutcome>;
+    fn webhook(&self, request: HookRequest) -> BoxFuture<'_, HookOutcome>;
 }
 
 pub struct Upload {

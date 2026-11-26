@@ -72,15 +72,37 @@ fn frequency(frequency: Option<&Value>) -> Value {
             json!({"kind":"daily", "time":string(get("time")), "days":sorted(get("days"))})
         }
         Some("once") => json!({"kind":"once", "at":string(get("at"))}),
+        Some("cron") => json!({"kind":"cron", "expr":trim(&string(get("expr")))}),
         Some("event") => {
             let event = get("event");
             let field = |key: &str| event.and_then(|event| event.get(key));
             let clean = match field("source").and_then(Value::as_str) {
                 Some("webhook") => {
-                    json!({"source":"webhook", "key":field("key").filter(|v| !v.is_null()).map_or_else(String::new, string_of_value)})
+                    let mut clean = json!({"source":"webhook", "key":field("key").filter(|v| !v.is_null()).map_or_else(String::new, string_of_value)});
+                    // The "only when" filters and the quoted fields as given (`rules` checks them); the signing
+                    // secret, its sender and an old key are the routine's own commands', never a draft's.
+                    for name in ["where", "contains", "pick"] {
+                        if let Some(value) = field(name).filter(|value| !value.is_null()) {
+                            clean[name] = value.clone();
+                        }
+                    }
+                    clean
                 }
                 Some("github") => {
-                    json!({"source":"github", "repo":string(field("repo")), "events":sorted(field("events"))})
+                    let mut clean = json!({"source":"github", "repo":string(field("repo")), "events":sorted(field("events"))});
+                    if let Some(from) = field("from").filter(|from| from.is_array()) {
+                        clean["from"] = sorted(Some(from));
+                    }
+                    for name in ["contains", "label"] {
+                        if let Some(text) = field(name)
+                            .and_then(Value::as_str)
+                            .map(trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            clean[name] = text.into();
+                        }
+                    }
+                    clean
                 }
                 Some("files") => json!({"source":"files", "path":string(field("path"))}),
                 Some("git") => {
@@ -123,6 +145,16 @@ pub(super) fn clean(draft: &Value) -> serde_json::Map<String, Value> {
         "autoApprove":draft.get("autoApprove") == Some(&Value::Bool(true)),
         "enabled":draft.get("enabled") == Some(&Value::Bool(true)),
     });
+    // A fresh run's thinking level and its own worktree (`rules` checks the level); absent keeps a save as it was.
+    if let Some(thinking) = draft.get("thinking") {
+        clean["thinking"] = match thinking.as_str().map(trim) {
+            Some(level) if !level.is_empty() => level.into(),
+            _ => Value::Null,
+        };
+    }
+    if let Some(worktree) = draft.get("worktree") {
+        clean["worktree"] = (worktree == &Value::Bool(true)).into();
+    }
     if let Some(session) = draft.get("wakeSession").filter(|v| !v.is_null()) {
         clean["wakeSession"] = string_of_value(session).into();
     }

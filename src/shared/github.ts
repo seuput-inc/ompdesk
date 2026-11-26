@@ -10,6 +10,8 @@
 
 /** `OWNER/NAME` as GitHub allows them (no host part; the host travels separately). */
 export const GITHUB_REPO_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
+/** A GitHub login. */
+export const GITHUB_LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 /** A host name gh can be signed in to, e.g. `github.com` or `ghe.example.com:8443`. */
 export const GITHUB_HOST_PATTERN = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::\d{1,5})?$/i;
 /** A new repository's name. */
