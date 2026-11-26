@@ -156,7 +156,7 @@ export function profileToFlags(profile: LaunchProfile): string[] {
 }
 
 /** Shell-safe charset: args outside it are single-quoted in the preview. */
-const SHELL_SAFE = /^[A-Za-z0-9_@%+=:,./-]+$/;
+export const SHELL_SAFE = /^[A-Za-z0-9_@%+=:,./-]+$/;
 
 function quoteShellArg(arg: string): string {
 	if (arg.length > 0 && SHELL_SAFE.test(arg)) return arg;
