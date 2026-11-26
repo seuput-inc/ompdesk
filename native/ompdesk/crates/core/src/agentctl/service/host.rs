@@ -744,6 +744,23 @@ impl Host {
             .await
     }
 
+    /// `bots.relocate(from, to, sessions)`: a bot's folder moved from `from` to `to`; main moves each of its chats'
+    /// `sessions` into `to` (an open, idle chat through its own omp, which then runs there) and answers each session's
+    /// file now, by its file before. A session it cannot move yet (its chat runs a turn) is refused, and the whole call
+    /// with it, to be asked again.
+    pub async fn relocate_bot(
+        &self,
+        from: &str,
+        to: &str,
+        sessions: &[String],
+    ) -> R<std::collections::HashMap<String, String>> {
+        self.ask(
+            "bots.relocate",
+            json!({ "from": from, "to": to, "sessions": sessions }),
+        )
+        .await
+    }
+
     /// `stored(device, query)`: saved sessions on this computer or a paired host.
     pub async fn stored(&self, device: Option<&str>, query: Option<&str>) -> R<Vec<StoredSession>> {
         self.ask("stored", json!({ "device": device, "query": query }))

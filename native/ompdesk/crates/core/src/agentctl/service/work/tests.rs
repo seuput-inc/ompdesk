@@ -1195,6 +1195,18 @@ fn bots_main(
                 _ => Ok(json!({ "success": false, "error": "no" })),
             },
             "schedules.command" => Ok(json!({ "schedules": [] })),
+            // A bot's folder moved: each session lands in `<to>/.moved/` (stock files it under the new folder's dir).
+            "bots.relocate" => {
+                let to = args["to"].as_str().unwrap_or("");
+                let moved: serde_json::Map<String, Value> = args["sessions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(|session| (session.to_owned(), json!(moved_to(to, session))))
+                    .collect();
+                Ok(Value::Object(moved))
+            }
             // The tab that holds the bot's chat now.
             "reach" => Ok(json!("bot1")),
             _ => Ok(Value::Null),
@@ -1237,10 +1249,29 @@ fn bot_world(folder: &str) -> Value {
     })
 }
 
+/// Where the fake main's `bots.relocate` puts `session` when the bot's folder moved to `to`.
+fn moved_to(to: &str, session: &str) -> String {
+    format!(
+        "{to}/.moved/{}",
+        session.rsplit('/').next().unwrap_or(session)
+    )
+}
+
 /// Makes the bot Ada, shows main a world where `bot1` runs in its folder and lets the bot see its chat.
 async fn ada(
     id: u64,
     root: &Scratch,
+    mails: Mails,
+    extra: impl Fn(&str, &Value) -> Option<Value> + Send + 'static,
+) -> (AgentControl, Asked, String) {
+    ada_in(id, root, &bot_files(root), mails, extra).await
+}
+
+/// `ada` over the journals in `files`.
+async fn ada_in(
+    id: u64,
+    root: &Scratch,
+    files: &Files,
     mails: Mails,
     extra: impl Fn(&str, &Value) -> Option<Value> + Send + 'static,
 ) -> (AgentControl, Asked, String) {
@@ -1249,7 +1280,7 @@ async fn ada(
         id,
         bot_world(&folder),
         Caps::default(),
-        &bot_files(root),
+        files,
         bots_main(mails, extra),
     );
     let (text, is_error) = run(
@@ -1944,8 +1975,9 @@ async fn only_the_owner_picks_the_approval_mode_and_skill_projects_a_bots_chats_
     assert_eq!(control.bot_named("Ada").unwrap().chat_approval, None);
     assert_eq!(launch(&control), json!([]));
 
+    let repo = root.0.join("repo").to_string_lossy().into_owned();
     control
-        .bots_command(json!({ "action": "update", "id": id, "chatApproval": "always-ask", "skillProjects": ["/repo"] }))
+        .bots_command(json!({ "action": "update", "id": id, "chatApproval": "always-ask", "skillProjects": [repo] }))
         .await
         .unwrap();
     let flags = launch(&control);
@@ -2406,4 +2438,333 @@ async fn a_room_asks_the_members_its_reply_mode_names_and_a_member_answers_with_
     // A session that is no bot's chat has no rooms.
     let (text, is_error) = run(&control, "ompdesk_room", json!({ "action": "list" })).await;
     assert!(is_error && text.contains("works in a bot's chat"), "{text}");
+}
+
+// ---- a bot's folder follows its name (`bot_move.rs`) --------------------------------------------------------------
+
+/// `bot_files` that also keeps the registry on disk (`bots.json`), as a restart reads it again.
+fn kept_files(root: &Scratch) -> Files {
+    Files {
+        bots: Some(root.0.join("bots.json")),
+        ..bot_files(root)
+    }
+}
+
+/// A fake Schedules service over `book`: `get` lists it, `save` replaces the schedule of that id with the draft.
+fn schedule_book(
+    book: Arc<Mutex<Vec<Value>>>,
+) -> impl Fn(&str, &Value) -> Option<Value> + Send + 'static {
+    move |method, args| {
+        (method == "schedules.command").then(|| {
+            let request = &args["request"];
+            let mut schedules = book.lock().unwrap();
+            if request["action"] == "save"
+                && let Some(row) = schedules.iter_mut().find(|row| row["id"] == request["id"])
+            {
+                let mut saved = request["draft"].clone();
+                saved["id"] = row["id"].clone();
+                *row = saved;
+            }
+            json!({ "schedules": schedules.clone(), "runs": [], "nextRuns": {} })
+        })
+    }
+}
+
+/// A routine of the bot in `folder` that wakes its home chat `/s/bot.jsonl`.
+fn routine(id: &str, name: &str, folder: &str) -> Value {
+    let mut row = scheduled(id, name, json!({ "kind": "interval", "minutes": 5 }));
+    row["cwd"] = json!(folder);
+    row["wakeSession"] = json!("/s/bot.jsonl");
+    row
+}
+
+/// A world with only the caller: no chat runs in any bot's folder.
+fn quiet_world() -> Value {
+    json!({
+        "enabled": true,
+        "manageEnabled": true,
+        "scheduleDevices": [""],
+        "tabs": [tab("main0001", json!({ "title": "Boss", "sessionPath": "/s/boss.jsonl" }))],
+        "windowOf": { "main0001": "w" },
+    })
+}
+
+/// A control over `bots` written to the registry first (a start after an update), whose folders exist.
+fn started_with(id: u64, root: &Scratch, bots: Value) -> (AgentControl, Asked) {
+    if !root.0.join("bots.json").exists() {
+        std::fs::write(root.0.join("bots.json"), bots.to_string()).unwrap();
+    }
+    rig_files(
+        id,
+        quiet_world(),
+        Caps::default(),
+        &kept_files(root),
+        bots_main(Mails::default(), |_, _| None),
+    )
+}
+
+/// A link to the folder `target` at `at`: a symlink on POSIX, a junction on Windows (`disk/scratch.rs`'s fixture).
+fn link(target: &std::path::Path, at: &std::path::Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, at).unwrap();
+    #[cfg(windows)]
+    crate::sys::junction(target, at).unwrap();
+}
+
+fn relocations(asked: &Asked) -> usize {
+    asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(method, _)| method == "bots.relocate")
+        .count()
+}
+
+/// The owner renames a bot: its folder in the bots folder moves to the new name's slug with its files, its chats'
+/// sessions and its routines (their titles too), and its home chat is told to fix its own files.
+#[tokio::test]
+async fn a_rename_moves_the_bots_folder_its_sessions_and_routines_and_tells_its_home_chat() {
+    let root = Scratch::new();
+    let folder = root.0.join("ada").to_string_lossy().into_owned();
+    let book = Arc::new(Mutex::new(vec![
+        routine("r1", "Ada: Look around", &folder),
+        scheduled(
+            "u1",
+            "Ada: mine",
+            json!({ "kind": "interval", "minutes": 5 }),
+        ),
+    ]));
+    let (control, asked, id) =
+        ada(9_730, &root, Mails::default(), schedule_book(book.clone())).await;
+    std::fs::write(root.0.join("ada").join("SOUL.md"), "I am Ada.").unwrap();
+    control
+        .bots_command(json!({ "action": "update", "id": id, "name": "Bea" }))
+        .await
+        .unwrap();
+    let to = root.0.join("bea").to_string_lossy().into_owned();
+    assert!(root.0.join("bea").join("SOUL.md").is_file());
+    assert!(!root.0.join("ada").exists());
+    let bot = control.bot_named(&id).unwrap();
+    assert_eq!(
+        (bot.name.as_str(), bot.folder.as_str()),
+        ("Bea", to.as_str())
+    );
+    assert_eq!(
+        bot.home.as_deref(),
+        Some(moved_to(&to, "/s/bot.jsonl").as_str())
+    );
+    assert_eq!((bot.moving, bot.renamed_from), (None, None));
+    let book = book.lock().unwrap();
+    assert_eq!(book[0]["name"], "Bea: Look around");
+    assert_eq!(book[0]["cwd"], json!(to));
+    assert_eq!(book[0]["wakeSession"], json!(moved_to(&to, "/s/bot.jsonl")));
+    assert_eq!(
+        book[1]["name"], "Ada: mine",
+        "a schedule elsewhere keeps its title"
+    );
+    let asked = asked.lock().unwrap();
+    assert!(
+        asked
+            .iter()
+            .any(|(method, args)| method == "bots.relocate" && args["from"] == json!(folder))
+    );
+    assert!(asked.iter().any(|(method, args)| {
+        method == "mail"
+            && args
+                .to_string()
+                .contains("You were renamed from Ada to Bea")
+    }));
+}
+
+/// While a chat in its folder runs a turn the folder waits; the pass after the turn ends moves it.
+#[tokio::test]
+async fn a_renamed_bots_folder_waits_for_a_running_turn() {
+    let root = Scratch::new();
+    let (control, asked, id) = ada(9_731, &root, Mails::default(), |_, _| None).await;
+    let folder = root.0.join("ada").to_string_lossy().into_owned();
+    let mut busy = bot_world(&folder);
+    busy["tabs"][1]["busy"] = json!(true);
+    crate::ports::apply_state(control.host.port(), 1, &busy.to_string()).unwrap();
+    control
+        .bots_command(json!({ "action": "update", "id": id, "name": "Bea" }))
+        .await
+        .unwrap();
+    let bot = control.bot_named(&id).unwrap();
+    assert_eq!(bot.name, "Bea");
+    assert_eq!(bot.folder, folder);
+    assert_eq!(bot.renamed_from.as_deref(), Some("Ada"));
+    assert!(root.0.join("ada").is_dir() && !root.0.join("bea").exists());
+    assert_eq!(relocations(&asked), 0);
+
+    crate::ports::apply_state(control.host.port(), 2, &bot_world(&folder).to_string()).unwrap();
+    control.bots_tick().await;
+    assert!(!root.0.join("ada").exists() && root.0.join("bea").is_dir());
+    assert_eq!(control.bot_named(&id).unwrap().renamed_from, None);
+    assert_eq!(relocations(&asked), 1);
+}
+
+/// A directory rename that fails (a folder held open on Windows) leaves the old folder whole and the registry on it.
+#[tokio::test]
+async fn a_move_that_fails_leaves_the_old_folder_whole() {
+    let root = Scratch::new();
+    let (control, asked, id) = ada(9_732, &root, Mails::default(), |_, _| None).await;
+    std::fs::write(root.0.join("ada").join("SOUL.md"), "I am Ada.").unwrap();
+    super::bot_move::FAIL_RENAME.with(|fail| fail.set(true));
+    let (text, is_error) = run(
+        &control,
+        "ompdesk_bot",
+        json!({ "action": "rename", "bot": "Ada", "name": "Bea" }),
+    )
+    .await;
+    assert!(!is_error && text.contains("stays"), "{text}");
+    assert_eq!(
+        std::fs::read_to_string(root.0.join("ada").join("SOUL.md")).unwrap(),
+        "I am Ada."
+    );
+    assert!(!root.0.join("bea").exists());
+    let bot = control.bot_named(&id).unwrap();
+    assert_eq!(bot.folder, root.0.join("ada").to_string_lossy());
+    assert_eq!(bot.moving, None);
+    assert_eq!(relocations(&asked), 0);
+}
+
+/// A crash right after the directory moved, before the registry was saved: the next start names the new folder at
+/// once, its first pass finishes the move (sessions, routines), and the old folder never comes back.
+#[tokio::test]
+async fn a_move_cut_off_by_a_crash_finishes_on_the_next_start() {
+    let root = Scratch::new();
+    let from = root.0.join("ada").to_string_lossy().into_owned();
+    let to = root.0.join("bea").to_string_lossy().into_owned();
+    {
+        let (control, _, id) = ada_in(
+            9_733,
+            &root,
+            &kept_files(&root),
+            Mails::default(),
+            |_, _| None,
+        )
+        .await;
+        control.bots().change(&id, |record| {
+            record.name = "Bea".to_owned();
+            record.moving = Some(crate::agentctl::journal::bots::FolderMove {
+                from: from.clone(),
+                to: to.clone(),
+            });
+        });
+        std::fs::rename(&from, &to).unwrap();
+    }
+    let book = Arc::new(Mutex::new(vec![routine("r1", "Bea: Look around", &from)]));
+    let (control, asked) = rig_files(
+        9_734,
+        bot_world(&from),
+        Caps::default(),
+        &kept_files(&root),
+        bots_main(Mails::default(), schedule_book(book.clone())),
+    );
+    assert_eq!(control.bot_named("Bea").unwrap().folder, to);
+    control.bots_tick().await;
+    let bot = control.bot_named("Bea").unwrap();
+    assert_eq!(bot.moving, None);
+    assert_eq!(
+        bot.home.as_deref(),
+        Some(moved_to(&to, "/s/bot.jsonl").as_str())
+    );
+    let routine = book.lock().unwrap()[0].clone();
+    assert_eq!(
+        routine["cwd"],
+        json!(to),
+        "the routine wakes in the new folder"
+    );
+    assert_eq!(routine["wakeSession"], json!(moved_to(&to, "/s/bot.jsonl")));
+    assert!(
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(method, args)| method == "bots.relocate"
+                && args["sessions"] == json!(["/s/bot.jsonl"])),
+        "the chat open on the old folder moves along"
+    );
+    assert!(!root.0.join("ada").exists());
+}
+
+/// No rename record, no move: a `-2` left by a name clash and a folder the owner named stay put across starts.
+#[tokio::test]
+async fn a_bot_never_renamed_keeps_its_folder_across_starts() {
+    let root = Scratch::new();
+    for name in ["ada-2", "my-desk"] {
+        std::fs::create_dir(root.0.join(name)).unwrap();
+    }
+    let bots = json!([
+        { "id": "bot-a", "name": "Ada", "folder": root.0.join("ada-2") },
+        { "id": "bot-b", "name": "Bea", "folder": root.0.join("my-desk") },
+    ]);
+    for port in [9_735, 9_736] {
+        let (control, asked) = started_with(port, &root, bots.clone());
+        control.bots_tick().await;
+        assert_eq!(relocations(&asked), 0);
+    }
+    assert!(root.0.join("ada-2").is_dir() && root.0.join("my-desk").is_dir());
+    assert!(!root.0.join("ada").exists() && !root.0.join("bea").exists());
+}
+
+/// A rename to the same name is how a bot renamed before rename records asks for its move: once, then nothing.
+#[tokio::test]
+async fn a_same_name_rename_moves_an_old_names_folder_once() {
+    let root = Scratch::new();
+    std::fs::create_dir(root.0.join("old-cy")).unwrap();
+    let (control, asked) = started_with(
+        9_737,
+        &root,
+        json!([{ "id": "bot-c", "name": "Cy", "folder": root.0.join("old-cy") }]),
+    );
+    for _ in 0..2 {
+        control
+            .bots_command(json!({ "action": "update", "id": "bot-c", "name": "Cy" }))
+            .await
+            .unwrap();
+    }
+    assert!(root.0.join("cy").is_dir() && !root.0.join("old-cy").exists());
+    assert_eq!(
+        control.bot_named("bot-c").unwrap().folder,
+        root.0.join("cy").to_string_lossy()
+    );
+    assert_eq!(relocations(&asked), 1);
+}
+
+/// A folder outside the bots folder, one that is a link, and one reached through a link stay where they are, and so
+/// does what is behind the link, on a rename and on the pass of a start that finds a rename record.
+#[tokio::test]
+async fn a_folder_outside_the_bots_folder_or_behind_a_link_never_moves() {
+    let root = Scratch::new();
+    let outside = Scratch::new();
+    for name in ["proj", "linked", "behind/proj"] {
+        std::fs::create_dir_all(outside.0.join(name)).unwrap();
+    }
+    link(&outside.0.join("linked"), &root.0.join("lnk"));
+    link(&outside.0.join("behind"), &root.0.join("through"));
+    let bots = json!([
+        { "id": "bot-d", "name": "Dee", "folder": outside.0.join("proj") },
+        { "id": "bot-e", "name": "Eve", "folder": root.0.join("lnk") },
+        { "id": "bot-f", "name": "Fay", "folder": root.0.join("through").join("proj") },
+        { "id": "bot-g", "name": "Gus", "folder": root.0.join("lnk"), "renamedFrom": "Old" },
+    ]);
+    let (control, asked) = started_with(9_738, &root, bots);
+    control.bots_tick().await;
+    for (id, name) in [("bot-d", "Dee2"), ("bot-e", "Eve2"), ("bot-f", "Fay2")] {
+        control
+            .bots_command(json!({ "action": "update", "id": id, "name": name }))
+            .await
+            .unwrap();
+    }
+    assert_eq!(relocations(&asked), 0);
+    for name in ["proj", "linked", "behind/proj"] {
+        assert!(outside.0.join(name).is_dir(), "{name}");
+    }
+    assert!(std::fs::symlink_metadata(root.0.join("lnk")).is_ok());
+    for name in ["dee2", "eve2", "fay2", "gus"] {
+        assert!(!root.0.join(name).exists(), "{name}");
+        assert!(!outside.0.join(name).exists(), "{name}");
+    }
+    assert_eq!(control.bot_named("bot-g").unwrap().renamed_from, None);
 }

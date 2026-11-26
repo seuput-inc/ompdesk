@@ -527,6 +527,7 @@ impl AgentControl {
         }
         loop {
             self.observe_bots();
+            self.finish_moves().await;
             self.arm_looks().await;
             self.feed_bots().await;
             let mut mem = self.mem();
@@ -759,6 +760,19 @@ impl AgentControl {
                     } else {
                         changed.reach.join(", ")
                     }
+                ))
+            }
+            // The owner's rename in Settings, for an agent: a folder in the bots folder follows the new name.
+            "rename" => {
+                let bot = wanted()?;
+                let name = args.name.as_deref().unwrap_or("").trim();
+                if name.is_empty() {
+                    return fail("rename needs name.");
+                }
+                let (renamed, folder) = self.rename_bot(&bot, name).await?;
+                Ok(format!(
+                    "Renamed the bot {} to {}. {folder}",
+                    bot.name, renamed.name
                 ))
             }
             "look_around" => {
@@ -1366,17 +1380,14 @@ impl AgentControl {
                 {
                     self.set_paused(&bot.id, paused).await?;
                 }
-                let name = text("name")
+                // A rename: its folder in the bots folder follows (`bot_move.rs`), the rest below reads where it is now.
+                if let Some(name) = text("name")
                     .map(|name| name.trim().to_owned())
-                    .filter(|name| !name.is_empty());
-                if let Some(name) = &name
-                    && self
-                        .bots()
-                        .find(name)
-                        .is_some_and(|other| other.id != bot.id)
+                    .filter(|name| !name.is_empty())
                 {
-                    return fail(format!("There is already a bot named \"{name}\"."));
+                    self.rename_bot(&bot, &name).await?;
                 }
+                let bot = self.bot_named(&id)?;
                 let reach = request.get("reach").and_then(Value::as_array).map(|list| {
                     list.iter()
                         .filter_map(Value::as_str)
@@ -1424,9 +1435,6 @@ impl AgentControl {
                     }
                     if let Some(folders) = skill_projects {
                         record.skill_projects = folders;
-                    }
-                    if let Some(name) = name {
-                        record.name = name;
                     }
                     match request.get("model") {
                         Some(Value::Null) => record.model = None,

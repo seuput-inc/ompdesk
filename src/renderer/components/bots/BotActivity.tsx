@@ -260,7 +260,7 @@ function Suggestions({ bot }: { bot: Bot }) {
 			<SectionLabel
 				action={
 					<Button disabled={!bot.home || bot.paused} onClick={lookNow} size="sm" variant="ghost">
-						{bot.lookAround ? t("bots.suggestions.lookNow") : t("bots.suggestions.turnOn")}
+						{on ? t("bots.suggestions.lookNow") : t("bots.suggestions.turnOn")}
 					</Button>
 				}
 				count={items.length}
@@ -303,7 +303,7 @@ function Suggestions({ bot }: { bot: Bot }) {
 						}
 						actionCount={item.link ? 3 : 2}
 						actionsOnHover
-						data-bot-suggestion={item.id}
+						rowProps={{ "data-bot-suggestion": item.id }}
 						description={item.why}
 						key={item.id}
 						meta={
@@ -348,7 +348,7 @@ function Workers({ bot }: { bot: Bot }) {
 			<SectionLabel count={workers.length}>{t("bots.workers.title")}</SectionLabel>
 			{shown.map(worker => (
 				<ListRow
-					data-bot-worker={worker.state}
+					rowProps={{ "data-bot-worker": worker.state }}
 					description={
 						<span className="flex min-w-0 items-center gap-1">
 							{worker.branch && <GitBranch aria-hidden className="size-3 shrink-0" />}

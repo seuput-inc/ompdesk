@@ -1630,8 +1630,8 @@ pub struct AppArgs {
 /// `ompdesk_bot`'s arguments (`BotArgs` of `tools.ts`).
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct BotArgs {
-    /// `create`, `offer`, `list`, `pause`, `resume`, `set`, `look_around`, `suggest`, `suggestions` or `hand`. `offer`
-    /// takes `name` and the purpose in `text`.
+    /// `create`, `offer`, `list`, `pause`, `resume`, `set`, `rename`, `look_around`, `suggest`, `suggestions` or
+    /// `hand`. `offer` takes `name` and the purpose in `text`.
     pub action: String,
     #[serde(default)]
     pub name: Option<String>,

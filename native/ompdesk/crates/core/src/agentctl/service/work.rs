@@ -19,6 +19,7 @@
 mod app;
 mod auto;
 mod bot_files;
+mod bot_move;
 mod bot_package;
 mod bots;
 mod items;

@@ -95,6 +95,8 @@ pub struct Mail {
     pub instruction: Option<String>,
     /// What it carries besides text: pictures sent inline (by reference, bytes in the attachment store), files landed.
     pub attachments: Option<AttachedSet>,
+    /// The bot whose chat sent it: a reader shows that bot's name now, not `from_title` as it was then.
+    pub from_bot: Option<String>,
     pub at: f64,
 }
 
@@ -123,6 +125,7 @@ impl Mail {
             card: None,
             instruction: None,
             attachments: None,
+            from_bot: None,
             at,
         }
     }
@@ -258,6 +261,9 @@ pub fn mail_details(mail: &Mail) -> Value {
         .filter(|dispatch| !dispatch.is_empty())
     {
         map.insert("dispatch".into(), dispatch.clone().into());
+    }
+    if let Some(bot) = &mail.from_bot {
+        map.insert("fromBot".into(), bot.clone().into());
     }
     if let Some(merged) = mail.merged.filter(|merged| *merged != 0) {
         map.insert("merged".into(), js_number(merged as f64));

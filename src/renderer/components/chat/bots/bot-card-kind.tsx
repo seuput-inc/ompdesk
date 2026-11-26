@@ -46,10 +46,13 @@ export function botCardOf(toolName: string, args: Record<string, unknown>): BotC
 	}
 }
 
-/** The owner's item changes the core mailed into a bot chat (`item-<id>-v<version>`). */
-export function isItemMail(message: AgentMessage): boolean {
+/**
+ * Mail the cards' chunk draws: the owner's item changes the core mailed into a bot chat (`item-<id>-v<version>`), and
+ * whatever a bot's chat sent (`fromBot`), whose sender reads as the bot's name now.
+ */
+export function isBotMail(message: AgentMessage): boolean {
 	const details = resultDetails(message);
-	return text(details?.from) === "ompdesk" && text(details?.id).startsWith("item-");
+	return (text(details?.from) === "ompdesk" && text(details?.id).startsWith("item-")) || !!text(details?.fromBot);
 }
 
 export function useCardHidden(kind: BotCardKind | null): boolean {

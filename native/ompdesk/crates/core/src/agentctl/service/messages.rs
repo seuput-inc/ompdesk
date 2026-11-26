@@ -1103,6 +1103,13 @@ impl AgentControl {
             self.now(),
         );
         mail.files = args.files.clone();
+        // A bot's chat writes as its bot: the receiver reads the bot's name now, a rename included.
+        mail.from_bot = caller
+            .device
+            .is_none()
+            .then(|| self.bot_of_folder(&caller.cwd))
+            .flatten()
+            .map(|bot| bot.id);
         mail.attachments = attached
             .as_ref()
             .filter(|carried| carried.count > 0)

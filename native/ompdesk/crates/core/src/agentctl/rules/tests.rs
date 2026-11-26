@@ -52,6 +52,7 @@ fn mail_of(value: &Value) -> Mail {
         card: value["card"].as_str().map(str::to_owned),
         attachments: None,
         instruction: value["instruction"].as_str().map(str::to_owned),
+        from_bot: None,
         at: value["at"].as_f64().unwrap(),
     }
 }

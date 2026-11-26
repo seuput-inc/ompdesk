@@ -46,6 +46,10 @@ pub struct BotRecord {
     pub workers: Vec<BotWorker>,
     /// Project folders whose skills its chats load besides its own.
     pub skill_projects: Vec<String>,
+    /// A move of its folder under way, saved before the directory is renamed (`bot_move.rs`).
+    pub moving: Option<FolderMove>,
+    /// The rename record: the name it had before a rename whose folder has not followed yet (`bot_move.rs`).
+    pub renamed_from: Option<String>,
     /// Its memory upkeep schedule's id (`tidy_memory`).
     pub tidy: Option<String>,
     /// Notification kinds the owner turned off for its chats: `permission`, `done`, `failed`.
@@ -54,6 +58,14 @@ pub struct BotRecord {
     /// The newest item event the owner had seen when they last opened its Items tab (`itemsOpened`): a row changed
     /// by anyone else since reads as new.
     pub items_seen: u64,
+}
+
+/// A bot's folder moving from `from` to `to` (`BotRecord.moving`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FolderMove {
+    pub from: String,
+    pub to: String,
 }
 
 /// Workers a bot keeps.

@@ -725,6 +725,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		description:
 			"Make, list, pause or set up a bot: a folder whose sessions are its chats.\n" +
 			"offer {name, text} proposes a bot instead of making it: the owner sees a card in this chat with its name, what it would do (text) and Create bot, and nothing is made until they press it. " +
+			"rename {bot, name} renames it and tells its home chat to update its own files. A folder in ~/.omp/bots follows the new name's slug, with its chats and routines (once the chats there end their turns); a folder outside it never moves, nor one whose new name's folder is taken. " +
 			"A bot is a folder on this computer (default ~/.omp/bots/<name>); every session in that folder is one of its chats, the first its home chat. create {name, folder?} makes the folder and sends nothing: the owner writes first (asks the user first only if they turned off \"Let agents manage other sessions\"). list shows each bot with its folder, home chat, pause, specialty (from its SOUL.md) and open and owner-waiting items. pause {bot} holds every message to it until resume {bot}, which hands each held one over once; a send to a paused bot is refused. set {bot, model?, auto_approve?, stale_days?, reach?} sets the model its new chats and routines use (\"\" for omp's default), whether its routines run without asking, after how many untouched days an open item reads stale (0 never), and the paired devices whose agents may message it. look_around {bot?, on?, every?, weekdays_only?, focus?} changes only what it names of its Look around: a read-only look in its home chat at the preset's hours (every-4h, the default, every-2h, twice-daily or mornings), weekdays unless weekdays_only is false, looking for focus (the owner's words); change it only when the owner asks. From a bot's chat, bot defaults to that bot. suggestions {bot?} lists what its Suggestions list holds, what the owner started lately and what they dismissed; suggest {suggestions: [{title, why, ask, link?}]} (a bot's chat only, at most 5) replaces that list with this look's next steps, an empty list clearing it. hand {bot?, session, text} hands a session to the bot: the bot's home chat becomes its opener and the text reaches it from the bot; from a bot's chat it takes the session over for that bot. Only the owner deletes a bot or picks how its chats are approved. See skill://ompdesk/references/bots.md.",
 		parameters: {
 			type: "object",
@@ -738,13 +739,14 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 						"pause",
 						"resume",
 						"set",
+						"rename",
 						"look_around",
 						"suggestions",
 						"suggest",
 						"hand",
 					],
 				},
-				name: { type: "string", maxLength: BOT_NAME_MAX, description: "create, offer: the bot's name." },
+				name: { type: "string", maxLength: BOT_NAME_MAX, description: "create, offer, rename: the bot's name." },
 				folder: {
 					type: "string",
 					description: "create: an absolute folder for it; default ~/.omp/bots/<name>, made unique.",
@@ -1266,6 +1268,7 @@ export const ARGS = {
 				"pause",
 				"resume",
 				"set",
+				"rename",
 				"look_around",
 				"suggestions",
 				"suggest",

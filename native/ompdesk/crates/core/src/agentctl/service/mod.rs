@@ -167,6 +167,8 @@ pub struct Mem {
     pub bot_unsupported: HashSet<String>,
     /// Bots whose Look around schedule could not be saved this launch (`arm_looks`): not tried again every pass.
     pub look_unarmed: HashSet<String>,
+    /// `<bot id>\n<folder>` moves whose directory rename failed this launch (`bot_move.rs`): tried again next launch.
+    pub folder_unmoved: HashSet<String>,
     /// A bot pass runs; another asked meanwhile runs once more when it ends.
     pub bot_ticking: bool,
     pub bot_tick_again: bool,
@@ -389,6 +391,7 @@ impl AgentControl {
             app: std::sync::OnceLock::new(),
         }));
         control.hold_paused();
+        control.settle_moves();
         control
     }
 

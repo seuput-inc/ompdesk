@@ -7,7 +7,8 @@
  * wait outlives the executor's stack frame and the tab list belongs to that window.
  */
 
-import { isAbsolute, posix, resolve } from "node:path";
+import { access } from "node:fs/promises";
+import { basename, isAbsolute, posix, resolve } from "node:path";
 import type { AutopilotAction, AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import {
 	AGENT_CARD_PREFIX,
@@ -134,6 +135,8 @@ export const CARD_TIMEOUT_MS = 10 * 60_000;
 const WORKTREE_PREFIX = "omp/agent/";
 /** A receiver's bridge answers which messages its journal holds within this (a socket request, no omp command queue). */
 const SENT_MARKS_TIMEOUT_MS = 8_000;
+/** A bot chat's omp moving its session to the bot's new folder (stock `/move`, `local/workspace.ts`). */
+const MOVE_TIMEOUT_MS = 60_000;
 /** After a new session's first prompt was answered, long enough for its turn to reach the relaunch marker. */
 const OPENING_SETTLE_MS = 3_000;
 /** An open that never sent its first prompt (it failed, or its omp never came up) stops holding a restart after this. */
@@ -218,6 +221,8 @@ export interface AgentControlHostDeps {
 	notify: (win: ClientWindow, tabId: string, title: string, body: string) => void;
 	/** Close a session's tab and delete its saved file (the sidebar's delete). */
 	deleteSession: (sessionPath: string, device: string | undefined) => Promise<void>;
+	/** Move a saved session of this computer to `cwd` (stock `SessionManager.moveTo`); its file after. Absent: none move. */
+	moveSession?: (sessionPath: string, cwd: string) => Promise<string>;
 	text: AgentControlHost["text"];
 	/** How often opened sessions are looked at for closing, in the core's runtime; 0 turns the timer off (default 10 s). */
 	sweepMs?: number;
@@ -1317,6 +1322,55 @@ export class AgentControlRuntime {
 				await deps.deleteSession(info.sessionPath, info.device);
 			},
 			deleteStored: session => deps.deleteSession(session.path, session.device),
+			relocateBot: async (from, to, sessions) => {
+				const moveStored = deps.moveSession;
+				if (!moveStored) throw new Error("Sessions cannot be moved on this computer.");
+				const moved: Record<string, string> = {};
+				let stored: SessionInfo[] | null = null;
+				for (const sessionPath of sessions) {
+					const owner = deps.pool.sessionOwner(sessionPath);
+					const sidecar = owner ? deps.pool.sidecarOf(owner.tabId) : null;
+					if (owner && sidecar?.processAlive) {
+						// Its own omp moves it (stock `/move`) and runs on in `to`; a turn under way refuses until it ends.
+						const response = await this.#hostCommand(
+							owner.tabId,
+							{ type: "move_session", path: to },
+							MOVE_TIMEOUT_MS,
+						);
+						if (!response.success)
+							throw new Error(`A chat in ${from} did not move: ${response.error ?? "refused"}`);
+						const state = await this.#hostCommand(owner.tabId, { type: "get_state" });
+						const file = state.success
+							? (state.data as { sessionFile?: string } | undefined)?.sessionFile
+							: undefined;
+						if (file) moved[sessionPath] = file;
+						continue;
+					}
+					if (
+						await access(sessionPath).then(
+							() => true,
+							() => false,
+						)
+					) {
+						const file = await moveStored(sessionPath, to);
+						moved[sessionPath] = file;
+						// A chat whose omp is not running starts on the moved file, in `to`.
+						if (owner) sidecar?.restart(to, file);
+						continue;
+					}
+					// Moved before a crash cut the move off: it is the session of that name in `to` now.
+					stored ??= (await deps.sessions?.list()) ?? [];
+					const found = stored.find(info => info.cwd === to && basename(info.path) === basename(sessionPath));
+					if (found) moved[sessionPath] = found.path;
+				}
+				// A new chat there nobody wrote to yet holds no session: it starts again in `to`.
+				for (const { tabs } of deps.pool.controlTabs()) {
+					for (const row of tabs) {
+						if (!row.device && !row.sessionPath && row.cwd === from) deps.pool.sidecarOf(row.tabId)?.restart(to);
+					}
+				}
+				return moved;
+			},
 			branchFacts: (worktree, device) =>
 				this.#git<BranchFacts>(device, GIT_METHODS.facts, { worktree: gitRef(worktree) }, () =>
 					branchFacts(worktree),

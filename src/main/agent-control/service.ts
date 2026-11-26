@@ -434,6 +434,12 @@ export interface AgentControlHost {
 	deleteSession(callerTabId: string, tabId: string): Promise<void>;
 	/** Delete a saved session no tab of this app holds, on the device it is saved on (the sidebar's delete). */
 	deleteStored(session: StoredSession): Promise<void>;
+	/**
+	 * A bot's folder moved from `from` to `to`: move each of its chats' `sessions` there (an open chat through its own omp,
+	 * which then runs in `to`), and restart a chat there that has no session yet. Answers each session's file now, by its
+	 * file before; rejects while a chat cannot move yet, to be asked again.
+	 */
+	relocateBot(from: string, to: string, sessions: string[]): Promise<Record<string, string>>;
 	/** Git facts of a session's worktree, read on `device` (absent = this computer). Rejects with a readable message. */
 	branchFacts(worktree: WorktreeRef, device?: string): Promise<BranchFacts>;
 	/**
@@ -1170,6 +1176,8 @@ export class AgentControl {
 				coded(async () => (await host.deleteSession(callerTabId, tabId)) ?? null),
 			deleteStored: ({ session }: { session: StoredSession }) =>
 				coded(async () => (await host.deleteStored(session)) ?? null),
+			"bots.relocate": ({ from, to, sessions }: { from: string; to: string; sessions: string[] }) =>
+				coded(() => host.relocateBot(from, to, sessions)),
 			confirm: ({ callerTabId, title, message }: { callerTabId: string; title: string; message: string }) =>
 				coded(() => host.confirm(callerTabId, title, message)),
 			answer: ({

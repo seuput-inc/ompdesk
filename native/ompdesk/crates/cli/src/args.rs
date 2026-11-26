@@ -496,6 +496,7 @@ const BOT_ACTIONS: &[&str] = &[
     "pause",
     "resume",
     "set",
+    "rename",
     "look-around",
     "hand",
 ];
@@ -524,6 +525,7 @@ fn build_bot(p: &Parsed) -> Result<Built, String> {
             &["BOT", "on|off"],
             &["every", "every-day", "focus"],
         ),
+        "rename" => action_shape(p, "bot", &["BOT", "NAME"], &[]),
         "hand" => action_shape(p, "bot", &["BOT", "SESSION", "TEXT"], &[]),
         _ => action_shape(p, "bot", &["BOT"], &[]),
     };
@@ -555,6 +557,9 @@ fn build_bot(p: &Parsed) -> Result<Built, String> {
             if p.bool("every-day") {
                 a.insert("weekdays_only".into(), false.into());
             }
+        }
+        "rename" => {
+            a.insert("name".into(), p.pos(2).unwrap_or_default().into());
         }
         "hand" => {
             a.insert("session".into(), p.pos(2).unwrap_or_default().into());
@@ -906,7 +911,7 @@ pub static SPECS: &[Spec] = &[
     },
     Spec {
         name: "bot",
-        usage: "bot ACTION [ARGS]; ACTION is create NAME [--folder F] | list | pause BOT | resume BOT | set BOT [--model M] [--auto-approve | --no-auto-approve] [--stale-days N] [--reach DEVICE]... | look-around BOT on|off [--every every-4h|every-2h|twice-daily|mornings] [--every-day] [--focus TEXT] | hand BOT SESSION TEXT|-",
+        usage: "bot ACTION [ARGS]; ACTION is create NAME [--folder F] | list | pause BOT | resume BOT | set BOT [--model M] [--auto-approve | --no-auto-approve] [--stale-days N] [--reach DEVICE]... | rename BOT NAME | look-around BOT on|off [--every every-4h|every-2h|twice-daily|mornings] [--every-day] [--focus TEXT] | hand BOT SESSION TEXT|-",
         summary: "Bots: a folder whose sessions are its chats (ompdesk_bot). --model \"\" clears it, --stale-days 0 is never.",
         flags: &[
             ("folder", S),
