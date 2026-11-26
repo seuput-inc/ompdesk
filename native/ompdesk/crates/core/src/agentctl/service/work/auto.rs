@@ -234,7 +234,15 @@ impl AgentControl {
             {
                 continue;
             }
-            match auto_close_decision(&facts) {
+            let decision = auto_close_decision(&facts);
+            crate::agentctl::runtime::activity::probe(&format!(
+                "auto_close {} restored={} status={:?} last_run={} -> {decision:?} {facts:?}",
+                tab.tab_id,
+                tab.restored,
+                tab.status,
+                tab.last_run.is_some()
+            ));
+            match decision {
                 AutoCloseDecision::Close {
                     remove_worktree,
                     delete_session,

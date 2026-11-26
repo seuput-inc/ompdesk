@@ -189,6 +189,7 @@ test("a message a busy child had not read survives a relaunch, its done report r
 	// Interrupted turns stay stopped, so the child's restored tab is idle and takes the message it lost at once.
 	const profile = await makeProfile({ resumeInterrupted: false });
 	profile.env.OMP_GUI_TEST_AGENT_SWEEP_MS = "500";
+	await fs.rm(path.join(os.tmpdir(), "child-asked-probe.log"), { force: true });
 	let current: ElectronApplication | undefined;
 	// `agent_control.aside` frames count the hand-overs: an idle omp answers one `{idle: true}`, then gets the prompt.
 	const marked = async (mark: string, type = "prompt") =>
@@ -252,6 +253,10 @@ test("a message a busy child had not read survives a relaunch, its done report r
 					layoutAtQuit,
 				}),
 			});
+			const probe = await fs
+				.readFile(path.join(os.tmpdir(), "child-asked-probe.log"), "utf8")
+				.catch(() => "(no probe log)");
+			console.log(`[auto-close-probe]\n${probe}`);
 			throw error;
 		}
 		const kid = (await tabs(second.page)).find(tab => tab.sessionPath === childPath)?.tabId ?? "";
