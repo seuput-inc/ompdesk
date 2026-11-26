@@ -1015,7 +1015,10 @@ async fn session_ports(tabs: &[ControlTab]) -> HashMap<String, Vec<u16>> {
     };
     let mut ports: HashMap<String, Vec<u16>> = HashMap::new();
     for listener in listeners {
-        ports.entry(listener.tag).or_default().extend(listener.ports);
+        ports
+            .entry(listener.tag)
+            .or_default()
+            .extend(listener.ports);
     }
     for found in ports.values_mut() {
         found.sort_unstable();

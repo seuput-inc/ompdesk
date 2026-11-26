@@ -207,7 +207,9 @@ async fn add(call: Call) -> Result<Reply, Fault> {
         return Reply::json(&false);
     }
     blocking(move || {
-        let _held = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _held = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let file = user_data.join(FILE);
         let mut store = load(&file);
         visited(&mut store, &url, &title, now_ms());
@@ -225,7 +227,9 @@ async fn list(call: Call) -> Result<Reply, Fault> {
     } = call.params()?;
     let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_ENTRIES);
     blocking(move || {
-        let _held = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _held = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Reply::json(&suggestions(&load(&user_data.join(FILE)), &query, limit))
     })
     .await
@@ -234,7 +238,9 @@ async fn list(call: Call) -> Result<Reply, Fault> {
 async fn remove(call: Call) -> Result<Reply, Fault> {
     let RemoveParams { user_data, url } = call.params()?;
     blocking(move || {
-        let _held = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _held = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let file = user_data.join(FILE);
         let mut store = load(&file);
         let before = store.entries.len();
@@ -250,7 +256,9 @@ async fn remove(call: Call) -> Result<Reply, Fault> {
 async fn clear(call: Call) -> Result<Reply, Fault> {
     let ClearParams { user_data } = call.params()?;
     blocking(move || {
-        let _held = LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _held = LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         save(&user_data.join(FILE), &Store::default())?;
         Reply::json(&())
     })
@@ -283,12 +291,18 @@ mod tests {
         assert!(!keepable("file:///etc/passwd"));
         assert!(!keepable("omp-visual://v1-abc/index.html"));
         assert!(!keepable("http:///path"));
-        assert!(!keepable(&format!("https://example.com/{}", "a".repeat(MAX_URL))));
+        assert!(!keepable(&format!(
+            "https://example.com/{}",
+            "a".repeat(MAX_URL)
+        )));
     }
 
     #[test]
     fn a_visit_moves_its_address_to_the_front_and_counts_it() {
-        let mut kept = store(&[("https://a.test/", "A", 1.0, 1), ("https://b.test/", "B", 2.0, 4)]);
+        let mut kept = store(&[
+            ("https://a.test/", "A", 1.0, 1),
+            ("https://b.test/", "B", 2.0, 4),
+        ]);
         visited(&mut kept, "https://b.test/", "", 3.0);
         visited(&mut kept, "https://c.test/", "  C  ", 4.0);
         let read: Vec<(&str, &str, u32)> = kept
@@ -299,7 +313,11 @@ mod tests {
         // An empty title keeps the one seen before.
         assert_eq!(
             read,
-            [("https://c.test/", "C", 1), ("https://b.test/", "B", 5), ("https://a.test/", "A", 1)]
+            [
+                ("https://c.test/", "C", 1),
+                ("https://b.test/", "B", 5),
+                ("https://a.test/", "A", 1)
+            ]
         );
     }
 
@@ -307,11 +325,24 @@ mod tests {
     fn keeps_the_newest_addresses_up_to_the_cap() {
         let mut kept = Store::default();
         for index in 0..MAX_ENTRIES + 3 {
-            visited(&mut kept, &format!("https://site{index}.test/"), "", index as f64);
+            visited(
+                &mut kept,
+                &format!("https://site{index}.test/"),
+                "",
+                index as f64,
+            );
         }
         assert_eq!(kept.entries.len(), MAX_ENTRIES);
-        assert_eq!(kept.entries[0].url, format!("https://site{}.test/", MAX_ENTRIES + 2));
-        assert!(!kept.entries.iter().any(|entry| entry.url == "https://site0.test/"));
+        assert_eq!(
+            kept.entries[0].url,
+            format!("https://site{}.test/", MAX_ENTRIES + 2)
+        );
+        assert!(
+            !kept
+                .entries
+                .iter()
+                .any(|entry| entry.url == "https://site0.test/")
+        );
     }
 
     #[test]
@@ -328,10 +359,17 @@ mod tests {
             .collect();
         assert_eq!(
             urls,
-            ["https://www.localhost.dev/", "http://localhost:5173/", "https://docs.example.com/local"]
+            [
+                "https://www.localhost.dev/",
+                "http://localhost:5173/",
+                "https://docs.example.com/local"
+            ]
         );
         assert_eq!(suggestions(&kept, "", 2).len(), 2);
-        assert_eq!(suggestions(&kept, "vite", 8)[0].url, "http://localhost:5173/");
+        assert_eq!(
+            suggestions(&kept, "vite", 8)[0].url,
+            "http://localhost:5173/"
+        );
     }
 
     #[test]
