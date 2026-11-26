@@ -2294,11 +2294,10 @@ async fn a_kickoff_that_ended_silent_is_sent_again_once_by_itself_and_on_each_tr
     let facts = Arc::new(Mutex::new(said(0, false, "none")));
     let (control, _asked, id) = ada(9_732, &root, mails.clone(), chat_facts(&facts)).await;
     control.bots_tick().await;
-    // Its turn ended without a word: the next look says so, and the page offers Try again.
+    // The page reopens before the next bot pass has noticed that the turn ended without a word.
+    // The live chat, not the last listed silent flag, decides whether to retry.
+    assert!(!control.bot_named("Ada").unwrap().kickoff_silent);
     *facts.lock().unwrap() = said(0, false, "silent");
-    control.bots_tick().await;
-    assert!(control.bot_named("Ada").unwrap().kickoff_silent);
-    // The page opens: one retry, a new fingerprint.
     assert!(control.kickoff_retry(&id, false).await.unwrap());
     let bot = control.bot_named("Ada").unwrap();
     assert_eq!(bot.kickoffs.len(), 2);
@@ -2308,6 +2307,8 @@ async fn a_kickoff_that_ended_silent_is_sent_again_once_by_itself_and_on_each_tr
     // Opened again: Orca retries by itself only once.
     assert!(!control.kickoff_retry(&id, false).await.unwrap());
     // The owner's Try again sends it whenever it ended silent.
+    control.bots_tick().await;
+    assert!(control.bot_named("Ada").unwrap().kickoff_silent);
     assert!(control.kickoff_retry(&id, true).await.unwrap());
     assert_eq!(control.bot_named("Ada").unwrap().kickoffs.len(), 3);
     // Not while it speaks, a turn runs, or once the owner wrote.
