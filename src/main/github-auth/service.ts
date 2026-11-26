@@ -46,6 +46,7 @@ export interface GithubAuthDeps {
 }
 
 export const LOGIN_ARGS = ["auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web"];
+export const PROJECT_SCOPE_ARGS = ["auth", "refresh", "--hostname", "github.com", "--scopes", "read:project,project"];
 const DEFAULT_DEVICE_URL = "https://github.com/login/device";
 const LOGIN_TIMEOUT_MS = 10 * 60_000;
 const OUTPUT_LIMIT = 20_000;
@@ -59,6 +60,8 @@ const CODE = /one-time code(?::\s*|\s*\()([A-Z0-9-]{6,})/i;
 const DEVICE_URL = /(https:\/\/github\.com\/login\/device\S*)/;
 
 interface ActiveLogin {
+	/** gh's arguments: a sign-in, or a scope added to the one there is. */
+	args: readonly string[];
 	pty: PtyHandle | null;
 	output: string;
 	answeredGitPrompt: boolean;
@@ -128,11 +131,16 @@ export class GithubAuthService {
 		return { gh: ghRunner, git: gitRunner, cwd: this.#deps.home };
 	}
 
-	async startLogin(): Promise<GithubAuthState> {
+	/**
+	 * A device-code sign-in; with `scopes: "project"` gh's sign-in gains the project scope Agents › GitHub › Projects
+	 * needs (`gh auth refresh`, the same code and page; Orca `GhAuthErrorHelp.tsx`).
+	 */
+	async startLogin(scopes?: "project"): Promise<GithubAuthState> {
 		// A second click while gh installs for the first one keeps that install: it continues on its own.
 		if (this.#login && this.#state.flow?.state === "installing") return this.#state;
 		this.cancelLogin();
 		const login: ActiveLogin = {
+			args: scopes === "project" ? PROJECT_SCOPE_ARGS : LOGIN_ARGS,
 			pty: null,
 			output: "",
 			answeredGitPrompt: false,
@@ -184,7 +192,7 @@ export class GithubAuthService {
 		try {
 			pty = await this.#deps.pty({
 				application: gh,
-				args: LOGIN_ARGS,
+				args: [...login.args],
 				cwd: this.#deps.home,
 				env: await this.#deps.loginEnv(),
 			});

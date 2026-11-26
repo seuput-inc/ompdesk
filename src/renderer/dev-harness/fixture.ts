@@ -732,6 +732,20 @@ export function githubFixture(op: string): unknown {
 			return null;
 		case "pr_template":
 			return { body: null };
+		case "project_list":
+			return {
+				projects: [
+					{
+						id: "PVT_1",
+						owner: "dev",
+						ownerType: "user",
+						number: 3,
+						title: "Session work",
+						url: "https://github.com/users/dev/projects/3",
+					},
+				],
+				partialFailure: null,
+			};
 		default:
 			return op.endsWith("_list") ? [] : {};
 	}

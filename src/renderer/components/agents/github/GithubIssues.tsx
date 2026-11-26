@@ -146,7 +146,8 @@ function issueBranch(issue: GithubIssueDetail): string {
 	return words ? `${issue.number}-${words}` : `issue-${issue.number}`;
 }
 
-function IssueDetail({
+/** An issue's page: its text, state, people, comments and edits (also a project item's, `GithubProjects.tsx`). */
+export function IssueDetail({
 	issue,
 	target,
 	onChanged,
