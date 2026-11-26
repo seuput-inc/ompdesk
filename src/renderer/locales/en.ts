@@ -1,5 +1,6 @@
 import { PRODUCT_REPO } from "../../shared/product-repo";
 import { memoryEn } from "./memory";
+import { trackersEn } from "./trackers";
 export const en: Record<string, string> = {
 	"chat.history.loading": "Loading earlier messages…",
 	"chat.history.updating": "Updating…",
@@ -7925,4 +7926,5 @@ export const en: Record<string, string> = {
 	"fixWithAgent.fixChecks": "Fix failed checks with agent",
 	"fixWithAgent.addressComments": "Ask agent to address comments",
 	...memoryEn,
+	...trackersEn,
 };

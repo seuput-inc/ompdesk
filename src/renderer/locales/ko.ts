@@ -1,5 +1,6 @@
 import { PRODUCT_REPO } from "../../shared/product-repo";
 import { memoryKo } from "./memory";
+import { trackersKo } from "./trackers";
 export const ko: Record<string, string> = {
 	"chat.history.loading": "이전 메시지를 불러오고 있어요…",
 	"chat.history.updating": "갱신하는 중…",
@@ -7900,4 +7901,5 @@ export const ko: Record<string, string> = {
 	"fixWithAgent.fixChecks": "실패한 검사를 에이전트로 고치기",
 	"fixWithAgent.addressComments": "에이전트에게 코멘트 반영 요청",
 	...memoryKo,
+	...trackersKo,
 };

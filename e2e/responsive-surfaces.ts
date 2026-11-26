@@ -2236,6 +2236,34 @@ export const SURFACES: readonly Surface[] = [
 			...(tab === "definitions" ? {} : { parity: { session: "work" as const } }),
 		}),
 	),
+	// Agents › GitHub's work-source bar: GitLab without glab (its install card), Linear and Jira with no account yet
+	// (their connect cards); each is the surface a person meets first.
+	...(["gitlab", "linear", "jira"] as const).map(
+		(source): Surface => ({
+			id: `agents-source-${source}`,
+			area: "B",
+			title: `Agents › GitHub › the ${source} source (its first card)`,
+			open: async page => {
+				await openPageTab(page, "agents", "github");
+				await page.locator(`[data-work-source="${source}"]`).click();
+			},
+			ready: `[data-work-sources="${source}"]`,
+			settle: 1200,
+			parity: { session: "work" },
+		}),
+	),
+	{
+		id: "agents-github-projects",
+		area: "B",
+		title: "Agents › GitHub › Projects (the account's projects)",
+		open: async page => {
+			await openPageTab(page, "agents", "github");
+			await page.locator('[data-github-center] [role="tab"][data-tab-id="projects"]').click();
+		},
+		ready: "[data-project-list]",
+		settle: 1200,
+		parity: { session: "work" },
+	},
 	{
 		id: "agents-pr-detail",
 		area: "B",

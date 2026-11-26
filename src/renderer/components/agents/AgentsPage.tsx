@@ -2,7 +2,7 @@
  * Agents destination: a full page in the main area with
  * four tabs — Live (the session's subagents), Definitions (enable, model and
  * prewalk overrides per agent), Pull requests and GitHub (issues, Actions,
- * releases, notifications, repositories). The active tab lives in the
+ * releases, notifications, repositories, beside Linear and Jira). The active tab lives in the
  * ui store (`agentsTab`, `openAgents(tab)`) so ⌥A, ⌥P, the palette, menus and
  * links land on the right one.
  */
@@ -13,9 +13,9 @@ import { type AgentsTab, useUiStore } from "../../stores/ui";
 import { PageLayout, Tabs } from "../common";
 import { isLiveSubagentStatus } from "../panels/subagent-graph";
 import { AgentDefinitions } from "./AgentDefinitions";
-import { GithubCenter } from "./github/GithubCenter";
 import { LiveAgents } from "./LiveAgents";
 import { PullRequests } from "./PullRequests";
+import { WorkSources } from "./sources/WorkSources";
 
 const TAB_LABEL_KEY: Record<AgentsTab, string> = {
 	live: "agents.tabs.live",
@@ -55,7 +55,7 @@ export function AgentsPage() {
 			{tab === "live" && <LiveAgents />}
 			{tab === "definitions" && <AgentDefinitions />}
 			{tab === "prs" && <PullRequests />}
-			{tab === "github" && <GithubCenter />}
+			{tab === "github" && <WorkSources />}
 		</PageLayout>
 	);
 }

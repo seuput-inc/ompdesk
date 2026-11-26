@@ -76,6 +76,7 @@ import type { SplitLayout } from "./split-layout";
 import type { SshToolsApi } from "./ssh-tools";
 import type { StartupMark } from "./startup-timing";
 import type { TerminalApi } from "./terminal-types";
+import type { TrackersApi } from "./trackers";
 import type { UiLanguage } from "./ui-language";
 
 // ============================================================================
@@ -2390,6 +2391,8 @@ export interface OmpApi {
 	bots: BotsApi;
 	/** This computer's mail accounts for email routines (Settings › Schedules › Email accounts); passwords go one way. */
 	mailAccounts: MailAccountsApi;
+	/** This computer's Linear and Jira connections and their work items (Agents › GitHub's source bar); tokens go one way. */
+	trackers: TrackersApi;
 	/** The sidebar's project list of this computer or a paired host (src/main/sidebar-projects.ts). */
 	sidebarProjects: SidebarProjectsApi;
 	/** OMPdesk's own ssh on this computer: port forwards, port watch, agent state, prompts (Settings › SSH). */
@@ -2623,7 +2626,8 @@ export interface OmpApi {
 	/** This machine's GitHub CLI sign-in; remote tabs never use it (their host signs in on its own). */
 	githubAuth: {
 		refresh(force?: boolean): Promise<GithubAuthState>;
-		startLogin(): Promise<GithubAuthState>;
+		/** `scopes: "project"` adds the project scope to the sign-in there is (Agents › GitHub › Projects). */
+		startLogin(scopes?: "project"): Promise<GithubAuthState>;
 		openLogin(): Promise<GithubAuthState>;
 		cancelLogin(): Promise<GithubAuthState>;
 		logout(): Promise<GithubAuthState>;

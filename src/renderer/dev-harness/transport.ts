@@ -50,6 +50,7 @@ import { SCHEDULES_COMMAND, SCHEDULES_LOG } from "../../shared/schedule-channels
 import { readSidebarPrefs, SIDEBAR_PREFS_KEY, type SidebarChange, sidebarPatch } from "../../shared/sidebar-prefs";
 import { SIDEBAR_PROJECTS_COMMAND, type SidebarProjectsRequest } from "../../shared/sidebar-projects";
 import type { TerminalLeaseState, TerminalOperation, TerminalSnapshot } from "../../shared/terminal-types";
+import { TRACKERS_COMMAND } from "../../shared/trackers";
 import {
 	ADVISOR_USAGE,
 	CONTEXT_INSPECT,
@@ -614,6 +615,12 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				return respond(command, { entries: [] });
 			case "github":
 				return respond(command, githubFixture(command.request.op));
+			// glab is installed and signed out: the GitLab source shows its sign-in.
+			case "gitlab":
+				return respond(
+					command,
+					command.request.op === "status" ? { hosts: [], signedIn: false, project: null, envToken: null } : {},
+				);
 			case "pr_repo":
 				return respond(command, PR_REPO);
 			case "pr_list":
@@ -796,6 +803,9 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				return { ok: true, entries: FILE_TREE, truncated: false };
 			case MAIL_ACCOUNTS_COMMAND:
 				return MAIL_STATE;
+			// No Linear or Jira account yet: their sources show the connect card.
+			case TRACKERS_COMMAND:
+				return { accounts: [], selected: { linear: null, jira: null } };
 			case IPC_COMMANDS.STATS_FETCH:
 				return statsAnswer((payload as IpcStatsFetchPayload).path);
 			case IPC_COMMANDS.FS_READ_PLAN:
