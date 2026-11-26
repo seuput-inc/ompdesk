@@ -35,9 +35,16 @@ function props(element: Element | null): Record<string, (event: unknown) => void
 	return (key ? record[key] : {}) as Record<string, (event: unknown) => void>;
 }
 
+/** The moves the phone's drawer panel heard: it closes on a swipe left over it (SidebarDrawer's native listener). */
+let panelMoves = 0;
+
 async function render(onArchive: () => void, onRow: () => void) {
 	const host = document.createElement("div");
 	document.body.appendChild(host);
+	panelMoves = 0;
+	host.addEventListener("pointermove", () => {
+		panelMoves += 1;
+	});
 	root = createRoot(host as unknown as Element);
 	await act(async () =>
 		root?.render(
@@ -53,17 +60,14 @@ async function render(onArchive: () => void, onRow: () => void) {
 const track = () => document.querySelector(".omp-swipe-track");
 const isOpen = () => document.querySelector(".omp-swipe")?.hasAttribute("data-swipe-open") ?? false;
 
+/** A touch down, one move `dx` sideways (a real DOM event, so every native listener on its way hears it), and up. */
 async function swipe(pointerType: string, dx: number) {
-	const event = (clientX: number) => ({
-		pointerType,
-		pointerId: 1,
-		clientX,
-		clientY: 10,
-		currentTarget: track(),
+	const point = (clientX: number) => ({ pointerType, pointerId: 1, clientX, clientY: 10, currentTarget: track() });
+	await act(async () => props(track()).onPointerDown?.(point(200)));
+	await act(async () => {
+		track()?.dispatchEvent(Object.assign(new Event("pointermove", { bubbles: true }), point(200 + dx)));
 	});
-	await act(async () => props(track()).onPointerDown?.(event(200)));
-	await act(async () => props(track()).onPointerMove?.(event(200 + dx)));
-	await act(async () => props(track()).onPointerUp?.(event(200 + dx)));
+	await act(async () => props(track()).onPointerUp?.(point(200 + dx)));
 }
 
 async function clickTrack(): Promise<boolean> {
@@ -106,9 +110,17 @@ describe("SwipeActions", () => {
 		expect(await clickTrack()).toBe(false);
 	});
 
-	it("uncovers nothing under a mouse drag", async () => {
+	it("uncovers nothing under a mouse drag, which still reaches the listeners above", async () => {
 		await render(vi.fn(), vi.fn());
 		await swipe("mouse", -120);
 		expect(isOpen()).toBe(false);
+		expect(panelMoves).toBe(1);
+	});
+
+	it("keeps a swipe past the drawer's close distance from the drawer, even in one move", async () => {
+		await render(vi.fn(), vi.fn());
+		await swipe("touch", -80);
+		expect(isOpen()).toBe(true);
+		expect(panelMoves).toBe(0);
 	});
 });
