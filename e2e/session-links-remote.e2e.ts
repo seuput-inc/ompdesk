@@ -8,7 +8,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { exitApp } from "./harness";
+import { cssString, exitApp } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, openHostFolder, type RemoteInstance } from "./remote-harness";
 
 const PR = "https://github.com/acme/app/pull/7";
@@ -63,7 +63,7 @@ test("a paired computer reads and changes a host's session links on the host", a
 		);
 		expect(await linksOn(b, sessionPath)).toEqual([PR]);
 		expect(await linksOn(a, sessionPath)).toEqual([]);
-		const row = a.locator(`[data-sidebar-device="${deviceId}"] [data-device-session="${sessionPath}"]`);
+		const row = a.locator(`[data-sidebar-device="${deviceId}"] [data-device-session=${cssString(sessionPath)}]`);
 		await expect(row).toContainText("1 linked", { timeout: 30_000 });
 
 		// Added on the host itself: the paired computer's row follows.
