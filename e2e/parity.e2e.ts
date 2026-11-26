@@ -774,7 +774,18 @@ if (dir) {
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {
-					const { path: sessionPath } = await hostSession(session);
+					const { path: sessionPath, cwd } = await hostSession(session);
+					if (session === "connector") {
+						const id = await b.evaluate(
+							async folder =>
+								(await window.omp.bots.command({ action: "get" })).bots.find(bot => bot.folder === folder)?.id,
+							cwd,
+						);
+						if (!id) throw new Error("No bot owns the connector chat");
+						const fold = b.locator(`[data-bot-fold=${cssString(id)}]`);
+						await expect(fold).toBeVisible();
+						if ((await fold.getAttribute("aria-expanded")) === "false") await fold.click();
+					}
 					await openRow(
 						b,
 						b.locator(`.omp-sidebar-session-row[data-session-path=${cssString(sessionPath)}]`),
