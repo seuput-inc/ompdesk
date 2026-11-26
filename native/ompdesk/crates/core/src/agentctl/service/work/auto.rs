@@ -209,6 +209,13 @@ impl AgentControl {
             if tab.last_run.is_none() && !tab.restored {
                 continue;
             }
+            // A message still owed to it (sent, not yet in its journal: a relaunch ended the omp that held it unread)
+            // is work it has not done; the redelivery starts its next turn.
+            if let (Some(outbox), Some(path)) = (&self.send_outbox, &tab.session_path)
+                && !outbox.owed_to(path, tab.device.as_deref()).is_empty()
+            {
+                continue;
+            }
             let facts = self.auto_close_facts(tab, opener_idle).await;
             // The facts come from its omp just now, the tab from main's state as the pass began. A turn that ran in
             // between (a message handed to a child a relaunch restored runs at once) leaves facts of a run the tab
