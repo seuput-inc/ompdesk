@@ -95,6 +95,7 @@ export interface Surface {
 }
 
 export type ParitySession =
+	| "start"
 	| "work"
 	| "reply"
 	| "steer"
@@ -1808,26 +1809,13 @@ export const SURFACES: readonly Surface[] = [
 	{
 		id: "first-run",
 		area: "A",
-		title: "First run's provider step with Orca's step pill, in a new empty tab on a computer where nothing can serve yet",
-		// A fresh load checks the providers again, as a launch does; the step draws in a session with no transcript.
-		open: async (page, look) => {
-			await page.reload();
-			await openDrawer(page, look);
-			// This computer's project header's +, or on a paired computer's view the host project's.
-			await page
-				.locator(":is([data-sidebar-group-new], [data-device-group-new]):visible")
-				.first()
-				.click({ force: true });
-			// A phone's drawer closes onto the new tab; if it stays over it, pick its row, as a finger would.
-			const drawer = page.locator("[data-drawer]");
-			await drawer.waitFor({ state: "hidden", timeout: 5_000 }).catch(async () => {
-				await drawer.locator("button[data-roving-item]", { hasText: "New session" }).first().click();
-			});
+		title: "First run's provider step on the start tab of a fresh profile",
+		open: async page => {
+			await page.locator('[data-first-run-step="connect"] [data-provider-connect="anthropic"]').waitFor();
 		},
 		ready: '[data-first-run-step="connect"] [role="progressbar"]',
-		// Parity only, and only over a host whose fake omp has no signed-in provider (`OMP_GUI_TEST_SIGNED_OUT=1`).
 		when: () => false,
-		parity: { session: "work", available: () => process.env.OMP_GUI_TEST_SIGNED_OUT === "1" },
+		parity: { session: "start" },
 	},
 	{
 		id: "sidebar-family",

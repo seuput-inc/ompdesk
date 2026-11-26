@@ -23,7 +23,14 @@ import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
 import { writeShellBin, writeShellGh } from "./fixture/shell-gh";
 import { FIXTURE_NEWER_OMP_VERSION } from "./fixture/version";
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
-import { connectHost, launchRemote, makeRemoteProfile, REMOTE_LOGIN, type RemoteInstance } from "./remote-harness";
+import {
+	connectHost,
+	launchRemote,
+	makeRemoteProfile,
+	openHostFolder,
+	REMOTE_LOGIN,
+	type RemoteInstance,
+} from "./remote-harness";
 import { crashed, type Look, panelCrash } from "./responsive-audit";
 import { PARITY_WORK_PROMPT, type ParitySession, SURFACES, type Surface } from "./responsive-surfaces";
 
@@ -326,19 +333,23 @@ if (dir) {
 	// surface, and every surface in reverse) run side by side as two tests, each in a worker of its own.
 	test.describe.configure({ mode: "parallel", retries: 0 });
 
-	const capture = async (surfaces: readonly ParitySurface[], out: string): Promise<void> => {
-		test.setTimeout(300_000 + surfaces.length * 90_000);
+	const captureProfiles = async (
+		surfaces: readonly ParitySurface[],
+		out: string,
+		records: SurfaceRecord[],
+		pageErrors: string[],
+	): Promise<void> => {
+		const fresh = surfaces.length === 1 && surfaces[0]?.parity.session === "start";
 		await fs.mkdir(out, { recursive: true });
 		const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-parity-")));
 		// The composer dictation surfaces script the fake omp's speech through this file (e2e/fixture/rpc-ui.ts `voiceScript`).
-		process.env.OMP_GUI_TEST_VOICE_FILE = path.join(parent, "voice.json");
+		if (!fresh) process.env.OMP_GUI_TEST_VOICE_FILE = path.join(parent, "voice.json");
 		// `session-slow-start` holds the fake omp's `get_state` through this file (e2e/fixture/rpc-ui.ts `startFile`).
-		process.env.OMP_GUI_TEST_START_FILE = path.join(parent, "start.json");
+		if (!fresh) process.env.OMP_GUI_TEST_START_FILE = path.join(parent, "start.json");
 		let host: RemoteInstance | undefined;
 		let client: RemoteInstance | undefined;
 		let proxy: ServeProxy | undefined;
 		const browser = await chromium.launch();
-		const pageErrors: string[] = [];
 		let android: { bin: string; close(): Promise<void> } | undefined;
 		try {
 			const ghBin = path.join(parent, "ghbin");
@@ -350,17 +361,24 @@ if (dir) {
 				await fs.writeFile(hostOmpVersion, `${FIXTURE_NEWER_OMP_VERSION}\n`);
 			}
 			// `preview-start`, `preview-device`: both computers see the same emulator (each lists its own devices).
-			const previewStart = process.env.OMP_GUI_TEST_PREVIEW_START === "1";
+			const previewStart = !fresh && process.env.OMP_GUI_TEST_PREVIEW_START === "1";
 			if (previewStart) android = await fakeAndroidDevice(parent, browser);
 			const devicePath = android ? `${android.bin}${path.delimiter}` : "";
+			const firstRunEnv = fresh
+				? { OMP_GUI_TEST_SIGNED_OUT: "1", OMP_GUI_TEST_LOGIN: "1", OMP_GUI_TEST_FEATURED: "1" }
+				: undefined;
+			const prefs = fresh
+				? { firstRunComplete: false }
+				: { displayPreferences: { showTokenUsage: true }, ...(BLOCKED_USAGE ? { sidebarWidth: 227 } : {}) };
 			const hostProfile = await makeRemoteProfile(parent, "host", {
 				language: DESKTOP.lang,
 				theme: DESKTOP.theme,
 				// The usage row under a reply (`reply-usage`): on here, on the paired computer and through to the phone.
-				prefs: { displayPreferences: { showTokenUsage: true }, ...(BLOCKED_USAGE ? { sidebarWidth: 227 } : {}) },
+				prefs,
 				// Only the host's omp starts under the hold: its slow-start bound is short, so the banner shows within seconds.
 				// B's `gh` is the stand-in above: every view's GitHub reads reach B's.
 				env: {
+					...firstRunEnv,
 					OMP_GUI_START_SLOW_MS: "1500",
 					OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1",
 					PATH: `${devicePath}${ghBin}${path.delimiter}${process.env.PATH}`,
@@ -372,8 +390,9 @@ if (dir) {
 				language: DESKTOP.lang,
 				theme: DESKTOP.theme,
 				port: hostProfile.port,
-				prefs: { displayPreferences: { showTokenUsage: true }, ...(BLOCKED_USAGE ? { sidebarWidth: 227 } : {}) },
+				prefs,
 				env: {
+					...firstRunEnv,
 					OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1",
 					...(devicePath ? { PATH: `${devicePath}${process.env.PATH}` } : {}),
 				},
@@ -401,24 +420,29 @@ if (dir) {
 			// B's work: a titled session with one answered turn.
 			let work: HostSession = { path: "", cwd: "" };
 			const start = (await b.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.tabId ?? "";
-			await b.evaluate(
-				id => window.omp.rpc.commandForTab(id, { type: "bash", command: "fixture:title:Parity work" }),
-				start,
-			);
-			const input = b.locator("textarea").first();
-			await input.fill(PARITY_WORK_PROMPT);
-			await input.press("Enter");
-			await expect(b.getByText("Local fixture reply").first()).toBeVisible({ timeout: 30_000 });
-			await expect
-				.poll(
-					async () => {
-						const tab = (await b.evaluate(() => window.omp.tabs.list())).find(entry => entry.tabId === start);
-						work = { path: tab?.sessionPath ?? "", cwd: tab?.cwd ?? "" };
-						return work.path;
-					},
-					{ timeout: 30_000 },
-				)
-				.not.toBe("");
+			if (fresh) {
+				// A blank start tab has no stored row. A opens B's folder, without sending a turn on either computer.
+				await openHostFolder(a, deviceId, hostProfile.project);
+			} else {
+				await b.evaluate(
+					id => window.omp.rpc.commandForTab(id, { type: "bash", command: "fixture:title:Parity work" }),
+					start,
+				);
+				const input = b.locator("textarea").first();
+				await input.fill(PARITY_WORK_PROMPT);
+				await input.press("Enter");
+				await expect(b.getByText("Local fixture reply").first()).toBeVisible({ timeout: 30_000 });
+				await expect
+					.poll(
+						async () => {
+							const tab = (await b.evaluate(() => window.omp.tabs.list())).find(entry => entry.tabId === start);
+							work = { path: tab?.sessionPath ?? "", cwd: tab?.cwd ?? "" };
+							return work.path;
+						},
+						{ timeout: 30_000 },
+					)
+					.not.toBe("");
+			}
 
 			// B's phone page.
 			await b.evaluate(() => window.omp.mobileWeb.command({ action: "enable" }));
@@ -996,6 +1020,9 @@ if (dir) {
 				for (const n of [1, 2, 3]) await stored(phone, work.cwd, `Parity stored ${n}`);
 				for (const n of [1, 2, 3]) await stored(a, clientProfile.project, `Parity stored ${n}`);
 				await a.reload();
+				const local = a.locator('[data-sidebar-device-toggle="local"]');
+				await local.waitFor();
+				if ((await local.getAttribute("aria-expanded")) === "false") await local.click();
 				// A's own project starts folded (its window shows B's session): unfolded once, so its rows can be reached.
 				const fold = a.locator(
 					`[data-workspace-group=${cssString(clientProfile.project)}] button[aria-expanded='false']`,
@@ -1004,8 +1031,11 @@ if (dir) {
 				if ((await fold.count()) > 0) await fold.first().click();
 			};
 
-			const records: SurfaceRecord[] = [];
 			for (const surface of surfaces) {
+				if (surface.parity.session === "start" && !fresh) {
+					await captureProfiles([surface], out, records, pageErrors);
+					continue;
+				}
 				if (surface.parity.pairedBack) await pairBack();
 				if (surface.parity.remoteChild && !remoteChildLeft) await leaveRemoteChild();
 				if (surface.parity.hiddenRoster && !hiddenRosterLeft) await leaveHiddenRoster();
@@ -1029,8 +1059,13 @@ if (dir) {
 						// 45798443670 and 45816609957 stalled about 20 minutes on a surface no output named).
 						console.log(`[parity] ${new Date().toISOString().slice(11, 19)} ${surface.id} › ${view}`);
 						try {
-							await show[view](surface.parity.session);
-							await page.locator("[data-composer-input]").first().waitFor({ state: "visible", timeout: 60_000 });
+							if (!fresh) {
+								await show[view](surface.parity.session);
+								await page
+									.locator("[data-composer-input]")
+									.first()
+									.waitFor({ state: "visible", timeout: 60_000 });
+							}
 							await surface.open(page, VIEW_LOOK[view]);
 							if (surface.ready)
 								await page.locator(surface.ready).first().waitFor({ state: "visible", timeout: 15_000 });
@@ -1095,12 +1130,6 @@ if (dir) {
 					}
 				});
 			}
-			await fs.writeFile(
-				path.join(out, "parity.json"),
-				`${JSON.stringify({ surfaces: records, pageErrors }, null, "\t")}\n`,
-			);
-			const failed = records.flatMap(record => record.failures.map(failure => `${record.id} › ${failure}`));
-			expect(failed, "every surface reached in every view").toEqual([]);
 		} finally {
 			await browser.close().catch(() => undefined);
 			await proxy?.close().catch(() => undefined);
@@ -1108,6 +1137,19 @@ if (dir) {
 			await android?.close().catch(() => undefined);
 			await fs.rm(parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => undefined);
 		}
+	};
+
+	const capture = async (surfaces: readonly ParitySurface[], out: string) => {
+		test.setTimeout(300_000 + surfaces.length * 90_000);
+		const records: SurfaceRecord[] = [];
+		const pageErrors: string[] = [];
+		await captureProfiles(surfaces, out, records, pageErrors);
+		await fs.writeFile(
+			path.join(out, "parity.json"),
+			`${JSON.stringify({ surfaces: records, pageErrors }, null, "\t")}\n`,
+		);
+		const failed = records.flatMap(record => record.failures.map(failure => `${record.id} › ${failure}`));
+		expect(failed, "every surface reached in every view").toEqual([]);
 	};
 
 	const sheet = "local window, paired computer's view and phone of the same session";
