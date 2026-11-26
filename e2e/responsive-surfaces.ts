@@ -358,6 +358,14 @@ async function openWorkspaceDialog(page: Page, look: Look): Promise<void> {
 	await palette.locator('[data-command-name="switch-project"]').click();
 }
 
+/** The new task sheet through the command palette's "New task…" command (a real control on every view). */
+async function openNewTaskSheet(page: Page, look: Look): Promise<void> {
+	await clickCommandPalette(page, look);
+	const palette = page.locator('[role="dialog"]:has([data-palette-index])');
+	await palette.getByRole("combobox").fill("new-worktree-tab");
+	await palette.locator('[data-command-name="new-worktree-tab"]').click();
+}
+
 /** Put a prompt of the web host's sheet layer (`?host=1` pages) in front of the person. */
 async function hostPrompt(page: Page, prompt: Record<string, unknown>): Promise<void> {
 	await page.evaluate(prompt => {
@@ -897,7 +905,7 @@ const DIALOG_FLAGS: ReadonlyArray<{ id: string; action: string; args?: unknown[]
 	{ id: "dialog-benchmark", action: "openBenchmark", title: "Model benchmark" },
 	{ id: "dialog-model-setup", action: "openModelSetup", title: "Model setup assistant" },
 	{ id: "dialog-debug", action: "openDebug", title: "Debug console" },
-	{ id: "dialog-worktree", action: "openWorktreeDialog", title: "New worktree" },
+	{ id: "dialog-worktree", action: "openWorktreeDialog", title: "New task" },
 ];
 
 /**
@@ -2109,6 +2117,20 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work", after: closeOverlay },
 	},
 	{
+		id: "board-all",
+		area: "B",
+		title: "All sessions: the sidebar's All sessions row opens the board of every session in four lanes",
+		open: async (page, look) => {
+			await openDrawer(page, look);
+			await page.locator('[data-sidebar-nav-row="board"]:visible').first().click();
+		},
+		ready: "[data-board-lanes] [data-board-lane='idle']",
+		// Parity only: the board reads a computer's session lists, which the audits' harness page does not run.
+		when: () => false,
+		// Esc on a page goes back to the session, so the next surface starts on it.
+		parity: { session: "work", after: closeOverlay },
+	},
+	{
 		id: "settings-computer-use",
 		area: "B",
 		title: "Settings › Agent behavior, scrolled to Computer use engine and the macOS permission rows under it",
@@ -2209,11 +2231,47 @@ export const SURFACES: readonly Surface[] = [
 			title: `Agents › ${tab}`,
 			// Live, Pull requests and GitHub open through the palette and their tab (real controls), so the parity sheet
 			// takes them.
-			open: tab === "definitions" ? page => ui(page, "openAgents", tab) : page => openPageTab(page, "agents", tab),
+			open:
+				tab === "definitions"
+					? page => ui(page, "openAgents", tab)
+					: async page => {
+							await openPageTab(page, "agents", tab);
+							// The source bar keeps the last source a person chose; a source surface may have run first.
+							if (tab === "github") await page.locator('[data-work-source="github"]').click();
+						},
 			settle: 900,
 			...(tab === "definitions" ? {} : { parity: { session: "work" as const } }),
 		}),
 	),
+	// Agents › GitHub's work-source bar: GitLab without glab (its install card), Linear and Jira with no account yet
+	// (their connect cards); each is the surface a person meets first.
+	...(["gitlab", "linear", "jira"] as const).map(
+		(source): Surface => ({
+			id: `agents-source-${source}`,
+			area: "B",
+			title: `Agents › GitHub › the ${source} source (its first card)`,
+			open: async page => {
+				await openPageTab(page, "agents", "github");
+				await page.locator(`[data-work-source="${source}"]`).click();
+			},
+			ready: `[data-work-sources="${source}"]`,
+			settle: 1200,
+			parity: { session: "work" },
+		}),
+	),
+	{
+		id: "agents-github-projects",
+		area: "B",
+		title: "Agents › GitHub › Projects (the account's projects)",
+		open: async page => {
+			await openPageTab(page, "agents", "github");
+			await page.locator('[data-work-source="github"]').click();
+			await page.locator('[data-github-center] [role="tab"][data-tab-id="projects"]').click();
+		},
+		ready: "[data-project-list]",
+		settle: 1200,
+		parity: { session: "work" },
+	},
 	{
 		id: "agents-pr-detail",
 		area: "B",
@@ -2323,7 +2381,9 @@ export const SURFACES: readonly Surface[] = [
 						? openWorkspaceDialog(page, look)
 						: dialog.id === "dialog-model-setup"
 							? openModelSetup(page, look)
-							: ui(page, dialog.action, ...(dialog.args ?? [])),
+							: dialog.id === "dialog-worktree"
+								? openNewTaskSheet(page, look)
+								: ui(page, dialog.action, ...(dialog.args ?? [])),
 			...(dialog.id === "dialog-command-palette"
 				? { ready: "[role=dialog] [role=listbox]", parity: { session: "work" as const } }
 				: dialog.id === "dialog-workspace"
@@ -2337,7 +2397,13 @@ export const SURFACES: readonly Surface[] = [
 								ready: "[role=dialog] [data-model-setup-evidence] [aria-haspopup=listbox]",
 								parity: { session: "work" as const, after: closeOverlay },
 							}
-						: {}),
+						: dialog.id === "dialog-worktree"
+							? {
+									// The new task sheet over the work session's project, opened from the palette's command.
+									ready: "[role=dialog] [data-new-task-sheet] [data-new-task-project]",
+									parity: { session: "work" as const, after: closeOverlay },
+								}
+							: {}),
 			settle: 700,
 		}),
 	),

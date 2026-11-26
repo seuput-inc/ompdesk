@@ -430,7 +430,30 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // own since 26190f1da. The budget is that measure plus 80 bytes.
 // The Schedules channel names left `shared/schedules.ts` for `shared/schedule-channels.ts` (26 Nov 2026, routines),
 // so the first screen's `omp-api.ts` no longer pulls the schedule rules (cron, webhook senders, filters) with them.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_227_982;
+// All sessions (26 Nov 2026, orca-board). On the first screen: the board's destination and its window's start on it
+// (`stores/ui.ts` `openBoard`, AppShell's loader, `main.tsx` `#/board`), the sidebar's All sessions nav row (its
+// figures load as their own chunk behind Suspense), a session row's Copy title and the hover that loads its last
+// exchange (`lib/last-exchange.ts`, its own chunk), and a child's question in its opener's dock (`ChildAsks`, drawn
+// beside each pane's own card at once). The page, its peek, inbox and Resources load on intent with the other pages:
+// measured 2,230,764 (CI run 45754781110, omp/agent/orca-board at 3a021909f), 2,782 bytes over.
+// Dictation (26 Nov 2026, orca-dictation): the composer's take state with hold-to-talk, the words while speaking and
+// Retry (`hooks/use-dictation-take.ts`, `lib/dictation-press.ts`), the audio context made inside the press and the
+// microphone's opening (`lib/dictation-capture.ts`, because WebKit keeps a context made later suspended), the
+// `voice.dictate` key and the stream's RPC methods and strings. Loaded on use, off the first screen: the take's capture,
+// stream and whole-take transcription (`lib/dictation-live.ts`, while the microphone opens), the tidy pass and its
+// glossary (`lib/dictation-text.ts`, when a take first lands) and the window's dictation host (once dictation is on):
+// measured 2,231,148 (e2e-nightly run 45755595124), 3,166 bytes over. Both, with the title bar's tab strip gone
+// (c0ecfe18f): measured 2,231,648 (CI run 45769328347, omp/agent/orca-dictation at b85ccc38c). The budget is that
+// measure plus 80 bytes.
+// The new task sheet's pending rows (26 Nov 2026, orca-worktree-create): a task being made shows on the sidebar's first
+// screen (`layout/sidebar/NewTaskRows.tsx` and the step runner of `stores/new-tasks.ts`, its composer helpers already
+// loaded): 737 bytes measured over main (CI build of omp/agent/orca-worktree-create on 8fafd91b6), added to the budget.
+// Work sources outside GitHub (26 Nov 2026, orca-trackers): `omp-api.ts`'s `trackers` member and GitLab's request
+// timeout, the tracker fault codes in `shared/ipc-error-codes.ts`, GitHub sign-in's project scope argument and a new
+// task's exact branch (`stores/new-tasks.ts`, `worktreeCreate`'s `branch`); the channel names sit in
+// `shared/tracker-channels.ts` so the tracker rules stay with the source bar's lazy chunks: measured 2,232,761
+// (e2e-nightly run 45779116807, omp/agent/orca-trackers at c149c5843). The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_232_841;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

@@ -22,6 +22,7 @@ enum Kind {
     Setup,
     PreMerge,
     PostMerge,
+    Archive,
 }
 
 #[derive(Deserialize)]
@@ -57,6 +58,7 @@ impl Hook {
             Kind::Setup => "setup",
             Kind::PreMerge => "pre-merge",
             Kind::PostMerge => "post-merge",
+            Kind::Archive => "archive",
         };
         let log = self.log_dir.join(format!("ompdesk-worktree-{name}.log"));
         let output = Output::new(&log);

@@ -106,6 +106,7 @@ import type {
 	RuntimeErrorReport,
 	SessionContentMatch,
 	SessionInfo,
+	SessionUse,
 	SystemInfo,
 	TailnetComputer,
 	TrayState,
@@ -188,6 +189,8 @@ import {
 	type SshPrompt,
 	type SshToolsState,
 } from "./ssh-tools";
+import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND } from "./tracker-channels";
+import type { TrackersApi } from "./trackers";
 
 /** How `window.omp` reaches main: Electron's `ipcRenderer`, or a web device's socket. */
 export interface OmpTransport {
@@ -278,6 +281,10 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			command: request => transport.invoke(MAIL_ACCOUNTS_COMMAND, request),
 			test: id => transport.invoke(MAIL_ACCOUNTS_COMMAND, { action: "test", id }),
 		} satisfies MailAccountsApi,
+		trackers: {
+			command: request => transport.invoke(TRACKERS_COMMAND, request),
+			accounts: request => transport.invoke(TRACKERS_ACCOUNTS, request),
+		} satisfies TrackersApi,
 		sidebarProjects: {
 			command: (request, device) => transport.invoke(SIDEBAR_PROJECTS_COMMAND, request, device),
 			onState: callback => subscribe<IpcSidebarProjects>(SIDEBAR_PROJECTS_STATE, callback),
@@ -549,7 +556,8 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 		githubAuth: {
 			refresh: (force?: boolean) =>
 				transport.invoke(IPC_COMMANDS.GITHUB_AUTH_REFRESH, force === true) as Promise<GithubAuthState>,
-			startLogin: () => transport.invoke(IPC_COMMANDS.GITHUB_AUTH_LOGIN_START) as Promise<GithubAuthState>,
+			startLogin: (scopes?: "project") =>
+				transport.invoke(IPC_COMMANDS.GITHUB_AUTH_LOGIN_START, scopes) as Promise<GithubAuthState>,
 			openLogin: () => transport.invoke(IPC_COMMANDS.GITHUB_AUTH_LOGIN_OPEN) as Promise<GithubAuthState>,
 			cancelLogin: () => transport.invoke(IPC_COMMANDS.GITHUB_AUTH_LOGIN_CANCEL) as Promise<GithubAuthState>,
 			logout: () => transport.invoke(IPC_COMMANDS.GITHUB_AUTH_LOGOUT) as Promise<GithubAuthState>,
@@ -608,6 +616,13 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 				transport.invoke(IPC_COMMANDS.SESSIONS_DUMP_BUNDLE, request) as Promise<DiagnosticBundleResult>,
 			openInNewWindow: (payload: IpcSessionOpenNewWindowPayload) =>
 				transport.invoke(IPC_COMMANDS.SESSION_OPEN_NEW_WINDOW, payload) as Promise<boolean>,
+			/** A new window that opens on the all-sessions board (false on a phone's page: a page is one window). */
+			openBoardWindow: () => transport.invoke(IPC_COMMANDS.BOARD_OPEN_WINDOW) as Promise<boolean>,
+			use: () => transport.invoke(IPC_COMMANDS.RESOURCES_READ) as Promise<SessionUse[] | null>,
+			endProcess: (ompPid: number, pid: number, startedMs: number) =>
+				transport.invoke(IPC_COMMANDS.RESOURCES_END_PROCESS, { ompPid, pid, startedMs }) as Promise<boolean>,
+			giveBack: (tabId: string) =>
+				transport.invoke(IPC_COMMANDS.RESOURCES_GIVE_BACK, tabId) as Promise<"released" | "busy">,
 			consumePendingOpen: () => transport.invoke(IPC_COMMANDS.SESSION_CONSUME_PENDING) as Promise<string | null>,
 			summaries: (device?: string) =>
 				transport.invoke(IPC_COMMANDS.SESSION_SUMMARIES, device) as Promise<VersionedSummaries | null>,

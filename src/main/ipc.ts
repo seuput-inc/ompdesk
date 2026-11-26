@@ -109,6 +109,7 @@ import type {
 	NotificationClickPayload,
 	SessionContentMatch,
 	SessionKind,
+	SessionUse,
 } from "../shared/ipc-types";
 import {
 	HOST_UPDATE_ACTIONS,
@@ -140,6 +141,7 @@ import { SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import { SIDEBAR_PROJECTS_COMMAND } from "../shared/sidebar-projects";
 import { parseTerminalCommands, TERMINAL_COMMANDS_PREF } from "../shared/terminal-commands";
 import { SCRATCH_TERMINAL_TAB } from "../shared/terminal-types";
+import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND } from "../shared/tracker-channels";
 import { isUiLanguage } from "../shared/ui-language";
 import {
 	findChromiumBrowsers,
@@ -235,6 +237,7 @@ import { closeWindowTab, type TabReleaseDeps } from "./tab-release";
 import { type SessionFolderState, type SpawnTabRemote, sessionFolderState, spawnTabForWindow } from "./tab-spawn";
 import { TERMINAL_READ_TOOL } from "./terminal/agent-tool";
 import { closeTabTerminals, readTabTerminals, registerTerminalIpc } from "./terminal/ipc";
+import { parseTrackersAccountsRequest, parseTrackersRequest, type TrackerAccounts } from "./tracker-accounts";
 import { personsPrompt, type RelaunchContinuation, trackMove } from "./turn-resume";
 import { dispatchedCommand, STOP_COMMANDS } from "./turn-stop-log";
 import { appVersion } from "./updater";
@@ -329,12 +332,20 @@ export interface IpcDeps {
 	 * of another app): the phones' upload folder (web/uploads.ts), its limits and its 24-hour lifetime.
 	 */
 	uploads?: Pick<UploadStore, "attachHere" | "goneIn">;
+	/** All sessions › Resources: what each live session holds, a process's Stop, a quiet tab's omp given back now. */
+	resources?: {
+		use(): Promise<SessionUse[] | null>;
+		endProcess(ompPid: number, pid: number, startedMs: number): Promise<boolean>;
+		giveBack(tabId: string): Promise<"released" | "busy">;
+	};
 	/** A preference was written through PREFS_SET (main-side effects such as keep-awake). */
 	onPrefChanged?: (key: string) => void;
 	/** The Schedules service, created later than the handlers: read per use. */
 	schedules?: () => Pick<ScheduleService, "command" | "create" | "prune"> | null;
 	/** The owner's mail accounts for email routines, created with the Schedules service: read per use. */
 	mailAccounts?: () => Pick<MailAccounts, "state" | "save" | "remove" | "test"> | null;
+	/** This computer's Linear and Jira connections (tracker-accounts.ts): read per use. */
+	trackerAccounts?: () => Pick<TrackerAccounts, "command" | "accounts"> | null;
 	/** This computer's sidebar project list: it looks for new folders when the session index changes. */
 	sidebarProjects?: Pick<SidebarProjects, "schedule" | "layoutChanged">;
 	/**
@@ -1810,6 +1821,25 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return (await deps.spawnWindow(folder?.folder ?? cwd, sessionPath, kind, device)) !== null;
 	});
 
+	// The all-sessions board in a window of its own (Orca's pop-out dashboard): a new window on its usual start tab
+	// that opens on the board page.
+	ipc.handle(
+		IPC_COMMANDS.BOARD_OPEN_WINDOW,
+		async () => (await deps.spawnWindow(undefined, undefined, undefined, undefined, "board")) !== null,
+	);
+
+	// All sessions › Resources (Orca's resource usage and sleep): what each live session holds, a process's Stop, and a
+	// quiet tab's omp given back now (index.ts wires them to SessionProcesses, the pool and idle release's rule).
+	ipc.handle(IPC_COMMANDS.RESOURCES_READ, async () => (await deps.resources?.use()) ?? null);
+	ipc.handle(IPC_COMMANDS.RESOURCES_END_PROCESS, async (_caller, payload: unknown) => {
+		const { ompPid, pid, startedMs } = (payload ?? {}) as Record<string, unknown>;
+		if (!Number.isInteger(ompPid) || !Number.isInteger(pid) || typeof startedMs !== "number") return false;
+		return (await deps.resources?.endProcess(ompPid as number, pid as number, startedMs)) ?? false;
+	});
+	ipc.handle(IPC_COMMANDS.RESOURCES_GIVE_BACK, async (_caller, tabId: unknown) =>
+		typeof tabId === "string" && deps.resources ? deps.resources.giveBack(tabId) : "busy",
+	);
+
 	// ========================================================================
 	// Session tabs — in-window parallel sessions. Each tab owns a pooled
 	// sidecar bound to the CALLING window (no new BrowserWindow); the pool
@@ -2559,6 +2589,17 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		if (action === "remove" && typeof id === "string") return accounts.remove(id);
 		if (action === "test" && typeof id === "string") return accounts.test(id);
 		throw new Error("Invalid mail accounts request");
+	});
+	// Agents › GitHub's Linear and Jira sources: this computer's accounts; a token goes in and never comes back out.
+	ipc.handle(TRACKERS_COMMAND, (_caller, request: unknown) => {
+		const trackers = deps.trackerAccounts?.();
+		if (!trackers) throw new Error("Trackers are not available yet");
+		return trackers.command(parseTrackersRequest(request));
+	});
+	ipc.handle(TRACKERS_ACCOUNTS, (_caller, request: unknown) => {
+		const trackers = deps.trackerAccounts?.();
+		if (!trackers) throw new Error("Trackers are not available yet");
+		return trackers.accounts(parseTrackersAccountsRequest(request));
 	});
 	ipc.handle(SCHEDULES_LOG, (caller, runId: unknown, device?: unknown) => {
 		if (typeof runId !== "string") throw new Error("Invalid run id");

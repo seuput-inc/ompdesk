@@ -1,6 +1,7 @@
-import { CircleDot, CircleOff, Copy, ExternalLink, MessageSquare, Pencil, Plus, RefreshCw } from "lucide-react";
+import { CircleDot, CircleOff, Copy, ExternalLink, MessageSquare, Pencil, Play, Plus, RefreshCw } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import type { GithubIssueDetail, GithubIssueState } from "../../../../shared/github";
+import { issueTaskPrompt } from "../../../lib/fix-prompts";
 import { copyText, formatTimeAgo } from "../../../lib/format";
 import { github, useGithubLoad } from "../../../lib/github";
 import { uploadGithubImage } from "../../../lib/github-image";
@@ -9,6 +10,7 @@ import { MarkdownRenderer } from "../../../lib/markdown";
 import { openExternal } from "../../../lib/open-external";
 import { sameRepo, useGithubNav } from "../../../stores/github-nav";
 import { toast, toastError } from "../../../stores/toast";
+import { useUiStore } from "../../../stores/ui";
 import {
 	AsyncSection,
 	Badge,
@@ -144,7 +146,8 @@ function issueBranch(issue: GithubIssueDetail): string {
 	return words ? `${issue.number}-${words}` : `issue-${issue.number}`;
 }
 
-function IssueDetail({
+/** An issue's page: its text, state, people, comments and edits (also a project item's, `GithubProjects.tsx`). */
+export function IssueDetail({
 	issue,
 	target,
 	onChanged,
@@ -183,6 +186,20 @@ function IssueDetail({
 					<span>{formatTimeAgo(issue.updatedAt)}</span>
 				</div>
 				<div className="flex flex-wrap gap-2">
+					<Button
+						data-github-issue-start
+						icon={<Play />}
+						onClick={() =>
+							useUiStore.getState().openWorktreeDialog({
+								name: issueBranch(issue),
+								prompt: issueTaskPrompt(issue),
+							})
+						}
+						size="sm"
+						variant="primary"
+					>
+						{t("github.issues.startTask")}
+					</Button>
 					<Button icon={<Pencil />} onClick={() => setEditing(true)} size="sm" variant="secondary">
 						{t("common.edit")}
 					</Button>

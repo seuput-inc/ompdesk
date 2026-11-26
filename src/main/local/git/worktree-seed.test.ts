@@ -291,6 +291,7 @@ describe("the standalone worktree hook supervisor", () => {
 		["setup", 0, true],
 		["pre-merge", 4, false],
 		["post-merge", 130, true],
+		["archive", 2, false],
 	] as const)("keeps the captured %s result, log and last 4096 UTF-16 units", async (hook, code, fromPrimary) => {
 		const primary = path.join(scratch, "fixture primary");
 		await fs.rename(repo, primary);

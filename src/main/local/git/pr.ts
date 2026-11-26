@@ -77,6 +77,10 @@ const REFUSALS = new Set([
 	"pr_review_failed",
 	"pr_edit_failed",
 	"github_failed",
+	// Projects (v2): the token lacks the project scope; a view this page cannot draw, or too large to read whole.
+	"gh_project_scope",
+	"project_unsupported",
+	"project_too_large",
 ]);
 
 /** One gh request to the core (`timeoutMs`: see `coreGh`); its refusals keep their code. */

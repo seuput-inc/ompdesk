@@ -516,15 +516,19 @@ describe("Sidebar menus and pinned ordering", () => {
 		const nav = container.querySelector("[data-sidebar-nav]");
 		const navRows = () =>
 			[...container.querySelectorAll("[data-sidebar-nav-row]")].map(row => row.getAttribute("data-sidebar-nav-row"));
-		expect(navRows()).toEqual(["agents", "schedules", "stats", "phone"]);
+		expect(navRows()).toEqual(["board", "agents", "schedules", "stats", "phone"]);
 		expect(container.querySelector("[data-sidebar-bots]")).toBeNull();
 		await act(async () => useBotsFeature.setState({ available: true }));
-		expect(navRows()).toEqual(["agents", "schedules", "bots", "stats", "phone"]);
+		expect(navRows()).toEqual(["board", "agents", "schedules", "bots", "stats", "phone"]);
 		expect(container.querySelector("[data-sidebar-bots]")?.textContent).toContain("No bots yet");
 		await fire(container.querySelector('[data-sidebar-nav-row="bots"]'), "onClick");
 		expect(useUiStore.getState().destination).toBe("bots");
 		await act(async () => useBotsFeature.setState({ available: false }));
-		expect(nav?.textContent).toContain("⌥A");
+		// The Agents shortcut is the cell's tooltip and aria-keyshortcuts: a half-width cell has no room for it.
+		expect(nav?.textContent).not.toContain("⌥A");
+		expect(container.querySelector('[data-sidebar-nav-row="agents"]')?.getAttribute("aria-keyshortcuts")).toBe(
+			"Alt+A",
+		);
 
 		await fire(container.querySelector('[data-sidebar-nav-row="stats"]'), "onClick");
 		expect(useUiStore.getState().destination).toBe("insights");
@@ -541,7 +545,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		await fire(container.querySelector('[data-sidebar-nav-row="stats"]'), "onContextMenu");
 		expect(menuItemLabels()).toEqual(["Hide from sidebar"]);
 		await fire(menuItem("Hide from sidebar"), "onClick");
-		expect(navRows()).toEqual(["agents", "schedules", "phone"]);
+		expect(navRows()).toEqual(["board", "agents", "schedules", "phone"]);
 		expect(useSidebarFolds.getState().navHidden).toEqual({ stats: true });
 
 		const footer = container.querySelector("[data-sidebar-destinations]");
@@ -576,7 +580,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(document.body.querySelector("[data-sidebar-pins]")).not.toBeNull();
 		expect(useUiStore.getState()).toMatchObject({ destination: "settings", settingsTab: "keyboard" });
 		await fire(document.body.querySelector("#sidebar-nav-stats"), "onClick");
-		expect(navRows()).toEqual(["agents", "schedules", "stats", "phone"]);
+		expect(navRows()).toEqual(["board", "agents", "schedules", "stats", "phone"]);
 	});
 
 	it("pins only the usage block by default (it draws nothing without a subscription account); other pinned ones sit above the destinations in a fixed order and open their view", async () => {
@@ -623,7 +627,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		await fire(menuItem("Customize sidebar…"), "onClick");
 		const sheet = document.body.querySelector("[data-sidebar-pins]");
 		// A desktop window's usage block is the status bar's, so its sheet offers no usage switch (a phone's does).
-		expect(sheet?.querySelectorAll('[role="switch"]')).toHaveLength(9);
+		expect(sheet?.querySelectorAll('[role="switch"]')).toHaveLength(10);
 		const switchFor = (pin: string) => document.body.querySelector(`#sidebar-pin-${pin}`);
 		expect(switchFor("usage")).toBeNull();
 		expect(switchFor("files")?.getAttribute("aria-checked")).toBe("false");
@@ -1360,7 +1364,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		const labels = menuItemLabels();
 		expect(labels.some(label => label.includes("New agent session here"))).toBe(true);
 		expect(labels.some(label => label.includes("New chat session here"))).toBe(false);
-		expect(labels.some(label => label.includes("New worktree tab here"))).toBe(true);
+		expect(labels.some(label => label.includes("New task here"))).toBe(true);
 		expect(labels.some(label => label.includes("Rename"))).toBe(true);
 		expect(labels.some(label => label.includes("Move up"))).toBe(true);
 		expect(labels.some(label => label.includes("Move down"))).toBe(true);
@@ -1651,6 +1655,7 @@ describe("Sidebar menus and pinned ordering", () => {
 			"Move to project…",
 			"Archive",
 			"Hide from other agents",
+			"Copy title",
 			"Show in folder",
 			"Delete",
 		]);
@@ -2059,6 +2064,7 @@ describe("Sidebar menus and pinned ordering", () => {
 			"Move to project…",
 			"Archive",
 			"Hide from other agents",
+			"Copy title",
 			"Show in folder",
 			"Delete",
 		]);
@@ -4319,6 +4325,7 @@ describe("Sidebar device sections", () => {
 				"Move down",
 				"Move to project…",
 				"Archive",
+				"Copy title",
 				"Delete",
 			]);
 		});
@@ -6965,6 +6972,7 @@ describe("Sidebar on a touch screen", () => {
 			"Move to project…",
 			"Archive",
 			"Hide from other agents",
+			"Copy title",
 			"Show in folder",
 			"Delete",
 		]);

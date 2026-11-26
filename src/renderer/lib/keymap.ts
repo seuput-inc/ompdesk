@@ -249,6 +249,24 @@ export function formatShortcut(label: string, platform: KeymapPlatform = PLATFOR
 	return [...new Set(parts)].join(" / ");
 }
 
+/** `KeyboardEvent.key` names of the glyph base keys, as `aria-keyshortcuts` spells them. */
+const ARIA_KEY_NAMES: Record<string, string> = {
+	...WINDOWS_KEY_NAMES,
+	"⎋": "Escape",
+	"↑": "ArrowUp",
+	"↓": "ArrowDown",
+	"←": "ArrowLeft",
+	"→": "ArrowRight",
+};
+
+/** A macOS-spelled shortcut as `aria-keyshortcuts` names it on `platform` ("⌥A" → "Alt+A"; ⌘ is CmdOrCtrl, as in formatShortcut). */
+export function ariaKeyShortcut(label: string, platform: KeymapPlatform = PLATFORM): string | undefined {
+	const chord = parseChordParts(platformChord(label, platform));
+	if (!chord) return undefined;
+	const mods = [chord.ctrl && "Control", chord.alt && "Alt", chord.shift && "Shift", chord.meta && "Meta"];
+	return [...mods.filter(Boolean), ARIA_KEY_NAMES[chord.key] ?? chord.key].join("+");
+}
+
 /** Structural subset of KeyboardEvent that chord extraction reads (test-friendly). */
 export interface KeyEventLike {
 	key: string;
@@ -639,6 +657,16 @@ export const KEYMAP_ACTIONS = [
 		defaults: ["⌃`"],
 		overlaySafe: true,
 		hotkeyGroup: "view",
+	},
+	// Hold to dictate (Orca's `voice.dictation`, Auto mode): a tap starts and stops a take, a press held 300 ms records
+	// until release (`lib/dictation-press.ts`). Orca's Mod+E is the export here, so ⌥D. Handled by DictationHost, which
+	// needs the key's release; App's dispatch never sees it.
+	{
+		id: "voice.dictate",
+		labelKey: "hotkeys.row.dictate",
+		defaults: ["⌥D"],
+		overlaySafe: false,
+		hotkeyGroup: "generation",
 	},
 	{ id: "hotkeys", labelKey: "hotkeys.row.hotkeys", defaults: ["⌘/", "⌃/"], overlaySafe: true, hotkeyGroup: "view" },
 ] as const satisfies readonly KeymapAction[];

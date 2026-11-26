@@ -67,7 +67,7 @@ import { useBotsAvailable } from "../../../lib/bots-source";
 import { activeComposerInput } from "../../../lib/composer-focus";
 import { saveDiagnosticBundle } from "../../../lib/diagnostic-bundle";
 import { hideNativeDragImage } from "../../../lib/drag-image";
-import { cx, formatClock } from "../../../lib/format";
+import { copyText, cx, formatClock } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { isImeKeyEvent } from "../../../lib/ime";
 import { actionKbd, onEscape } from "../../../lib/keymap";
@@ -145,6 +145,7 @@ import { SessionLiveTitle, sessionLive } from "../SessionLiveTitle";
 import { openedChildCounts, openedChildRows } from "../work-board/opened-children";
 import { childFoldSignal, type FoldSignal, foldSummary, sessionFoldSignal } from "./fold-summary";
 import { remoteOpenedTab, summaryRowState } from "./host-row-state";
+import { NewTaskRows } from "./NewTaskRows";
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
 import { deleteProject, isStoredRow } from "./project-delete";
 import { projectMenuItems } from "./project-menu";
@@ -1807,6 +1808,20 @@ export function Sidebar() {
 		) : null;
 		// The age slot: the waiting token (a mark that stays), else the time since it last did something.
 		const age = waiting || !indexed ? null : <TimeAgo className="text-(--sc-text-subtle)" iso={session.modified} />;
+		const rowTip = [
+			title,
+			worktree?.label,
+			fork?.tooltip,
+			statusLabel,
+			target ? t("sidebar.row.repositoryTip", { name: target.name }) : null,
+			target?.head ? headWords(t, target.head).tip : null,
+			prWords,
+			linkWords,
+			folderMissing ? t("sidebar.folderMissingTip", { folder: session.cwd }) : null,
+			indexed ? formatClock(session.modified) : null,
+		]
+			.filter(Boolean)
+			.join("\n");
 		return (
 			<Fragment key={session.path}>
 				<ListRow
@@ -1824,6 +1839,23 @@ export function Sidebar() {
 						tabIndex,
 						"data-roving-item": key,
 						onFocus: () => setFocusKey(key),
+						// The last exchange joins the native tooltip on hover only (lib/last-exchange.ts, its own chunk), since
+						// reading it for every row on each render would parse every transcript snapshot; React leaves the
+						// attribute until the row's text changes.
+						onPointerEnter: event => {
+							const row = event.currentTarget;
+							void import("../../../lib/last-exchange").then(
+								({ rowTipWithExchange }) => {
+									const tip = rowTipWithExchange(t, rowTip, {
+										tabId: tab?.id,
+										sessionPath: session.path,
+										stamp: session.modified,
+									});
+									if (tip) row.title = tip;
+								},
+								() => undefined,
+							);
+						},
 						onKeyDown: event => {
 							if (opensMenu(event)) {
 								event.preventDefault();
@@ -1934,20 +1966,7 @@ export function Sidebar() {
 							{linkWords && <span className="sr-only">, {linkWords}</span>}
 						</>
 					}
-					titleText={[
-						title,
-						worktree?.label,
-						fork?.tooltip,
-						statusLabel,
-						target ? t("sidebar.row.repositoryTip", { name: target.name }) : null,
-						target?.head ? headWords(t, target.head).tip : null,
-						prWords,
-						linkWords,
-						folderMissing ? t("sidebar.folderMissingTip", { folder: session.cwd }) : null,
-						indexed ? formatClock(session.modified) : null,
-					]
-						.filter(Boolean)
-						.join("\n")}
+					titleText={rowTip}
 				/>
 				{(openTabId || opened.length > 0 || (summary?.agents.length ?? 0) > 0) && (
 					<SidebarSubagents
@@ -2101,6 +2120,7 @@ export function Sidebar() {
 						    install with hundreds of sessions must not build the full DOM per debounced refresh just to hide it. */}
 						<Collapse open={!groupCollapsed}>
 							<div className="space-y-px" data-session-group={group.cwd} data-state="expanded">
+								<NewTaskRows cwd={group.cwd} />
 								{group.sessions.map(session => renderSessionRow(session, true))}
 								<SidebarLooseChildren foldKey={`group:${group.cwd}`} opened={loose} />
 							</div>
@@ -2172,6 +2192,7 @@ export function Sidebar() {
 							</Button>
 						</div>
 					))}
+				<NewTaskRows except={groups.map(group => group.cwd)} />
 				{groups.length > 0 && (
 					<DndContext collisionDetection={closestCenter} onDragEnd={onProjectDragEnd} sensors={projectSensors}>
 						<SortableContext items={groups.map(group => group.cwd)} strategy={verticalListSortingStrategy}>
@@ -2565,6 +2586,7 @@ export function Sidebar() {
 										links: then(() => setLinksFor(session.path)),
 									}
 								: {}),
+							copyTitle: then(() => void copyText(sessionDisplayLabel(session, t("sidebar.untitled")))),
 							reveal: then(() => void revealSession(session)),
 							saveBundle: anonymized =>
 								then(() => {

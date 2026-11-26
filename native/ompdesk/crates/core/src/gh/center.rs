@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::json::{self, get, or};
-use super::{BodyFile, Tools, pr, review};
+use super::{BodyFile, Tools, pr, projects, review};
 use crate::fs::order::{is_js_space, js_trim};
 use crate::run::Opts;
 use crate::server::{Fault, Reply};
@@ -196,6 +196,16 @@ enum Op {
     /// A private attachment's signed URL, read into a `data:` URL.
     Attachment {
         url: String,
+    },
+    /// Projects (v2) the viewer and its organizations have (`projects.rs`).
+    ProjectList,
+    ProjectView(projects::ViewRequest),
+    /// A field set on an item, or cleared without `value`.
+    ProjectField {
+        project_id: String,
+        item_id: String,
+        field_id: String,
+        value: Option<projects::FieldValue>,
     },
 }
 
@@ -1152,6 +1162,14 @@ pub async fn command(
             data,
         } => review::image_upload(&center, &name, &content_type, &data).await,
         Op::Attachment { url } => review::attachment(&url).await,
+        Op::ProjectList => projects::list(&center).await,
+        Op::ProjectView(request) => projects::view(&center, request).await,
+        Op::ProjectField {
+            project_id,
+            item_id,
+            field_id,
+            value,
+        } => projects::set_field(&center, &project_id, &item_id, &field_id, value).await,
     }
 }
 

@@ -23,6 +23,7 @@ import type {
 import type { TodoDriftState } from "../../resources/gui-bridge/todo-drift-contracts";
 import type { ModelRequestFrame } from "../../resources/gui-bridge/turn-stages-contracts";
 import type { GithubRequest } from "./github";
+import type { GitlabRequest } from "./gitlab";
 
 export type { DesktopSlotState };
 
@@ -460,6 +461,17 @@ export type RpcCommand =
 	// The model the speech's language needs (`language`: a tag; default the conversation language): starts its download
 	// into omp's model cache without waiting, so the call asks again until it answers `ready` or `failed`.
 	| { id?: string; type: "stt_prepare"; language?: string }
+	// Stock's `#warmModel`: load the language's dictation model into the speech worker when its weights are here.
+	| { id?: string; type: "stt_warm"; language?: string }
+	// A live take on stock's streaming session: `start` answers `{id}` (null while the model downloads: transcribe the
+	// take whole instead), `audio` feeds 16 kHz mono PCM16 (little-endian, base64, no header) and answers the words so
+	// far (`SttStreamWords`), `stop` answers the whole transcript, `cancel` drops it.
+	| { id?: string; type: "stt_stream_start"; language?: string }
+	| { id?: string; type: "stt_stream_audio"; streamId: string; audioBase64: string }
+	| { id?: string; type: "stt_stream_stop"; streamId: string }
+	| { id?: string; type: "stt_stream_cancel"; streamId: string }
+	// The person's opt-in cleanup of dictated words on a small model (`tiny`, then `smol`): answers `{text}`.
+	| { id?: string; type: "dictation_cleanup"; text: string; terms: string[] }
 	| { id?: string; type: "retry" }
 	/** Stock `restoreSession` (what `omp --restore` runs): go on with the turn the last process was cut off in. Main-only; the renderer never sends it. */
 	| { id?: string; type: "restore_interrupted" }
@@ -558,10 +570,26 @@ export type RpcCommand =
 			branch?: { name: string; mode: "new" | "local" | "remote"; remote?: string; from?: string };
 			/** One per dialog opening: a retried request (an answer lost on the way) gets the same worktree, never a second one. */
 			requestId?: string;
+			/** A preset of the repository's `.ompdesk/sparse`: only its folders are checked out. */
+			sparse?: string;
+			/** False: no seed or setup hook now; the caller runs `worktree_prepare` as its own step. */
+			prepare?: boolean;
 	  }
 	| { id?: string; type: "worktree_remove"; path: string; force?: boolean }
 	// The worktree dialog fetches the remote default branch when it opens, so a `default`-based create finds it fresh.
 	| { id?: string; type: "worktree_prefetch"; baseCwd?: string }
+	// The seed and setup hook of a worktree `worktree_create {prepare: false}` made (`RpcWorktreePrepared`).
+	| { id?: string; type: "worktree_prepare"; baseCwd: string; path: string }
+	// The repository's sparse checkout presets (`RpcSparsePreset[]`).
+	| { id?: string; type: "worktree_sparse_presets"; baseCwd?: string }
+	// A setup hook drafted from another tool's config, when the repository has none (`RpcSetupDraft | null`).
+	| { id?: string; type: "worktree_setup_draft"; baseCwd?: string }
+	// Saves the person's setup hook in the main checkout; refused (`setup_exists`) over an existing one.
+	| { id?: string; type: "worktree_setup_save"; baseCwd?: string; text: string }
+	// A short name for a new task from its first prompt, by the session's title model (`{title: string | null}`).
+	| { id?: string; type: "worktree_name_suggest"; text: string }
+	// The tab's own placeholder branch renamed while never published (`{branch: string | null}`, FS91).
+	| { id?: string; type: "worktree_rename_branch"; from: string; to: string }
 	// Orphaned worktrees: OMPdesk-made linked worktrees no open session uses, listed for the repository of the tab's
 	// cwd; removal re-checks everything and only takes a landed or untouched one (`LocalCommandError` codes
 	// `not_orphan`, `not_removable`).
@@ -599,6 +627,8 @@ export type RpcCommand =
 	| { id?: string; type: "pr_edit"; number: number; title?: string; body?: string; base?: string }
 	// Agents › GitHub over gh (src/main/local/git/github.ts; contract src/shared/github.ts).
 	| { id?: string; type: "github"; request: GithubRequest; background?: boolean }
+	// Agents › GitHub › GitLab over glab (src/main/local/git/gitlab.ts; contract src/shared/gitlab.ts).
+	| { id?: string; type: "gitlab"; request: GitlabRequest }
 	// What a web page says about itself, for a conversation link's hover card (core `webPeek.get`,
 	// native/ompdesk/crates/core/src/web_peek.rs: https only, public addresses only, 5 s, 256 KiB).
 	| { id?: string; type: "web_peek"; url: string }
@@ -1392,6 +1422,27 @@ export interface RpcWorktreeCreateResult {
 	setup?: WorktreeSetupReport;
 	/** Present for base `default`: what fetching the remote default branch first brought, or why it could not. */
 	base?: WorktreeBaseFetch;
+}
+
+/** worktree_prepare: what the seed and the setup hook did (each absent when the repository has neither file). */
+export type RpcWorktreePrepared = Pick<RpcWorktreeCreateResult, "seed" | "setup">;
+
+/** worktree_sparse_presets: one `[name]` of the repository's `.ompdesk/sparse` and its folders. */
+export interface RpcSparsePreset {
+	name: string;
+	folders: string[];
+}
+
+/**
+ * worktree_setup_draft: a setup hook drafted from another tool's config (`source`, read from `file` in the main
+ * checkout): its `commands`, and the hook's text for the computer it would run on, saved as `script`.
+ */
+export interface RpcSetupDraft {
+	source: string;
+	file: string;
+	commands: string[];
+	script: string;
+	text: string;
 }
 
 /** `ref`: `origin/<default>`; `behind`: commits the fetch brought (`subjects`: the newest three); `fetched` false when a fetch under 30 s old was reused or it failed. */
@@ -2920,9 +2971,10 @@ export interface SessionStats {
 // Voice (speech in/out)
 // ============================================================================
 
-/** Result of `transcribe_audio`: the recognized utterance. */
+/** Result of `transcribe_audio` and `stt_stream_stop`: the recognized utterance and the language it was heard in. */
 export interface TranscribeAudioResult {
 	text: string;
+	language?: string;
 }
 
 /** Result of `synthesize_speech`: local TTS output as base64 WAV (PCM16). */

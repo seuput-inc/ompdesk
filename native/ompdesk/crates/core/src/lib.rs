@@ -17,6 +17,7 @@ pub mod ext;
 pub mod fs;
 pub mod gh;
 pub mod git;
+mod glab;
 mod http;
 pub mod hub;
 pub mod ipc;
@@ -54,6 +55,7 @@ pub mod supervise;
 mod sys;
 pub mod tailscale;
 mod termhistory;
+mod trackers;
 // shortcut: the contract the units T2.2-T2.5 fill is unused until they land; drop this allow with the last of them.
 #[allow(dead_code)]
 mod tools;

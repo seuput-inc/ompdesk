@@ -44,6 +44,7 @@ import {
 	type TerminalSnapshot,
 } from "../../../shared/terminal-types";
 import { currentShellMode, useCompactShell, useShellInput } from "../../hooks/use-shell-mode";
+import { DICTATION_TEXT_EVENT } from "../../lib/dictation-target";
 import { FILE_DRAG_TYPE, readFileDrag } from "../../lib/file-drag";
 import { cx } from "../../lib/format";
 import { useT } from "../../lib/i18n";
@@ -184,6 +185,7 @@ export interface TerminalMount {
 				| "clearSelection"
 				| "parser"
 				| "registerLinkProvider"
+				| "paste"
 			>
 		>;
 	fit(): void;
@@ -402,6 +404,14 @@ export function TerminalViewport({
 					},
 				}),
 			);
+			// Dictation into this terminal (DictationHost): the words, one line, go in as a paste (bracketed when the
+			// program asked); Enter stays the person's.
+			const onDictated = (event: Event) => {
+				if (!view.terminal.paste) return;
+				event.preventDefault();
+				view.terminal.paste((event as CustomEvent<string>).detail);
+			};
+			target.addEventListener(DICTATION_TEXT_EVENT, onDictated);
 			view.terminal.attachCustomKeyEventHandler(event => {
 				if (event.type !== "keydown") return true;
 				const action = terminalAction(event);
@@ -561,6 +571,7 @@ export function TerminalViewport({
 				fontChanged.current = null;
 				clearTimeout(fitTimer);
 				observer.disconnect();
+				target.removeEventListener(DICTATION_TEXT_EVENT, onDictated);
 				theme.disconnect();
 				input.dispose();
 				bell?.dispose();

@@ -72,7 +72,7 @@ import { CoreError, core } from "../core/process";
 import { deletedSessions } from "../deleted-sessions";
 import { discardOpenedWorktree } from "../disk/saved-worktrees";
 import { createWorktree, tablessWorktreeBridge, WORKTREE_COMMAND_BUDGETS_MS } from "../local/git/worktree";
-import { describePreparation, MERGE_HOOKS_BUDGET_MS } from "../local/git/worktree-seed";
+import { describePreparation, MERGE_HOOKS_BUDGET_MS, SETUP_TIMEOUT_MS } from "../local/git/worktree-seed";
 import {
 	GIT_METHODS,
 	GIT_REQUEST_TIMEOUT_MS,
@@ -1341,7 +1341,8 @@ export class AgentControlRuntime {
 					GIT_METHODS.removeWorktree,
 					{ worktree: gitRef(worktree), withRemote: true },
 					() => removeSafeWorktree(worktree),
-					REMOTE_COPY_MS,
+					// The repository's archive hook may run before the removal.
+					SETUP_TIMEOUT_MS + REMOTE_COPY_MS,
 				);
 				return typeof answer === "string" ? { removal: answer } : answer;
 			},

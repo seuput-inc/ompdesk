@@ -29,7 +29,8 @@ function childPath(parent: string, name: string): string {
 	return `${parent.replace(/[\\/]+$/, "")}${separator}${name}`;
 }
 
-function CloneDialog({ repo, host, onClose }: { repo: string; host: string | undefined; onClose: () => void }) {
+/** Clone `repo` into a folder the person picks (also a project item's missing repository, `GithubProjects.tsx`). */
+export function CloneDialog({ repo, host, onClose }: { repo: string; host: string | undefined; onClose: () => void }) {
 	const t = useT();
 	const { busy, run } = useGithubMutation();
 	const [destination, setDestination] = useState("");

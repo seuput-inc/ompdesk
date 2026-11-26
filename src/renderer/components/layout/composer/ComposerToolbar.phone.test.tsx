@@ -67,6 +67,8 @@ const baseProps: ComposerToolbarProps = {
 	queueSplitCount: 0,
 	dictationPhase: "idle",
 	onMic: () => {},
+	onMicDown: () => {},
+	onMicUp: () => {},
 	onStopAndSend: () => {},
 	stoppable: false,
 	hasDraft: false,
@@ -127,6 +129,40 @@ describe("phone toolbar", () => {
 		await render({ hasDraft: true, sendDisabled: false, onMic });
 		expect(slot("send").querySelector(".omp-composer-mic")).toBeNull();
 		expect(slot("send").querySelector(`[aria-label="${translate("input.send")}"]`)).not.toBeNull();
+	});
+
+	it("holding the Send slot's mic: its release ends the take, and the click it makes on Stop and send never sends", async () => {
+		useSettingsStore.setState({ sttEnabled: true });
+		const onMicDown = vi.fn();
+		const onMicUp = vi.fn();
+		const onStopAndSend = vi.fn();
+		await render({ onMicDown, onMicUp, onStopAndSend });
+		const press = (type: string) => {
+			const button = slot("send").querySelector("button") as unknown as HTMLElement;
+			return act(async () =>
+				button.dispatchEvent(Object.assign(new Event(type, { bubbles: true }), { button: 0, pointerId: 1 })),
+			);
+		};
+		await press("pointerdown");
+		expect(onMicDown).toHaveBeenCalledTimes(1);
+		const held = slot("send").querySelector("button");
+		// While the mic opens the slot is already Stop and send, the same button under the finger: the mousedown that
+		// follows the press is still cancelled, so the field keeps focus (a disabled Send there took it).
+		await render({ onMicDown, onMicUp, onStopAndSend, dictationPhase: "starting" });
+		expect(slot("send").querySelector("button")).toBe(held);
+		expect(held?.hasAttribute("data-dictation-send")).toBe(true);
+		const mousedown = new Event("mousedown", { bubbles: true, cancelable: true });
+		await act(async () => held?.dispatchEvent(mousedown));
+		expect(mousedown.defaultPrevented).toBe(true);
+		await render({ onMicDown, onMicUp, onStopAndSend, dictationPhase: "recording" });
+		expect(slot("send").querySelector("button[data-dictation-send]")).toBe(held);
+		await press("pointerup");
+		expect(onMicUp).toHaveBeenCalledTimes(1);
+		await act(async () => (slot("send").querySelector("button") as unknown as HTMLElement).click());
+		expect(onStopAndSend).not.toHaveBeenCalled();
+		// A tap of its own sends.
+		await act(async () => (slot("send").querySelector("button") as unknown as HTMLElement).click());
+		expect(onStopAndSend).toHaveBeenCalledTimes(1);
 	});
 
 	it("keeps the empty Send slot a disabled Send when dictation is off", async () => {

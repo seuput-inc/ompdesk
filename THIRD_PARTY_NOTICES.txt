@@ -6151,6 +6151,25 @@ Conversation code adapted from the same Orca commit, with changes:
 - src/renderer/components/chat/transcript-find.ts (`findScrollDelta`), from
   src/renderer/src/components/native-chat/viewport/find/native-chat-find-visibility.ts
 
+Dictation code adapted from the same Orca commit, with changes:
+
+- src/renderer/lib/dictation-text.ts (filler words, term spelling), from
+  src/shared/speech/dictation/dictation-filler-words.ts, dictation-term-spelling.ts,
+  dictation-dictionary.ts and dictation-text-pipeline.ts
+- the cleanup request in resources/gui-bridge/stt-language-core.ts, from
+  src/shared/speech/dictation/dictation-cleanup.ts
+
+New task and worktree code adapted from the same Orca commit, with changes:
+
+- src/main/local/git/setup-draft.ts, from src/shared/workspace-setup/setup-script-import*.ts and
+  setup-script-package-manager-suggestion.ts (a setup-hook draft from another tool's config)
+- native/ompdesk/crates/core/src/git/sparse.rs and the sparse and parallel checkout of
+  native/ompdesk/crates/core/src/git/worktree.rs, from src/main/git/worktrees/creation/
+  worktree-sparse-add.ts and checkout-workers-git-args.ts
+- src/renderer/stores/new-tasks.ts and src/renderer/components/layout/sidebar/NewTaskRows.tsx, from
+  src/renderer/src/components/worktree-creation/worktree-setup-steps.ts, worktree-creation-clock.ts and
+  sidebar/worktree-list/rows/PendingWorktreeRow.tsx (a new task's steps on its row)
+
 Permission is hereby granted, free of charge, to any person obtaining a copy of the palettes
 and associated documentation files (the "Software"), to deal in the Software without
 restriction, including without limitation the rights to use, copy, modify, merge, publish,

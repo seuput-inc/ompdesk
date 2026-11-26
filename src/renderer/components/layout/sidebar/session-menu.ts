@@ -18,6 +18,7 @@ import {
 	Bell,
 	BellOff,
 	Columns2,
+	Copy,
 	ExternalLink,
 	Eye,
 	EyeOff,
@@ -91,6 +92,8 @@ export interface SessionMenuActions {
 	/** Archives it, or restores it when archived. */
 	toggleArchive?: () => void;
 	toggleAgentHidden?: () => void;
+	/** Copies its title as the row shows it. */
+	copyTitle?: () => void;
 	reveal?: () => void;
 	/** Saves the open tab's diagnostic bundle; `anonymized` when Option/Alt was held. */
 	saveBundle?: (anonymized: boolean) => void;
@@ -245,10 +248,21 @@ export function sessionMenuItems({
 			onSelect: actions.toggleAgentHidden,
 		});
 
-	const other: ContextMenuItem[] =
-		facts.stored && actions.reveal
-			? [{ id: "session-reveal", label: t("sidebar.menu.reveal"), icon: FolderSearch, onSelect: actions.reveal }]
-			: [];
+	const other: ContextMenuItem[] = [];
+	if (facts.stored && actions.copyTitle)
+		other.push({
+			id: "session-copy-title",
+			label: t("sidebar.menu.copyTitle"),
+			icon: Copy,
+			onSelect: actions.copyTitle,
+		});
+	if (facts.stored && actions.reveal)
+		other.push({
+			id: "session-reveal",
+			label: t("sidebar.menu.reveal"),
+			icon: FolderSearch,
+			onSelect: actions.reveal,
+		});
 
 	// Stock's `/dump` runs in the tab's own omp: a session no tab holds has nothing to dump, so it has no item.
 	const { saveBundle } = actions;

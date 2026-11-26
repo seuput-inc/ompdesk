@@ -12,8 +12,10 @@
  *    the worktree's own git dir. A failure is reported, never fatal: the worktree stays. The script is the
  *    repository's own, run with the user's rights, as the agent's first `bun install` there would be.
  *
- * `runWorktreeHook` also runs `.ompdesk/worktree-pre-merge` (in the worktree, before `ompdesk_merge` starts git) and
- * `.ompdesk/worktree-post-merge` (in the parent checkout, after the merge landed), found and logged the same way.
+ * `runWorktreeHook` also runs `.ompdesk/worktree-pre-merge` (in the worktree, before `ompdesk_merge` starts git),
+ * `.ompdesk/worktree-post-merge` (in the parent checkout, after the merge landed) and `.ompdesk/worktree-archive` (in
+ * the worktree, before OMPdesk removes it: Orca's archive script, `execute-worktree-removal.ts:162-188`; a failure keeps
+ * the worktree), found and logged the same way.
  *
  * The script runs under the core binary's supervise mode (`ompdesk-core --supervise`, `superviseWorktreeHook`), not as a
  * request of the running core. A hook is a shell whose children (`bun install`) must end with it at its timeout, and
@@ -25,21 +27,25 @@
  * here is OMPdesk's own (`worktree.ts`), so nothing of stock is duplicated.
  */
 
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
 import type { WorktreeBaseFetch, WorktreeSeedReport, WorktreeSetupReport } from "../../../shared/rpc-types";
 import { currentStepSignal, fencedEffect } from "../../serial-chain";
 import { superviseWorktreeHook } from "../../setup/supervisor";
+import { LocalCommandError } from "../types";
 import { coreGit, DEFAULT_TIMEOUT_MS } from "./exec";
 
 const WORKTREE_INCLUDE_FILE = ".worktreeinclude";
 export const SETUP_TIMEOUT_MS = 120_000;
 const runFoundHook = fencedEffect("worktree hook", superviseWorktreeHook);
-/** The repository's own scripts around a worktree's life: when it is made, and either side of `ompdesk_merge`. */
-export type WorktreeHook = "setup" | "pre-merge" | "post-merge";
+/** The repository's own scripts around a worktree's life: made, either side of `ompdesk_merge`, and before it goes. */
+export type WorktreeHook = "setup" | "pre-merge" | "post-merge" | "archive";
 const HOOK_EXTENSION = process.platform === "win32" ? ".cmd" : "";
 export const WORKTREE_HOOK_SCRIPTS: Record<WorktreeHook, string> = {
 	setup: `.ompdesk/worktree-setup${HOOK_EXTENSION}`,
 	"pre-merge": `.ompdesk/worktree-pre-merge${HOOK_EXTENSION}`,
 	"post-merge": `.ompdesk/worktree-post-merge${HOOK_EXTENSION}`,
+	archive: `.ompdesk/worktree-archive${HOOK_EXTENSION}`,
 };
 /** What `ompdesk_merge` may spend in hooks: one before the merge, one after. */
 export const MERGE_HOOKS_BUDGET_MS = 2 * SETUP_TIMEOUT_MS;
@@ -83,6 +89,74 @@ export async function runWorktreeHook(
 		1,
 	);
 	return found ? runFoundHook(hook, { primary, worktree, cwd, timeoutMs }, found, currentStepSignal()) : null;
+}
+
+/** Whether the repository has a script for `hook` (the worktree's own or the main checkout's); runs nothing. */
+export async function hasWorktreeHook(hook: WorktreeHook, primary: string, worktree: string): Promise<boolean> {
+	const found = await coreGit<{ script: string } | null>(
+		"git.worktreeHook",
+		{ primary, worktree, script: WORKTREE_HOOK_SCRIPTS[hook], log: `ompdesk-worktree-${hook}.log` },
+		1,
+	).catch(() => null);
+	return found !== null;
+}
+
+/**
+ * The repository's archive hook before a removal of `worktree` (the person's Remove, an agent session's safe removal,
+ * disk care's sweep, an orphan's and an unused open's; stock's `worktree.onExit` removal runs none): null when it has
+ * none or it ran well, else the clause that says why the worktree stays.
+ */
+export async function archiveHookRefusal(primary: string, worktree: string): Promise<string | null> {
+	const script = WORKTREE_HOOK_SCRIPTS.archive;
+	try {
+		const report = await runWorktreeHook("archive", { primary, worktree, cwd: worktree });
+		if (!report || report.ok) return null;
+		const how = report.timedOut ? "timed out" : `failed (exit ${report.exitCode})`;
+		return `its ${script} ${how}; log ${report.logPath}`;
+	} catch (error) {
+		return `its ${script} could not run (${error instanceof Error ? error.message : String(error)})`;
+	}
+}
+
+/**
+ * The setup hook's text for `commands` on this computer (FX21: a draft from another tool's config, `setup-draft.ts`):
+ * a POSIX shell script that stops at the first failure, or on Windows a batch file whose every line is `call`ed (a
+ * bare `npm` there would end the batch) and stops at the first failure.
+ */
+export function setupScriptText(commands: readonly string[]): string {
+	if (process.platform === "win32")
+		return [
+			"@echo off",
+			// The draft spells the hook's variables as sh does; cmd reads `%NAME%`.
+			...commands.map(command => `call ${command.replace(/\$\{(OMPDESK_[A-Z_]+)\}/g, "%$1%")} || exit /b 1`),
+			"",
+		].join("\r\n");
+	return ["#!/bin/sh", "set -e", ...commands, ""].join("\n");
+}
+
+/** Whether the main checkout `primary` has a setup hook (a draft is offered only when it has none). */
+export async function hasSetupScript(primary: string): Promise<boolean> {
+	return fs.stat(path.join(primary, WORKTREE_HOOK_SCRIPTS.setup)).then(
+		() => true,
+		() => false,
+	);
+}
+
+/**
+ * Saves the person's setup hook (`text`, as they read and edited it) in the main checkout `primary`. Refused when the
+ * repository already has one: a draft never replaces a script someone wrote.
+ */
+export async function saveSetupScript(primary: string, text: string): Promise<{ path: string }> {
+	const file = path.join(primary, WORKTREE_HOOK_SCRIPTS.setup);
+	await fs.mkdir(path.dirname(file), { recursive: true });
+	try {
+		await fs.writeFile(file, text, { flag: "wx", mode: 0o755 });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST")
+			throw new LocalCommandError(`${WORKTREE_HOOK_SCRIPTS.setup} already exists.`, "setup_exists");
+		throw error;
+	}
+	return { path: file };
 }
 
 /** Both steps after a successful `worktree add`; neither ever fails the creation. */

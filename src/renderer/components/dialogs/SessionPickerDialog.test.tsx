@@ -86,8 +86,11 @@ async function type(value: string): Promise<void> {
 	await act(async () => props.onChange?.({ target: input, currentTarget: input }));
 }
 
+/** The session rows (the create-worktree row at the end is not one). */
 const rows = () =>
-	Array.from(document.body.querySelectorAll('[role="option"]')).map(row => (row.textContent ?? "").trim());
+	Array.from(document.body.querySelectorAll('[role="option"]:not([data-session-picker-create])')).map(row =>
+		(row.textContent ?? "").trim(),
+	);
 
 beforeEach(() => {
 	vi.useFakeTimers();
@@ -171,5 +174,34 @@ describe("SessionPickerDialog listing", () => {
 		await act(async () => row.click());
 		await flush();
 		expect(openTab).toHaveBeenCalledWith({ sessionPath: removed.path, kind: "agent" });
+	});
+});
+
+describe("SessionPickerDialog extras", () => {
+	it("ends with a row that starts a worktree by the typed name, past the operators", async () => {
+		useUiStore.setState({ worktreeDialog: null });
+		await mount();
+		await type("repo:nowhere fix-login");
+		expect(rows()).toHaveLength(0);
+		const create = document.body.querySelector("[data-session-picker-create]") as unknown as {
+			textContent: string;
+			click(): void;
+		};
+		expect(create.textContent).toContain("fix-login");
+		await act(async () => create.click());
+		expect(useUiStore.getState()).toMatchObject({ sessionPickerOpen: false, worktreeDialog: { name: "fix-login" } });
+	});
+
+	it("lists only the sessions a tab here holds under the Open in a tab chip", async () => {
+		useTabsStore.setState({
+			tabs: [{ id: "t1", cwd: "/work", status: "ready", sessionPath: "/s/a.jsonl", unreadDone: false } as never],
+		});
+		await mount();
+		expect(rows()).toHaveLength(2);
+		const chip = document.body.querySelector('[data-session-picker-chip="open"]') as unknown as { click(): void };
+		await act(async () => chip.click());
+		expect(rows()).toHaveLength(1);
+		expect(document.body.querySelector("[data-session-picker-open]")).not.toBeNull();
+		useTabsStore.setState({ tabs: [] });
 	});
 });

@@ -84,13 +84,16 @@ export function withFileTab(tabs: FileTab[], path: string, keep: boolean): FileT
  * What fills the main area: the open session (transcript + composer) or one
  * of the destination pages. The sidebar stays visible for all of them.
  */
-export type Destination = "session" | "agents" | "bots" | "insights" | "settings";
+export type Destination = "session" | "agents" | "board" | "bots" | "insights" | "settings";
 export type PageDestination = Exclude<Destination, "session">;
 export type AgentsTab = "live" | "definitions" | "prs" | "github";
 export type InsightsTab = "stats" | "usage";
 export type InsightsStatsScope = "session" | "all";
+/** The all-sessions page's views: the lanes, one list by latest activity, and what each session holds. */
+export type BoardView = "board" | "inbox" | "resources";
 const AGENTS_TABS: readonly string[] = ["live", "definitions", "prs", "github"] satisfies AgentsTab[];
 const INSIGHTS_TABS: readonly string[] = ["stats", "usage"] satisfies InsightsTab[];
+const BOARD_VIEWS: readonly string[] = ["board", "inbox", "resources"] satisfies BoardView[];
 /** Settings section a cold ⌘, lands on (SettingsPage maps legacy ids). */
 const DEFAULT_SETTINGS_TAB = "general";
 /** Documents whose rendered/source choice the Files viewer remembers. */
@@ -122,6 +125,15 @@ export interface GuiDisplayPreferences {
 	pasteMenuThreshold?: number | null;
 	/** Touch devices only: Enter sends like on a desktop instead of adding a line (default off: only Send sends). */
 	mobileEnterSends?: boolean | null;
+}
+
+/** What opens the new task sheet with: its project, and a name and first prompt to start from. */
+export interface NewTaskSheetContext {
+	baseCwd?: string;
+	name?: string;
+	prompt?: string;
+	/** The exact branch the worktree gets (a Linear issue's `branchName`), never prefixed or renamed. */
+	branch?: string;
 }
 
 interface UiStore {
@@ -187,6 +199,7 @@ interface UiStore {
 	/** What the main area shows: the session or a destination page. */
 	destination: Destination;
 	agentsTab: AgentsTab;
+	boardView: BoardView;
 	insightsTab: InsightsTab;
 	insightsStatsScope: InsightsStatsScope;
 	settingsTab: string;
@@ -218,9 +231,9 @@ interface UiStore {
 	/** A provider whose card Providers & accounts should show: it scrolls to the card and clears this. A new object per ask, so asking again for the same provider shows it again. */
 	providerFocus: { id: string } | null;
 	renameDialogOpen: boolean;
-	/** Worktree-create dialog (plan/20): non-null opens it; baseCwd pins the
-	 * repo when invoked from a Sidebar group (default = active session cwd). */
-	worktreeDialog: { baseCwd?: string } | null;
+	/** The new task sheet (`dialogs/WorktreeDialog.tsx`): non-null opens it. `baseCwd` pins the project (a Sidebar
+	 * group; default the active session's folder); `name` and `prompt` fill it (a GitHub issue or pull request). */
+	worktreeDialog: NewTaskSheetContext | null;
 	/** Close-time cleanup prompt for a worktree-bound tab (plan/20): the tab
 	 * awaiting the user's delete/keep decision before closeTab proceeds. */
 	worktreeClosePrompt: { tabId: string } | null;
@@ -311,6 +324,8 @@ interface UiStore {
 	/** Back to the session view (Esc on a page, selecting a session). */
 	closeDestination: () => void;
 	openAgents: (tab?: AgentsTab) => void;
+	/** The all-sessions page (board or inbox). */
+	openBoard: (view?: BoardView) => void;
 	/** The Bots page (only reachable while `useBotsAvailable`, lib/bots-source.ts). */
 	openBots: () => void;
 	openInsights: (tab?: InsightsTab, scope?: InsightsStatsScope) => void;
@@ -374,7 +389,7 @@ interface UiStore {
 	closeProviderForm: () => void;
 	openRenameDialog: () => void;
 	closeRenameDialog: () => void;
-	openWorktreeDialog: (context?: { baseCwd?: string }) => void;
+	openWorktreeDialog: (context?: NewTaskSheetContext) => void;
 	closeWorktreeDialog: () => void;
 	openWorktreeClosePrompt: (tabId: string) => void;
 	closeWorktreeClosePrompt: () => void;
@@ -482,6 +497,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 	modelPickerOpen: false,
 	destination: "session",
 	agentsTab: "live",
+	boardView: "board",
 	insightsTab: "stats",
 	insightsStatsScope: "session",
 	settingsTab: DEFAULT_SETTINGS_TAB,
@@ -611,12 +627,16 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 		else if (destination === "agents")
 			get().openAgents(section && AGENTS_TABS.includes(section) ? (section as AgentsTab) : undefined);
 		else if (destination === "bots") get().openBots();
+		else if (destination === "board")
+			get().openBoard(section && BOARD_VIEWS.includes(section) ? (section as BoardView) : undefined);
 		else get().openInsights(section && INSIGHTS_TABS.includes(section) ? (section as InsightsTab) : undefined);
 	},
 	closeDestination: () => transitionView(() => set({ destination: "session" })),
 	openAgents: tab =>
 		transitionView(() => set(state => ({ destination: "agents", agentsTab: tab ?? state.agentsTab }))),
 	openBots: () => transitionView(() => set({ destination: "bots" })),
+	openBoard: view =>
+		transitionView(() => set(state => ({ destination: "board", boardView: view ?? state.boardView }))),
 	openInsights: (tab, scope) =>
 		transitionView(() =>
 			set(state => ({

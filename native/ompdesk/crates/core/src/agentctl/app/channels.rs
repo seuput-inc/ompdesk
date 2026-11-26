@@ -78,6 +78,10 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ),
     ("session:open-new-window", Risk::Never(SESSION_TOOLS)),
     ("session:consume-pending", Risk::Never(SESSION_TOOLS)),
+    ("board:open-window", Risk::Never(SESSION_TOOLS)),
+    ("resources:read", Risk::Never(DENY)),
+    ("resources:end-process", Risk::Never(DENY)),
+    ("resources:give-back", Risk::Never(DENY)),
     ("tab:spawn", Risk::Never(SESSION_TOOLS)),
     ("tab:close", Risk::Never(SESSION_TOOLS)),
     ("tab:file-edit-report", Risk::Never(SESSION_TOOLS)),
@@ -224,6 +228,9 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("extension-update:now", Risk::Never(OPERATOR)),
     ("schedules:command", Risk::Never(OPERATOR)),
     ("mail-accounts:command", Risk::Never(CREDENTIALS)),
+    // Linear and Jira: the accounts hold the person's tokens; an agent reads its tracker through its own tools.
+    ("trackers:command", Risk::Never(OWN_TOOLS)),
+    ("trackers:accounts", Risk::Never(OPERATOR)),
     ("schedules:log", Risk::Never(DENY)),
     // The owner's own Bots page; agents have ompdesk_bot and ompdesk_item.
     ("bots:command", Risk::Never(OPERATOR)),

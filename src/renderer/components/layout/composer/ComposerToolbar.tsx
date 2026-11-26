@@ -29,7 +29,17 @@ import {
 	Sparkles,
 	Square,
 } from "lucide-react";
-import { type ChangeEvent, type MouseEvent, memo, type ReactNode, type RefObject, useId, useState } from "react";
+import {
+	type ChangeEvent,
+	type MouseEvent,
+	memo,
+	type ReactNode,
+	type RefObject,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { useShellMode } from "../../../hooks/use-shell-mode";
 import { useT } from "../../../lib/i18n";
 import type { ComposerInputMode } from "../../../lib/input-modes";
@@ -65,6 +75,52 @@ import { useThinkingSelector } from "./ThinkingControl";
 /** Settings row of the stock `stt.enabled` switch; the + menu's Dictation item opens it while dictation is off (stock owns the setting, nothing here writes it). */
 const STT_SETTING_TARGET = "agent:setting-stt.enabled";
 
+/**
+ * The mic's press (`lib/dictation-press.ts`): a pointer press goes down and up (a tap toggles, a held press records
+ * until release, its pointer captured so a release off the button still counts) and the click it makes is ignored; a
+ * click no pointer press made (Enter or Space) toggles.
+ */
+function useMicPress(onMic: () => void, onDown: () => void, onUp: () => void) {
+	const latest = useRef({ onMic, onDown, onUp });
+	latest.current = { onMic, onDown, onUp };
+	return useMemo(() => {
+		let pressed = false;
+		const release = () => latest.current.onUp();
+		/** The click a pointer press made is the press's, not a click of its own. */
+		const pressClick = () => {
+			const was = pressed;
+			pressed = false;
+			return was;
+		};
+		return {
+			props: {
+				onPointerDown: (event: { button: number; pointerId: number; currentTarget: Element }) => {
+					if (event.button !== 0) return;
+					pressed = true;
+					event.currentTarget.setPointerCapture?.(event.pointerId);
+					latest.current.onDown();
+				},
+				onPointerUp: release,
+				onPointerCancel: release,
+				onClick: () => {
+					if (!pressClick()) latest.current.onMic();
+				},
+			},
+			/**
+			 * For the Send slot's stop-and-send, which takes the mic's place under a finger still on it (one button node):
+			 * that press's release ends a held take, and its click never sends.
+			 */
+			slotProps: (onSend: () => void) => ({
+				onPointerUp: release,
+				onPointerCancel: release,
+				onClick: () => {
+					if (!pressClick()) onSend();
+				},
+			}),
+		};
+	}, []);
+}
+
 export interface ComposerToolbarProps {
 	/** The tab's route exists: without it the row is inert and busy. */
 	routeReady: boolean;
@@ -84,7 +140,11 @@ export interface ComposerToolbarProps {
 	/** The `!!` / `$$` form: kept out of the model context. */
 	composerExcluded?: boolean;
 	dictationPhase: DictationPhase;
+	/** The mic's click from the keyboard: start a take, or end the one in flight. */
 	onMic: () => void;
+	/** The mic pressed and released: a tap toggles, a press held 300 ms records until release. */
+	onMicDown: () => void;
+	onMicUp: () => void;
 	onStopAndSend: () => void;
 	/** Something Stop ends: the run, or a prompt not yet sent. */
 	stoppable: boolean;
@@ -114,6 +174,8 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 	queueSplitCount,
 	dictationPhase,
 	onMic,
+	onMicDown,
+	onMicUp,
 	onStopAndSend,
 	stoppable,
 	hasDraft,
@@ -141,6 +203,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 	const keymapOverrides = useUiStore(s => s.keymapOverrides);
 	const stopping = useComposerStore(s => s.stopping);
 	const thinkingName = useThinkingName();
+	const micPress = useMicPress(onMic, onMicDown, onMicUp);
 	const supportsThinking = useModelStore(s => s.availableThinkingLevels.length > 0);
 	// While first-run setup runs, the live model is whatever omp fell back to
 	// (e.g. a tiny on-device model); show the neutral prompt instead.
@@ -160,7 +223,8 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 				})
 			: null;
 	const slot = sendSlot({
-		recording: dictationPhase === "recording",
+		// From the press on, not from the mic's opening: the finger's own mousedown follows on this button.
+		recording: dictationPhase === "starting" || dictationPhase === "recording",
 		editingQueued,
 		stoppable,
 		hasDraft,
@@ -209,7 +273,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 						disabled={!routeReady}
 						icon={<Mic />}
 						label={t("voice.mic.start")}
-						onClick={onMic}
+						{...micPress.props}
 						variant="secondary"
 					/>
 				) : slot.state === "dictation" ? (
@@ -221,7 +285,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 						disabled={!routeReady}
 						icon={withStopHint(<ArrowUp strokeWidth={2.25} />)}
 						label={t("voice.dictation.stopAndSend")}
-						onClick={onStopAndSend}
+						{...micPress.slotProps(onStopAndSend)}
 						variant="primary"
 					/>
 				) : (
@@ -447,7 +511,8 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 							)
 						}
 						label={recording ? t("voice.mic.stop") : t("voice.mic.start")}
-						onClick={onMic}
+						{...micPress.props}
+						shortcut={touchInput ? undefined : actionKbd("voice.dictate", keymapOverrides)}
 						size="sm"
 					/>
 				)}

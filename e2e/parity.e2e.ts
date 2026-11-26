@@ -29,7 +29,8 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd,
 
 /**
  * B's `gh`: signed in, the project's repository `o/r` with one open PR whose detail has a file, a passing check and an
- * open review thread, and one open issue (`agents-prs`, `agents-pr-detail`, `agents-github`). The project's own branch
+ * open review thread, one open issue and one project (`agents-prs`, `agents-pr-detail`, `agents-github`,
+ * `agents-github-projects`). The project's own branch
  * has no PR (`--head`), so the sidebar rows show none and the Changes panel offers to link one.
  */
 async function writeParityGh(bin: string): Promise<void> {
@@ -108,6 +109,8 @@ async function writeParityGh(bin: string): Promise<void> {
 			"#!/bin/sh",
 			'case "$*" in',
 			`"auth status"*) echo "github.com" >&2; echo "  ✓ Logged in to github.com account dev (keyring)" >&2 ;;`,
+			// Agents › GitHub › Projects: the account's one project (both discovery reads name `projectsV2`).
+			`"api"*projectsV2*) echo '{"data":{"viewer":{"login":"dev","projectsV2":{"nodes":[{"id":"PVT_1","number":3,"title":"Session work","url":"https://github.com/users/dev/projects/3","owner":{"__typename":"User","login":"dev"}}]},"organizations":{"nodes":[]}}}}' ;;`,
 			`"api"*graphql*) cat "${bin}/graphql.json" ;;`,
 			`"api"*rate_limit*) echo '{"resources":{"core":{"limit":5000,"remaining":4990,"reset":1900000000},"graphql":{"limit":5000,"remaining":4990,"reset":1900000000}}}' ;;`,
 			`"api user"*) echo '{"login":"dev"}' ;;`,

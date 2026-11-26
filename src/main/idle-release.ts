@@ -51,6 +51,16 @@ export function idleFootprints(sample: WatchProcesses, tabs: readonly ReleaseTab
 	return bytes;
 }
 
+/**
+ * The person's Give back now (after Orca's sleep, `sleep/WorkspaceSleepMenuItems.tsx`, FB33): the same tab idle release
+ * would take (the pool reads it quiet, its omp started no process), whatever memory reads and however long it has been
+ * quiet. The pool checks again when it releases.
+ */
+export function canGiveBack(tab: ReleaseTab | undefined, sample: WatchProcesses | null): boolean {
+	if (tab?.quiet !== true || tab.pid === undefined || !sample) return false;
+	return idleFootprints(sample, [tab]).has(tab.pid);
+}
+
 export class IdleRelease {
 	readonly #quietMs: number;
 	/** Since when each quiet tab has been quiet with no child process. */

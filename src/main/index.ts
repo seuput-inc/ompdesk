@@ -126,10 +126,17 @@ import { applyLaunchDecision, type LaunchDecision, softwareCompositing } from ".
 import { installHangWatchdog, markMainStep } from "./hang-watchdog";
 import { startLowDiskWatch } from "./health-watch";
 import { getMainLanguage, mainT } from "./i18n";
+import { canGiveBack } from "./idle-release";
 import { startupCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
 import { shellRunner } from "./local/git/exec";
-import { createWorktree, stockWorktreeLocation, tablessWorktreeBridge } from "./local/git/worktree";
+import {
+	createWorktree,
+	setBranchRenamedListener,
+	setRecordedFoldersSource,
+	stockWorktreeLocation,
+	tablessWorktreeBridge,
+} from "./local/git/worktree";
 import { renameStoredSession } from "./local/session-files";
 import { LocalEngines, localEngineSettings } from "./local-engines";
 import { LogWatcher } from "./log-watcher";
@@ -142,7 +149,7 @@ import { installMainFailureLogging } from "./main-failures";
 import { McpHub } from "./mcp-hub";
 import { onMcpChange } from "./mcp-live";
 import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
-import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading } from "./memory-sampler";
+import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading, watchProcesses } from "./memory-sampler";
 import { startMemoryWatch } from "./memory-watch";
 import { configureNativeBin, nativeBinPath } from "./native-bin";
 import { quietBotTurn } from "./notify-triage";
@@ -165,6 +172,7 @@ import { routinePorts } from "./routines/ports";
 import { writeRuntimeLog } from "./runtime-log";
 import { layoutsToSave } from "./saved-layouts";
 import { ompRunLauncher, ScheduleService } from "./schedules";
+import type { SecretBox } from "./secret-files";
 import { whenSessionFree } from "./session-free";
 import { SessionIndex } from "./session-index";
 import { SessionKindStore } from "./session-kinds";
@@ -222,6 +230,7 @@ import { configureTerminalHistory, saveTerminalsForQuit } from "./terminal/histo
 import { exitWithLauncher } from "./test-launcher-exit";
 import { ToolsClient } from "./tools/client";
 import { registerToolsIpc } from "./tools/ipc";
+import { TrackerAccounts } from "./tracker-accounts";
 import { InterruptedTurnStore, limitLook, retryDelays, TurnResume } from "./turn-resume";
 import { recordTurnStop, setTurnStopLog } from "./turn-stop-log";
 import { journalWait, TurnWaitWatch, WAIT_SWEEP_MS } from "./turn-wait-watch";
@@ -497,6 +506,8 @@ function firstWindowLoaded(): Promise<void> {
 }
 /** The owner's mail accounts for email routines (Settings › Schedules › Email accounts). */
 let mailAccounts: MailAccounts | null = null;
+/** This computer's Linear and Jira connections (tracker-accounts.ts). */
+let trackerAccounts: TrackerAccounts | null = null;
 /** Keep-awake while this computer's own tabs run a turn (Settings › General › Window). */
 let workAwakePolicy: KeepAwakePolicy | null = null;
 /** A charging laptop's lid close never stops work a keep-awake blocker holds (src/main/power/lid-awake.ts). */
@@ -648,6 +659,7 @@ async function spawnWindow(
 	pendingSessionPath?: string,
 	kind?: SessionKind,
 	device?: string,
+	page?: "board",
 ): Promise<BrowserWindow | null> {
 	// An approved quit has torn the services down (or is doing so): a window built now has nothing to run on, and
 	// restoring the layout on it would drop what a disposed `RemoteDevices` cannot open from the saved session.
@@ -674,7 +686,8 @@ async function spawnWindow(
 		win.close();
 		return null;
 	}
-	const restoreSavedLayout = cwd === undefined && pendingSessionPath === undefined && kind === undefined;
+	const restoreSavedLayout =
+		cwd === undefined && pendingSessionPath === undefined && kind === undefined && page === undefined;
 	if (restoreSavedLayout) {
 		const [saved] = readSavedTabLayouts();
 		if (saved) {
@@ -687,7 +700,7 @@ async function spawnWindow(
 	const target = resolveWindowSpawnTarget(cwd, pendingSessionPath, kind, fallback, work);
 	// The tab's omp starts on the session file (`--session`), as a tab spawn's does: the renderer's boot switch it
 	// used to wait for never ran in a window whose tab list had not named its tab yet.
-	const win = windowManager.createWindow({ cwd: target.cwd });
+	const win = windowManager.createWindow({ cwd: target.cwd, ...(page ? { page } : {}) });
 	const sidecar = sidecarPool.acquire(
 		target.cwd,
 		win,
@@ -1407,6 +1420,14 @@ app.whenReady().then(async () => {
 	// Orphaned worktrees (worktree-orphans.ts): a folder is open when a tab of this computer or a tab it hosts for a
 	// paired device runs in it (`hostServices.workspaceDirs()` is the cwd of every hosted tab, a superset of its `summarySources()`).
 	setOpenFoldersSource(() => [...sidecarPool.workspaceDirs(), ...hostServices.workspaceDirs()]);
+	setRecordedFoldersSource(async () => (await sessionIndex.listKnown())?.map(info => info.cwd) ?? []);
+	// A new task's branch renamed for its work (FS91): every tab bound to that worktree on the old name follows.
+	setBranchRenamedListener((path, from, branch) => {
+		for (const { tabs } of sidecarPool.controlTabs())
+			for (const tab of tabs)
+				if (tab.worktree?.path === path && tab.worktree.branch === from)
+					sidecarPool.bindWorktree(tab.tabId, { ...tab.worktree, branch });
+	});
 	let hostOmpVersion: string | null = null;
 	void systemOmp().then(resolution => {
 		if (resolution.ok) hostOmpVersion = resolution.runtime.version;
@@ -2149,18 +2170,26 @@ app.whenReady().then(async () => {
 					};
 		},
 	});
+	const secretBox: SecretBox = {
+		available: () => safeStorage.isEncryptionAvailable(),
+		blocked: () => (keychainWouldAskForTests ? KEYCHAIN_WOULD_ASK : safeStorageUnavailableReason()),
+		encrypt: text => safeStorage.encryptString(text),
+		decrypt: data => safeStorage.decryptString(data),
+	};
 	// The owner's mailboxes for email routines; each password is kept encrypted by the OS keystore (mail-accounts.ts).
 	mailAccounts = new MailAccounts({
 		dir: app.getPath("userData"),
 		...(keychainWouldAskForTests ? { rememberSaved: false } : {}),
 		// A test launch reaches its fake IMAP server over plain TCP on this computer; a real launch always uses TLS.
 		plainLoopback: Boolean(process.env.OMP_GUI_TEST_IMAP_PLAIN),
-		box: {
-			available: () => safeStorage.isEncryptionAvailable(),
-			blocked: () => (keychainWouldAskForTests ? KEYCHAIN_WOULD_ASK : safeStorageUnavailableReason()),
-			encrypt: text => safeStorage.encryptString(text),
-			decrypt: data => safeStorage.decryptString(data),
-		},
+		box: secretBox,
+	});
+	// Linear and Jira connections (Agents › GitHub's source bar); their requests run in the core (trackers/).
+	trackerAccounts = new TrackerAccounts({
+		dir: app.getPath("userData"),
+		box: secretBox,
+		core: async (params, timeoutMs) => (await core().call("trackers.request", params, { timeoutMs })).result,
+		proxyPref: () => prefsStore().get("proxyUrl"),
 	});
 	// Before the first window exists, so its page load is seen (it also writes the update's start mark, below).
 	const firstWindowReady = firstWindowLoaded();
@@ -2567,8 +2596,26 @@ app.whenReady().then(async () => {
 			attachHere: (name, bytes) => hostUploads().attachHere(name, bytes),
 			goneIn: (text, cwd) => hostUploads().goneIn(text, cwd),
 		},
+		resources: {
+			use: async () => {
+				const use = await sessionProcesses.use();
+				if (!use) return null;
+				const tabs = sidecarPool.memoryTabs();
+				return use.map(entry => {
+					const tab = tabs.find(candidate => candidate.pid !== undefined && candidate.pid === entry.ompPid);
+					return tab ? { ...entry, tabId: tab.tabId, quiet: tab.quiet } : entry;
+				});
+			},
+			endProcess: (ompPid, pid, startedMs) => sessionProcesses.endProcess(ompPid, pid, startedMs),
+			giveBack: async tabId => {
+				const tab = sidecarPool.memoryTabs().find(candidate => candidate.tabId === tabId);
+				if (!canGiveBack(tab, await watchProcesses())) return "busy";
+				return (await sidecarPool.releaseIdle(tabId)) ? "released" : "busy";
+			},
+		},
 		schedules: () => scheduleService,
 		mailAccounts: () => mailAccounts,
+		trackerAccounts: () => trackerAccounts,
 		sidebarProjects,
 		// `webHost` is created below: the prompt origins read it when a prompt is sent, never at registration.
 		promptOrigins: {

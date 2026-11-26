@@ -283,14 +283,38 @@ fn dmarc_passed(results: &str, receiver: &str, from_domain: &str) -> bool {
     })
 }
 
-/// An authserv-id is the receiver's when it is the IMAP host itself or a name in the host's registrable domain
-/// (`mx.example.com` for `imap.example.com`). Anything else, a sender's own header included, is not trusted.
+/// Providers whose receivers stamp an authserv-id outside their IMAP host's own domain: the IMAP host and the exact
+/// ids its own `Authentication-Results` carries. Only an id a source shows is listed; any other id stays untrusted.
+/// Not listed:
+/// - Microsoft (`outlook.office365.com`, `imap-mail.outlook.com`): its header has no authserv-id, it starts with
+///   `spf=` (https://learn.microsoft.com/en-us/defender-office-365/message-headers-eop-mdo), so there is no id to
+///   trust and a `from` filter there fails closed.
+/// - Yahoo (`imap.mail.yahoo.com`): its ids are names under `yahoo.com` (`atlas.mail.yahoo.com` in
+///   https://www.suped.com/learn/dmarc/why-are-spf-dkim-and-dmarc-failing-in-yahooaol-and-how-to-fix-it), which the
+///   registrable-domain rule already trusts.
+const KNOWN_RECEIVERS: &[(&str, &[&str])] = &[
+    // A real Gmail header posted on Google's own forum starts `Authentication-Results: mx.google.com;`
+    // (https://support.google.com/mail/thread/21523648).
+    ("imap.gmail.com", &["mx.google.com"]),
+    // iCloud writes one header per method, DMARC's first: `Authentication-Results: dmarc.icloud.com; dmarc=pass
+    // header.from=…` (https://ddz.dev/blog/icloud-junk-dmarc-pass-fake-reply-subject). Only the topmost header is
+    // read, so a message whose top header is another method's fails closed.
+    ("imap.mail.me.com", &["dmarc.icloud.com"]),
+];
+
+/// An authserv-id is the receiver's when it is the IMAP host itself, one of `KNOWN_RECEIVERS`' ids for that host, or
+/// a name in the host's registrable domain (`mx.example.com` for `imap.example.com`). Anything else, a sender's own
+/// header included, is not trusted.
 fn trusted_id(id: &str, receiver: &str) -> bool {
     let host = js_trim(receiver).trim_end_matches('.').to_lowercase();
     if id.is_empty() || host.is_empty() {
         return false;
     }
-    if id == host {
+    if id == host
+        || KNOWN_RECEIVERS
+            .iter()
+            .any(|(known, ids)| *known == host && ids.contains(&id))
+    {
         return true;
     }
     if host.parse::<std::net::IpAddr>().is_ok() {
@@ -491,6 +515,68 @@ mod tests {
         assert!(!trusted_id("mx.other.co.uk", "imap.example.co.uk"));
         assert!(!trusted_id("co.uk", "imap.example.co.uk"));
         assert!(!trusted_id("", RECEIVER));
+    }
+
+    #[test]
+    fn known_providers_vouch_only_under_their_own_cited_ids() {
+        let gmail = |results: &str| {
+            sent_by(
+                "ann@example.com",
+                results,
+                "imap.gmail.com",
+                "ann@example.com",
+            )
+        };
+        // Gmail: mx.google.com, exactly; nothing else under google.com, and never another host's id.
+        assert!(gmail(
+            "mx.google.com; spf=pass; dmarc=pass (p=REJECT) header.from=example.com"
+        ));
+        assert!(!gmail(
+            "mx.attacker.com; dmarc=pass header.from=example.com"
+        ));
+        assert!(!gmail("google.com; dmarc=pass header.from=example.com"));
+        assert!(!gmail(
+            "dmarc.icloud.com; dmarc=pass header.from=example.com"
+        ));
+        assert!(!sent_by(
+            "ann@example.com",
+            "mx.google.com; dmarc=pass header.from=example.com",
+            "imap.example.org",
+            "ann@example.com"
+        ));
+        // iCloud: dmarc.icloud.com, exactly; its other per-method ids carry no DMARC verdict.
+        let icloud = |results: &str| {
+            sent_by(
+                "ann@example.com",
+                results,
+                "imap.mail.me.com",
+                "ann@example.com",
+            )
+        };
+        assert!(icloud(
+            "dmarc.icloud.com; dmarc=pass header.from=example.com"
+        ));
+        assert!(!icloud(
+            "spf.icloud.com; spf=pass smtp.mailfrom=example.com"
+        ));
+        assert!(!icloud("icloud.com; dmarc=pass header.from=example.com"));
+        assert!(!icloud("mx.google.com; dmarc=pass header.from=example.com"));
+        // Microsoft writes no authserv-id: its header starts with a method, so it vouches for nothing.
+        for host in ["outlook.office365.com", "imap-mail.outlook.com"] {
+            assert!(!sent_by(
+                "ann@example.com",
+                "spf=pass (sender IP is 192.0.2.1) smtp.mailfrom=example.com; dmarc=pass action=none header.from=example.com;compauth=pass reason=100",
+                host,
+                "ann@example.com"
+            ));
+        }
+        // Yahoo stamps names under yahoo.com, which its IMAP host's registrable domain already covers.
+        assert!(sent_by(
+            "ann@example.com",
+            "atlas.mail.yahoo.com; dkim=pass header.d=example.com; dmarc=pass header.from=example.com",
+            "imap.mail.yahoo.com",
+            "ann@example.com"
+        ));
     }
 
     #[test]

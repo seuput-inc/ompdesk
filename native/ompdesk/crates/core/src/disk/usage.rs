@@ -49,6 +49,18 @@ struct Row {
     #[serde(flatten)]
     target: Target,
     bytes: u64,
+    /// The worktrees part only: its largest folders (one worktree each), largest first.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    children: Vec<Child>,
+}
+
+/// How many of the worktree root's folders the breakdown names.
+const WORKTREE_ROWS: usize = 12;
+
+#[derive(Serialize)]
+struct Child {
+    path: String,
+    bytes: u64,
 }
 
 #[derive(Serialize)]
@@ -112,6 +124,19 @@ pub(super) async fn handle(call: Call) -> Result<Reply, Fault> {
             let walked = bytes(reading, &path, reuse, &scope)?;
             let mut count = walked.bytes;
             let mut work = walked.work;
+            let mut children = Vec::new();
+            if matches!(target.id, Part::Worktrees) {
+                let mut folders = walked.children;
+                folders.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                folders.truncate(WORKTREE_ROWS);
+                children = folders
+                    .into_iter()
+                    .map(|(name, bytes)| Child {
+                        path: Path::new(&path).join(name).to_string_lossy().into_owned(),
+                        bytes,
+                    })
+                    .collect();
+            }
             if matches!(target.id, Part::Stats) {
                 for suffix in ["-wal", "-shm"] {
                     let sidecar = bytes(reading, &format!("{path}{suffix}"), false, &scope)?;
@@ -123,6 +148,7 @@ pub(super) async fn handle(call: Call) -> Result<Reply, Fault> {
             let row = Row {
                 target,
                 bytes: count,
+                children,
             };
             Ok::<_, Fault>((row, work))
         })
