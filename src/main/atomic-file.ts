@@ -81,19 +81,11 @@ export function writeFileAtomicSync(file: string, data: string, options: AtomicW
 	}
 }
 
-export interface AsyncAtomicWriteOptions extends AtomicWriteOptions {
-	/**
-	 * Asked right before every rename, which then runs in the same tick: false drops the write. A writer that a
-	 * synchronous final save overtakes (a quit) must not land afterwards.
-	 */
-	commitIf?: () => boolean;
-}
-
-/** Replaces `file` with `data`; a refused rename is tried again for about 5 s without blocking. Resolves once it is there (or dropped by `commitIf`). */
+/** Replaces `file` with `data`; a refused rename is tried again for about 5 s without blocking. Resolves once it is there. */
 export async function writeFileAtomic(
 	file: string,
 	data: string | Uint8Array,
-	options: AsyncAtomicWriteOptions = {},
+	options: AtomicWriteOptions = {},
 ): Promise<void> {
 	await mkdir(dirname(file), { recursive: true, ...(options.dirMode === undefined ? {} : { mode: options.dirMode }) });
 	const temp = tempFor(file);
@@ -101,10 +93,6 @@ export async function writeFileAtomic(
 		await writeFile(temp, data, options.mode === undefined ? undefined : { mode: options.mode });
 		if (options.mode !== undefined) await chmod(temp, options.mode);
 		for (let attempt = 0; ; attempt++) {
-			if (options.commitIf && !options.commitIf()) {
-				await rm(temp, { force: true });
-				return;
-			}
 			try {
 				await rename(temp, file);
 				return;
