@@ -172,7 +172,8 @@ import type {
 	SessionInfoUpdateFrame,
 	SubagentFrame,
 } from "./rpc-types";
-import { SCHEDULES_COMMAND, SCHEDULES_LOG, SCHEDULES_STATE, type SchedulesState } from "./schedules";
+import { SCHEDULES_COMMAND, SCHEDULES_LOG, SCHEDULES_STATE } from "./schedule-channels";
+import type { SchedulesState } from "./schedules";
 import type { VersionedSessionList } from "./session-list-delta";
 import type { SummariesChanged, VersionedSummaries } from "./session-summary";
 import type { SessionArtworks, SessionTargetQuery, SessionTargets } from "./session-target";

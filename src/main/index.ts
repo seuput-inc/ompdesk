@@ -74,7 +74,7 @@ import type { OmpUpdateState } from "../shared/omp-update";
 import { VISUAL_SCHEME } from "../shared/preview";
 import { PSTACK_PREF } from "../shared/pstack";
 import { REPLY_LANGUAGE_PREF } from "../shared/reply-language";
-import { SCHEDULES_STATE } from "../shared/schedules";
+import { SCHEDULES_STATE } from "../shared/schedule-channels";
 import type { SetupState } from "../shared/setup";
 import { isMutedFolder, readSidebarPrefs, SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import {

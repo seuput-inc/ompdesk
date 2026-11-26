@@ -428,10 +428,9 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // menu's sessions and paste links (`composer-extras.ts`, also on the composer's focus): measured 2,227,902 (local build
 // of omp/agent/orca-chat-reading rebased on be4a4064f), 9,027 bytes over main's budget, of which about 290 are main's
 // own since 26190f1da. The budget is that measure plus 80 bytes.
-// Routines (Orca port, 26 Nov 2026): `shared/schedules.ts`, whose chunk the first screen loads, gains the cron, webhook
-// sender and filter rules the Settings page and the core share: 141 bytes over the budget before chat-reading (branch
-// run 45738931385). The budget adds those bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_228_123;
+// The Schedules channel names left `shared/schedules.ts` for `shared/schedule-channels.ts` (26 Nov 2026, routines),
+// so the first screen's `omp-api.ts` no longer pulls the schedule rules (cron, webhook senders, filters) with them.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_227_982;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

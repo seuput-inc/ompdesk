@@ -9,10 +9,6 @@
 
 import { GITHUB_LOGIN_PATTERN } from "./github";
 
-export const SCHEDULES_COMMAND = "schedules:command";
-export const SCHEDULES_LOG = "schedules:log";
-export const SCHEDULES_STATE = "schedules:state";
-
 /** Shortest and longest interval a schedule may repeat at, in minutes. */
 export const SCHEDULE_MIN_INTERVAL = 5;
 export const SCHEDULE_MAX_INTERVAL = 7 * 24 * 60;

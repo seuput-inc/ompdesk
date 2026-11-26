@@ -43,7 +43,7 @@ import {
 	PREVIEW_VISUAL,
 	PREVIEW_VISUALS,
 } from "../../shared/preview";
-import { SCHEDULES_COMMAND, SCHEDULES_LOG, SCHEDULES_STATE } from "../../shared/schedules";
+import { SCHEDULES_COMMAND, SCHEDULES_LOG, SCHEDULES_STATE } from "../../shared/schedule-channels";
 import { SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "../../shared/sidebar-projects";
 import {
 	SSH_TOOLS_AGENT,
