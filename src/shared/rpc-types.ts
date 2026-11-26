@@ -23,6 +23,7 @@ import type {
 import type { TodoDriftState } from "../../resources/gui-bridge/todo-drift-contracts";
 import type { ModelRequestFrame } from "../../resources/gui-bridge/turn-stages-contracts";
 import type { GithubRequest } from "./github";
+import type { GitlabRequest } from "./gitlab";
 
 export type { DesktopSlotState };
 
@@ -626,6 +627,8 @@ export type RpcCommand =
 	| { id?: string; type: "pr_edit"; number: number; title?: string; body?: string; base?: string }
 	// Agents › GitHub over gh (src/main/local/git/github.ts; contract src/shared/github.ts).
 	| { id?: string; type: "github"; request: GithubRequest; background?: boolean }
+	// Agents › GitHub › GitLab over glab (src/main/local/git/gitlab.ts; contract src/shared/gitlab.ts).
+	| { id?: string; type: "gitlab"; request: GitlabRequest }
 	// What a web page says about itself, for a conversation link's hover card (core `webPeek.get`,
 	// native/ompdesk/crates/core/src/web_peek.rs: https only, public addresses only, 5 s, 256 KiB).
 	| { id?: string; type: "web_peek"; url: string }

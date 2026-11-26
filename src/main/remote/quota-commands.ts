@@ -245,6 +245,7 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"git_undo_commit",
 	"git_unstage",
 	"github",
+	"gitlab",
 	"history_recent",
 	"history_record",
 	"history_search",

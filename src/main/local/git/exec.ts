@@ -26,8 +26,8 @@ const binCache = new Map<string, Promise<string | null>>();
 // Homebrew's prefixes are looked in too when its bin dir is not on the login-shell PATH (a shell that never
 // runs `brew shellenv`, a PATH an rc file rebuilds): a gh or git installed by brew is still the user's.
 
-/** Absolute path to `git`/`gh`, or null when not installed. */
-export function resolveBin(name: "git" | "gh"): Promise<string | null> {
+/** Absolute path to `git`/`gh`/`glab`, or null when not installed. */
+export function resolveBin(name: "git" | "gh" | "glab"): Promise<string | null> {
 	let pending = binCache.get(name);
 	if (!pending) {
 		const platform = process.platform;
@@ -131,6 +131,27 @@ const GH_ENV = { GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", NO_COLOR: 
 export async function ghRunner(bin: string): Promise<CoreRunner> {
 	const env = await runnerEnv(GH_ENV);
 	env.GH_TELEMETRY ??= "false";
+	return { bin, args: [], env, timeoutMs: DEFAULT_TIMEOUT_MS, maxBytes: DEFAULT_MAX_BYTES };
+}
+
+/**
+ * The GitLab CLI as stock omp runs it for its `glab-mr` tool (`utils/gitlab.ts` `GLAB_SPEC`, `utils/forge-cli.ts`
+ * `FORGE_NON_INTERACTIVE_ENV`): no prompt, no update check, no colour, and git and ssh refusing to ask.
+ */
+const GLAB_ENV = {
+	GLAB_NO_PROMPT: "1",
+	GLAB_CHECK_UPDATE: "false",
+	NO_COLOR: "1",
+	GIT_ASKPASS: "true",
+	GIT_EDITOR: "true",
+	GIT_TERMINAL_PROMPT: "0",
+	LC_MESSAGES: "C",
+};
+
+/** This process's rules for the glab at `bin` that the core runs (`glab.request`), read now. */
+export async function glabRunner(bin: string): Promise<CoreRunner> {
+	const env = await runnerEnv(GLAB_ENV);
+	delete env.LC_ALL;
 	return { bin, args: [], env, timeoutMs: DEFAULT_TIMEOUT_MS, maxBytes: DEFAULT_MAX_BYTES };
 }
 
