@@ -2119,7 +2119,8 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-board-lanes] [data-board-lane='idle']",
 		// Parity only: the board reads a computer's session lists, which the audits' harness page does not run.
 		when: () => false,
-		parity: { session: "work" },
+		// Esc on a page goes back to the session, so the next surface starts on it.
+		parity: { session: "work", after: closeOverlay },
 	},
 	{
 		id: "settings-computer-use",
