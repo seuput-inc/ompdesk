@@ -223,8 +223,9 @@ interface UiStore {
 	providerFocus: { id: string } | null;
 	renameDialogOpen: boolean;
 	/** Worktree-create dialog (plan/20): non-null opens it; baseCwd pins the
-	 * repo when invoked from a Sidebar group (default = active session cwd). */
-	worktreeDialog: { baseCwd?: string } | null;
+	 * repo when invoked from a Sidebar group (default = active session cwd); `name` fills in a name typed elsewhere
+	 * (the session picker's create row). */
+	worktreeDialog: { baseCwd?: string; name?: string } | null;
 	/** Close-time cleanup prompt for a worktree-bound tab (plan/20): the tab
 	 * awaiting the user's delete/keep decision before closeTab proceeds. */
 	worktreeClosePrompt: { tabId: string } | null;
@@ -380,7 +381,7 @@ interface UiStore {
 	closeProviderForm: () => void;
 	openRenameDialog: () => void;
 	closeRenameDialog: () => void;
-	openWorktreeDialog: (context?: { baseCwd?: string }) => void;
+	openWorktreeDialog: (context?: { baseCwd?: string; name?: string }) => void;
 	closeWorktreeDialog: () => void;
 	openWorktreeClosePrompt: (tabId: string) => void;
 	closeWorktreeClosePrompt: () => void;

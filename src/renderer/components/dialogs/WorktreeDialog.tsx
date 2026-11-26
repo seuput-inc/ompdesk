@@ -102,7 +102,7 @@ export function WorktreeDialog() {
 
 	useEffect(() => {
 		if (!dialog) return;
-		setName("");
+		setName(dialog.name ?? "");
 		setBaseRef("HEAD");
 		setCreating(false);
 		setCreated(null);

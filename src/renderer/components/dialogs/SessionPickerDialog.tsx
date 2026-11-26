@@ -8,7 +8,18 @@
  * stores. Follows the ModelPicker overlay pattern.
  */
 
-import { ArrowDownAZ, Check, Clock, Folder, FolderTree, Globe, History, MessageCircle, RotateCw } from "lucide-react";
+import {
+	ArrowDownAZ,
+	Check,
+	Clock,
+	Folder,
+	FolderTree,
+	Globe,
+	History,
+	MessageCircle,
+	Plus,
+	RotateCw,
+} from "lucide-react";
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { SessionInfo } from "../../../shared/ipc-types";
 import { opensInOwnTab, requestSessionSwitch, switchSessionNow } from "../../hooks/use-session-switch";
@@ -18,6 +29,8 @@ import { useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
 import { listboxTarget } from "../../lib/listbox-nav";
 import { useProjectNames } from "../../lib/project-origin";
+import { laneState } from "../../lib/session-lane";
+import { sessionRun } from "../../lib/session-run";
 import {
 	matchesSessionOperators,
 	mergeContentMatches,
@@ -26,17 +39,21 @@ import {
 	splitSessionQuery,
 } from "../../lib/session-search";
 import { sessionDisplayParts, sessionHasContent } from "../../lib/session-title";
+import { useSummaryMap } from "../../stores/hosted-sessions";
 import { useSessionStore } from "../../stores/session";
 import { sessionListFeed } from "../../stores/session-list";
+import { useTabsStore } from "../../stores/tabs";
 import { useUiStore } from "../../stores/ui";
 import {
 	Badge,
 	Button,
+	Chip,
 	EmptyState,
 	IconButton,
 	InlineNotice,
 	Kbd,
 	Modal,
+	OptionGroup,
 	OptionRow,
 	SearchField,
 	SessionTitle,
@@ -44,13 +61,18 @@ import {
 	Spinner,
 	Tooltip,
 } from "../common";
+import { SessionStatusLane } from "../layout/sidebar/SessionStatusLane";
 
 type SessionScope = "local" | "global";
+/** What a session is doing, as a chip narrows the list: it waits on the person, it works, a tab here holds it. */
+type StateChip = "needs" | "working" | "open";
 
 /** Delay before the main-process content grep is consulted for the current query. */
 const CONTENT_SEARCH_DEBOUNCE_MS = 200;
 /** Minimum query length for content augmentation (single characters match everything). */
 const CONTENT_SEARCH_MIN_QUERY = 2;
+/** Project chips offered at most, the busiest first. */
+const PROJECT_CHIPS = 6;
 
 export function SessionPickerDialog() {
 	const t = useT();
@@ -71,6 +93,8 @@ export function SessionPickerDialog() {
 	/** Transcript-only hits from the main-process grep: path → excerpt of the matching text. */
 	const [contentHits, setContentHits] = useState<ReadonlyMap<string, string | undefined>>(new Map());
 	const [contentPending, setContentPending] = useState(false);
+	const [stateChips, setStateChips] = useState<readonly StateChip[]>([]);
+	const [projectChips, setProjectChips] = useState<readonly string[]>([]);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const listRef = useRef<HTMLDivElement>(null);
 	const listboxId = useId();
@@ -91,6 +115,8 @@ export function SessionPickerDialog() {
 		setScope("global");
 		setSortMode("recent");
 		setShowPath(null);
+		setStateChips([]);
+		setProjectChips([]);
 		// The sidebar's list (or the last run's snapshot of it) fills the dialog at once; the read below replaces it.
 		const known = sessionListFeed("global").store.getState().sessions.filter(sessionHasContent);
 		setSessions(known);
@@ -193,10 +219,42 @@ export function SessionPickerDialog() {
 		return { filtered: merged, contentOnly: only };
 	}, [sessions, query, sortMode, contentHits, projectNameOf]);
 
+	// The chips (Orca's ⌘J filter chips): what a session is doing, by its computer's summary, and its project; and the
+	// sessions a tab of this window holds listed first, as their own group (Orca's open-tab results).
+	const tabs = useTabsStore(state => state.tabs);
+	const summaries = useSummaryMap(undefined);
+	const projects = useMemo(() => {
+		const counts = new Map<string, number>();
+		for (const session of sessions) {
+			const name = projectNameOf(session.cwd).name;
+			counts.set(name, (counts.get(name) ?? 0) + 1);
+		}
+		return [...counts]
+			.sort((a, b) => b[1] - a[1])
+			.slice(0, PROJECT_CHIPS)
+			.map(([name]) => name);
+	}, [sessions, projectNameOf]);
+	const { held, rest } = useMemo(() => {
+		const tabOf = (session: SessionInfo) =>
+			tabs.find(tab => tab.device === undefined && tab.sessionPath === session.path);
+		const passes = filtered.filter(session => {
+			if (projectChips.length > 0 && !projectChips.includes(projectNameOf(session.cwd).name)) return false;
+			if (stateChips.length === 0) return true;
+			const tab = tabOf(session);
+			const run = sessionRun(summaries.get(session.path), tab?.unreadDone === true);
+			return stateChips.some(chip => (chip === "needs" ? run.waiting : chip === "working" ? run.running : !!tab));
+		});
+		return { held: passes.filter(session => tabOf(session)), rest: passes.filter(session => !tabOf(session)) };
+	}, [filtered, tabs, summaries, stateChips, projectChips, projectNameOf]);
+	const listed = useMemo(() => [...held, ...rest], [held, rest]);
+	// A name typed that no session answers can start a worktree (Orca's create row): its own last option.
+	const createName = query.trim() ? splitSessionQuery(query).text.trim() : "";
+	const optionCount = listed.length + (createName ? 1 : 0);
+
 	// Clamp the highlight when the visible list shrinks (search, reload).
 	useEffect(() => {
-		setActiveIndex(index => Math.min(index, Math.max(0, filtered.length - 1)));
-	}, [filtered.length]);
+		setActiveIndex(index => Math.min(index, Math.max(0, optionCount - 1)));
+	}, [optionCount]);
 
 	useEffect(() => {
 		listRef.current?.querySelector(`[data-option-index="${activeIndex}"]`)?.scrollIntoView({ block: "nearest" });
@@ -220,10 +278,14 @@ export function SessionPickerDialog() {
 			setSwitching(null);
 		}
 	};
+	const createWorktree = () => {
+		close();
+		useUiStore.getState().openWorktreeDialog({ name: createName });
+	};
 
 	const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
 		if (isImeKeyEvent(event)) return;
-		const target = listboxTarget(event.key, activeIndex, filtered.length, { wrap: false });
+		const target = listboxTarget(event.key, activeIndex, optionCount, { wrap: false });
 		if (target !== null) {
 			event.preventDefault();
 			setActiveIndex(target);
@@ -231,14 +293,94 @@ export function SessionPickerDialog() {
 		}
 		if (event.key === "Enter") {
 			event.preventDefault();
-			const session = filtered[activeIndex];
+			const session = listed[activeIndex];
 			if (session) void select(session);
+			else if (createName && activeIndex === listed.length) createWorktree();
 		}
 	};
 
 	// role="listbox" only when option rows actually render (loading / error /
 	// empty states are plain status blocks, not listbox children).
-	const showOptions = !error && !loading && filtered.length > 0;
+	const showOptions = !error && !loading && optionCount > 0;
+	const toggle = <T extends string>(values: readonly T[], value: T): T[] =>
+		values.includes(value) ? values.filter(candidate => candidate !== value) : [...values, value];
+
+	const renderRow = (session: SessionInfo, index: number) => {
+		const snippet = contentOnly.has(session.path) ? contentHits.get(session.path) : undefined;
+		const isCurrent = session.id === sessionId;
+		const isActive = index === activeIndex;
+		// A blank stored title falls back like the sidebar's, never to an empty row.
+		const titleParts = sessionDisplayParts(session, t("sessionPicker.untitled"));
+		const tab = tabs.find(candidate => candidate.device === undefined && candidate.sessionPath === session.path);
+		const run = sessionRun(summaries.get(session.path), tab?.unreadDone === true);
+		return (
+			<OptionRow
+				active={isActive}
+				selected={isCurrent}
+				data-option-index={index}
+				disabled={switching !== null}
+				id={`${listboxId}-option-${index}`}
+				key={session.path}
+				onClick={() => void select(session)}
+				onMouseEnter={() => setActiveIndex(index)}
+			>
+				{run.signal ? (
+					<span className="shrink-0" title={t(run.signal.labelKey)}>
+						<SessionStatusLane
+							state={laneState({
+								run,
+								attention: run.ask,
+								live: run.running ? "turn" : null,
+								stopped: false,
+								pullRequest: false,
+								open: tab !== undefined,
+							})}
+						/>
+					</span>
+				) : (
+					<History aria-hidden className="size-(--sc-icon-sm) shrink-0 text-(--sc-text-muted)" />
+				)}
+				{session.kind === "chat" && (
+					<MessageCircle
+						className="size-(--sc-icon-sm) shrink-0 text-(--sc-text-muted)"
+						aria-label={t("tabs.kind.chat")}
+					/>
+				)}
+				<span className="min-w-0 flex-1">
+					<SessionTitle
+						className="text-sc-md"
+						parts={titleParts}
+						titleClassName={`text-(--sc-text) ${isCurrent ? "font-semibold" : "font-medium"}`}
+					/>
+					<span className="block truncate text-sc-xs text-(--sc-text-muted)">
+						{run.signal && <span className="sr-only">{t(run.signal.labelKey)}, </span>}
+						{effectiveShowPath && session.cwd
+							? shortenPath(session.cwd)
+							: projectNameOf(session.cwd, session.title).name}{" "}
+						· {t("sessionPicker.messageCount", { count: session.messageCount })} ·{" "}
+						{formatTimeAgo(session.modified)}
+					</span>
+					{snippet && (
+						<span className="mt-0.5 block truncate text-sc-xs text-(--sc-text-secondary)">{snippet}</span>
+					)}
+				</span>
+				{projectNameOf(session.cwd, session.title).gone && (
+					<Tooltip content={t("sessionFolder.goneTip")}>
+						<span className="shrink-0" data-session-folder-gone>
+							<Badge variant="warning">{t("sessionFolder.gone")}</Badge>
+						</span>
+					</Tooltip>
+				)}
+				{contentOnly.has(session.path) && (
+					<Badge className="shrink-0" variant="info">
+						{t("sessionPicker.contentMatch")}
+					</Badge>
+				)}
+				{switching === session.path && <Spinner size="sm" spin />}
+				{isCurrent && <Check aria-hidden className="size-(--sc-icon-sm) shrink-0 text-(--sc-text-secondary)" />}
+			</OptionRow>
+		);
+	};
 
 	return (
 		<Modal
@@ -256,7 +398,7 @@ export function SessionPickerDialog() {
 						<SearchField
 							listbox={{
 								id: listboxId,
-								activeId: filtered.length > 0 ? `${listboxId}-option-${activeIndex}` : undefined,
+								activeId: optionCount > 0 ? `${listboxId}-option-${activeIndex}` : undefined,
 							}}
 							controlSize="lg"
 							label={t("sessionPicker.searchLabel")}
@@ -287,6 +429,31 @@ export function SessionPickerDialog() {
 					<Kbd shortcut="⎋" />
 				</div>
 				<div
+					className="flex flex-wrap items-center gap-1 border-b border-(--sc-divider) px-4 py-2 [--hit-gap-x:2px] [--hit-gap-y:2px]"
+					data-session-picker-chips
+				>
+					{(["needs", "working", "open"] as const).map(chip => (
+						<Chip
+							data-session-picker-chip={chip}
+							key={chip}
+							onPressedChange={() => setStateChips(current => toggle(current, chip))}
+							pressed={stateChips.includes(chip)}
+						>
+							{t(`sessionPicker.chip.${chip}`)}
+						</Chip>
+					))}
+					{projects.map(name => (
+						<Chip
+							data-session-picker-chip="project"
+							key={`project:${name}`}
+							onPressedChange={() => setProjectChips(current => toggle(current, name))}
+							pressed={projectChips.includes(name)}
+						>
+							{name}
+						</Chip>
+					))}
+				</div>
+				<div
 					className="min-h-0 flex-1 overflow-y-auto p-1.5"
 					id={listboxId}
 					ref={listRef}
@@ -312,80 +479,54 @@ export function SessionPickerDialog() {
 						/>
 					) : loading ? (
 						<SkeletonRows className="py-3" label={t("sessionPicker.loading")} widths={[70, 52, 64, 46, 58]} />
-					) : filtered.length === 0 && !contentPending ? (
-						<EmptyState
-							size="sm"
-							title={
-								sessions.length === 0
-									? scope === "local"
-										? t("sessionPicker.emptyLocal")
-										: t("sessionPicker.empty")
-									: t("sessionPicker.noMatch", { query })
-							}
-						/>
 					) : (
-						filtered.map((session, index) => {
-							const snippet = contentOnly.has(session.path) ? contentHits.get(session.path) : undefined;
-							const isCurrent = session.id === sessionId;
-							const isActive = index === activeIndex;
-							// A blank stored title falls back like the sidebar's, never to an empty row.
-							const titleParts = sessionDisplayParts(session, t("sessionPicker.untitled"));
-							return (
+						<>
+							{listed.length === 0 && !contentPending && (
+								<EmptyState
+									size="sm"
+									title={
+										sessions.length === 0
+											? scope === "local"
+												? t("sessionPicker.emptyLocal")
+												: t("sessionPicker.empty")
+											: t("sessionPicker.noMatch", { query })
+									}
+								/>
+							)}
+							{held.length > 0 ? (
+								<>
+									<OptionGroup
+										count={held.length}
+										data-session-picker-open
+										label={t("sessionPicker.group.open")}
+									>
+										{held.map((session, index) => renderRow(session, index))}
+									</OptionGroup>
+									{rest.length > 0 && (
+										<OptionGroup count={rest.length} label={t("sessionPicker.group.other")}>
+											{rest.map((session, index) => renderRow(session, held.length + index))}
+										</OptionGroup>
+									)}
+								</>
+							) : (
+								rest.map((session, index) => renderRow(session, index))
+							)}
+							{createName && (
 								<OptionRow
-									active={isActive}
-									selected={isCurrent}
-									data-option-index={index}
-									disabled={switching !== null}
-									id={`${listboxId}-option-${index}`}
-									key={session.path}
-									onClick={() => void select(session)}
-									onMouseEnter={() => setActiveIndex(index)}
+									active={activeIndex === listed.length}
+									data-option-index={listed.length}
+									data-session-picker-create
+									id={`${listboxId}-option-${listed.length}`}
+									onClick={createWorktree}
+									onMouseEnter={() => setActiveIndex(listed.length)}
 								>
-									<History aria-hidden className="size-(--sc-icon-sm) shrink-0 text-(--sc-text-muted)" />
-									{session.kind === "chat" && (
-										<MessageCircle
-											className="size-(--sc-icon-sm) shrink-0 text-(--sc-text-muted)"
-											aria-label={t("tabs.kind.chat")}
-										/>
-									)}
-									<span className="min-w-0 flex-1">
-										<SessionTitle
-											className="text-sc-md"
-											parts={titleParts}
-											titleClassName={`text-(--sc-text) ${isCurrent ? "font-semibold" : "font-medium"}`}
-										/>
-										<span className="block truncate text-sc-xs text-(--sc-text-muted)">
-											{effectiveShowPath && session.cwd
-												? shortenPath(session.cwd)
-												: projectNameOf(session.cwd, session.title).name}{" "}
-											· {t("sessionPicker.messageCount", { count: session.messageCount })} ·{" "}
-											{formatTimeAgo(session.modified)}
-										</span>
-										{snippet && (
-											<span className="mt-0.5 block truncate text-sc-xs text-(--sc-text-secondary)">
-												{snippet}
-											</span>
-										)}
+									<Plus aria-hidden className="size-(--sc-icon-sm) shrink-0 text-(--sc-text-muted)" />
+									<span className="min-w-0 flex-1 truncate text-sc-md">
+										{t("sessionPicker.createWorktree", { name: createName })}
 									</span>
-									{projectNameOf(session.cwd, session.title).gone && (
-										<Tooltip content={t("sessionFolder.goneTip")}>
-											<span className="shrink-0" data-session-folder-gone>
-												<Badge variant="warning">{t("sessionFolder.gone")}</Badge>
-											</span>
-										</Tooltip>
-									)}
-									{contentOnly.has(session.path) && (
-										<Badge className="shrink-0" variant="info">
-											{t("sessionPicker.contentMatch")}
-										</Badge>
-									)}
-									{switching === session.path && <Spinner size="sm" spin />}
-									{isCurrent && (
-										<Check aria-hidden className="size-(--sc-icon-sm) shrink-0 text-(--sc-text-secondary)" />
-									)}
 								</OptionRow>
-							);
-						})
+							)}
+						</>
 					)}
 					{contentPending && !error && !loading && (
 						<Spinner
