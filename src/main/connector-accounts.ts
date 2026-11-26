@@ -9,9 +9,8 @@
  * consumer); the requests run in the core (`routines/connectors.rs`, `routines/google.rs`).
  */
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { constants, promises as fs, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { constants, promises as fs } from "original-fs";
 import { z } from "zod";
 import {
 	type BotConnectorsRequest,
