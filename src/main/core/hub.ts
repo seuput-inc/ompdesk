@@ -452,12 +452,13 @@ export class Hub {
 		const { control, times } = connection;
 		// Silent since: the wait's start, the worker's last byte from the core, or the last look before it connected.
 		let since = waitedAt;
-		// The limit is counted in slices, never read off the clock: a test's fake clock stands still while main's
-		// thread waits. Silence compares the worker's wall times with main's real clock, as `lossTrace` does.
-		for (let slice = 1; ; slice++) {
-			const outcome = Atomics.wait(control, STATE, WAITING, HUB_SLICE_MS);
+		// Both bounds read main's real clock (`realPerformance`, never a test's fake one) against the worker's wall times,
+		// as `lossTrace` does: a timed wait oversleeps on a loaded computer, so counting slices would pass the limit.
+		for (;;) {
+			const left = waitedAt + HUB_WAIT_LIMIT_MS - realNow();
+			if (left <= 0) return "limit";
+			const outcome = Atomics.wait(control, STATE, WAITING, Math.min(HUB_SLICE_MS, left));
 			if (outcome !== "timed-out") return outcome;
-			if (slice * HUB_SLICE_MS >= HUB_WAIT_LIMIT_MS) return "limit";
 			if (Atomics.load(control, CONNECTED) !== 1) since = realNow();
 			else if (realNow() - Math.max(since, times[0] ?? 0) >= HUB_CALL_DEADLINE_MS) return "silent";
 		}
