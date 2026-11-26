@@ -3,9 +3,10 @@
  * Connect card whose button opens that connector's setup for the bot whose chat this is; any other action, a failure,
  * or an offer outside a bot's own chat on this computer keeps the generic view.
  */
+import { useEffect } from "react";
 import { BOT_CONNECTOR_SERVICES } from "../../../../shared/bot-connectors";
 import { useT } from "../../../lib/i18n";
-import { botOfFolder, useBotsStore } from "../../../stores/bots";
+import { botOfFolder, ensureBots, useBotsStore } from "../../../stores/bots";
 import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useTabsStore } from "../../../stores/tabs";
 import { ConnectorOfferCard } from "../../bots/BotConnectors";
@@ -19,8 +20,15 @@ export function BotRenderer(props: ToolRendererProps) {
 	const tabId = useRuntimeTabId();
 	const tab = useTabsStore(s => s.tabs.find(tab => tab.id === tabId));
 	const bot = useBotsStore(s => botOfFolder(s.state.bots, tab?.cwd));
-	const service = BOT_CONNECTOR_SERVICES.find(known => known === args.service);
-	if (args.action !== "offer_connector" || isError || isPartial || !service) return <GenericRenderer {...props} />;
+	const service =
+		args.action === "offer_connector" && !isError && !isPartial
+			? BOT_CONNECTOR_SERVICES.find(known => known === args.service)
+			: undefined;
+	const localOffer = !!service && !tab?.device;
+	useEffect(() => {
+		if (localOffer) ensureBots();
+	}, [localOffer]);
+	if (!service) return <GenericRenderer {...props} />;
 	// A remote chat can share a folder spelling with an unrelated bot here. Never open local setup for it.
 	if (tab?.device)
 		return (
