@@ -151,13 +151,14 @@ const DOT_TONE: Record<HostView["state"], StatusTone> = {
 /**
  * Folds every project of one device's list or opens them all again (Orca's `SectionCollapseAllButton`,
  * sidebar/worktree-list/controls/SectionCollapseAllButton.tsx:10-67): with a mouse it shows while its header is
- * hovered or holds focus, a finger keeps it. Without device sections the palette's commands do it.
+ * hovered or holds focus. A finger has no hover and folds through the palette's commands: a fourth button in the 32 px
+ * header would leave each of them under a finger's 36 px (responsive-smoke's tap check).
  */
 function FoldAllButton({ allFolded, onToggle }: { allFolded: boolean; onToggle: () => void }) {
 	const t = useT();
 	return (
 		<span
-			className="hidden group-focus-within/device:contents group-hover/device:contents [@media(hover:none)]:contents"
+			className="hidden [@media(hover:hover)]:group-focus-within/device:contents [@media(hover:hover)]:group-hover/device:contents"
 			data-sidebar-fold-all={allFolded ? "folded" : "open"}
 		>
 			<IconButton
