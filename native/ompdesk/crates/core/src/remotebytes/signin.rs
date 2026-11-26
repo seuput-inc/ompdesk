@@ -183,6 +183,9 @@ struct Relay {
     events: Events,
     closed: watch::Sender<bool>,
     busy: Mutex<bool>,
+    /// What still holds a listener of the relay: its start while it binds, and each accept task. The end is told only
+    /// once none does, so nothing listens on the port when main hears it.
+    holders: Mutex<usize>,
 }
 
 static RELAYS: LazyLock<Mutex<HashMap<u64, Arc<Relay>>>> = LazyLock::new(Mutex::default);
@@ -198,15 +201,53 @@ impl Relay {
         *self.closed.borrow()
     }
 
+    fn holders(&self) -> MutexGuard<'_, usize> {
+        self.holders
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// Stops listening; a callback on its way finishes (its page is the one the browser shows). Main hears the end
-    /// once (`remotebytes.signInEnded`), after every ask this relay made.
+    /// once (`remotebytes.signInEnded`), after every ask this relay made and once its listeners are gone.
     fn close(&self) {
+        let holders = self.holders();
         if self.closed.send_replace(true) {
             return;
         }
         relays().remove(&self.id);
+        if *holders == 0 {
+            self.ended();
+        }
+    }
+
+    /// A listener holder lets go (its listeners already dropped); the last one after a close tells the end.
+    fn release(&self) {
+        let mut holders = self.holders();
+        *holders -= 1;
+        if *holders == 0 && self.is_closed() {
+            self.ended();
+        }
+    }
+
+    fn ended(&self) {
         self.events
             .send("remotebytes.signInEnded", &json!({"relay": self.id}));
+    }
+}
+
+/// One holder of a relay's listeners; letting go (a drop, also of a cancelled start) is [`Relay::release`].
+struct Hold(Arc<Relay>);
+
+impl Hold {
+    fn new(relay: &Arc<Relay>) -> Hold {
+        *relay.holders() += 1;
+        Hold(relay.clone())
+    }
+}
+
+impl Drop for Hold {
+    fn drop(&mut self) {
+        self.0.release();
     }
 }
 
@@ -237,8 +278,11 @@ pub async fn start(call: Call) -> Result<Reply, Fault> {
         events: call.events.clone(),
         closed: watch::channel(false).0,
         busy: Mutex::new(false),
+        holders: Mutex::new(0),
     });
     relays().insert(relay.id, relay.clone());
+    // Declared before the listeners, so a return drops them before it lets go.
+    let hold = Hold::new(&relay);
     let timer = relay.clone();
     let mut closing = relay.closed.subscribe();
     tokio::spawn(async move {
@@ -264,8 +308,9 @@ pub async fn start(call: Call) -> Result<Reply, Fault> {
         }
     }
     for listener in listeners {
-        tokio::spawn(accept(relay.clone(), listener));
+        tokio::spawn(accept(Hold::new(&relay), listener));
     }
+    drop(hold);
     Reply::json(&json!({"listening": true}))
 }
 
@@ -288,17 +333,21 @@ async fn ended(closed: &mut watch::Receiver<bool>) {
     let _ = closed.wait_for(|closed| *closed).await;
 }
 
-async fn accept(relay: Arc<Relay>, listener: TcpListener) {
+async fn accept(hold: Hold, listener: TcpListener) {
+    let relay = hold.0.clone();
     let mut closed = relay.closed.subscribe();
     loop {
         tokio::select! {
-            () = ended(&mut closed) => return,
+            () = ended(&mut closed) => break,
             accepted = listener.accept() => {
                 let Ok((stream, _)) = accepted else { continue };
                 tokio::spawn(serve(relay.clone(), stream));
             }
         }
     }
+    // The port is free before the end is told.
+    drop(listener);
+    drop(hold);
 }
 
 /// One connection: one answer (`connection: close`), and an idle one ends with the relay.

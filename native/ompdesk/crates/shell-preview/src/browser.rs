@@ -24,6 +24,13 @@ pub struct LaunchConfig {
     pub command_timeout: Duration,
 }
 
+impl LaunchConfig {
+    /// How long one CDP command may take: the app's Preview and every test of a real Chromium use this one deadline,
+    /// so a check never fails on a wait the shipped Preview tolerates (a first browser context once took over 10 s on a
+    /// release runner whose ordinary first takes under 0.2 s; release 45736653201, probes 45739807347…45739830850).
+    pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+}
+
 pub struct Navigation {
     pub session_id: String,
     pub frame_id: String,
