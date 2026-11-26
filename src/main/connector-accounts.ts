@@ -179,6 +179,10 @@ export class ConnectorAccounts {
 			];
 			this.#write();
 			return this.state();
+		} catch (error) {
+			// The browser never opened, or main gave up first: the core's listener goes too.
+			await this.#options.core("connectors.googleSignInCancel", { flow }).catch(() => undefined);
+			throw error;
 		} finally {
 			this.#signingIn = null;
 		}

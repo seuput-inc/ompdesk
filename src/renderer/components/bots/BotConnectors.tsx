@@ -821,6 +821,14 @@ function GoogleSetup({
 		void window.omp.botConnectors.command({ action: "cancelGoogle" }).catch(() => {
 			// The sign-in's own answer says how it ended.
 		});
+	// A sign-in still waiting in the browser when the sheet closes ends with it (after one that ended, main has none).
+	useEffect(() => {
+		if (!signingIn) return;
+		return () =>
+			void window.omp.botConnectors.command({ action: "cancelGoogle" }).catch(() => {
+				// Nothing was waiting.
+			});
+	}, [signingIn]);
 	return (
 		<div className="flex flex-col gap-4" data-connector-setup="google">
 			{apps.google.length > 0 && (

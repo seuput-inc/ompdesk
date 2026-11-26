@@ -379,7 +379,7 @@ fn asks(schedule: &Object) -> bool {
         return false;
     };
     match event.get("source").and_then(Value::as_str) {
-        Some("slack" | "linear") => true,
+        Some("slack" | "linear" | "google") => true,
         Some("github") => event
             .get("ask")
             .and_then(Value::as_str)
