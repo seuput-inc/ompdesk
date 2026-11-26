@@ -65,6 +65,7 @@ import {
 	TOOLS_AUTO_UPDATE_PREF,
 } from "../shared/desktop-prefs";
 import { ECC_PREF } from "../shared/ecc";
+import { LAUNCH_INCIDENT_PREF, launchIncidentOf } from "../shared/feedback";
 import { IPC_COMMANDS, IPC_EVENTS, type SessionKind } from "../shared/ipc-types";
 import { KEYCHAIN_WOULD_ASK } from "../shared/keychain";
 import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
@@ -798,7 +799,11 @@ app.whenReady().then(async () => {
 	});
 	// A second instance quits at once: it must not take the running one's marker, nor watch anything.
 	if (gotLock) {
-		for (const report of await consumeHangReports()) writeRuntimeLog(report);
+		const hangReports = await consumeHangReports();
+		for (const report of hangReports) writeRuntimeLog(report);
+		// A freeze or a crash loop the last launches left is offered for a report once (LaunchIncidentNotice).
+		const incident = launchIncidentOf(hangReports, safeMode, Date.now());
+		if (incident) prefsStore().set(LAUNCH_INCIDENT_PREF, incident);
 		installHangWatchdog(postWatchdog);
 		// A slow step leaves a line (slow-steps.ts): main's blocked thread, a handler, a wait on the core, an omp's start.
 		installSlowSteps({
