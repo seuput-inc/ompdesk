@@ -15,6 +15,7 @@ import {
 	GitFork,
 	Info,
 	Keyboard,
+	MailCheck,
 	MessageSquareWarning,
 	MoreHorizontal,
 	PanelLeft,
@@ -144,6 +145,7 @@ import {
 	MenuButton,
 	SearchField,
 	SkeletonRows,
+	SwipeActions,
 	TimeAgo,
 } from "../../common";
 import { StarterGuide } from "../../onboarding/StarterGuide";
@@ -1983,8 +1985,6 @@ export function Sidebar() {
 				</span>
 			</Badge>
 		) : null;
-		// The age slot: the waiting token (a mark that stays), else the time since it last did something.
-		const age = waiting || !indexed ? null : <TimeAgo className="text-(--sc-text-subtle)" iso={session.modified} />;
 		const rowTip = [
 			title,
 			worktree?.label,
@@ -1999,160 +1999,192 @@ export function Sidebar() {
 		]
 			.filter(Boolean)
 			.join("\n");
+		// The age slot: the waiting token (a mark that stays), else the time since it last did something.
+		const age = waiting || !indexed ? null : <TimeAgo className="text-(--sc-text-subtle)" iso={session.modified} />;
+		// On a touch screen a swipe uncovers the row's everyday actions (Orca's swipe rows, MobileAgentListRows.tsx:209):
+		// left archives or restores a stored session, right marks an open tab out of view unread again.
+		const archived = archivedIds.has(session.id);
+		const swipe = touchInput
+			? {
+					trailing: indexed
+						? [
+								{
+									id: "archive",
+									label: t(archived ? "sidebar.menu.restore" : "sidebar.menu.archive"),
+									icon: archived ? ArchiveRestore : Archive,
+									onSelect: () => setArchived([session], !archived),
+								},
+							]
+						: [],
+					leading:
+						tab && !active && !tab.unreadDone
+							? {
+									id: "unread",
+									label: t("sidebar.menu.markUnread"),
+									icon: MailCheck,
+									tone: "accent" as const,
+									onSelect: () => useTabsStore.getState().markUnread(tab.id),
+								}
+							: undefined,
+				}
+			: {};
 		return (
 			<Fragment key={session.path}>
-				<ListRow
-					leading={
-						<span className="omp-session-leading">
-							<SessionStatusLane
-								fresh={doneBefore.current.get(session.path) === false}
-								prTone={pr ? branchPrTone(pr) : undefined}
-								state={lane}
-							/>
-							<SessionRowArtwork target={target} />
-						</span>
-					}
-					buttonProps={{
-						tabIndex,
-						"data-roving-item": key,
-						onFocus: () => setFocusKey(key),
-						// The last exchange joins the native tooltip on hover only (lib/last-exchange.ts, its own chunk), since
-						// reading it for every row on each render would parse every transcript snapshot; React leaves the
-						// attribute until the row's text changes.
-						onPointerEnter: event => {
-							const row = event.currentTarget;
-							void import("../../../lib/last-exchange").then(
-								({ rowTipWithExchange }) => {
-									const tip = rowTipWithExchange(t, rowTip, {
-										tabId: tab?.id,
-										sessionPath: session.path,
-										stamp: session.modified,
-									});
-									if (tip) row.title = tip;
-								},
-								() => undefined,
-							);
-						},
-						onKeyDown: event => {
-							if (opensMenu(event)) {
-								event.preventDefault();
-								setSessionMenu({ anchor: anchorBelow(event.currentTarget), session });
-							} else if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
-								// Alt+↑/↓ moves the row in its list, as a project header and a device section do.
-								if (moveSession(session, event.key === "ArrowUp" ? -1 : 1)) event.preventDefault();
-							} else if (event.key === "F2" && indexed) {
-								event.preventDefault();
-								startRename(session);
-							} else if (event.key === "Delete" && deletable) {
-								event.preventDefault();
-								setPendingDelete({ kind: "session", session });
-							} else if (
-								(event.key === "ArrowRight" || event.key === "ArrowLeft") &&
-								(summary?.agents.length ?? 0) + opened.length > 0
-							) {
-								const open = event.key === "ArrowRight";
-								const subagents = useSidebarSubagentsStore.getState();
-								if (open === subagents.expanded.has(session.path)) return;
-								event.preventDefault();
-								subagents.setExpanded(session.path, open);
-							}
-						},
-					}}
-					className={cx("omp-sidebar-session-row", runChild && "omp-sidebar-session-run-child")}
-					secondary={
-						<SessionRowLine
-							// The mark takes the age's place: the time is in the tooltip.
-							age={folderMissing ? null : age}
-							head={target?.head ?? null}
-							marks={
-								<>
-									{folderMissing && <SidebarFolderMissingMark />}
-									{marker}
-									{folderMissing ? null : waitingBadge}
-								</>
-							}
-							worktree={worktree?.kind}
-						/>
-					}
-					secondaryEnd={
-						<SessionRowEnd>
-							{hasFamilyChip(summary?.agents ?? [], opened, hiddenFamilies.has(session.path)) && (
-								<SidebarSubagentsToggle
-									agents={summary?.agents}
-									opened={opened}
-									sessionKey={session.path}
-									tabId={openTabId ?? null}
+				<SwipeActions {...swipe}>
+					<ListRow
+						leading={
+							<span className="omp-session-leading">
+								<SessionStatusLane
+									fresh={doneBefore.current.get(session.path) === false}
+									prTone={pr ? branchPrTone(pr) : undefined}
+									state={lane}
 								/>
-							)}
-							{indexed && (
-								<IconButton
-									data-sidebar-row-menu
-									icon={<MoreHorizontal />}
-									label={t("sidebar.sessionMenu")}
-									onClick={event => setSessionMenu({ anchor: anchorBelow(event.currentTarget), session })}
-									size="sm"
-									tabIndex={-1}
-								/>
-							)}
-						</SessionRowEnd>
-					}
-					onClick={event => {
-						if (pickRow(session, event)) return;
-						// Clicking the session already in view folds/unfolds its family rows.
-						if (active && (summary?.agents.length ?? 0) + opened.length > 0) toggleSidebarSubagents(session.path);
-						openSession(session);
-					}}
-					rowProps={{
-						...reorder.rowDrag(
-							session.path,
-							variant === undefined ? sessionListOf(session) : null,
-							openTabId ? { id: openTabId, shown: isCurrent } : undefined,
-						),
-						onContextMenu: event => setSessionMenu({ anchor: anchorFromEvent(event), session }),
-						"data-pickable": (indexed && session.device === undefined) || undefined,
-						"data-picked": picked.has(session.path) || undefined,
-						"data-active": active,
-						"data-current": isCurrent || undefined,
-						"data-pane-focus": (isCurrent && selectionOf(openTabId).splitShown) || undefined,
-						"data-pane-shown": (active && !isCurrent && selectionOf(openTabId).splitShown) || undefined,
-						"data-live": indexed ? undefined : true,
-						"data-switch-pending": switchPendingTo === session.id || undefined,
-						"data-session-kind": session.kind ?? "agent",
-						"data-signal": signal,
-						// An unseen finish also bolds the title (Orca's unread card).
-						"data-unseen": lane === "done" || undefined,
-						"data-session-path": session.path,
-						"data-folder-missing": folderMissing || undefined,
-						"data-session-run-child": runChild || undefined,
-						"data-flip-key": `session:${session.path}`,
-					}}
-					selected={active}
-					title={
-						<>
-							{sessionEmoji[session.path] && (
-								<span aria-hidden className="mr-1 shrink-0" data-session-emoji>
-									{sessionEmoji[session.path]}
-								</span>
-							)}
-							<SessionLiveTitle
-								agents={workingAgents}
-								opened={runningOpened}
-								parts={titleParts}
-								running={signal === "running"}
-								settling={settling}
-								swapScope={session.path}
-								waiting={signal === "waiting"}
+								<SessionRowArtwork target={target} />
+							</span>
+						}
+						buttonProps={{
+							tabIndex,
+							"data-roving-item": key,
+							onFocus: () => setFocusKey(key),
+							// The last exchange joins the native tooltip on hover only (lib/last-exchange.ts, its own chunk), since
+							// reading it for every row on each render would parse every transcript snapshot; React leaves the
+							// attribute until the row's text changes.
+							onPointerEnter: event => {
+								const row = event.currentTarget;
+								void import("../../../lib/last-exchange").then(
+									({ rowTipWithExchange }) => {
+										const tip = rowTipWithExchange(t, rowTip, {
+											tabId: tab?.id,
+											sessionPath: session.path,
+											stamp: session.modified,
+										});
+										if (tip) row.title = tip;
+									},
+									() => undefined,
+								);
+							},
+							onKeyDown: event => {
+								if (opensMenu(event)) {
+									event.preventDefault();
+									setSessionMenu({ anchor: anchorBelow(event.currentTarget), session });
+								} else if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+									// Alt+↑/↓ moves the row in its list, as a project header and a device section do.
+									if (moveSession(session, event.key === "ArrowUp" ? -1 : 1)) event.preventDefault();
+								} else if (event.key === "F2" && indexed) {
+									event.preventDefault();
+									startRename(session);
+								} else if (event.key === "Delete" && deletable) {
+									event.preventDefault();
+									setPendingDelete({ kind: "session", session });
+								} else if (
+									(event.key === "ArrowRight" || event.key === "ArrowLeft") &&
+									(summary?.agents.length ?? 0) + opened.length > 0
+								) {
+									const open = event.key === "ArrowRight";
+									const subagents = useSidebarSubagentsStore.getState();
+									if (open === subagents.expanded.has(session.path)) return;
+									event.preventDefault();
+									subagents.setExpanded(session.path, open);
+								}
+							},
+						}}
+						className={cx("omp-sidebar-session-row", runChild && "omp-sidebar-session-run-child")}
+						secondary={
+							<SessionRowLine
+								// The mark takes the age's place: the time is in the tooltip.
+								age={folderMissing ? null : age}
+								head={target?.head ?? null}
+								marks={
+									<>
+										{folderMissing && <SidebarFolderMissingMark />}
+										{marker}
+										{folderMissing ? null : waitingBadge}
+									</>
+								}
+								worktree={worktree?.kind}
 							/>
-							{fork?.parentTitle && <ForkParent name={fork.parentTitle} />}
-							{fork && <span className="sr-only">, {fork.label}</span>}
-							{worktree?.label && <span className="sr-only">, {worktree.label}</span>}
-							{statusLabel && <span className="sr-only">, {statusLabel}</span>}
-							{prWords && <span className="sr-only">, {prWords}</span>}
-							{linkWords && <span className="sr-only">, {linkWords}</span>}
-						</>
-					}
-					titleText={rowTip}
-				/>
+						}
+						secondaryEnd={
+							<SessionRowEnd>
+								{hasFamilyChip(summary?.agents ?? [], opened, hiddenFamilies.has(session.path)) && (
+									<SidebarSubagentsToggle
+										agents={summary?.agents}
+										opened={opened}
+										sessionKey={session.path}
+										tabId={openTabId ?? null}
+									/>
+								)}
+								{indexed && (
+									<IconButton
+										data-sidebar-row-menu
+										icon={<MoreHorizontal />}
+										label={t("sidebar.sessionMenu")}
+										onClick={event => setSessionMenu({ anchor: anchorBelow(event.currentTarget), session })}
+										size="sm"
+										tabIndex={-1}
+									/>
+								)}
+							</SessionRowEnd>
+						}
+						onClick={event => {
+							if (pickRow(session, event)) return;
+							// Clicking the session already in view folds/unfolds its family rows.
+							if (active && (summary?.agents.length ?? 0) + opened.length > 0)
+								toggleSidebarSubagents(session.path);
+							openSession(session);
+						}}
+						rowProps={{
+							...reorder.rowDrag(
+								session.path,
+								variant === undefined ? sessionListOf(session) : null,
+								openTabId ? { id: openTabId, shown: isCurrent } : undefined,
+							),
+							onContextMenu: event => setSessionMenu({ anchor: anchorFromEvent(event), session }),
+							"data-pickable": (indexed && session.device === undefined) || undefined,
+							"data-picked": picked.has(session.path) || undefined,
+							"data-active": active,
+							"data-current": isCurrent || undefined,
+							"data-pane-focus": (isCurrent && selectionOf(openTabId).splitShown) || undefined,
+							"data-pane-shown": (active && !isCurrent && selectionOf(openTabId).splitShown) || undefined,
+							"data-live": indexed ? undefined : true,
+							"data-switch-pending": switchPendingTo === session.id || undefined,
+							"data-session-kind": session.kind ?? "agent",
+							"data-signal": signal,
+							// An unseen finish also bolds the title (Orca's unread card).
+							"data-unseen": lane === "done" || undefined,
+							"data-session-path": session.path,
+							"data-folder-missing": folderMissing || undefined,
+							"data-session-run-child": runChild || undefined,
+							"data-flip-key": `session:${session.path}`,
+						}}
+						selected={active}
+						title={
+							<>
+								{sessionEmoji[session.path] && (
+									<span aria-hidden className="mr-1 shrink-0" data-session-emoji>
+										{sessionEmoji[session.path]}
+									</span>
+								)}
+								<SessionLiveTitle
+									agents={workingAgents}
+									opened={runningOpened}
+									parts={titleParts}
+									running={signal === "running"}
+									settling={settling}
+									swapScope={session.path}
+									waiting={signal === "waiting"}
+								/>
+								{fork?.parentTitle && <ForkParent name={fork.parentTitle} />}
+								{fork && <span className="sr-only">, {fork.label}</span>}
+								{worktree?.label && <span className="sr-only">, {worktree.label}</span>}
+								{statusLabel && <span className="sr-only">, {statusLabel}</span>}
+								{prWords && <span className="sr-only">, {prWords}</span>}
+								{linkWords && <span className="sr-only">, {linkWords}</span>}
+							</>
+						}
+						titleText={rowTip}
+					/>
+				</SwipeActions>
 				{(openTabId || opened.length > 0 || (summary?.agents.length ?? 0) > 0) && (
 					<SidebarSubagents
 						agents={summary?.agents}

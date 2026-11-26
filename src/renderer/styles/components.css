@@ -4962,3 +4962,43 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 	background-color: var(--device-color);
 	border-color: transparent;
 }
+
+/* SwipeActions: the row slides over its actions on a touch swipe; at rest they are not drawn. */
+.omp-swipe {
+	position: relative;
+	overflow: hidden;
+	border-radius: var(--sc-radius-md);
+}
+.omp-swipe-actions {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	justify-content: space-between;
+	opacity: 0;
+}
+.omp-swipe[data-swipe-open] .omp-swipe-actions {
+	opacity: 1;
+}
+.omp-swipe-action {
+	display: flex;
+	width: 76px;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 2px;
+	background-color: var(--sc-surface-3);
+	color: var(--sc-text);
+}
+.omp-swipe-action[data-tone="accent"] {
+	background-color: var(--sc-accent);
+	color: var(--sc-accent-fg);
+}
+.omp-swipe-track {
+	position: relative;
+	background-color: var(--omp-sidebar-bg);
+	touch-action: pan-y;
+	transition: transform var(--sc-duration-med) var(--sc-ease-standard);
+}
+.omp-swipe-track.omp-swipe-dragging {
+	transition: none;
+}
