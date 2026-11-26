@@ -484,6 +484,8 @@ enum Mode {
     New,
     Local,
     Remote,
+    /// The local branch when it exists (a work item started again), else a new one as `New` makes it.
+    Reuse,
 }
 
 /// The branch a caller names (main checked its shape: `worktreeBranchSource`).
@@ -496,9 +498,9 @@ struct Source {
 }
 
 /// A worktree at `target` on exactly the branch the caller names: a new one (from `from`, else the create's start
-/// point), an existing
-/// local one, or a new local one tracking `<remote>/<name>`. The name is never changed: a taken, missing or invalid
-/// one is refused, and a new branch whose `worktree add` failed is deleted again.
+/// point), an existing local one, either of those as the branch exists (`reuse`), or a new local one tracking
+/// `<remote>/<name>`. The name is never changed: a taken, missing or invalid one is refused, and a new branch whose
+/// `worktree add` failed is deleted again.
 async fn add_named(
     git: &Git,
     primary: &str,
@@ -524,16 +526,14 @@ async fn add_named(
     let exists = branch_exists(git, primary, name).await?;
     let failed = |message: String| refuse("worktree_create_failed", message);
     match source.mode {
-        Mode::New => {
-            if exists {
-                return Err(failed(format!("The branch {name} already exists.")));
-            }
+        Mode::New | Mode::Reuse if !exists => {
             // Without its own `from`, a named branch starts where the create's base points (HEAD, the fetched
             // default branch or the ref), as a generated one does.
             let from = source.from.as_deref().unwrap_or(start_point);
             add_new(git, primary, base_cwd, target, name, from, checkout).await
         }
-        Mode::Local => {
+        Mode::New => Err(failed(format!("The branch {name} already exists."))),
+        Mode::Local | Mode::Reuse => {
             if !exists {
                 return Err(failed(format!("The branch {name} does not exist.")));
             }
@@ -1552,5 +1552,34 @@ mod add_tests {
             .await
             .unwrap();
         assert_eq!(renamed.as_deref(), Some("omp/gui/fix-fresh"));
+    }
+
+    #[tokio::test]
+    async fn a_work_item_started_again_reuses_its_branch_where_a_new_one_is_refused() {
+        let primary = monorepo("reuse");
+        let named = |mode| {
+            let mut params = params(&primary, None, Vec::new());
+            params.source = Some(Source {
+                name: "jin/lin-12-fix-login".into(),
+                mode,
+                remote: None,
+                from: None,
+            });
+            params
+        };
+        let first = add(named(Mode::Reuse), Scope::detached()).await.unwrap();
+        let tree = PathBuf::from(&first.path);
+        sh(&tree, &["commit", "-q", "--allow-empty", "-m", "work"]);
+        let worked = sh(&tree, &["rev-parse", "HEAD"]);
+        sh(&primary, &["worktree", "remove", first.path.as_str()]);
+
+        let refused = add(named(Mode::New), Scope::detached())
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(refused.code, "worktree_create_failed");
+        let again = add(named(Mode::Reuse), Scope::detached()).await.unwrap();
+        assert_eq!(again.branch, "jin/lin-12-fix-login");
+        assert_eq!(sh(Path::new(&again.path), &["rev-parse", "HEAD"]), worked);
     }
 }
