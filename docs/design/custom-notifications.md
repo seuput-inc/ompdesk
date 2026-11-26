@@ -2,6 +2,12 @@
 
 The owner asked for OMPdesk's notifications to appear as the app's own popup, like KakaoTalk's PC popup: a small card in a corner of the screen, outside the app window and over other apps, with the app mark, the session title, a one-line preview, a click that opens the session, a close button, auto-hide and stacking. On macOS and Windows alike, with the person's own notification controls folded behind a gear on the popup ("설정 아이콘으로 접어서 표현", the owner, 26 Nov 2026).
 
+Four notifications on GitHub's runners (26 Nov 2026; three cards and "+1 more", newest nearest the corner):
+
+| macOS (top-right, below the menu bar) | Windows (bottom-right, above the taskbar) |
+|---|---|
+| ![macOS](custom-notifications-macos.png) | ![Windows](custom-notifications-windows.png) |
+
 ## Where it lives
 
 The admission rules stay where they are: main's `maybeNotify`, the batch, per-session mute, dropped, presence and seen, and the shell's `app.admitNotification`. What reaches the shell is the same `notification.show {id, title, body, icon, silent, tab}` call as today, and Node hears the same `notification.event {id, name, reason}` events. The popup replaces the OS banner behind that call. It is one more destination in `crates/shell/src/notification.rs`. Nothing changes in `src/main`. A click reaches main's existing `click` listener, so it opens the tab through today's path. Closing a banner once its tab is seen (`notification.closeTab`) closes the popup's card through the same `close_any(id)`.
@@ -76,4 +82,4 @@ The phone's Web Push, main's admission and batching, `IpcNotifyResult`, and the 
 ## Tests
 
 - Rust unit tests (`notification_popup/mod.rs`): `route` over platform × OS gate × mute × test run, the stack (queue, "+N more", close of a shown or waiting card, countdown paused by hover, the open menu and idle, the menu's height), `place` (monitor choice, corner, a taskbar on the left), the mute (`until` bounds, expiry, the file round trip), and the parsing of `ompdesk-popup:` actions, which refuses anything else.
-- `e2e/notification-popup.e2e.ts` (Windows, `OMP_GUI_TEST_NOTIFICATION_POPUP=1`): a background tab's turn finishes, the popup page shows that session's title and preview, the window log line shows the no-activate, tool-window and topmost flags, the gear opens its menu, and clicking the card makes that tab the app window's active tab. A second test mutes for an hour and sees the next finished turn routed `muted` with no card.
+- `e2e/notification-popup.e2e.ts` (Windows, `OMP_GUI_TEST_NOTIFICATION_POPUP=1`): a background tab's turn finishes, the popup page shows that session's title and preview, the window log line shows the no-activate, tool-window and topmost flags, the gear opens its menu, and clicking the card makes that tab the app window's active tab. A second test mutes for an hour and sees the next finished turn skipped as `dropped` (no card, no chime).
