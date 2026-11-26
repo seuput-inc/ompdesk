@@ -410,12 +410,18 @@ export function SidebarDeviceSection({
 						query={query}
 						read={online && !pending}
 					/>
-				) : host.state === "connecting" ? (
-					<p className="flex items-center gap-2 px-2.5 py-1.5 text-sc-xs text-(--sc-text-muted)">
-						<Spinner size="sm" />
-						{stateLabel}
-					</p>
-				) : null}
+				) : (
+					<>
+						{host.state === "connecting" && (
+							<p className="flex items-center gap-2 px-2.5 py-1.5 text-sc-xs text-(--sc-text-muted)">
+								<Spinner size="sm" />
+								{stateLabel}
+							</p>
+						)}
+						{/* No rows while the link is down: the host's tasks still show, so a failed one can be closed. */}
+						<NewTaskRows device={host.deviceId} />
+					</>
+				)}
 			</Collapse>
 		</section>
 	);

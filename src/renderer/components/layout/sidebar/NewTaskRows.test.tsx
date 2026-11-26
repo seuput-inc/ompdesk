@@ -60,12 +60,21 @@ const shown = () => [...document.querySelectorAll("[data-new-task]")].map(row =>
 
 it("lists a paired computer's task in that computer's project group, not in this computer's list", async () => {
 	useNewTasksStore.setState({ tasks: { here: task("here", undefined), there: task("there", "pc-b") } });
-	await mount(<NewTaskRows except={[]} />);
+	await mount(<NewTaskRows except={[]} sections={["pc-b"]} />);
 	expect(shown()).toEqual(["here"]);
 	await mount(<NewTaskRows cwd="/work/project" device="pc-b" />);
 	expect(shown()).toEqual(["there"]);
 	await mount(<NewTaskRows device="pc-b" except={["/work/project"]} />);
 	expect(shown()).toEqual([]);
+	// A section whose host is offline lists every task of its host.
+	await mount(<NewTaskRows device="pc-b" />);
+	expect(shown()).toEqual(["there"]);
+});
+
+it("keeps a task of a computer the sidebar has no section for in this computer's list, so it can be closed", async () => {
+	useNewTasksStore.setState({ tasks: { here: task("here", undefined), there: task("there", "pc-gone") } });
+	await mount(<NewTaskRows except={["/work/project"]} sections={["pc-b"]} />);
+	expect(shown()).toEqual(["there"]);
 });
 
 it("says what refused a failed task, its headline in the tooltip", async () => {

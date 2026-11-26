@@ -16,8 +16,14 @@ use windows::UI::Notifications::{
     ToastNotification, ToastNotificationManager, ToastNotifier,
 };
 use windows::core::{HSTRING, IInspectable};
+use windows_sys::Win32::Foundation::HMODULE;
+use windows_sys::Win32::Media::Audio::{PlaySoundW, SND_ALIAS, SND_ASYNC, SND_NODEFAULT};
 use windows_sys::Win32::System::Com::CoTaskMemFree;
-use windows_sys::Win32::UI::Shell::GetCurrentProcessExplicitAppUserModelID;
+use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+use windows_sys::Win32::UI::Shell::{
+    GetCurrentProcessExplicitAppUserModelID, QUERY_USER_NOTIFICATION_STATE,
+    QUNS_ACCEPTS_NOTIFICATIONS, SHQueryUserNotificationState,
+};
 
 use super::comthread;
 use crate::notify_spec::{ToastSpec, dismissal_reason};
@@ -90,14 +96,19 @@ fn context(what: &'static str) -> impl Fn(windows::core::Error) -> String {
     }
 }
 
+/// The notifier for this process's AppUserModelID.
+fn notifier() -> Result<ToastNotifier, String> {
+    let aumid = app_user_model_id()
+        .ok_or("the process has no AppUserModelID, so Windows cannot attribute a toast to it")?;
+    ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(aumid))
+        .map_err(context("creating the toast notifier"))
+}
+
 /// Shows the toast. `Err` says why it could not (the caller reports `failed`); events then follow through `emit`.
 pub fn show(spec: &ToastSpec, emit: Emit) -> Result<(), String> {
     comthread::init();
     sweep();
-    let aumid = app_user_model_id()
-        .ok_or("the process has no AppUserModelID, so Windows cannot attribute a toast to it")?;
-    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(aumid))
-        .map_err(context("creating the toast notifier"))?;
+    let notifier = notifier()?;
     match notifier.Setting() {
         Ok(NotificationSetting::Enabled) => {}
         Ok(other) => return Err(setting_text(other).into()),
@@ -169,4 +180,99 @@ pub fn close(id: u64) {
     if let Some((notifier, toast)) = found {
         let _ = notifier.Hide(&toast);
     }
+}
+
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Whether a window the app draws itself may interrupt the person now (docs/design/custom-notifications.md). `Err`
+/// says why not; the caller then hands the notification to the toast, which Windows quiets by its own rules. Every
+/// answer that is not a clear yes is a no.
+pub fn popup_gate() -> Result<(), String> {
+    comthread::init();
+    match notifier()?.Setting() {
+        Ok(NotificationSetting::Enabled) => {}
+        Ok(other) => return Err(setting_text(other).into()),
+        Err(error) => return Err(context("reading the notification setting")(error)),
+    }
+    let mut state: QUERY_USER_NOTIFICATION_STATE = 0;
+    // SAFETY: a valid out-pointer for the state.
+    let read = unsafe { SHQueryUserNotificationState(&mut state) };
+    if read < 0 {
+        return Err(format!(
+            "SHQueryUserNotificationState failed (0x{:08X})",
+            read as u32
+        ));
+    }
+    if state != QUNS_ACCEPTS_NOTIFICATIONS {
+        return Err(format!(
+            "the user notification state is {state}, not accepting"
+        ));
+    }
+    match quiet_hours_profile()? {
+        0 => Ok(()),
+        profile => Err(format!(
+            "Do Not Disturb or Focus assist is on (quiet hours profile {profile})"
+        )),
+    }
+}
+
+/// `WNF_SHEL_QUIETHOURS_ACTIVE_PROFILE_CHANGED`: 0 off, 1 priority only (Windows 11's Do Not Disturb), 2 alarms only.
+/// Windows documents no API for Focus assist; this state is the known undocumented read
+/// (https://stackoverflow.com/questions/53407374). A state never written has no data: off.
+fn quiet_hours_profile() -> Result<u32, String> {
+    type Query = unsafe extern "system" fn(
+        state: *const u64,
+        type_id: *const std::ffi::c_void,
+        scope: *const std::ffi::c_void,
+        stamp: *mut u32,
+        buffer: *mut std::ffi::c_void,
+        size: *mut u32,
+    ) -> i32;
+    const STATE: u64 = 0x0D83_063E_A3BF_1C75;
+    let ntdll = wide("ntdll.dll");
+    // SAFETY: ntdll is loaded in every process; the name is NUL-terminated.
+    let module: HMODULE = unsafe { GetModuleHandleW(ntdll.as_ptr()) };
+    if module.is_null() {
+        return Err("ntdll is not loaded".into());
+    }
+    // SAFETY: a loaded module and a NUL-terminated ASCII name.
+    let found = unsafe { GetProcAddress(module, c"NtQueryWnfStateData".as_ptr().cast()) }
+        .ok_or("ntdll has no NtQueryWnfStateData")?;
+    // SAFETY: NtQueryWnfStateData has had this signature since Windows 8 (the answer above declares it the same way).
+    let query: Query = unsafe { std::mem::transmute(found) };
+    let (mut stamp, mut profile, mut size) = (0u32, 0u32, 4u32);
+    // SAFETY: the state name, stamp, buffer and size point at live locals; the buffer holds `size` bytes.
+    let status = unsafe {
+        query(
+            &STATE,
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut stamp,
+            (&mut profile as *mut u32).cast(),
+            &mut size,
+        )
+    };
+    if status < 0 {
+        return Err(format!(
+            "the quiet hours profile could not be read (NTSTATUS 0x{:08X})",
+            status as u32
+        ));
+    }
+    Ok(if size == 0 { 0 } else { profile })
+}
+
+/// Windows' default notification sound, as a toast without `silent` plays it. Asynchronous; silence when the person
+/// set no sound for it.
+pub fn play_default_sound() {
+    let alias = wide("Notification.Default");
+    // SAFETY: a NUL-terminated alias name; SND_ASYNC copies what it needs before returning.
+    unsafe {
+        PlaySoundW(
+            alias.as_ptr(),
+            std::ptr::null_mut(),
+            SND_ALIAS | SND_ASYNC | SND_NODEFAULT,
+        )
+    };
 }

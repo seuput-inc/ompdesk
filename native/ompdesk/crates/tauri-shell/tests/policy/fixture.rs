@@ -40,7 +40,7 @@ fn main() -> io::Result<()> {
         let params = &call["params"];
         let answer = match call["method"].as_str().unwrap() {
             method if method.starts_with("clipboard.") => clipboard.call(method, params),
-            "app.admitNotification" => notify.admit(params).unwrap(),
+            "app.admitNotification" => notify.admit(params, false).unwrap(),
             method @ ("app.updateDestination" | "app.sweepUpdateFiles") => {
                 let mut args = params.clone();
                 let directory = args.as_object_mut().unwrap().remove("directory").unwrap();
@@ -87,7 +87,7 @@ fn main() -> io::Result<()> {
                 Path::new(params["rendererRoot"].as_str().unwrap()),
                 params["packaged"].as_bool().unwrap(),
                 params["windows"].as_bool().unwrap(),
-                params["headless"].as_str().map(std::ffi::OsStr::new),
+                params["headless"].as_str() == Some("1"),
             ),
             "hang.consume" => marker::consume_reports(Path::new(params["path"].as_str().unwrap())),
             "app.diagnosticBundleFileName" => {

@@ -76,17 +76,29 @@ function NewTaskRow({ task }: { task: NewTask }) {
 		/>
 	);
 }
-
 /**
  * The tasks on `device` (absent: this computer) cut from `cwd`, or with `except`, those whose project is none of those
- * folders.
+ * folders. This computer's list (`except`, no `device`) also lists a paired computer's tasks when `sections` (the
+ * paired computers the sidebar draws a section for) lacks it, so a task on an unpaired computer can still be closed.
  */
-export function NewTaskRows({ device, cwd, except }: { device?: string; cwd?: string; except?: readonly string[] }) {
+export function NewTaskRows({
+	device,
+	cwd,
+	except,
+	sections,
+}: {
+	device?: string;
+	cwd?: string;
+	except?: readonly string[];
+	sections?: readonly string[];
+}) {
 	const tasks = useNewTasksStore(state => state.tasks);
-	const shown = Object.values(tasks).filter(
-		task =>
-			task.request.device === device &&
-			(cwd !== undefined ? task.request.baseCwd === cwd : !except?.includes(task.request.baseCwd)),
+	const shown = Object.values(tasks).filter(task =>
+		task.request.device === device
+			? cwd !== undefined
+				? task.request.baseCwd === cwd
+				: !except?.includes(task.request.baseCwd)
+			: device === undefined && sections !== undefined && !sections.includes(task.request.device ?? ""),
 	);
 	if (shown.length === 0) return null;
 	return (

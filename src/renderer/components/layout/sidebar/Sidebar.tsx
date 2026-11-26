@@ -2249,7 +2249,7 @@ export function Sidebar() {
 							</Button>
 						</div>
 					))}
-				<NewTaskRows except={groups.map(group => group.cwd)} />
+				<NewTaskRows except={groups.map(group => group.cwd)} sections={sectionHosts.map(host => host.deviceId)} />
 				{groups.length > 0 && (
 					<DndContext collisionDetection={closestCenter} onDragEnd={onProjectDragEnd} sensors={projectSensors}>
 						<SortableContext items={groups.map(group => group.cwd)} strategy={verticalListSortingStrategy}>

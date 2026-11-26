@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::path::Path;
 
 use serde_json::{Value, json};
@@ -8,7 +7,7 @@ pub(super) fn fact(
     renderer_root: &Path,
     packaged: bool,
     windows: bool,
-    headless: Option<&OsStr>,
+    quiet: bool,
 ) -> Value {
     let path = if packaged {
         resources.join("app-icon.png")
@@ -20,7 +19,7 @@ pub(super) fn fact(
         root.extend(["resources", "brand", "app-icon.png"]);
         root
     };
-    let notifications = if headless == Some(OsStr::new("1")) {
+    let notifications = if quiet {
         "off"
     } else if windows {
         "appIcon"
