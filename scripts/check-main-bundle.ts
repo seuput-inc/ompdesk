@@ -505,7 +505,9 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // finding an a2ui chat row: 2,217,814 (branch run 45712547026), 782 bytes more.
 // Both merged with the quick terminal: measured 2,217,549 (branch run 45727586452; main's GitHub card went lazy
 // meanwhile), inside the quick terminal's budget, which stays.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_253_162;
+// The A2UI stack merged with main at b90e7549d: measured 2,254,932 (CI run 45868553036, omp/agent/a2ui-u4-2 at
+// 33356584c), 1,850 bytes over main's 2,253,082. The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_255_012;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
