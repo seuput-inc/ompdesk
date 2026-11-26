@@ -1,5 +1,5 @@
 /**
- * The sidebar's nav rows (Agents, Schedules, Bots, Stats, Phone; settings-layout-look.md › Nav rows) sit two to a row
+ * The sidebar's nav rows (Agents, Schedules, Stats, Phone; settings-layout-look.md › Nav rows) sit two to a row
  * (the owner's request, 26 Nov 2026), on the dev harness (`vite.harness.config.ts`): at the default 280 px sidebar and
  * at the grid's narrowest, 260 px, every label reads whole in English and Korean, an odd count leaves its last cell at a
  * column's width, a narrower sidebar puts one per row, and a phone's drawer keeps 44 px cells.
@@ -159,7 +159,7 @@ for (const lang of ["en", "ko"] as const)
 test("an odd count leaves the last cell a column wide", async () => {
 	const page = await openHarness("en", {});
 	const besideBoard = (list: Cell[]) => list.filter(cell => cell.row !== "board").length;
-	// Hide a cell, and one more when that leaves an even count (the Bots cell shows while the bots feature does).
+	// Hide a cell, and one more when that leaves an even count.
 	let list = await cells(page);
 	do {
 		const hide = list[list.length - 2]?.row ?? "";

@@ -2,7 +2,10 @@
  * The sidebar's Bots section above the projects (Orca's `SidebarBotsSection.tsx:174-385`; the owner's decision of
  * 25 Nov 2026): one header like the Chats section's (fold, the folded bots' faces, collapse all, options, "+"), then
  * one row per bot, each unfolding to its chats (the session rows the list draws for the bot's folder, so a chat keeps
- * its status, menu and family). Mounted only while the bots feature is available (`useBotsAvailable`).
+ * its status, menu and family). Mounted only while the bots feature is available (`useBotsAvailable`), pinned atop the
+ * lists as Orca's `SidebarBotsSplit.tsx` pins it (without its resizable split). It is the Bots page's entry, as in Orca,
+ * which has no Bots nav row: the header's chevron folds the section, its title opens the page (the owner's call,
+ * 27 Nov 2026).
  *
  * - "+" (Orca's :247-297): New bot, Browse templates, Import from another app, New group. Share by link is Orca
  *   Cloud's, so it is not here. The bot groups follow the bots, each a row of its members' faces opening its room.
@@ -43,6 +46,7 @@ import { isImeKeyEvent } from "../../../lib/ime";
 import { useBotsStore } from "../../../stores/bots";
 import { useBotsView } from "../../../stores/bots-view";
 import { toast, toastError } from "../../../stores/toast";
+import { useUiStore } from "../../../stores/ui";
 import { BotAvatar, type BotMark } from "../../bots/BotAvatar";
 import { BotHoverCard } from "../../bots/BotHoverCard";
 import { BotLineText } from "../../bots/BotLineText";
@@ -197,18 +201,33 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 			className="omp-sidebar-head group/head flex items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
 			data-flip-key="bots"
 		>
-			<SidebarFoldButton
-				aria-label={t("bots.section.fold", {
-					total,
-					needsYou,
-				})}
-				className="text-(--sc-text-muted) hover:text-(--sc-text)"
-				data-roving-item="bots"
-				data-sidebar-bots-toggle
-				folded={folded}
-				icon={<BotMessageSquare aria-hidden className="size-(--sc-icon-sm) shrink-0" />}
-				onClick={() => view.setFolded(!folded)}
+			{/* The chevron and glyph fold the section; the title beside them opens the Bots page. */}
+			{/* Stretched to the header's height, which a touch screen sets as a minimum (mobile.css). */}
+			<span className="flex w-12 shrink-0 self-stretch">
+				<SidebarFoldButton
+					aria-label={t("bots.section.fold", {
+						total,
+						needsYou,
+					})}
+					className="text-(--sc-text-muted) hover:text-(--sc-text)"
+					data-roving-item="bots"
+					data-sidebar-bots-toggle
+					folded={folded}
+					icon={<BotMessageSquare aria-hidden className="size-(--sc-icon-sm) shrink-0" />}
+					onClick={() => view.setFolded(!folded)}
+					tabIndex={-1}
+				/>
+			</span>
+			{/* controls-ok: the section header's words, styled as the fold header beside them (SidebarFoldButton). */}
+			<button
+				aria-label={t("bots.section.openPage")}
+				className="flex min-w-0 flex-1 items-center self-stretch rounded-(--sc-radius-md) pr-1 text-left text-sc-xs font-semibold text-(--sc-text-muted) hover:text-(--sc-text) focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--sc-focus-ring)"
+				data-destination="bots"
+				data-roving-item="bots:page"
+				data-sidebar-bots-open
+				onClick={() => useUiStore.getState().openBots()}
 				tabIndex={-1}
+				type="button"
 			>
 				<span className="min-w-0 truncate">{t("destination.bots")}</span>
 				{folded && (
@@ -226,8 +245,7 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 							))}
 					</span>
 				)}
-				{!folded && <span className="flex-1" />}
-			</SidebarFoldButton>
+			</button>
 			{!folded && sorted.length > 1 && (
 				<IconButton
 					className="text-(--sc-text-subtle) hover:text-(--sc-text)"

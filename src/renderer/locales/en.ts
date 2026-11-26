@@ -8220,6 +8220,7 @@ export const en: Record<string, string> = {
 	"bots.section.collapseAll": "Collapse all bots",
 	"bots.section.expandAll": "Expand all bots",
 	"bots.section.region": "Your bots",
+	"bots.section.openPage": "Open Bots",
 	"bots.section.emptyTitle": "Your AI teammate",
 	"bots.section.emptyDescription": "A bot keeps working for you in its own folder: it remembers, watches and reports.",
 	"bots.section.allHidden": "All bots are paused and hidden.",

@@ -514,7 +514,7 @@ function groupToggle(cwd: string): Element {
 }
 
 describe("Sidebar menus and pinned ordering", () => {
-	it("leads with the nav rows (Bots only once the bots feature is available) and ends with Settings and a help menu", async () => {
+	it("leads with the nav rows, the Bots section (once the bots feature is available) as the Bots page's entry, and ends with Settings and a help menu", async () => {
 		useBotsFeature.setState({ available: false });
 		installMockOmp(LIST);
 		seedStores();
@@ -525,15 +525,23 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(navRows()).toEqual(["board", "agents", "schedules", "stats", "phone"]);
 		expect(container.querySelector("[data-sidebar-bots]")).toBeNull();
 		await act(async () => useBotsFeature.setState({ available: true }));
-		expect(navRows()).toEqual(["board", "agents", "schedules", "bots", "stats", "phone"]);
+		// No Bots nav row, as in Orca: the section pinned atop the lists is the entry.
+		expect(navRows()).toEqual(["board", "agents", "schedules", "stats", "phone"]);
+		const list = container.querySelector('[data-tour="sessions"]');
+		const first = list?.querySelector("[data-sidebar-bots], [data-workspace-group]");
+		expect(first?.getAttribute("data-sidebar-bots")).not.toBeNull();
 		// With no bot yet the section is one card that makes the first (Orca's SidebarBotsEmptyState).
 		const bots = container.querySelector("[data-sidebar-bots]");
 		expect(bots?.textContent).toContain("Your AI teammate");
 		expect([...(bots?.querySelectorAll("button") ?? [])].map(button => button.textContent)).toEqual(
 			expect.arrayContaining(["New bot", "Templates"]),
 		);
-		await fire(container.querySelector('[data-sidebar-nav-row="bots"]'), "onClick");
+		// Its title opens the Bots page; its chevron still folds it.
+		await fire(container.querySelector("[data-sidebar-bots-open]"), "onClick");
 		expect(useUiStore.getState().destination).toBe("bots");
+		await fire(container.querySelector("[data-sidebar-bots-toggle]"), "onClick");
+		expect(container.querySelector("[data-sidebar-bots-toggle]")?.getAttribute("aria-expanded")).toBe("false");
+		await fire(container.querySelector("[data-sidebar-bots-toggle]"), "onClick");
 		await act(async () => useBotsFeature.setState({ available: false }));
 		// The Agents shortcut is the cell's tooltip and aria-keyshortcuts: a half-width cell has no room for it.
 		expect(nav?.textContent).not.toContain("⌥A");

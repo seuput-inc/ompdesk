@@ -541,7 +541,7 @@ async function ensureParityItems(page: Page): Promise<void> {
 async function openParityItems(page: Page, look: Look): Promise<void> {
 	await ensureParityItems(page);
 	await openDrawer(page, look);
-	await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+	await page.locator("[data-sidebar-bots-open]:visible").first().click();
 	// A phone shows the list first, and a group's room may be the page: the bot's row opens its page.
 	if ((await page.locator("[data-bot-pane]:visible").count()) === 0)
 		await page.locator("[data-bots-page-row]:visible").first().click();
@@ -2489,7 +2489,7 @@ export const SURFACES: readonly Surface[] = [
 		open: async (page, look) => {
 			await ensureParityBot(page);
 			await openDrawer(page, look);
-			await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+			await page.locator("[data-sidebar-bots-open]:visible").first().click();
 			// A phone shows the list first: the bot's row opens its page.
 			const row = page.locator("[data-bots-page-row]:visible").first();
 			if ((await page.locator("[data-bot-pane]:visible").count()) === 0) await row.click();
@@ -2536,7 +2536,7 @@ export const SURFACES: readonly Surface[] = [
 					await window.omp.bots.command({ action: "roomCreate", name: "Parity group", bots: [state.bots[0].id] });
 			});
 			await openDrawer(page, look);
-			await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+			await page.locator("[data-sidebar-bots-open]:visible").first().click();
 			await page.locator("[data-bots-page-room]:visible").first().click();
 		},
 		ready: "[data-bot-room] [data-bot-room-box]",

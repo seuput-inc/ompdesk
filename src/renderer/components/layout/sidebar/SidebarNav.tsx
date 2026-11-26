@@ -1,17 +1,17 @@
 /**
  * The sidebar's nav rows (Orca's `SidebarNav`, the owner's decision of 25 Nov 2026): under the search line, one cell per
  * place the app goes besides a session: All sessions (the board, with how many sessions need the person and work now;
- * Orca's dashboard entry), Agents, Schedules, Bots (only while the bots feature is available, `useBotsAvailable`), Stats
- * and Phone (pairing a phone; not on the phone's own page). Two cells to a row (the owner's request, 26 Nov 2026), one
- * per row in a sidebar under 260 px (sidebar.css); All sessions takes a whole row, its counts need the room. A
- * half-width cell has no room for the Agents shortcut, so it is the cell's tooltip and `aria-keyshortcuts`. A cell's
- * right click (long press, Shift+F10) hides it from this device's sidebar; Customize sidebar shows it again
+ * Orca's dashboard entry), Agents, Schedules, Stats and Phone (pairing a phone; not on the phone's own page). Bots has
+ * no cell, as in Orca (sidebar/chrome/SidebarNav.tsx): the Bots section pinned atop the lists is its entry, its title
+ * opening the Bots page (`SidebarBots.tsx`; the owner's call, 27 Nov 2026). Two cells to a row (the owner's request,
+ * 26 Nov 2026), one per row in a sidebar under 260 px (sidebar.css); All sessions takes a whole row, its counts need
+ * the room. A half-width cell has no room for the Agents shortcut, so it is the cell's tooltip and `aria-keyshortcuts`.
+ * A cell's right click (long press, Shift+F10) hides it from this device's sidebar; Customize sidebar shows it again
  * (`navHidden`, device-local).
  */
-import { BarChart3, Bot, BotMessageSquare, CalendarClock, Columns3, type LucideIcon, Smartphone } from "lucide-react";
+import { BarChart3, Bot, CalendarClock, Columns3, type LucideIcon, Smartphone } from "lucide-react";
 import { type KeyboardEvent as ReactKeyboardEvent, Suspense, useState } from "react";
 import { useShellInput } from "../../../hooks/use-shell-mode";
-import { useBotsAvailable } from "../../../lib/bots-source";
 import { lazyChunk } from "../../../lib/chunk-load";
 import { cx } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
@@ -26,14 +26,14 @@ const BoardNavCounts = lazyChunk(() =>
 	import("../../board/board-counts").then(module => ({ default: module.BoardNavCounts })),
 );
 
-export const SIDEBAR_NAV = ["board", "agents", "schedules", "bots", "stats", "phone"] as const;
+export const SIDEBAR_NAV = ["board", "agents", "schedules", "stats", "phone"] as const;
 export type SidebarNavRow = (typeof SIDEBAR_NAV)[number];
 
 interface NavRowSpec {
 	labelKey: string;
 	icon: LucideIcon;
 	/** The `data-destination` a page row carries (AppShell preloads its page when a pointer reaches it). */
-	destination?: "agents" | "board" | "bots" | "insights";
+	destination?: "agents" | "board" | "insights";
 	open: () => void;
 }
 
@@ -55,12 +55,6 @@ export const SIDEBAR_NAV_ROWS: Record<SidebarNavRow, NavRowSpec> = {
 		icon: CalendarClock,
 		open: () => useUiStore.getState().openSettings("schedules"),
 	},
-	bots: {
-		labelKey: "destination.bots",
-		icon: BotMessageSquare,
-		destination: "bots",
-		open: () => useUiStore.getState().openBots(),
-	},
 	stats: {
 		labelKey: "destination.insights",
 		icon: BarChart3,
@@ -76,9 +70,8 @@ export const SIDEBAR_NAV_ROWS: Record<SidebarNavRow, NavRowSpec> = {
 
 /** The rows this view can offer at all (before the person's own hiding). */
 export function useOfferedNavRows(): SidebarNavRow[] {
-	const bots = useBotsAvailable();
 	const onPhonePage = webRuntime() !== null;
-	return SIDEBAR_NAV.filter(row => (row !== "bots" || bots) && (row !== "phone" || !onPhonePage));
+	return SIDEBAR_NAV.filter(row => row !== "phone" || !onPhonePage);
 }
 
 export function SidebarNav() {
