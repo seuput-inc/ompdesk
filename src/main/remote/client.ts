@@ -18,6 +18,9 @@ import { Link, type Liveness, type WireMessage } from "./wire";
 
 export type LinkState = "connecting" | "online" | "offline";
 
+/** A line the core's client loop logs for its link (`remote-link` in gui-runtime.jsonl). */
+export type LinkLogEvent = "down" | "attempt" | "up" | "gate-probe";
+
 /**
  * What may say the network or the computer changed: the client checks (online) or retries (offline) at once.
  * `peer`: the host's computer just connected to this one, so it is up now, even while a dial to it still hangs.
@@ -170,8 +173,9 @@ export interface RemoteClientOptions {
 	sharing?: SharingCore;
 	/** Where `remote-hosts.json` is: the pinned record is read from it on every attempt and told the working address. */
 	userData?: string;
-	/** The link's transitions for the runtime log (`remote-link`): `down`, each `attempt`, `up`. No addresses or keys. */
-	log?: (event: "down" | "attempt" | "up", details: Record<string, unknown>) => void;
+	/** The link's transitions for the runtime log (`remote-link`): `down`, each `attempt`, `up`, and a `gate-probe` the
+	 * host's gate still refused. No addresses or keys. */
+	log?: (event: LinkLogEvent, details: Record<string, unknown>) => void;
 	/** The link's ping and dead timers (tests shorten them). */
 	liveness?: Liveness;
 }
@@ -203,7 +207,7 @@ function route(): void {
 	process.on("remote.client.log", data => {
 		const { client, event, details } = data as {
 			client: number;
-			event: "down" | "attempt" | "up";
+			event: LinkLogEvent;
 			details: Record<string, unknown>;
 		};
 		clients.get(client)?.logged(event, details);
@@ -429,7 +433,7 @@ export class RemoteClient {
 	}
 
 	/** A transition the core logged for this link. */
-	logged(event: "down" | "attempt" | "up", details: Record<string, unknown>): void {
+	logged(event: LinkLogEvent, details: Record<string, unknown>): void {
 		this.#opts.log?.(event, details);
 	}
 
