@@ -274,7 +274,7 @@ async function ui(page: Page, action: string, ...args: unknown[]): Promise<void>
  * Show the side panel's `view` by clicks a person makes, on a real window as on the harness: the title bar's Side
  * panel button when the panel is closed, then the view's button (the panel's top bar; a phone's tab bar at its foot).
  */
-async function openPanelView(page: Page, look: Look, view: "diff" | "files" | "terminal"): Promise<void> {
+async function openPanelView(page: Page, look: Look, view: "diff" | "files" | "terminal" | "preview"): Promise<void> {
 	const button = page
 		.locator(".omp-panel-topbar:visible, [data-panel-tabbar]:visible")
 		.getByRole("button", { name: say(look, `panel.tabs.${view}`), exact: true })
@@ -1949,21 +1949,30 @@ export const SURFACES: readonly Surface[] = [
 			area: "A",
 			title: `Side panel › ${panel}`,
 			open: async (page, look) => {
-				if (panel === "preview" || panel === "files") return ui(page, "setPanelTab", panel);
+				if (panel === "files") return ui(page, "setPanelTab", panel);
 				await openPanelView(page, look, panel);
 				await page
-					.locator(panel === "diff" ? "[data-scm-bar]:visible" : "[data-terminal-head]:visible")
+					.locator(
+						panel === "diff"
+							? "[data-scm-bar]:visible"
+							: panel === "preview"
+								? "[data-preview-panel]:visible"
+								: "[data-terminal-head]:visible",
+					)
 					.first()
 					.waitFor({ timeout: 20_000 });
 			},
-			// The terminal's sheet is ready once its first shell's tab shows (with the phone's key bar under it).
+			// The terminal's sheet is ready once its first shell's tab shows (with the phone's key bar under it). The
+			// Preview's empty tab shows its start page (servers, forwards, devices, recent sites).
 			ready:
 				panel === "diff"
 					? "[data-scm-bar]:visible"
 					: panel === "terminal"
 						? "[data-terminal-tab]:visible"
-						: "[data-sheet-panel], [data-panel-tabbar], .omp-panel-topbar",
-			...(panel === "diff" || panel === "terminal"
+						: panel === "preview"
+							? "[data-preview-panel]:visible"
+							: "[data-sheet-panel], [data-panel-tabbar], .omp-panel-topbar",
+			...(panel === "diff" || panel === "terminal" || panel === "preview"
 				? { parity: { session: "work" as const, after: closePanelView } }
 				: {}),
 			settle: 900,
