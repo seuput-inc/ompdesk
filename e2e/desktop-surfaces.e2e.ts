@@ -205,8 +205,8 @@ test("@smoke Windows: the Mica backdrop is on where the build has it, and closin
 		expect(chrome.platform).toBe("win32");
 		expect(chrome.mica).toBe(mica ? "true" : undefined);
 		if (mica) expect(chrome.background).toBe("rgba(0, 0, 0, 0)");
-		// The page answers and the sidecar is ready before the window is: main shows it on `ready-to-show`
-		// (window.ts), which fires when the app's real content first paints, ~1 s after the page loads.
+		// The shell shows the window at the page's first paint or 500 ms after making it, whichever comes first
+		// (app_window.rs `SHOW_BEFORE_PAINT`), as the launch's `presence` says.
 		await expect
 			.poll(windowState, { timeout: 30_000 })
 			.toMatchObject({ count: 1, destroyed: false, visible: true, minimized: false });

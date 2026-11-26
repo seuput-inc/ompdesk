@@ -457,15 +457,17 @@ impl Client {
                 json!({"deviceId": self.device_id, "name": name, "reason": failure.code, "wasOnlineMs": 0}),
             );
         }
-        self.set_state(&mut inner, LinkState::Offline);
         // The host's gate refused this device by a person's choice: a timer would only be refused again, so only
         // `connect` or a wake signal (focus, unlock, online, the node returning) tries again (Orca P100).
         if matches!(failure.code.as_str(), "not_allowed" | "blocked") {
             clear(&mut inner.retry);
+            self.set_state(&mut inner, LinkState::Offline);
             return;
         }
         let within = clock::now_ms().saturating_sub(since) < REFUSED_RETRY_WINDOW_MS;
+        // Armed before `offline` is told: main may advance the test clock the moment it hears it.
         self.schedule_retry(&mut inner, refused && within);
+        self.set_state(&mut inner, LinkState::Offline);
     }
 
     /// The pinned record as the file says it now (the stored one when the file has none).
@@ -553,11 +555,12 @@ impl Client {
             down_logged: true,
             refused: None,
         });
-        self.set_state(&mut inner, LinkState::Offline);
         self.schedule_retry(&mut inner, false);
+        self.set_state(&mut inner, LinkState::Offline);
     }
 
     /// `refused`: the host's computer answered with a refusal, so the backoff stays at its first step.
+    /// Before `offline` is told, so whoever hears it finds the retry armed.
     fn schedule_retry(&self, inner: &mut Inner, refused: bool) {
         if !inner.running {
             return;
@@ -756,6 +759,76 @@ mod tests {
         assert!(
             at_deadline,
             "a stale original lookup was not cancelled for its peer retry"
+        );
+    }
+
+    /// The event and data of each frame the client sends, in order.
+    async fn next(read: &mut mpsc::UnboundedReceiver<crate::wire::Frame>) -> (String, Value) {
+        let frame = read.recv().await.expect("the client is alive");
+        let value: Value = serde_json::from_slice(frame.parts().0).unwrap();
+        (
+            value["event"].as_str().unwrap().to_owned(),
+            value["data"].clone(),
+        )
+    }
+
+    fn told(frame: &(String, Value), state: &str) -> bool {
+        frame.0 == "remote.client.state" && frame.1["state"] == state
+    }
+
+    /// Main hears `offline` and moves the test clock by the backoff at once (`transport.test.ts`): the retry must
+    /// already be armed then, or the advance passes it and that attempt never runs (release run 45631785852).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_attempt_arms_its_retry_before_it_tells_offline() {
+        let _serial = clock::TEST_CLOCK.lock().await;
+        clock::set_real();
+        let dir = std::env::temp_dir().join(format!("ompdesk-client-retry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (frames, mut read) = mpsc::unbounded_channel();
+        let release = Arc::new(Notify::new());
+        let mut host = Map::new();
+        host.insert("deviceId".into(), "studio".into());
+        let client = Client::new(ClientOptions {
+            events: crate::server::test_events(&frames),
+            identity: Arc::new(crate::remote::identity::load_or_create(&dir).unwrap()),
+            host,
+            name: "laptop".into(),
+            app_version: "0.0.0".into(),
+            capabilities: Map::new(),
+            liveness: Liveness::default(),
+            store: None,
+            addresses: Box::new(Held(Arc::clone(&release))),
+        });
+        clock::set_manual(10_000);
+        client.connect();
+        // Arming a retry takes the clock: held, an attempt that tells `offline` only after arming tells nothing yet.
+        let held = clock::hold();
+        release.notify_one();
+        let early = tokio::time::timeout(Duration::from_millis(500), async {
+            loop {
+                if told(&next(&mut read).await, "offline") {
+                    return;
+                }
+            }
+        })
+        .await
+        .is_ok();
+        drop(held);
+        if !early {
+            while !told(&next(&mut read).await, "offline") {}
+        }
+        clock::advance(RECONNECT_MIN_MS).await;
+        let retried = client.inner().outage.as_ref().map(|outage| outage.attempts);
+        client.close();
+        release.notify_one();
+        clock::set_real();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!early, "offline was told before its retry was armed");
+        assert_eq!(
+            retried,
+            Some(2),
+            "the backoff advance after offline ran no attempt"
         );
     }
 }

@@ -39,6 +39,33 @@ pub fn for_new_window() -> Option<tauri::Theme> {
     })
 }
 
+/// The page's background in each scheme (`--sc-bg`; src/renderer/styles/tokens.test.ts pins the file to it).
+const WINDOW_BACKGROUND: &str = include_str!("../../../../../src/shared/window-background.json");
+
+fn hex(colour: &str) -> Option<tauri::window::Color> {
+    let digits = colour
+        .strip_prefix('#')
+        .filter(|digits| digits.len() == 6)?;
+    let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).ok();
+    Some(tauri::window::Color(
+        channel(0)?,
+        channel(2)?,
+        channel(4)?,
+        255,
+    ))
+}
+
+/// What a new app window is painted in until its page paints: the page's own background in the scheme it will open in,
+/// so a window shown before a slow first paint is the app's colour, never white or black.
+pub fn window_background() -> Option<tauri::window::Color> {
+    let source = STATE.with(|state| state.borrow().source);
+    let dark = effective_theme(&system::theme(), source)["dark"]
+        .as_bool()
+        .unwrap_or(false);
+    let colours: Value = serde_json::from_str(WINDOW_BACKGROUND).ok()?;
+    hex(colours[if dark { "dark" } else { "light" }].as_str()?)
+}
+
 pub fn init() {
     STATE.with(|state| {
         let mut state = state.borrow_mut();
@@ -94,4 +121,18 @@ pub fn handle(call: Call) {
         let now = snapshot(source);
         call.ok(json!({"dark": now["dark"], "highContrast": now["highContrast"], "inverted": now["inverted"], "system": now["system"]}));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn both_schemes_have_an_opaque_window_background() {
+        let colours: Value = serde_json::from_str(WINDOW_BACKGROUND).unwrap();
+        for scheme in ["light", "dark"] {
+            let colour = hex(colours[scheme].as_str().unwrap()).unwrap();
+            assert_eq!(colour.3, 255, "{scheme}");
+        }
+    }
 }

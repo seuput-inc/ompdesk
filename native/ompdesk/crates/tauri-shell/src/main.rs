@@ -350,6 +350,23 @@ fn stall_bootstrap_request() -> bool {
         .is_ok()
 }
 
+/// Test seam (`OMP_GUI_TEST_SHELL_HOLD_PAGE_MS=<ms>`, test builds only): the first app document is answered that late,
+/// as a cold WebView2 start holds the first paint (nightly 45646449982).
+#[cfg(feature = "test-automation")]
+fn hold_first_page(uri: &tauri::http::Uri) {
+    static HELD: AtomicBool = AtomicBool::new(false);
+    let document = matches!(uri.path(), "/" | "/index.html");
+    let Some(ms) = std::env::var("OMP_GUI_TEST_SHELL_HOLD_PAGE_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+    else {
+        return;
+    };
+    if document && !HELD.swap(true, Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+}
+
 /// Records how far `wc` got through the migration page in tauri-shell.jsonl; `start` begins a timed round when none
 /// runs (`migrate_watch.rs`). The caller holds `migration`.
 fn migration_step(migration: &mut Migration, wc: u64, step: migrate_watch::Step, start: bool) {
@@ -793,6 +810,13 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     });
     if let Some((x, y)) = bounds.position {
         builder = builder.position(x, y);
+    }
+    // Painted in the page's own background until the page paints: the window may show before it (app_window.rs
+    // `SHOW_BEFORE_PAINT`). A Mica window draws its backdrop instead.
+    if !plan.mica
+        && let Some(colour) = theme::window_background()
+    {
+        builder = builder.background_color(colour);
     }
     builder = builder.min_inner_size(window_state::MIN_WIDTH, window_state::MIN_HEIGHT);
     #[cfg(target_os = "macos")]
@@ -2032,6 +2056,8 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             };
             std::thread::spawn(move || {
                 if !bootstrap {
+                    #[cfg(feature = "test-automation")]
+                    hold_first_page(request.uri());
                     return responder.respond(assets::serve(&runtime().renderer, request, &runtime().content_policy));
                 }
                 #[cfg(feature = "test-automation")]

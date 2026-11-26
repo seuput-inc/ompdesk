@@ -1300,7 +1300,6 @@ export function runRpcUi(): void {
 		["openai-codex", "OpenAI Codex"],
 		["github-copilot", "GitHub Copilot"],
 		["openrouter", "OpenRouter"],
-		["google-gemini-cli", "Google Gemini CLI"],
 		["deepseek", "DeepSeek"],
 		["groq", "Groq"],
 		["mistral", "Mistral"],
