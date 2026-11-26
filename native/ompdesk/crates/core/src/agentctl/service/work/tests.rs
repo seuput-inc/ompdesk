@@ -1216,6 +1216,7 @@ fn bot_files(root: &Scratch) -> Files {
     Files {
         mail_outbox: Some(super::super::JournalFile::default()),
         bots_root: Some(root.0.clone()),
+        items: Some(root.0.join("items.json")),
         ..Files::default()
     }
 }
@@ -1753,8 +1754,29 @@ async fn a_bot_by_name_is_its_home_chat_and_another_computer_reaches_it_only_whe
     assert!(control.bot_target(&caller, &tabs, "Nobody").await.is_err());
 }
 
+/// The `schedules.create` drafts main was asked for, oldest first.
+fn created(asked: &Asked) -> Vec<Value> {
+    asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(method, _)| method == "schedules.create")
+        .map(|(_, args)| args["draft"].clone())
+        .collect()
+}
+
+fn deleted(asked: &Asked, schedule: &str) -> bool {
+    asked.lock().unwrap().iter().any(|(method, args)| {
+        method == "schedules.command"
+            && args["request"]["action"] == "delete"
+            && args["request"]["id"] == schedule
+    })
+}
+
+/// Orca's `bot-look-around.ts:42-62`: on for a new bot, every 4 hours on weekdays, its schedule saved once the bot has
+/// its home chat; a change names only its fields and saves the schedule again; off removes it.
 #[tokio::test]
-async fn look_around_is_one_daily_wake_of_the_home_chat_and_goes_when_turned_off() {
+async fn look_around_is_on_for_a_new_bot_every_four_hours_on_weekdays_and_follows_its_setting() {
     let root = Scratch::new();
     let (control, asked, id) = ada(9_710, &root, Mails::default(), |method, args| {
         (method == "schedules.create").then(|| {
@@ -1768,45 +1790,290 @@ async fn look_around_is_one_daily_wake_of_the_home_chat_and_goes_when_turned_off
         })
     })
     .await;
-    let (text, is_error) = run(
-        &control,
-        "ompdesk_bot",
-        json!({ "action": "look_around", "bot": "Ada", "on": true, "time": "08:30" }),
-    )
-    .await;
-    assert!(!is_error, "{text}");
-    let create = asked
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|(method, _)| method == "schedules.create")
-        .map(|(_, args)| args["draft"].clone())
-        .unwrap();
-    assert_eq!(create["name"], "Ada: Look around");
-    assert_eq!(create["wakeSession"], "/s/bot.jsonl");
+    assert!(control.bot_named("Ada").unwrap().look().on);
+    control.arm_looks().await;
+    let first = created(&asked);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0]["name"], "Ada: Look around");
+    assert_eq!(first[0]["wakeSession"], "/s/bot.jsonl");
     assert_eq!(
-        create["frequency"],
-        json!({ "kind": "daily", "time": "08:30", "days": [] })
+        first[0]["frequency"],
+        json!({ "kind": "cron", "expr": "0 8,12,16,20 * * 1-5" })
     );
-    assert!(create["prompt"].as_str().unwrap().contains("NO_REPLY"));
+    let prompt = first[0]["prompt"].as_str().unwrap();
+    assert!(prompt.contains("\"action\":\"suggest\""), "{prompt}");
+    assert!(prompt.contains("NO_REPLY"), "{prompt}");
     assert_eq!(
         control.bot_named("Ada").unwrap().look_around.as_deref(),
         Some("sch-look")
     );
+    // Armed once: a second pass saves nothing.
+    control.arm_looks().await;
+    assert_eq!(created(&asked).len(), 1);
+
+    control
+        .bots_command(json!({ "action": "update", "id": id, "lookAround": { "every": "mornings", "weekdaysOnly": false, "focus": "PR reviews" } }))
+        .await
+        .unwrap();
+    assert!(deleted(&asked, "sch-look"));
+    let again = created(&asked);
+    assert_eq!(again.len(), 2);
+    assert_eq!(
+        again[1]["frequency"],
+        json!({ "kind": "cron", "expr": "0 8 * * *" })
+    );
+    assert!(
+        again[1]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Look for: PR reviews")
+    );
+    let look = control.bot_named("Ada").unwrap().look();
+    assert!(look.on && !look.weekdays_only && look.every == "mornings");
+
+    let refused = control
+        .bots_command(json!({ "action": "update", "id": id, "lookAround": { "every": "hourly" } }))
+        .await;
+    assert!(refused.is_err());
+
     control
         .bots_command(json!({ "action": "update", "id": id, "lookAround": { "on": false } }))
         .await
         .unwrap();
-    assert!(
-        asked
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(method, args)| method == "schedules.command"
-                && args["request"]["action"] == "delete"
-                && args["request"]["id"] == "sch-look")
-    );
     assert_eq!(control.bot_named("Ada").unwrap().look_around, None);
+    assert!(!control.bot_named("Ada").unwrap().look().on);
+    control.arm_looks().await;
+    assert_eq!(created(&asked).len(), 2);
+}
+
+/// Orca's `bot-look-around-state.ts`: a look's list replaces the open one (a repeat keeps its id and age), a dismissed
+/// one is refused in any spacing or case, a credential is refused, and only a bot's own chat suggests.
+#[tokio::test]
+async fn a_look_replaces_the_suggestions_list_and_a_dismissed_one_stays_out() {
+    let root = Scratch::new();
+    let (control, _, id) = ada(9_712, &root, Mails::default(), |_, _| None).await;
+    let suggest = |list: Value| {
+        let control = control.clone();
+        async move {
+            let outcome = control
+                .run(
+                    "bot1",
+                    "ompdesk_bot",
+                    json!({ "action": "suggest", "suggestions": list }),
+                    None,
+                )
+                .await;
+            (outcome.text, outcome.is_error)
+        }
+    };
+    let listed = |control: &AgentControl| -> Vec<Value> {
+        control.bots_state()["looks"][0]["items"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    };
+    let one = json!({ "title": "Review PR 12", "why": "It waits on you.", "ask": "Review PR 12", "link": "https://github.com/o/r/pull/12/files#r1" });
+    let two = json!({ "title": "Answer Kim", "why": "She asked twice.", "ask": "Draft my answer to Kim" });
+    let (text, is_error) = suggest(json!([one, two])).await;
+    assert!(!is_error, "{text}");
+    let before = listed(&control);
+    assert_eq!(before.len(), 2);
+    // The same pull request by another link: it keeps its id; Kim, not listed again, is replaced.
+    let again = json!({ "title": "Review pull request 12", "why": "Still waiting.", "ask": "Review it", "link": "https://github.com/o/r/pull/12" });
+    let (text, is_error) = suggest(json!([again])).await;
+    assert!(!is_error, "{text}");
+    let after = listed(&control);
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0]["id"], before[0]["id"]);
+    assert_eq!(after[0]["title"], "Review pull request 12");
+
+    let suggestion = after[0]["id"].as_str().unwrap().to_owned();
+    control
+        .bots_command(
+            json!({ "action": "suggestion", "id": id, "suggestion": suggestion, "act": "dismiss" }),
+        )
+        .await
+        .unwrap();
+    assert!(listed(&control).is_empty());
+    let (text, is_error) = suggest(json!([{ "title": "Review  PR 12", "why": "w", "ask": "a", "link": "https://GitHub.com/o/r/pull/12#x" }])).await;
+    assert!(is_error && text.contains("dismissed"), "{text}");
+    let (text, is_error) = suggest(json!([{ "title": "Rotate the key", "why": "w", "ask": "use ghp_0123456789abcdefghijABCDEFGHIJ" }])).await;
+    assert!(is_error && text.contains("credential"), "{text}");
+    // A session in no bot's folder is not a look.
+    let outcome = control
+        .run(
+            "main0001",
+            "ompdesk_bot",
+            json!({ "action": "suggest", "suggestions": [two] }),
+            None,
+        )
+        .await;
+    assert!(outcome.is_error, "{}", outcome.text);
+    // Seen: nothing listed is new any more.
+    let (text, is_error) =
+        suggest(json!([{ "title": "Answer Kim", "why": "w", "ask": "a" }])).await;
+    assert!(!is_error, "{text}");
+    control
+        .bots_command(json!({ "action": "looksSeen", "id": id }))
+        .await
+        .unwrap();
+    let seen = control.bots_state()["looks"][0]["seenAt"].as_f64().unwrap();
+    assert!(
+        listed(&control)
+            .iter()
+            .all(|item| item["createdAt"].as_f64().unwrap() <= seen)
+    );
+}
+
+/// Orca's `bot-types.ts:207` `permissionMode`: the owner picks how a bot's chats start; the bot cannot widen it.
+#[tokio::test]
+async fn only_the_owner_picks_the_approval_mode_and_skill_projects_a_bots_chats_start_with() {
+    let root = Scratch::new();
+    let (control, _, id) = ada(9_713, &root, Mails::default(), |_, _| None).await;
+    let launch = |control: &AgentControl| control.bots_state()["bots"][0]["launch"].clone();
+    assert_eq!(launch(&control), json!([]));
+    let outcome = control
+        .run(
+            "bot1",
+            "ompdesk_bot",
+            json!({ "action": "set", "approval": "yolo" }),
+            None,
+        )
+        .await;
+    assert!(!outcome.is_error, "{}", outcome.text);
+    assert_eq!(control.bot_named("Ada").unwrap().chat_approval, None);
+    assert_eq!(launch(&control), json!([]));
+
+    control
+        .bots_command(json!({ "action": "update", "id": id, "chatApproval": "always-ask", "skillProjects": ["/repo"] }))
+        .await
+        .unwrap();
+    let flags = launch(&control);
+    assert_eq!(flags[0], "--approval-mode");
+    assert_eq!(flags[1], "always-ask");
+    assert_eq!(flags[2], "--config");
+    let overlay = std::fs::read_to_string(flags[3].as_str().unwrap()).unwrap();
+    assert!(overlay.contains("skills"), "{overlay}");
+    assert!(
+        control
+            .bots_command(json!({ "action": "update", "id": id, "chatApproval": "everything" }))
+            .await
+            .is_err()
+    );
+    control
+        .bots_command(
+            json!({ "action": "update", "id": id, "chatApproval": null, "skillProjects": [] }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(launch(&control), json!([]));
+}
+
+/// Orca's `bot-work-store.ts`: a session a bot's chat opened is its worker, with its branch; one of the bot's own chats
+/// never is.
+#[tokio::test]
+async fn a_session_a_bots_chat_opened_is_its_worker_with_its_branch() {
+    let root = Scratch::new();
+    let folder = root.0.join("ada").to_string_lossy().into_owned();
+    let mut world = bot_world(&folder);
+    world["tabs"].as_array_mut().unwrap().push(tab(
+        "kid1",
+        json!({ "title": "Fix the build", "worktree": worktree("omp/agent/fix"), "busy": true }),
+    ));
+    world["parents"] =
+        json!({ "kid1": { "callerTabId": "bot1" }, "work1": { "callerTabId": "main0001" } });
+    let (control, _) = rig_files(
+        9_714,
+        world,
+        Caps::default(),
+        &bot_files(&root),
+        bots_main(Mails::default(), |_, _| None),
+    );
+    let (text, is_error) = run(
+        &control,
+        "ompdesk_bot",
+        json!({ "action": "create", "name": "Ada" }),
+    )
+    .await;
+    assert!(!is_error, "{text}");
+    control.observe_bots();
+    let workers = control.bots_state()["bots"][0]["workers"].clone();
+    assert_eq!(workers.as_array().unwrap().len(), 1, "{workers}");
+    assert_eq!(workers[0]["session"], "kid1");
+    assert_eq!(workers[0]["branch"], "omp/agent/fix");
+    assert_eq!(workers[0]["state"], "working");
+    assert_eq!(workers[0]["tabId"], "kid1");
+}
+
+/// Orca's `sharing/bot-package-archive.ts`, as a local file: a bot's soul, skills and memory topics go out and come
+/// back as a new bot; one holding a credential is not exported.
+#[tokio::test]
+async fn a_bot_exported_to_a_package_file_comes_back_as_a_new_bot() {
+    let root = Scratch::new();
+    let (control, _, id) = ada(9_715, &root, Mails::default(), |_, _| None).await;
+    let folder = root.0.join("ada");
+    std::fs::write(
+        folder.join("SOUL.md"),
+        "# Ada\n\nShe reviews pull requests.\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(folder.join(".omp/skills/review")).unwrap();
+    std::fs::write(
+        folder.join(".omp/skills/review/SKILL.md"),
+        "---\nname: review\n---\nRead the diff.\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(folder.join("memory")).unwrap();
+    std::fs::write(folder.join("memory/repos.md"), "- o/r is the main repo\n").unwrap();
+    std::fs::write(folder.join("MEMORY.md"), "- the owner's private fact\n").unwrap();
+    let file = root
+        .0
+        .join("ada.ompdesk-bot.json")
+        .to_string_lossy()
+        .into_owned();
+    let answer = control
+        .bots_command(json!({ "action": "export", "id": id, "file": file }))
+        .await
+        .unwrap();
+    assert_eq!(answer["file"], file.as_str());
+    let written = std::fs::read_to_string(&file).unwrap();
+    assert!(!written.contains("private fact"), "{written}");
+
+    let state = control
+        .bots_command(json!({ "action": "importPackage", "file": file }))
+        .await
+        .unwrap();
+    let copy = state["bots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|bot| bot["name"] == "Ada 2")
+        .cloned()
+        .unwrap();
+    let copied = std::path::PathBuf::from(copy["folder"].as_str().unwrap());
+    assert_ne!(copied, folder);
+    assert!(
+        std::fs::read_to_string(copied.join("SOUL.md"))
+            .unwrap()
+            .contains("reviews pull requests")
+    );
+    assert!(copied.join(".omp/skills/review/SKILL.md").is_file());
+    assert!(
+        std::fs::read_to_string(copied.join("memory/repos.md"))
+            .unwrap()
+            .contains("main repo")
+    );
+    assert!(!copied.join("MEMORY.md").exists());
+
+    std::fs::write(
+        folder.join("memory/keys.md"),
+        "token ghp_0123456789abcdefghijABCDEFGHIJ\n",
+    )
+    .unwrap();
+    let refused = control
+        .bots_command(json!({ "action": "export", "id": id, "file": file }))
+        .await;
+    assert!(refused.is_err());
 }
 
 #[tokio::test]

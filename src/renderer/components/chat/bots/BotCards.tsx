@@ -14,10 +14,12 @@
  * - Tool added (FC76, `NativeChatToolAddedCard.tsx:1-121`): `ompdesk_app extensions.install_mcp`, with Sign in while
  *   the server needs one and Remove.
  * - A bot chat's turn that ended in NO_REPLY folds to one quiet line that opens to its words.
+ * - Run result (Orca's `bot-automation-result-note.ts`): a bot's own automation that ran on its own answers in the
+ *   bot's home chat as a note; it draws as "<name> finished" with its first line, opening to the whole answer.
  *
  * Each has Hide (FC20, `NativeChatCardHideButton.tsx`): that kind leaves every chat (`hidden-cards.ts`).
  */
-import { EyeOff, ListTodo, Moon, Send, UserRoundPlus, Wrench } from "lucide-react";
+import { CalendarClock, EyeOff, ListTodo, Moon, Send, UserRoundPlus, Wrench } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { type Bot, ITEM_STATUSES, type Item, type ItemStatus } from "../../../../shared/bots";
 import type { AgentMessage } from "../../../../shared/rpc-types";
@@ -492,6 +494,34 @@ export function QuietReply({ text: words }: { text: string }) {
 			{open && body && (
 				<div className="ms-5.5 border-s-2 border-(--sc-border-subtle) ps-2 text-sc-sm text-(--sc-text-secondary)">
 					<MarkdownRenderer content={body} />
+				</div>
+			)}
+		</div>
+	);
+}
+
+// ---- Run results (Orca's `bot-automation-result-note.ts`) -------------------------------------------------------
+
+/** One of the bot's automations finished: its name and the first line of its answer, opening to the whole answer. */
+export function RunResultNote({ name, answer }: { name: string; answer: string }) {
+	const t = useT();
+	const [open, setOpen] = useState(false);
+	const first = firstLine(answer);
+	return (
+		<div className="ps-(--omp-editorial-inset) pe-(--omp-editorial-edge)" data-bot-run-result>
+			<Row icon={<CalendarClock />} kind="runResults">
+				<DisclosureButton className="min-w-0" inline onToggle={() => setOpen(!open)} open={open}>
+					<span className="truncate">{t("chat.botCards.runResult", { name })}</span>
+				</DisclosureButton>
+				{!open && first && (
+					<span className="min-w-0 truncate text-(--sc-text-subtle)" title={first}>
+						{first}
+					</span>
+				)}
+			</Row>
+			{open && (
+				<div className="ms-5.5 border-s-2 border-(--sc-border-subtle) ps-2 text-sc-sm text-(--sc-text-secondary)">
+					<MarkdownRenderer content={answer} />
 				</div>
 			)}
 		</div>

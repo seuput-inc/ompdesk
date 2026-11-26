@@ -1,6 +1,7 @@
 //! `ompdesk_session_open`: `#openCommands`, `#resolveModel`, `#openMany`, `#openOne`, `#openText`, `#ensureStarted`
 //! and the public `openSessions`.
 
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -838,6 +839,11 @@ impl AgentControl {
             {
                 item.model = Some(model);
             }
+            if let Some(bot) = &bot
+                && bot_worktree(&bot.folder, item)
+            {
+                item.worktree = Some(WorktreeArg::Flag(true));
+            }
         }
         let results = self
             .open_many(caller, tabs, &items, show.as_deref(), None)
@@ -1013,5 +1019,49 @@ impl OpenCommand<'_> {
                 return Ok(because(error.is_tool().then(|| error.message())));
             }
         }
+    }
+}
+
+/// Whether a bot's open of `one` (from a chat in `bot_folder`) gets a worktree of its own (Orca's `bot-preamble.ts:74`,
+/// `--worktree new-child`): a fresh session on this computer whose folder is a project in a git checkout (it or a
+/// folder above it holds `.git`), unless the bot said `worktree` itself.
+fn bot_worktree(bot_folder: &str, one: &OpenOne) -> bool {
+    one.worktree.is_none()
+        && one.reopen.is_none()
+        && one.device.is_none()
+        && one.folder.as_deref().is_some_and(|folder| {
+            folder != bot_folder
+                && Path::new(folder)
+                    .ancestors()
+                    .any(|dir| std::fs::symlink_metadata(dir.join(".git")).is_ok())
+        })
+}
+
+#[cfg(test)]
+mod bot_worktree_tests {
+    use super::bot_worktree;
+    use crate::agentctl::service::types::{OpenOne, WorktreeArg};
+
+    #[test]
+    fn a_bots_code_work_in_a_git_project_opens_in_a_worktree_unless_it_says_otherwise() {
+        let root = std::env::temp_dir().join(format!("bot-worktree-{}", std::process::id()));
+        let project = root.join("repo");
+        std::fs::create_dir_all(project.join(".git")).unwrap();
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("plain")).unwrap();
+        let open = |folder: &std::path::Path| OpenOne {
+            folder: Some(folder.to_string_lossy().into_owned()),
+            ..OpenOne::default()
+        };
+        assert!(bot_worktree("/bots/ada", &open(&project)));
+        assert!(bot_worktree("/bots/ada", &open(&project.join("src"))));
+        assert!(!bot_worktree("/bots/ada", &open(&root.join("plain"))));
+        assert!(!bot_worktree("/bots/ada", &OpenOne::default()));
+        let said = OpenOne {
+            worktree: Some(WorktreeArg::Flag(false)),
+            ..open(&project)
+        };
+        assert!(!bot_worktree("/bots/ada", &said));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

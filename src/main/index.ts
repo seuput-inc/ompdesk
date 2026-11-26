@@ -76,6 +76,7 @@ import { VISUAL_SCHEME } from "../shared/preview";
 import { PSTACK_PREF } from "../shared/pstack";
 import { REPLY_LANGUAGE_PREF } from "../shared/reply-language";
 import { SCHEDULES_STATE } from "../shared/schedule-channels";
+import { scheduleResultNote } from "../shared/schedule-result-note";
 import type { SetupState } from "../shared/setup";
 import { isMutedFolder, readSidebarPrefs, SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import {
@@ -108,7 +109,7 @@ import {
 import { sweepStaleTemps } from "./atomic-file";
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
-import { onBotsState } from "./bots";
+import { botsStateNow, onBotsState } from "./bots";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
 import { answersWithin, ConnectivityMonitor, PROBE_TIMEOUT_MS, probeTarget, reaches } from "./connectivity";
 import { CONSOLE_POLL_MS, ConsoleWindowWatch, listConsoleWindows } from "./console-window-watch";
@@ -1147,6 +1148,9 @@ app.whenReady().then(async () => {
 		creditSpendPref: () => prefsStore().get(CREDIT_SPEND_PREF),
 		ompdeskRolesFile: join(app.getPath("userData"), OMPDESK_ROLES_FILE),
 		launchFlags: cwd => prefsStore().launchFlags(cwd),
+		// A bot's chat also starts with its owner's picks (its approval mode, its skill projects): the core's `launch`,
+		// asked of the core first when no state has arrived yet (a restored bot chat right after a relaunch).
+		botLaunchArgs: async cwd => (await botsStateNow()).bots.find(bot => bot.folder === cwd)?.launch ?? [],
 		// ai-memory's `session-end` (the handoff) needs omp's own shutdown, which only a closed stdin triggers.
 		gracefulStopMs: () => (aiMemoryService?.state().phase === "ready" ? 4_000 : 0),
 		aiMemoryExtensionArgs: cwd => aiMemoryService?.extensionArgs(cwd) ?? Promise.resolve([]),
@@ -2212,7 +2216,7 @@ app.whenReady().then(async () => {
 				}).show();
 				return;
 			}
-			const note = `${mainT("schedules.result.note", "en", { name })}\n\n${text}`;
+			const note = scheduleResultNote(name, text);
 			void sessionNote
 				.current?.(to.session, note)
 				.catch(error => console.error("[schedules] result not delivered:", error));

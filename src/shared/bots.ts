@@ -10,6 +10,8 @@
  * Dependency-free.
  */
 
+import type { ApprovalMode } from "./tool-approval";
+
 /**
  * Whether this build has bots: the registry and a way to make the first one (`ompdesk_bot create`, the `ompdesk bot`
  * CLI). The Bots navigation row and page (orca-look-shell) show only while it is true.
@@ -42,12 +44,22 @@ export interface Bot {
 	model: string | null;
 	/** Its routines run every tool without asking (`--yolo`); a chat still asks as any session does. */
 	autoApprove: boolean;
+	/** The approval mode its chats start in (stock's `--approval-mode`); null starts them as any chat. Owner-only. */
+	chatApproval?: ApprovalMode | null;
 	/** Paired devices (by id) whose agents may message it; empty = this computer's only. */
 	reach: string[];
 	/** Days an open item goes untouched before it reads as stale; null = never. */
 	staleDays: number | null;
-	/** Its Look around routine (a schedule id in Settings › Schedules); null when off. */
+	/** Its Look around routine (a schedule id in Settings › Schedules); null while none is saved. */
 	lookAround: string | null;
+	/** Its Look around setting (absent in a state from before it). */
+	lookSetting?: BotLookSetting;
+	/** Sessions its chats opened or were handed, oldest first (absent in a state from before them). */
+	workers?: BotWorker[];
+	/** Project folders whose skills its chats load besides its own. */
+	skillProjects?: string[];
+	/** The flags its chats start with (`--approval-mode`, a `--config` overlay); main adds them to every spawn. */
+	launch?: string[];
 	/** Its memory upkeep routine (a schedule id); null when off. */
 	tidy: string | null;
 	/** Notification kinds turned off for its chats (`BOT_QUIET_KINDS`); empty = all on. */
@@ -61,11 +73,64 @@ export interface Bot {
 	itemsSeen?: number;
 }
 
+/** Look around's presets (Orca's `LOOK_AROUND_EVERY_CHOICES`). */
+export const LOOK_EVERY = ["every-4h", "every-2h", "twice-daily", "mornings"] as const;
+export type LookEvery = (typeof LOOK_EVERY)[number];
+/** The longest Look around focus (Orca's `LOOK_AROUND_FOCUS_MAX_LENGTH`; the core refuses a longer one). */
+export const LOOK_FOCUS_MAX = 500;
+
+/** When a bot looks around and for what (Orca's `BotLookAround`); a new bot's is on, every 4 hours, weekdays. */
+export interface BotLookSetting {
+	on: boolean;
+	every: LookEvery;
+	weekdaysOnly: boolean;
+	/** What to look for, in the owner's words; empty is anything waiting on them. */
+	focus: string;
+}
+
+/** One next step a look suggested: Start puts `ask` in the bot's message box. */
+export interface BotSuggestion {
+	id: string;
+	title: string;
+	why: string;
+	ask: string;
+	link?: string;
+	/** Epoch ms it was first suggested. */
+	createdAt: number;
+}
+
+/** A bot's Suggestions list, apart from its items (Up next). */
+export interface BotLooks {
+	bot: string;
+	/** Open suggestions, oldest first. */
+	items: BotSuggestion[];
+	/** When the owner last saw the list (epoch ms, 0 never): a suggestion made after it is new. */
+	seenAt: number;
+	lastLookedAt: number | null;
+}
+
+/** One session a bot's chat opened or was handed, and what its tab does now. */
+export interface BotWorker {
+	/** Its session file, else its tab id until it has one. */
+	session: string;
+	title: string;
+	cwd: string;
+	/** Its worktree's branch. */
+	branch: string | null;
+	/** When the bot was first seen with it (ISO). */
+	since: string;
+	state: "working" | "idle" | "closed";
+	/** The tab holding it on this computer, while one does. */
+	tabId?: string;
+}
+
 /** What a bot's chats can notify (Orca's per-bot notification toggles): an approval or question, a finished turn, a failure. */
 export const BOT_QUIET_KINDS = ["permission", "done", "failed"] as const;
 export type BotQuietKind = (typeof BOT_QUIET_KINDS)[number];
 /** The longest purpose a new bot is given (Orca's `BOT_PURPOSE_MAX_LENGTH`; the core refuses a longer one). */
 export const BOT_PURPOSE_MAX = 200;
+/** Projects whose skills a bot's chats load, at most (`SKILL_PROJECTS_MAX` of the core). */
+export const BOT_SKILL_PROJECTS_MAX = 20;
 /** The largest picture the core keeps (`bot_files.rs` `PICTURE_MAX`). */
 export const BOT_PICTURE_MAX_BYTES = 512 * 1024;
 
@@ -188,6 +253,8 @@ export interface BotsState {
 	items: Item[];
 	/** The bot groups and their rooms (absent in a state read before groups). */
 	rooms?: Room[];
+	/** Each bot's Suggestions list, for bots whose Look around is on (absent in a state read before it). */
+	looks?: BotLooks[];
 	/** The owner's answer named a question the bot has since replaced: nothing was written. */
 	refused?: "question_changed";
 }
@@ -267,8 +334,12 @@ export type BotsRequest =
 			autoApprove?: boolean;
 			reach?: string[];
 			staleDays?: number | null;
-			/** Turn its Look around routine on (daily at `time`, local `HH:MM`, default 09:00) or off. */
-			lookAround?: { on: boolean; time?: string };
+			/** A change to its Look around: only the fields named change; on with no home chat yet waits for one. */
+			lookAround?: Partial<BotLookSetting>;
+			/** The approval mode its chats start in; null starts them as any chat. */
+			chatApproval?: ApprovalMode | null;
+			/** Project folders whose skills its chats load (absolute, `BOT_SKILL_PROJECTS_MAX` at most). */
+			skillProjects?: string[];
 			/** Turn its memory upkeep routine on (daily at `time`, default 03:00) or off. */
 			tidy?: { on: boolean; time?: string };
 			quiet?: BotQuietKind[];
@@ -295,6 +366,12 @@ export type BotsRequest =
 	/** The owner opened the bot's Items tab: its items as they are now are seen. */
 	| { action: "itemsOpened"; id: string }
 	| { action: "roomCreate"; name: string; bots: string[] }
+	/** The owner's Start or Dismiss of one of the bot's suggestions. */
+	| { action: "suggestion"; id: string; suggestion: string; act: "start" | "dismiss" }
+	/** The owner saw the bot's Suggestions: what is listed now is no longer new. */
+	| { action: "looksSeen"; id: string }
+	/** A new bot from a package file (`BOT_PACKAGE_SUFFIX`); its name is made unique. */
+	| { action: "importPackage"; file: string }
 	| { action: "roomUpdate"; id: string; name?: string; bots?: string[]; replyMode?: RoomReplyMode }
 	| { action: "roomDelete"; id: string }
 	/** The owner's post; `messageId` makes a resend post once. */
@@ -336,20 +413,33 @@ export interface BotImportSource {
 	folder: string;
 }
 
-/** Everything `BOTS_COMMAND` takes: a change to the state, a file, or the import sources. */
-export type BotsCall = BotsRequest | BotFileRequest | { action: "importSources" };
+/** The bot as one package file at `file` (an absolute path the owner picked), answered with that path. */
+export interface BotExportRequest {
+	action: "export";
+	id: string;
+	file: string;
+}
+
+/** Everything `BOTS_COMMAND` takes: a change to the state, a file, the import sources, or an export. */
+export type BotsCall = BotsRequest | BotFileRequest | { action: "importSources" } | BotExportRequest;
 export type BotsAnswer<C extends BotsCall> = C extends BotFileRequest
 	? BotFile
 	: C extends { action: "importSources" }
 		? { sources: BotImportSource[] }
-		: BotsState;
+		: C extends BotExportRequest
+			? { file: string }
+			: BotsState;
 
 export interface BotsApi {
 	command(request: BotsRequest): Promise<BotsState>;
 	file(request: Omit<BotFileRequest, "action">): Promise<BotFile>;
 	importSources(): Promise<{ sources: BotImportSource[] }>;
+	exportPackage(request: Omit<BotExportRequest, "action">): Promise<{ file: string }>;
 	onState(callback: (state: BotsState) => void): () => void;
 }
+
+/** A bot package file's name (`bot_package.rs` writes JSON): `<name>.ompdesk-bot.json`. */
+export const BOT_PACKAGE_SUFFIX = ".ompdesk-bot.json";
 
 /**
  * Whether a bot's (or a routine's) answer is a quiet result: its last non-empty line, Markdown dressing aside

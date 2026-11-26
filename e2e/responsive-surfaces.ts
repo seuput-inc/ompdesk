@@ -530,6 +530,51 @@ async function ensureParityItems(page: Page): Promise<void> {
 	}
 }
 
+/**
+ * The parity bot has suggestions to show (bot-suggestions): a chat opened in its folder lists two the way a look does,
+ * `ompdesk_bot suggest` through the fake omp's host tool, then closes again.
+ */
+async function ensureParitySuggestions(page: Page): Promise<void> {
+	await ensureParityBot(page);
+	const folder = await page.evaluate(async () => {
+		const state = await window.omp.bots.command({ action: "get" });
+		return (state.looks ?? []).some(look => look.items.length > 0) ? null : (state.bots[0]?.folder ?? null);
+	});
+	if (!folder) return;
+	const tabId = (await page.evaluate(cwd => window.omp.tabs.spawn({ cwd }), folder))?.tabId;
+	if (!tabId) throw new Error("no chat opened in the parity bot's folder");
+	const suggestions = [
+		{
+			title: "Review the parity sheet",
+			why: "Three views changed since it was last read.",
+			ask: "Read the parity sheet and tell me what differs",
+		},
+		{ title: "Answer the open question", why: "It has waited a day.", ask: "Draft my answer to the open question" },
+	];
+	try {
+		await until(
+			async () =>
+				(await page.evaluate(() => window.omp.tabs.list())).some(
+					tab => tab.tabId === tabId && tab.status === "ready",
+				),
+			"the parity bot's chat never became ready",
+		);
+		await page.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
+			tabId,
+			`fixture:host-tool:ompdesk_bot ${JSON.stringify({ action: "suggest", suggestions })}`,
+		] as const);
+		await until(
+			async () =>
+				((await page.evaluate(() => window.omp.bots.command({ action: "get" }))).looks ?? []).some(
+					look => look.items.length >= 2,
+				),
+			"the parity bot's suggestions never arrived",
+		);
+	} finally {
+		await page.evaluate(id => window.omp.tabs.close(id), tabId);
+	}
+}
+
 /** The Bots page on the parity bot's page, its Items tab chosen and its list shown (not an item another surface opened). */
 async function openParityItems(page: Page, look: Look): Promise<void> {
 	await ensureParityItems(page);
@@ -2412,6 +2457,23 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work" },
 	},
 	{
+		id: "bot-suggestions",
+		area: "B",
+		title: "A bot's Suggestions on its Activity: its looks' next steps with Start, Dismiss and Look now, apart from its items",
+		open: async (page, look) => {
+			await ensureParitySuggestions(page);
+			await openDrawer(page, look);
+			await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+			if ((await page.locator("[data-bot-pane]:visible").count()) === 0)
+				await page.locator("[data-bots-page-row]:visible").first().click();
+			await page.locator('[data-bot-pane-tabs] [data-tab-id="activity"]:visible').first().click();
+		},
+		ready: "[data-bot-pane] [data-bot-suggestions] [data-bot-suggestion]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
 		id: "bot-items",
 		area: "B",
 		title: "A bot's Items tab: the filter, its items in groups (Working, Planned) with their rows",
@@ -2483,6 +2545,37 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-settings-page] [data-settings-bots]",
 		when: () => false,
 		parity: { session: "work" },
+	},
+	{
+		id: "bot-new",
+		area: "B",
+		title: "New bot from Settings › Bots: name, purpose, picture, model, where it runs and Create",
+		open: async (page, look) => {
+			await ensureParityBot(page);
+			await openDrawer(page, look);
+			await page.locator('[data-destination="settings"]').first().click();
+			const nav = page.locator('[data-settings-section="bots"]');
+			await nav.waitFor({ state: "visible", timeout: 15_000 });
+			await nav.click();
+			await page.locator("[data-settings-page] [data-settings-bots-new]:visible").first().click();
+		},
+		ready: "[data-new-bot]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work", after: closeOverlay },
+	},
+	{
+		id: "schedule-new",
+		area: "B",
+		title: "The automation editor: Settings › Schedules › New schedule, its prompt, folder, when and options",
+		open: async (page, look) => {
+			await openSettingsSchedules(page, look);
+			await page.locator("[data-settings-page] [data-schedule-new]:visible").first().click();
+		},
+		ready: "[data-schedule-form]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work", after: closeOverlay },
 	},
 	{
 		id: "board-all",

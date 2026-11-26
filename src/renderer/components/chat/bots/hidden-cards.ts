@@ -8,7 +8,14 @@ import { translate } from "../../../lib/i18n";
 import { readPref } from "../../../lib/prefs-read";
 import { toast, toastError } from "../../../stores/toast";
 
-export const CHAT_CARD_KINDS = ["itemNotes", "botOffers", "botRequests", "toolsAdded", "quietRuns"] as const;
+export const CHAT_CARD_KINDS = [
+	"itemNotes",
+	"botOffers",
+	"botRequests",
+	"toolsAdded",
+	"quietRuns",
+	"runResults",
+] as const;
 export type ChatCardKind = (typeof CHAT_CARD_KINDS)[number];
 
 const PREF = "hiddenChatCards";

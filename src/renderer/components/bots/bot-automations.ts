@@ -81,3 +81,16 @@ export function useLocalSchedules(): SchedulesState {
 	}, []);
 	return state;
 }
+
+/**
+ * Why the schedule `id` is off when the app turned it off after failed runs in a row (the core's `wake_failures`
+ * records a skipped run saying so): the newest failure's error, "" when it gave none; null when it is on or the owner
+ * turned it off.
+ */
+export function turnedOffAfterFailures(state: SchedulesState, id: string): string | null {
+	const schedule = state.schedules.find(entry => entry.id === id);
+	if (!schedule || schedule.enabled) return null;
+	const runs = state.runs.filter(run => run.scheduleId === id);
+	if (runs[0]?.status !== "skipped" || !runs[0].error?.startsWith("Turned off after")) return null;
+	return runs.find(run => run.status === "failed")?.error ?? "";
+}

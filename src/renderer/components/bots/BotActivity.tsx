@@ -7,20 +7,44 @@
  * - Needs you (`BotNeedsYouSection.tsx:38-422`, FK-B16): its chats' own prompts (approvals first, then questions,
  *   as their rows read them), then its items set to Needs you; five rows, then Show more. A chat's row opens the
  *   chat, an item's row its item page.
- * - Suggestions (`BotUpNextSection.tsx:263-340`, FK-B18): planned items its Look around saved; Start marks one
- *   working, Dismiss cancels it; Look now runs its Look around (or turns it on). A row opens its item page.
+ * - Suggestions (`BotUpNextSection.tsx:263-340`, Orca's `shared/bots/bot-look-around.ts:142-176`): what its looks
+ *   suggested, apart from its items, with a New mark on what came since the owner last saw the list; Start puts its
+ *   ask in the home chat's message box, Dismiss keeps it out for 30 days; Look now runs its Look around (or turns it
+ *   on).
+ * - Workers (`bot-work-store.ts`): the sessions its chats opened or were handed, what each does and its branch.
  * - Automations (`BotUpcomingSection.tsx`, FK-B19): its schedules ranked failed, running, soonest (`botAutomations`);
  *   pause or resume, Run now, open in Settings › Schedules, Delete (asks first); five rows plus its own routines;
  *   "+" opens its home chat with "Set up an automation that " to finish.
- * - Memory (`BotTidyUpReview.tsx:20-160`, FK-B20, FK-B22): the last memory upkeep's changes and one Undo that puts
- *   MEMORY.md back as it was before it; its memory files open from the Memory row in Settings.
+ * - Memory (`BotTidyUpReview.tsx:20-160`, FK-B20, FK-B22): the last memory upkeep's changes, one Undo that puts
+ *   MEMORY.md back as it was before it, and an Undo per line it took out or put in (Orca's memory History rows); a
+ *   notice with Turn on when the upkeep turned itself off after 3 failed runs. Its memory files open from Settings.
  */
-import { Check, CircleAlert, CircleDashed, Clock, ExternalLink, Play, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import {
+	Check,
+	CircleAlert,
+	CircleDashed,
+	Clock,
+	ExternalLink,
+	GitBranch,
+	Play,
+	Plus,
+	RotateCcw,
+	Trash2,
+	X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
-import { type Bot, type BotFile, type Item, itemsNeedingYou } from "../../../shared/bots";
+import {
+	type Bot,
+	type BotFile,
+	type BotSuggestion,
+	type BotWorker,
+	type Item,
+	itemsNeedingYou,
+} from "../../../shared/bots";
 import type { AskKind } from "../../lib/attention";
 import { formatClock } from "../../lib/format";
 import { useT } from "../../lib/i18n";
+import { openExternal } from "../../lib/open-external";
 import { sessionRun } from "../../lib/session-run";
 import { useBotsStore } from "../../stores/bots";
 import { tabSummary, useHostedSessionsStore } from "../../stores/hosted-sessions";
@@ -29,6 +53,7 @@ import { toast, toastError } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";
 import {
 	Badge,
+	Banner,
 	Button,
 	ConfirmDialog,
 	EmptyState,
@@ -39,10 +64,11 @@ import {
 	Spinner,
 	StatusDot,
 } from "../common";
-import { type BotAutomation, botAutomations, useLocalSchedules } from "./bot-automations";
+import { type BotAutomation, botAutomations, turnedOffAfterFailures, useLocalSchedules } from "./bot-automations";
 import { type LaunchStep, openBotChat, sendKickoff, useBotLaunch } from "./bot-launch";
 import { openBotPage } from "./bot-page";
 import { openItem } from "./items/item-store";
+import { type MemoryLineChange, memoryLineChanges, undoMemoryLine } from "./memory-lines";
 
 /** The item's own page, under the bot's Items tab. */
 function showItem(bot: Bot, item: Item): void {
@@ -58,6 +84,7 @@ export function BotActivity({ bot }: { bot: Bot }) {
 			<BotFirstScreen bot={bot} />
 			<NeedsYou bot={bot} />
 			<Suggestions bot={bot} />
+			<Workers bot={bot} />
 			<Automations bot={bot} />
 			<TidyUp bot={bot} />
 		</div>
@@ -195,21 +222,27 @@ function NeedsYou({ bot }: { bot: Bot }) {
 	);
 }
 
+/** Suggestions shown before "Show N more" (Orca's `SUGGESTION_LIMITS.shown`). */
+const SUGGESTIONS_SHOWN = 3;
+
 function Suggestions({ bot }: { bot: Bot }) {
 	const t = useT();
-	const items = useBotsStore(s => s.state.items);
+	const looks = useBotsStore(s => s.state.looks?.find(look => look.bot === bot.id));
 	const command = useBotsStore(s => s.command);
-	const now = Date.now();
-	const planned = items.filter(
-		(item: Item) =>
-			item.bot === bot.id &&
-			item.status === "planned" &&
-			!(item.snoozedUntil && Date.parse(item.snoozedUntil) > now),
-	);
-	const change = (item: Item, status: Item["status"]) =>
-		void command({ action: "item", id: item.id, status }).catch((error: unknown) =>
-			toastError({ title: t("bots.suggestions.failed"), error }),
-		);
+	const [all, setAll] = useState(false);
+	const items = looks?.items ?? [];
+	const seenAt = looks?.seenAt ?? 0;
+	// What was new when the list came into view keeps its mark while it stays in view.
+	const [newSince] = useState(seenAt);
+	const unseen = items.filter(item => item.createdAt > seenAt).length;
+	useEffect(() => {
+		if (unseen > 0) void command({ action: "looksSeen", id: bot.id }).catch(() => {});
+	}, [bot.id, command, unseen]);
+	const on = bot.lookSetting?.on ?? bot.lookAround !== null;
+	const act = (item: BotSuggestion, how: "start" | "dismiss") =>
+		void command({ action: "suggestion", id: bot.id, suggestion: item.id, act: how })
+			.then(() => (how === "start" ? openBotChat(bot, bot.home, item.ask) : undefined))
+			.catch((error: unknown) => toastError({ title: t("bots.suggestions.failed"), error }));
 	const lookNow = () => {
 		if (bot.lookAround)
 			void window.omp.schedules
@@ -221,6 +254,7 @@ function Suggestions({ bot }: { bot: Bot }) {
 				toastError({ title: t("bots.suggestions.lookFailed"), error }),
 			);
 	};
+	const shown = all ? items : items.slice(0, SUGGESTIONS_SHOWN);
 	return (
 		<section aria-label={t("bots.suggestions.title")} className="flex flex-col gap-1" data-bot-suggestions>
 			<SectionLabel
@@ -229,40 +263,123 @@ function Suggestions({ bot }: { bot: Bot }) {
 						{bot.lookAround ? t("bots.suggestions.lookNow") : t("bots.suggestions.turnOn")}
 					</Button>
 				}
-				count={planned.length}
+				count={items.length}
 			>
 				{t("bots.suggestions.title")}
 			</SectionLabel>
-			{planned.length === 0 ? (
-				<EmptyState size="row" title={t("bots.suggestions.none")} />
+			{looks?.lastLookedAt ? (
+				<p className="text-sc-xs text-(--sc-text-muted)" data-bot-looked>
+					{t("bots.suggestions.looked", { when: formatClock(looks.lastLookedAt) })}
+				</p>
+			) : null}
+			{items.length === 0 ? (
+				<EmptyState size="row" title={on ? t("bots.suggestions.none") : t("bots.suggestions.off")} />
 			) : (
-				planned.map(item => (
+				shown.map(item => (
 					<ListRow
 						actions={
 							<>
+								{item.link && (
+									<IconButton
+										icon={<ExternalLink />}
+										label={t("bots.suggestions.openLink")}
+										onClick={() => openExternal(item.link ?? "")}
+										size="sm"
+									/>
+								)}
 								<IconButton
 									icon={<Play />}
 									label={t("bots.suggestions.start")}
-									onClick={() => change(item, "working")}
+									onClick={() => act(item, "start")}
 									size="sm"
 								/>
 								<IconButton
 									icon={<X />}
 									label={t("bots.suggestions.dismiss")}
-									onClick={() => change(item, "canceled")}
+									onClick={() => act(item, "dismiss")}
 									size="sm"
 								/>
 							</>
 						}
-						actionCount={2}
+						actionCount={item.link ? 3 : 2}
 						actionsOnHover
-						description={item.description}
+						data-bot-suggestion={item.id}
+						description={item.why}
 						key={item.id}
-						onClick={() => showItem(bot, item)}
+						meta={
+							item.createdAt > newSince ? (
+								<Badge data-bot-suggestion-new size="xs" variant="info">
+									{t("bots.suggestions.new")}
+								</Badge>
+							) : undefined
+						}
+						onClick={() => act(item, "start")}
 						size="sm"
 						title={item.title}
+						tooltip={t("bots.suggestions.startHint")}
 					/>
 				))
+			)}
+			{items.length > shown.length && (
+				<Button className="self-start" onClick={() => setAll(true)} size="sm" variant="ghost">
+					{t("bots.showMore", { count: items.length - shown.length })}
+				</Button>
+			)}
+		</section>
+	);
+}
+
+/** The sessions its chats opened or were handed (Orca's `bot-work-store.ts` rows): what each does, and its branch. */
+function Workers({ bot }: { bot: Bot }) {
+	const t = useT();
+	const [all, setAll] = useState(false);
+	const workers = [...(bot.workers ?? [])].reverse();
+	if (workers.length === 0) return null;
+	const shown = all ? workers : workers.slice(0, ROWS);
+	const open = (worker: BotWorker) => {
+		useUiStore.getState().closeDestination();
+		const tabs = useTabsStore.getState();
+		if (worker.tabId) void tabs.switchTab(worker.tabId).catch(() => {});
+		else if (worker.session.includes("/") || worker.session.includes("\\"))
+			void tabs.openTab({ cwd: worker.cwd, sessionPath: worker.session, kind: "agent" }).catch(() => {});
+	};
+	return (
+		<section aria-label={t("bots.workers.title")} className="flex flex-col gap-1" data-bot-workers>
+			<SectionLabel count={workers.length}>{t("bots.workers.title")}</SectionLabel>
+			{shown.map(worker => (
+				<ListRow
+					data-bot-worker={worker.state}
+					description={
+						<span className="flex min-w-0 items-center gap-1">
+							{worker.branch && <GitBranch aria-hidden className="size-3 shrink-0" />}
+							<span className="truncate">{worker.branch ?? worker.cwd}</span>
+						</span>
+					}
+					key={worker.session}
+					leading={
+						<StatusDot
+							decorative
+							tone={worker.state === "working" ? "working" : worker.state === "idle" ? "success" : "neutral"}
+						/>
+					}
+					meta={
+						<Badge size="xs" variant={worker.state === "closed" ? "muted" : "default"}>
+							{t(`bots.workers.state.${worker.state}`)}
+						</Badge>
+					}
+					onClick={
+						worker.tabId || worker.session.includes("/") || worker.session.includes("\\")
+							? () => open(worker)
+							: undefined
+					}
+					size="sm"
+					title={worker.title || t("bots.chats.untitled")}
+				/>
+			))}
+			{workers.length > shown.length && (
+				<Button className="self-start" onClick={() => setAll(true)} size="sm" variant="ghost">
+					{t("bots.showMore", { count: workers.length - shown.length })}
+				</Button>
 			)}
 		</section>
 	);
@@ -398,11 +515,14 @@ export function lastTidy(history: readonly string[]): { stamp: string; copy: str
 
 function TidyUp({ bot }: { bot: Bot }) {
 	const t = useT();
+	const schedules = useLocalSchedules();
 	const [memory, setMemory] = useState<BotFile | null>(null);
 	const [lines, setLines] = useState<string[] | null>(null);
+	const [copy, setCopy] = useState<string | null>(null);
 	const [reviewing, setReviewing] = useState(false);
 	const [undone, setUndone] = useState(false);
 	const run = memory ? lastTidy(memory.history) : null;
+	const turnedOff = bot.tidy ? turnedOffAfterFailures(schedules, bot.tidy) : null;
 	useEffect(() => {
 		let live = true;
 		window.omp.bots
@@ -435,6 +555,37 @@ function TidyUp({ bot }: { bot: Bot }) {
 			live = false;
 		};
 	}, [bot.id, changesFile]);
+	const copyFile = run?.copy;
+	useEffect(() => {
+		if (!reviewing || !copyFile) return;
+		let live = true;
+		window.omp.bots
+			.file({ id: bot.id, file: `memory/history/${copyFile}` })
+			.then(read => {
+				if (live) setCopy(read.exists ? read.content : null);
+			})
+			.catch(() => {});
+		return () => {
+			live = false;
+		};
+	}, [bot.id, copyFile, reviewing]);
+	// One change undone: MEMORY.md as it is now, with that line put back or taken out; a file changed meanwhile is kept.
+	const undoLine = async (change: MemoryLineChange) => {
+		if (!memory || copy === null) return;
+		try {
+			const written = await window.omp.bots.file({
+				id: bot.id,
+				file: "MEMORY.md",
+				content: undoMemoryLine(memory.content, copy, change),
+				expectedMtimeMs: memory.mtimeMs,
+			});
+			setMemory(written);
+			if (written.changed) toast({ variant: "warning", message: t("bots.tidy.changedMeanwhile") });
+		} catch (error) {
+			toastError({ title: t("bots.tidy.undoFailed"), error });
+		}
+	};
+	const lineChanges = memory && copy !== null ? memoryLineChanges(copy, memory.content) : [];
 	const undo = async () => {
 		if (!run) return;
 		try {
@@ -458,6 +609,27 @@ function TidyUp({ bot }: { bot: Bot }) {
 			>
 				{t("bots.tidy.section")}
 			</SectionLabel>
+			{turnedOff !== null && (
+				<Banner
+					actions={
+						<Button
+							onClick={() =>
+								void window.omp.schedules
+									.command({ action: "setEnabled", id: bot.tidy ?? "", enabled: true })
+									.catch((error: unknown) => toastError({ title: t("bots.automations.failed"), error }))
+							}
+							size="sm"
+							variant="secondary"
+						>
+							{t("bots.tidy.turnOn")}
+						</Button>
+					}
+					data-bot-tidy-off
+					variant="warning"
+				>
+					{t("bots.tidy.turnedOff", { error: turnedOff || t("bots.tidy.noReason") })}
+				</Banner>
+			)}
 			{run && lines ? (
 				<ListRow
 					description={t("bots.tidy.changes", { count: lines.length })}
@@ -508,6 +680,29 @@ function TidyUp({ bot }: { bot: Bot }) {
 								</div>
 							);
 						})}
+						{lineChanges.length > 0 && (
+							<div data-bot-tidy-lines>
+								<SectionLabel as="h4">{t("bots.tidy.lines")}</SectionLabel>
+								<ul className="mt-1 flex flex-col gap-0.5">
+									{lineChanges.map(change => (
+										<li className="flex min-w-0 items-center gap-2" key={`${change.kind}:${change.line}`}>
+											<Badge size="xs" variant={change.kind === "added" ? "success" : "muted"}>
+												{t(`bots.tidy.line.${change.kind}`)}
+											</Badge>
+											<span className="min-w-0 flex-1 truncate" title={change.line}>
+												{change.line}
+											</span>
+											<IconButton
+												icon={<RotateCcw />}
+												label={t("bots.tidy.undoLine")}
+												onClick={() => void undoLine(change)}
+												size="sm"
+											/>
+										</li>
+									))}
+								</ul>
+							</div>
+						)}
 						<p className="text-sc-xs text-(--sc-text-muted)">
 							{undone ? t("bots.tidy.undone") : t("bots.tidy.undoNote")}
 						</p>

@@ -353,6 +353,16 @@ impl AgentControl {
         );
         let precheck = precheck_of(&args, device.as_ref())?.flatten();
         let results_to = results_to_of(caller, &args, device.as_ref())?;
+        // A bot's own fresh-run automation answers in its home chat, which draws the answer as a run result card
+        // (Orca's `bot-automation-result-note.ts`), unless the bot named where its answer goes.
+        let results_to = match results_to {
+            None if wake_session.is_none() && device.is_none() && caller.device.is_none() => self
+                .bot_of_folder(&caller.cwd)
+                .or_else(|| self.bot_of_folder(&cwd))
+                .and_then(|bot| bot.home)
+                .map(|session| ScheduleResultsTo::Session { session }),
+            given => given,
+        };
         if !self.host.state().manage_enabled || precheck.is_some() {
             let folder = match &device {
                 Some(device) => format!("{cwd} ({})", device.name),

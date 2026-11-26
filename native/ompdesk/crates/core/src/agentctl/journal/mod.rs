@@ -24,6 +24,7 @@ pub mod attachments;
 pub mod bots;
 pub mod call_journal;
 pub mod items;
+pub mod looks;
 pub mod mail_outbox;
 pub mod pending_cleanups;
 pub mod rooms;

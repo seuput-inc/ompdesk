@@ -54,6 +54,11 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 				Date.now(),
 			).length,
 	);
+	// Suggestions its looks made since the owner last saw the list (Orca's `bot-look-around-seen.ts`).
+	const newSuggestions = useBotsStore(s => {
+		const looks = s.state.looks?.find(look => look.bot === bot.id);
+		return looks ? looks.items.filter(item => item.createdAt > looks.seenAt).length : 0;
+	});
 	return (
 		<div className="flex min-h-0 min-w-0 flex-col" data-bot-pane={bot.id}>
 			{bot.paused && (
@@ -147,7 +152,7 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 					{
 						id: "activity",
 						label: t("bots.pane.activity"),
-						badge: facts.needsYou > 0 ? facts.needsYou : undefined,
+						badge: facts.needsYou + newSuggestions > 0 ? facts.needsYou + newSuggestions : undefined,
 					},
 					{ id: "items", label: t("bots.pane.items"), badge: openItems > 0 ? openItems : undefined },
 					{ id: "chats", label: t("bots.pane.chats") },

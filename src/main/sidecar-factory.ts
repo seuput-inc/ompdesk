@@ -96,6 +96,8 @@ export interface LocalSidecarDeps {
 	 * folder (plus the `--config` that keeps a copy of ai-memory's extension in omp's agent dir out of it); absent: none.
 	 */
 	aiMemoryExtensionArgs?: (cwd: string) => Promise<string[]>;
+	/** The flags a bot's owner picked for its chats (`Bot.launch`) when `cwd` is a bot's folder, read at every spawn. */
+	botLaunchArgs?: (cwd: string) => Promise<string[]>;
 	/**
 	 * The file memory's address is kept in (written by the core's memory service), passed as `OMP_GUI_MEMORY` at every spawn
 	 * for the bridge's memory recall; absent: no recall (tests).
@@ -192,6 +194,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 				const interfaces = ["-e", join(deps.builtinDir, "interfaces")];
 				const ponytail = ["-e", join(bridgeDir, "ponytail.ts")];
 				const memory = (await deps.aiMemoryExtensionArgs?.(cwd)) ?? [];
+				const bot = (await deps.botLaunchArgs?.(cwd)) ?? [];
 				const hub = memory.length ? ((await deps.mcpHubEnv?.()) ?? {}) : {};
 				// One table for this computer's tabs and the tabs it hosts for a paired device.
 				const computer = deps.computerUse
@@ -211,6 +214,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 						...interfaces,
 						...ponytail,
 						...memory,
+						...bot,
 					],
 					// A chat (no project) keeps the packs' roots but not their section texts.
 					env: {

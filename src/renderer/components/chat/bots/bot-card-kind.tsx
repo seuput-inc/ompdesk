@@ -5,6 +5,7 @@
 import { createContext, Suspense, useEffect } from "react";
 import { AGENT_CONTROL_TOOLS } from "../../../../shared/agent-control";
 import type { AgentMessage } from "../../../../shared/rpc-types";
+import { parseScheduleResultNote } from "../../../../shared/schedule-result-note";
 import { lazyChunk } from "../../../lib/chunk-load";
 import { resultDetails } from "../../../lib/format";
 import { botOfFolder, useBotsStore } from "../../../stores/bots";
@@ -52,6 +53,13 @@ export function isItemMail(message: AgentMessage): boolean {
 	return text(details?.from) === "ompdesk" && text(details?.id).startsWith("item-");
 }
 
+/** A fresh scheduled run's answer the app noted into this chat (`scheduleResultNote`): its name and answer, else null. */
+export function runResultOf(message: AgentMessage): { name: string; answer: string } | null {
+	const details = resultDetails(message);
+	if (text(details?.from) !== "ompdesk") return null;
+	return parseScheduleResultNote(typeof details?.text === "string" ? details.text : "");
+}
+
 export function useCardHidden(kind: BotCardKind | null): boolean {
 	const card = kind !== null;
 	useEffect(() => {
@@ -69,6 +77,7 @@ export function useBotChat(tabId: string | null): boolean {
 const LazyBotToolCard = lazyChunk(() => import("./BotCards").then(module => ({ default: module.BotToolCard })));
 const LazyItemNote = lazyChunk(() => import("./BotCards").then(module => ({ default: module.ItemNote })));
 const LazyQuietReply = lazyChunk(() => import("./BotCards").then(module => ({ default: module.QuietReply })));
+const LazyRunResultNote = lazyChunk(() => import("./BotCards").then(module => ({ default: module.RunResultNote })));
 
 export function BotToolCard(props: {
 	kind: BotCardKind;
@@ -143,6 +152,17 @@ export function QuietReply({ text: words }: { text: string }) {
 	return (
 		<Suspense fallback={null}>
 			<LazyQuietReply text={words} />
+		</Suspense>
+	);
+}
+
+/** A bot's automation run, ended: its answer as a card in the bot's chat (Orca's `bot-automation-result-note.ts`). */
+export function RunResultNote({ name, answer }: { name: string; answer: string }) {
+	const hidden = useCardHidden("runResults");
+	if (hidden) return null;
+	return (
+		<Suspense fallback={null}>
+			<LazyRunResultNote answer={answer} name={name} />
 		</Suspense>
 	);
 }

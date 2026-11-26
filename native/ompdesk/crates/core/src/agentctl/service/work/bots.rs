@@ -19,32 +19,58 @@ use super::super::types::{
     BotArgs, ControlTab, ScheduleDraft, ScheduleFrequency, SendArgs, TabStatus,
 };
 use super::bot_files;
+use super::bot_package;
 use super::schedule::is_absolute;
 use crate::agentctl::journal::attachments::sha256_hex;
-use crate::agentctl::journal::bots::{BotRecord, STALE_DAYS, slug, specialty};
+use crate::agentctl::journal::bots::{BotRecord, BotWorker, STALE_DAYS, slug, specialty};
 use crate::agentctl::journal::items::ItemRecord;
+use crate::agentctl::journal::looks::{EVERY_CHOICES, FOCUS_MAX, LookSetting, PER_LOOK, TITLE_MAX};
 use crate::agentctl::journal::mail_outbox::{
     MailAnswer, OutboxMail, RedeliverDeps, redeliver_mail,
 };
+use crate::agentctl::journal::write_text;
 use crate::agentctl::rules::mail::{Mail, MailKind, delivery_for, mail_details, mail_text};
 
 /// The longest bot name.
 const NAME_MAX: usize = 80;
 /// What a bot chat's omp is given to take its context.
 const CONTEXT_MS: u64 = 10_000;
-/// What the Look around routine asks of the bot.
-const LOOK_AROUND_PROMPT: &str = "Look around: read over the projects you work on and their recent work (sessions, commits, open items), read-only. Change nothing: no edits, no commits, no sessions opened. Save at most 5 suggestions for the owner as planned items with ompdesk_item {\"action\":\"add\"}, skipping any already open. End with NO_REPLY when nothing is worth saying.";
+/// What a look is told to look for when its owner named nothing (Orca's `bot-look-around-prompt.ts` `DEFAULT_FOCUS`).
+const LOOK_DEFAULT_FOCUS: &str = "Anything waiting on your owner: reviews asked of them, failing checks on their work, questions put to them, follow-ups they promised.";
+/// The approval modes a bot's chats may start in (`APPROVAL_MODES` of `src/shared/tool-approval.ts`).
+const APPROVAL_MODES: [&str; 4] = ["yolo", "write", "always-ask-cached", "always-ask"];
+/// Projects whose skills a bot's chats load, at most.
+const SKILL_PROJECTS_MAX: usize = 20;
 /// What the memory upkeep routine asks of the bot (Orca's bot tidy-up, `BotTidyUpSection.tsx`): a copy of MEMORY.md
 /// first, so the owner's Undo puts it back whole, and one line per change beside it for the review.
 const TIDY_PROMPT: &str = "Tidy your memory: MEMORY.md in your folder. First copy MEMORY.md as it is now to memory/history/<the local date and time as YYYY-MM-DD-HHMM>.md (make the folder). Then merge repeated lines, mark facts that changed as replaced (keep the newer one), file details into topic files memory/<topic>.md, and move lines that no longer matter to memory/archive.md. Change memory files only: no posts, no edits to projects, no sessions opened. Last, write one line per change to memory/history/<the same name>.changes.md, starting with Learned:, Merged:, Replaced:, Filed: or Archived:. Write nothing and copy nothing when there is nothing to tidy. End with NO_REPLY.";
 /// Notification kinds a bot's chats can be quiet about (`Bot.quiet`).
 const QUIET_KINDS: [&str; 3] = ["permission", "done", "failed"];
 
-/// A bot's own daily routine (`bot_routine`).
+/// A bot's own routine (`bot_routine`).
 #[derive(Clone, Copy)]
 enum Routine {
     LookAround,
     Tidy,
+}
+
+/// What a look asks of the bot (Orca's `bot-look-around-prompt.ts` `lookAroundPrompt`): it reads, and ends in one
+/// `ompdesk_bot suggest` that replaces the Suggestions list.
+fn look_prompt(focus: &str) -> String {
+    let focus = if focus.trim().is_empty() {
+        LOOK_DEFAULT_FOCUS
+    } else {
+        focus.trim()
+    };
+    format!(
+        "Look around: find what is waiting on your owner and suggest up to {PER_LOOK} next steps for their Suggestions list.\n\n\
+This look only reads: read files, run read-only commands (gh pr view|list|checks|diff, gh issue view|list, git log|show|diff|status), ompdesk_sessions, ompdesk_item list. Change nothing: no edits, no commits, no sessions opened, no item or MEMORY.md changes.\n\n\
+Look for: {focus}\n\n\
+Also look at open sessions (ompdesk_sessions) whose work fits your purpose and the focus above and that no bot has taken over. Suggest taking one over only when you can name a concrete next step and what your owner could stop keeping track of; its ask names the session to hand you.\n\n\
+First run ompdesk_bot {{\"action\":\"suggestions\"}}: it lists what is still suggested, what your owner started lately (they act on that kind) and what they dismissed (never suggest those again, in any wording).\n\n\
+Then call ompdesk_bot {{\"action\":\"suggest\",\"suggestions\":[{{\"title\":\"…\",\"why\":\"…\",\"ask\":\"…\",\"link\":\"…\"}}]}} once with every next step worth it: title says what to do, under {TITLE_MAX} characters; why is one sentence on why now; ask is the message your owner would send you to do it, written as them; link is the thread, issue or pull request it is about, if any. It replaces the list: name a still-true one again with the same title, and pass an empty list when nothing is worth it. Suggest only things with a concrete next step.\n\n\
+End with NO_REPLY; one short line for your owner may come before it."
+    )
 }
 
 /// A new id: `<prefix>-` and 12 hex digits from the system's random generator.
@@ -120,16 +146,39 @@ impl AgentControl {
         let bots: Vec<BotRecord> = self.bots().all().to_vec();
         let items: Vec<ItemRecord> = self.items().all(now).to_vec();
         let state = self.host.state();
+        let looks: Vec<Value> = {
+            let looks = self.looks();
+            bots.iter()
+                .filter(|bot| bot.look().on)
+                .filter_map(|bot| looks.get(&bot.id).map(|look| (bot, look)))
+                .map(|(bot, look)| {
+                    json!({
+                        "bot": bot.id,
+                        "items": look.open(now),
+                        "seenAt": look.seen_at,
+                        "lastLookedAt": look.last_looked_at,
+                    })
+                })
+                .collect()
+        };
         let bots_json: Vec<Value> = bots
             .iter()
             .map(|bot| {
                 let mut value = serde_json::to_value(bot).unwrap_or(Value::Null);
+                value["lookSetting"] = serde_json::to_value(bot.look()).unwrap_or(Value::Null);
                 if let Some(said) = specialty(Path::new(&bot.folder)) {
                     value["specialty"] = json!(said);
                 }
                 if let Some(picture) = bot_files::picture_of(Path::new(&bot.folder)) {
                     value["picture"] = json!(picture);
                 }
+                value["workers"] = json!(
+                    bot.workers
+                        .iter()
+                        .map(|worker| worker_json(worker, &state.tabs))
+                        .collect::<Vec<Value>>()
+                );
+                value["launch"] = json!(self.bot_launch(bot));
                 value
             })
             .collect();
@@ -141,7 +190,48 @@ impl AgentControl {
             })
             .collect();
         let rooms_json = serde_json::to_value(self.rooms().all()).unwrap_or_else(|_| json!([]));
-        json!({ "bots": bots_json, "items": items_json, "rooms": rooms_json })
+        json!({ "bots": bots_json, "items": items_json, "rooms": rooms_json, "looks": looks })
+    }
+
+    /// The flags each chat of `bot` starts with (main adds them to every spawn in its folder): the approval mode its
+    /// owner picked (`--approval-mode`, stock's runtime override), and a settings overlay naming its skill projects'
+    /// skill folders (`--config`, `skills.customDirectories`). Shortcut: the overlay stands in for a global
+    /// `skills.customDirectories` in the bot's chats; merge the two when someone needs both.
+    fn bot_launch(&self, bot: &BotRecord) -> Vec<String> {
+        let mut flags: Vec<String> = Vec::new();
+        if let Some(mode) = &bot.chat_approval {
+            flags.extend(["--approval-mode".to_owned(), mode.clone()]);
+        }
+        if !bot.skill_projects.is_empty()
+            && let Some(dir) = &self.bot_config_dir
+        {
+            let file = dir.join(format!("{}.yml", bot.id));
+            let folders: Vec<String> = bot
+                .skill_projects
+                .iter()
+                .flat_map(|project| {
+                    [".omp", ".claude", ".agents"].map(|kind| {
+                        Path::new(project)
+                            .join(kind)
+                            .join("skills")
+                            .to_string_lossy()
+                            .into_owned()
+                    })
+                })
+                .collect();
+            let text = json!({ "skills": { "customDirectories": folders } }).to_string();
+            if std::fs::read_to_string(&file).ok().as_deref() != Some(text.as_str()) {
+                let written = std::fs::create_dir_all(dir)
+                    .map_err(|error| error.to_string())
+                    .and_then(|()| write_text(&file, &text, Some(0o600)));
+                if let Err(error) = written {
+                    eprintln!("[bots] {}: skill projects not saved: {error}", bot.name);
+                    return flags;
+                }
+            }
+            flags.extend(["--config".to_owned(), file.to_string_lossy().into_owned()]);
+        }
+        flags
     }
 
     /// The bot `key` names (its name or id).
@@ -235,6 +325,8 @@ impl AgentControl {
             name: name.to_owned(),
             folder: folder_text,
             stale_days: Some(STALE_DAYS),
+            // A new bot looks around (Orca's `LOOK_AROUND_DEFAULTS`); its schedule is saved once it has a home chat.
+            look_setting: Some(LookSetting::default()),
             created_at: crate::aimemory::value::iso(self.now().max(0.0) as u64),
             ..BotRecord::default()
         };
@@ -290,6 +382,10 @@ impl AgentControl {
         };
         self.items().remove_bot(&bot.id);
         self.rooms().remove_bot(&bot.id);
+        self.looks().remove_bot(&bot.id);
+        if let Some(dir) = &self.bot_config_dir {
+            let _ = std::fs::remove_file(dir.join(format!("{}.yml", bot.id)));
+        }
         let chats: Vec<String> = bot
             .home
             .iter()
@@ -431,6 +527,7 @@ impl AgentControl {
         }
         loop {
             self.observe_bots();
+            self.arm_looks().await;
             self.feed_bots().await;
             let mut mem = self.mem();
             if !mem.bot_tick_again {
@@ -442,15 +539,37 @@ impl AgentControl {
     }
 
     /// A tab on this computer whose folder is a bot's, seen with its session file, is that bot's chat (the first one its
-    /// home); an item's session link that names a tab names its session file once the tab has one.
+    /// home); a tab a bot's chat opened (or was handed: its opener is the bot's home chat) is that bot's worker; an
+    /// item's session link that names a tab names its session file once the tab has one.
     pub(crate) fn observe_bots(&self) {
         let state = self.host.state();
+        let since = crate::aimemory::value::iso(self.now().max(0.0) as u64);
         let mut changed = false;
         {
             let mut bots = self.bots();
             for tab in state.tabs.iter().filter(|tab| tab.device.is_none()) {
                 if let Some(path) = tab.session_path.as_deref().filter(|path| !path.is_empty()) {
                     changed |= bots.observe(&tab.cwd, path);
+                }
+                let opener = state
+                    .parent_of(&tab.tab_id)
+                    .and_then(|opener| state.tabs.iter().find(|entry| entry.tab_id == opener));
+                if let Some(opener) = opener.filter(|opener| opener.device.is_none()) {
+                    let seen = BotWorker {
+                        session: tab
+                            .session_path
+                            .clone()
+                            .filter(|path| !path.is_empty())
+                            .unwrap_or_else(|| tab.tab_id.clone()),
+                        title: tab.name().to_owned(),
+                        cwd: tab.cwd.clone(),
+                        branch: tab
+                            .worktree
+                            .as_ref()
+                            .map(|worktree| worktree.branch.clone()),
+                        since: since.clone(),
+                    };
+                    changed |= bots.observe_worker(&opener.cwd, &tab.tab_id, seen);
                 }
             }
         }
@@ -522,10 +641,18 @@ impl AgentControl {
         tabs: &[ControlTab],
         args: BotArgs,
     ) -> R<String> {
+        // From a bot's own chat the bot may go unnamed.
+        let own = || {
+            self.bot_of_folder(&caller.cwd)
+                .filter(|_| caller.device.is_none())
+        };
         let wanted = || -> R<BotRecord> {
             match args.bot.as_deref().filter(|bot| !bot.trim().is_empty()) {
                 Some(key) => self.bot_named(key),
-                None => fail(format!("{} needs bot (its name or id).", args.action)),
+                None => match own() {
+                    Some(bot) => Ok(bot),
+                    None => fail(format!("{} needs bot (its name or id).", args.action)),
+                },
             }
         };
         match args.action.as_str() {
@@ -636,10 +763,97 @@ impl AgentControl {
             }
             "look_around" => {
                 let bot = wanted()?;
-                let Some(on) = args.on else {
-                    return fail("look_around needs on (true or false).");
+                let patch = LookPatch {
+                    on: args.on,
+                    every: args.every.clone(),
+                    weekdays_only: args.weekdays_only,
+                    focus: args.focus.clone(),
                 };
-                self.look_around(&bot.id, on, args.time.as_deref()).await
+                if patch.on.is_none()
+                    && patch.every.is_none()
+                    && patch.weekdays_only.is_none()
+                    && patch.focus.is_none()
+                {
+                    return fail("look_around needs on, every, weekdays_only or focus.");
+                }
+                self.look_around(&bot.id, &patch).await
+            }
+            "suggest" => {
+                let Some(bot) = own() else {
+                    return fail("Only a bot's own chat can suggest next steps.");
+                };
+                let Some(suggestions) = &args.suggestions else {
+                    return fail(
+                        "suggest needs suggestions: a list, empty when nothing is worth it.",
+                    );
+                };
+                let now = self.now();
+                let listed = self.looks().change(&bot.id, |look| {
+                    look.look(suggestions, now, || new_id("sug"))
+                });
+                let listed = match listed {
+                    Ok(listed) => listed,
+                    Err(why) => return fail(why),
+                };
+                self.bots_changed();
+                Ok(if listed == 0 {
+                    "Nothing listed: your owner's Suggestions list is empty now.".to_owned()
+                } else {
+                    format!("Listed {listed} suggestion(s) for your owner. End with NO_REPLY.")
+                })
+            }
+            "suggestions" => {
+                let bot = wanted()?;
+                let now = self.now();
+                let history = self
+                    .looks()
+                    .get(&bot.id)
+                    .map(|look| look.history(now))
+                    .unwrap_or_default();
+                let block = |heading: &str, titles: &[String]| {
+                    if titles.is_empty() {
+                        format!("{heading} none")
+                    } else {
+                        format!(
+                            "{heading}\n{}",
+                            titles
+                                .iter()
+                                .map(|title| format!("- {title}"))
+                                .collect::<Vec<String>>()
+                                .join("\n")
+                        )
+                    }
+                };
+                let look = bot.look();
+                Ok([
+                    format!(
+                        "Look around of the bot {}: {}{}.",
+                        bot.name,
+                        if look.on {
+                            look_when(&look)
+                        } else {
+                            "off".to_owned()
+                        },
+                        if look.focus.is_empty() {
+                            String::new()
+                        } else {
+                            format!("; looks for: {}", look.focus)
+                        }
+                    ),
+                    block(
+                        "Still listed (suggest again with the same title only if still true):",
+                        &history.open,
+                    ),
+                    block(
+                        "Your owner started these lately, so they act on this kind:",
+                        &history.started,
+                    ),
+                    block(
+                        "They dismissed these: never suggest them again, in any wording:",
+                        &history.dismissed,
+                    ),
+                ]
+                .join("\n\n"))
             }
             "hand" => {
                 let bot = wanted()?;
@@ -719,37 +933,141 @@ impl AgentControl {
         lines.join("\n")
     }
 
-    /// Turns a bot's Look around routine on (daily at `time`, default 09:00, into its home chat) or off.
-    pub(crate) async fn look_around(&self, id: &str, on: bool, time: Option<&str>) -> R<String> {
-        self.bot_routine(id, on, time, Routine::LookAround).await
+    /// A change to a bot's Look around (Orca's `patchLookAround`: only the fields named change), saved on the record,
+    /// then its schedule (the `every` preset's hours, weekdays or every day, into its home chat) saved again, or
+    /// removed when off. While the bot has no home chat the setting waits and `arm_looks` saves the schedule once it has.
+    pub(crate) async fn look_around(&self, id: &str, patch: &LookPatch) -> R<String> {
+        let Some(bot) = self.bots().find(id).cloned() else {
+            return fail("That bot is gone.");
+        };
+        let mut look = bot.look();
+        if let Some(on) = patch.on {
+            look.on = on;
+        }
+        if let Some(every) = &patch.every {
+            if !EVERY_CHOICES.contains(&every.as_str()) {
+                return fail(format!("every is one of {}.", EVERY_CHOICES.join(", ")));
+            }
+            look.every = every.clone();
+        }
+        if let Some(weekdays_only) = patch.weekdays_only {
+            look.weekdays_only = weekdays_only;
+        }
+        if let Some(focus) = &patch.focus {
+            if focus.trim().chars().count() > FOCUS_MAX {
+                return fail(format!("focus is {FOCUS_MAX} characters at most."));
+            }
+            look.focus = focus.trim().to_owned();
+        }
+        let look = look.normalized();
+        let bot = self.change_bot(&bot.id, |record| record.look_setting = Some(look.clone()))?;
+        self.mem().look_unarmed.remove(&bot.id);
+        if !look.on {
+            if bot.look_around.is_some() {
+                self.bot_routine(&bot, Routine::LookAround, None).await?;
+            }
+            return Ok(format!(
+                "Turned off the Look around of the bot {}.",
+                bot.name
+            ));
+        }
+        let when = look_when(&look);
+        if bot.home.is_none() {
+            return Ok(format!(
+                "The bot {} will look around {when} once it has a home chat; what it finds goes to its Suggestions list.",
+                bot.name
+            ));
+        }
+        let schedule = self.save_look(&bot).await?;
+        Ok(format!(
+            "The bot {} looks around {when} (schedule {schedule}); what it finds goes to its Suggestions list.",
+            bot.name
+        ))
+    }
+
+    /// Saves the bot's Look around schedule as its setting says; the schedule's id.
+    async fn save_look(&self, bot: &BotRecord) -> R<String> {
+        let look = bot.look();
+        let frequency = ScheduleFrequency::Cron { expr: look.cron() };
+        let schedule = self
+            .bot_routine(
+                bot,
+                Routine::LookAround,
+                Some((frequency, look_prompt(&look.focus))),
+            )
+            .await?;
+        Ok(schedule.unwrap_or_default())
+    }
+
+    /// A bot whose Look around is on and that has a home chat but no schedule yet (a new bot's first chat) gets it;
+    /// one that could not be saved is not tried again this launch until its setting changes.
+    pub(crate) async fn arm_looks(&self) {
+        let waiting: Vec<BotRecord> = self
+            .bots()
+            .all()
+            .iter()
+            .filter(|bot| bot.look().on && bot.look_around.is_none() && bot.home.is_some())
+            .cloned()
+            .collect();
+        for bot in waiting {
+            if self.mem().look_unarmed.contains(&bot.id) {
+                continue;
+            }
+            if let Err(error) = self.save_look(&bot).await {
+                eprintln!("[bots] {}: Look around not saved: {error:?}", bot.name);
+                self.mem().look_unarmed.insert(bot.id.clone());
+            }
+        }
     }
 
     /// Turns a bot's memory upkeep routine on (daily at `time`, default 03:00, into its home chat) or off.
     pub(crate) async fn tidy_memory(&self, id: &str, on: bool, time: Option<&str>) -> R<String> {
-        self.bot_routine(id, on, time, Routine::Tidy).await
-    }
-
-    /// One of a bot's own daily routines on or off: one schedule that wakes its home chat, its id on the record.
-    async fn bot_routine(
-        &self,
-        id: &str,
-        on: bool,
-        time: Option<&str>,
-        routine: Routine,
-    ) -> R<String> {
         let Some(bot) = self.bots().find(id).cloned() else {
             return fail("That bot is gone.");
         };
+        if !on {
+            self.bot_routine(&bot, Routine::Tidy, None).await?;
+            return Ok(format!(
+                "Turned off the Memory upkeep of the bot {}.",
+                bot.name
+            ));
+        }
+        let time = time.unwrap_or("03:00");
+        if !is_time(time) {
+            return fail("time is HH:MM, 00:00 to 23:59.");
+        }
+        let frequency = ScheduleFrequency::Daily {
+            time: time.to_owned(),
+            days: Vec::new(),
+        };
+        let schedule = self
+            .bot_routine(
+                &bot,
+                Routine::Tidy,
+                Some((frequency, TIDY_PROMPT.to_owned())),
+            )
+            .await?
+            .unwrap_or_default();
+        Ok(format!(
+            "The bot {} tidies its memory daily at {time} (schedule {schedule}).",
+            bot.name
+        ))
+    }
+
+    /// One of a bot's own routines on (`draft`: when and what to ask) or off (None): one schedule that wakes its home
+    /// chat, its id on the record; the one it had goes first. The new schedule's id.
+    async fn bot_routine(
+        &self,
+        bot: &BotRecord,
+        routine: Routine,
+        draft: Option<(ScheduleFrequency, String)>,
+    ) -> R<Option<String>> {
         let Some(source) = self.schedule_source(None) else {
             return fail("Scheduled runs are not available on this computer.");
         };
-        let (label, prompt, default_time) = match routine {
-            Routine::LookAround => ("Look around", LOOK_AROUND_PROMPT, "09:00"),
-            Routine::Tidy => ("Memory upkeep", TIDY_PROMPT, "03:00"),
-        };
-        let held = match routine {
-            Routine::LookAround => bot.look_around.clone(),
-            Routine::Tidy => bot.tidy.clone(),
+        let (label, held) = match routine {
+            Routine::LookAround => ("Look around", bot.look_around.clone()),
+            Routine::Tidy => ("Memory upkeep", bot.tidy.clone()),
         };
         let keep = |record: &mut BotRecord, schedule: Option<String>| match routine {
             Routine::LookAround => record.look_around = schedule,
@@ -759,29 +1077,23 @@ impl AgentControl {
         if let Some(old) = held.as_deref() {
             let _ = source.remove(old).await;
         }
-        if !on {
+        let Some((frequency, prompt)) = draft else {
             self.change_bot(&bot.id, |record| keep(record, None))?;
-            return Ok(format!("Turned off the {label} of the bot {}.", bot.name));
-        }
+            return Ok(None);
+        };
         let Some(home) = bot.home.clone() else {
+            self.change_bot(&bot.id, |record| keep(record, None))?;
             return fail(format!(
                 "The bot {} has no home chat yet, so nothing can wake it: open a session in {} first.",
                 bot.name, bot.folder
             ));
         };
-        let time = time.unwrap_or(default_time);
-        if !is_time(time) {
-            return fail("time is HH:MM, 00:00 to 23:59.");
-        }
         let row = source
             .save(&ScheduleDraft {
                 name: format!("{}: {label}", bot.name),
-                prompt: prompt.to_owned(),
+                prompt,
                 cwd: bot.folder.clone(),
-                frequency: ScheduleFrequency::Daily {
-                    time: time.to_owned(),
-                    days: Vec::new(),
-                },
+                frequency,
                 model: bot.model.clone(),
                 auto_approve: bot.auto_approve,
                 enabled: true,
@@ -793,16 +1105,7 @@ impl AgentControl {
             })
             .await?;
         self.change_bot(&bot.id, |record| keep(record, Some(row.id.clone())))?;
-        Ok(match routine {
-            Routine::LookAround => format!(
-                "The bot {} looks around daily at {time} (schedule {}); its suggestions arrive as planned items.",
-                bot.name, row.id
-            ),
-            Routine::Tidy => format!(
-                "The bot {} tidies its memory daily at {time} (schedule {}).",
-                bot.name, row.id
-            ),
-        })
+        Ok(Some(row.id))
     }
 
     /// Hands `target` to `bot`: the bot's home chat becomes its opener, and `text` goes to it as a message from the bot.
@@ -1019,6 +1322,43 @@ impl AgentControl {
                     .unwrap_or_default();
                 return Ok(json!({ "sources": sources }));
             }
+            // The bot as one package file the owner picked (`{file}`, not the state).
+            "export" => {
+                let bot = self.bot_named(&id)?;
+                let file = text("file").unwrap_or_default();
+                let package = bot_package::export(&bot)?;
+                bot_package::write(&file, &package)?;
+                return Ok(json!({ "file": file }));
+            }
+            // A new bot from a package file: its name made unique, its parts checked before anything is written.
+            "importPackage" => {
+                let package = bot_package::read(&text("file").unwrap_or_default())?;
+                let base = package.name.trim().to_owned();
+                let mut name = base.clone();
+                let mut n = 2;
+                while self.bots().find(&name).is_some() {
+                    name = format!("{base} {n}");
+                    n += 1;
+                }
+                let bot = self.create_bot(&name, None)?;
+                if let Err(error) = bot_package::seed(Path::new(&bot.folder), &bot.name, &package) {
+                    self.bots().remove(&bot.id);
+                    let _ = std::fs::remove_dir_all(&bot.folder);
+                    self.bots_changed();
+                    return Err(error);
+                }
+                self.change_bot(&bot.id, |record| {
+                    if let Some(look) = package.look_around.clone() {
+                        record.look_setting = Some(look.normalized());
+                    }
+                    record.quiet = QUIET_KINDS
+                        .iter()
+                        .filter(|kind| package.quiet.iter().any(|given| given.as_str() == **kind))
+                        .map(|kind| (*kind).to_owned())
+                        .collect();
+                    record.stale_days = package.stale_days.filter(|days| *days > 0.0);
+                })?;
+            }
             "update" => {
                 let bot = self.bot_named(&id)?;
                 if let Some(paused) = request.get("paused").and_then(Value::as_bool)
@@ -1043,7 +1383,48 @@ impl AgentControl {
                         .map(str::to_owned)
                         .collect::<Vec<String>>()
                 });
+                // The owner's alone: an agent's `ompdesk_bot set` never reaches these.
+                let approval = match request.get("chatApproval") {
+                    None => None,
+                    Some(Value::Null) => Some(None),
+                    Some(Value::String(mode)) if APPROVAL_MODES.contains(&mode.as_str()) => {
+                        Some(Some(mode.clone()))
+                    }
+                    Some(_) => {
+                        return fail(format!(
+                            "chatApproval is one of {}, or null.",
+                            APPROVAL_MODES.join(", ")
+                        ));
+                    }
+                };
+                let skill_projects = match request.get("skillProjects").and_then(Value::as_array) {
+                    None => None,
+                    Some(list) => {
+                        let mut folders: Vec<String> = Vec::new();
+                        for folder in list.iter().filter_map(Value::as_str).map(str::trim) {
+                            if !Path::new(folder).is_absolute() {
+                                return fail("skillProjects are absolute folders.");
+                            }
+                            if folder != bot.folder && !folders.iter().any(|known| known == folder)
+                            {
+                                folders.push(folder.to_owned());
+                            }
+                        }
+                        if folders.len() > SKILL_PROJECTS_MAX {
+                            return fail(format!(
+                                "A bot takes the skills of {SKILL_PROJECTS_MAX} projects at most."
+                            ));
+                        }
+                        Some(folders)
+                    }
+                };
                 self.change_bot(&bot.id, |record| {
+                    if let Some(approval) = approval {
+                        record.chat_approval = approval;
+                    }
+                    if let Some(folders) = skill_projects {
+                        record.skill_projects = folders;
+                    }
                     if let Some(name) = name {
                         record.name = name;
                     }
@@ -1086,9 +1467,7 @@ impl AgentControl {
                     self.bots_changed();
                 }
                 if let Some(look) = request.get("lookAround").filter(|look| look.is_object()) {
-                    let on = look.get("on").and_then(Value::as_bool).unwrap_or(false);
-                    self.look_around(&bot.id, on, look.get("time").and_then(Value::as_str))
-                        .await?;
+                    self.look_around(&bot.id, &LookPatch::of(look)).await?;
                 }
                 if let Some(tidy) = request.get("tidy").filter(|tidy| tidy.is_object()) {
                     let on = tidy.get("on").and_then(Value::as_bool).unwrap_or(false);
@@ -1099,6 +1478,39 @@ impl AgentControl {
             "delete" => self.delete_bot(&id).await?,
             "item" => refused = self.owner_item(&request).await?,
             "itemsOpened" => self.items_opened(&id)?,
+            // The owner's Start or Dismiss of a suggestion (Start then puts its ask in the bot's message box).
+            "suggestion" => {
+                let bot = self.bot_named(&id)?;
+                let act = match text("act").as_deref() {
+                    Some("start") => "started",
+                    Some("dismiss") => "dismissed",
+                    _ => return fail("suggestion: act is start or dismiss."),
+                };
+                let suggestion = text("suggestion").unwrap_or_default();
+                let now = self.now();
+                let resolved = self
+                    .looks()
+                    .change(&bot.id, |look| look.resolve(&suggestion, act, now));
+                if let Err(why) = resolved {
+                    return fail(why);
+                }
+                self.bots_changed();
+            }
+            // The owner saw the bot's Suggestions: what is listed now is no longer new.
+            "looksSeen" => {
+                let bot = self.bot_named(&id)?;
+                let now = self.now();
+                let changed = self.looks().change(&bot.id, |look| {
+                    let unseen = look.unseen(now) > 0;
+                    if unseen {
+                        look.seen_at = now;
+                    }
+                    unseen
+                });
+                if changed {
+                    self.bots_changed();
+                }
+            }
             "roomCreate" | "roomUpdate" | "roomDelete" | "roomPost" | "roomStop" => {
                 self.owner_room(&request).await?;
             }
@@ -1172,4 +1584,70 @@ fn bot_context(
             .collect::<Vec<Value>>(),
         "live": live,
     })
+}
+
+/// A change to a bot's Look around: only the fields named change (`BotsRequest` `update.lookAround`, `ompdesk_bot
+/// look_around`).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LookPatch {
+    pub on: Option<bool>,
+    pub every: Option<String>,
+    pub weekdays_only: Option<bool>,
+    pub focus: Option<String>,
+}
+
+impl LookPatch {
+    /// The owner's `lookAround` object.
+    fn of(value: &Value) -> LookPatch {
+        LookPatch {
+            on: value.get("on").and_then(Value::as_bool),
+            every: value
+                .get("every")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            weekdays_only: value.get("weekdaysOnly").and_then(Value::as_bool),
+            focus: value
+                .get("focus")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        }
+    }
+}
+
+/// When a Look around runs, as its answers say it (Orca's `LOOK_AROUND_EVERY_LABELS`).
+fn look_when(look: &LookSetting) -> String {
+    let hours = match look.every.as_str() {
+        "every-2h" => "every 2 hours from 8:00 to 20:00",
+        "twice-daily" => "twice a day, at 8:00 and 13:00",
+        "mornings" => "each morning at 8:00",
+        _ => "every 4 hours from 8:00 to 20:00",
+    };
+    format!(
+        "{hours}, {}",
+        if look.weekdays_only {
+            "on weekdays"
+        } else {
+            "every day"
+        }
+    )
+}
+
+/// One of a bot's workers as the state carries it (`BotWorker` of `src/shared/bots.ts`): the record, and what its tab on
+/// this computer does now (`working`, `idle`, or `closed` when no tab holds it).
+fn worker_json(worker: &BotWorker, tabs: &[ControlTab]) -> Value {
+    let tab = tabs.iter().find(|tab| {
+        tab.device.is_none()
+            && (tab.session_path.as_deref() == Some(worker.session.as_str())
+                || tab.tab_id == worker.session)
+    });
+    let mut value = serde_json::to_value(worker).unwrap_or(Value::Null);
+    value["state"] = json!(match tab {
+        Some(tab) if tab.busy => "working",
+        Some(_) => "idle",
+        None => "closed",
+    });
+    if let Some(tab) = tab {
+        value["tabId"] = json!(tab.tab_id);
+    }
+    value
 }

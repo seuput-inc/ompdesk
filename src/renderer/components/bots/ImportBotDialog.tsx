@@ -3,12 +3,15 @@
  * the bots of OpenClaw, Hermes and OpenBot found on this computer, or "Another app…", whose bot first saves itself as
  * files (the prompt to paste, copied here) and whose folder the owner then picks. Create makes a new bot whose first
  * turn reads that folder and sets itself up from it: no parser, the bot reads the files. Keys and logins stay behind.
+ * "From a bot file" reads an OMPdesk bot package (`sharing/bot-package-archive.ts`, `BOT_PACKAGE_SUFFIX`) and makes
+ * the bot it holds at once.
  */
-import { ArrowRight, FolderOpen, PackageOpen } from "lucide-react";
+import { ArrowRight, FileUp, FolderOpen, PackageOpen } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import type { BotImportSource } from "../../../shared/bots";
 import { useT } from "../../lib/i18n";
 import { useBotsStore } from "../../stores/bots";
+import { toast } from "../../stores/toast";
 import { Button, CopyButton, Input, Modal, PathText, Radio, Spinner } from "../common";
 import { BotAvatar } from "./BotAvatar";
 import { type BotImportPick, createBot, IMPORT_EXPORT_PROMPT } from "./bot-launch";
@@ -20,6 +23,7 @@ export function ImportBotDialog({ onClose }: { onClose: () => void }) {
 	const t = useT();
 	const formId = useId();
 	const bots = useBotsStore(s => s.state.bots);
+	const command = useBotsStore(s => s.command);
 	const [sources, setSources] = useState<BotImportSource[] | null>(null);
 	const [picked, setPicked] = useState<string | null>(null);
 	const [otherFolder, setOtherFolder] = useState("");
@@ -57,6 +61,26 @@ export function ImportBotDialog({ onClose }: { onClose: () => void }) {
 		setError(null);
 		try {
 			await createBot({ name, importFrom: source });
+			onClose();
+		} catch (failure) {
+			setError(failure instanceof Error ? failure.message : String(failure));
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	// A bot package file: the core makes the bot it holds (its name made unique) and the dialog closes.
+	const importFile = async () => {
+		setError(null);
+		try {
+			const paths: unknown = await window.omp.system.showOpenDialog([
+				{ name: t("bots.settings.packageType"), extensions: ["json"] },
+			]);
+			const file = Array.isArray(paths) && typeof paths[0] === "string" ? paths[0] : null;
+			if (!file) return;
+			setBusy(true);
+			await command({ action: "importPackage", file });
+			toast({ variant: "success", message: t("bots.import.fileDone") });
 			onClose();
 		} catch (failure) {
 			setError(failure instanceof Error ? failure.message : String(failure));
@@ -143,6 +167,19 @@ export function ImportBotDialog({ onClose }: { onClose: () => void }) {
 						</span>
 					</label>
 				</fieldset>
+				<div className="flex items-center gap-2" data-bot-import-file>
+					<span className="min-w-0 flex-1 text-sc-xs text-(--sc-text-muted)">{t("bots.import.fileHint")}</span>
+					<Button
+						disabled={busy}
+						icon={<FileUp />}
+						onClick={() => void importFile()}
+						size="sm"
+						type="button"
+						variant="secondary"
+					>
+						{t("bots.import.file")}
+					</Button>
+				</div>
 				{picked === OTHER && (
 					<div className="flex flex-col gap-2 rounded-(--sc-radius-md) border border-(--sc-border-subtle) p-3">
 						<p className="text-sc-sm text-(--sc-text)">{t("bots.import.exportStep")}</p>

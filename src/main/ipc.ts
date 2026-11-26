@@ -157,7 +157,7 @@ import type { AnswerStep } from "./agent-control/target-answer";
 import { quitApproved, requestQuit } from "./app-quit";
 import { Autopilot, type AutopilotCommand, type AutopilotNotice } from "./autopilot";
 import { routeHostAutopilotNotice } from "./autopilot-notice-route";
-import { setBotsState } from "./bots";
+import { setBotsAsk, setBotsState } from "./bots";
 import {
 	CHECKOUT_PEERS_SWEEP_MS,
 	type CheckoutMember,
@@ -1619,6 +1619,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	deps.agentOpening.current = () => agentControl.opening();
 	deps.sessionNote.current = (session, text) => agentControl.noteSession(session, text);
 	deps.botHome.current = (name, deviceId, deviceName) => agentControl.botHome(name, deviceId, deviceName);
+	setBotsAsk(() => agentControl.bots({ action: "get" }));
 	// The control socket (src/main/control-socket): anything on this computer drives the same service as the tools.
 	void startControlSocket({
 		userData: app.getPath("userData"),
