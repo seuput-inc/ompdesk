@@ -1,8 +1,8 @@
 //! A renamed bot's folder follows its name. Every rename leaves a rename record (`BotRecord.renamed_from`); a bot with
-//! one whose folder is a real folder directly inside the bots folder (`~/.omp/bots`, read through every link) moves to
-//! `<bots folder>/<slug of the name>`, at once or, while a chat there runs a turn, at a later bot pass. A folder outside
-//! the bots folder is a project of the owner's and never moves; nor does one whose target is taken, one two bots
-//! share, or one that is a link. No folder moves only because its name differs from the bot's: a `-2` left by a clash
+//! one whose folder is a real folder inside the bots folder (`~/.omp/bots`, read through every link) moves to
+//! `<its parent>/<slug of the name>`, at once or, while a chat there runs a turn, at a later bot pass. A folder outside
+//! the bots folder is a project of the owner's and never moves; nor does one whose target is taken, one whose path
+//! holds a link, or one that is, holds or sits in another bot's folder. No folder moves only because its name differs from the bot's: a `-2` left by a clash
 //! or a folder the owner named stays. A rename to the same name is how a bot renamed before rename records asks for
 //! the move: it records the rename and moves the folder when it may, and does nothing once the folder matches.
 //!
@@ -43,23 +43,41 @@ fn rebased(path: &str, from: &str, to: &str) -> String {
     }
 }
 
-/// Why `folder` may not move, if it may not: it must be a real folder (no link, no junction) whose real place is
-/// directly inside the bots folder `root`'s real place, so no link on the way leads the move into a project elsewhere.
+/// Why `folder` may not move, if it may not: it must sit inside the bots folder `root` with no link or junction on any
+/// part of its path below `root`, and its real place must be the same path inside `root`'s real place, so no link on
+/// the way leads the move into a project elsewhere.
 fn unmovable(root: &Path, folder: &str) -> Option<String> {
     let path = Path::new(folder);
-    if path.parent() != Some(root) {
+    let Some(rest) = path
+        .strip_prefix(root)
+        .ok()
+        .filter(|rest| !rest.as_os_str().is_empty())
+    else {
         return Some("it is not in the bots folder".to_owned());
-    }
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if crate::fs::disk::linked(&meta) => {
-            return Some("it is a link to another folder".to_owned());
+    };
+    let mut at = root.to_path_buf();
+    for part in rest.components() {
+        let std::path::Component::Normal(name) = part else {
+            return Some("its path is not a plain one".to_owned());
+        };
+        at.push(name);
+        match std::fs::symlink_metadata(&at) {
+            Ok(meta) if crate::fs::disk::linked(&meta) => {
+                return Some(format!("{} is a link to another folder", at.display()));
+            }
+            Ok(meta) if !meta.is_dir() => return Some(format!("{} is not a folder", at.display())),
+            Ok(_) => {}
+            Err(error) => return Some(format!("{} cannot be read: {error}", at.display())),
         }
-        Ok(meta) if !meta.is_dir() => return Some("it is not a folder".to_owned()),
-        Ok(_) => {}
-        Err(error) => return Some(format!("it cannot be read: {error}")),
     }
     match (std::fs::canonicalize(root), std::fs::canonicalize(path)) {
-        (Ok(real_root), Ok(real)) if real.parent() == Some(real_root.as_path()) => None,
+        (Ok(real_root), Ok(real))
+            if real
+                .strip_prefix(&real_root)
+                .is_ok_and(|inside| inside == rest) =>
+        {
+            None
+        }
         (Ok(_), Ok(real)) => Some(format!(
             "it leads to {}, outside the bots folder",
             real.display()
@@ -195,17 +213,17 @@ impl AgentControl {
             return Ok(format!("Its folder is {}.", bot.folder));
         };
         let target = folder_for(&bot.folder, &bot.name).unwrap_or_default();
-        let shared = self
-            .bots()
-            .all()
-            .iter()
-            .any(|other| other.id != bot.id && other.folder == bot.folder);
+        // A move never carries or displaces another bot's folder: none may be this one, inside it or around it.
+        let shared = self.bots().all().iter().any(|other| {
+            other.id != bot.id
+                && (within(&other.folder, &bot.folder) || within(&bot.folder, &other.folder))
+        });
         let refused = match &self.bots_root {
             _ if target == bot.folder => Some(String::new()),
             None => Some("this app has no bots folder".to_owned()),
             Some(root) => unmovable(root, &bot.folder),
         }
-        .or_else(|| shared.then(|| "another bot has it too".to_owned()))
+        .or_else(|| shared.then(|| "another bot's folder is it, holds it or sits in it".to_owned()))
         .or_else(|| {
             (Path::new(&target).exists() || self.bots().of_folder(&target).is_some())
                 .then(|| format!("{target} is taken"))

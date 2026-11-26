@@ -22,7 +22,14 @@ test.beforeEach(async () => {
 	const agent = path.join(profile, "agent");
 	await Promise.all([fs.mkdir(project), fs.mkdir(desktop), fs.mkdir(agent)]);
 	await fs.writeFile(path.join(desktop, "prefs.json"), JSON.stringify({ language: "en", firstRunComplete: true }));
-	app = await launchApp({ project, desktop, agent, profile, env: { OMP_GUI_HEADLESS: "1" } });
+	app = await launchApp({
+		project,
+		desktop,
+		agent,
+		profile,
+		// The fake omp keeps stock session files, so the chat below is the bot's home chat with a file to move.
+		env: { OMP_GUI_HEADLESS: "1", OMP_GUI_TEST_SESSION_FILES: "1" },
+	});
 	page = await app.firstWindow();
 	errors = [];
 	page.on("pageerror", error => errors.push(error.message));
@@ -41,7 +48,7 @@ const exists = (dir: string) =>
 		() => false,
 	);
 
-test("a renamed bot's folder, files and routine follow its new name with no question", async () => {
+test("a renamed bot's folder, files, routine and open chat follow its new name with no question", async () => {
 	const folder = await page.evaluate(async () => {
 		const state = await window.omp.bots.command({ action: "create", name: "Rex", purpose: "Reviews pull requests." });
 		return state.bots.find(bot => bot.name === "Rex")?.folder ?? "";
@@ -64,6 +71,31 @@ test("a renamed bot's folder, files and routine follow its new name with no ques
 			}),
 		folder,
 	);
+	// Its home chat is open and idle in its folder: the rename moves it through its own omp (stock `/move`).
+	const chat = (await page.evaluate(cwd => window.omp.tabs.spawn({ cwd }), folder))?.tabId ?? "";
+	expect(chat).not.toBe("");
+	const tabOf = () => page.evaluate(async id => (await window.omp.tabs.list()).find(tab => tab.tabId === id), chat);
+	const ask = (message: string) =>
+		page.evaluate(([id, text]) => window.omp.rpc.commandForTab(id, { type: "prompt", message: text }), [
+			chat,
+			message,
+		] as const);
+	const field = (data: unknown, key: string): unknown =>
+		data && typeof data === "object" && key in data ? Reflect.get(data, key) : undefined;
+	const asked = async () => {
+		const response = await page.evaluate(
+			id => window.omp.rpc.commandForTab(id, { type: "get_branch_messages" }),
+			chat,
+		);
+		const listed = field(response.data, "messages");
+		return Array.isArray(listed) ? listed.length : 0;
+	};
+	await expect.poll(async () => (await tabOf())?.status).toBe("ready");
+	await ask("Who are you?");
+	await expect
+		.poll(() => page.evaluate(async () => (await window.omp.bots.command({ action: "get" })).bots[0]?.home ?? null))
+		.not.toBeNull();
+	await expect.poll(async () => (await tabOf())?.status).toBe("ready");
 
 	await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
 	if ((await page.locator("[data-bot-pane]:visible").count()) === 0)
@@ -85,4 +117,16 @@ test("a renamed bot's folder, files and routine follow its new name with no ques
 	expect(routine).toMatchObject({ name: "Ruby: nightly", cwd: moved });
 	await expect(page.locator("[data-bot-pane-header]")).toContainText("Ruby");
 	await expect(page.locator("[data-sidebar-bots]")).toContainText("Ruby");
+
+	// The open chat runs in the new folder, its session says so, and it still answers.
+	await expect.poll(async () => (await tabOf())?.cwd).toBe(moved);
+	const state = await page.evaluate(id => window.omp.rpc.commandForTab(id, { type: "get_state" }), chat);
+	expect(state).toMatchObject({ success: true, data: { cwd: moved } });
+	const sessionFile = String(field(state.data, "sessionFile") ?? "");
+	const header: unknown = JSON.parse((await fs.readFile(sessionFile, "utf8")).split("\n")[1] ?? "{}");
+	expect(field(header, "cwd")).toBe(moved);
+	const before = await asked();
+	await ask("Still there?");
+	await expect.poll(asked).toBe(before + 1);
+	await expect.poll(async () => (await tabOf())?.status).toBe("ready");
 });

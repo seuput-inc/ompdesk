@@ -2463,6 +2463,9 @@ fn schedule_book(
             {
                 let mut saved = request["draft"].clone();
                 saved["id"] = row["id"].clone();
+                // Main answers JSON numbers as JavaScript writes them (`5`, never the core's `5.0`, which a flattened
+                // draft's tagged frequency cannot take back); no move changes a frequency.
+                saved["frequency"] = row["frequency"].clone();
                 *row = saved;
             }
             json!({ "schedules": schedules.clone(), "runs": [], "nextRuns": {} })
@@ -2767,4 +2770,46 @@ async fn a_folder_outside_the_bots_folder_or_behind_a_link_never_moves() {
         assert!(!outside.0.join(name).exists(), "{name}");
     }
     assert_eq!(control.bot_named("bot-g").unwrap().renamed_from, None);
+}
+
+/// A folder nested in the bots folder moves beside itself; one that holds, or sits in, another bot's folder stays, and
+/// so does that other bot's.
+#[tokio::test]
+async fn a_nested_folder_moves_beside_itself_unless_another_bots_folder_overlaps_it() {
+    let root = Scratch::new();
+    for name in ["team/old", "crew/lead/mate"] {
+        std::fs::create_dir_all(root.0.join(name)).unwrap();
+    }
+    let (control, asked) = started_with(
+        9_739,
+        &root,
+        json!([
+            { "id": "bot-h", "name": "Old", "folder": root.0.join("team").join("old") },
+            { "id": "bot-i", "name": "Lead", "folder": root.0.join("crew").join("lead") },
+            { "id": "bot-j", "name": "Mate", "folder": root.0.join("crew").join("lead").join("mate") },
+        ]),
+    );
+    for (id, name) in [("bot-h", "New"), ("bot-i", "Boss"), ("bot-j", "Pal")] {
+        control
+            .bots_command(json!({ "action": "update", "id": id, "name": name }))
+            .await
+            .unwrap();
+    }
+    assert!(root.0.join("team").join("new").is_dir() && !root.0.join("team").join("old").exists());
+    assert_eq!(
+        control.bot_named("bot-h").unwrap().folder,
+        root.0.join("team").join("new").to_string_lossy()
+    );
+    assert!(root.0.join("crew").join("lead").join("mate").is_dir());
+    assert!(!root.0.join("crew").join("boss").exists());
+    assert!(!root.0.join("crew").join("lead").join("pal").exists());
+    assert_eq!(
+        control.bot_named("bot-j").unwrap().folder,
+        root.0
+            .join("crew")
+            .join("lead")
+            .join("mate")
+            .to_string_lossy()
+    );
+    assert_eq!(relocations(&asked), 1);
 }
