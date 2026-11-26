@@ -445,7 +445,10 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // measured 2,231,148 (e2e-nightly run 45755595124), 3,166 bytes over. Both, with the title bar's tab strip gone
 // (c0ecfe18f): measured 2,231,648 (CI run 45769328347, omp/agent/orca-dictation at b85ccc38c). The budget is that
 // measure plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_231_728;
+// The new task sheet's pending rows (26 Nov 2026, orca-worktree-create): a task being made shows on the sidebar's first
+// screen (`layout/sidebar/NewTaskRows.tsx` and the step runner of `stores/new-tasks.ts`, its composer helpers already
+// loaded): 737 bytes measured over main (CI build of omp/agent/orca-worktree-create on 8fafd91b6), added to the budget.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_232_465;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
