@@ -6,7 +6,7 @@
 import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { AgentMessage, MessagesPage, RpcCommand, RpcResponse } from "../../../../shared/rpc-types";
 import * as sessionHydration from "../../../hooks/session-hydration";
 import { resetSessionSurface } from "../../../hooks/use-session-switch";
@@ -14,10 +14,13 @@ import { filePickInProgress } from "../../../lib/file-pick";
 import { clearHistoryImages, rememberHistoryImages } from "../../../lib/history-images";
 import { I18nProvider, translate } from "../../../lib/i18n";
 import { expandPasteMarkers, pasteMarkerText, storePaste } from "../../../lib/paste-blobs";
-import { METER_BARS, recordAndTranscribe, stopVoiceRecording } from "../../../lib/voice";
-// A take's prepare loop loads with its module (`import("./stt-prepare")`, lib/voice.ts). Loaded with this file, so a
-// download's progress waits on the bridge's answer alone, never on the module loader: a cold load outlasted the one
-// tick the dictation tests wait when this file was the first to run on a busy runner (ci run 42701060204).
+import { METER_BARS, recordAndTranscribe, STOP_TAIL_MS, stopVoiceRecording } from "../../../lib/voice";
+// A take's prepare loop, capture and tidy pass load on use (`import("./stt-prepare")`, `import("./dictation-live")`,
+// `import("./dictation-text")`). Loaded with this file, so a take waits on the bridge's answer alone, never on the
+// module loader: a cold load outlasted the dictation tests' waits when this file was the first to run on a busy runner
+// (ci runs 42701060204, 45755585143).
+import "../../../lib/dictation-live";
+import "../../../lib/dictation-text";
 import "../../../lib/stt-prepare";
 import { useComposerStore } from "../../../stores/composer";
 import { useExtensionUiStore } from "../../../stores/extension-ui";
@@ -1814,6 +1817,8 @@ describe("InputArea dictation", () => {
 	let transcribeAudio: Mock;
 	let mic: FakeMic;
 
+	beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
+
 	async function mountWithMic(): Promise<void> {
 		mic = installFakeMic();
 		await mount();
@@ -1856,8 +1861,7 @@ describe("InputArea dictation", () => {
 		expect(document.querySelector("button[data-dictation-send]")).toBeNull();
 		opened.resolve(new FakeStream());
 		await flush();
-		// The take's capture loads while the microphone opens (`lib/dictation-live.ts`).
-		await vi.waitFor(() => expect(phase()).toBe("recording"));
+		expect(phase()).toBe("recording");
 		// The microphone hears a tenth of a second (the take is transcribed whole: this omp has no live stream).
 		mic.context().feed(new Float32Array(1600).fill(0.1));
 	}
@@ -1865,11 +1869,15 @@ describe("InputArea dictation", () => {
 	/** Enter ends the take; capture goes on for the stop tail, then the take is transcribed. */
 	async function endTake(): Promise<void> {
 		await windowKey("Enter");
+		await vi.advanceTimersByTimeAsync(STOP_TAIL_MS);
 		await vi.waitFor(() => expect(phase()).not.toBe("recording"));
 		await flush();
 	}
 
-	afterEach(() => uninstallFakeMic());
+	afterEach(() => {
+		vi.useRealTimers();
+		uninstallFakeMic();
+	});
 
 	it("shows the meter while recording, and Enter ends the take into the draft at the caret", async () => {
 		await mountWithMic();
