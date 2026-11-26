@@ -53,6 +53,8 @@ export function ChangelogDialog() {
 		if (active instanceof HTMLElement && active.tagName === "BUTTON" && dialog?.contains(active)) {
 			notesEl.focus({ preventScroll: true });
 		}
+		// Focus on the notes (the dialog's first focus) scrolled the body to their edge: the window opens at its top.
+		if (document.activeElement === notesEl) notesEl.closest("[data-dialog-body]")?.scrollTo({ top: 0 });
 	}, [open, markdown]);
 	return (
 		<Modal
