@@ -2,9 +2,9 @@
 //!
 //! Tauri's `unstable` feature (on for `Manager::get_webview`) hosts each app window's WKWebView as a child of tao's
 //! content view. WebKit hands a keyDown the page did not use (Right at the end of the text, Left at its start) to
-//! the view's next responder, and tao's `keyDown:` runs `interpretKeyEvents:` on it: with an input method such as
-//! Korean the arrow's characters (U+F703 and its kin, Apple's function-key private-use range) were inserted into the
-//! composer as a glyph (tauri-apps/tauri#10194). Without `unstable`, wry's own parent view (`WryWebViewParent`)
+//! the view's next responder, and tao's `keyDown:` runs `interpretKeyEvents:` on it, which in that layout inserts a
+//! character for the arrow into the focused field (tauri-apps/tauri#10194 measured U+001D for Right; the event's
+//! own characters are U+F703). Without `unstable`, wry's own parent view (`WryWebViewParent`)
 //! swallows these keys; this responder, put between the WKWebView and tao's view, does the same. Everything else a
 //! responder passes up (key up, mouse, scroll, commands) goes on to tao's view unchanged.
 #![allow(unsafe_code)]
