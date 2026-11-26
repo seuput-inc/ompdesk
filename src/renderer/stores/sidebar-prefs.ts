@@ -15,6 +15,7 @@ import {
 	type FooterPin,
 	type RailPin,
 	readSidebarPrefs,
+	type SessionSort,
 	SIDEBAR_PREFS_KEY,
 	type SidebarChange,
 	type SidebarEntryField,
@@ -53,6 +54,10 @@ interface SidebarPrefsStore extends SidebarPrefs {
 	setEntry: (field: SidebarEntryField, key: string, value: string | null) => Promise<void>;
 	/** Renames a project group, or with `to` null takes every project out of it. */
 	renameProjectGroup: (from: string, to: string | null) => Promise<void>;
+	/** How every session list sorts (the sidebar header's options). */
+	setSessionSort: (sort: SessionSort) => Promise<void>;
+	/** Whether a project's rows idle past `SESSION_SLEEP_AFTER_MS` fold under its "N sleeping" line. */
+	setHideSleeping: (hide: boolean) => Promise<void>;
 	touchWorkspace: (cwd: string) => void;
 	reset: () => void;
 }
@@ -214,6 +219,10 @@ export const useSidebarPrefs = create<SidebarPrefsStore>()((set, get) => {
 		setEntry: (field, key, value) => write("sidebar.entryFailed", () => ({ op: "set-entry", field, key, value })),
 
 		renameProjectGroup: (from, to) => write("sidebar.entryFailed", () => ({ op: "rename-project-group", from, to })),
+
+		setSessionSort: sort => write("sidebar.options.failed", () => ({ op: "set-session-sort", sort })),
+
+		setHideSleeping: hide => write("sidebar.options.failed", () => ({ op: "set-hide-sleeping", hide })),
 
 		touchWorkspace: cwd => {
 			// A lost write costs an ordering hint, nothing the user set out to do. Before the stored blob is known

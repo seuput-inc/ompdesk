@@ -75,6 +75,7 @@ import { copyText, cx, formatClock } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { isImeKeyEvent } from "../../../lib/ime";
 import { actionKbd, onEscape } from "../../../lib/keymap";
+import { useMinuteTick } from "../../../lib/now-tick";
 import { reorderProjects, withLocalProjectOrder } from "../../../lib/project-order";
 import { useProjectNames, useWorktreeKindLabels } from "../../../lib/project-origin";
 import { sessionForkOrigin } from "../../../lib/session-fork";
@@ -155,7 +156,7 @@ import { workingAgentCount } from "../live-work";
 import { SessionLiveTitle, sessionLive } from "../SessionLiveTitle";
 import { openedChildCounts, openedChildRows } from "../work-board/opened-children";
 import { childFoldSignal, type FoldSignal, foldSummary, sessionFoldSignal } from "./fold-summary";
-import { remoteOpenedTab, summaryRowState } from "./host-row-state";
+import { remoteOpenedTab, rowActivity, summaryRowState } from "./host-row-state";
 import { NewTaskRows } from "./NewTaskRows";
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
 import { ProjectGlyph } from "./ProjectGlyph";
@@ -172,11 +173,13 @@ import { SidebarFoldButton } from "./SidebarFoldButton";
 import { SidebarFolderMissingMark } from "./SidebarFolderMissingMark";
 import { SidebarFoldSummary } from "./SidebarFoldSummary";
 import { SidebarNav } from "./SidebarNav";
+import { SidebarOptions } from "./SidebarOptions";
 import { PinMenu, type PinMenuState, pinMenuHandlers, SidebarPinsSheet } from "./SidebarPinsSheet";
 import { isProjectSectionFold, projectSectionFold, SidebarProjectSection } from "./SidebarProjectSection";
 import { SidebarRemovedProjects } from "./SidebarRemovedProjects";
 import { SidebarRenameField } from "./SidebarRenameField";
 import { SessionLinksDialog, sessionLinksWords } from "./SidebarSessionLinks";
+import { SidebarSleeping } from "./SidebarSleeping";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
 import { SidebarUpdateCard } from "./SidebarUpdateCard";
 import { SidebarUsage, useOfferedFooterPins } from "./SidebarUsage";
@@ -596,6 +599,12 @@ export function Sidebar() {
 	const projectEmoji = useSidebarPrefs(s => s.projectEmoji);
 	const sessionEmoji = useSidebarPrefs(s => s.sessionEmoji);
 	const sessionParents = useSidebarPrefs(s => s.sessionParents);
+	const sessionSort = useSidebarPrefs(s => s.sessionSort);
+	const hideSleeping = useSidebarPrefs(s => s.hideSleeping);
+	// The sleep rule's clock: once a minute, and only while sleeping rows fold.
+	const minute = useMinuteTick(hideSleeping);
+	// The projects whose "N sleeping" line the person opened, this launch.
+	const [wokenGroups, setWokenGroups] = useState<ReadonlySet<string>>(NO_PICKS);
 	// The projects this computer lists apart from its sessions: an empty one keeps its group (src/main/sidebar-projects.ts).
 	const projectList = useProjectList();
 	const {
@@ -842,9 +851,24 @@ export function Sidebar() {
 				sessionOrder: list => sessionOrder[list],
 				projectGroup: cwd => projectGroups[cwd],
 				sessionParents,
+				sort: sessionSort,
+				hideSleeping,
 			},
 			query: filter,
 			nameOf: key => groupAliases[key] ?? projectName(key).name,
+			// This computer's summary of each row (any window's tab, or a paired device's here; a tab of this window
+			// whose omp has named no file yet by that tab), as the row itself reads it.
+			activity: session =>
+				rowActivity(
+					summaryByPath.get(session.path) ??
+						hostedByKey.get(session.id) ??
+						(session.liveTabId === undefined
+							? undefined
+							: summaryByPath.get(unsavedSessionKey(session.liveTabId))),
+					session.status,
+				),
+			current: session => tabOfRow(localTabs, session)?.id === activeTabId,
+			now: minute,
 		}),
 		[
 			sessions,
@@ -868,6 +892,10 @@ export function Sidebar() {
 			groupAliases,
 			projectGroups,
 			sessionParents,
+			sessionSort,
+			hideSleeping,
+			activeTabId,
+			minute,
 		],
 	);
 	// A session an agent here opened on a paired device is that opener's child too: its tab, or a stand-in for one
@@ -887,8 +915,21 @@ export function Sidebar() {
 				filter,
 				projectGroups,
 				sessionParents,
+				sessionSort,
+				hideSleeping,
 			]),
-		[pinnedSessions, pinnedGroups, groupOrder, sessionOrder, archivedSessions, filter, projectGroups, sessionParents],
+		[
+			pinnedSessions,
+			pinnedGroups,
+			groupOrder,
+			sessionOrder,
+			archivedSessions,
+			filter,
+			projectGroups,
+			sessionParents,
+			sessionSort,
+			hideSleeping,
+		],
 	);
 	const rows = useHeld(family.rows, holdRows, ownOrder, pointing);
 	const rowsHeldBack = rows === family.rows ? 0 : rowsWaiting(rows, family.rows);
@@ -1026,12 +1067,13 @@ export function Sidebar() {
 	const projectSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 	/**
 	 * Each stored session's list (its project, or Chats) and that list's rows in order; empty while a filter shows only
-	 * some rows (a move there would forget where the hidden ones were). A new session's live row (no file yet) has no
-	 * place to keep: it stays on top until it has one.
+	 * some rows or a sort other than the person's own orders them, and none for a project whose sleeping rows fold (a
+	 * move there would forget where the hidden rows were). A new session's live row (no file yet) has no place to keep:
+	 * it stays on top until it has one.
 	 */
 	const sessionLists = useMemo(() => {
 		const lists = new Map<string, SessionList>();
-		if (query) return lists;
+		if (query || sessionSort !== "manual") return lists;
 		const add = (key: string, rows: readonly SidebarSession[]) => {
 			const paths = rows
 				.filter(row => row.liveTabId === undefined && !row.departed && !runParentOf.has(row.path))
@@ -1040,9 +1082,9 @@ export function Sidebar() {
 			for (const path of paths) if (!lists.has(path)) lists.set(path, list);
 		};
 		add(CHATS_ORDER_KEY, chatSessions);
-		for (const group of allGroups) add(group.cwd, group.sessions);
+		for (const group of allGroups) if (group.sleeping.length === 0) add(group.cwd, group.sessions);
 		return lists;
-	}, [query, chatSessions, allGroups, runParentOf, pinnedSessions]);
+	}, [query, sessionSort, chatSessions, allGroups, runParentOf, pinnedSessions]);
 	const sessionListOf = (session: SidebarSession): SessionList | null =>
 		session.liveTabId === undefined ? (sessionLists.get(session.path) ?? null) : null;
 	const reorder = useSessionReorder({
@@ -2490,7 +2532,25 @@ export function Sidebar() {
 						<Collapse open={!groupCollapsed}>
 							<div className="space-y-px" data-session-group={group.cwd} data-state="expanded">
 								<NewTaskRows cwd={group.cwd} />
-								{group.sessions.map(session => renderSessionRow(session, true))}
+								{group.sessions
+									.filter(session => !group.sleeping.includes(session.path))
+									.map(session => renderSessionRow(session, true))}
+								<SidebarSleeping
+									count={group.sleeping.length}
+									onToggle={() =>
+										setWokenGroups(open => {
+											const next = new Set(open);
+											if (!next.delete(group.cwd)) next.add(group.cwd);
+											return next;
+										})
+									}
+									open={wokenGroups.has(group.cwd)}
+									rovingKey={`sleeping:${group.cwd}`}
+								>
+									{group.sessions
+										.filter(session => group.sleeping.includes(session.path))
+										.map(session => renderSessionRow(session, true))}
+								</SidebarSleeping>
 								<SidebarLooseChildren foldKey={`group:${group.cwd}`} opened={loose} />
 							</div>
 						</Collapse>
@@ -2762,6 +2822,8 @@ export function Sidebar() {
 								value={filter}
 							/>
 						</div>
+						{/* How the lists sort and whether sleeping rows fold (Orca's Workspace options beside its search). */}
+						<SidebarOptions />
 						{/* Once a host is paired every device header ends in its own project button, so the search row's
 						    would be a second one for this device. */}
 						{sectionHosts.length > 0 ? null : (

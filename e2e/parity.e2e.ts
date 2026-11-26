@@ -968,6 +968,48 @@ if (dir) {
 				await untilAnswered(b, start, { after: "hello" });
 			};
 
+			/**
+			 * What a `sleepingRow` surface shows, set up once before the first: B's project `parity-sleep` holds "Parity
+			 * older" and "Parity newer" (each one answered turn, in that order) and "Parity sleeping", whose file then reads
+			 * two hours untouched (`modified` is the file's mtime), so Recent lists the newer first and Hide sleeping folds
+			 * the third under the project's line. Made from B's phone page, which every view loads afresh, so no window of
+			 * B keeps a tab of them.
+			 */
+			let sleepingLeft = false;
+			const leaveSleeping = async () => {
+				sleepingLeft = true;
+				const folder = path.join(parent, "parity-sleep");
+				await fs.mkdir(folder, { recursive: true });
+				let sleepingFile = "";
+				for (const title of ["Parity older", "Parity newer", "Parity sleeping"]) {
+					const tabId = (await phone.evaluate(cwd => window.omp.tabs.spawn({ cwd }), folder))?.tabId ?? "";
+					if (!tabId) throw new Error(`the phone opened no tab for ${title}`);
+					const made = async () =>
+						(await phone.evaluate(() => window.omp.tabs.list())).find(tab => tab.tabId === tabId);
+					await expect.poll(async () => (await made())?.status, { timeout: 60_000 }).toBe("ready");
+					await phone.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
+						tabId,
+						`fixture:title:${title}`,
+					] as const);
+					await phone.evaluate(
+						id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "hello" }),
+						tabId,
+					);
+					let file = "";
+					await expect
+						.poll(async () => (file = (await made())?.sessionPath ?? ""), { timeout: 30_000 })
+						.not.toBe("");
+					await untilAnswered(phone, tabId);
+					expect(await phone.evaluate(id => window.omp.tabs.close(id), tabId)).toBe(true);
+					sleepingFile = file;
+				}
+				const asleepSince = new Date(Date.now() - 2 * 60 * 60_000);
+				await fs.utimes(sleepingFile, asleepSince, asleepSince);
+				// A turn of the work session makes main read the sessions again.
+				await b.evaluate(id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "hello" }), start);
+				await untilAnswered(b, start, { after: "hello" });
+			};
+
 			const records: SurfaceRecord[] = [];
 			for (const surface of surfaces) {
 				if (surface.parity.pairedBack) await pairBack();
@@ -975,6 +1017,7 @@ if (dir) {
 				if (surface.parity.hiddenRoster && !hiddenRosterLeft) await leaveHiddenRoster();
 				if (surface.parity.crossProject && !crossProjectLeft) await leaveCrossProject();
 				if (surface.parity.folderMissing && !folderMissingLeft) await leaveFolderMissing();
+				if (surface.parity.sleepingRow && !sleepingLeft) await leaveSleeping();
 				const record: SurfaceRecord = {
 					id: surface.id,
 					title: surface.title,

@@ -921,7 +921,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(rows[1]).toContain("Session /work/alpha/one");
 	});
 
-	it("keeps one header line, its search and the project folder button, with chats after the projects in one list", async () => {
+	it("keeps one header line, its search, the list's options and the project folder button, with chats after the projects in one list", async () => {
 		const omp = installMockOmp([
 			...LIST,
 			session("/work/chat-1.jsonl", "/work/chat-home", { kind: "chat", firstMessage: "chat one" }),
@@ -939,9 +939,13 @@ describe("Sidebar menus and pinned ordering", () => {
 			[...(headerRow()?.querySelectorAll("input, button") ?? [])].map(
 				element => element.getAttribute("aria-label") ?? "",
 			);
-		// No Code/Chat switch: one search over every session, then the project folder button.
+		// No Code/Chat switch: one search over every session, the list's options, then the project folder button.
 		expect(container.querySelector('[role="tablist"]')).toBeNull();
-		expect(rowControls()).toEqual([translate("sidebar.filter"), translate("sidebar.project.newFolder")]);
+		expect(rowControls()).toEqual([
+			translate("sidebar.filter"),
+			translate("sidebar.options.label"),
+			translate("sidebar.project.newFolder"),
+		]);
 		expect(headerRow()?.querySelector("input")?.getAttribute("placeholder")).toBe(
 			translate("sidebar.filterPlaceholder"),
 		);
@@ -1466,6 +1470,28 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(alpha()).toEqual(["/work/alpha/two.jsonl", "/work/alpha/one.jsonl"]);
 		await fire(rowFor("Session /work/alpha/one"), "onContextMenu");
 		expect(menuItem("Move up").getAttribute("aria-disabled") === "true").toBe(true);
+	});
+
+	it("sorts by the person's choice, and folds sleeping rows under a line that opens them", async () => {
+		installMockOmp(LIST);
+		seedStores();
+		useSidebarPrefs.setState({ hydrated: true, sessionSort: "recent" });
+		await mount(<Sidebar />);
+		const alpha = () =>
+			[...container.querySelectorAll("[data-session-path]")]
+				.map(element => (element as unknown as Element).getAttribute("data-session-path"))
+				.filter(path => path?.startsWith("/work/alpha/"));
+		// Newest activity first; the manual order put the older session first.
+		expect(alpha()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
+		const line = () => container.querySelector('[data-session-group="/work/alpha"] [data-sidebar-sleeping]');
+		expect(line()).toBeNull();
+
+		// Both rows did nothing for months and no tab uses them: they fold under the project's line.
+		await act(async () => useSidebarPrefs.setState({ hideSleeping: true }));
+		expect(line()?.getAttribute("data-sidebar-sleeping")).toBe("2");
+		expect(alpha()).toEqual([]);
+		await fire(line()?.querySelector("[data-sidebar-sleeping-toggle]") ?? null, "onClick");
+		expect(alpha()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
 	});
 
 	it("dragging a session row onto another row of its list moves it there, and the order is kept", async () => {
