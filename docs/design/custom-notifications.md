@@ -34,7 +34,7 @@ Each card carries a gear (⚙, label "Notification options"/"알림 옵션") bes
 - **Mute until tomorrow** / "내일까지 알림 끄기": until 08:00 local time the next day. The page computes that instant, because it knows the local time zone, and sends it as `until`. The shell refuses an `until` in the past or more than 36 h away.
 - **Notification settings…** / "알림 설정…": opens Settings in the app window (the app menu's `open-settings`, whose General section holds the notification switch and chime) and shows the window.
 
-Muting closes the cards on screen (`close` `userCanceled`) and holds every notification until the time passes. That covers the toast route too, and there is no sound. The mute is OMPdesk-wide on this computer, kept in `<userData>/notification-mute.json` (`{"until": <ms>}`) so that an update's relaunch keeps it. While it lasts, the tray menu has **Resume notifications** / "알림 다시 받기", which ends it. The phone's Web Push is not affected; the phone has its own controls.
+Muting closes the cards on screen (`close` `userCanceled`) and holds every notification until the time passes. That covers the toast route too, and there is no sound. The mute is OMPdesk-wide on this computer, kept in `<userData>/notification-mute.json` (`{"until": <ms>}`) so that an update's relaunch keeps it. It ends on its own; nothing else ends it early (the tray menu stays as the owner set it on 29 Oct 2026). The phone's Web Push is not affected; the phone has its own controls.
 
 ## Drawing: a small webview, not a native card
 
@@ -63,7 +63,7 @@ The page is a self-contained HTML document compiled into the shell (`notificatio
 - **Sound.** As today's banner, once at `show` when `silent` is not set: on Windows the default notification sound (`PlaySound` alias `Notification.Default`); on macOS the person's alert sound (`NSBeep`). There is none for a hidden, muted or toast-routed card, since the toast plays its own.
 - **Theme.** Dark or light from the shell's effective theme (`theme.setSource`), with the page background from `src/shared/window-background.json` (the app's `--sc-bg`). With reduced motion there is no rise.
 - **Motion.** The card enters with 160 ms of opacity plus an 8 px rise (`ease-out`). It leaves at once, because the window shrinks with it. No other animation.
-- **Strings.** The shell's labels (`native_labels.json`, en and ko): `notificationPopup.*`, `tray.resumeNotifications`.
+- **Strings.** The shell's labels (`native_labels.json`, en and ko): `notificationPopup.*`.
 
 ## Settings
 

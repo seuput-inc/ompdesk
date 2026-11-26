@@ -24,20 +24,20 @@
 * { box-sizing: border-box; margin: 0; }
 html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); }
 body {
-	font: 13px/18px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+	font: 13px/18px -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
 	-webkit-user-select: none;
 	user-select: none;
 	cursor: default;
 }
+#stack > * + * { border-top: 1px solid var(--line); }
 .card {
 	position: relative;
 	display: flex;
 	align-items: center;
 	gap: 12px;
 	height: 64px;
-	padding: 0 40px 0 14px;
+	padding: 0 68px 0 14px;
 }
-.card + .card { border-top: 1px solid var(--line); }
 .card:hover { background: var(--hover); }
 .card.enter { animation: enter 160ms cubic-bezier(0.2, 0, 0, 1); }
 @keyframes enter { from { opacity: 0; transform: translateY(8px); } }
@@ -47,27 +47,44 @@ body {
 .title, .body { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .title { font-weight: 600; font-size: 14px; line-height: 20px; }
 .body { color: var(--muted); }
-.close {
+.tool {
 	position: absolute;
 	top: 8px;
-	right: 8px;
 	width: 24px;
 	height: 24px;
 	border: 0;
 	border-radius: 6px;
+	padding: 0;
 	background: transparent;
 	color: var(--muted);
-	font: 16px/24px "Segoe UI Symbol", system-ui, sans-serif;
+	display: grid;
+	place-items: center;
 }
-.close:hover { background: var(--line); color: var(--fg); }
+.tool:hover, .tool[aria-expanded="true"] { background: var(--line); color: var(--fg); }
+.tool svg { width: 14px; height: 14px; }
+.gear { right: 36px; }
+.close { right: 8px; }
 .more {
 	height: 28px;
 	padding: 0 14px;
-	border-top: 1px solid var(--line);
 	color: var(--muted);
 	font-size: 12px;
 	line-height: 27px;
 }
+.menu { height: 104px; padding: 4px; }
+.menu button {
+	display: block;
+	width: 100%;
+	height: 32px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--fg);
+	font: inherit;
+	text-align: left;
+}
+.menu button:hover { background: var(--hover); }
 </style>
 </head>
 <body>
@@ -75,49 +92,80 @@ body {
 <script>
 "use strict";
 // The shell reads and cancels these navigations (notification_popup/mod.rs `action`).
-const go = (action, id) => { location.href = `ompdesk-popup:${action}?id=${id}`; };
+const go = (action, query = "") => { location.href = `ompdesk-popup:${action}${query}`; };
+const GEAR = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v1.8M8 12.7v1.8M14.5 8h-1.8M3.3 8H1.5M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3M12.6 12.6l-1.3-1.3M4.7 4.7 3.4 3.4"/></svg>';
+const CROSS = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
 let known = new Set();
 
-function card({ id, title, body }, labels, fresh) {
-	const row = document.createElement("div");
-	row.className = fresh ? "card enter" : "card";
+function element(tag, className, text) {
+	const node = document.createElement(tag);
+	node.className = className;
+	if (text !== undefined) node.textContent = text;
+	return node;
+}
+
+function tool(className, label, svg, onClick) {
+	const button = element("button", `tool ${className}`);
+	button.type = "button";
+	button.setAttribute("aria-label", label);
+	button.title = label;
+	// The icons are fixed markup of this page, never text from a notification.
+	button.innerHTML = svg;
+	button.addEventListener("click", event => { event.stopPropagation(); onClick(); });
+	return button;
+}
+
+function card({ id, title, body }, state) {
+	const row = element("div", known.has(id) ? "card" : "card enter");
 	row.dataset.id = String(id);
-	const icon = document.createElement("div");
-	icon.className = "icon";
-	const text = document.createElement("div");
-	text.className = "text";
-	const heading = document.createElement("div");
-	heading.className = "title";
-	heading.textContent = title;
-	const line = document.createElement("div");
-	line.className = "body";
-	line.textContent = body;
-	text.append(heading, line);
-	const close = document.createElement("button");
-	close.className = "close";
-	close.type = "button";
-	close.textContent = "\u00d7";
-	close.setAttribute("aria-label", labels.close);
-	close.addEventListener("click", event => { event.stopPropagation(); go("close", id); });
-	row.addEventListener("click", () => go("click", id));
-	row.append(icon, text, close);
+	const text = element("div", "text");
+	text.append(element("div", "title", title), element("div", "body", body));
+	const gear = tool("gear", state.labels.options, GEAR, () => go("menu"));
+	gear.setAttribute("aria-haspopup", "menu");
+	gear.setAttribute("aria-expanded", String(state.menu));
+	row.append(element("div", "icon"), text, gear, tool("close", state.labels.close, CROSS, () => go("close", `?id=${id}`)));
+	row.addEventListener("click", () => go("click", `?id=${id}`));
 	return row;
 }
 
-// What the shell sends (`window.rs` `render`): the scheme, the cards on screen oldest first, and the "+N more" row.
+/** 08:00 tomorrow in this computer's time zone, which only the page knows. */
+function tomorrowMorning() {
+	const at = new Date();
+	at.setDate(at.getDate() + 1);
+	at.setHours(8, 0, 0, 0);
+	return at.getTime();
+}
+
+function menu(labels) {
+	const box = element("div", "menu");
+	box.setAttribute("role", "menu");
+	const item = (label, onClick) => {
+		const button = element("button", "", label);
+		button.type = "button";
+		button.setAttribute("role", "menuitem");
+		button.addEventListener("click", onClick);
+		box.append(button);
+	};
+	item(labels.muteHour, () => go("mute", `?until=${Date.now() + 3_600_000}`));
+	item(labels.muteTomorrow, () => go("mute", `?until=${tomorrowMorning()}`));
+	item(labels.settings, () => go("settings"));
+	return box;
+}
+
+// What the shell sends (`window.rs` `view`): the scheme, the cards on screen oldest first, the "+N more" row, the
+// gear's menu, and which corner the popup sits in. The newest card sits nearest the corner; the menu and "+N more"
+// take the far edge, where the window grows.
 window.render = state => {
 	const root = document.documentElement;
 	root.dataset.scheme = state.dark ? "dark" : "light";
 	root.lang = state.lang;
 	if (state.background) root.style.setProperty("--bg", state.background);
 	root.classList.toggle("still", state.reducedMotion);
-	const rows = state.cards.map(item => card(item, state.labels, !known.has(item.id)));
-	if (state.more > 0) {
-		const more = document.createElement("div");
-		more.className = "more";
-		more.textContent = state.labels.more;
-		rows.push(more);
-	}
+	const cards = state.cards.map(item => card(item, state));
+	const far = [];
+	if (state.menu) far.push(menu(state.labels));
+	if (state.more > 0) far.push(element("div", "more", state.labels.more));
+	const rows = state.corner === "top" ? [...cards.reverse(), ...far.reverse()] : [...far, ...cards];
 	known = new Set(state.cards.map(item => item.id));
 	document.getElementById("stack").replaceChildren(...rows);
 };

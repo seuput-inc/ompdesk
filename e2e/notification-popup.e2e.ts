@@ -73,13 +73,14 @@ async function popupPage(): Promise<Page> {
 	return found as Page;
 }
 
-test("a finished background run shows as a popup card, and clicking it opens that tab", async () => {
+/** Tab `title` runs a turn in the background behind a new front tab; returns the background tab and the front one. */
+async function backgroundRun(title: string): Promise<{ background: string; front: string }> {
 	// Notifications only fire while the window is unfocused; Playwright emulates page focus, so report the real state.
 	await page.evaluate(() => {
 		document.hasFocus = () => false;
 	});
 	const background = await activeTab();
-	await nameTab(background, "Release notes run");
+	await nameTab(background, title);
 	await page.locator("textarea").first().fill("fixture running");
 	await page.getByRole("button", { name: "Send", exact: true }).click();
 	await expect(page.getByRole("button", { name: "Stop", exact: true })).toBeVisible();
@@ -87,7 +88,17 @@ test("a finished background run shows as a popup card, and clicking it opens tha
 	await expect.poll(async () => (await tabs()).length).toBe(2);
 	await expect.poll(activeTab).not.toBe(background);
 	await expect.poll(async () => (await tabs()).find(tab => tab.tabId === background)?.status).toBe("running");
+	return { background, front: await activeTab() };
+}
 
+async function routes(): Promise<unknown[]> {
+	return (await readRecords(path.join(desktop, "tauri-shell.jsonl")))
+		.filter(record => record.event === "notification.route")
+		.map(record => record.route);
+}
+
+test("a finished background run shows as a popup card, and clicking it opens that tab", async () => {
+	const { background } = await backgroundRun("Release notes run");
 	await fixtureCommand(background, "fixture:finish");
 	const popup = await popupPage();
 	const card = popup.locator(".card");
@@ -95,18 +106,55 @@ test("a finished background run shows as a popup card, and clicking it opens tha
 	await expect(card.locator(".title")).toHaveText("Release notes run");
 	await expect(card.locator(".body")).toHaveText("Background run finished");
 	await expect(card.getByRole("button", { name: "Close" })).toHaveCount(1);
+	await popup.screenshot({ path: test.info().outputPath("popup.png") });
 
-	const log = path.join(desktop, "tauri-shell.jsonl");
-	const records = await readRecords(log);
-	expect(records.find(record => record.event === "notification.route")).toMatchObject({ route: "hidden" });
+	expect(await routes()).toEqual(["hidden"]);
+	const records = await readRecords(path.join(desktop, "tauri-shell.jsonl"));
 	expect(records.find(record => record.event === "notification.popup.window")).toMatchObject({
 		noActivate: true,
 		toolWindow: true,
 		topmost: true,
 	});
 
+	// The gear folds the controls away: its menu opens inside the popup and closes again.
+	const gear = card.getByRole("button", { name: "Notification options" });
+	await gear.dispatchEvent("click");
+	const menu = popup.getByRole("menu");
+	await expect(menu.getByRole("menuitem")).toHaveText([
+		"Mute for 1 hour",
+		"Mute until tomorrow",
+		"Notification settings…",
+	]);
+	await expect(gear).toHaveAttribute("aria-expanded", "true");
+	await gear.dispatchEvent("click");
+	await expect(menu).toHaveCount(0);
+
 	// The window never goes on screen in a test run, so the click is the page's own event, not a pointer.
 	await card.dispatchEvent("click");
 	await expect.poll(activeTab).toBe(background);
+	await expect(card).toHaveCount(0);
+});
+
+test("muting from the gear closes the card and holds the next notification", async () => {
+	const { background, front } = await backgroundRun("First run");
+	await nameTab(front, "Second run");
+	await page.locator("textarea").first().fill("fixture running");
+	await page.getByRole("button", { name: "Send", exact: true }).click();
+	await expect.poll(async () => (await tabs()).find(tab => tab.tabId === front)?.status).toBe("running");
+
+	await fixtureCommand(background, "fixture:finish");
+	const popup = await popupPage();
+	const card = popup.locator(".card");
+	await expect(card).toHaveCount(1);
+	await card.getByRole("button", { name: "Notification options" }).dispatchEvent("click");
+	await popup.getByRole("menuitem", { name: "Mute for 1 hour" }).dispatchEvent("click");
+	await expect(card).toHaveCount(0);
+	const muted = (await readRecords(path.join(desktop, "tauri-shell.jsonl"))).find(
+		record => record.event === "notification.muted",
+	);
+	expect(Number(muted?.until) - Date.now()).toBeGreaterThan(59 * 60_000);
+
+	await fixtureCommand(front, "fixture:finish");
+	await expect.poll(routes).toEqual(["hidden", "muted"]);
 	await expect(card).toHaveCount(0);
 });

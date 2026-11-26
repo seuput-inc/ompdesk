@@ -1,24 +1,29 @@
 //! The popup's window and page (docs/design/custom-notifications.md). Everything here runs on the UI thread.
 //!
-//! The window is made at the first popup and kept. It shares the app's WebView2 environment (the same data folder and
-//! browser arguments as an app window), so it starts a renderer, not a cold browser. A card that arrives before its
-//! page is ready waits up to `READY_MS`, then goes to the OS banner. The page has no app preload and no IPC: the shell
-//! draws through `eval(render(…))`, and the page asks by navigating to `ompdesk-popup:`, which the shell cancels.
+//! The window is made at the first popup and kept. It shares the app's webview environment (the same data folder and,
+//! on Windows, the same browser arguments as an app window), so it starts a renderer, not a cold browser. A card that
+//! arrives before its page is ready waits up to `READY_MS`, then goes to the OS banner. The page has no app preload and
+//! no IPC: the shell draws through `eval(render(…))`, and the page asks by navigating to `ompdesk-popup:`, which the
+//! shell cancels. On macOS the webview's view moves into a non-activating panel (`popup_panel.rs`), and the Tauri
+//! window that made it is never shown.
 
 use std::cell::RefCell;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::Instant;
 
 use base64::Engine;
 use serde_json::{Value, json};
 use shell_core::notify_spec::ToastSpec;
 use tauri::webview::{NewWindowResponse, PageLoadEvent};
-use tauri::{LogicalSize, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use super::{Action, CARD_HEIGHT, Card, Host, READY_MS, Route, Stack, WIDTH};
-use crate::labels::{fill, text};
+use crate::labels::{Lang, fill, text};
 use crate::log::log;
 use crate::native_chrome::notification::{self, emit};
-use crate::{system, theme, tray, ui};
+use crate::{entry, system, theme, tray, ui};
 
 const LABEL: &str = "notification-popup";
 const TICK_MS: i64 = 500;
@@ -27,6 +32,9 @@ const ICON: &str = include_str!("../../../../../../resources/brand/mark-tile-sma
 #[derive(Default)]
 struct State {
     window: Option<WebviewWindow>,
+    /// The macOS panel holding the page.
+    #[cfg(target_os = "macos")]
+    panel: isize,
     ready: bool,
     /// A test run's popup: never on screen, no sound, no countdown.
     hidden: bool,
@@ -41,13 +49,52 @@ thread_local! {
     static STATE: RefCell<State> = RefCell::new(State::default());
 }
 
+/// When the gear's mute ends (ms since the epoch), 0 for none.
+static MUTE_UNTIL: AtomicI64 = AtomicI64::new(0);
+
 fn with<R>(work: impl FnOnce(&mut State) -> R) -> R {
     STATE.with(|state| work(&mut state.borrow_mut()))
 }
 
-/// `notification::Popup` for this shell.
+fn mute_path() -> PathBuf {
+    crate::runtime().user_data.join("notification-mute.json")
+}
+
+/// `notification::Popup` for this shell, and the mute a previous run left.
 pub fn install() {
+    if let Some(until) = std::fs::read_to_string(mute_path())
+        .ok()
+        .as_deref()
+        .and_then(super::read_mute)
+    {
+        MUTE_UNTIL.store(until, Ordering::Relaxed);
+    }
     notification::set_popup(notification::Popup { show, close });
+}
+
+/// Whether the gear's mute holds now.
+fn muted() -> bool {
+    MUTE_UNTIL.load(Ordering::Relaxed) > crate::wall_clock_ms()
+}
+
+/// Keeps the mute's end where a relaunch finds it. A failed write leaves the mute in memory for this run.
+fn save_mute(until: i64) {
+    let path = mute_path();
+    let written = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("no folder"))
+        .and_then(|dir| {
+            std::fs::create_dir_all(dir)?;
+            let mut temp = tempfile::NamedTempFile::new_in(dir)?;
+            temp.write_all(super::mute_file(until).as_bytes())?;
+            crate::profile_file::persist(temp, &path)
+        });
+    if let Err(error) = written {
+        log(
+            "notification.mute_save_failed",
+            json!({"error": error.to_string()}),
+        );
+    }
 }
 
 fn host() -> Host {
@@ -67,18 +114,23 @@ fn gate() -> Result<(), String> {
 
 #[cfg(not(windows))]
 fn gate() -> Result<(), String> {
-    Err("no popup on this platform".into())
+    Ok(())
 }
 
 /// Takes `spec` unless it belongs to the OS banner.
 fn show(spec: &ToastSpec) -> bool {
-    let (route, reason) = super::route(host(), gate);
+    let (route, reason) = super::route(host(), muted(), gate);
     log(
         "notification.route",
         json!({"id": spec.id, "route": route.name(), "reason": reason}),
     );
-    if route == Route::Banner {
-        return false;
+    match route {
+        Route::Banner => return false,
+        Route::Muted => {
+            emit(spec.id, "close", Some("muted".to_owned()));
+            return true;
+        }
+        Route::Popup | Route::Hidden => {}
     }
     with(|state| state.hidden = route == Route::Hidden);
     if let Err(error) = ensure_window() {
@@ -115,9 +167,11 @@ fn admit(spec: &ToastSpec) {
         state.hidden
     });
     emit(spec.id, "show", None);
-    #[cfg(windows)]
     if !hidden && !spec.silent {
+        #[cfg(windows)]
         shell_core::sys::toast::play_default_sound();
+        #[cfg(target_os = "macos")]
+        shell_core::sys_mac::popup_panel::alert_sound();
     }
     render();
     if !hidden {
@@ -155,15 +209,38 @@ fn page_ready() {
 }
 
 fn act(action: Action) {
-    let (id, name, reason) = match action {
-        Action::Click(id) => (id, "click", None),
-        Action::Close(id) => (id, "close", Some("userCanceled".to_owned())),
-    };
-    if with(|state| state.stack.remove(id)) {
-        // A clicked card leaves without a `close`, as a clicked Windows toast does.
-        emit(id, name, reason);
-        render();
+    match action {
+        Action::Click(id) => {
+            if with(|state| state.stack.remove(id)) {
+                // A clicked card leaves without a `close`, as a clicked Windows toast does.
+                emit(id, "click", None);
+            }
+        }
+        Action::Close(id) => {
+            if with(|state| state.stack.remove(id)) {
+                emit(id, "close", Some("userCanceled".to_owned()));
+            }
+        }
+        Action::Menu => with(|state| state.stack.toggle_menu()),
+        Action::Mute(asked) => {
+            let Some(until) = super::mute_until(crate::wall_clock_ms(), asked) else {
+                log("notification.mute_refused", json!({"until": asked}));
+                return;
+            };
+            MUTE_UNTIL.store(until, Ordering::Relaxed);
+            save_mute(until);
+            log("notification.muted", json!({"until": until}));
+            for id in with(|state| state.stack.clear()) {
+                emit(id, "close", Some("userCanceled".to_owned()));
+            }
+        }
+        Action::Settings => {
+            with(|state| state.stack.toggle_menu());
+            entry::activate();
+            entry::menu_action("open-settings");
+        }
     }
+    render();
 }
 
 fn page_url() -> String {
@@ -218,6 +295,11 @@ fn ensure_window() -> Result<(), String> {
     if let Some(args) = crate::webview_args()? {
         builder = builder.additional_browser_args(&args);
     }
+    #[cfg(target_os = "macos")]
+    {
+        // The panel is never key: the first click must reach the page.
+        builder = builder.accept_first_mouse(true);
+    }
     // wcId 0: the page never downloads, the only thing the id names.
     builder = crate::sessions::configure_app(builder, "app", 0)?;
     let window = builder.build().map_err(|e| e.to_string())?;
@@ -234,6 +316,16 @@ fn ensure_window() -> Result<(), String> {
             json!({"noActivate": no_activate, "toolWindow": tool_window, "topmost": topmost}),
         );
     }
+    #[cfg(target_os = "macos")]
+    {
+        let ns_window = window.ns_window().map_err(|e| e.to_string())? as isize;
+        let panel = shell_core::sys_mac::popup_panel::adopt(ns_window)?;
+        with(|state| state.panel = panel);
+        log(
+            "notification.popup.window",
+            json!({"nonactivatingPanel": true}),
+        );
+    }
     with(|state| state.window = Some(window));
     Ok(())
 }
@@ -243,17 +335,22 @@ fn view(stack: &Stack) -> Value {
     let lang = tray::language();
     let mut view = stack.view();
     let more = view["more"].as_u64().unwrap_or(0).to_string();
+    view["corner"] = json!(if cfg!(target_os = "macos") {
+        "top"
+    } else {
+        "bottom"
+    });
     view["dark"] = json!(theme::is_dark());
     view["background"] = json!(theme::background_hex());
     view["reducedMotion"] = json!(system::reduced_motion());
-    view["lang"] = json!(if lang == crate::labels::Lang::Ko {
-        "ko"
-    } else {
-        "en"
-    });
+    view["lang"] = json!(if lang == Lang::Ko { "ko" } else { "en" });
     view["labels"] = json!({
         "close": text(lang, "notificationPopup.close"),
+        "options": text(lang, "notificationPopup.options"),
         "more": fill(lang, "notificationPopup.more", &[("count", &more)]),
+        "muteHour": text(lang, "notificationPopup.muteHour"),
+        "muteTomorrow": text(lang, "notificationPopup.muteTomorrow"),
+        "settings": text(lang, "notificationPopup.settings"),
     });
     view
 }
@@ -281,30 +378,70 @@ fn render() {
         );
     }
     if hidden {
-        let _ = window.set_size(LogicalSize::new(size.0, size.1.max(1.0)));
         return;
     }
-    #[cfg(windows)]
-    {
-        let Ok(hwnd) = window.hwnd().map(|handle| handle.0 as isize) else {
-            return;
-        };
-        if empty {
-            shell_core::sys::winops::hide(hwnd);
-            return;
-        }
-        if let Some(at) = super::place(&screens(), primary(), pointer(), size) {
-            shell_core::sys::winops::show_topmost_at(
-                hwnd,
-                at.x,
-                at.y,
-                at.width as i32,
-                at.height as i32,
-            );
-        }
+    if empty {
+        surface_hide(&window);
+    } else {
+        surface_show(&window, size);
     }
-    #[cfg(not(windows))]
-    let _ = empty;
+}
+
+#[cfg(windows)]
+fn surface_show(window: &WebviewWindow, size: (f64, f64)) {
+    let Ok(hwnd) = window.hwnd().map(|handle| handle.0 as isize) else {
+        return;
+    };
+    if let Some(at) = super::place(&screens(), primary(), pointer(), size) {
+        shell_core::sys::winops::show_topmost_at(
+            hwnd,
+            at.x,
+            at.y,
+            at.width as i32,
+            at.height as i32,
+        );
+    }
+}
+
+#[cfg(windows)]
+fn surface_hide(window: &WebviewWindow) {
+    if let Ok(hwnd) = window.hwnd() {
+        shell_core::sys::winops::hide(hwnd.0 as isize);
+    }
+}
+
+/// Whether the pointer is over the popup (its countdown pauses).
+#[cfg(windows)]
+fn hovered(window: &WebviewWindow) -> bool {
+    let (Ok(at), Ok(size), Some((x, y))) =
+        (window.outer_position(), window.outer_size(), pointer())
+    else {
+        return false;
+    };
+    x >= f64::from(at.x)
+        && y >= f64::from(at.y)
+        && x < f64::from(at.x) + f64::from(size.width)
+        && y < f64::from(at.y) + f64::from(size.height)
+}
+
+#[cfg(target_os = "macos")]
+fn surface_show(_: &WebviewWindow, size: (f64, f64)) {
+    shell_core::sys_mac::popup_panel::show_top_right(
+        with(|state| state.panel),
+        size.0,
+        size.1,
+        super::MARGIN,
+    );
+}
+
+#[cfg(target_os = "macos")]
+fn surface_hide(_: &WebviewWindow) {
+    shell_core::sys_mac::popup_panel::hide(with(|state| state.panel));
+}
+
+#[cfg(target_os = "macos")]
+fn hovered(_: &WebviewWindow) -> bool {
+    shell_core::sys_mac::popup_panel::contains_mouse(with(|state| state.panel))
 }
 
 #[cfg(windows)]
@@ -351,25 +488,13 @@ fn primary() -> Option<usize> {
         .position(|monitor| monitor.position() == primary.position())
 }
 
+#[cfg(windows)]
 fn pointer() -> Option<(f64, f64)> {
     crate::runtime()
         .app
         .cursor_position()
         .ok()
         .map(|at| (at.x, at.y))
-}
-
-/// Whether the pointer is over the popup (its countdown pauses).
-fn hovered(window: &WebviewWindow) -> bool {
-    let (Ok(at), Ok(size), Some((x, y))) =
-        (window.outer_position(), window.outer_size(), pointer())
-    else {
-        return false;
-    };
-    x >= f64::from(at.x)
-        && y >= f64::from(at.y)
-        && x < f64::from(at.x) + f64::from(size.width)
-        && y < f64::from(at.y) + f64::from(size.height)
 }
 
 fn start_ticking() {
