@@ -27,7 +27,7 @@ import { motionPlay } from "../../lib/motion";
 import { useSessionRuntime } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
 import { Badge } from "../common";
-import { useAskDock } from "./ask-dock";
+import { ForeignPrompt, useAskDock } from "./ask-dock";
 
 /**
  * How many prompts wait behind the card on screen. Stock answers one dialog at
@@ -100,9 +100,12 @@ export function PromptCard({
 }: PromptCardProps) {
 	const t = useT();
 	const waiting = useContext(PromptQueueContext);
+	const foreign = useContext(ForeignPrompt);
 	const tabId = useSessionRuntime()?.tabId;
+	// A child's card in its opener's dock focuses the opener's pane, where it is drawn, never the child's tab.
+	const paneTabId = foreign?.dockTabId ?? tabId;
 	const focusPane = () => {
-		if (tabId) void useTabsStore.getState().switchTab(tabId);
+		if (paneTabId) void useTabsStore.getState().switchTab(paneTabId);
 	};
 	const cardRef = useRef<HTMLElement>(null);
 	useCardFocus(cardRef);
@@ -140,6 +143,13 @@ export function PromptCard({
 					<span className="min-w-0 flex-1 text-sc-md font-semibold break-keep break-words" id={labelId}>
 						{label}
 					</span>
+					{foreign && (
+						<span className="inline-flex min-w-0" data-prompt-from-child>
+							<Badge className="max-w-48 truncate" variant="info">
+								{t("extDialog.fromChild", { title: foreign.from })}
+							</Badge>
+						</span>
+					)}
 					{waiting > 0 && (
 						<span className="inline-flex" data-prompt-waiting>
 							<Badge variant="muted">{t("extDialog.waiting", { count: waiting })}</Badge>

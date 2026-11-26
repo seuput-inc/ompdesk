@@ -2628,6 +2628,7 @@ export const ko: Record<string, string> = {
 	"extDialog.editor.hintSubmit": "제출",
 	"extDialog.editor.hintNewline": "줄바꿈",
 	"extDialog.waiting": "+{count}개 대기 중",
+	"extDialog.fromChild": "{title}의 질문",
 	"extDialog.status": "확장 상태",
 
 	// Session picker dialog

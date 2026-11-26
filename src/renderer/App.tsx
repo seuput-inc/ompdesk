@@ -3,6 +3,7 @@ import type { MenuAction, RunProgressState } from "../shared/ipc-types";
 import { TRANSCRIPT_FIND_EVENT } from "./components/chat/TranscriptFind";
 import { Button, InlineNotice, Modal, ToastStack } from "./components/common";
 import { ChangelogDialog, WhatsNewNotice } from "./components/dialogs/ChangelogDialog";
+import { ChildAsks } from "./components/dialogs/ChildAsks";
 import { ExtensionDialog } from "./components/dialogs/ExtensionDialog";
 import { ModelRestoreDialog } from "./components/dialogs/ModelRestoreDialog";
 import { PlanApprovalDialog } from "./components/dialogs/PlanApprovalDialog";
@@ -938,6 +939,7 @@ export function App() {
 				{visibleTabIds({ activeTabId, split }).map(tabId => (
 					<TabRuntimeProvider key={tabId} tabId={tabId}>
 						<ExtensionDialog />
+						<ChildAsks openerTabId={tabId} />
 						<PlanApprovalDialog />
 					</TabRuntimeProvider>
 				))}

@@ -1283,3 +1283,66 @@ describe("ExtensionDialog non-dialog mutations", () => {
 		expect(useExtensionUiStore.getState().pendingRequests).toEqual([]);
 	});
 });
+
+describe("a child's question in its opener's dock", () => {
+	it("shows the hidden child's card with its name and answers the child, not the opener", async () => {
+		const { useTabsStore } = await import("../../stores/tabs");
+		const { ensureTabRuntime } = await import("../../stores/tab-runtime");
+		const { TabRuntimeProvider } = await import("../../lib/tab-runtime-provider");
+		const { ChildAsks } = await import("./ChildAsks");
+		const { deleteSessionRuntime } = await import("../../stores/session-runtime-context");
+		await mount();
+		useTabsStore.setState({
+			activeTabId: "opener",
+			split: null,
+			tabs: [
+				{ id: "opener", cwd: "/w", status: "ready", unreadDone: false } as never,
+				{
+					id: "child",
+					cwd: "/w",
+					status: "ready",
+					unreadDone: false,
+					openedBy: "opener",
+					title: "Fix login",
+				} as never,
+			],
+		});
+		const child = ensureTabRuntime("child");
+		const childUi = child.stores.get("extensionUi") as unknown as typeof useExtensionUiStore;
+		await act(async () => {
+			childUi.getState().pushRequest({
+				type: "extension_ui_request",
+				id: "child-confirm",
+				method: "confirm",
+				title: "Push the branch?",
+				message: "",
+			});
+		});
+		await act(async () => {
+			root.render(
+				<I18nProvider>
+					<TabRuntimeProvider tabId="opener">
+						<AskDockSlot />
+						<ChildAsks openerTabId="opener" />
+					</TabRuntimeProvider>
+				</I18nProvider>,
+			);
+		});
+		await flush();
+		expect(document.querySelector(".omp-ask-dock [data-prompt-card]")?.textContent).toContain("Push the branch?");
+		expect(document.querySelector("[data-prompt-from-child]")?.textContent).toBe(
+			translate("extDialog.fromChild", { title: "Fix login" }),
+		);
+		const cancel = buttonWithText("Cancel");
+		if (!cancel) throw new Error("the child's confirm has no Cancel");
+		await click(cancel);
+		expect(respondExtensionUi).toHaveBeenCalledWith(
+			{ type: "extension_ui_response", id: "child-confirm", cancelled: true },
+			"child",
+		);
+		expect(document.querySelector("[data-prompt-from-child]")).toBeNull();
+		deleteSessionRuntime("child");
+		deleteSessionRuntime("opener");
+		useTabsStore.setState({ tabs: [], activeTabId: null });
+	});
+});

@@ -2638,6 +2638,7 @@ export const en: Record<string, string> = {
 	"extDialog.editor.hintSubmit": "Submit",
 	"extDialog.editor.hintNewline": "New line",
 	"extDialog.waiting": "+{count} waiting",
+	"extDialog.fromChild": "From {title}",
 	"extDialog.status": "Extension status",
 
 	// Session picker dialog
