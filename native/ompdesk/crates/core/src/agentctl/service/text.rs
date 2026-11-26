@@ -265,8 +265,9 @@ pub fn mutates(tool: Tool, args: &Value) -> bool {
         Tool::Open | Tool::Send | Tool::Answer | Tool::Stop | Tool::Merge | Tool::App => true,
         Tool::Schedule => action != Some("list"),
         Tool::Autopilot => action != Some("status"),
-        Tool::Bot => action != Some("list"),
+        Tool::Bot => !matches!(action, Some("list" | "offer")),
         Tool::Item => !matches!(action, Some("list" | "show")),
+        Tool::Room => action == Some("post"),
         _ => false,
     }
 }
@@ -470,15 +471,21 @@ pub fn schedule_state(row: &ScheduleRow) -> String {
 /// How to call a webhook trigger: the path and the key it answers to.
 pub fn webhook_line(row: &ScheduleRow) -> String {
     use super::types::{ScheduleEvent, ScheduleFrequency as Frequency};
-    let Frequency::Event {
-        event: ScheduleEvent::Webhook { key },
-        ..
-    } = &row.frequency
-    else {
+    let Frequency::Event { event, .. } = &row.frequency else {
         return String::new();
     };
+    let ScheduleEvent::Webhook { key, signed_by, .. } = &**event else {
+        return String::new();
+    };
+    // A signed hook takes its sender's signature only: the key alone starts nothing.
+    let credential = match signed_by {
+        Some(sender) => {
+            format!("calls signed with its {sender} secret (set in Settings › Schedules)")
+        }
+        None => format!("the header \"Authorization: Bearer {key}\""),
+    };
     format!(
-        " Webhook: POST /hooks/{} on that computer's OMPdesk web server (on while Mobile web is on: http://127.0.0.1:<its port> there, or its Mobile web link from the tailnet) with the header \"Authorization: Bearer {key}\"; the request body is passed to the run.",
+        " Webhook: POST /hooks/{} on that computer's OMPdesk web server (on while Mobile web is on: http://127.0.0.1:<its port> there, or its Mobile web link from the tailnet) with {credential}; the request body is passed to the run.",
         row.id
     )
 }

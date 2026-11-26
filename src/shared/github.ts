@@ -10,6 +10,8 @@
 
 /** `OWNER/NAME` as GitHub allows them (no host part; the host travels separately). */
 export const GITHUB_REPO_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
+/** A GitHub login. */
+export const GITHUB_LOGIN_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 /** A host name gh can be signed in to, e.g. `github.com` or `ghe.example.com:8443`. */
 export const GITHUB_HOST_PATTERN = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?(?::\d{1,5})?$/i;
 /** A new repository's name. */
@@ -92,6 +94,19 @@ export type GithubRequest = GithubTarget &
 		| { op: "attachment"; url: string }
 		/** Every file's diff of a PR from one read, by path (Expand all). */
 		| { op: "pr_diffs"; number: number }
+		/** Projects (v2) the viewer and its organizations have. */
+		| { op: "project_list" }
+		/** A project's view (by id, else its first table, roadmap or board) with its items; `query` replaces its filter. */
+		| {
+				op: "project_view";
+				owner: string;
+				ownerType: GithubProjectOwnerType;
+				number: number;
+				viewId?: string;
+				query?: string;
+		  }
+		/** Set (or with no `value`, clear) one field of one item. */
+		| { op: "project_field"; projectId: string; itemId: string; fieldId: string; value?: GithubProjectFieldInput }
 	);
 
 export type GithubOp = GithubRequest["op"];
@@ -399,4 +414,98 @@ export interface GithubResults {
 	image_upload: { url: string };
 	attachment: { dataUrl: string };
 	pr_diffs: Record<string, string>;
+	project_list: { projects: GithubProjectSummary[]; partialFailure: string | null };
+	project_view: GithubProjectTable;
+	project_field: { ok: true };
+}
+
+/** A project (v2) one can open (core `gh/projects.rs`; Orca `project-view-discovery.ts`). */
+export interface GithubProjectSummary {
+	id: string;
+	owner: string;
+	ownerType: GithubProjectOwnerType;
+	number: number;
+	title: string;
+	url: string;
+}
+
+export type GithubProjectOwnerType = "organization" | "user";
+export type GithubProjectLayout = "TABLE_LAYOUT" | "BOARD_LAYOUT" | "ROADMAP_LAYOUT";
+
+export type GithubProjectField =
+	| { kind: "field"; id: string; name: string; dataType: string }
+	| {
+			kind: "single-select";
+			id: string;
+			name: string;
+			dataType: "SINGLE_SELECT";
+			options: { id: string; name: string; color: string }[];
+	  }
+	| {
+			kind: "iteration";
+			id: string;
+			name: string;
+			dataType: "ITERATION";
+			iterations: { id: string; title: string; startDate: string; duration: number }[];
+	  };
+
+export type GithubProjectValue =
+	| { kind: "single-select"; optionId: string; name: string; color: string }
+	| { kind: "iteration"; iterationId: string; title: string; startDate: string; duration: number }
+	| { kind: "text"; text: string }
+	| { kind: "number"; number: number }
+	| { kind: "date"; date: string }
+	| { kind: "labels"; labels: string[] }
+	| { kind: "users"; users: string[] };
+
+/** A value written to an item's field (`project_field`); none clears it. */
+export type GithubProjectFieldInput =
+	| { kind: "single-select"; optionId: string }
+	| { kind: "iteration"; iterationId: string }
+	| { kind: "text"; text: string }
+	| { kind: "number"; number: number }
+	| { kind: "date"; date: string };
+
+export interface GithubProjectRow {
+	id: string;
+	itemType: "ISSUE" | "PULL_REQUEST" | "DRAFT_ISSUE" | "REDACTED";
+	number: number | null;
+	title: string;
+	/** A draft issue's text. */
+	body: string | null;
+	url: string | null;
+	state: string | null;
+	isDraft: boolean | null;
+	/** `OWNER/NAME` of an issue's or PR's repository. */
+	repository: string | null;
+	assignees: string[];
+	labels: string[];
+	/** By field id. */
+	values: Record<string, GithubProjectValue>;
+	updatedAt: string;
+}
+
+export interface GithubProjectTable {
+	project: {
+		id: string;
+		title: string;
+		url: string;
+		owner: string;
+		ownerType: GithubProjectOwnerType;
+		number: number;
+	};
+	views: { id: string; number: number | null; name: string; layout: string }[];
+	view: {
+		id: string;
+		name: string;
+		layout: GithubProjectLayout;
+		/** The view's own filter (a read may replace it). */
+		filter: string;
+		fields: GithubProjectField[];
+		groupBy: GithubProjectField[];
+		sortBy: { direction: "ASC" | "DESC"; field: GithubProjectField }[];
+	};
+	/** In the project's order. */
+	rows: GithubProjectRow[];
+	totalCount: number;
 }

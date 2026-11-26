@@ -47,6 +47,8 @@ const RESULT_WAIT_DEFAULT_SECONDS: u64 = 600;
 const RESULT_MAX_CHARS: usize = 20_000;
 const RESULT_TABLE_ANSWER_CHARS: usize = 1_500;
 const READ_DEFAULT_MESSAGES: usize = 12;
+/// How long a list waits for the scan of what the sessions' processes listen on; past it the rows go without ports.
+const PORTS_TIMEOUT_MS: u64 = 5_000;
 
 /// One session's lines in a result: whether it is settled, and what it says.
 #[derive(Clone, Debug)]
@@ -154,10 +156,11 @@ impl AgentControl {
                 .collect(),
         )
         .await;
+        let ports = session_ports(&candidates).await;
         let mut rows: Vec<Row> = join::all(
             candidates
                 .iter()
-                .map(|tab| join::boxed(self.list_row(caller, tab, &opened)))
+                .map(|tab| join::boxed(self.list_row(caller, tab, &opened, &ports)))
                 .collect(),
         )
         .await;
@@ -303,6 +306,7 @@ impl AgentControl {
         caller: &ControlTab,
         tab: &ControlTab,
         opened: &HashSet<String>,
+        ports: &HashMap<String, Vec<u16>>,
     ) -> Row {
         let mut marks: Vec<&str> = Vec::new();
         if tab.tab_id == caller.tab_id {
@@ -339,6 +343,10 @@ impl AgentControl {
         ];
         if let Some(worktree) = &tab.worktree {
             parts.push(format!("worktree {}", worktree.branch));
+        }
+        if let Some(ports) = tab.process_tag.as_ref().and_then(|tag| ports.get(tag)) {
+            let listed: Vec<String> = ports.iter().map(|port| format!(":{port}")).collect();
+            parts.push(format!("listening on {}", listed.join(", ")));
         }
         if let Some(name) = tab.device_name.as_deref().filter(|name| !name.is_empty()) {
             parts.push(format!("on {name}"));
@@ -979,4 +987,42 @@ impl AgentControl {
                 .as_deref(),
         ))
     }
+}
+
+/// The TCP ports each of `tabs`' processes on this computer listen on, by process tag, ascending. A scan that fails
+/// or takes longer than `PORTS_TIMEOUT_MS` leaves every row without ports: they never hold the list back.
+async fn session_ports(tabs: &[ControlTab]) -> HashMap<String, Vec<u16>> {
+    let tags: Vec<String> = tabs
+        .iter()
+        .filter_map(|tab| tab.process_tag.clone())
+        .collect();
+    if tags.is_empty() {
+        return HashMap::new();
+    }
+    let omps: Vec<u32> = tabs.iter().filter_map(|tab| tab.omp_pid).collect();
+    let scanned = crate::procs::listeners(
+        crate::procs::SESSION_TAG_ENV,
+        &tags,
+        Some(crate::procs::STOCK_WORKER_ARG),
+        &omps,
+        PORTS_TIMEOUT_MS,
+        crate::server::Scope::detached(),
+    );
+    let Ok(Ok(listeners)) =
+        tokio::time::timeout(Duration::from_millis(PORTS_TIMEOUT_MS), scanned).await
+    else {
+        return HashMap::new();
+    };
+    let mut ports: HashMap<String, Vec<u16>> = HashMap::new();
+    for listener in listeners {
+        ports
+            .entry(listener.tag)
+            .or_default()
+            .extend(listener.ports);
+    }
+    for found in ports.values_mut() {
+        found.sort_unstable();
+        found.dedup();
+    }
+    ports
 }

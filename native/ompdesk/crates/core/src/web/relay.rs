@@ -19,7 +19,8 @@ use tokio::sync::oneshot;
 
 use super::auth::Policy;
 use super::deps::{
-    BoxFuture, Desktop, HookOutcome, Hooks, PairingDetails, PairingOutcome, Peer, Whois,
+    BoxFuture, Desktop, HookOutcome, HookRequest, Hooks, PairingDetails, PairingOutcome, Peer,
+    Whois,
 };
 use super::devices::Device;
 use crate::server::{Call, Events, Fault, Registry, Reply};
@@ -180,8 +181,19 @@ impl Whois for Relay {
 }
 
 impl Hooks for Relay {
-    fn webhook(&self, id: &str, bearer: &str, detail: &str) -> BoxFuture<'_, HookOutcome> {
-        let data = json!({ "id": id, "bearer": bearer, "detail": detail });
+    fn webhook(&self, request: HookRequest) -> BoxFuture<'_, HookOutcome> {
+        use base64::Engine as _;
+        let headers: Map<String, Value> = request
+            .headers
+            .into_iter()
+            .map(|(name, value)| (name, Value::String(value)))
+            .collect();
+        let data = json!({
+            "id": request.id,
+            "bearer": request.bearer,
+            "headers": headers,
+            "body": base64::engine::general_purpose::STANDARD.encode(&request.body),
+        });
         Box::pin(async move {
             match self
                 .ask("hook", data)
@@ -189,7 +201,9 @@ impl Hooks for Relay {
                 .as_ref()
                 .and_then(Value::as_str)
             {
-                Some("fired") => HookOutcome::Fired,
+                // A call its routine's filters passed over, or a sender's retry of one already taken, is answered as
+                // taken too: the sender has nothing to send again.
+                Some("fired" | "ignored" | "duplicate") => HookOutcome::Fired,
                 Some("denied") => HookOutcome::Denied,
                 Some("off") => HookOutcome::Off,
                 Some("unknown") => HookOutcome::Unknown,

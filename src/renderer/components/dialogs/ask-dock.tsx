@@ -8,8 +8,15 @@
  * widgets sit under the input box, where stock's TUI draws them.
  */
 
-import { useLayoutEffect, useRef, useSyncExternalStore } from "react";
+import { createContext, useContext, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { useSessionRuntime } from "../../stores/session-runtime-context";
+
+/**
+ * A card drawn for another session than the one whose dock it sits in: a child's question in its opener's ask dock
+ * (Orca's worker approvals, FC40). `dockTabId` is the opener's tab, whose dock holds the card and which a press on it
+ * focuses; `from` the child's name, said in the card's header. The card answers the child's own request.
+ */
+export const ForeignPrompt = createContext<{ dockTabId: string; from: string } | null>(null);
 
 type DockPlace = "above" | "below";
 
@@ -184,7 +191,9 @@ export function BelowEditorDockSlot() {
 
 /** The composer dock above the input box of the current session runtime, or null when none is mounted. */
 export function useAskDock(): HTMLElement | null {
-	const tabId = useSessionRuntime()?.tabId ?? null;
+	const foreign = useContext(ForeignPrompt);
+	const runtimeTabId = useSessionRuntime()?.tabId ?? null;
+	const tabId = foreign?.dockTabId ?? runtimeTabId;
 	return useSyncExternalStore(subscribe, () => docks.above.get(tabId) ?? null);
 }
 

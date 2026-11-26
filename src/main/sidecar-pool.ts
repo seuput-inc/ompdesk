@@ -270,6 +270,9 @@ interface TabHandle {
 	 * core's `sessionFile` item alone, never read for a rule.
 	 */
 	sessionFile: string | null;
+	/** Who opened the tab (its tab id and that tab's session file), kept like `sessionFile`: the core's `opener` item. */
+	openedBy: string | null;
+	openedBySession: string | null;
 	full: FullWiring | null;
 	/** Paired devices that view this tab through their own tab on this host, by the id the core knows them by. */
 	views: Map<number, HostedTabView>;
@@ -327,6 +330,8 @@ function projectEvents(events: AgentSessionEvent[]): ProjectedEvent[] {
 			case "tool_execution_end":
 			case "auto_compaction_start":
 			case "auto_compaction_end":
+			case "manual_compaction_start":
+			case "manual_compaction_end":
 				kept.push({ type: event.type });
 				break;
 			case "agent_end": {
@@ -573,7 +578,8 @@ export class SidecarPool {
 	/**
 	 * A new core's pool is seeded with the tabs main holds a sidecar for. What the new pool has of each is what the
 	 * handles can say: the tab id, its owner window, its device, its kind and status, the session file the core
-	 * last held for it (F-OWN: the double-attach guard and the resume facts survive a loss). What a lost core loses: each tab's run (a turn on reads as
+	 * last held for it (F-OWN: the double-attach guard and the resume facts survive a loss) and who opened it (a
+	 * paired device's list of this computer and the next saved layout nest the child). What a lost core loses: each tab's run (a turn on reads as
 	 * idle until its next event), the last outcome, titles and the cached session id, the open asks and sign-ins,
 	 * extension state, drafts, subagent levels, counters (`touched`, `prompted`, `exits`), each window's view (the
 	 * first tab of a window is active and visible again; splits are gone) and every observer's debounce. The windows
@@ -591,6 +597,8 @@ export class SidecarPool {
 				kind: handle.sidecar.kind,
 				status: handle.sidecar.status,
 				sessionFile: handle.sessionFile,
+				openedBy: handle.openedBy,
+				openedBySession: handle.openedBySession,
 				full: [...(handle.full?.windows.keys() ?? [])],
 				views: [...handle.views.keys()],
 			}));
@@ -650,6 +658,14 @@ export class SidecarPool {
 			case "sessionFile": {
 				const handle = this.#handles.get(item.tab as string);
 				if (handle) handle.sessionFile = (item.file as string | null) ?? null;
+				return;
+			}
+			case "opener": {
+				const handle = this.#handles.get(item.tab as string);
+				if (handle) {
+					handle.openedBy = (item.openedBy as string | null) ?? null;
+					handle.openedBySession = (item.openedBySession as string | null) ?? null;
+				}
 				return;
 			}
 			case "gone": {
@@ -1208,6 +1224,8 @@ export class SidecarPool {
 			hosted,
 			gone: false,
 			sessionFile: null,
+			openedBy: null,
+			openedBySession: null,
 			full: null,
 			views: new Map(),
 		};

@@ -112,6 +112,14 @@ class FakeContents extends EventEmitter {
 		return "Mozilla/5.0 Chrome/140.0.0.0 Electron";
 	}
 	readonly capturePage = vi.fn(async () => pngCapture());
+	/** OMPdesk's page tools (`page-scripts.ts`), run in their own world. */
+	readonly executeJavaScriptInIsolatedWorld = vi.fn(async (_world: number, _scripts: { code: string }[]) => null);
+	/** The page-tool calls made so far, as `method(args)` with the prelude cut off. */
+	pageCalls(): string[] {
+		return this.executeJavaScriptInIsolatedWorld.mock.calls.map(
+			([, [script]]) => script?.code.slice(script.code.lastIndexOf("globalThis.__ompdesk[")) ?? "",
+		);
+	}
 	close(): void {
 		this.closed = true;
 	}
@@ -515,6 +523,80 @@ describe("preview host", () => {
 		}
 	});
 
+	it("tries a dev server that refused the load again while the page shows, until it answers or the person moves on", async () => {
+		register();
+		const { ask, pages } = openWindow();
+		await ask({ action: "layout", bounds: { x: 0, y: 0, width: 400, height: 300 }, visible: true });
+		await ask({ action: "load", url: "http://localhost:3000/" });
+		const [page] = pages();
+		if (!page) throw new Error("no page");
+		const state = () => ask({ action: "clearProblems" });
+		const refuse = (url = "http://localhost:3000/") =>
+			page.emit("did-fail-load", {}, -102, "net::ERR_CONNECTION_REFUSED", url, true);
+		vi.useFakeTimers();
+		try {
+			refuse();
+			expect(await state()).toMatchObject({ retrying: true, error: "net::ERR_CONNECTION_REFUSED" });
+			await vi.advanceTimersByTimeAsync(999);
+			expect(page.loaded).toEqual(["http://localhost:3000/"]);
+			await vi.advanceTimersByTimeAsync(1);
+			expect(page.loaded).toEqual(["http://localhost:3000/", "http://localhost:3000/"]);
+			// Each attempt keeps the failure on screen; Chromium's own error page is no answer.
+			page.emit("did-start-loading");
+			page.emit("did-navigate", {}, "chrome-error://chromewebdata/");
+			refuse();
+			expect(await state()).toMatchObject({ retrying: true, error: "net::ERR_CONNECTION_REFUSED" });
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(page.loaded).toHaveLength(3);
+			// The server answered.
+			page.emit("did-navigate", {}, "http://localhost:3000/");
+			expect(await state()).toMatchObject({ retrying: false, error: null });
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(page.loaded).toHaveLength(3);
+
+			// A site on the web that refused is not a dev server: it is not tried again.
+			refuse("https://example.com/");
+			expect(await state()).toMatchObject({ retrying: false });
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(page.loaded).toHaveLength(3);
+
+			// The person's own address replaces the retry.
+			refuse();
+			await ask({ action: "load", url: "https://example.org/" });
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(page.loaded.at(-1)).toBe("https://example.org/");
+			expect(page.loaded.filter(url => url === "http://localhost:3000/")).toHaveLength(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps each web page a tab committed in this computer's history, never a visual's", async () => {
+		const add = vi.fn(async () => true);
+		const ipc = new IpcRegistry({
+			handle: (channel, handler) => electron.handlers.set(channel, handler),
+			on: () => {},
+		});
+		const visuals = { parse: parseVisualUrl, view: () => null, url: () => null, list: async () => [] };
+		registerPreviewHost(ipc, () => false, visuals as never, undefined, undefined, {
+			add,
+			list: async () => [],
+			remove: async () => null,
+			clear: async () => null,
+		});
+		const { ask, pages } = openWindow();
+		await ask({ action: "load", url: "http://localhost:5173/" });
+		const [page] = pages();
+		if (!page) throw new Error("no page");
+		page.emit("did-navigate", {}, "http://localhost:5173/");
+		page.emit("did-stop-loading");
+		// A stop with no commit (a reload of the same document's resources) records nothing more.
+		page.emit("did-stop-loading");
+		page.emit("did-navigate", {}, "chrome-error://chromewebdata/");
+		page.emit("did-stop-loading");
+		expect(add.mock.calls).toEqual([["http://localhost:5173/", ""]]);
+	});
+
 	describe("Preview check", () => {
 		const BOUNDS = { x: 0, y: 0, width: 600, height: 400 };
 		const BEHIND = PREVIEW_CHECK_BEHIND_MS;
@@ -772,6 +854,52 @@ describe("agent browsing on a paired host's tab", () => {
 			{ url: "https://example.org/" },
 			undefined,
 		);
+	});
+
+	it("draws the agent's pointer where its mouse events land and takes it out of its screenshots (FT65)", async () => {
+		const { socket, opening } = open();
+		const { ask, pages } = remoteWindow(socket);
+		await ask({ action: "load", url: "https://example.com/" });
+		opening.resolve();
+		await ask(RELAY);
+		const [page] = pages();
+		if (!page) throw new Error("No page");
+		const cursorCalls = () => page.pageCalls().filter(call => call.includes('["cursor"]'));
+		socket.push({ t: "rpc", id: 1, op: "attach" });
+		socket.push({
+			t: "rpc",
+			id: 2,
+			op: "send",
+			method: "Input.dispatchMouseEvent",
+			params: { type: "mousePressed", x: 120, y: 48, button: "left" },
+		});
+		await vi.waitFor(() => expect(socket.frames().at(-1)).toMatchObject({ id: 2, ok: true }));
+		expect(cursorCalls()).toEqual(['globalThis.__ompdesk["cursor"](...[{"x":120,"y":48}])']);
+		// The screenshot is taken only after the pointer was hidden.
+		const order: string[] = [];
+		page.executeJavaScriptInIsolatedWorld.mockImplementationOnce(async () => {
+			order.push("hidden");
+			return null;
+		});
+		page.debugger.sendCommand.mockImplementationOnce(async () => {
+			order.push("captured");
+			return {};
+		});
+		socket.push({ t: "rpc", id: 3, op: "send", method: "Page.captureScreenshot", params: {} });
+		await vi.waitFor(() => expect(socket.frames().at(-1)).toMatchObject({ id: 3, ok: true }));
+		expect(order).toEqual(["hidden", "captured"]);
+		expect(cursorCalls().at(-1)).toBe('globalThis.__ompdesk["cursor"](...[null])');
+		// A mouse event inside a frame's own session has that frame's coordinates: no pointer for it.
+		socket.push({
+			t: "rpc",
+			id: 4,
+			op: "send",
+			sessionId: "frame",
+			method: "Input.dispatchMouseEvent",
+			params: { type: "mouseMoved", x: 1, y: 1 },
+		});
+		await vi.waitFor(() => expect(socket.frames().at(-1)).toMatchObject({ id: 4 }));
+		expect(cursorCalls()).toHaveLength(2);
 	});
 
 	it("never lets the host's agent open this computer's own addresses", async () => {

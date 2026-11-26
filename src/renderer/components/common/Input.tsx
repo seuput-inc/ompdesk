@@ -240,7 +240,9 @@ export const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(function 
 		el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
 	}, [autoGrow]);
 
-	useLayoutEffect(resize, [resize]);
+	// A value set by code (a sheet's prefill) grows the field too, not only typing.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the value is what changes the height.
+	useLayoutEffect(resize, [resize, rest.value]);
 
 	return (
 		<FieldShell controlId={ids.controlId} error={error} hint={hint} label={label} noteId={ids.noteId}>

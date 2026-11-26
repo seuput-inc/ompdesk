@@ -410,6 +410,8 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"message_end",
 			"prompt_result",
 			"session_settled",
+			"manual_compaction_start",
+			"manual_compaction_end",
 			"available_commands_update",
 			"command_output",
 			"session_info_update",
@@ -1129,7 +1131,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"Dictation and read-aloud: stock's stt (asr-client, downloader, models) and tts (models, tts-client, wav) modules, the tts tool and the role resolver.",
+			"Dictation and read-aloud: stock's stt (asr-client's whole-clip transcribe and live startStream, downloader's download and warm, models) and tts (models, tts-client, wav) modules, the tts tool and the role resolver.",
 		files: [
 			"resources/gui-bridge/voice.ts",
 			"resources/gui-bridge/capabilities.ts",
@@ -2596,5 +2598,20 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		files: ["resources/gui-bridge/copy-targets.ts"],
 		stock: ["@oh-my-pi/pi-coding-agent/ui/overlays/pickers/copy-selector"],
 		tests: ["src/main/local/copy-targets.test.ts"],
+	},
+	{
+		id: "C21",
+		area: "copy",
+		contract: "internal",
+		disposition: {
+			kind: "open",
+			reason:
+				"Agents › GitHub › GitLab runs glab from the core with no omp to ask; stock's runner and host rule live in its `glab-mr` tool, which takes a session.",
+		},
+		summary:
+			"Copy of stock glab's non-interactive environment (`utils/gitlab.ts` `GLAB_SPEC`) and of `assertGitlabHostTrustedForEnvToken`, whose glab config hosts are read from `glab auth status`.",
+		files: ["src/main/local/git/exec.ts", "native/ompdesk/crates/core/src/glab/mod.rs"],
+		stock: ["@oh-my-pi/pi-coding-agent/utils/gitlab", "@oh-my-pi/pi-coding-agent/tools/glab-mr"],
+		tests: [],
 	},
 ];

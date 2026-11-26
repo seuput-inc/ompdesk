@@ -5,6 +5,7 @@
  */
 import { release as osRelease } from "node:os";
 import appCompatibility from "../shared/app-compatibility.json";
+import type { UnsupportedSystemUpdate } from "../shared/ipc-types";
 import { compareVersions } from "../shared/version";
 import { CoreError, core } from "./core/process";
 
@@ -135,12 +136,26 @@ export type ReleaseFeedErrorCode =
 /** A coded failure of the lookup; the check classifies it by `code`. */
 export class ReleaseFeedError extends Error {
 	readonly code: ReleaseFeedErrorCode;
+	/** UPDATE_COMPATIBILITY_ERROR on a Mac whose macOS is known to be below the release's: what the notice names. */
+	readonly unsupportedSystem?: UnsupportedSystemUpdate;
 
-	constructor(code: ReleaseFeedErrorCode, message: string) {
+	constructor(code: ReleaseFeedErrorCode, message: string, unsupportedSystem?: UnsupportedSystemUpdate) {
 		super(message);
 		this.name = "ReleaseFeedError";
 		this.code = code;
+		this.unsupportedSystem = unsupportedSystem;
 	}
+}
+
+/**
+ * The macOS version a Darwin minimum stands for (macOS 11-15 run Darwin 20-24, macOS 26 runs Darwin 25), or null
+ * below Darwin 20. Orca's `macosVersionForDarwinFloor` (shared/updater/requirements/macos-darwin-floor.ts:42); its
+ * one minor-floor entry (macOS 13.4) lies below OMPdesk's floor, so only the major is mapped.
+ */
+export function macosForDarwin(darwin: string): string | null {
+	const major = Number(darwin.split(".")[0]);
+	if (!Number.isSafeInteger(major) || major < 20) return null;
+	return String(major <= 24 ? major - 9 : major + 1);
 }
 
 const SYSTEM_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
@@ -224,9 +239,11 @@ export function assertUpdateSupported(release: PlatformRelease, systemVersion: s
 		SYSTEM_VERSION.test(systemVersion) && systemVersion.split(".").every(n => Number.isSafeInteger(Number(n)));
 	const order = valid ? compareVersions(systemVersion, minimum) : null;
 	if (order === null || order < 0) {
+		const macos = order === null ? null : macosForDarwin(minimum);
 		throw new ReleaseFeedError(
 			UPDATE_COMPATIBILITY_ERROR,
 			`Update ${release.version} requires Darwin ${minimum}; this system reports ${systemVersion}`,
+			macos === null ? undefined : { version: release.version, minimumMacOS: macos },
 		);
 	}
 }

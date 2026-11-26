@@ -26,7 +26,8 @@ impl Ctx {
             return Ok(Value::Null);
         }
         let facts = self.facts(&tabs).await?;
-        Ok(self.with(|pool| {
+        let mut refreshed: Vec<String> = Vec::new();
+        let layout = self.with(|pool| {
             let active = pool.active_by_window.get(&win).cloned();
             let active_index = tabs
                 .iter()
@@ -67,8 +68,11 @@ impl Ctx {
                 let Some(entry) = pool.entry_mut(tab) else {
                     continue;
                 };
-                if let Some(file) = opener_file {
+                if let Some(file) = opener_file
+                    && entry.opened_by_session.as_ref() != Some(&file)
+                {
                     entry.opened_by_session = Some(file);
+                    refreshed.push(tab.clone());
                 }
                 let mut descriptor = Map::new();
                 descriptor.insert("cwd".into(), facts[tab.as_str()]["cwd"].clone());
@@ -136,6 +140,10 @@ impl Ctx {
                 );
             }
             Value::Object(layout)
-        }))
+        });
+        for tab in &refreshed {
+            self.push_opener(tab);
+        }
+        Ok(layout)
     }
 }

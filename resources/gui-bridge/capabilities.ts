@@ -135,6 +135,7 @@ export const FEATURES = {
 	sshManage: "Adding, editing and deleting an SSH host",
 	sshTest: "SSH connection test",
 	dictation: "Dictation (speech to text)",
+	dictationCleanup: "Model cleanup of dictated words",
 	readAloud: "Read aloud (text to speech)",
 	debug: "Debug console",
 	transcript: "Session transcript",
@@ -1125,7 +1126,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * directory (`getAgentDir`); a refusal carries stock's retry hint. `credit_spend_commit_check` asks the same checks
 	 * about the models stock's `omp commit` would pick (`resolvePrimaryModel`, `resolveSmolModel`, `resolveApiKeyOnce`).
 	 * credit-spend-run.ts, the same switch's extension for `omp -p` runs, writes a scheduled run's usage from stock's
-	 * tally (`sessionManager.getUsageStatistics`).
+	 * tally (`sessionManager.getUsageStatistics`) and the session file it saved (`sessionManager.getSessionFile`).
 	 */
 	creditSpend: {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()"],
@@ -1139,6 +1140,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"modelRegistry.authStorage.credentials.list()",
 			"modelRegistry.authStorage.oauth.accounts()",
 			"sessionManager.getUsageStatistics()",
+			"sessionManager.getSessionFile()",
 		],
 		modules: {
 			"@oh-my-pi/pi-ai/utils/retry-after": ["appendRetryAfterHint()"],
@@ -1831,8 +1833,9 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		},
 	},
 	/**
-	 * transcribe_audio and stt_prepare: prepare is dictation's own setup (it gets the model the speech's language
-	 * needs, and transcription waits on the same download), so dictation that cannot be prepared is not offered.
+	 * transcribe_audio, stt_prepare, stt_warm and the live take (stt_stream_*): prepare is dictation's own setup (it gets
+	 * the model the speech's language needs, and transcription waits on the same download), so dictation that cannot be
+	 * prepared is not offered. A live take is stock's streaming session (its worker's endpointer segments the speech).
 	 */
 	dictation: {
 		session: ["settings", "modelRegistry"],
@@ -1841,9 +1844,18 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[`${AGENT}/config/model-roles`]: ["roleCandidatePool()"],
 			[`${AGENT}/config/registry`]: ["lookup()"],
 			// `terminate()` lets go of a worker whose take passed its deadline (voice.ts `transcribeWithin`).
-			[`${AGENT}/stt/asr-client`]: ["sttClient.transcribe()", "sttClient.terminate()"],
+			[`${AGENT}/stt/asr-client`]: ["sttClient.transcribe()", "sttClient.startStream()", "sttClient.terminate()"],
 			[`${AGENT}/stt/downloader`]: ["downloadSttModel()", "isSttModelCached()"],
 			[`${AGENT}/stt/models`]: ["resolveSttModelSpec()"],
+		},
+	},
+	/** dictation_cleanup: the person's opt-in pass over dictated words on a small model (tiny, then smol). */
+	dictationCleanup: {
+		session: ["settings", "sessionId", "modelRegistry.getApiKey()", "modelRegistry.resolver()"],
+		modules: {
+			"@oh-my-pi/pi-ai": ["completeSimple()"],
+			[`${AGENT}/config/model-roles`]: ["roleCandidatePool()"],
+			[`${AGENT}/config/model-resolver`]: ["resolveRoleChain()"],
 		},
 	},
 	/** synthesize_speech: the only action that evaluates the `tts/*` source copies (HEAVY_COPIES). */

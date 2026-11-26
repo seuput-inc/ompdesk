@@ -11,11 +11,12 @@ import {
 	DISK_CARE_REMOVE_IDLE_DAYS,
 	type DiskCareState,
 } from "../../../shared/disk-care";
-import { formatBytes } from "../../lib/format";
+import { basename, formatBytes } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { lastRead, rememberRead } from "../../lib/last-read";
 import { useTimeAgo } from "../../lib/now-tick";
 import { toastError } from "../../stores/toast";
+import { useUiStore } from "../../stores/ui";
 import { Button } from "../common";
 import { SettingsRow } from "./SettingsLayout";
 
@@ -38,7 +39,11 @@ function tooltip(t: Translate, state: DiskCareState | null): string {
 	];
 	if (state && !state.automatic) lines.push(t("diskCare.manualOnly"));
 	if (state?.usage)
-		for (const part of state.usage.parts) lines.push(`${t(`diskCare.part.${part.id}`)}: ${formatBytes(part.bytes)}`);
+		for (const part of state.usage.parts) {
+			lines.push(`${t(`diskCare.part.${part.id}`)}: ${formatBytes(part.bytes)}`);
+			// The worktrees' largest folders, one worktree each (after Orca's workspace storage table, FB99).
+			for (const child of part.children ?? []) lines.push(`  ${basename(child.path)}: ${formatBytes(child.bytes)}`);
+		}
 	const run = state?.lastRun;
 	if (run) {
 		for (const action of run.actions)
@@ -93,16 +98,26 @@ export function DiskCareRow() {
 		<SettingsRow
 			compactControl
 			control={
-				<Button
-					data-testid="disk-care-clean"
-					disabled={running}
-					loading={running}
-					onClick={() => void clean()}
-					size="sm"
-					variant="secondary"
-				>
-					{t("diskCare.clean")}
-				</Button>
+				<span className="flex items-center gap-1">
+					<Button
+						data-disk-care-worktrees
+						onClick={() => useUiStore.getState().openViewSheet("work")}
+						size="sm"
+						variant="ghost"
+					>
+						{t("diskCare.worktrees")}
+					</Button>
+					<Button
+						data-testid="disk-care-clean"
+						disabled={running}
+						loading={running}
+						onClick={() => void clean()}
+						size="sm"
+						variant="secondary"
+					>
+						{t("diskCare.clean")}
+					</Button>
+				</span>
 			}
 			description={tooltip(t, state)}
 			icon={<HardDrive />}

@@ -44,6 +44,7 @@ import {
 	type TerminalSnapshot,
 } from "../../../shared/terminal-types";
 import { currentShellMode, useCompactShell, useShellInput } from "../../hooks/use-shell-mode";
+import { DICTATION_TEXT_EVENT } from "../../lib/dictation-target";
 import { FILE_DRAG_TYPE, readFileDrag } from "../../lib/file-drag";
 import { cx } from "../../lib/format";
 import { useT } from "../../lib/i18n";
@@ -184,6 +185,7 @@ export interface TerminalMount {
 				| "clearSelection"
 				| "parser"
 				| "registerLinkProvider"
+				| "paste"
 			>
 		>;
 	fit(): void;
@@ -230,14 +232,14 @@ function clearScreen(view: TerminalMount): void {
 
 /** The keymap's terminal actions a focused terminal takes before its shell sees the key. */
 let compiledKeymap: { overrides: KeymapOverrides; map: Map<string, string> } | null = null;
-function terminalAction(event: KeyboardEvent): "terminal.find" | "terminal.new" | "terminal.quick" | null {
+function terminalAction(event: KeyboardEvent): "find" | "terminal.new" | "terminal.quick" | null {
 	const chord = chordFromEvent(event);
 	if (!chord) return null;
 	const overrides = useUiStore.getState().keymapOverrides;
 	if (compiledKeymap?.overrides !== overrides)
 		compiledKeymap = { overrides, map: compileKeymap(KEYMAP_ACTIONS, overrides) };
 	const action = compiledKeymap.map.get(chord);
-	return action === "terminal.find" || action === "terminal.new" || action === "terminal.quick" ? action : null;
+	return action === "find" || action === "terminal.new" || action === "terminal.quick" ? action : null;
 }
 
 /** One notice per page when a program's OSC 52 copy could not reach the clipboard. */
@@ -402,10 +404,18 @@ export function TerminalViewport({
 					},
 				}),
 			);
+			// Dictation into this terminal (DictationHost): the words, one line, go in as a paste (bracketed when the
+			// program asked); Enter stays the person's.
+			const onDictated = (event: Event) => {
+				if (!view.terminal.paste) return;
+				event.preventDefault();
+				view.terminal.paste((event as CustomEvent<string>).detail);
+			};
+			target.addEventListener(DICTATION_TEXT_EVENT, onDictated);
 			view.terminal.attachCustomKeyEventHandler(event => {
 				if (event.type !== "keydown") return true;
 				const action = terminalAction(event);
-				if (action === "terminal.find") {
+				if (action === "find") {
 					event.preventDefault();
 					setFinding(true);
 					return false;
@@ -561,6 +571,7 @@ export function TerminalViewport({
 				fontChanged.current = null;
 				clearTimeout(fitTimer);
 				observer.disconnect();
+				target.removeEventListener(DICTATION_TEXT_EVENT, onDictated);
 				theme.disconnect();
 				input.dispose();
 				bell?.dispose();
@@ -660,7 +671,7 @@ export function TerminalViewport({
 								id: "find",
 								label: t("panel.terminal.find.open"),
 								icon: Search,
-								shortcut: actionKbd("terminal.find", useUiStore.getState().keymapOverrides) || undefined,
+								shortcut: actionKbd("find", useUiStore.getState().keymapOverrides) || undefined,
 								onSelect: () => setFinding(true),
 							},
 						]

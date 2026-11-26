@@ -360,6 +360,9 @@ export function createWebOmp(env: ShimEnv): WebOmp {
 		},
 		[C.SYSTEM_DESKTOP_AWAY]: async () => null,
 		[C.SYSTEM_NOTIFY_TEST]: async () => "unsupported",
+		[C.APP_REMOVE]: async () => {
+			throw new Error("Remove OMPdesk from this computer runs on that computer's own window");
+		},
 		[C.SYSTEM_NOTIFY_SETTINGS]: async () => undefined,
 		[C.SYSTEM_NOTIFY]: async (payload: unknown) => {
 			const { title, body, tabId, kind } = payload as {
@@ -395,6 +398,8 @@ export function createWebOmp(env: ShimEnv): WebOmp {
 			return (await env.openTab({ sessionPath, cwd, device })) !== null;
 		},
 		[C.SESSION_CONSUME_PENDING]: async () => env.takePendingSessionPath(),
+		// A page is one window (the board hides the button there).
+		[C.BOARD_OPEN_WINDOW]: async () => false,
 		[C.UPDATER_APPLY]: async () => {
 			const confirm = hooks().confirmUpdateApply;
 			const confirmed = confirm ? await confirm() : env.browser.confirm(env.t("web.update.confirm"));

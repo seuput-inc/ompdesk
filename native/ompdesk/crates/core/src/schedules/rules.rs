@@ -14,7 +14,30 @@ use crate::fs::order::{is_js_space, js_trim};
 
 const MIN_INTERVAL: f64 = 5.0;
 const MAX_INTERVAL: f64 = 7.0 * 24.0 * 60.0;
-const GITHUB_EVENT_KINDS: [&str; 5] = ["pull_request", "issue", "ci_failure", "release", "push"];
+const GITHUB_EVENT_KINDS: [&str; 12] = [
+    "pull_request",
+    "pr_merged",
+    "pr_closed",
+    "issue",
+    "issue_closed",
+    "comment",
+    "labeled",
+    "ci_failure",
+    "ci_passed",
+    "workflow_finished",
+    "release",
+    "push",
+];
+/// Stock's `--thinking` levels (`SCHEDULE_THINKING_LEVELS`).
+const THINKING_LEVELS: [&str; 8] = [
+    "off", "minimal", "low", "medium", "high", "xhigh", "max", "auto",
+];
+/// "Only when" ops and limits (`WEBHOOK_WHERE_OPS`, `WEBHOOK_FILTER_LIMITS`).
+const WHERE_OPS: [&str; 5] = ["=", "!=", "contains", "exists", "!exists"];
+const WHERE_MAX: usize = 8;
+const VALUES_MAX: usize = 10;
+const PICK_MAX: usize = 12;
+const FILTER_TEXT_MAX: usize = 200;
 const SESSION_EVENT_KINDS: [&str; 3] = ["done", "failed", "waiting"];
 /// The longest a mail account's name or one of its filters may be, in UTF-16 units.
 const MAIL_TEXT_MAX: usize = 200;
@@ -70,7 +93,7 @@ impl Zone for Fixed {
 }
 
 /// Days since the epoch of a date of the proleptic Gregorian calendar (Howard Hinnant's `days_from_civil`).
-fn days(day: Day) -> i64 {
+pub(super) fn days(day: Day) -> i64 {
     let year = if day.month <= 2 {
         day.year - 1
     } else {
@@ -86,7 +109,7 @@ fn days(day: Day) -> i64 {
 }
 
 /// The date `days` after the epoch (`civil_from_days`).
-fn civil(days: i64) -> Day {
+pub(super) fn civil(days: i64) -> Day {
     let shifted = days + 719_468;
     let era = shifted.div_euclid(146_097);
     let day_of_era = shifted.rem_euclid(146_097);
@@ -109,7 +132,7 @@ fn utc(day: Day, hour: u32, minute: u32) -> i64 {
 }
 
 /// 0 = Sunday, as `getDay`.
-fn weekday(day: Day) -> i64 {
+pub(super) fn weekday(day: Day) -> i64 {
     (days(day) + 4).rem_euclid(7)
 }
 
@@ -322,13 +345,33 @@ fn event_sound(event: Option<&Value>) -> bool {
         return false;
     };
     match event.get("source").and_then(Value::as_str) {
-        Some("webhook") => event
-            .get("key")
-            .and_then(Value::as_str)
-            .is_some_and(|key| utf16_len(key) >= 16),
+        Some("webhook") => {
+            event
+                .get("key")
+                .and_then(Value::as_str)
+                .is_some_and(|key| utf16_len(key) >= 16)
+                && webhook_filters_sound(event)
+        }
         Some("github") => {
+            let short = |value: &Value| {
+                value.as_str().is_some_and(|text| {
+                    !js_trim(text).is_empty() && utf16_len(text) <= FILTER_TEXT_MAX
+                })
+            };
+            let from = event.get("from").is_none_or(|from| {
+                from.as_array().is_some_and(|logins| {
+                    !logins.is_empty()
+                        && logins
+                            .iter()
+                            .all(|login| login.as_str().is_some_and(is_github_login))
+                })
+            });
             is_github_repo(&text_or_empty(event.get("repo")))
                 && non_empty_subset(event.get("events"), &GITHUB_EVENT_KINDS)
+                && from
+                && ["contains", "label"]
+                    .iter()
+                    .all(|name| event.get(*name).is_none_or(short))
         }
         Some("files") => is_absolute(&text_or_empty(event.get("path"))),
         Some("git") => {
@@ -369,6 +412,61 @@ fn event_sound(event: Option<&Value>) -> bool {
     }
 }
 
+/// A GitHub login: letters, digits and hyphens, at most 39, not starting with a hyphen.
+fn is_github_login(login: &str) -> bool {
+    (1..=39).contains(&login.len())
+        && !login.starts_with('-')
+        && login
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+/// Whether a webhook's "only when" filters and picked fields keep their shape (`webhookFiltersProblem`): paths
+/// start at `body` or `headers`, ops are known, a test that compares has values and one that looks for presence none.
+fn webhook_filters_sound(event: &serde_json::Map<String, Value>) -> bool {
+    let path = |value: &Value| {
+        value.as_str().is_some_and(|path| {
+            utf16_len(path) <= FILTER_TEXT_MAX
+                && ["body", "headers"].iter().any(|root| {
+                    path.strip_prefix(root)
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with(['.', '[']))
+                })
+        })
+    };
+    let test = |test: &Value| {
+        let op = test.get("op").and_then(Value::as_str);
+        let values = test.get("values");
+        let presence = matches!(op, Some("exists" | "!exists"));
+        let listed = values.and_then(Value::as_array).is_some_and(|values| {
+            !values.is_empty()
+                && values.len() <= VALUES_MAX
+                && values.iter().all(|value| {
+                    value
+                        .as_str()
+                        .is_some_and(|value| utf16_len(value) <= FILTER_TEXT_MAX)
+                })
+        });
+        test.get("path").is_some_and(path)
+            && op.is_some_and(|op| WHERE_OPS.contains(&op))
+            && if presence { values.is_none() } else { listed }
+    };
+    let tests = event.get("where").is_none_or(|tests| {
+        tests
+            .as_array()
+            .is_some_and(|tests| tests.len() <= WHERE_MAX && tests.iter().all(test))
+    });
+    let contains = event.get("contains").is_none_or(|text| {
+        text.as_str()
+            .is_some_and(|text| !js_trim(text).is_empty() && utf16_len(text) <= FILTER_TEXT_MAX)
+    });
+    let pick = event.get("pick").is_none_or(|paths| {
+        paths
+            .as_array()
+            .is_some_and(|paths| paths.len() <= PICK_MAX && paths.iter().all(path))
+    });
+    tests && contains && pick
+}
+
 /// The JavaScript threw a `TypeError` over this draft (a name that is no text, days that are no list): a journal
 /// holding such a schedule read as empty.
 #[derive(Debug, PartialEq, Eq)]
@@ -386,6 +484,18 @@ pub fn draft_problem(draft: &Value, zone: &dyn Zone) -> Result<Option<&'static s
     }
     if !truthy(draft.get("cwd")) || !is_absolute(&text_or_empty(draft.get("cwd"))) {
         return Ok(Some("cwd"));
+    }
+    // A fresh run's `--thinking` is one of stock's levels.
+    if draft
+        .get("thinking")
+        .filter(|thinking| !thinking.is_null())
+        .is_some_and(|thinking| {
+            !thinking
+                .as_str()
+                .is_some_and(|level| THINKING_LEVELS.contains(&level))
+        })
+    {
+        return Ok(Some("thinking"));
     }
     let frequency = match draft.get("frequency") {
         None | Some(Value::Null) => return Err(Threw),
@@ -416,6 +526,12 @@ pub fn draft_problem(draft: &Value, zone: &dyn Zone) -> Result<Option<&'static s
             .and_then(|at| date_parse(at, zone))
             .is_none()
             .then_some("once"),
+        Some("cron") => frequency
+            .get("expr")
+            .and_then(Value::as_str)
+            .and_then(super::cron::parse)
+            .is_none()
+            .then_some("cron"),
         Some("event") => {
             // A wait's deadline (`by`), when it has one, is a moment.
             let by = frequency.get("by").filter(|by| !by.is_null());
@@ -445,6 +561,12 @@ pub fn next_run_at(
             .and_then(Value::as_str)
             .and_then(|at| date_parse(at, zone))
             .filter(|at| *at > now),
+        // A cron's next minute that matches, in local time; a start missed while closed is not run.
+        "cron" => super::cron::next(
+            &super::cron::parse(frequency.get("expr")?.as_str()?)?,
+            now,
+            zone,
+        ),
         "interval" => {
             let step = (frequency.get("minutes")?.as_f64()? * minute_ms as f64) as i64;
             Some(match last_start {

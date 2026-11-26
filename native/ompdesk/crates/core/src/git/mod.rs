@@ -6,8 +6,9 @@
 //! (`unlanded.ts`): `unlanded.rs`; a folder's project facts (`origin.ts`): `origin.rs`; a session worktree's standing,
 //! merge and safe removal (`agent-control/branches.ts`): `branches.rs`; orphaned worktrees (`worktree-orphans.ts`):
 //! `orphans.rs`; a fresh worktree's seeding from `.worktreeinclude` and its hook's lookup (`worktree-seed.ts`):
-//! `seed.rs`. Every request carries `git`, how main runs git (`gitRunner` in `exec.ts`: binary, environment,
-//! timeout, output cap), so this side decides none of it, and runs under the request's scope: a cancelled request
+//! `seed.rs`; a repository's sparse checkout presets (`.ompdesk/sparse`): `sparse.rs`. Every request carries `git`,
+//! how main runs git (`gitRunner` in `exec.ts`: binary, environment, timeout, output cap), so this side decides none
+//! of it, and runs under the request's scope: a cancelled request
 //! starts no git and ends the one it runs. Failures are faults whose message is what the TypeScript threw (git's
 //! stderr, node's error text, `spawn <bin> ENOENT`, `-c timed out after 60000ms`); a refusal the TypeScript coded
 //! carries that code.
@@ -30,6 +31,7 @@ pub(crate) mod read;
 pub(crate) mod run;
 mod scm;
 mod seed;
+mod sparse;
 pub(crate) mod triggers;
 mod unlanded;
 pub(crate) mod worktree;
@@ -48,6 +50,14 @@ use run::Git;
 struct At {
     git: Runner,
     cwd: String,
+}
+
+#[derive(Deserialize)]
+struct RenameParams {
+    git: Runner,
+    cwd: String,
+    from: String,
+    to: String,
 }
 
 #[derive(Deserialize)]
@@ -853,6 +863,21 @@ pub fn register(registry: &mut Registry) {
             } = call.params()?;
             let git = Git::new(git, call.scope);
             Reply::json(&worktree::plan(&git, &cwd, checkout_spelling, base_ref.as_deref()).await?)
+        })
+    });
+    registry.add("git.renameUnpushed", |call| {
+        Box::pin(async move {
+            let RenameParams { git, cwd, from, to } = call.params()?;
+            let git = Git::new(git, call.scope);
+            let branch = worktree::rename_unpushed(&git, &cwd, &from, &to).await?;
+            Reply::json(&serde_json::json!({ "branch": branch }))
+        })
+    });
+    registry.add("git.sparsePresets", |call| {
+        Box::pin(async move {
+            let At { git, cwd } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&sparse::presets(&git, &cwd).await?)
         })
     });
     registry.add("git.worktreePrefetch", |call| {

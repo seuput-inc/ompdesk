@@ -59,6 +59,11 @@ import { PromptCard, PromptQueueContext, TimeoutFooter } from "./PromptCard";
 /** Requests handled elsewhere (store/router) — never rendered as dialogs. */
 const NON_DIALOG_METHODS = new Set(["notify", "setStatus", "setWidget", "setTitle", "set_editor_text", "cancel"]);
 
+/** A request the person answers on a card (not a notice, a widget or an editor fill). */
+export function isDialogRequest(request: Pick<ExtensionUIRequest, "method">): boolean {
+	return !NON_DIALOG_METHODS.has(request.method);
+}
+
 function WidgetPanel({ name, lines }: { name: string; lines: string[] }) {
 	return (
 		<div
@@ -1108,4 +1113,19 @@ export function ExtensionDialog() {
 			)}
 		</>
 	);
+}
+
+/**
+ * A child session's first open card, drawn inside the child's runtime and (through `ForeignPrompt`) in its opener's
+ * ask dock, so the person answers it without leaving the opener (Orca's worker approvals, FC40). Only the card: the
+ * child's notices, widgets and timeouts stay its own dialog's, which runs whenever its tab is on screen.
+ */
+export function ChildAskCard() {
+	const pending = useExtensionUiStore(state => state.pendingRequests);
+	const arrivals = useExtensionUiStore(state => state.arrivedAt);
+	const loginRequestIds = useExtensionUiStore(state => state.loginRequestIds);
+	const request = pending.find(req => isDialogRequest(req) && !Object.hasOwn(loginRequestIds, req.id)) ?? null;
+	const arrivedAt = request ? arrivals[request.id] : undefined;
+	const remaining = useCountdown(request, arrivedAt);
+	return request ? <ActiveDialog arrivedAt={arrivedAt} remaining={remaining} request={request} /> : null;
 }

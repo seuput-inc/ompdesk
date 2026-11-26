@@ -1107,11 +1107,53 @@ fn an_item_snoozed_until_a_time_is_hidden_until_then() {
     assert_eq!(parse_iso("2026-11-25"), Some(at - 9.0 * 3_600_000.0));
     assert_eq!(parse_iso("tomorrow"), None);
     let item = ItemRecord {
+        status: "working".into(),
         snoozed_until: Some("2026-11-25T09:00:00Z".into()),
         ..ItemRecord::default()
     };
     assert!(item.snoozed(at - 1.0));
     assert!(!item.snoozed(at));
+    // A closed item is never snoozed.
+    let done = ItemRecord {
+        status: "done".into(),
+        ..item
+    };
+    assert!(!done.snoozed(at - 1.0));
+}
+
+#[test]
+fn item_events_are_numbered_across_items_and_a_new_question_names_its_ask() {
+    let dir = Dir::new();
+    let file = dir.file("items.json");
+    // A file from before events had ids: each gets one as it loads, in order.
+    std::fs::write(
+        &file,
+        r#"[{"id":"i1","bot":"b1","number":1,"session":"/s","title":"A","status":"planned","events":[{"at":"x","actor":"bot","kind":"made"},{"at":"y","actor":"bot","kind":"edited"}]}]"#,
+    )
+    .unwrap();
+    let mut items = Items::new(Some(file.clone()));
+    let ids: Vec<u64> = items
+        .get("i1")
+        .unwrap()
+        .events
+        .iter()
+        .map(|event| event.id)
+        .collect();
+    assert_eq!(ids, [1, 2]);
+    let changed = items
+        .change("i1", |item| {
+            item.event("z", "bot", "asked", Some("Which?"));
+            item.event("z", "bot", "status", Some("needs_you"));
+            item.question = Some(super::items::ItemQuestion {
+                text: "Which?".into(),
+                ..Default::default()
+            });
+        })
+        .unwrap();
+    assert_eq!(changed.events.last().unwrap().id, 4);
+    assert_eq!(changed.question.unwrap().id, 3, "the ask's own event");
+    assert_eq!(items.newest_event("b1"), 4);
+    assert_eq!(Items::new(Some(file)).newest_event("b1"), 4);
 }
 
 #[test]

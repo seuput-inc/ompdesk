@@ -27,6 +27,8 @@ export interface DiskUsagePart {
 	id: DiskPartId;
 	bytes: number;
 	path: string;
+	/** The worktrees part only: its largest folders (one worktree each) and their bytes, largest first. */
+	children?: { path: string; bytes: number }[];
 }
 
 export interface DiskUsage {

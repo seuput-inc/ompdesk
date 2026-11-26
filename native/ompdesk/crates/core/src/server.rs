@@ -252,6 +252,7 @@ pub fn registry() -> Registry {
     crate::fs::register(&mut registry);
     crate::git::register(&mut registry);
     crate::gh::register(&mut registry);
+    crate::glab::register(&mut registry);
     crate::keepawake::register(&mut registry);
     crate::logs::register(&mut registry);
     crate::mcp_hub::register(&mut registry);
@@ -272,6 +273,7 @@ pub fn registry() -> Registry {
     crate::control::register(&mut registry);
     crate::tailscale::register(&mut registry);
     crate::termhistory::register(&mut registry);
+    crate::trackers::register(&mut registry);
     crate::ssh::register(&mut registry);
     crate::stats::register(&mut registry);
     crate::stock::register(&mut registry);
@@ -281,6 +283,8 @@ pub fn registry() -> Registry {
     crate::sidecar::register(&mut registry);
     crate::ipc::register(&mut registry);
     crate::visuals::register(&mut registry);
+    crate::browsing::register(&mut registry);
+    crate::emulator::register(&mut registry);
     crate::web_peek::register(&mut registry);
     crate::web::bytes::register(&mut registry);
     crate::web::host::register(&mut registry);

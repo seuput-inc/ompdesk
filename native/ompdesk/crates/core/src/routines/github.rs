@@ -44,33 +44,58 @@ const PROTOTYPE_NAMES: [&str; 12] = [
     "toLocaleString",
 ];
 
-/// One event kind a GitHub trigger follows.
+/// One event kind a GitHub trigger follows. The kinds after Orca's GitHub triggers (FX1,
+/// `shared/automation-event-triggers.ts:16-48`) that a `gh api` poll can see: a PR merged or closed unmerged, an
+/// issue closed, a comment, a label added, a workflow run passed or finished.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     PullRequest,
+    PrMerged,
+    PrClosed,
     Issue,
+    IssueClosed,
+    Comment,
+    Labeled,
     CiFailure,
+    CiPassed,
+    WorkflowFinished,
     Release,
     Push,
 }
 
 impl Kind {
+    /// Every kind, in the order a trigger reads them.
+    pub const ALL: [Kind; 12] = [
+        Kind::PullRequest,
+        Kind::PrMerged,
+        Kind::PrClosed,
+        Kind::Issue,
+        Kind::IssueClosed,
+        Kind::Comment,
+        Kind::Labeled,
+        Kind::CiFailure,
+        Kind::CiPassed,
+        Kind::WorkflowFinished,
+        Kind::Release,
+        Kind::Push,
+    ];
+
     pub fn parse(name: &str) -> Option<Kind> {
-        Some(match name {
-            "pull_request" => Kind::PullRequest,
-            "issue" => Kind::Issue,
-            "ci_failure" => Kind::CiFailure,
-            "release" => Kind::Release,
-            "push" => Kind::Push,
-            _ => return None,
-        })
+        Kind::ALL.into_iter().find(|kind| kind.name() == name)
     }
 
     pub(super) fn name(self) -> &'static str {
         match self {
             Kind::PullRequest => "pull_request",
+            Kind::PrMerged => "pr_merged",
+            Kind::PrClosed => "pr_closed",
             Kind::Issue => "issue",
+            Kind::IssueClosed => "issue_closed",
+            Kind::Comment => "comment",
+            Kind::Labeled => "labeled",
             Kind::CiFailure => "ci_failure",
+            Kind::CiPassed => "ci_passed",
+            Kind::WorkflowFinished => "workflow_finished",
             Kind::Release => "release",
             Kind::Push => "push",
         }
@@ -81,13 +106,106 @@ impl Kind {
             Kind::PullRequest => {
                 format!("repos/{repo}/pulls?state=all&sort=created&direction=desc&per_page=20")
             }
+            Kind::PrMerged | Kind::PrClosed => {
+                format!("repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=20")
+            }
             Kind::Issue => {
                 format!("repos/{repo}/issues?state=all&sort=created&direction=desc&per_page=20")
             }
+            Kind::IssueClosed => {
+                format!("repos/{repo}/issues?state=closed&sort=updated&direction=desc&per_page=20")
+            }
+            Kind::Comment => {
+                format!("repos/{repo}/issues/comments?sort=created&direction=desc&per_page=20")
+            }
+            Kind::Labeled => format!("repos/{repo}/issues/events?per_page=30"),
             Kind::CiFailure => format!("repos/{repo}/actions/runs?status=failure&per_page=20"),
+            Kind::CiPassed => format!("repos/{repo}/actions/runs?status=success&per_page=20"),
+            Kind::WorkflowFinished => {
+                format!("repos/{repo}/actions/runs?status=completed&per_page=20")
+            }
             Kind::Release => format!("repos/{repo}/releases?per_page=10"),
             Kind::Push => format!("repos/{repo}"),
         }
+    }
+}
+
+/// A GitHub trigger's filters (`ScheduleEvent` github `from`, `contains`, `label`): who did it, words in its title or
+/// text, a label it carries or got.
+#[derive(Default)]
+pub struct Filters {
+    from: Vec<String>,
+    contains: Option<String>,
+    label: Option<String>,
+}
+
+impl Filters {
+    pub fn of(event: &Value) -> Filters {
+        let text = |name: &str| {
+            event
+                .get(name)
+                .and_then(Value::as_str)
+                .map(|text| text.trim().to_lowercase())
+                .filter(|text| !text.is_empty())
+        };
+        Filters {
+            from: event
+                .get("from")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_lowercase)
+                .collect(),
+            contains: text("contains"),
+            label: text("label"),
+        }
+    }
+
+    /// Whether a new row (`line` what the run is told of it) passes.
+    fn pass(&self, kind: Kind, row: Js<'_>, line: &str) -> bool {
+        let login = |person: Js<'_>| match optional(person, "login") {
+            Js::Val(Value::String(login)) => login.to_lowercase(),
+            _ => String::new(),
+        };
+        let by = match kind {
+            Kind::Labeled | Kind::CiFailure | Kind::CiPassed | Kind::WorkflowFinished => {
+                login(optional(row, "actor"))
+            }
+            Kind::Release => login(optional(row, "author")),
+            _ => login(optional(row, "user")),
+        };
+        let from = self.from.is_empty() || (kind != Kind::Push && self.from.contains(&by));
+        let words = |key: &str| match optional(row, key) {
+            Js::Val(Value::String(text)) => text.to_lowercase(),
+            _ => String::new(),
+        };
+        let contains = self.contains.as_ref().is_none_or(|needle| {
+            line.to_lowercase().contains(needle) || words("body").contains(needle)
+        });
+        let labels: Vec<String> = match kind {
+            Kind::Labeled => vec![words_of(optional(optional(row, "label"), "name"))],
+            _ => match optional(row, "labels") {
+                Js::Val(Value::Array(labels)) => labels
+                    .iter()
+                    .map(|label| words_of(optional(Js::Val(label), "name")))
+                    .collect(),
+                _ => Vec::new(),
+            },
+        };
+        let label = self
+            .label
+            .as_ref()
+            .is_none_or(|wanted| labels.contains(wanted));
+        from && contains && label
+    }
+}
+
+/// A field's text, lowercase; empty for anything else.
+fn words_of(value: Js<'_>) -> String {
+    match value {
+        Js::Val(Value::String(text)) => text.to_lowercase(),
+        _ => String::new(),
     }
 }
 
@@ -214,17 +332,32 @@ pub async fn read(
     kind: Kind,
     state: &mut State,
 ) -> Result<Vec<String>, String> {
+    read_with(api, repo, kind, state, &Filters::default()).await
+}
+
+/// `read`, keeping only the new rows that pass `filters`; a row passed over is seen all the same.
+pub async fn read_with(
+    api: &impl Api,
+    repo: &str,
+    kind: Kind,
+    state: &mut State,
+    filters: &Filters,
+) -> Result<Vec<String>, String> {
     if kind == Kind::Push {
-        return read_push(api, repo, state).await;
+        let lines = read_push(api, repo, state).await?;
+        return Ok(lines
+            .into_iter()
+            .filter(|line| filters.pass(kind, Js::Undefined, line))
+            .collect());
     }
     let json = api.get(&kind.endpoint(repo)).await?;
     let mut rows = Vec::new();
     for row in rows_of(kind, &json)? {
-        rows.push((Id::of(id_of(kind, row)?), describe(kind, row)?));
+        rows.push((Id::of(id_of(kind, row)?), describe(kind, row)?, row));
     }
     let Some((_, seen)) = state.seen.iter_mut().find(|(name, _)| name == kind.name()) else {
         let mut ids: Vec<Id> = Vec::new();
-        for (id, _) in rows {
+        for (id, _, _) in rows {
             if !ids.iter().any(|seen| seen.same(&id)) {
                 ids.push(id);
             }
@@ -234,10 +367,12 @@ pub async fn read(
     };
     let fresh: Vec<&String> = rows
         .iter()
-        .filter(|(id, _)| !seen.iter().any(|known| known.same(id)))
-        .map(|(_, line)| line)
+        .filter(|(id, line, row)| {
+            !seen.iter().any(|known| known.same(id)) && filters.pass(kind, *row, line)
+        })
+        .map(|(_, line, _)| line)
         .collect();
-    for (id, _) in &rows {
+    for (id, _, _) in &rows {
         if !seen.iter().any(|known| known.same(id)) {
             seen.push(id.clone());
         }
@@ -325,19 +460,32 @@ async fn read_push(api: &impl Api, repo: &str, state: &mut State) -> Result<Vec<
 /// The rows of a kind's answer as its `rows` filter kept them.
 fn rows_of(kind: Kind, json: &Value) -> Result<Vec<Js<'_>>, String> {
     let all = match kind {
-        Kind::CiFailure => list(optional(Js::Val(json), "workflow_runs"))?,
+        Kind::CiFailure | Kind::CiPassed | Kind::WorkflowFinished => {
+            list(optional(Js::Val(json), "workflow_runs"))?
+        }
         _ => list(Js::Val(json))?,
     };
     let mut rows = Vec::with_capacity(all.len());
     for row in all {
-        let keep = match kind {
-            Kind::Issue => matches!(property(row, "pull_request")?, Js::Undefined),
-            Kind::CiFailure => match property(row, "conclusion")? {
+        let concluded = |wanted: &str| -> Result<bool, String> {
+            Ok(match property(row, "conclusion")? {
                 Js::Undefined => true,
-                Js::Val(conclusion) => conclusion.as_str() == Some("failure"),
-            },
+                Js::Val(conclusion) => conclusion.as_str() == Some(wanted),
+            })
+        };
+        let keep = match kind {
+            Kind::Issue | Kind::IssueClosed => {
+                matches!(property(row, "pull_request")?, Js::Undefined)
+            }
+            Kind::CiFailure => concluded("failure")?,
+            Kind::CiPassed => concluded("success")?,
             Kind::Release => !matches!(property(row, "draft")?, Js::Val(Value::Bool(true))),
-            Kind::PullRequest | Kind::Push => true,
+            Kind::PrMerged => truthy(property(row, "merged_at")?),
+            Kind::PrClosed => !truthy(property(row, "merged_at")?),
+            Kind::Labeled => {
+                matches!(property(row, "event")?, Js::Val(Value::String(event)) if event == "labeled")
+            }
+            Kind::PullRequest | Kind::Comment | Kind::WorkflowFinished | Kind::Push => true,
         };
         if keep {
             rows.push(row);
@@ -348,8 +496,77 @@ fn rows_of(kind: Kind, json: &Value) -> Result<Vec<Js<'_>>, String> {
 
 fn id_of(kind: Kind, row: Js<'_>) -> Result<Js<'_>, String> {
     match kind {
-        Kind::PullRequest | Kind::Issue => property(row, "number"),
+        Kind::PullRequest | Kind::Issue | Kind::PrMerged | Kind::PrClosed | Kind::IssueClosed => {
+            property(row, "number")
+        }
         _ => property(row, "id"),
+    }
+}
+
+/// The line of a kind the TypeScript never read (FX1): fields read leniently, as none of them names a row.
+fn describe_more(kind: Kind, row: Js<'_>) -> String {
+    let text = |value: Js<'_>, chars: usize| match value {
+        Js::Val(Value::String(text)) => clip(text, chars),
+        _ => String::new(),
+    };
+    let field = |key: &str| optional(row, key);
+    let url = nullish_template(field("html_url"));
+    match kind {
+        Kind::PrMerged | Kind::PrClosed | Kind::IssueClosed => {
+            let what = if kind == Kind::IssueClosed {
+                "Issue"
+            } else {
+                "PR"
+            };
+            let done = match kind {
+                Kind::PrMerged => "merged",
+                Kind::PrClosed => "closed without merging",
+                _ => "closed",
+            };
+            let number = nullish_template(field("number"));
+            let title = text(field("title"), TITLE_CHARS);
+            format!(
+                "{what} #{number} \"{title}\" by {} {done}: {url}",
+                who(field("user"))
+            )
+        }
+        Kind::Comment => {
+            // `issue_url` ends in the issue's (or the PR's) number.
+            let on = text(field("issue_url"), 400);
+            let number = on.rsplit('/').next().unwrap_or_default();
+            let said = text(field("body"), 200);
+            format!(
+                "Comment by {} on #{number}: \"{said}\": {url}",
+                who(field("user"))
+            )
+        }
+        Kind::Labeled => {
+            let issue = field("issue");
+            let label = text(optional(optional(row, "label"), "name"), 80);
+            let number = nullish_template(optional(issue, "number"));
+            let title = text(optional(issue, "title"), TITLE_CHARS);
+            let url = nullish_template(optional(issue, "html_url"));
+            format!(
+                "Label \"{label}\" added to #{number} \"{title}\" by {}: {url}",
+                who(field("actor"))
+            )
+        }
+        _ => {
+            let name = text(field("name"), 80);
+            let title = text(field("display_title"), TITLE_CHARS);
+            let branch = match field("head_branch") {
+                branch if truthy(branch) => template(branch),
+                _ => "an unknown branch".into(),
+            };
+            if kind == Kind::CiPassed {
+                format!("CI passed: workflow \"{name}\" on {branch} (\"{title}\"): {url}")
+            } else {
+                let conclusion = nullish_template(field("conclusion"));
+                format!(
+                    "Workflow \"{name}\" finished ({conclusion}) on {branch} (\"{title}\"): {url}"
+                )
+            }
+        }
     }
 }
 
@@ -398,6 +615,7 @@ fn describe(kind: Kind, row: Js<'_>) -> Result<String, String> {
             format!("Release {}{named} published by {who}: {url}", template(tag))
         }
         Kind::Push => unreachable!("push is read by commit order"),
+        _ => describe_more(kind, row),
     })
 }
 
@@ -655,5 +873,67 @@ mod tests {
         );
         assert_eq!(encode_uri_component("!'()*~-_.%"), "!'()*~-_.%25");
         assert_eq!(utf16_prefix("😀😀😀😀", 7), "😀😀😀\u{fffd}");
+    }
+
+    #[test]
+    fn reads_the_kinds_orca_follows_and_filters_them() {
+        let pulls = json!([
+            {"number": 7, "title": "Fix build", "user": {"login": "ann"}, "merged_at": "2026-11-01T00:00:00Z",
+             "html_url": "u7", "labels": [{"name": "Bug"}], "body": "It broke"},
+            {"number": 8, "title": "Drop it", "user": {"login": "bob"}, "merged_at": null, "html_url": "u8", "labels": []}
+        ]);
+        let merged = rows_of(Kind::PrMerged, &pulls).unwrap();
+        assert_eq!(merged.len(), 1);
+        let line = describe(Kind::PrMerged, merged[0]).unwrap();
+        assert_eq!(line, "PR #7 \"Fix build\" by ann merged: u7");
+        let closed = rows_of(Kind::PrClosed, &pulls).unwrap();
+        assert_eq!(
+            describe(Kind::PrClosed, closed[0]).unwrap(),
+            "PR #8 \"Drop it\" by bob closed without merging: u8"
+        );
+        let all = Filters::of(&json!({"from": ["Ann"], "label": "bug", "contains": "BROKE"}));
+        assert!(all.pass(Kind::PrMerged, merged[0], &line));
+        assert!(!Filters::of(&json!({"from": ["bob"]})).pass(Kind::PrMerged, merged[0], &line));
+        assert!(!Filters::of(&json!({"label": "ui"})).pass(Kind::PrMerged, merged[0], &line));
+        assert!(!Filters::of(&json!({"contains": "flaky"})).pass(Kind::PrMerged, merged[0], &line));
+        let events = json!([
+            {"id": 1, "event": "labeled", "label": {"name": "urgent"}, "actor": {"login": "cy"},
+             "issue": {"number": 3, "title": "Crash", "html_url": "u3"}},
+            {"id": 2, "event": "closed"}
+        ]);
+        let labeled = rows_of(Kind::Labeled, &events).unwrap();
+        assert_eq!(labeled.len(), 1);
+        assert_eq!(
+            describe(Kind::Labeled, labeled[0]).unwrap(),
+            "Label \"urgent\" added to #3 \"Crash\" by cy: u3"
+        );
+        assert!(
+            Filters::of(&json!({"label": "Urgent", "from": ["cy"]})).pass(
+                Kind::Labeled,
+                labeled[0],
+                ""
+            )
+        );
+        let comments = json!([{"id": 9, "issue_url": "https://api.github.com/repos/o/r/issues/12", "body": "LGTM",
+            "user": {"login": "dee"}, "html_url": "c9"}]);
+        let comment = rows_of(Kind::Comment, &comments).unwrap();
+        assert_eq!(
+            describe(Kind::Comment, comment[0]).unwrap(),
+            "Comment by dee on #12: \"LGTM\": c9"
+        );
+        let runs = json!({"workflow_runs": [
+            {"id": 5, "name": "CI", "display_title": "Fix", "head_branch": "main", "conclusion": "success", "html_url": "r5"},
+            {"id": 6, "name": "CI", "display_title": "Oops", "head_branch": "main", "conclusion": "failure", "html_url": "r6"}
+        ]});
+        let passed = rows_of(Kind::CiPassed, &runs).unwrap();
+        assert_eq!(passed.len(), 1);
+        assert_eq!(
+            describe(Kind::CiPassed, passed[0]).unwrap(),
+            "CI passed: workflow \"CI\" on main (\"Fix\"): r5"
+        );
+        assert_eq!(rows_of(Kind::WorkflowFinished, &runs).unwrap().len(), 2);
+        for kind in Kind::ALL {
+            assert_eq!(Kind::parse(kind.name()), Some(kind));
+        }
     }
 }

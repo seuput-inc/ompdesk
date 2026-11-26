@@ -57,13 +57,53 @@ describe("starter guide with unreadable prefs", () => {
 		expect(useStarterGuideStore.getState().loaded).toBe(true);
 		expect(useStarterGuideStore.getState().done).toEqual(["model", "prompt", "split"]);
 		expect(set).toHaveBeenCalledTimes(1);
-		expect(set).toHaveBeenCalledWith(STARTER_GUIDE_PREF, { done: ["model", "prompt", "split"], dismissed: true });
+		expect(set).toHaveBeenCalledWith(STARTER_GUIDE_PREF, {
+			done: ["model", "prompt", "split"],
+			dismissed: true,
+			// A guide saved before the tours: the surfaces such a person knows count as toured.
+			toursSeen: ["schedules", "preview"],
+			tipsSeen: [],
+		});
 	});
 
 	it("writes at once once the guide is loaded", async () => {
 		get.mockResolvedValue({ done: ["model"], dismissed: false });
 		await useStarterGuideStore.getState().load();
 		useStarterGuideStore.getState().complete(["prompt"]);
-		expect(set).toHaveBeenCalledWith(STARTER_GUIDE_PREF, { done: ["model", "prompt"], dismissed: false });
+		expect(set).toHaveBeenCalledWith(STARTER_GUIDE_PREF, {
+			done: ["model", "prompt"],
+			dismissed: false,
+			toursSeen: ["schedules", "preview"],
+			tipsSeen: [],
+		});
+	});
+});
+
+describe("first-visit tours and tips", () => {
+	it("marks a surface tour seen when it ends and a tip seen once, merged with what prefs hold", async () => {
+		get.mockResolvedValue({ done: [], dismissed: false, toursSeen: ["stats"], tipsSeen: ["bogus"] });
+		await useStarterGuideStore.getState().load();
+		expect(useStarterGuideStore.getState().tipsSeen).toEqual([]);
+		useStarterGuideStore.getState().startSurfaceTour("board");
+		useStarterGuideStore.getState().setSurfaceTourStep(2);
+		expect(useStarterGuideStore.getState().surfaceTour).toEqual({ id: "board", step: 2 });
+		useStarterGuideStore.getState().endSurfaceTour();
+		useStarterGuideStore.getState().seeTip("palette");
+		useStarterGuideStore.getState().seeTip("palette");
+		expect(useStarterGuideStore.getState().surfaceTour).toBeNull();
+		expect(set).toHaveBeenCalledTimes(2);
+		expect(set).toHaveBeenLastCalledWith(STARTER_GUIDE_PREF, {
+			done: [],
+			dismissed: false,
+			toursSeen: ["board", "stats"],
+			tipsSeen: ["palette"],
+		});
+	});
+
+	it("counts every tour and tip seen for a test run's seeded guide", async () => {
+		get.mockResolvedValue({ seenAll: true });
+		await useStarterGuideStore.getState().load();
+		expect(useStarterGuideStore.getState().toursSeen).toEqual(["shell", "board", "stats", "schedules", "preview"]);
+		expect(useStarterGuideStore.getState().tipsSeen).toEqual(["board", "palette", "phone", "pet"]);
 	});
 });

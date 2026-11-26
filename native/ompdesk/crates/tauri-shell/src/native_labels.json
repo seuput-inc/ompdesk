@@ -354,5 +354,29 @@
 	"tray.keepsRunningBody": {
 		"en": "Click the tray icon to bring the window back. Quit from the tray menu.",
 		"ko": "트레이 아이콘을 누르면 창이 돌아와요. 종료는 트레이 메뉴에서 해요."
+	},
+	"notificationPopup.close": {
+		"en": "Close",
+		"ko": "닫기"
+	},
+	"notificationPopup.more": {
+		"en": "+{count} more",
+		"ko": "외 {count}개"
+	},
+	"notificationPopup.options": {
+		"en": "Notification options",
+		"ko": "알림 옵션"
+	},
+	"notificationPopup.muteHour": {
+		"en": "Mute for 1 hour",
+		"ko": "1시간 동안 알림 끄기"
+	},
+	"notificationPopup.muteTomorrow": {
+		"en": "Mute until tomorrow",
+		"ko": "내일까지 알림 끄기"
+	},
+	"notificationPopup.settings": {
+		"en": "Notification settings…",
+		"ko": "알림 설정…"
 	}
 }

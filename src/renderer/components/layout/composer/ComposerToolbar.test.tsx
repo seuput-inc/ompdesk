@@ -60,6 +60,8 @@ const baseProps: ComposerToolbarProps = {
 	queueSplitCount: 0,
 	dictationPhase: "idle",
 	onMic: () => {},
+	onMicDown: () => {},
+	onMicUp: () => {},
 	onStopAndSend: () => {},
 	stoppable: false,
 	hasDraft: true,

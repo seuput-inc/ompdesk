@@ -6,7 +6,7 @@ import { useEffect, useRef } from "react";
 import { historyImages } from "../../../lib/history-images";
 import { expandPasteMarkers } from "../../../lib/paste-blobs";
 import type { TabRpc } from "../../../lib/tab-rpc";
-import type { ComposerImage } from "../../../stores/composer";
+import type { DraftPictureSlot } from "../../../stores/composer";
 import { type InputHistoryContext, useInputHistoryStore } from "../../../stores/input-history";
 
 export interface ComposerHistory {
@@ -28,8 +28,8 @@ export function useComposerHistory({
 	cwd,
 	owner,
 	device,
-	images,
-	setImages,
+	pictureSlots,
+	setPictureSlots,
 	placeDraft,
 }: {
 	rpc: TabRpc;
@@ -39,12 +39,13 @@ export function useComposerHistory({
 	/** `${tabId}:${sessionId}`: the composer the browsing belongs to. */
 	owner: string;
 	device: string | undefined;
-	images: ComposerImage[];
-	setImages: (next: ComposerImage[]) => void;
+	/** The draft's picture strip: unread saved pictures step aside with the ready ones. */
+	pictureSlots: DraftPictureSlot[];
+	setPictureSlots: (next: DraftPictureSlot[]) => void;
 	placeDraft: (next: string, caret: number) => void;
 }): ComposerHistory {
-	/** The draft's pictures while ↑/↓ shows history entries (restored on the way back). */
-	const navDraftImages = useRef<ComposerImage[]>([]);
+	/** The draft's picture strip while ↑/↓ shows history entries (restored on the way back). */
+	const navDraftImages = useRef<DraftPictureSlot[]>([]);
 
 	// Refresh from this tab's omp machine when its bridge is ready.
 	useEffect(() => {
@@ -67,9 +68,9 @@ export function useComposerHistory({
 	 * browsing and come back with it, an entry brings the pictures it was sent with.
 	 */
 	const showRecalled = (recalled: string, wasBrowsing: boolean, caret: number) => {
-		if (!wasBrowsing) navDraftImages.current = images;
+		if (!wasBrowsing) navDraftImages.current = pictureSlots;
 		const backToDraft = useInputHistoryStore.getState().navIndex === -1;
-		setImages(backToDraft ? navDraftImages.current : [...historyImages(recalled)]);
+		setPictureSlots(backToDraft ? navDraftImages.current : [...historyImages(recalled)]);
 		placeDraft(recalled, caret);
 	};
 

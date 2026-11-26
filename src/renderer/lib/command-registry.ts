@@ -32,6 +32,7 @@ import { useModelStore } from "../stores/model";
 import { useOutputStyleStore } from "../stores/output-style";
 import { type SessionStore, useSessionStore } from "../stores/session";
 import { useSettingsStore } from "../stores/settings";
+import { askSidebar } from "../stores/sidebar-request";
 import { useTabsStore } from "../stores/tabs";
 import { toast, toastError } from "../stores/toast";
 import { useTodoStore } from "../stores/todo";
@@ -105,6 +106,7 @@ export interface CommandMenuItem {
 export const COMMAND_CATEGORIES = [
 	"session",
 	"agents",
+	"bots",
 	"insights",
 	"model",
 	"providers",
@@ -934,7 +936,12 @@ export function buildCommandMenu(ctx: CommandRegistryContext): CommandMenuItem[]
 		affordance: {
 			kind: "action",
 			run: async () => {
-				const { response: res, cancelled } = await runManualMaintenance("compact", () => ctx.rpc.compact());
+				const {
+					response: res,
+					cancelled,
+					skipped,
+				} = await runManualMaintenance("compact", () => ctx.rpc.compact());
+				if (skipped) return;
 				if (cancelled) {
 					toast({ variant: "info", message: t("command.compactCancelled") });
 					return;
@@ -1554,6 +1561,30 @@ export function buildCommandMenu(ctx: CommandRegistryContext): CommandMenuItem[]
 		category: "settings",
 		shortcut: kbd("sidebar.toggle"),
 		affordance: { kind: "action", run: () => useUiStore.getState().toggleSidebar() },
+	});
+	add({
+		name: "reveal-current",
+		label: t("sidebar.revealCurrent"),
+		category: "settings",
+		affordance: { kind: "action", run: () => askSidebar("reveal-current") },
+	});
+	add({
+		name: "fold-projects",
+		label: t("sidebar.foldAll.collapse"),
+		category: "settings",
+		affordance: { kind: "action", run: () => askSidebar("fold-projects") },
+	});
+	add({
+		name: "unfold-projects",
+		label: t("sidebar.foldAll.expand"),
+		category: "settings",
+		affordance: { kind: "action", run: () => askSidebar("unfold-projects") },
+	});
+	add({
+		name: "clone-repository",
+		label: t("sidebar.project.clone"),
+		category: "workspace",
+		affordance: { kind: "action", run: () => askSidebar("clone") },
 	});
 	add({
 		name: "toggle-thinking-blocks",

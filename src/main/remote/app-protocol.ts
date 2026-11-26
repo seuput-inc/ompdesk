@@ -22,6 +22,9 @@
  * - `sessions.targets {sessions: SessionTargetQuery[]}` → SessionTargets, `sessions.artwork {roots}` → SessionArtworks
  *   (`shared/session-target.ts`, answered by session-targets.ts); an older host answers `unsupported`
  * - `sessions.pullRequest {root, branch}` → GithubBranchPr | null: a row's branch PR, read on the host (session-targets.ts)
+ * - `sessions.links {command: SessionLinksCommand}` → the host's answer (`answerSessionLinks`): read, add or remove the
+ *   links attached to the host's sessions (local/session-links.ts); every change, from anywhere, comes as the
+ *   `host.sessionLinks.changed` event; an older host answers `unsupported`
  * - `host.fs.readBinary {rtab?, cwd?, path, maxBytes?}` → HostFsReadBinaryReply: the file
  *   viewer's bytes, base64 on the link, capped at FS_BINARY_REMOTE_MAX_BYTES by the host
  * - `host.fs.readRange {rtab?, cwd?, path, offset, length}` → HostFsReadBinaryReply: one slice of a file for a
@@ -98,6 +101,13 @@
  *   port while the host's `login` runs. `host.signIn.callback {rtab, path, query}` → SignInCallbackReply: the host
  *   replays `query` only to the callback of the open_url its tab's running sign-in raised, and only on that path with
  *   that flow's `state`, once; refused `sign_in_unavailable` otherwise. Free. An older host answers `unsupported`.
+ * - A host tab's dev server in a device's Preview (port-tunnels.ts; Orca's paired server forwards): the server runs
+ *   on the host's loopback, so the device stands in for it on its own and carries each connection the Preview makes.
+ *   `host.portTunnel.connect {rtab, port, conn}` → null (the host connects only to a port the tab's own processes listen
+ *   on, `get_session_ports`; refused `port_unavailable` otherwise), `host.portTunnel.send {rtab, conn, data}` → null
+ *   (bytes, base64), `host.portTunnel.close {rtab, conn}` → null; the host pushes the server's bytes and the
+ *   connection's end as the `host.portTunnel` event. `conn` is the device's own number for the connection. Free. An
+ *   older host answers `unsupported`.
  *
  * - What every session row shows of the host's sessions, as the host built it (`shared/session-summary.ts`):
  *   `sessions.summaries {}` → VersionedSummaries; each change comes as the `host.summaries` event (a SummaryDelta on
@@ -109,8 +119,8 @@
  *   hold are deleted); each delete is pushed as the `host.sessionsDeleted` event. An older host answers `unsupported`.
  *
  * Events (B → A): `tab.event` (TabEventMessage), `sessions.changed` (no data), `host.ompUpdate.changed`,
- * `host.schedules.changed`, `host.projects.changed`, `host.models.changed`, `host.previewRelay`, `host.summaries`,
- * `host.sessionsDeleted` and `host.remoteOpened`.
+ * `host.schedules.changed`, `host.projects.changed`, `host.models.changed`, `host.previewRelay`, `host.portTunnel`,
+ * `host.summaries`, `host.sessionsDeleted`, `host.remoteOpened` and `host.sessionLinks.changed`.
  * Both sides parse what crosses the link with the schemas below.
  */
 import { z } from "zod";
@@ -140,8 +150,19 @@ import type { LocalEngineDetectState } from "../../shared/local-engines";
 import type { ModelSetupStatus } from "../../shared/model-setup";
 import { OMP_UPDATE_FAILURE_REASONS, type OmpUpdateState } from "../../shared/omp-update";
 import { BLOCKING_UI_METHODS, type ExtensionUIRequest } from "../../shared/rpc-types";
-import type { ScheduleCreated, SchedulesRequest, SchedulesState } from "../../shared/schedules";
-import { ScheduleFrequencySchema, ScheduleRunSchema } from "../../shared/schedules-schema";
+import {
+	type ScheduleCreated,
+	type SchedulesRequest,
+	type SchedulesState,
+	WEBHOOK_SENDERS,
+} from "../../shared/schedules";
+import {
+	ScheduleFrequencySchema,
+	ScheduleRunSchema,
+	ScheduleThinkingSchema,
+	WebhookCallSchema,
+} from "../../shared/schedules-schema";
+import { SIDEBAR_ENTRY_FIELDS } from "../../shared/sidebar-prefs";
 import type { SidebarLayoutChange, SidebarProjectsRequest, SidebarProjectsState } from "../../shared/sidebar-projects";
 import { SIGN_IN_PAGE_MAX_CHARS } from "../sign-in-callback";
 
@@ -222,6 +243,8 @@ export const SCHEDULES_EVENT = "host.schedules.changed";
 export const MODELS_CHANGED_EVENT = "host.models.changed";
 /** The host's sidebar project list changed (data: SidebarProjectsState); sent to every connected device. */
 export const PROJECTS_EVENT = "host.projects.changed";
+/** A session's links on the host changed (no data); sent to every connected device, whose rows read them again. */
+export const SESSION_LINKS_EVENT = "host.sessionLinks.changed";
 /**
  * Agent browsing's tunnel (`host.previewRelay.*` above). The params are strict: nothing a device sends names an address,
  * the host dials the relay it remembered for the tab. The event carries each frame the relay sent (`message`) and the
@@ -254,6 +277,27 @@ export const SignInCallbackReply = z.object({
 	contentType: z.string().max(200),
 	body: z.string().max(SIGN_IN_PAGE_MAX_CHARS),
 });
+/**
+ * A host tab's dev server through the device's stand-in (`host.portTunnel.*` above). The params are strict: the device
+ * names the tab and a port the host checks against the tab's own listening processes, never an address.
+ */
+export const PORT_TUNNEL_METHODS = {
+	connect: "host.portTunnel.connect",
+	send: "host.portTunnel.send",
+	close: "host.portTunnel.close",
+} as const;
+export const PORT_TUNNEL_EVENT = "host.portTunnel";
+const TunnelConn = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+export const PortTunnelConnectParams = z
+	.object({ rtab: PreviewRelayRtab, port: z.number().int().min(1).max(65_535), conn: TunnelConn })
+	.strict();
+export const PortTunnelSendParams = z.object({ rtab: PreviewRelayRtab, conn: TunnelConn, data: z.string() }).strict();
+export const PortTunnelCloseParams = z.object({ rtab: PreviewRelayRtab, conn: TunnelConn }).strict();
+export const PortTunnelEvent = z.discriminatedUnion("kind", [
+	z.object({ kind: z.literal("data"), conn: TunnelConn, data: z.string() }),
+	z.object({ kind: z.literal("close"), conn: TunnelConn }),
+]);
+export type PortTunnelEvent = z.infer<typeof PortTunnelEvent>;
 /**
  * This computer's session summaries changed (data: a `SummaryDelta`), sent to every connected device; `sessions.summaries
  * {}` answers the whole set (a device reads it as its link comes up and whenever a change does not apply on its copy).
@@ -797,7 +841,12 @@ const UpdateStatusSchema: z.ZodType<UpdateStatus> = z.discriminatedUnion("state"
 		restartAt: z.number().optional(),
 		installing: z.literal(true).optional(),
 	}),
-	z.object({ state: z.literal("not-available"), version: z.string() }),
+	z.object({
+		state: z.literal("not-available"),
+		version: z.string(),
+		// The host's Mac cannot run the newer release; its Settings row says so on a paired computer too.
+		unsupportedSystem: z.object({ version: z.string(), minimumMacOS: z.string() }).optional(),
+	}),
 	z.object({
 		state: z.literal("error"),
 		message: z.string(),
@@ -845,6 +894,8 @@ const ScheduleDraftSchema = z.object({
 	model: z.string().max(200).nullable(),
 	autoApprove: z.boolean(),
 	enabled: z.boolean(),
+	thinking: ScheduleThinkingSchema.nullable().optional(),
+	worktree: z.boolean().optional(),
 });
 
 const ScheduleId = z.string().min(1).max(200);
@@ -859,6 +910,14 @@ export const SchedulesCommandParams: z.ZodType<{ request: SchedulesRequest }> = 
 		z.object({ action: z.literal("setPaused"), paused: z.boolean() }),
 		z.object({ action: z.literal("runNow"), id: ScheduleId }),
 		z.object({ action: z.literal("stop"), runId: ScheduleId }),
+		z.object({ action: z.literal("rotateKey"), id: ScheduleId, keepOld: z.boolean() }),
+		z.object({
+			action: z.literal("setSecret"),
+			id: ScheduleId,
+			sender: z.enum(WEBHOOK_SENDERS).nullable(),
+			secret: z.string().min(1).max(500).optional(),
+		}),
+		z.object({ action: z.literal("sampleCall"), id: ScheduleId }),
 	]),
 });
 
@@ -875,6 +934,7 @@ export const SchedulesStateSchema: z.ZodType<SchedulesState> = z.object({
 	),
 	runs: z.array(ScheduleRunSchema),
 	nextRuns: z.record(z.string(), z.string().nullable()),
+	calls: z.record(z.string(), z.array(WebhookCallSchema)).optional(),
 });
 
 /** `host.schedules.create` reply: the id this save made and the state after it. */
@@ -898,6 +958,13 @@ const SidebarLayoutChangeSchema = z.discriminatedUnion("op", [
 		move: z.object({ path: ProjectPath, over: ProjectPath }).optional(),
 	}),
 	z.object({ op: z.literal("set-sessions-archived"), ids: ProjectOrder, archived: z.boolean() }),
+	z.object({
+		op: z.literal("set-entry"),
+		field: z.enum(SIDEBAR_ENTRY_FIELDS),
+		key: ProjectPath,
+		value: z.string().max(4096).nullable(),
+	}),
+	z.object({ op: z.literal("rename-project-group"), from: ProjectPath, to: z.string().max(4096).nullable() }),
 ]) satisfies z.ZodType<SidebarLayoutChange>;
 
 /** `host.projects.command` params: the device's sidebar reads or edits the host's project list. */
@@ -926,6 +993,12 @@ export const SidebarProjectsStateSchema: z.ZodType<SidebarProjectsState> = z.obj
 			archivedSessions: z.array(ProjectPath),
 			groupOrder: z.array(ProjectPath),
 			sessionOrder: z.record(ProjectPath, z.array(ProjectPath)),
+			// An older host sends none of the keyed entries.
+			projectGroups: z.record(ProjectPath, z.string().max(4096)).optional(),
+			projectColors: z.record(ProjectPath, z.string().max(4096)).optional(),
+			projectEmoji: z.record(ProjectPath, z.string().max(4096)).optional(),
+			sessionEmoji: z.record(ProjectPath, z.string().max(4096)).optional(),
+			sessionParents: z.record(ProjectPath, z.string().max(4096)).optional(),
 		})
 		.optional(),
 });

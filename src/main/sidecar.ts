@@ -166,6 +166,8 @@ const AGENT_EVENT_TYPES: Record<string, true> = {
 	tool_execution_end: true,
 	auto_compaction_start: true,
 	auto_compaction_end: true,
+	manual_compaction_start: true,
+	manual_compaction_end: true,
 	auto_retry_start: true,
 	auto_retry_end: true,
 	retry_fallback_applied: true,
@@ -845,6 +847,11 @@ export class SidecarManager extends EventEmitter {
 	/** The running omp's pid, for its process tree's measured footprint (memory-sampler.ts). */
 	get pid(): number | undefined {
 		return this.#pid;
+	}
+
+	/** The tab's process tag (`SessionProcesses`), once its first omp was started; its control row's ports read by it. */
+	get processTag(): string | undefined {
+		return this.#processes?.tag;
 	}
 
 	start(): void {
@@ -1634,7 +1641,7 @@ export class SidecarManager extends EventEmitter {
 				: runtime,
 			send,
 			bridge,
-			...(this.#processes ? { leftProcesses: this.#processes.leftover } : {}),
+			...(this.#processes ? { leftProcesses: this.#processes.leftover, processes: this.#processes } : {}),
 		};
 	}
 

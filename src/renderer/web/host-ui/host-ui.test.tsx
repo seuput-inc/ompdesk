@@ -611,7 +611,7 @@ describe("WebHostUi", () => {
 		await expect(update).resolves.toBe(false);
 	});
 
-	it("opens a link on this device and offers the computer in a toast", async () => {
+	it("opens a link on this device and offers the computer and the Preview in a toast", async () => {
 		const host = hostActions();
 		setWebRuntime(runtime(host));
 		const opened = vi.fn();
@@ -624,5 +624,14 @@ describe("WebHostUi", () => {
 		expect(toast?.action?.label).toBe(translate("hostUi.link.onComputer"));
 		toast?.action?.run();
 		expect(host.openExternalOnComputer).toHaveBeenCalledWith("https://example.com/x");
+		// The Preview here shows the page the computer browses (FM51).
+		expect(toast?.secondAction?.label).toBe(translate("hostUi.link.inPreview"));
+		toast?.secondAction?.run();
+		expect(useUiStore.getState()).toMatchObject({ previewUrl: "https://example.com/x", panelTab: "preview" });
+		// Only a web address has a Preview to open in (the same message would only count up the toast above).
+		useToastStore.setState({ toasts: [] });
+		await webHostHooks().openExternal?.("mailto:someone@example.com");
+		expect(useToastStore.getState().toasts.at(-1)).toMatchObject({ message: translate("hostUi.link.opened") });
+		expect(useToastStore.getState().toasts.at(-1)?.secondAction).toBeUndefined();
 	});
 });

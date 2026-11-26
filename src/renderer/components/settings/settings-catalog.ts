@@ -17,6 +17,7 @@ export const SETTINGS_SECTION_IDS = [
 	"permissions",
 	"workspace",
 	"schedules",
+	"bots",
 	"connections",
 	"updates",
 	"advanced",
@@ -31,7 +32,7 @@ export interface SettingsNavGroup {
 /** Left sub-nav: flat, always fully visible, grouped by who the setting is for. */
 export const SETTINGS_NAV: readonly SettingsNavGroup[] = [
 	{ id: "app", items: ["general", "appearance", "keyboard"] },
-	{ id: "agent", items: ["models", "agent", "memory", "tools", "permissions", "workspace", "schedules"] },
+	{ id: "agent", items: ["models", "agent", "memory", "tools", "permissions", "workspace", "schedules", "bots"] },
 	{ id: "system", items: ["connections", "updates", "advanced"] },
 ];
 
@@ -51,6 +52,8 @@ export const SECTION_SCOPE: Record<SettingsSectionId, "app" | "host" | "mixed"> 
 	workspace: "host",
 	// A paired host runs its own schedules, in its folders, while its OMPdesk is open.
 	schedules: "host",
+	// Bots live on this computer (their folders are here), whichever tab is focused.
+	bots: "app",
 	// Memory runs on this computer for every omp OMPdesk starts here: a paired host's tab never moves it.
 	memory: "app",
 	connections: "mixed",
@@ -93,6 +96,8 @@ export const CURATED_SCHEMA_ROWS: Readonly<Record<string, SettingsSectionId>> = 
 	"goal.enabled": "agent",
 	"ttsr.enabled": "agent",
 	"advisor.enabled": "agent",
+	"stt.enabled": "agent",
+	"stt.submitTrigger": "agent",
 };
 
 /** Structured settings are edited only by their dedicated editor. */
@@ -202,6 +207,24 @@ export const GUI_SEARCH_ITEMS: readonly GuiSearchItem[] = [
 		labelKey: "settings.gui.judgeAssist",
 		aliases:
 			"judge model jev decision small question notification needs you title fits preview error blank smart automation 판정 모델 판단 모델 작은 판단 질문 알림 제목 미리보기 오류 빈 페이지 스마트 자동화",
+	},
+	{
+		id: "dictationMicrophone",
+		section: "agent",
+		labelKey: "settings.dictation.microphone",
+		aliases: "microphone mic input device dictation voice test level 마이크 입력 장치 받아쓰기 음성 테스트",
+	},
+	{
+		id: "dictationTerms",
+		section: "agent",
+		labelKey: "settings.dictation.terms",
+		aliases: "dictation terms glossary vocabulary dictionary spelling names 받아쓰기 용어 사전 어휘 표기 이름",
+	},
+	{
+		id: "dictationCleanup",
+		section: "agent",
+		labelKey: "settings.dictation.cleanup",
+		aliases: "dictation cleanup tidy punctuation small model tiny smol 받아쓰기 다듬기 문장부호 작은 모델",
 	},
 	{
 		id: "autoMode",
@@ -381,6 +404,12 @@ export const GUI_SEARCH_ITEMS: readonly GuiSearchItem[] = [
 		section: "appearance",
 		labelKey: "settings.gui.colorBlindMode",
 		aliases: "colorBlindMode color blind 색각 색맹",
+	},
+	{
+		id: "desktopPet",
+		section: "appearance",
+		labelKey: "settings.gui.desktopPet",
+		aliases: "desktopPet pet sprite mascot companion 펫 캐릭터 스프라이트",
 	},
 	{
 		id: "transcriptDetail",

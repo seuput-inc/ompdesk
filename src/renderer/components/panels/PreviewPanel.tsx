@@ -9,14 +9,19 @@ import {
 	Globe,
 	Laptop,
 	Maximize,
+	Monitor,
+	Moon,
 	MoreHorizontal,
 	MousePointerClick,
 	Plus,
+	RefreshCcw,
 	RotateCw,
+	Search,
 	SlidersHorizontal,
 	Smartphone,
 	Square,
 	SquareDashed,
+	Sun,
 	Tablet,
 	XCircle,
 	ZoomIn,
@@ -26,18 +31,20 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
 	clampPreviewZoom,
 	EMPTY_PREVIEW,
-	isLoopbackUrl,
 	PREVIEW_PROBLEM_LIMIT,
 	PREVIEW_TAB_LIMIT,
 	PREVIEW_VIEWPORTS,
 	PREVIEW_ZOOM_MAX,
 	PREVIEW_ZOOM_MIN,
+	type PreviewColorScheme,
+	type PreviewDevice,
 	type PreviewRequest,
 	type PreviewViewport,
 	previewAddress,
 	previewProblemCount,
 	reducePreviewState,
 } from "../../../shared/preview";
+import { hostTabCannotOpen } from "../../lib/host-ports";
 import { useT } from "../../lib/i18n";
 import { openExternal } from "../../lib/open-external";
 import { latestBashPreviewUrl } from "../../lib/preview-browser";
@@ -68,10 +75,27 @@ import {
 	StatusDot,
 	Tabs,
 } from "../common";
+import { useFirstVisitTour } from "../onboarding/surface-tours";
+import { PreviewAuthDialog } from "./PreviewAuth";
 import { PreviewCheckNotice } from "./PreviewCheckNotice";
+import { PreviewDeviceScreen } from "./PreviewDevice";
 import { AllVisualsDialog, PreviewFeedbackBar, usePreviewFeedback } from "./PreviewFeedback";
+import { PreviewFind } from "./PreviewFind";
+import { PreviewStart } from "./PreviewStart";
 import { PreviewStreamView } from "./PreviewStreamView";
+import { PreviewSuggestions, useAddressSuggestions } from "./PreviewSuggestions";
 import { usePreviewLayout } from "./use-preview-layout";
+
+const SCHEME_ICONS = { system: Monitor, light: Sun, dark: Moon } as const;
+
+/** `host:port` of an address, for the line that says nothing runs there yet; "" when it has none. */
+function addressHost(url: string): string {
+	try {
+		return new URL(url).host;
+	} catch {
+		return "";
+	}
+}
 
 const VIEWPORT_ICONS = { fill: Maximize, phone: Smartphone, tablet: Tablet, laptop: Laptop } as const;
 
@@ -108,9 +132,11 @@ async function startAgentRelay(runtime: SessionRuntime, tabId: string): Promise<
 }
 export function PreviewPanel() {
 	const t = useT();
+	useFirstVisitTour("preview");
 	const tabId = useRuntimeTabId();
 	const runtime = useSessionRuntime();
 	const remote = useTabsStore(s => Boolean(s.tabs.find(tab => tab.id === (tabId ?? s.activeTabId))?.device));
+	const worktree = useTabsStore(s => s.tabs.find(tab => tab.id === (tabId ?? s.activeTabId))?.worktree?.path ?? null);
 	const requested = useUiStore(s => s.previewUrl);
 	const latest = useToolsStore(latestBashPreviewUrl);
 	const visible = useUiStore(s => s.panelVisible && s.panelTab === "preview" && s.destination === "session");
@@ -122,13 +148,28 @@ export function PreviewPanel() {
 	const web = chromePlatform() === "web";
 	const urlInput = useRef<HTMLInputElement>(null);
 	const address = previewAddress(input);
-	const remoteBlocked = remote && isLoopbackUrl(address ?? "");
+	// A paired host's tab opens this computer's loopback only through its servers' stand-ins (`lib/host-ports.ts`).
+	const remoteBlocked = remote && hostTabCannotOpen(address ?? "");
 	const [problemsOpen, setProblemsOpen] = useState(false);
 	const problemsAnchor = useRef<HTMLButtonElement>(null);
 	const [agentStarting, setAgentStarting] = useState(false);
+	const [findOpen, setFindOpen] = useState(false);
+	/** A running device whose screen shows in place of the page (Orca's emulator pane). */
+	const [device, setDevice] = useState<PreviewDevice | null>(null);
+	/** The person types into the address field: its suggestions show until they open something or leave it. */
+	const [typing, setTyping] = useState(false);
 	const command = useCallback((request: PreviewRequest) => {
 		void window.omp.preview.command(request).catch(error => dispatch({ loading: false, error: String(error) }));
 	}, []);
+	/** Open `url` from a suggestion or the start page, as the address field's Enter would. */
+	const openUrl = (url: string) => {
+		setDevice(null);
+		setInput(url);
+		setTyping(false);
+		setInvalid(false);
+		if (!(remote && hostTabCannotOpen(url))) command({ action: "load", url });
+	};
+	const suggestions = useAddressSuggestions(input, typing, openUrl);
 	const agentTab = useRef<string | null>(null);
 	agentTab.current = state.agent?.tabId ?? null;
 	/** Take the page back from the agent: close its connection here, then stop its tab's relay. */
@@ -194,7 +235,7 @@ export function PreviewPanel() {
 		lastRequested.current = requested;
 		setInput(url);
 		setInvalid(false);
-		if (!(remote && isLoopbackUrl(url))) command({ action: "load", url });
+		if (!(remote && hostTabCannotOpen(url))) command({ action: "load", url });
 	}, [requested, latest, remote, tabId, command]);
 	// C135: the tab's visuals come back as preview tabs (the first one shown when no address was asked for),
 	// and the ones the agent shows while this panel is up open at once.
@@ -235,7 +276,7 @@ export function PreviewPanel() {
 	usePreviewLayout(
 		surface,
 		web,
-		visible && !remoteBlocked && Boolean(state.url) && !state.error && !state.crashed,
+		visible && !device && !remoteBlocked && Boolean(state.url) && !state.error && !state.crashed,
 		command,
 	);
 	useEffect(
@@ -264,6 +305,20 @@ export function PreviewPanel() {
 			icon: Plus,
 			disabled: state.tabs.length >= PREVIEW_TAB_LIMIT,
 			onSelect: () => command({ action: "newTab" }),
+		},
+		{
+			id: "hard-reload",
+			label: t("panel.preview.hardReload"),
+			icon: RefreshCcw,
+			disabled: !pageReady,
+			onSelect: () => command({ action: "hardReload" }),
+		},
+		{
+			id: "find",
+			label: t("panel.preview.find"),
+			icon: Search,
+			disabled: !pageReady,
+			onSelect: () => setFindOpen(true),
 		},
 		{
 			id: "all-visuals",
@@ -325,6 +380,17 @@ export function PreviewPanel() {
 				onSelect: () => command({ action: "viewport", viewport }),
 			}),
 		),
+		...(["system", "light", "dark"] as const).map(
+			(scheme: PreviewColorScheme, index): ContextMenuItem => ({
+				id: `scheme-${scheme}`,
+				label: t(`panel.preview.scheme.${scheme}`),
+				icon: SCHEME_ICONS[scheme],
+				checked: state.colorScheme === scheme,
+				disabled: !pageReady,
+				separatorBefore: index === 0,
+				onSelect: () => command({ action: "colorScheme", scheme }),
+			}),
+		),
 		{
 			id: "save-pdf",
 			label: t("panel.preview.savePdf"),
@@ -347,9 +413,13 @@ export function PreviewPanel() {
 				className="flex min-h-(--sc-space-10) min-w-0 shrink-0 items-center gap-1 border-b border-(--sc-divider) px-3 py-2"
 				onSubmit={event => {
 					event.preventDefault();
+					setTyping(false);
 					const url = previewAddress(input);
 					setInvalid(!url);
-					if (url && !remoteBlocked) command({ action: "load", url });
+					if (url && !remoteBlocked) {
+						setDevice(null);
+						command({ action: "load", url });
+					}
 				}}
 			>
 				<IconButton
@@ -376,6 +446,7 @@ export function PreviewPanel() {
 				<input
 					aria-label={t("panel.preview.url")}
 					aria-invalid={invalid}
+					{...suggestions.fieldProps}
 					ref={urlInput}
 					inputMode="url"
 					autoCapitalize="none"
@@ -383,10 +454,13 @@ export function PreviewPanel() {
 					className="h-(--sc-control-sm) min-w-0 flex-1 rounded-(--sc-radius-sm) border border-(--sc-border) bg-(--sc-field) px-2 text-sc-sm text-(--sc-text) focus-visible:outline-(length:--sc-focus-width) focus-visible:outline-(--sc-focus-ring)"
 					value={input}
 					placeholder={t("panel.preview.placeholder")}
+					onBlur={() => setTyping(false)}
 					onChange={event => {
 						setInput(event.target.value);
 						setInvalid(false);
+						setTyping(true);
 					}}
+					onKeyDown={event => void suggestions.onKeyDown(event)}
 				/>
 				<div className="flex shrink-0 items-center">
 					{state.zoom !== 1 && (
@@ -446,6 +520,7 @@ export function PreviewPanel() {
 					/>
 				</div>
 			</form>
+			<PreviewSuggestions suggestions={suggestions} onOpen={openUrl} />
 			<Popover
 				anchorRef={problemsAnchor}
 				ariaLabel={t("panel.preview.problemsTitle")}
@@ -576,16 +651,22 @@ export function PreviewPanel() {
 				</div>
 			)}
 			<PreviewFeedbackBar state={state} feedback={feedback} command={command} tabId={tabId} pageReady={pageReady} />
+			{findOpen && pageReady && <PreviewFind onClose={() => setFindOpen(false)} />}
 			<div
 				className="min-h-(--sc-space-6) truncate px-3 py-1 text-sc-xs text-(--sc-text-muted)"
 				role="status"
 				data-preview-status
-				title={state.title}
+				title={state.hoverUrl || state.title}
 			>
 				{state.loading ? (
 					<span className="flex items-center gap-1.5">
 						<Spinner size="sm" />
 						{t("panel.preview.loading")}
+					</span>
+				) : state.hoverUrl ? (
+					// Orca's link status bubble: the address under the pointer, where the title otherwise shows.
+					<span className="font-mono" data-preview-hover-url>
+						{state.hoverUrl}
 					</span>
 				) : (
 					state.title
@@ -665,7 +746,9 @@ export function PreviewPanel() {
 				</div>
 			)}
 			<div ref={surface} className="relative min-h-0 flex-1" data-preview-surface>
-				{remoteBlocked ? (
+				{device ? (
+					<PreviewDeviceScreen active={visible} device={device} onClose={() => setDevice(null)} />
+				) : remoteBlocked ? (
 					<EmptyState icon={<Globe />} size="sm" title={t("panel.preview.remote")} />
 				) : state.crashed ? (
 					<div role="alert" className="p-4">
@@ -685,7 +768,20 @@ export function PreviewPanel() {
 						<EmptyState
 							icon={<Globe />}
 							size="sm"
-							title={t("panel.preview.failed")}
+							title={
+								state.retrying && /CONNECTION_REFUSED/.test(state.error) && addressHost(state.url)
+									? t("panel.preview.notRunning", { host: addressHost(state.url) })
+									: t("panel.preview.failed")
+							}
+							description={
+								state.retrying
+									? t(
+											/CONNECTION_REFUSED/.test(state.error)
+												? "panel.preview.waitingForServer"
+												: "panel.preview.waiting",
+										)
+									: undefined
+							}
 							actions={
 								<Button size="sm" variant="secondary" onClick={() => command({ action: "reload" })}>
 									{t("common.retry")}
@@ -695,15 +791,13 @@ export function PreviewPanel() {
 						<ErrorDetail className="break-words" error={state.error} />
 					</div>
 				) : !state.url ? (
-					<EmptyState
-						icon={<Globe />}
-						size="sm"
-						title={t("panel.preview.empty")}
-						actions={
-							<Button size="sm" variant="secondary" onClick={() => urlInput.current?.focus()}>
-								{t("panel.preview.enterUrl")}
-							</Button>
-						}
+					<PreviewStart
+						onEnterUrl={() => urlInput.current?.focus()}
+						onOpen={openUrl}
+						onDevice={setDevice}
+						remote={remote}
+						tabId={tabId}
+						worktree={worktree}
 					/>
 				) : web ? (
 					<PreviewStreamView active={visible} tab={state.activeTab} />
@@ -716,6 +810,10 @@ export function PreviewPanel() {
 					onOpen={visualId => command({ action: "openVisual", tabId, visualId })}
 				/>
 			)}
+			<PreviewAuthDialog
+				auth={state.auth}
+				onAnswer={(id, answer) => command({ action: "authAnswer", id, ...(answer ?? {}) })}
+			/>
 		</div>
 	);
 }

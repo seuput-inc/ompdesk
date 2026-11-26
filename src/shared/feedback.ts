@@ -44,7 +44,13 @@ export interface FeedbackInput {
 	errors?: readonly string[];
 	/** Error text carried in from a crash page or error surface. */
 	prefillError?: string | null;
+	/** A picture rides the clipboard (an issue URL cannot carry one): the body marks where to paste it. */
+	picture?: boolean;
 }
+
+/** Where the issue body asks for the copied picture; the body's first section, so a shortened body keeps it. */
+export const PICTURE_PASTE_MARK =
+	"### Screenshot\n\n<!-- The picture is on your clipboard: paste it here (⌘V / Ctrl+V). -->";
 
 /** One parsed runtime log line, rendered as a compact single-line summary. */
 interface RuntimeLogEntry {
@@ -94,6 +100,8 @@ export function formatErrorTail(rawLines: readonly string[]): string {
 
 export function buildIssueBody(input: FeedbackInput): string {
 	const sections: string[] = [];
+	// First: buildIssueUrl shortens a long body from its end, which must never drop the place to paste.
+	if (input.picture) sections.push(PICTURE_PASTE_MARK);
 	const description = input.description.trim();
 	if (description) sections.push(description);
 	const details: string[] = [];

@@ -134,6 +134,15 @@ export const IPC_ERROR_CODES = [
 	"relay_unavailable",
 	// A paired host's tab runs no browser sign-in waiting for the callback a device's browser brought back (host-services.ts `host.signIn.callback`).
 	"sign_in_unavailable",
+	// Linear or Jira refused, paused, could not be reached or failed (core `trackers/`, main tracker-accounts.ts).
+	"tracker_auth",
+	"tracker_rate_limited",
+	"tracker_network",
+	"tracker_forbidden",
+	"tracker_failed",
+	"tracker_busy",
+	// A paired host's tab has no process listening on the port a device's Preview asked for (host-services.ts `host.portTunnel.*`).
+	"port_unavailable",
 ] as const;
 
 export type IpcErrorCode = (typeof IPC_ERROR_CODES)[number];

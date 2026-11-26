@@ -327,21 +327,53 @@ export async function acquireSlot(locks: Locks, kind: SlotKind, who: Who): Promi
 export const HEAVY_HELD_ENV = "OMPDESK_HEAVY_HELD";
 
 /**
- * The staged `ompdesk` that runs the pool (`src/main/native-bin.ts` says where; `bun run build:native` stages it).
- * Present: that one, however old, because the `heavy` commands are a stable wire and `ensureNative` would rebuild
- * (cargo, outside the pool) every time a peer edits `native/`. Absent: `build` runs `ensureNative` once; on GitHub's
- * runners it never does and the pool is skipped (undefined): one job owns a runner, so there is nothing to share,
- * and ci.yml's `static` job (`bun run check:types`, `electron: "false"`) stages no binary
- * (`.github/actions/install`). Loaded on first use: the vitest and Playwright configs import this file for
- * `ramWorkers` and must not load `src/main/native-bin.ts` or `build-native.ts` for it.
+ * An `ompdesk` that can run the pool without building one, in this order: the staged one (`src/main/native-bin.ts`
+ * says where; `bun run build:native` stages it), an `ompdesk` on PATH, the installed app's. Any of them, however old,
+ * because the `heavy` commands are a stable wire. Only a real executable counts on PATH: on Windows OMPdesk's CLI
+ * launcher is an `ompdesk.cmd`, which Node cannot spawn without a shell, and it points at the installed app's
+ * binary, the next candidate anyway. Undefined on GitHub's runners when nothing is staged: one job owns a runner, so
+ * there is nothing to share, and ci.yml's `static` job (`bun run check:types`, `electron: "false"`) stages no binary
+ * (`.github/actions/install`).
  */
-async function heavyBinary(env: NodeJS.ProcessEnv, build: boolean): Promise<string | undefined> {
+export async function availableHeavyBinary(env: NodeJS.ProcessEnv): Promise<string | undefined> {
 	const { nativeBinPath } = await import("../src/main/native-bin");
 	const staged = nativeBinPath("ompdesk");
 	if (fs.existsSync(staged)) return staged;
-	if (env.GITHUB_ACTIONS || !build) return undefined;
+	if (env.GITHUB_ACTIONS) return undefined;
+	const exe = process.platform === "win32" ? "ompdesk.exe" : "ompdesk";
+	const onPath = (env.PATH ?? env.Path ?? "")
+		.split(path.delimiter)
+		.filter(Boolean)
+		.map(dir => path.join(dir, exe));
+	const installed =
+		process.platform === "darwin"
+			? ["/Applications/OMPdesk.app/Contents/Resources/ompdesk-bin/ompdesk"]
+			: process.platform === "win32"
+				? [
+						path.join(
+							env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"),
+							"Programs",
+							"OMPdesk",
+							"resources",
+							"ompdesk-bin",
+							exe,
+						),
+					]
+				: [];
+	return [...onPath, ...installed].find(file => fs.statSync(file, { throwIfNoEntry: false })?.isFile());
+}
+
+/**
+ * The `ompdesk` that runs the pool: an available one (`availableHeavyBinary`), else, for `build`, the staged one built
+ * by `ensureNative` (cargo, outside the pool: two fresh worktrees doing it at once swapped a 16 GB Mac, so it is the
+ * last resort). Loaded on first use: the vitest and Playwright configs import this file for `ramWorkers` and must not
+ * load `src/main/native-bin.ts` or `build-native.ts` for it.
+ */
+async function heavyBinary(env: NodeJS.ProcessEnv, build: boolean): Promise<string | undefined> {
+	const available = await availableHeavyBinary(env);
+	if (available || env.GITHUB_ACTIONS || !build) return available;
 	(await import("./build-native")).ensureNative();
-	return staged;
+	return (await import("../src/main/native-bin")).nativeBinPath("ompdesk");
 }
 
 export interface HeavyStatus {

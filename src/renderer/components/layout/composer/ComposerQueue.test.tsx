@@ -257,7 +257,7 @@ describe("ComposerQueuePill", () => {
 			original: "queued text",
 			token: hold.token,
 		});
-		expect(state.editingQueued?.snapshot).toEqual({ draft: "my draft", images: [image] });
+		expect(state.editingQueued?.snapshot).toEqual({ draft: "my draft", pictureSlots: [image] });
 		expect(state.draft).toBe("queued text");
 		expect(state.images).toEqual([]);
 		expect(settled).toHaveBeenCalledTimes(1);

@@ -421,6 +421,80 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // terminal port, 26 Nov 2026; the saved-command store and parser load with the palette, the sheet and xterm on first
 // open), on top of the review notes: measured 2,218,875 (local build of omp/agent/orca-terminal rebased on 73923cfad),
 // 2,857 bytes over. The budget is that measure plus 80 bytes.
+// The conversation's reading and writing extras (26 Nov 2026, orca-chat-reading). On the first screen, because the
+// first paint of a session draws them: a restored draft's pictures as ordered slots with their kept-file references
+// (`stores/composer.ts`, `draft-persistence.ts`, `use-composer-draft.ts`; a slot is a thumbnail, a still placeholder or
+// the "Attach again" chip inside the one picture strip), a long prompt's fold (`MessageBubble`), the rail's "Your
+// messages" button, the Find bar's listener (`TranscriptFind`), the transcript's Backspace and paste keys, the
+// composer's ⌘↵, the manual compaction events (a compaction under way when the page loads) and their strings. The
+// no-op notice is one branch of the compact call. Loaded idle after start (AppShell), off the first screen and drawn
+// from their loaded module: the Find bar (`TranscriptFindBar`), the rail's list (`PromptListPanel`), and the `@`
+// menu's sessions and paste links (`composer-extras.ts`, also on the composer's focus): measured 2,227,902 (local build
+// of omp/agent/orca-chat-reading rebased on be4a4064f), 9,027 bytes over main's budget, of which about 290 are main's
+// own since 26190f1da. The budget is that measure plus 80 bytes.
+// The Schedules channel names left `shared/schedules.ts` for `shared/schedule-channels.ts` (26 Nov 2026, routines),
+// so the first screen's `omp-api.ts` no longer pulls the schedule rules (cron, webhook senders, filters) with them.
+// All sessions (26 Nov 2026, orca-board). On the first screen: the board's destination and its window's start on it
+// (`stores/ui.ts` `openBoard`, AppShell's loader, `main.tsx` `#/board`), the sidebar's All sessions nav row (its
+// figures load as their own chunk behind Suspense), a session row's Copy title and the hover that loads its last
+// exchange (`lib/last-exchange.ts`, its own chunk), and a child's question in its opener's dock (`ChildAsks`, drawn
+// beside each pane's own card at once). The page, its peek, inbox and Resources load on intent with the other pages:
+// measured 2,230,764 (CI run 45754781110, omp/agent/orca-board at 3a021909f), 2,782 bytes over.
+// Dictation (26 Nov 2026, orca-dictation): the composer's take state with hold-to-talk, the words while speaking and
+// Retry (`hooks/use-dictation-take.ts`, `lib/dictation-press.ts`), the audio context made inside the press and the
+// microphone's opening (`lib/dictation-capture.ts`, because WebKit keeps a context made later suspended), the
+// `voice.dictate` key and the stream's RPC methods and strings. Loaded on use, off the first screen: the take's capture,
+// stream and whole-take transcription (`lib/dictation-live.ts`, while the microphone opens), the tidy pass and its
+// glossary (`lib/dictation-text.ts`, when a take first lands) and the window's dictation host (once dictation is on):
+// measured 2,231,148 (e2e-nightly run 45755595124), 3,166 bytes over. Both, with the title bar's tab strip gone
+// (c0ecfe18f): measured 2,231,648 (CI run 45769328347, omp/agent/orca-dictation at b85ccc38c). The budget is that
+// measure plus 80 bytes.
+// The new task sheet's pending rows (26 Nov 2026, orca-worktree-create): a task being made shows on the sidebar's first
+// screen (`layout/sidebar/NewTaskRows.tsx` and the step runner of `stores/new-tasks.ts`, its composer helpers already
+// loaded): 737 bytes measured over main (CI build of omp/agent/orca-worktree-create on 8fafd91b6), added to the budget.
+// Work sources outside GitHub (26 Nov 2026, orca-trackers): `omp-api.ts`'s `trackers` member and GitLab's request
+// timeout, the tracker fault codes in `shared/ipc-error-codes.ts`, GitHub sign-in's project scope argument and a new
+// task's exact branch (`stores/new-tasks.ts`, `worktreeCreate`'s `branch`); the channel names sit in
+// `shared/tracker-channels.ts` so the tracker rules stay with the source bar's lazy chunks: measured 2,232,761
+// (e2e-nightly run 45779116807, omp/agent/orca-trackers at c149c5843). The budget is that measure plus 80 bytes.
+// A paired host's task in its own section and a failed task's reason (`NewTaskRows` in `SidebarDevices.tsx`,
+// `errorDetail`), and an auto-grow field that follows a value set by code: 87 bytes (2,232,472 on e2e-nightly run
+// 45785242603, omp/agent/board-parity at 8ebe6c326, against the 2,232,385 its base measured), added to the budget.
+// The sidebar's Bots section (26 Nov 2026, orca-bots-ui: `SidebarBots.tsx`, the bots store, a bot row's facts and its
+// hover card; the sidebar is the phone's first screen, and a section that loads later would pop in). The dialogs, the
+// bot page, the templates and their words load later (OnDemandDialogs, `BotsPage` lazy, `bot-launch` imports the
+// templates on a template's create): 3,814 bytes measured over main (branch run 45779653731 on 9878bdec4), added to the
+// budget.
+// Organizing the sidebar (27 Nov 2026, orca-projects): the phone's first screen draws the session list, so what its
+// rows and stores carry is on it: project groups and their section header, project and session glyphs (colour,
+// emoji), the keyed sidebar entries (`setEntry`, `renameProjectGroup`), picking several rows and their menu
+// (`pickedMenuItems`), the row swipe (`SwipeActions`, `sessionSwipeItems`), the open row's account read
+// (`lib/tab-accounts.ts`), the sidebar requests store, the MRU close and the reopened tab's place; the dialogs (move,
+// rename, appearance, emoji, parent, clone, locate folder) load on use: 2,316 bytes over main's measure (2,234,781 in
+// CI run 45784490025 on 9878bdec4, whose budget was 2,232,465), added to the budget.
+// First-visit tours, feature tips and What OMPdesk can do (26 Nov 2026, orca-onboarding). On the first screen: the
+// guide store's tour and tip tables with their seen flags (`stores/starter-guide.ts`), the first-visit check in AppShell
+// (`onboarding/surface-tours.ts`, `spotlight-target.ts`), Help's new item and the update check's macOS notice state.
+// Both tours' cards, the tip row, the sheet and the desktop-only notices load as their own chunks: 2,863 bytes
+// (2,235,624 on CI run 45786852939, omp/agent/orca-onboarding on fbe7b7b8d, against the 2,232,761 its base measured),
+// added to the budget.
+// Bot items, groups and chat cards (26 Nov 2026, orca-bots-items): the sidebar's group rows (`bots/rooms/room-faces.tsx`),
+// the item page's three rebindable keys (`lib/keymap.ts`), the Bots page's room place (`bots/bot-page.ts`) and what
+// decides a chat's bot card and its Hide (`chat/bots/bot-card-kind.tsx`, `hidden-cards.ts`, read by `ToolCard`,
+// `MessageBubble` and `ChatStream`, all on the phone's first screen). The cards, the Items tab, the item page and the
+// room load later (`chat/bots/BotCards.tsx` lazy, `BotsPage` lazy): 5,283 bytes over the budget of its base (2,242,025
+// in branch run 45815652051 at 21739cea5, whose budget was 2,236,742), added to the budget with 80 bytes.
+// The Preview's session ports and link toast (26 Nov 2026, orca-preview): the sidebar polls what each open tab's
+// processes listen on (`stores/session-ports.ts`), names them in the row's tooltip and lists Open and Stop per port in
+// its menu (`session-menu.ts`; reading, ending and opening load by import(), `lib/session-port-actions.ts`), and the
+// phone's link toast offers Open in Preview beside Open on computer (a toast's `secondAction`,
+// `web/host-ui/WebHostUi.tsx`): 1,346 bytes over main (2,232,994 in e2e-nightly run 45773210485, omp/agent/orca-preview
+// at 6db34b5b0, over main's 2,231,648), added to the budget.
+// A bot's living face (27 Nov 2026, orca-bots-face): the face drawn at rest where a bot has no picture, on the phone's
+// first screen through the sidebar's Bots rows (`lib/bot-face.ts`, `common/BotFace.tsx`, `bots/BotAvatar.tsx`); the rig
+// that moves it loads after the page's `load` as its own chunk (`lib/bot-face-motion.ts` and what it imports): 4,452
+// bytes over the budget of its base (2,253,082 in CI run 45852447692 at a789da035, whose budget was 2,248,630), added
+// to the budget with 80 bytes.
 // An `a2ui` call's own chat row (26 Nov 2026, docs/design/a2ui.md §2), all of it in `main-*.js` (the engine and views
 // stay in the A2UI chunk): `buildHistoryRows` cutting the call out of its card, `MessageBubble` choosing the card, the
 // one lazy loader and its Suspense, the tool's row label, and the preload list's seven new chunk names (the A2UI chunk
@@ -431,7 +505,7 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // finding an a2ui chat row: 2,217,814 (branch run 45712547026), 782 bytes more.
 // Both merged with the quick terminal: measured 2,217,549 (branch run 45727586452; main's GitHub card went lazy
 // meanwhile), inside the quick terminal's budget, which stays.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_218_955;
+const WEB_FIRST_SCREEN_JS_BYTES = 2_253_162;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionInfo } from "../../shared/ipc-types";
-import { rankSessions } from "./session-search";
+import { rankSessions, splitSessionQuery } from "./session-search";
 
 function row(id: string, overrides: Partial<SessionInfo> = {}): SessionInfo {
 	return {
@@ -24,5 +24,25 @@ describe("rankSessions", () => {
 		const other = row("other");
 		expect(rankSessions([other, renamed], "login redirect")).toEqual([renamed]);
 		expect(rankSessions([other, renamed], "release")).toEqual([renamed]);
+	});
+
+	it("narrows by repo: and path: before ranking the free text", () => {
+		const app = row("app", { cwd: "/code/acme/app", firstMessage: "fix login" });
+		const site = row("site", { cwd: "/code/acme/site", firstMessage: "fix login" });
+		const other = row("other", { cwd: "/code/zeta/tool", firstMessage: "fix login" });
+		expect(rankSessions([app, site, other], "repo:ACME/APP login")).toEqual([app]);
+		expect(rankSessions([app, site, other], 'path:"acme/" repo:site')).toEqual([site]);
+		expect(rankSessions([app, site, other], "path:zeta", "recent", () => "anything")).toEqual([other]);
+		expect(rankSessions([app, site, other], "repo:nowhere")).toEqual([]);
+	});
+});
+
+describe("splitSessionQuery", () => {
+	it("keeps operator-looking text inside a word literal and drops empty operators", () => {
+		expect(splitSessionQuery('myrepo:x "a b" path: repo:"Acme App" https://h/path:x')).toEqual({
+			text: 'myrepo:x "a b" https://h/path:x',
+			repo: ["acme app"],
+			path: [],
+		});
 	});
 });

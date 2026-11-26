@@ -257,6 +257,12 @@ pub struct ControlTab {
     /// Its turn waits for the internet connection and goes on once it is back (`IpcTabInfo.awaitingConnection`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub awaiting_connection: bool,
+    /// The process tag of the tab's omp on this computer (`SessionProcesses`), absent for a paired host's tab.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_tag: Option<String>,
+    /// The tab's own omp, whose browser relay listens: never one of the session's servers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub omp_pid: Option<u32>,
 }
 
 /// Stock's auto-retry saga a running turn is in (`IpcRetrySaga`).
@@ -804,10 +810,33 @@ pub struct ClosedChild {
 pub enum ScheduleEvent {
     Webhook {
         key: String,
+        /// "Only when" tests, quoted fields, the old key after a rotate and the sender that signs calls: the
+        /// schedules' own (`schedules/hooks.rs`), carried through an update as they were.
+        #[serde(default, rename = "where", skip_serializing_if = "Option::is_none")]
+        filter: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contains: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pick: Option<Vec<String>>,
+        #[serde(
+            default,
+            rename = "previousKey",
+            skip_serializing_if = "Option::is_none"
+        )]
+        previous_key: Option<Value>,
+        #[serde(default, rename = "signedBy", skip_serializing_if = "Option::is_none")]
+        signed_by: Option<String>,
     },
     Github {
         repo: String,
         events: Vec<String>,
+        /// Only events by these logins, with this text in their title or text, or with this label.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contains: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
     },
     Files {
         path: String,
@@ -852,8 +881,12 @@ pub enum ScheduleFrequency {
     Once {
         at: String,
     },
+    /// Five-field cron in local time.
+    Cron {
+        expr: String,
+    },
     Event {
-        event: ScheduleEvent,
+        event: Box<ScheduleEvent>,
         /// A wait's deadline (ISO): it runs once, on its event or then.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         by: Option<String>,
@@ -923,6 +956,12 @@ pub struct ScheduleDraft {
     /// Where a fresh run's answer goes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub results_to: Option<ScheduleResultsTo>,
+    /// A fresh run's `--thinking` level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    /// A fresh run starts in a new worktree of `cwd` each time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<bool>,
 }
 
 /// `ScheduleDraft.resultsTo`.
@@ -1441,16 +1480,38 @@ pub struct ScheduleArgs {
     /// `self` or `notify`.
     #[serde(default)]
     pub results_to: Option<String>,
+    /// A start: five-field cron in local time.
+    #[serde(default)]
+    pub cron: Option<String>,
+    /// A fresh run's `--thinking` level; empty removes it.
+    #[serde(default)]
+    pub thinking: Option<String>,
+    /// A fresh run in a new worktree each time.
+    #[serde(default)]
+    pub worktree: Option<bool>,
 }
 
 /// `ompdesk_schedule`'s `on`: the trigger as the tool takes it (a webhook's key is made by the service).
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "source", rename_all = "lowercase")]
 pub enum ScheduleOn {
-    Webhook,
+    Webhook {
+        #[serde(default, rename = "where")]
+        filter: Option<Value>,
+        #[serde(default)]
+        contains: Option<String>,
+        #[serde(default)]
+        pick: Option<Vec<String>>,
+    },
     Github {
         repo: String,
         events: Vec<String>,
+        #[serde(default)]
+        from: Option<Vec<String>>,
+        #[serde(default)]
+        contains: Option<String>,
+        #[serde(default)]
+        label: Option<String>,
     },
     Files {
         path: String,
@@ -1569,7 +1630,8 @@ pub struct AppArgs {
 /// `ompdesk_bot`'s arguments (`BotArgs` of `tools.ts`).
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct BotArgs {
-    /// `create`, `list`, `pause`, `resume`, `set`, `look_around` or `hand`.
+    /// `create`, `offer`, `list`, `pause`, `resume`, `set`, `look_around` or `hand`. `offer` takes `name` and the
+    /// purpose in `text`.
     pub action: String,
     #[serde(default)]
     pub name: Option<String>,
@@ -1638,6 +1700,35 @@ pub struct ItemArgs {
     pub session: Option<String>,
     #[serde(default)]
     pub pr: Option<String>,
+    /// Several questions asked at once (`set`): each with its quick replies.
+    #[serde(default)]
+    pub asks: Option<Vec<AskArg>>,
+}
+
+/// One question of `ItemArgs.asks`.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct AskArg {
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub recommended: Option<u32>,
+    #[serde(default)]
+    pub multi: bool,
+}
+
+/// `ompdesk_room`'s arguments (`RoomArgs` of `tools.ts`).
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+pub struct RoomArgs {
+    /// `list`, `read` or `post`.
+    pub action: String,
+    /// Its id or name.
+    #[serde(default)]
+    pub room: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub limit: Option<u32>,
 }
 
 /// The control tools' names (`AGENT_CONTROL_TOOLS`).
@@ -1661,10 +1752,11 @@ pub enum Tool {
     Report,
     Bot,
     Item,
+    Room,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 18] = [
+    pub const ALL: [Tool; 19] = [
         Tool::List,
         Tool::Open,
         Tool::Send,
@@ -1683,6 +1775,7 @@ impl Tool {
         Tool::Report,
         Tool::Bot,
         Tool::Item,
+        Tool::Room,
     ];
 
     pub fn name(self) -> &'static str {
@@ -1705,6 +1798,7 @@ impl Tool {
             Tool::Report => "ompdesk_report",
             Tool::Bot => "ompdesk_bot",
             Tool::Item => "ompdesk_item",
+            Tool::Room => "ompdesk_room",
         }
     }
 

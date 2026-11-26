@@ -7,10 +7,12 @@
 //! Schedules and runs are held as the JSON they were written as, key order included, so a journal reads back what it
 //! held and writes it the way `JSON.stringify` did; the rules read the members they name.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
 
+use super::hooks;
 use super::rules::{self, Zone};
 use crate::control::js::string_of_value;
 use crate::server::Fault;
@@ -35,6 +37,16 @@ const WAKE_FAILURES_OFF: usize = 3;
 const PRECHECK_OUTPUT_KEPT: usize = 300;
 /// The line a run's answer ends with when it has nothing worth reporting (`NO_REPLY` in `src/shared/bots.ts`).
 pub(super) const NO_REPLY: &str = "NO_REPLY";
+/// Recent calls a webhook routine keeps (`WEBHOOK_CALLS_KEPT`); an older call's body file goes with it.
+const CALLS_KEPT: usize = 20;
+/// Delivery ids a webhook routine remembers, so a sender's retry or redelivery starts nothing (Orca keeps 50).
+const DELIVERIES_KEPT: usize = 50;
+/// After a rotate that keeps it, the old key still starts runs this long (`WEBHOOK_KEY_OVERLAP_MS`).
+const KEY_OVERLAP_MS: i64 = DAY_MS;
+/// The same refusal or duplicate within this long counts on the newest call's row (Orca groups them per minute).
+const FOLD_MS: i64 = 60_000;
+/// The longest signing secret kept.
+const SECRET_MAX_CHARS: usize = 500;
 
 /// Whether an answer is a quiet result: its last non-empty line, Markdown dressing aside (a heading's or a list's
 /// mark, `*`, `_`, backticks, `~` around it, a period after it), is `NO_REPLY`. The same rule as `isQuietResult` in
@@ -160,6 +172,18 @@ pub enum Out {
         name: String,
         to: Value,
     },
+    /// A webhook call that fires its routine: its whole body, for the run to read at `file`.
+    HookBody { file: String, body: Vec<u8> },
+    /// Files of calls that left a routine's recent calls.
+    RemoveFiles { files: Vec<String> },
+}
+
+/// One call of a routine's webhook as the edge read it (`schedules.webhook`): the bearer key it sent, its headers
+/// (lowercase names) and its body.
+pub struct HookCall {
+    pub bearer: Option<String>,
+    pub headers: BTreeMap<String, String>,
+    pub body: Vec<u8>,
 }
 
 struct Active {
@@ -227,6 +251,14 @@ pub struct Engine {
     closed: bool,
     /// Timed starts wait until then (`resumed`).
     settle_until: i64,
+    /// A webhook routine's recent calls, newest first, by schedule id (`SchedulesState.calls`).
+    calls: HashMap<String, Vec<Object>>,
+    /// The delivery ids each webhook routine took, oldest first (FX4).
+    delivered: HashMap<String, VecDeque<String>>,
+    /// Where a firing call's body is saved (the run logs' folder); none in a test.
+    hook_dir: Option<PathBuf>,
+    /// Tells calls apart within a moment (a call's id; not the runs' ids, which the captured scenarios count).
+    call_seq: u64,
     pub outs: Vec<Out>,
 }
 
@@ -252,6 +284,29 @@ fn webhook_key(frequency: Option<&Value>) -> Option<&str> {
     let event = frequency.get("event")?;
     (frequency.get("kind")?.as_str()? == "event" && event.get("source")?.as_str()? == "webhook")
         .then(|| event.get("key")?.as_str())?
+}
+
+/// A schedule's webhook trigger, when it has one.
+fn webhook_event(schedule: &Object) -> Option<&Value> {
+    webhook_key(schedule.get("frequency"))?;
+    schedule.get("frequency")?.get("event")
+}
+
+fn webhook_event_mut(schedule: &mut Object) -> Option<&mut Object> {
+    webhook_key(schedule.get("frequency"))?;
+    schedule
+        .get_mut("frequency")?
+        .get_mut("event")?
+        .as_object_mut()
+}
+
+/// A schedule as anything outside the core sees it: without its webhook's signing secret.
+fn shown(schedule: &Object) -> Object {
+    let mut shown = schedule.clone();
+    if let Some(event) = webhook_event_mut(&mut shown) {
+        event.shift_remove("secret");
+    }
+    shown
 }
 
 /// `timingSafeEqual` behind its length check: whether two keys are the same, in a time that says nothing of where
@@ -313,8 +368,27 @@ impl Engine {
             last_ask: 0,
             closed: false,
             settle_until: 0,
+            calls: HashMap::new(),
+            delivered: HashMap::new(),
+            hook_dir: None,
+            call_seq: 0,
             outs: Vec::new(),
         }
+    }
+
+    /// Where a firing webhook call's body is saved for its run (the run logs' folder).
+    pub fn set_hook_dir(&mut self, dir: PathBuf) {
+        self.hook_dir = Some(dir);
+    }
+
+    /// The file a call's body is saved in.
+    fn body_file(&self, call: &str) -> Option<String> {
+        let dir = self.hook_dir.as_ref()?;
+        Some(
+            dir.join(format!("{call}.webhook"))
+                .to_string_lossy()
+                .into_owned(),
+        )
     }
 
     fn parse(&self, value: Option<&Value>) -> Option<i64> {
@@ -347,6 +421,7 @@ impl Engine {
         self.paused = paused;
         self.schedules = schedules;
         self.runs = runs;
+        self.calls = self.read_calls(stored);
         let ended = Value::String(rules::iso(now));
         for run in &mut self.runs {
             if text(run, "status") == Some("running") {
@@ -428,7 +503,7 @@ impl Engine {
         let frequency = schedule.get("frequency")?;
         match kind_of(schedule)? {
             "once" => self.parse(frequency.get("at")),
-            "interval" | "daily" => {
+            "interval" | "daily" | "cron" => {
                 let id = id_of(schedule);
                 let base = match self
                     .runs
@@ -516,21 +591,69 @@ impl Engine {
             let next = self.next.get(id).map(|next| rules::iso(*next));
             next_runs.insert(id.to_owned(), next.map_or(Value::Null, Value::String));
         }
-        json!({
+        let schedules: Vec<Object> = self.schedules.iter().map(shown).collect();
+        let mut state = json!({
             "paused": self.paused,
-            "schedules": self.schedules,
+            "schedules": schedules,
             "runs": self.runs,
             "nextRuns": next_runs,
-        })
+        });
+        if let Some(calls) = self.calls_value() {
+            state["calls"] = calls;
+        }
+        state
+    }
+
+    /// The recent webhook calls by schedule, in the schedules' order; none while no routine has one.
+    fn calls_value(&self) -> Option<Value> {
+        let calls: Object = self
+            .schedules
+            .iter()
+            .filter_map(|schedule| {
+                let id = id_of(schedule);
+                let calls = self.calls.get(id).filter(|calls| !calls.is_empty())?;
+                Some((id.to_owned(), json!(calls)))
+            })
+            .collect();
+        (!calls.is_empty()).then_some(Value::Object(calls))
+    }
+
+    /// The recent calls a journal kept, for the routines it holds.
+    fn read_calls(&self, stored: Option<&str>) -> HashMap<String, Vec<Object>> {
+        let Some(parsed) = stored.and_then(|stored| {
+            serde_json::from_str::<Value>(&crate::json::whole_surrogates(stored)).ok()
+        }) else {
+            return HashMap::new();
+        };
+        let Some(kept) = parsed.get("calls").and_then(Value::as_object) else {
+            return HashMap::new();
+        };
+        kept.iter()
+            .filter(|(id, _)| self.find(id).is_some())
+            .map(|(id, calls)| {
+                let calls = calls
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_object)
+                    .take(CALLS_KEPT)
+                    .cloned()
+                    .collect();
+                (id.clone(), calls)
+            })
+            .collect()
     }
 
     fn journal(&self) -> String {
-        let stored = json!({
+        let mut stored = json!({
             "version": 1,
             "paused": self.paused,
             "schedules": self.schedules,
             "runs": self.runs,
         });
+        if let Some(calls) = self.calls_value() {
+            stored["calls"] = calls;
+        }
         // `JSON.stringify(stored, null, 2)`.
         serde_json::to_string_pretty(&stored).unwrap_or_default()
     }
@@ -563,21 +686,29 @@ impl Engine {
         let Some(at) = self.routine(id) else {
             return false;
         };
+        if !self.take_event(at, detail) {
+            self.changed();
+        }
+        true
+    }
+
+    /// A routine's event: a run now, or (true) kept for one more run after the running one.
+    fn take_event(&mut self, at: usize, detail: &str) -> bool {
+        let id = id_of(&self.schedules[at]).to_owned();
         let mut line = rules::one_line(detail);
         if line.is_empty() {
             line = "The trigger fired".into();
         }
-        if self.active.contains_key(id) {
-            let kept = self.pending.entry(id.to_owned()).or_default();
+        if self.active.contains_key(&id) {
+            let kept = self.pending.entry(id).or_default();
             kept.push(line);
             let over = kept.len().saturating_sub(PENDING_DETAILS_MAX);
             kept.drain(..over);
             return true;
         }
-        self.chain.remove(id);
+        self.chain.remove(&id);
         self.start_event(at, vec![line]);
-        self.changed();
-        true
+        false
     }
 
     /// A replacement source cannot spend its predecessor's pending quota or replay its queued details.
@@ -600,22 +731,280 @@ impl Engine {
         }
     }
 
-    /// `POST /hooks/<id>` with `Authorization: Bearer <key>`: fires the routine whose webhook key it is.
-    pub fn webhook(&mut self, id: &str, bearer: &str, detail: &str, now: i64) -> &'static str {
-        let key = self
+    /// `POST /hooks/<id>`: fires the routine whose webhook it is, when the call carries its key (`Authorization:
+    /// Bearer`, or the old key within its overlap after a rotate) or, once the routine has a signing secret, only its
+    /// sender's signature. Every call the routine's id names is one of its recent calls with what became of it.
+    pub fn webhook(&mut self, id: &str, call: &HookCall, now: i64) -> &'static str {
+        self.hook(id, call, None, now)
+    }
+
+    /// `webhook` with what fired the run given (`told`) instead of read from the call: the captured scenarios'
+    /// webhook steps say it as main once did.
+    #[cfg(test)]
+    pub fn webhook_told(
+        &mut self,
+        id: &str,
+        call: &HookCall,
+        told: &str,
+        now: i64,
+    ) -> &'static str {
+        self.hook(id, call, Some(told), now)
+    }
+
+    fn hook(&mut self, id: &str, call: &HookCall, told: Option<&str>, now: i64) -> &'static str {
+        self.now = now;
+        let Some(event) = self
             .find(id)
-            .and_then(|at| webhook_key(self.schedules[at].get("frequency")));
-        let Some(key) = key else {
+            .and_then(|at| webhook_event(&self.schedules[at]))
+            .cloned()
+        else {
             return "unknown";
         };
-        if !same_key(key.as_bytes(), bearer.as_bytes()) {
+        if let Err(reason) = self.admitted(&event, call) {
+            self.log_call(id, "refused", Some(reason), None, false);
+            self.changed();
             return "denied";
         }
-        if self.fire(id, detail, now) {
-            "fired"
-        } else {
-            "off"
+        self.hook_call(id, &event, call, false, told)
+    }
+
+    /// Whether a call may start its routine: its sender's signature once a secret is set (the key alone no longer
+    /// does), else its key; why not.
+    fn admitted(&self, event: &Value, call: &HookCall) -> Result<(), &'static str> {
+        if let Some(sender) = event.get("signedBy").and_then(Value::as_str) {
+            let sender = hooks::Sender::parse(sender).ok_or("unknown sender")?;
+            let secret = event
+                .get("secret")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            return hooks::verify(sender, secret, &call.headers, &call.body, self.now);
         }
+        let bearer = call.bearer.as_deref().ok_or("no key")?.as_bytes();
+        let key = event.get("key").and_then(Value::as_str).unwrap_or_default();
+        let old = event
+            .get("previousKey")
+            .filter(|old| {
+                self.parse(old.get("until"))
+                    .is_some_and(|until| until > self.now)
+            })
+            .and_then(|old| old.get("key")?.as_str());
+        // Both compared, so the time says nothing of which key it was.
+        let current = same_key(key.as_bytes(), bearer);
+        let previous = same_key(old.unwrap_or_default().as_bytes(), bearer) && old.is_some();
+        if current || previous {
+            Ok(())
+        } else {
+            Err("wrong key")
+        }
+    }
+
+    /// An admitted call (or Settings' sample): off, filtered out, a delivery already taken, or its event, its body
+    /// saved for the run first.
+    fn hook_call(
+        &mut self,
+        id: &str,
+        event: &Value,
+        call: &HookCall,
+        sample: bool,
+        told: Option<&str>,
+    ) -> &'static str {
+        let Some(at) = self.routine(id) else {
+            self.log_call(id, "off", None, None, sample);
+            self.changed();
+            return "off";
+        };
+        let document = hooks::document(&call.headers, &call.body);
+        if !hooks::wanted(event, &document, &call.body) {
+            self.log_call(id, "ignored", None, None, sample);
+            self.changed();
+            return "ignored";
+        }
+        let sender = event
+            .get("signedBy")
+            .and_then(Value::as_str)
+            .and_then(hooks::Sender::parse);
+        if let Some(delivery) =
+            hooks::delivery(&call.headers, &document, sender).filter(|_| !sample)
+        {
+            let seen = self.delivered.entry(id.to_owned()).or_default();
+            if seen.contains(&delivery) {
+                self.log_call(id, "duplicate", None, None, sample);
+                self.changed();
+                return "duplicate";
+            }
+            seen.push_back(delivery);
+            if seen.len() > DELIVERIES_KEPT {
+                seen.pop_front();
+            }
+        }
+        self.call_seq += 1;
+        let call_id = format!("call-{}-{}", self.now, self.call_seq);
+        let file = self.body_file(&call_id);
+        let detail = match told {
+            Some(told) => told.to_owned(),
+            None => hooks::detail(event, &document, &call.body, file.as_deref(), sample),
+        };
+        if let Some(file) = file {
+            self.outs.push(Out::HookBody {
+                file,
+                body: call.body.clone(),
+            });
+        }
+        let queued = self.take_event(at, &detail);
+        let run = self.active.get(id).and_then(|active| active.run.clone());
+        let (verdict, run) = if queued {
+            ("queued", None)
+        } else {
+            ("started", run)
+        };
+        self.log_call_as(&call_id, id, verdict, None, run, sample);
+        self.changed();
+        "fired"
+    }
+
+    fn log_call(
+        &mut self,
+        schedule: &str,
+        verdict: &str,
+        reason: Option<&str>,
+        run: Option<String>,
+        sample: bool,
+    ) {
+        self.call_seq += 1;
+        let call = format!("call-{}-{}", self.now, self.call_seq);
+        self.log_call_as(&call, schedule, verdict, reason, run, sample);
+    }
+
+    /// One recent call of a routine, newest first; the same refusal or duplicate within `FOLD_MS` counts on the
+    /// newest row instead. A call pushed past `CALLS_KEPT` takes its body file with it.
+    fn log_call_as(
+        &mut self,
+        call: &str,
+        schedule: &str,
+        verdict: &str,
+        reason: Option<&str>,
+        run: Option<String>,
+        sample: bool,
+    ) {
+        let at = rules::iso(self.now);
+        let now = self.now;
+        let calls = self.calls.entry(schedule.to_owned()).or_default();
+        if matches!(verdict, "refused" | "duplicate")
+            && let Some(newest) = calls.first_mut().filter(|newest| {
+                text(newest, "verdict") == Some(verdict)
+                    && text(newest, "reason") == reason
+                    && text(newest, "at")
+                        .and_then(|at| rules::date_parse(at, self.zone.as_ref()))
+                        .is_some_and(|then| now - then <= FOLD_MS)
+            })
+        {
+            let count = newest.get("count").and_then(Value::as_u64).unwrap_or(1) + 1;
+            newest.insert("count".into(), count.into());
+            newest.insert("at".into(), at.into());
+            return;
+        }
+        let mut row = Object::new();
+        row.insert("id".into(), call.into());
+        row.insert("at".into(), at.into());
+        row.insert("verdict".into(), verdict.into());
+        if let Some(reason) = reason {
+            row.insert("reason".into(), reason.into());
+        }
+        if let Some(run) = run {
+            row.insert("run".into(), run.into());
+        }
+        if sample {
+            row.insert("sample".into(), true.into());
+        }
+        calls.insert(0, row);
+        let gone: Vec<String> = calls
+            .drain(CALLS_KEPT.min(calls.len())..)
+            .map(|gone| id_of(&gone).to_owned())
+            .collect();
+        self.remove_bodies(gone);
+    }
+
+    /// The body files of calls that left: those that fired have one.
+    fn remove_bodies(&mut self, calls: Vec<String>) {
+        let files: Vec<String> = calls
+            .iter()
+            .filter_map(|call| self.body_file(call))
+            .collect();
+        if !files.is_empty() {
+            self.outs.push(Out::RemoveFiles { files });
+        }
+    }
+
+    /// A new webhook key (`rotateKey`); `keep` keeps the old one working `KEY_OVERLAP_MS`, else the events it let
+    /// in that wait for the next run go with it.
+    fn rotate_key(&mut self, at: usize, keep: bool) -> Result<(), Fault> {
+        webhook_event(&self.schedules[at])
+            .ok_or_else(|| fault("Only a webhook routine has a key"))?;
+        let key = (self.keys)();
+        if key.is_empty() {
+            return Err(fault("No new key could be made on this computer"));
+        }
+        let until = rules::iso(self.now + KEY_OVERLAP_MS);
+        let id = id_of(&self.schedules[at]).to_owned();
+        let Some(event) = webhook_event_mut(&mut self.schedules[at]) else {
+            return Err(fault("Only a webhook routine has a key"));
+        };
+        let old = event.insert("key".into(), key.into());
+        match old
+            .as_ref()
+            .and_then(Value::as_str)
+            .filter(|old| keep && !old.is_empty())
+        {
+            Some(old) => {
+                event.insert("previousKey".into(), json!({ "key": old, "until": until }));
+            }
+            None => {
+                event.shift_remove("previousKey");
+            }
+        }
+        if !keep {
+            self.pending.remove(&id);
+        }
+        Ok(())
+    }
+
+    /// `setSecret`: calls must carry `sender`'s signature made with `secret`, or (no sender) the key again.
+    fn set_secret(
+        &mut self,
+        at: usize,
+        sender: Option<&Value>,
+        secret: Option<&Value>,
+    ) -> Result<(), Fault> {
+        let sender = match sender.and_then(Value::as_str) {
+            None => None,
+            Some(name) => {
+                Some(hooks::Sender::parse(name).ok_or_else(|| fault("Unknown webhook sender"))?)
+            }
+        };
+        let secret = secret
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_owned();
+        if let Some(sender) = sender
+            && (!hooks::secret_usable(sender, &secret) || secret.chars().count() > SECRET_MAX_CHARS)
+        {
+            return Err(fault("That signing secret cannot sign for this sender"));
+        }
+        let Some(event) = webhook_event_mut(&mut self.schedules[at]) else {
+            return Err(fault("Only a webhook routine takes a signing secret"));
+        };
+        match sender {
+            Some(sender) => {
+                event.insert("signedBy".into(), sender.name().into());
+                event.insert("secret".into(), secret.into());
+            }
+            None => {
+                event.shift_remove("signedBy");
+                event.shift_remove("secret");
+            }
+        }
+        Ok(())
     }
 
     /// A routine's trigger cannot watch what it names: recorded as a failed run with the reason, and nothing runs.
@@ -710,6 +1099,37 @@ impl Engine {
                 if let Some(id) = running {
                     self.stop_schedule(&id);
                 }
+            }
+            Some("rotateKey") => {
+                let at = named(self)?;
+                self.rotate_key(at, request.get("keepOld") == Some(&Value::Bool(true)))?;
+            }
+            Some("setSecret") => {
+                let at = named(self)?;
+                self.set_secret(at, request.get("sender"), request.get("secret"))?;
+            }
+            Some("sampleCall") => {
+                let at = named(self)?;
+                let id = id_of(&self.schedules[at]).to_owned();
+                let event = webhook_event(&self.schedules[at])
+                    .cloned()
+                    .ok_or_else(|| fault("Only a webhook routine takes a test call"))?;
+                let body = json!({
+                    "sample": true,
+                    "message": "A test call from OMPdesk's Settings › Schedules",
+                    "sentAt": rules::iso(now),
+                });
+                let call = HookCall {
+                    bearer: None,
+                    headers: BTreeMap::from([(
+                        "content-type".to_owned(),
+                        "application/json".to_owned(),
+                    )]),
+                    body: body.to_string().into_bytes(),
+                };
+                // The sample's own outcome is one of its recent calls; the state it changed is told already.
+                self.hook_call(&id, &event, &call, true, None);
+                return Ok(Commanded::Done);
             }
             _ => return Err(fault("Unknown schedules action")),
         }
@@ -816,16 +1236,44 @@ impl Engine {
             clean.insert("wakeSession".into(), string_of_value(kept).into());
         }
         let before = existing.and_then(|at| self.schedules[at].get("frequency"));
-        if let Some(sent) = webhook_key(clean.get("frequency")) {
-            let key = match (sent, webhook_key(before)) {
+        if let Some(sent) = webhook_key(clean.get("frequency")).map(str::to_owned) {
+            let kept = before
+                .filter(|before| webhook_key(Some(before)).is_some())
+                .and_then(|before| before.get("event"));
+            let key = match (
+                sent.as_str(),
+                kept.and_then(|kept| kept.get("key"))
+                    .and_then(Value::as_str),
+            ) {
                 ("", Some(kept)) if !kept.is_empty() => kept.to_owned(),
                 ("", _) => (self.keys)(),
                 (sent, _) => sent.to_owned(),
             };
-            clean.insert(
-                "frequency".into(),
-                json!({ "kind": "event", "event": { "source": "webhook", "key": key } }),
-            );
+            let now = self.now;
+            let live = |old: &Value| {
+                old.get("until")
+                    .and_then(Value::as_str)
+                    .and_then(|until| rules::date_parse(until, self.zone.as_ref()))
+                    .is_some_and(|until| until > now)
+            };
+            if let Some(event) = clean
+                .get_mut("frequency")
+                .and_then(|frequency| frequency.get_mut("event"))
+                .and_then(Value::as_object_mut)
+            {
+                event.insert("key".into(), key.into());
+                // What only the routine's own commands set (`setSecret`, `rotateKey`): never taken from a draft, kept
+                // by every save; an old key past its overlap goes.
+                for name in ["signedBy", "secret", "previousKey"] {
+                    event.shift_remove(name);
+                    let value = kept
+                        .and_then(|kept| kept.get(name))
+                        .filter(|value| name != "previousKey" || live(value));
+                    if let Some(value) = value {
+                        event.insert(name.into(), value.clone());
+                    }
+                }
+            }
         }
         let draft = Value::Object(clean);
         let problem = rules::draft_problem(&draft, self.zone.as_ref()).unwrap_or(Some("interval"));
@@ -1394,7 +1842,7 @@ impl Engine {
             self.ended(run, None, failed, now);
             return;
         };
-        let mut told = schedule.clone();
+        let mut told = shown(schedule);
         let active = self.active.get(&id);
         let prompt = active.map(|active| active.prompt.clone());
         told.insert("prompt".into(), prompt.into());
@@ -1431,6 +1879,19 @@ impl Engine {
                 run: run.to_owned(),
                 text,
             });
+        }
+    }
+
+    /// What main learned of a fresh run as it ended: the session file its omp saved and the worktree it ran in
+    /// (`ScheduleRun.session`, `.worktree`).
+    pub fn run_facts(&mut self, run: &str, session: Option<String>, worktree: Option<String>) {
+        let Some(record) = self.runs.iter_mut().find(|record| id_of(record) == run) else {
+            return;
+        };
+        for (name, value) in [("session", session), ("worktree", worktree)] {
+            if let Some(value) = value.filter(|value| !value.is_empty()) {
+                record.insert(name.into(), value.into());
+            }
         }
     }
 
@@ -1734,6 +2195,10 @@ impl Engine {
         self.next.remove(&id);
         self.pending.remove(&id);
         self.chain.remove(&id);
+        self.delivered.remove(&id);
+        if let Some(calls) = self.calls.remove(&id) {
+            self.remove_bodies(calls.iter().map(|call| id_of(call).to_owned()).collect());
+        }
     }
 
     /// Spent one-time schedules past `once_done_kept`, the oldest first, are deleted with their runs.

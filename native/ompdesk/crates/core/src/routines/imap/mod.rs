@@ -20,7 +20,7 @@ use crate::server::{Fault, Registry, Reply, Scope};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const MESSAGES_PER_POLL: usize = 20;
 const BODY_BYTES: usize = 6_000;
-const HEADER_FIELDS: &str = "FROM TO CC DELIVERED-TO SUBJECT DATE MESSAGE-ID IN-REPLY-TO AUTO-SUBMITTED CONTENT-TYPE CONTENT-TRANSFER-ENCODING";
+const HEADER_FIELDS: &str = "FROM TO CC DELIVERED-TO SUBJECT DATE MESSAGE-ID IN-REPLY-TO AUTO-SUBMITTED AUTHENTICATION-RESULTS CONTENT-TYPE CONTENT-TRANSFER-ENCODING";
 const RESPONSE_MAX: usize = crate::http::BODY_MAX;
 
 #[derive(Deserialize)]
@@ -54,6 +54,13 @@ pub(super) struct Mailbox {
     #[cfg(test)]
     #[serde(skip)]
     tls: Option<Arc<ClientConfig>>,
+}
+
+impl Mailbox {
+    /// The server the mailbox is read from: whose `Authentication-Results` a routine trusts.
+    pub(in crate::routines) fn host(&self) -> &str {
+        &self.host
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

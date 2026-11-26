@@ -44,6 +44,10 @@ if (platform === "win32") {
 // (Agents, Schedules and Stats are always nav rows).
 const prefs: Record<string, unknown> = {};
 if (query.get("rail") === "all") prefs.sidebar = { railPins: ["usage", "jobs"] };
+// No first-visit tour or feature tip over a capture or an audit (stores/starter-guide.ts `seenAll`) unless `?tours=1`.
+if (query.get("tours") !== "1") prefs.starterGuide = { seenAll: true };
+// Bot faces stay at rest over a capture (common/BotFace.tsx) unless `?faces=1`.
+if (query.get("faces") !== "1") prefs.botFaces = "rest";
 // The app takes its theme from prefs once they load (and resolves "system" from the OS, not from localStorage),
 // so `?theme=` has to be a pref too or a dark capture paints light. Any theme id works (`?theme=github-dark`).
 const theme = migrateThemeName(query.get("theme"));

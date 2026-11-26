@@ -1,6 +1,6 @@
 /**
- * Tab lifecycle chores beside the title bar's tab strip (`tab-strip/SessionTabStrip.tsx`) and the sidebar, which both
- * pick and close tabs; nothing here renders.
+ * Tab lifecycle chores that used to ride on the (removed) tab strip. Session
+ * tabs are pooled sidecars navigated from the sidebar; nothing here renders.
  *
  * - A ⌘W-armed close (live run) auto-cancels after `confirmCloseMs`.
  * - The untargeted startup tab is an idle landing surface, not a permanent
@@ -85,7 +85,7 @@ export function TabHousekeeping({ confirmCloseMs = CONFIRM_CLOSE_MS }: { confirm
 				queue.steering.length === 0 &&
 				queue.followUp.length === 0 &&
 				composer.draft.trim().length === 0 &&
-				composer.images.length === 0
+				composer.pictureSlots.length === 0
 			);
 		};
 		const left = tabs.find(

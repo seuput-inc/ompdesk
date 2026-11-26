@@ -189,6 +189,7 @@ html[data-input="touch"]
 	:is(
 		.omp-session-sidebar [data-workspace-group],
 		.omp-session-sidebar [data-destination],
+		.omp-session-sidebar [data-sidebar-nav-row],
 		.omp-session-sidebar .omp-family-row,
 		.omp-list-row,
 		.settings-field-row
@@ -2421,6 +2422,7 @@ html[data-shell]
 		[data-sidebar-device-color] > button,
 		[data-sidebar-device-new-chat],
 		[data-sidebar-chats] > div:first-child > button,
+		[data-sidebar-bots] > div:first-child > button,
 		.omp-sidebar-header button,
 		.omp-sidebar-controls button,
 		[data-sidebar-destinations] button,
@@ -2443,7 +2445,8 @@ html[data-shell]
 		[data-device-state] > div:first-child,
 		[data-device-group] > div:first-child,
 		[data-sidebar-device-header],
-		[data-sidebar-chats] > div:first-child
+		[data-sidebar-chats] > div:first-child,
+		[data-sidebar-bots] > div:first-child
 	) {
 	height: auto;
 	min-height: 36px;
@@ -2457,7 +2460,8 @@ html[data-shell="phone"]
 		[data-device-state] > div:first-child,
 		[data-device-group] > div:first-child,
 		[data-sidebar-device-header],
-		[data-sidebar-chats] > div:first-child
+		[data-sidebar-chats] > div:first-child,
+		[data-sidebar-bots] > div:first-child
 	) {
 	min-height: 44px;
 }

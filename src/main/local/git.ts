@@ -21,6 +21,7 @@ import {
 	repoRoot,
 } from "./git/changes";
 import { githubCommand } from "./git/github";
+import { gitlabCommand } from "./git/gitlab";
 import { getNestedRepos } from "./git/nested";
 import {
 	prCheckout,
@@ -37,8 +38,18 @@ import {
 	prReview,
 } from "./git/pr";
 import * as scm from "./git/scm";
+import { setupDraft } from "./git/setup-draft";
 import { getGitUnlanded } from "./git/unlanded";
-import { createWorktree, prefetchWorktreeBase, removeWorktree, worktreeBranchSource } from "./git/worktree";
+import {
+	createWorktree,
+	prefetchWorktreeBase,
+	prepareCreatedWorktree,
+	removeWorktree,
+	renameUnpushedBranch,
+	sparsePresets,
+	worktreeBranchSource,
+} from "./git/worktree";
+import { hasSetupScript, saveSetupScript, setupScriptText, WORKTREE_HOOK_SCRIPTS } from "./git/worktree-seed";
 import { LocalCommandError, type LocalHandler } from "./types";
 
 const str = (value: unknown) => (typeof value === "string" ? value : undefined);
@@ -81,13 +92,36 @@ export const handlers: Record<string, LocalHandler> = {
 				baseRef: str(command.baseRef) || "HEAD",
 				branchPrefix: str(command.branchPrefix),
 				branch: worktreeBranchSource(command.branch),
+				sparse: str(command.sparse) || undefined,
+				...(command.prepare === false ? { prepare: false } : {}),
 				...(requestId && requestId.length <= 100 ? { request: { caller: "local", id: requestId } } : {}),
 			},
 			ctx.bridge,
 		);
 	},
+	// The new task sheet's own step after `worktree_create {prepare: false}`: the seed and the setup hook.
+	worktree_prepare: (command, ctx) => prepareCreatedWorktree(str(command.baseCwd) ?? ctx.cwd, str(command.path) ?? ""),
 	// The worktree dialog's fetch of the remote default branch when it opens (git/worktree.ts).
 	worktree_prefetch: (command, ctx) => prefetchWorktreeBase(str(command.baseCwd) ?? ctx.cwd),
+	// The repository's `.ompdesk/sparse` presets (core git/sparse.rs), offered by the new task sheet.
+	worktree_sparse_presets: (command, ctx) => sparsePresets(str(command.baseCwd) ?? ctx.cwd),
+	// A setup hook drafted from another tool's config when the repository has none (git/setup-draft.ts): read only.
+	worktree_setup_draft: async (command, ctx) => {
+		const cwd = str(command.baseCwd) ?? ctx.cwd;
+		const primary = await primaryRoot(cwd).catch(() => null);
+		if (!primary || (await hasSetupScript(primary))) return null;
+		const draft = await setupDraft(cwd);
+		return draft ? { ...draft, script: WORKTREE_HOOK_SCRIPTS.setup, text: setupScriptText(draft.commands) } : null;
+	},
+	// The person saves the draft they read and edited; never over an existing script.
+	worktree_setup_save: async (command, ctx) =>
+		saveSetupScript(await primaryRoot(str(command.baseCwd) ?? ctx.cwd), str(command.text) ?? ""),
+	// A name for a new task from its first prompt, by the session's title model (bridge modes/auto-title-engine.ts).
+	worktree_name_suggest: (command, ctx) =>
+		ctx.bridge.request("suggest_title", { text: (str(command.text) ?? "").slice(0, 4000) }),
+	// A new task's placeholder branch named for its work once its session has a title, while never published (FS91).
+	worktree_rename_branch: (command, ctx) =>
+		renameUnpushedBranch(ctx.cwd, str(command.from) ?? "", str(command.to) ?? ""),
 	worktree_remove: (command, ctx) =>
 		removeWorktree({ path: str(command.path) ?? "", force: command.force === true }, ctx.bridge, ctx.cwd),
 	// Orphaned worktrees (src/main/worktree-orphans.ts): which folders sessions hold is the whole app's, not this tab's.
@@ -115,6 +149,8 @@ export const handlers: Record<string, LocalHandler> = {
 	pr_repo: (_command, ctx) => prRepo(ctx.cwd),
 	// Agents › GitHub: issues, Actions, releases, notifications, repositories (request validated in github.ts).
 	github: (command, ctx) => githubCommand(ctx.cwd, command.request, command.background === true),
+	// Agents › GitHub › GitLab: merge requests over glab (request validated in gitlab.ts).
+	gitlab: (command, ctx) => gitlabCommand(ctx.cwd, command.request),
 	pr_list: (command, ctx) =>
 		prList(ctx.cwd, {
 			state: command.state as "open" | "closed" | "merged" | "all" | undefined,

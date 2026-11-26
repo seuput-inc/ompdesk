@@ -47,9 +47,7 @@ impl Desktop for Idle {
 impl Hooks for Idle {
     fn webhook(
         &self,
-        _id: &str,
-        _bearer: &str,
-        _detail: &str,
+        _request: super::deps::HookRequest,
     ) -> BoxFuture<'_, super::deps::HookOutcome> {
         Box::pin(async { super::deps::HookOutcome::Unknown })
     }

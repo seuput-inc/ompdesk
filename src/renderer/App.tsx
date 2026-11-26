@@ -1,7 +1,9 @@
 import { type ComponentType, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { MenuAction, RunProgressState } from "../shared/ipc-types";
+import { TRANSCRIPT_FIND_EVENT } from "./components/chat/TranscriptFind";
 import { Button, InlineNotice, Modal, ToastStack } from "./components/common";
 import { ChangelogDialog, WhatsNewNotice } from "./components/dialogs/ChangelogDialog";
+import { ChildAsks } from "./components/dialogs/ChildAsks";
 import { ExtensionDialog } from "./components/dialogs/ExtensionDialog";
 import { ModelRestoreDialog } from "./components/dialogs/ModelRestoreDialog";
 import { PlanApprovalDialog } from "./components/dialogs/PlanApprovalDialog";
@@ -13,7 +15,6 @@ import { AppShell } from "./components/layout/AppShell";
 import { DesktopSlotIndicator } from "./components/layout/DesktopSlotIndicator";
 import { FirstRunGate } from "./components/onboarding/FirstRunGate";
 import { SetupTakeoverHost } from "./components/onboarding/SetupTakeover";
-import { StarterTour } from "./components/onboarding/StarterTour";
 import { RemoteFolderPickerHost } from "./components/remote/RemoteFolderPicker";
 import { SshPromptDialog } from "./components/settings/SshPromptDialog";
 import { useExtensionUi } from "./hooks/use-extension-ui";
@@ -85,20 +86,42 @@ import { useModelWaitTogetherSync } from "./stores/model-wait-together";
 import { usePreviewVisualEvents } from "./stores/preview-visuals";
 import { useRemoteStateSync } from "./stores/remote";
 import { useSessionStore } from "./stores/session";
+import { focusedRuntimeTabId } from "./stores/session-runtime-context";
+import { useSettingsStore } from "./stores/settings";
+import { useStarterGuideStore } from "./stores/starter-guide";
 import { steppingFromTabId, useActiveTabKind, useSessionTabs, useTabsStore, visibleTabIds } from "./stores/tabs";
 import { toast, toastError } from "./stores/toast";
 import { isSidebarDrawerMode, migrateDefaultPanelTab, useUiStore } from "./stores/ui";
 import { checkForUpdatesInPlace, subscribeUpdaterStatus } from "./stores/updater";
 import { FileEditReporter } from "./web/FileEditReporter";
 import { WebHostUi } from "./web/host-ui/WebHostUi";
+import { webRuntime } from "./web/runtime";
 
 // Heavy overlays code-split: they render null while closed, so they download
 // only on first open instead of bloating the eager bundle.
 const FeedbackDialog = lazyChunk(() =>
 	import("./components/dialogs/FeedbackDialog").then(m => ({ default: m.FeedbackDialog })),
 );
+const CapabilitiesSheet = lazyChunk(() =>
+	import("./components/dialogs/CapabilitiesSheet").then(m => ({ default: m.CapabilitiesSheet })),
+);
 const BenchmarkDialog = lazyChunk(() =>
 	import("./components/dialogs/BenchmarkDialog").then(m => ({ default: m.BenchmarkDialog })),
+);
+// Their own chunks: a desktop window loads them at start, a phone's page never does (its first screen's budget).
+const PetOverlay = lazyChunk(() => import("./components/pet/PetOverlay").then(m => ({ default: m.PetOverlay })));
+const MacosRequirementNotice = lazyChunk(() =>
+	import("./components/dialogs/MacosRequirementNotice").then(m => ({ default: m.MacosRequirementNotice })),
+);
+const LaunchIncidentNotice = lazyChunk(() =>
+	import("./components/dialogs/LaunchIncidentNotice").then(m => ({ default: m.LaunchIncidentNotice })),
+);
+// Loaded when a getting-started step's tour or a surface's first-visit tour starts.
+const StarterTour = lazyChunk(() =>
+	import("./components/onboarding/StarterTour").then(m => ({ default: m.StarterTour })),
+);
+const SurfaceTour = lazyChunk(() =>
+	import("./components/onboarding/SurfaceTour").then(m => ({ default: m.SurfaceTour })),
 );
 const ModelSetupDialog = lazyChunk(() =>
 	import("./components/settings/model-setup/ModelSetupDialog").then(m => ({ default: m.ModelSetupDialog })),
@@ -114,6 +137,10 @@ const ThemePickerDialog = lazyChunk(() =>
 );
 const QuickTerminal = lazyChunk(() =>
 	import("./components/layout/QuickTerminal").then(m => ({ default: m.QuickTerminal })),
+);
+// The `voice.dictate` key and dictation outside the composer: loaded once dictation is on, off the phone's first screen.
+const DictationHost = lazyChunk(() =>
+	import("./components/dictation/DictationHost").then(m => ({ default: m.DictationHost })),
 );
 
 function FocusedSessionEffects() {
@@ -244,6 +271,12 @@ export function App() {
 	const themePickerOpen = useUiStore(s => s.themePickerOpen);
 	const [themePickerMounted, setThemePickerMounted] = useState(false);
 	if (themePickerOpen && !themePickerMounted) setThemePickerMounted(true);
+	// Help › What OMPdesk can do: loaded on its first open, then mounted so it closes with its own exit.
+	const capabilitiesOpen = useUiStore(s => s.capabilitiesOpen);
+	const [capabilitiesMounted, setCapabilitiesMounted] = useState(false);
+	if (capabilitiesOpen && !capabilitiesMounted) setCapabilitiesMounted(true);
+	const starterTouring = useStarterGuideStore(s => s.tour !== null);
+	const surfaceTouring = useStarterGuideStore(s => s.surfaceTour !== null);
 	// The quick terminal loads xterm: only on its first open, then stays mounted so its terminals keep their screens.
 	const quickTerminalOpen = useUiStore(s => s.quickTerminalOpen);
 	const [quickTerminalMounted, setQuickTerminalMounted] = useState(false);
@@ -478,6 +511,7 @@ export function App() {
 	// Defaults resolve for the renderer's platform (⌘ → ⌃ on Windows).
 	// The memo recomputes only when the overrides object identity changes.
 	const keymapOverrides = useUiStore(s => s.keymapOverrides);
+	const sttEnabled = useSettingsStore(s => s.sttEnabled);
 	const keymap = useMemo(() => compileKeymap(KEYMAP_ACTIONS, keymapOverrides), [keymapOverrides]);
 
 	// Boot hydration of user keybinding overrides (prefs key "keymapOverrides").
@@ -647,6 +681,12 @@ export function App() {
 				case "files.search":
 					ui.openFilesSearch();
 					return;
+				case "find":
+					// ⌘F — the focused pane's Find bar (chat/TranscriptFind.tsx); a focused terminal claimed the key first.
+					window.dispatchEvent(
+						new CustomEvent(TRANSCRIPT_FIND_EVENT, { detail: { tabId: focusedRuntimeTabId() } }),
+					);
+					return;
 				case "panel.toggle":
 					ui.togglePanel();
 					return;
@@ -661,9 +701,6 @@ export function App() {
 					return;
 				case "terminal.quick":
 					ui.setQuickTerminalOpen(!ui.quickTerminalOpen);
-					return;
-				case "terminal.find":
-					// The focused terminal opened its find bar before its shell saw the key; elsewhere the chord does nothing.
 					return;
 				case "hotkeys":
 					// ⌘/ or ⌃/ — Settings › Keyboard (/hotkeys parity); again returns.
@@ -933,6 +970,7 @@ export function App() {
 				{visibleTabIds({ activeTabId, split }).map(tabId => (
 					<TabRuntimeProvider key={tabId} tabId={tabId}>
 						<ExtensionDialog />
+						<ChildAsks openerTabId={tabId} />
 						<PlanApprovalDialog />
 					</TabRuntimeProvider>
 				))}
@@ -968,7 +1006,23 @@ export function App() {
 				) : null}
 				<ChangelogDialog />
 				<WhatsNewNotice />
-				<StarterTour />
+				{webRuntime() === null && (
+					<Suspense fallback={null}>
+						<MacosRequirementNotice />
+						<LaunchIncidentNotice />
+						<PetOverlay />
+					</Suspense>
+				)}
+				{starterTouring && (
+					<Suspense fallback={null}>
+						<StarterTour />
+					</Suspense>
+				)}
+				{surfaceTouring && (
+					<Suspense fallback={null}>
+						<SurfaceTour />
+					</Suspense>
+				)}
 				<RemoteFolderPickerHost />
 				<WebPairingDialog />
 				<WebDeviceNotice />
@@ -993,9 +1047,15 @@ export function App() {
 				) : null}
 				<Suspense fallback={null}>{importDialogOpen && <ImportForeignDialog />}</Suspense>
 				<Suspense fallback={null}>{feedbackOpen && <FeedbackDialog />}</Suspense>
+				<Suspense fallback={null}>{capabilitiesMounted && <CapabilitiesSheet />}</Suspense>
 			</div>
 			<SetupTakeoverHost />
 			<ToastStack />
+			{sttEnabled ? (
+				<Suspense fallback={null}>
+					<DictationHost />
+				</Suspense>
+			) : null}
 		</div>
 	);
 	return <FocusedRuntimeProvider tabId={activeTabId}>{surface}</FocusedRuntimeProvider>;

@@ -14,6 +14,7 @@ import {
 	GITHUB_HOST_PATTERN,
 	GITHUB_IMAGE_MAX_BYTES,
 	GITHUB_IMAGE_TYPES,
+	GITHUB_LOGIN_PATTERN,
 	GITHUB_REACTIONS,
 	GITHUB_REPO_NAME_PATTERN,
 	GITHUB_REPO_PATTERN,
@@ -41,7 +42,7 @@ const id = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 const text = z.string().max(65_536);
 const title = z.string().trim().min(1).max(256);
 /** A GitHub login (a user can be assigned or asked to review). */
-const login = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/);
+const login = z.string().regex(GITHUB_LOGIN_PATTERN);
 /** A GraphQL node id (`PRRT_kwDO…`, `IC_kwDO…`). */
 const nodeId = z.string().regex(/^[A-Za-z0-9_=-]{1,200}$/);
 const people = z.object({
@@ -152,6 +153,30 @@ const requestSchema = z
 				.refine(url => /^https:\/\/[a-z0-9.-]+\.githubusercontent\.com\//i.test(url)),
 		}),
 		z.object({ op: z.literal("pr_diffs"), number: id }),
+		z.object({ op: z.literal("project_list") }),
+		z.object({
+			op: z.literal("project_view"),
+			owner: z.string().regex(GITHUB_LOGIN_PATTERN),
+			ownerType: z.enum(["organization", "user"]),
+			number: id,
+			viewId: nodeId.optional(),
+			query: z.string().max(1024).optional(),
+		}),
+		z.object({
+			op: z.literal("project_field"),
+			projectId: nodeId,
+			itemId: nodeId,
+			fieldId: nodeId,
+			value: z
+				.discriminatedUnion("kind", [
+					z.object({ kind: z.literal("single-select"), optionId: z.string().min(1).max(200) }),
+					z.object({ kind: z.literal("iteration"), iterationId: z.string().min(1).max(200) }),
+					z.object({ kind: z.literal("text"), text: z.string().max(1024) }),
+					z.object({ kind: z.literal("number"), number: z.number().finite() }),
+					z.object({ kind: z.literal("date"), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }),
+				])
+				.optional(),
+		}),
 	])
 	.and(
 		z.object({

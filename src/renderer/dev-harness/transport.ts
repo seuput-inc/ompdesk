@@ -28,6 +28,8 @@ import type { OmpTransport } from "../../shared/omp-api";
 import {
 	EMPTY_PREVIEW,
 	PREVIEW_COMMAND,
+	PREVIEW_DEVICE,
+	PREVIEW_HISTORY,
 	PREVIEW_STATE,
 	PREVIEW_STREAM_COPY,
 	PREVIEW_STREAM_DIALOG,
@@ -46,10 +48,11 @@ import type {
 	SettingsSchemaResult,
 	UsageReport,
 } from "../../shared/rpc-types";
-import { SCHEDULES_COMMAND, SCHEDULES_LOG } from "../../shared/schedules";
+import { SCHEDULES_COMMAND, SCHEDULES_LOG } from "../../shared/schedule-channels";
 import { readSidebarPrefs, SIDEBAR_PREFS_KEY, type SidebarChange, sidebarPatch } from "../../shared/sidebar-prefs";
 import { SIDEBAR_PROJECTS_COMMAND, type SidebarProjectsRequest } from "../../shared/sidebar-projects";
 import type { TerminalLeaseState, TerminalOperation, TerminalSnapshot } from "../../shared/terminal-types";
+import { TRACKERS_COMMAND } from "../../shared/tracker-channels";
 import {
 	ADVISOR_USAGE,
 	CONTEXT_INSPECT,
@@ -258,6 +261,9 @@ const EMPTY_LISTS = [
 	IPC_COMMANDS.SESSIONS_HELD,
 	"worktree-lifecycle:prompts-get",
 	"ssh-tools:prompts",
+	// The Preview start page's recent sites and running devices: none on the harness.
+	PREVIEW_HISTORY,
+	PREVIEW_DEVICE,
 ];
 
 /** A stock-shaped settings list (`get_settings_schema`): a few rows so a settings page shows its real layout. */
@@ -614,12 +620,30 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				return respond(command, { entries: [] });
 			case "github":
 				return respond(command, githubFixture(command.request.op));
+			// glab is installed and signed out: the GitLab source shows its sign-in.
+			case "gitlab":
+				return respond(
+					command,
+					command.request.op === "status" ? { hosts: [], signedIn: false, project: null, envToken: null } : {},
+				);
 			case "pr_repo":
 				return respond(command, PR_REPO);
 			case "pr_list":
 				return respond(command, PR_LIST);
 			case "pr_get":
 				return respond(command, PR_DETAIL);
+			// Dictation: a live take the harness hears and answers with fixed words (e2e/dictation-live.e2e.ts counts
+			// the audio it was fed in `calls`).
+			case "stt_warm":
+				return respond(command, { warmed: false });
+			case "stt_stream_start":
+				return respond(command, { streamId: "harness-take" });
+			case "stt_stream_audio":
+				return respond(command, { text: "Dictated", partial: "in the harness", quietMs: 0 });
+			case "stt_stream_stop":
+				return respond(command, { text: "Dictated in the harness." });
+			case "stt_stream_cancel":
+				return respond(command, {});
 			default:
 				note(`rpc:${command.type}`);
 				return respond(command);
@@ -761,8 +785,14 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				remoteState = { ...remoteState, deviceSectionOrder: [...payload] };
 				emit(IPC_EVENTS.REMOTE_STATE, remoteState);
 				return undefined;
-			case BOTS_COMMAND:
+			case BOTS_COMMAND: {
+				// The harness has no bots: their files and other apps' bots read as nothing.
+				const action =
+					typeof payload === "object" && payload !== null && "action" in payload ? payload.action : null;
+				if (action === "file") return { exists: false, content: "", mtimeMs: 0, topics: [], history: [] };
+				if (action === "importSources") return { sources: [] };
 				return { bots: [], items: [] };
+			}
 			case SCHEDULES_COMMAND:
 				return SCHEDULES_STATE;
 			case SIDEBAR_PROJECTS_COMMAND:
@@ -784,6 +814,9 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				return { ok: true, entries: FILE_TREE, truncated: false };
 			case MAIL_ACCOUNTS_COMMAND:
 				return MAIL_STATE;
+			// No Linear or Jira account yet: their sources show the connect card.
+			case TRACKERS_COMMAND:
+				return { accounts: [], selected: { linear: null, jira: null } };
 			case IPC_COMMANDS.STATS_FETCH:
 				return statsAnswer((payload as IpcStatsFetchPayload).path);
 			case IPC_COMMANDS.FS_READ_PLAN:

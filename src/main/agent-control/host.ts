@@ -39,7 +39,7 @@ import {
 	parseClosedChildren,
 	sidebarViewOf,
 } from "../../shared/agent-control";
-import type { BotsRequest, BotsState } from "../../shared/bots";
+import type { BotsAnswer, BotsCall, BotsState } from "../../shared/bots";
 import type { SessionStatus } from "../../shared/control-protocol";
 import type {
 	AutoCloseTurn,
@@ -72,7 +72,7 @@ import { CoreError, core } from "../core/process";
 import { deletedSessions } from "../deleted-sessions";
 import { discardOpenedWorktree } from "../disk/saved-worktrees";
 import { createWorktree, tablessWorktreeBridge, WORKTREE_COMMAND_BUDGETS_MS } from "../local/git/worktree";
-import { describePreparation, MERGE_HOOKS_BUDGET_MS } from "../local/git/worktree-seed";
+import { describePreparation, MERGE_HOOKS_BUDGET_MS, SETUP_TIMEOUT_MS } from "../local/git/worktree-seed";
 import {
 	GIT_METHODS,
 	GIT_REQUEST_TIMEOUT_MS,
@@ -403,7 +403,7 @@ export class AgentControlRuntime {
 	}
 
 	/** The owner's change to the bots or their items (`BOTS_COMMAND`): the state after it. */
-	bots(request: BotsRequest): Promise<BotsState> {
+	bots<C extends BotsCall>(request: C): Promise<BotsAnswer<C>> {
 		return this.control.bots(request);
 	}
 
@@ -809,6 +809,7 @@ export class AgentControlRuntime {
 			owner && isWebWindow(owner.webContents.id)
 				? this.#deps.fileEdits.edits(owner.webContents.id, info.tabId)
 				: undefined;
+		const sidecar = this.#deps.pool.sidecarOf(info.tabId);
 		return {
 			tabId: info.tabId,
 			// Until stock names an opened session, it reads as the work it was opened for (`IpcTabInfo.task`).
@@ -816,8 +817,11 @@ export class AgentControlRuntime {
 			cwd: info.cwd,
 			...(info.device ? { device: info.device, deviceName: this.#deps.deviceName(info.device) } : {}),
 			status: info.status,
-			...(this.#deps.pool.sidecarOf(info.tabId)?.statusPayload?.sessionHeld ? { sessionHeld: true } : {}),
-			...(this.#deps.pool.sidecarOf(info.tabId)?.shared === true ? { viewing: true as const } : {}),
+			...(sidecar?.statusPayload?.sessionHeld ? { sessionHeld: true } : {}),
+			...(sidecar?.shared === true ? { viewing: true as const } : {}),
+			...(sidecar?.processTag
+				? { processTag: sidecar.processTag, ...(sidecar.pid !== undefined ? { ompPid: sidecar.pid } : {}) }
+				: {}),
 			...(info.message && (info.status === "error" || info.status === "exited") ? { failure: info.message } : {}),
 			...(info.status === "starting" && (info.queued || info.slow)
 				? { startWait: info.queued ? ("queued" as const) : ("slow" as const) }
@@ -1341,7 +1345,8 @@ export class AgentControlRuntime {
 					GIT_METHODS.removeWorktree,
 					{ worktree: gitRef(worktree), withRemote: true },
 					() => removeSafeWorktree(worktree),
-					REMOTE_COPY_MS,
+					// The repository's archive hook may run before the removal.
+					SETUP_TIMEOUT_MS + REMOTE_COPY_MS,
 				);
 				return typeof answer === "string" ? { removal: answer } : answer;
 			},
@@ -1353,7 +1358,8 @@ export class AgentControlRuntime {
 			closedChildren: () => parseClosedChildren(deps.prefs.get(AGENT_CLOSED_CHILDREN_PREF)),
 			botsChanged: state => deps.botsChanged?.(state),
 			setOpener: (tabId, openerTabId) => {
-				// As a session the bot's chat opened: its reports and auto-close go to that chat, across a relaunch too.
+				// As a session the bot's chat opened, or one the call journal names after its opener was lost: its reports
+				// and auto-close go to that tab, across a relaunch too.
 				this.#parents.set(tabId, { callerTabId: openerTabId });
 				deps.pool.setTabOpener(tabId, openerTabId);
 			},

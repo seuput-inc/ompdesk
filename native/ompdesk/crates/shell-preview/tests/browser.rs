@@ -957,7 +957,7 @@ async fn real_chromium_preview() {
             LaunchConfig {
                 executable,
                 profile_root,
-                command_timeout: Duration::from_secs(10),
+                command_timeout: LaunchConfig::COMMAND_TIMEOUT,
             },
             gate.clone(),
             gate.clone(),

@@ -24,7 +24,11 @@ describe("the core's reading of this computer", () => {
 		if (process.platform === "win32") {
 			expect(reading?.commitLimitBytes).toBeGreaterThan(0);
 			expect(reading?.commitBytes).toBeLessThanOrEqual(reading?.commitLimitBytes ?? 0);
-			expect(reading?.runQueue).toBeGreaterThanOrEqual(0);
+			// A look PDH has no value for leaves the run queue out (ci 45794591115 on main 99f82e0cb); the counter is
+			// kept, so a later look reads it.
+			let runQueue = reading?.runQueue;
+			for (let look = 0; runQueue === undefined && look < 5; look++) runQueue = (await readMemory())?.runQueue;
+			expect(runQueue).toBeGreaterThanOrEqual(0);
 		}
 		if (process.platform === "darwin") expect(reading?.swapBytes).toBeLessThanOrEqual(reading?.swapTotalBytes ?? -1);
 	});

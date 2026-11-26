@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.147.0] - 2026-11-26
+
+알림이 OMPdesk 자체 팝업으로 뜨고, 사이드바·새 작업·받아쓰기·일정·GitHub와 이슈 트래커 기능이 크게 늘었으며, 바쁜 순간에 앱 내부가 재시작되던 문제를 고쳤습니다.
+
+- 알림: 운영체제 배너 대신 화면 구석에 OMPdesk 팝업이 뜹니다(macOS 오른쪽 위, Windows 오른쪽 아래). 카드를 누르면 그 세션이 열리고, 톱니바퀴에서 1시간·내일 아침까지 알림을 끄거나 설정을 열 수 있습니다. Windows는 방해 금지 중이면 팝업을 띄우지 않습니다.
+- 사이드바: 위쪽 메뉴가 한 줄에 두 칸으로 놓입니다. 프로젝트 그룹·색·이모지, 여러 세션 한꺼번에 보관·삭제, 세션 부모 직접 지정, 옮긴 프로젝트 폴더 다시 찾기, 저장소 복제가 생겼습니다. 휴대폰에서는 세션 줄을 밀어 보관하거나 안 읽음으로 표시합니다.
+- 모든 세션 페이지(작업판, 받은 편지함, 미리보기)와 자원 보기가 생겼고, 자식 세션의 질문에 부모의 입력창 위에서 답할 수 있습니다.
+- 새 작업: 한 장의 시트에서 작업과 워크트리를 만들고, 사이드바 줄에서 만드는 단계를 보여 줍니다. GitHub 이슈에서 바로 시작할 수 있고, 아직 올리지 않은 브랜치는 첫 제목으로 이름이 바뀝니다.
+- 작업 소스: Linear·Jira 이슈, GitLab 머지 요청, GitHub Projects(표·보드·로드맵)를 Agents에서 다룹니다.
+- Changes 패널: Sync, 리베이스와 충돌 검토, 전체 diff, 그래프, blame, 중첩 저장소를 지원합니다. 워크트리를 지울 때 무시된 파일이나 서브모듈을 잃지 않습니다.
+- 받아쓰기: 누르고 있는 동안 받아쓰기, 실시간 표시, 침묵에서 멈춤, 다시 시도, 터미널과 다른 입력란, 마이크 선택을 지원합니다.
+- 일정: 검색·그룹·템플릿, 서명된 웹훅, cron, 전체 실행 기록이 생겼습니다.
+- 입력창과 대화: ⌘F로 대화 찾기, 긴 프롬프트 접기, 내 메시지 목록, `@`로 이 세션이 연 세션 부르기, 앱을 다시 켜도 첨부 그림이 남습니다. 모델 선택기에 새로고침 버튼이 생겼습니다.
+- 처음 쓰는 분을 위한 안내 투어와 기능 팁, 세션 상태를 보여 주는 데스크톱 펫, 최근 6주 통계, 멈춘 뒤 문제 보고, 이 컴퓨터에서 OMPdesk 지우기가 생겼습니다.
+- 제목 표시줄의 세션 탭 줄은 다시 뺐습니다.
+- 앱 내부(core)가 바쁜 순간 2초 만에 강제로 재시작되던 문제를 고쳤습니다. 그 재시작 뒤에 연결된 컴퓨터에서 자식 세션이 부모 아래로 묶이지 않던 문제도 고치고, 이미 흐트러진 줄은 기록에서 되돌립니다.
+- Windows에서 WebView2가 늦게 켜질 때도 사이드바와 입력창 모양이 먼저 그려집니다.
+- macOS 입력창에서 한글 입력 중 오른쪽·왼쪽 방향키가 아이콘 같은 글자를 넣던 문제를 고쳤습니다.
+- 한 파일 저장이 느려도 다른 저장이 막히지 않습니다.
+
+알려진 문제: 방향키 글자 문제가 이번 버전에서도 보이면 그 글자를 복사해서 알려 주세요.
+
+<!-- en -->
+
+Notifications arrive as OMPdesk's own popup, the sidebar, new tasks, dictation, schedules, GitHub and issue trackers grow a lot, and a busy moment no longer restarts the app's core.
+
+- Notifications: an OMPdesk popup in the screen corner instead of the system banner (top right on macOS, bottom right on Windows). A card opens its session; its gear mutes for an hour or until tomorrow morning, or opens the settings. On Windows, Do Not Disturb keeps the popup away.
+- Sidebar: the nav rows sit two to a row. Project groups, colors and emoji, archiving or deleting several sessions at once, setting a session's parent by hand, finding a moved project folder and cloning a repository. On a phone, swipe a row to archive it or mark it unread.
+- An All sessions page (board, inbox, peek) and a Resources view, and a child's question can be answered from its opener's dock.
+- New task: one sheet makes the task and its worktree, the sidebar row shows its steps, an issue starts one directly, and an unpublished branch takes the session's first title.
+- Work sources: Linear and Jira issues, GitLab merge requests and GitHub Projects (table, board, roadmap) in Agents.
+- Changes panel: Sync, rebase and conflict review, an all-files diff, graph, blame and nested repositories. Removing a worktree never loses ignored files or submodules.
+- Dictation: hold to dictate, live words, stop on silence, Retry, the terminal and other fields, and a microphone choice.
+- Schedules: search, groups, templates, signed webhooks, cron and every run's record.
+- Composer and transcript: ⌘F finds in the conversation, long prompts fold, a list of your messages, `@` names the sessions this one opened, a draft's pictures survive a relaunch, and the model picker has a Refresh button.
+- First-visit tours and feature tips, a desktop pet that shows what sessions are doing, the last six weeks in Stats, a report offered after a freeze, and removing OMPdesk from this computer.
+- The title bar's session tab strip is gone again.
+- The app's core is no longer restarted after 2 s while it is busy. After such a restart, a paired computer no longer shows a host's children loose; rows already split come back from the record.
+- On Windows, the sidebar and composer are drawn while WebView2 starts.
+- On macOS, Left and Right arrow keys no longer insert an icon-like character while typing Korean.
+- One slow file save no longer holds up the others.
+
+Known issue: if the arrow-key character still appears in this version, copy it and send it to us.
+
 ## [0.146.0] - 2026-11-26
 
 창이 늦게 그려져도 먼저 나타나고, 제목 표시줄의 탭 줄과 하단 상태 줄, 새 사이드바 모양, PR·리뷰·터미널 기능이 더해졌습니다.

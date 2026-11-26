@@ -4,12 +4,13 @@
  * per-view toolbar and its fit-relative zoom controls, and the channel a view
  * uses to tell the header the file's size and type.
  */
-import { ExternalLink as ExternalLinkIcon, ZoomIn, ZoomOut } from "lucide-react";
+import { AppWindow, ExternalLink as ExternalLinkIcon, ZoomIn, ZoomOut } from "lucide-react";
 import { createContext, type ReactNode, useContext, useEffect } from "react";
 import type { InlineFailure } from "../../../lib/error-detail";
 import { formatBytes } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { useFocusedTabDevice, useHostView } from "../../../stores/remote";
+import { toastError } from "../../../stores/toast";
 import { Button, Card, IconButton, InlineNotice, Skeleton } from "../../common";
 import { PathLink } from "../../tools/media/PathLink";
 
@@ -136,6 +137,29 @@ export function ViewerToolbar({ children, label }: { children: ReactNode; label:
 /** Zoom levels relative to fitting the panel width (PDF pages, Word pages). */
 export const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3] as const;
 export const ZOOM_FIT_INDEX = ZOOM_STEPS.indexOf(1);
+
+/**
+ * Shows a page or picture of this computer's tab in its Preview as a visual (Orca's workspace document preview):
+ * scripts run there, confined to the file's folder with no network (the agent's `gui_visualize` session). A paired
+ * host's tab has no such button: its files are on the host.
+ */
+export function OpenInPreviewButton({ path, tabId }: { path: string; tabId: string | undefined }) {
+	const t = useT();
+	const device = useFocusedTabDevice();
+	if (!tabId || device) return null;
+	return (
+		<IconButton
+			icon={<AppWindow />}
+			label={t("fileViewer.openInPreview")}
+			onClick={() =>
+				void window.omp.preview
+					.openFile(tabId, path)
+					.catch(error => toastError({ title: t("fileViewer.openInPreviewFailed"), error }))
+			}
+			size="sm"
+		/>
+	);
+}
 
 /** Zoom out, the current percentage (click: back to fit), zoom in. */
 export function ZoomControls({ index, onChange }: { index: number; onChange: (index: number) => void }) {

@@ -12,9 +12,10 @@ import * as mailAccounts from "../../shared/mail-accounts";
 import * as mobileWeb from "../../shared/mobile-web";
 import { createOmpApi } from "../../shared/omp-api";
 import * as preview from "../../shared/preview";
-import * as schedules from "../../shared/schedules";
+import * as schedules from "../../shared/schedule-channels";
 import * as sidebarProjects from "../../shared/sidebar-projects";
 import * as sshTools from "../../shared/ssh-tools";
+import * as trackers from "../../shared/tracker-channels";
 import { IPC_POLICY, type IpcChannel } from "./ipc-policy";
 
 const MAIN = path.join(__dirname, "..");
@@ -31,6 +32,7 @@ const NAMED: Record<string, unknown> = {
 	...schedules,
 	...sidebarProjects,
 	...sshTools,
+	...trackers,
 };
 const GROUPS: Record<string, Record<string, string>> = { IPC_COMMANDS, IPC_EVENTS };
 

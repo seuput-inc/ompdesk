@@ -1,32 +1,40 @@
 import { useState } from "react";
+import type { DictationFailureView } from "../../../hooks/use-dictation-take";
 import { languageName } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { useNowTick } from "../../../lib/now-tick";
-import type { SpeechModelDownload } from "../../../lib/voice";
+import type { DictationWords, SpeechModelDownload } from "../../../lib/voice";
 import { useUiStore } from "../../../stores/ui";
 import { Button, InlineNotice, Kbd, ProgressBar } from "../../common";
-import type { DictationFailureView } from "./use-composer-dictation";
 
 export type DictationPhase = "idle" | "starting" | "recording" | "transcribing";
 
+/** The words shown while speaking: the newest, since the bar is one line. */
+const WORDS_SHOWN = 90;
+
 /**
  * A slim bar between the field and the toolbar while dictating: "Starting microphone…" until the mic opens, then a
- * live level meter with the take's m:ss and the keys that end it (Enter inserts, Esc discards), then
- * "Transcribing…", or, while the take waits for its language's speech model to download, that language and how far
- * the download got. It never covers the field: the draft stays readable and editable, and the transcript lands at
- * its caret.
+ * live level meter with the take's m:ss, the words heard so far (stock's committed segments, then the one being
+ * spoken, muted) and the keys that end it (Enter inserts, Esc discards), then "Transcribing…", or, while the take waits
+ * for its language's speech model to download, that language and how far the download got. It never covers the field:
+ * the draft stays readable and editable, and the transcript lands at its caret.
  */
 export function DictationOverlay({
 	phase,
 	levels,
 	startedAt,
 	preparing,
+	words = null,
 }: {
 	phase: Exclude<DictationPhase, "idle">;
 	levels: readonly number[];
 	startedAt: number | null;
 	preparing: SpeechModelDownload | null;
+	words?: DictationWords | null;
 }) {
+	const heard = [words?.text, words?.partial].filter(Boolean).join(" ");
+	const shown = heard.length > WORDS_SHOWN ? `…${heard.slice(-WORDS_SHOWN)}` : heard;
+	const committed = Math.max(0, shown.length - (words?.partial.length ?? 0));
 	const t = useT();
 	const language = languageName(preparing?.language ?? null);
 	const preparingLabel = language ? t("voice.dictation.preparing", { language }) : t("voice.dictation.preparingAny");
@@ -54,7 +62,14 @@ export function DictationOverlay({
 					<span className="tabular-nums text-(--sc-text)">
 						{t("voice.dictation.listening")} · {clock}
 					</span>
-					<span className="ms-auto flex items-center gap-1.5 text-sc-xs text-(--sc-text-muted)">
+					{shown && (
+						// The words change several times a second: kept out of the status region's announcements.
+						<span aria-hidden className="min-w-0 flex-1 truncate text-(--sc-text)" data-dictation-words>
+							{shown.slice(0, committed)}
+							<span className="text-(--sc-text-muted)">{shown.slice(committed)}</span>
+						</span>
+					)}
+					<span className="ms-auto flex shrink-0 items-center gap-1.5 text-sc-xs text-(--sc-text-muted)">
 						<Kbd shortcut="Enter" />
 						{t("voice.dictation.insert")}
 						<Kbd shortcut="Esc" />
@@ -97,6 +112,11 @@ export function DictationFailureNotice({
 			<InlineNotice
 				action={
 					<>
+						{failure.retry && failure.kind !== "no-model" && (
+							<Button data-dictation-retry onClick={failure.retry} size="sm" variant="secondary">
+								{t("voice.fail.retry")}
+							</Button>
+						)}
 						{failure.kind === "no-model" && (
 							<Button
 								onClick={() => {

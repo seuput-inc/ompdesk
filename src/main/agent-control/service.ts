@@ -41,7 +41,7 @@ import type {
 	PrivacyPane,
 	SidebarView,
 } from "../../shared/agent-control";
-import type { BotsRequest, BotsState } from "../../shared/bots";
+import type { BotsAnswer, BotsCall, BotsState } from "../../shared/bots";
 import type { SessionStatus } from "../../shared/control-protocol";
 import { ipcErrorCode } from "../../shared/ipc-error-codes";
 import type {
@@ -160,6 +160,10 @@ export interface ControlTab {
 	scheduledRetry?: IpcScheduledRetry;
 	/** Its turn waits for the internet connection and goes on once it is back. */
 	awaitingConnection?: true;
+	/** The tab's process tag on this computer (`SessionProcesses`): the core lists what its processes listen on. */
+	processTag?: string;
+	/** The tab's own omp, left out of that list (its browser relay listens). */
+	ompPid?: number;
 }
 
 /** A saved session (stock's session index on this computer or a paired device), open in a tab or not. */
@@ -905,8 +909,8 @@ export class AgentControl {
 		return this.#call("liveReview", { callerTabId, last, ...(only ? { only: [...only] } : {}) });
 	}
 
-	/** The owner's change to the bots or their items (`BotsRequest`): the state after it. */
-	bots(request: BotsRequest): Promise<BotsState> {
+	/** The owner's change to the bots or their items, one of a bot's files or the import sources (`BotsCall`). */
+	bots<C extends BotsCall>(request: C): Promise<BotsAnswer<C>> {
 		return this.#call("bots", request as unknown as Record<string, unknown>);
 	}
 

@@ -50,23 +50,76 @@ async fn branch_exists(git: &Git, cwd: &str, branch: &str) -> Result<bool, Fault
     Ok(output.code == 0)
 }
 
-/// `worktree add` with its own timeout (minutes on a large repository: it checks out the whole tree).
+/// `-c checkout.workers=4` unless the person set `checkout.workers` at any scope (Orca
+/// `src/main/git/worktrees/creation/checkout-workers-git-args.ts:8-23`): git 2.32+ then checks out with four workers,
+/// an older git ignores the key. `config --get` exits 1 only when the key is unset; any other answer keeps git's own.
+async fn checkout_workers(git: &Git, cwd: &str) -> Result<&'static [&'static str], Fault> {
+    let set = git
+        .raw(cwd, &["config", "--get", "checkout.workers"])
+        .await?;
+    Ok(if set.code == 1 {
+        &["-c", "checkout.workers=4"]
+    } else {
+        &[]
+    })
+}
+
+/// `worktree add <add…>` with its own timeout (minutes on a large repository: it checks out the whole tree). With
+/// `sparse` folders it checks out only those (Orca `worktree-sparse-add.ts:28-57`): `--no-checkout`, then in the new
+/// worktree `sparse-checkout init --cone`, `set -- <folders>` and `checkout <branch>`; a failure there removes the
+/// worktree again (the caller deletes a branch it made).
 async fn add_worktree(
     git: &Git,
     primary: &str,
-    args: &[&str],
+    add: &[&str],
+    target: &str,
+    branch: &str,
+    sparse: &[String],
     timeout_ms: u64,
 ) -> Result<(), Fault> {
-    let opts = Opts {
+    let opts = || Opts {
         timeout_ms: Some(timeout_ms),
         ..Opts::default()
     };
-    git.text_with(primary, args, opts).await.map(drop)
+    let workers = checkout_workers(git, primary).await?;
+    let mut args: Vec<&str> = Vec::new();
+    if sparse.is_empty() {
+        args.extend_from_slice(workers);
+    }
+    args.extend(["worktree", "add"]);
+    if !sparse.is_empty() {
+        args.push("--no-checkout");
+    }
+    args.extend_from_slice(add);
+    git.text_with(primary, &args, opts()).await?;
+    if sparse.is_empty() {
+        return Ok(());
+    }
+    let materialized = async {
+        git.text(target, &["sparse-checkout", "init", "--cone"])
+            .await?;
+        let mut set: Vec<&str> = vec!["sparse-checkout", "set", "--"];
+        set.extend(sparse.iter().map(String::as_str));
+        git.text_with(target, &set, opts()).await?;
+        let mut checkout: Vec<&str> = workers.to_vec();
+        checkout.extend(["checkout", branch]);
+        git.text_with(target, &checkout, opts()).await.map(drop)
+    }
+    .await;
+    if let Err(error) = materialized {
+        if error != Fault::cancelled() {
+            let _ = git_remove(git, primary, &["--force"], target, Opts::default()).await;
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// A fetch of the remote default branch younger than this is not repeated (the dialog's prefetch, then its create).
 const FETCH_FRESH: Duration = Duration::from_secs(30);
 const FETCH_TIMEOUT_MS: u64 = 60_000;
+/// Each `ls-remote` of `rename_unpushed` (main's budget for the rename counts two per remote).
+const LS_REMOTE_MS: u64 = 30_000;
 
 /// Per main checkout, when its default branch was last fetched. One fetch at a time per repository: a create that
 /// follows a prefetch still running waits for it, then skips its own.
@@ -263,6 +316,33 @@ pub(super) struct AddParams {
     start_point: String,
     source: Option<Source>,
     add_timeout_ms: u64,
+    /// A preset of the main checkout's `.ompdesk/sparse` (`sparse.rs`): only its folders are checked out.
+    #[serde(default)]
+    sparse: Option<String>,
+    /// Folders saved sessions recorded as their working folder: never a new worktree's (`taken`).
+    #[serde(default)]
+    taken: Vec<String>,
+}
+
+/// How a worktree is checked out: the sparse folders (none: the whole tree) and `worktree add`'s timeout.
+struct Checkout<'a> {
+    sparse: &'a [String],
+    timeout_ms: u64,
+}
+
+/// Whether a saved session recorded `path` as its folder (FX22; Orca `retired-name-registry.ts` keeps retired names
+/// for the same reason): stock keys a session's history by its folder, so a new worktree in a removed one's folder
+/// would show that history as its own, and the removed session would open in it.
+fn taken(taken: &[String], path: &Path) -> bool {
+    let spelled = path.to_string_lossy();
+    taken.iter().any(|folder| {
+        let folder = read::native(folder);
+        if cfg!(windows) {
+            folder.to_lowercase() == spelled.to_lowercase()
+        } else {
+            folder == spelled
+        }
+    })
 }
 
 #[derive(Serialize)]
@@ -296,6 +376,27 @@ fn free_folder(scope: Scope, path: PathBuf) -> Result<Option<String>, Fault> {
 pub(super) async fn add(params: AddParams, scope: Scope) -> Result<Added, Fault> {
     let git = Git::new(params.git, scope.clone());
     let root = PathBuf::from(read::native(&params.root));
+    let sparse = match &params.sparse {
+        None => Vec::new(),
+        Some(name) => super::sparse::of_primary(&params.primary)
+            .await?
+            .into_iter()
+            .find(|preset| preset.name == *name)
+            .map(|preset| preset.folders)
+            .ok_or_else(|| {
+                refuse(
+                    "worktree_create_failed",
+                    format!(
+                        "No sparse checkout preset \"{name}\" in {}.",
+                        super::sparse::PRESETS_FILE
+                    ),
+                )
+            })?,
+    };
+    let checkout = Checkout {
+        sparse: &sparse,
+        timeout_ms: params.add_timeout_ms,
+    };
     for suffix in 1..=100 {
         let suffixed;
         let candidate = if suffix == 1 {
@@ -305,6 +406,9 @@ pub(super) async fn add(params: AddParams, scope: Scope) -> Result<Added, Fault>
             &suffixed
         };
         let path = root.join(format!("gui-{candidate}-{}", params.hash));
+        if taken(&params.taken, &path) {
+            continue;
+        }
         let held = scope.clone();
         let Some(path) = blocking(move || free_folder(held, path)).await?? else {
             continue;
@@ -316,7 +420,8 @@ pub(super) async fn add(params: AddParams, scope: Scope) -> Result<Added, Fault>
                 &params.base_cwd,
                 &path,
                 &source,
-                params.add_timeout_ms,
+                &params.start_point,
+                &checkout,
             )
             .await?;
             source.name
@@ -332,7 +437,7 @@ pub(super) async fn add(params: AddParams, scope: Scope) -> Result<Added, Fault>
                 &path,
                 &branch,
                 &params.start_point,
-                params.add_timeout_ms,
+                &checkout,
             )
             .await?;
             branch
@@ -352,15 +457,18 @@ async fn add_new(
     target: &str,
     branch: &str,
     start_point: &str,
-    add_timeout_ms: u64,
+    checkout: &Checkout<'_>,
 ) -> Result<(), Fault> {
     git.text(base_cwd, &["branch", "--no-track", branch, start_point])
         .await?;
     if let Err(error) = add_worktree(
         git,
         primary,
-        &["worktree", "add", target, branch],
-        add_timeout_ms,
+        &[target, branch],
+        target,
+        branch,
+        checkout.sparse,
+        checkout.timeout_ms,
     )
     .await
     {
@@ -376,6 +484,8 @@ enum Mode {
     New,
     Local,
     Remote,
+    /// The local branch when it exists (a work item started again), else a new one as `New` makes it.
+    Reuse,
 }
 
 /// The branch a caller names (main checked its shape: `worktreeBranchSource`).
@@ -387,16 +497,18 @@ struct Source {
     from: Option<String>,
 }
 
-/// A worktree at `target` on exactly the branch the caller names: a new one (from `from`, else HEAD), an existing
-/// local one, or a new local one tracking `<remote>/<name>`. The name is never changed: a taken, missing or invalid
-/// one is refused, and a new branch whose `worktree add` failed is deleted again.
+/// A worktree at `target` on exactly the branch the caller names: a new one (from `from`, else the create's start
+/// point), an existing local one, either of those as the branch exists (`reuse`), or a new local one tracking
+/// `<remote>/<name>`. The name is never changed: a taken, missing or invalid one is refused, and a new branch whose
+/// `worktree add` failed is deleted again.
 async fn add_named(
     git: &Git,
     primary: &str,
     base_cwd: &str,
     target: &str,
     source: &Source,
-    add_timeout_ms: u64,
+    start_point: &str,
+    checkout: &Checkout<'_>,
 ) -> Result<(), Fault> {
     let name = source.name.as_str();
     let valid = !name.starts_with('-')
@@ -414,22 +526,25 @@ async fn add_named(
     let exists = branch_exists(git, primary, name).await?;
     let failed = |message: String| refuse("worktree_create_failed", message);
     match source.mode {
-        Mode::New => {
-            if exists {
-                return Err(failed(format!("The branch {name} already exists.")));
-            }
-            let from = source.from.as_deref().unwrap_or("HEAD");
-            add_new(git, primary, base_cwd, target, name, from, add_timeout_ms).await
+        Mode::New | Mode::Reuse if !exists => {
+            // Without its own `from`, a named branch starts where the create's base points (HEAD, the fetched
+            // default branch or the ref), as a generated one does.
+            let from = source.from.as_deref().unwrap_or(start_point);
+            add_new(git, primary, base_cwd, target, name, from, checkout).await
         }
-        Mode::Local => {
+        Mode::New => Err(failed(format!("The branch {name} already exists."))),
+        Mode::Local | Mode::Reuse => {
             if !exists {
                 return Err(failed(format!("The branch {name} does not exist.")));
             }
             add_worktree(
                 git,
                 primary,
-                &["worktree", "add", target, name],
-                add_timeout_ms,
+                &[target, name],
+                target,
+                name,
+                checkout.sparse,
+                checkout.timeout_ms,
             )
             .await
         }
@@ -447,15 +562,126 @@ async fn add_named(
                     "The remote branch {upstream} does not exist."
                 )));
             }
-            add_worktree(
+            let added = add_worktree(
                 git,
                 primary,
-                &["worktree", "add", "--track", "-b", name, target, &upstream],
-                add_timeout_ms,
+                &["--track", "-b", name, target, &upstream],
+                target,
+                name,
+                checkout.sparse,
+                checkout.timeout_ms,
             )
-            .await
+            .await;
+            // A sparse checkout that failed after `-b` made the branch takes it back; it did not exist before.
+            if added.is_err() && branch_exists(git, primary, name).await.unwrap_or(false) {
+                let _ = git.raw(primary, &["branch", "-D", name]).await;
+            }
+            added
         }
     }
+}
+
+/// The branch a new task's worktree got its name for (FS91; Orca `first-work-branch-rename.ts:185-271`): the checkout
+/// at `cwd` renamed from `from` to `to` (else `to-2`… while those are taken), only while `from` is still what the
+/// checkout has out and it was never published: no upstream, no remote-tracking ref of that name, and no remote that
+/// `ls-remote` finds holding it (a remote that cannot be read counts as holding it). Main runs it under the lock its
+/// pushes take; an agent's own `git push` takes none, so the same test runs again after `git branch -m`, and a push
+/// that landed in between puts the old name back. None when any of that does not hold; nothing stays renamed then.
+pub async fn rename_unpushed(
+    git: &Git,
+    cwd: &str,
+    from: &str,
+    to: &str,
+) -> Result<Option<String>, Fault> {
+    rename_unpushed_around(git, cwd, from, to, || {}).await
+}
+
+/// `rename_unpushed` with `between` run after the last check and before `git branch -m` (a test's push lands there).
+async fn rename_unpushed_around(
+    git: &Git,
+    cwd: &str,
+    from: &str,
+    to: &str,
+    between: impl FnOnce(),
+) -> Result<Option<String>, Fault> {
+    let head = git
+        .raw(cwd, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .await?;
+    if head.code != 0 || js_trim(&head.text()) != from {
+        return Ok(None);
+    }
+    let valid = !to.starts_with('-')
+        && git
+            .raw(cwd, &["check-ref-format", "--branch", to])
+            .await?
+            .code
+            == 0;
+    if !valid || to == from {
+        return Ok(None);
+    }
+    let mut candidate = None;
+    for suffix in 1..=100 {
+        let name = if suffix == 1 {
+            to.to_owned()
+        } else {
+            format!("{to}-{suffix}")
+        };
+        if name == from {
+            return Ok(None);
+        }
+        if !branch_exists(git, cwd, &name).await? {
+            candidate = Some(name);
+            break;
+        }
+    }
+    let Some(candidate) = candidate else {
+        return Ok(None);
+    };
+    if published(git, cwd, from, from).await? {
+        return Ok(None);
+    }
+    between();
+    git.text(cwd, &["branch", "-m", from, &candidate]).await?;
+    // `branch -m` carries a `push -u`'s upstream over to the new name.
+    if published(git, cwd, &candidate, from).await? {
+        git.text(cwd, &["branch", "-m", &candidate, from]).await?;
+        return Ok(None);
+    }
+    Ok(Some(candidate))
+}
+
+/// Whether the branch `local` (its upstream) or the name `name` (a remote-tracking ref, or a remote's branch by
+/// `ls-remote`) was published. The network read goes last, so the local reads stay next to the rename.
+async fn published(git: &Git, cwd: &str, local: &str, name: &str) -> Result<bool, Fault> {
+    let remotes = git.text(cwd, &["remote"]).await?;
+    let head = format!("refs/heads/{name}");
+    for remote in remotes.split('\n').map(js_trim).filter(|r| !r.is_empty()) {
+        let opts = Opts {
+            timeout_ms: Some(LS_REMOTE_MS),
+            ..Opts::default()
+        };
+        match git
+            .run(cwd, &["ls-remote", "--heads", remote, &head], opts)
+            .await
+        {
+            Ok(found) if found.code == 0 && js_trim(&found.text()).is_empty() => {}
+            Ok(_) => return Ok(true),
+            Err(fault) if fault.code == "cancelled" => return Err(fault),
+            Err(_) => return Ok(true),
+        }
+    }
+    let upstream = format!("{local}@{{upstream}}");
+    let tracked = git
+        .raw(cwd, &["rev-parse", "--verify", "--quiet", &upstream])
+        .await?;
+    if tracked.code == 0 {
+        return Ok(true);
+    }
+    let pattern = format!("refs/remotes/*/{name}");
+    let tracking = git
+        .text(cwd, &["for-each-ref", "--format=%(refname)", &pattern])
+        .await?;
+    Ok(!js_trim(&tracking).is_empty())
 }
 
 #[derive(Serialize)]
@@ -1110,5 +1336,250 @@ mod fetch_tests {
         assert!(!base.fetched);
         assert!(base.error.is_some_and(|error| !error.is_empty()));
         assert_eq!(sh(&clone, &["rev-parse", "origin/main"]), before);
+    }
+}
+
+#[cfg(test)]
+mod add_tests {
+    use super::*;
+    use crate::git::run::tests::runner;
+    use crate::git::scm::tests::{repo_at, sh};
+
+    /// A repository with `apps/web`, `docs` and a root file, and its `.ompdesk/sparse` naming `web`.
+    fn monorepo(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ompdesk-core-wt-add-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let primary = dir.join("repo");
+        repo_at(&primary);
+        for file in ["apps/web/a.txt", "docs/b.txt"] {
+            let at = primary.join(file);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(at, "x\n").unwrap();
+        }
+        sh(&primary, &["add", "-A"]);
+        sh(&primary, &["commit", "-qm", "tree"]);
+        std::fs::create_dir_all(primary.join(".ompdesk")).unwrap();
+        std::fs::write(primary.join(".ompdesk/sparse"), "[web]\napps/web\n").unwrap();
+        primary
+    }
+
+    fn params(primary: &Path, sparse: Option<&str>, taken: Vec<String>) -> AddParams {
+        let primary = primary.to_str().unwrap().to_owned();
+        AddParams {
+            git: runner(),
+            base_cwd: primary.clone(),
+            root: Path::new(&primary)
+                .with_file_name("wt")
+                .to_str()
+                .unwrap()
+                .into(),
+            primary,
+            hash: "abc1234".into(),
+            slug: "task".into(),
+            branch_prefix: "omp/gui/".into(),
+            start_point: "HEAD".into(),
+            source: None,
+            add_timeout_ms: 60_000,
+            sparse: sparse.map(str::to_owned),
+            taken,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_sparse_preset_checks_out_its_folders_and_a_recorded_folder_is_passed_over() {
+        let primary = monorepo("sparse");
+        let used = primary.with_file_name("wt").join("gui-task-abc1234");
+        let taken = vec![used.to_str().unwrap().to_owned()];
+        let added = add(params(&primary, Some("web"), taken), Scope::detached())
+            .await
+            .unwrap();
+        let path = PathBuf::from(&added.path);
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("gui-task-2-abc1234")
+        );
+        assert_eq!(added.branch, "omp/gui/task-2");
+        assert!(path.join("apps/web/a.txt").exists());
+        assert!(
+            path.join("README.md").exists(),
+            "cone mode keeps root files"
+        );
+        assert!(!path.join("docs").exists());
+        assert!(!used.exists());
+    }
+
+    #[tokio::test]
+    async fn an_unknown_preset_is_refused_before_any_branch_or_folder() {
+        let primary = monorepo("unknown");
+        let fault = add(params(&primary, Some("api"), Vec::new()), Scope::detached())
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(fault.code, "worktree_create_failed");
+        assert!(!primary.with_file_name("wt").exists());
+        let branches = sh(&primary, &["branch", "--list", "omp/gui/*"]);
+        assert!(branches.is_empty(), "{branches}");
+    }
+
+    #[tokio::test]
+    async fn an_unpublished_branch_takes_its_name_and_a_published_one_keeps_it() {
+        let primary = monorepo("rename");
+        let tree = primary.with_file_name("tree");
+        let tree_path = tree.to_str().unwrap();
+        sh(
+            &primary,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "omp/gui/task-ab12",
+                tree_path,
+            ],
+        );
+        sh(&primary, &["branch", "omp/gui/fix-login"]);
+        let git = crate::git::run::tests::git();
+        let renamed = rename_unpushed(&git, tree_path, "omp/gui/task-ab12", "omp/gui/fix-login")
+            .await
+            .unwrap();
+        assert_eq!(renamed.as_deref(), Some("omp/gui/fix-login-2"));
+        assert_eq!(
+            sh(&tree, &["symbolic-ref", "--short", "HEAD"]),
+            "omp/gui/fix-login-2"
+        );
+        let stale = rename_unpushed(&git, tree_path, "omp/gui/task-ab12", "omp/gui/other")
+            .await
+            .unwrap();
+        assert_eq!(stale, None, "a branch no longer out is not renamed");
+
+        sh(
+            &primary,
+            &[
+                "update-ref",
+                "refs/remotes/origin/omp/gui/fix-login-2",
+                "HEAD",
+            ],
+        );
+        let published = rename_unpushed(&git, tree_path, "omp/gui/fix-login-2", "omp/gui/later")
+            .await
+            .unwrap();
+        assert_eq!(published, None);
+        assert_eq!(
+            sh(&tree, &["symbolic-ref", "--short", "HEAD"]),
+            "omp/gui/fix-login-2"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_named_branch_without_its_own_start_takes_the_create_base() {
+        let primary = monorepo("named");
+        let older = sh(&primary, &["rev-parse", "HEAD~1"]);
+        let mut named = params(&primary, None, Vec::new());
+        named.start_point = "HEAD~1".into();
+        named.source = Some(Source {
+            name: "jinseo/eng-12-fix-login".into(),
+            mode: Mode::New,
+            remote: None,
+            from: None,
+        });
+        let added = add(named, Scope::detached()).await.unwrap();
+        assert_eq!(added.branch, "jinseo/eng-12-fix-login");
+        assert_eq!(
+            sh(&primary, &["rev-parse", "jinseo/eng-12-fix-login"]),
+            older
+        );
+    }
+
+    #[tokio::test]
+    async fn a_push_that_lands_between_the_check_and_the_rename_keeps_the_old_name() {
+        let primary = monorepo("rename-race");
+        let bare = primary.with_file_name("origin.git");
+        sh(&primary, &["init", "-q", "--bare", bare.to_str().unwrap()]);
+        sh(
+            &primary,
+            &["remote", "add", "origin", bare.to_str().unwrap()],
+        );
+        let tree = primary.with_file_name("tree");
+        let tree_path = tree.to_str().unwrap();
+        let from = "omp/gui/task-cd34";
+        sh(&primary, &["worktree", "add", "-q", "-b", from, tree_path]);
+        let git = crate::git::run::tests::git();
+
+        let raced = rename_unpushed_around(&git, tree_path, from, "omp/gui/fix-race", || {
+            sh(&tree, &["push", "-q", "-u", "origin", from]);
+        })
+        .await
+        .unwrap();
+        assert_eq!(raced, None);
+        assert_eq!(sh(&tree, &["symbolic-ref", "--short", "HEAD"]), from);
+        assert!(sh(&primary, &["branch", "--list", "omp/gui/fix-race*"]).is_empty());
+        assert_eq!(
+            sh(&tree, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
+            format!("origin/{from}"),
+            "the upstream the push set stays with its branch"
+        );
+
+        // Published from elsewhere: no upstream and no remote-tracking ref here, only the remote's own branch.
+        let other = "omp/gui/task-ef56";
+        let other_tree = primary.with_file_name("tree-2");
+        let other_path = other_tree.to_str().unwrap();
+        sh(
+            &primary,
+            &["worktree", "add", "-q", "-b", other, other_path],
+        );
+        sh(
+            &primary,
+            &["push", "-q", "origin", &format!("{other}:{other}")],
+        );
+        sh(
+            &primary,
+            &["update-ref", "-d", &format!("refs/remotes/origin/{other}")],
+        );
+        let elsewhere = rename_unpushed(&git, other_path, other, "omp/gui/fix-else")
+            .await
+            .unwrap();
+        assert_eq!(elsewhere, None, "ls-remote finds the branch on origin");
+
+        let fresh = "omp/gui/task-gh78";
+        let fresh_tree = primary.with_file_name("tree-3");
+        let fresh_path = fresh_tree.to_str().unwrap();
+        sh(
+            &primary,
+            &["worktree", "add", "-q", "-b", fresh, fresh_path],
+        );
+        let renamed = rename_unpushed(&git, fresh_path, fresh, "omp/gui/fix-fresh")
+            .await
+            .unwrap();
+        assert_eq!(renamed.as_deref(), Some("omp/gui/fix-fresh"));
+    }
+
+    #[tokio::test]
+    async fn a_work_item_started_again_reuses_its_branch_where_a_new_one_is_refused() {
+        let primary = monorepo("reuse");
+        let named = |mode| {
+            let mut params = params(&primary, None, Vec::new());
+            params.source = Some(Source {
+                name: "jin/lin-12-fix-login".into(),
+                mode,
+                remote: None,
+                from: None,
+            });
+            params
+        };
+        let first = add(named(Mode::Reuse), Scope::detached()).await.unwrap();
+        let tree = PathBuf::from(&first.path);
+        sh(&tree, &["commit", "-q", "--allow-empty", "-m", "work"]);
+        let worked = sh(&tree, &["rev-parse", "HEAD"]);
+        sh(&primary, &["worktree", "remove", first.path.as_str()]);
+
+        let refused = add(named(Mode::New), Scope::detached())
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(refused.code, "worktree_create_failed");
+        let again = add(named(Mode::Reuse), Scope::detached()).await.unwrap();
+        assert_eq!(again.branch, "jin/lin-12-fix-login");
+        assert_eq!(sh(Path::new(&again.path), &["rev-parse", "HEAD"]), worked);
     }
 }

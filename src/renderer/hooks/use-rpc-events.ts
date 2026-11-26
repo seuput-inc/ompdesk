@@ -549,6 +549,40 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 								push({ variant: "warning", message: translate("events.maintenanceFailed", { action }) });
 							break;
 						}
+						case "manual_compaction_start": {
+							// A manual pass anyone asked for (another window, a paired device, the phone, an agent):
+							// every view shows the row. One this window started (`runManualMaintenance`) already does.
+							if (useSessionStore.getState().compactionInfo?.reason === "manual") break;
+							useSessionStore.setState({
+								isCompacting: true,
+								compactionInfo: { reason: "manual", action: event.mode ?? "compact", startedAt: Date.now() },
+							});
+							break;
+						}
+						case "manual_compaction_end": {
+							// This window's own pass is closed by its request's answer, which also says the outcome.
+							const info = useSessionStore.getState().compactionInfo;
+							if (info?.local) break;
+							if (info?.reason === "manual") {
+								// A handoff leaves no compaction card and is no measure of the next compaction.
+								const ran =
+									info.action !== "handoff" &&
+									!event.aborted &&
+									!event.skipped &&
+									!event.errorMessage &&
+									event.result != null;
+								useSessionStore.setState(state => ({
+									isCompacting: false,
+									compactionInfo: null,
+									...(ran ? { compactionRuns: withCompactionRun(state.compactionRuns, info) } : {}),
+								}));
+							}
+							if (event.result != null) {
+								void (tabId && sessionRuntime(tabId) ? hydrateTabSession(tabId) : hydrateSession());
+								bumpVersion = true;
+							}
+							break;
+						}
 						case "auto_retry_start": {
 							retryPendingTabs.add(tabId);
 							// TUI parity: inline retry loader for the delay+attempt window.

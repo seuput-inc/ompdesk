@@ -237,6 +237,8 @@ src/main/diagnostics.test.ts	tooling	-	Vitest suite: buildDiagnosticsReport.
 src/main/diagnostics.ts	mixed	2	app.diagnosticLog selects probes and folds recent entries across rotation in the shell without starting the core. Main combines live setup, peer and display state and applies the stock extension's shared redactor. Receiver: shell report builder with those state owners (§1.3a,c,d).
 src/main/disk-full-notice.ts	port	3	§1.3: still owns the synchronous OS notification handle and localized text. The shell and paired web router now distribute the basename snapshot to their own live pages.
 src/main/disk-full.ts	port	2	§1.3: atomic-file.ts reports or clears a failed write before returning; onChange delivers the current pending names at registration. The shell must receive the watch with its remaining Node writers and DISK_FULL_GET.
+src/main/draft-pictures.test.ts	tooling	-	Vitest suite: draft picture keep-folder (put, read, remove, device scope and cap).
+src/main/draft-pictures.ts	port	2	A composer draft's pictures under userData/draft-pictures/<device>/ (put, read, remove over IPC; writeFileAtomic). Moves to a core store (write_kept) with the web uploads' remaining Node side, the draftPictures channels and their WsRouter upload landing.
 src/main/editable-context-menu.test.ts	tooling	-	Vitest suite: editableContextMenuTemplate.
 src/main/editable-context-menu.ts	port	4	editableContextMenuTemplate builds Electron menu roles, spellchecker suggestions and copy-image actions from context-menu parameters for the text-field context menu (a popup; the app menu is tauri-shell/src/app_menu.rs).
 src/main/editor.ts	mixed	1	editor.prepare/finish own the temporary draft, contents, readback and cleanup. Main resolves the user's editor and awaits its exit outside the core's kill-on-exit process tree; a core restart must not end a GUI editor or expire a long edit.
@@ -371,6 +373,7 @@ src/main/saved-layouts.test.ts	tooling	-	Vitest suite: layoutsToSave.
 src/main/saved-layouts.ts	port	1	index.persistTabLayouts compares the live windows, previous layout and quit approval before writing the store; teardown must not persist a transient empty layout. layoutsToSave itself performs no file operation.
 src/main/schedules.test.ts	tooling	-	Vitest suite: ScheduleService.
 src/main/schedules.ts	mixed	2	Core owns drafts, journals, timers, live sources and supervised runs. Main forwards state changes, orders commands, supplies quota and launch inputs, and wakes the live session (§1.3c). Receiver: session/pool and device quota owners.
+src/main/secret-files.ts	exception	-	Keystore-sealed secret files of mail and tracker accounts. safeStorage stays with the credential consumer and the core has no keystore (native-rust › Ledger, Updater files).
 src/main/serial-chain.test.ts	tooling	-	Vitest suite: SerialChain.
 src/main/serial-chain.ts	port	2	§1.3: local/git/exec and tailscale/cli take the current AbortSignal synchronously before starting OS effects. Receiver: local with local/git/exec; remote-web removes the tailscale/cli use.
 src/main/session-free-stock.test.ts	tooling	-	Vitest suite: says a session is owned while another process holds its lease, and free once that process is gone.
@@ -475,6 +478,8 @@ src/main/test-symlinks.ts	tooling	-	itWithFileSymlinks gates filesystem tests on
 src/main/test-turn-edits-omp.ts	tooling	-	Stand-in omp serves a synthetic transcript over the live sidecar bridge for turn-edit parity and restart tests.
 src/main/tls-test-rig.ts	tooling	-	testCertificates signs a loopback server certificate with a temporary test authority.
 src/main/tool-approval-stock.test.ts	tooling	-	Vitest suite: reads every approval select stock sends over RPC, and each option means what the card says.
+src/main/tracker-accounts.test.ts	tooling	-	Vitest suite: TrackerAccounts keeps the key sealed, joins a shared list read and marks a refused key to reconnect.
+src/main/tracker-accounts.ts	native-client	-	Linear and Jira requests run in crates/core/src/trackers (trackers.request). Main keeps the account registry and each token in the keystore (SecretFiles), builds the authorization header per request and answers repeats from its 60 s cache; it moves with the keystore owner (§1.3c).
 src/main/turn-resume-ends.test.ts	tooling	-	Vitest suite: the end table and formal/turn-resume name the same rows and checks.
 src/main/turn-resume-ends.ts	tooling	-	HOLD_CHECKS/HOLD_ENDS expose core/src/resume/hold-ends.json for parity tests; core/src/resume/ends.rs makes the runtime decision.
 src/main/turn-resume-limit.test.ts	tooling	-	Vitest suite: a turn stock gave up on at a provider limit.

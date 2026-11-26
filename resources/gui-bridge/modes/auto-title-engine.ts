@@ -169,6 +169,9 @@ export interface AutoTitleStock {
 /** The retry's output ceiling (reasoning is off; a title is a handful of tokens) and how long it may take. */
 const RETRY_MAX_TOKENS = 256;
 const RETRY_DEADLINE_MS = 20_000;
+/** The one line `suggest_title` adds to stock's title prompt: a branch name takes English words. */
+const BRANCH_NAME_LINE =
+	"This title names a git branch: write it in English whatever language the user writes in, 2-4 plain lowercase words, no punctuation.";
 
 let stock: AutoTitleStock | undefined;
 let loadStock: (() => Promise<AutoTitleStock>) | undefined;
@@ -577,6 +580,22 @@ export const handlers: AutoTitleMethods = {
 		const session = env.session() as unknown as TitleSession;
 		await attach(session, env);
 		return regenerate(session);
+	},
+	/**
+	 * The new task sheet's name for a worktree branch (Orca FB40, `SmartWorkspaceNameField.tsx`; FS91's rename): the
+	 * title model's title for `text`, in English whatever the person writes (a branch takes ASCII words), from stock's
+	 * own title prompt with one line added for this ask only (`generateTitle`'s custom prompt; the session's title
+	 * prompt is untouched). Written nowhere.
+	 */
+	suggest_title: async (params, env) => {
+		const raw = params && typeof params === "object" && "text" in params ? params.text : undefined;
+		const text = typeof raw === "string" ? raw.trim() : "";
+		if (!text) return { title: null };
+		const session = env.session() as unknown as TitleSession;
+		const { titleSystemPrompt } = await stockFunctions();
+		requests++;
+		const title = await session.generateTitle(text, `${titleSystemPrompt}\n\n${BRANCH_NAME_LINE}`);
+		return { title: title?.trim() || null };
 	},
 };
 

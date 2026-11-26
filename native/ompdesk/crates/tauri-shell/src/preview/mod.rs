@@ -25,7 +25,10 @@ use crate::{
 };
 use serde_json::{Value, json};
 use shell_core::wire::WireError;
-use shell_preview::{Browser, LaunchConfig, Navigation, NavigationHandler, Page, Viewport};
+use shell_preview::{
+    AuthChallenge, Browser, Credentials, LaunchConfig, Navigation, NavigationHandler, Page,
+    Viewport,
+};
 use std::collections::{HashMap, HashSet};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -182,6 +185,39 @@ impl NavigationHandler for NavigationGate {
                 }
             }
             true
+        })
+    }
+
+    /// A server's sign-in challenge to the page: main shows the person a credentials form (Electron's `login`); its
+    /// answer is used for this one challenge and never kept here.
+    fn authenticate(
+        &self,
+        challenge: AuthChallenge,
+    ) -> Pin<Box<dyn Future<Output = Option<Credentials>> + Send>> {
+        let pages = Arc::clone(&self.0);
+        Box::pin(async move {
+            let route = pages
+                .routes
+                .lock()
+                .expect("Preview routes")
+                .get(&challenge.session_id)
+                .cloned()?;
+            pages.current(route.wc).ok()?;
+            let (send, receive) = oneshot::channel();
+            host::request(
+                "wc.login",
+                json!({"wcId":route.wc,"url":challenge.url,"origin":challenge.origin,
+                    "scheme":challenge.scheme,"realm":challenge.realm}),
+                None,
+                move |answer, _| {
+                    let _ = send.send(answer);
+                },
+            );
+            let answer = receive.await.ok()?.ok()?;
+            Some(Credentials {
+                username: answer.get("username")?.as_str()?.to_owned(),
+                password: answer.get("password")?.as_str()?.to_owned(),
+            })
         })
     }
 }
@@ -467,7 +503,7 @@ async fn serve(
                     LaunchConfig {
                         executable,
                         profile_root: profile_root.clone(),
-                        command_timeout: Duration::from_secs(30),
+                        command_timeout: LaunchConfig::COMMAND_TIMEOUT,
                     },
                     Arc::new(NavigationGate(Arc::clone(&pages))),
                     Arc::new(initialize::Initializer),

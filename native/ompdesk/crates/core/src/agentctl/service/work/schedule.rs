@@ -236,6 +236,9 @@ impl AgentControl {
                     let name = args.name.clone().filter(|name| !name.is_empty());
                     let prompt = args.prompt.clone().filter(|prompt| !prompt.is_empty());
                     let model = args.model.clone().filter(|model| !model.is_empty());
+                    // Empty removes a thinking level; absent keeps it.
+                    let thinking = args.thinking.clone();
+                    let worktree = args.worktree;
                     let precheck = precheck_of(&args, device.as_ref())?;
                     let results_to = results_to_of(caller, &args, device.as_ref())?;
                     // A precheck is a command this computer runs: the user allows each one, whatever else is allowed.
@@ -272,6 +275,12 @@ impl AgentControl {
                             if let Some(model) = model {
                                 draft.model = Some(model);
                             }
+                            if let Some(thinking) = thinking {
+                                draft.thinking = Some(thinking).filter(|level| !level.is_empty());
+                            }
+                            if let Some(worktree) = worktree {
+                                draft.worktree = Some(worktree);
+                            }
                             if let Some(frequency) = frequency {
                                 draft.frequency = frequency;
                                 draft.enabled = true;
@@ -293,7 +302,7 @@ impl AgentControl {
         let frequency = self.frequency_of(caller, &args, device.as_ref())?;
         let Some(frequency) = frequency else {
             return fail(
-                "create needs exactly one of every_minutes, daily_at, at, in_minutes or on.",
+                "create needs exactly one of every_minutes, daily_at, cron, at, in_minutes or on.",
             );
         };
         // The caller's folder is a path on its own device; another device needs its folder named.
@@ -382,6 +391,8 @@ impl AgentControl {
                 wake_session: wake_session.clone(),
                 precheck,
                 results_to,
+                thinking: args.thinking.clone().filter(|level| !level.is_empty()),
+                worktree: args.worktree.filter(|worktree| *worktree),
             })
             .await?;
         let when = describe_frequency(&row.frequency);
@@ -429,6 +440,11 @@ impl AgentControl {
         if let Some(minutes) = args.every_minutes {
             return Ok(Some(ScheduleFrequency::Interval { minutes }));
         }
+        if let Some(expr) = &args.cron {
+            return Ok(Some(ScheduleFrequency::Cron {
+                expr: expr.trim().to_owned(),
+            }));
+        }
         if let Some(time) = &args.daily_at {
             let mut days = args.days.clone().unwrap_or_default();
             days.sort_unstable();
@@ -473,11 +489,31 @@ impl AgentControl {
             return Ok(None);
         };
         let event = match on {
-            // The service makes the key.
-            ScheduleOn::Webhook => ScheduleEvent::Webhook { key: String::new() },
-            ScheduleOn::Github { repo, events } => ScheduleEvent::Github {
+            // The service makes the key; the sender's secret is set from Settings, never by an agent.
+            ScheduleOn::Webhook {
+                filter,
+                contains,
+                pick,
+            } => ScheduleEvent::Webhook {
+                key: String::new(),
+                filter: filter.clone(),
+                contains: contains.clone().filter(|text| !text.is_empty()),
+                pick: pick.clone().filter(|paths| !paths.is_empty()),
+                previous_key: None,
+                signed_by: None,
+            },
+            ScheduleOn::Github {
+                repo,
+                events,
+                from,
+                contains,
+                label,
+            } => ScheduleEvent::Github {
                 repo: repo.clone(),
                 events: events.clone(),
+                from: from.clone().filter(|logins| !logins.is_empty()),
+                contains: contains.clone().filter(|text| !text.is_empty()),
+                label: label.clone().filter(|text| !text.is_empty()),
             },
             ScheduleOn::Files { path } => ScheduleEvent::Files {
                 path: absolute(path, "on.path")?,
@@ -516,7 +552,10 @@ impl AgentControl {
                 lead_minutes: lead_minutes.unwrap_or(10),
             },
         };
-        Ok(Some(ScheduleFrequency::Event { event, by }))
+        Ok(Some(ScheduleFrequency::Event {
+            event: Box::new(event),
+            by,
+        }))
     }
 
     /// The card a new schedule raises while "Let agents manage other sessions" is off, and every precheck raises:

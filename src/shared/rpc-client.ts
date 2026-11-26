@@ -95,10 +95,30 @@ export interface SessionRpcClient {
 	getGitDiff(path: string, against?: string): Promise<RpcResponse>;
 	worktreeCreate(
 		name: string,
-		options?: { baseCwd?: string; baseRef?: "HEAD" | "default"; branchPrefix?: string; requestId?: string },
+		options?: {
+			baseCwd?: string;
+			baseRef?: string;
+			branchPrefix?: string;
+			/** The exact branch instead of `<branchPrefix><name>` (`worktree_create.branch`). */
+			branch?: { name: string; mode: "new" | "local" | "remote" | "reuse"; remote?: string; from?: string };
+			requestId?: string;
+			sparse?: string;
+			prepare?: boolean;
+		},
 	): Promise<RpcResponse>;
+	/** The seed and setup hook of a worktree `worktreeCreate(…, {prepare: false})` made (`RpcWorktreePrepared`). */
+	worktreePrepare(baseCwd: string, path: string): Promise<RpcResponse>;
 	/** Fetches the remote default branch ahead of a `default`-based create; its answer is only informative. */
 	worktreePrefetch(baseCwd?: string): Promise<RpcResponse>;
+	/** The repository's `.ompdesk/sparse` presets (`RpcSparsePreset[]`). */
+	worktreeSparsePresets(baseCwd?: string): Promise<RpcResponse>;
+	/** A setup hook drafted from another tool's config (`RpcSetupDraft | null`). */
+	worktreeSetupDraft(baseCwd?: string): Promise<RpcResponse>;
+	worktreeSetupSave(baseCwd: string | undefined, text: string): Promise<RpcResponse>;
+	/** A short name for a new task from its first prompt (`{title: string | null}`). */
+	worktreeNameSuggest(text: string): Promise<RpcResponse>;
+	/** The tab's own placeholder branch `from` renamed to `to` while never published (`{branch: string | null}`). */
+	worktreeRenameBranch(from: string, to: string): Promise<RpcResponse>;
 	worktreeRemove(path: string, force?: boolean): Promise<RpcResponse>;
 	prRepo(): Promise<RpcResponse>;
 	/**
@@ -268,11 +288,6 @@ export interface SessionRpcClient {
 	retryDesktopSlot(): Promise<RpcResponse>;
 	/** Revoke-failed holder: abort it and end its omp; the slot is freed only once that process has exited. */
 	killDesktopSlot(): Promise<RpcResponse>;
-	/** This computer's session links (`data`: session path → `SessionLink[]`), all or one session's. */
-	sessionLinks(sessionPath?: string): Promise<RpcResponse>;
-	/** `data`: the `SessionLink` kept; a URL `sessionLink` refuses fails. */
-	sessionLinkAdd(sessionPath: string, url: string): Promise<RpcResponse>;
-	sessionLinkRemove(sessionPath: string, url: string): Promise<RpcResponse>;
 	getDelegation(): Promise<RpcResponse>;
 	setDelegation(mode: DelegationMode): Promise<RpcResponse>;
 	/** This session's advisor spend, calls and delivered advisories (`AdvisorUsage`). */
@@ -309,6 +324,15 @@ export interface SessionRpcClient {
 	synthesizeSpeech(text: string): Promise<RpcResponse>;
 	// The model the speech's language needs: starts its download without waiting; the caller asks again.
 	sttPrepare(language?: string): Promise<RpcResponse>;
+	// Load the dictation model into the speech worker when its weights are here (stock's `#warmModel`).
+	sttWarm(): Promise<RpcResponse>;
+	// A live take: start (`{streamId}`, null to transcribe whole), feed PCM16 (answers the words so far), stop, cancel.
+	sttStreamStart(): Promise<RpcResponse>;
+	sttStreamAudio(streamId: string, audioBase64: string): Promise<RpcResponse>;
+	sttStreamStop(streamId: string): Promise<RpcResponse>;
+	sttStreamCancel(streamId: string): Promise<RpcResponse>;
+	// Opt-in cleanup of dictated words on a small model; `terms` are the glossary's spellings.
+	dictationCleanup(text: string, terms: string[]): Promise<RpcResponse>;
 }
 
 export type RpcTransport = (command: RpcCommand, timeoutMs?: number) => Promise<RpcResponse>;
@@ -351,8 +375,10 @@ const RPC_COMMAND_TIMEOUTS: Record<string, number> = {
 	// (src/main/local/git/{worktree,pr}.ts), or the renderer reports a failure
 	// while the worktree, checkout, or PR still lands.
 	worktree_create: 1_260_000,
+	worktree_prepare: 420_000,
 	worktree_prefetch: 480_000,
-	worktree_remove: 360_000,
+	worktree_remove: 480_000,
+	worktree_name_suggest: 60_000,
 	// `worktree add`, the archive copied back, then seeding and the setup hook (as worktree_create).
 	restore_saved_worktree: 960_000,
 	pr_repo: 120_000,
@@ -369,6 +395,8 @@ const RPC_COMMAND_TIMEOUTS: Record<string, number> = {
 	pr_edit: 180_000,
 	// A clone may take 10 minutes (GITHUB_COMMAND_BUDGET_MS); every other operation answers far sooner.
 	github: 730_000,
+	// Four glab runs of 30 s at most (src/main/local/git/gitlab.ts GITLAB_MS) and a slot's wait.
+	gitlab: 180_000,
 	// Source control (src/main/local/git/scm.ts SCM_COMMAND_BUDGETS_MS): hooks and network round trips.
 	git_stage: 70_000,
 	git_unstage: 70_000,
@@ -514,9 +542,20 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 				baseCwd: options?.baseCwd,
 				baseRef: options?.baseRef,
 				...(options?.branchPrefix ? { branchPrefix: options.branchPrefix } : {}),
+				...(options?.branch ? { branch: options.branch } : {}),
 				...(options?.requestId ? { requestId: options.requestId } : {}),
+				...(options?.sparse ? { sparse: options.sparse } : {}),
+				...(options?.prepare === false ? { prepare: false } : {}),
 			}),
+		worktreePrepare: (baseCwd, path) => rpcCommand({ type: "worktree_prepare", baseCwd, path }),
 		worktreePrefetch: baseCwd => rpcCommand({ type: "worktree_prefetch", ...(baseCwd ? { baseCwd } : {}) }),
+		worktreeSparsePresets: baseCwd =>
+			rpcCommand({ type: "worktree_sparse_presets", ...(baseCwd ? { baseCwd } : {}) }),
+		worktreeSetupDraft: baseCwd => rpcCommand({ type: "worktree_setup_draft", ...(baseCwd ? { baseCwd } : {}) }),
+		worktreeSetupSave: (baseCwd, text) =>
+			rpcCommand({ type: "worktree_setup_save", text, ...(baseCwd ? { baseCwd } : {}) }),
+		worktreeNameSuggest: text => rpcCommand({ type: "worktree_name_suggest", text }),
+		worktreeRenameBranch: (from, to) => rpcCommand({ type: "worktree_rename_branch", from, to }),
 		worktreeRemove: (path, force) => rpcCommand({ type: "worktree_remove", path, force }),
 		prRepo: () => rpcCommand({ type: "pr_repo" }),
 		prList: (state, limit, view, background, filter) =>
@@ -653,10 +692,6 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		stopDesktopSlot: () => rpcCommand({ type: "desktop_slot_stop" }),
 		retryDesktopSlot: () => rpcCommand({ type: "desktop_slot_retry" }),
 		killDesktopSlot: () => rpcCommand({ type: "desktop_slot_kill" }),
-		sessionLinks: sessionPath =>
-			rpcCommand(sessionPath ? { type: "session_links", sessionPath } : { type: "session_links" }),
-		sessionLinkAdd: (sessionPath, url) => rpcCommand({ type: "session_link_add", sessionPath, url }),
-		sessionLinkRemove: (sessionPath, url) => rpcCommand({ type: "session_link_remove", sessionPath, url }),
 		getDelegation: () => rpcCommand({ type: "get_delegation" }),
 		setDelegation: mode => rpcCommand({ type: "set_delegation", mode }),
 		getAdvisorStats: () => rpcCommand({ type: "get_advisor_stats" }),
@@ -687,5 +722,14 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		synthesizeSpeech: text => rpcCommand({ type: "synthesize_speech", text }, 60_000),
 		// The language's model download is polled while it runs.
 		sttPrepare: language => rpcCommand({ type: "stt_prepare", language }, 15_000),
+		sttWarm: () => rpcCommand({ type: "stt_warm" }, 15_000),
+		sttStreamStart: () => rpcCommand({ type: "stt_stream_start" }, 15_000),
+		sttStreamAudio: (streamId, audioBase64) =>
+			rpcCommand({ type: "stt_stream_audio", streamId, audioBase64 }, 15_000),
+		// The worker flushes the last segment; a long take's queued segments may still be decoding.
+		sttStreamStop: streamId => rpcCommand({ type: "stt_stream_stop", streamId }, 120_000),
+		sttStreamCancel: streamId => rpcCommand({ type: "stt_stream_cancel", streamId }),
+		// The bridge gives the model 10 s; the margin covers the hop.
+		dictationCleanup: (text, terms) => rpcCommand({ type: "dictation_cleanup", text, terms }, 15_000),
 	};
 }

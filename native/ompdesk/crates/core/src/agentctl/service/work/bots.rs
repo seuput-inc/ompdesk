@@ -18,6 +18,7 @@ use super::super::text::saved_id_of_path;
 use super::super::types::{
     BotArgs, ControlTab, ScheduleDraft, ScheduleFrequency, SendArgs, TabStatus,
 };
+use super::bot_files;
 use super::schedule::is_absolute;
 use crate::agentctl::journal::attachments::sha256_hex;
 use crate::agentctl::journal::bots::{BotRecord, STALE_DAYS, slug, specialty};
@@ -33,6 +34,18 @@ const NAME_MAX: usize = 80;
 const CONTEXT_MS: u64 = 10_000;
 /// What the Look around routine asks of the bot.
 const LOOK_AROUND_PROMPT: &str = "Look around: read over the projects you work on and their recent work (sessions, commits, open items), read-only. Change nothing: no edits, no commits, no sessions opened. Save at most 5 suggestions for the owner as planned items with ompdesk_item {\"action\":\"add\"}, skipping any already open. End with NO_REPLY when nothing is worth saying.";
+/// What the memory upkeep routine asks of the bot (Orca's bot tidy-up, `BotTidyUpSection.tsx`): a copy of MEMORY.md
+/// first, so the owner's Undo puts it back whole, and one line per change beside it for the review.
+const TIDY_PROMPT: &str = "Tidy your memory: MEMORY.md in your folder. First copy MEMORY.md as it is now to memory/history/<the local date and time as YYYY-MM-DD-HHMM>.md (make the folder). Then merge repeated lines, mark facts that changed as replaced (keep the newer one), file details into topic files memory/<topic>.md, and move lines that no longer matter to memory/archive.md. Change memory files only: no posts, no edits to projects, no sessions opened. Last, write one line per change to memory/history/<the same name>.changes.md, starting with Learned:, Merged:, Replaced:, Filed: or Archived:. Write nothing and copy nothing when there is nothing to tidy. End with NO_REPLY.";
+/// Notification kinds a bot's chats can be quiet about (`Bot.quiet`).
+const QUIET_KINDS: [&str; 3] = ["permission", "done", "failed"];
+
+/// A bot's own daily routine (`bot_routine`).
+#[derive(Clone, Copy)]
+enum Routine {
+    LookAround,
+    Tidy,
+}
 
 /// A new id: `<prefix>-` and 12 hex digits from the system's random generator.
 pub(crate) fn new_id(prefix: &str) -> String {
@@ -114,6 +127,9 @@ impl AgentControl {
                 if let Some(said) = specialty(Path::new(&bot.folder)) {
                     value["specialty"] = json!(said);
                 }
+                if let Some(picture) = bot_files::picture_of(Path::new(&bot.folder)) {
+                    value["picture"] = json!(picture);
+                }
                 value
             })
             .collect();
@@ -124,7 +140,8 @@ impl AgentControl {
                 serde_json::to_value(self.read_item(&state, bot, item, now)).unwrap_or(Value::Null)
             })
             .collect();
-        json!({ "bots": bots_json, "items": items_json })
+        let rooms_json = serde_json::to_value(self.rooms().all()).unwrap_or_else(|_| json!([]));
+        json!({ "bots": bots_json, "items": items_json, "rooms": rooms_json })
     }
 
     /// The bot `key` names (its name or id).
@@ -272,6 +289,7 @@ impl AgentControl {
             return fail("That bot is gone.");
         };
         self.items().remove_bot(&bot.id);
+        self.rooms().remove_bot(&bot.id);
         let chats: Vec<String> = bot
             .home
             .iter()
@@ -309,7 +327,9 @@ impl AgentControl {
                     .wake_session
                     .as_ref()
                     .is_some_and(|session| chats.contains(session));
-                if wakes_it || bot.look_around.as_deref() == Some(schedule.id.as_str()) {
+                let own = [bot.look_around.as_deref(), bot.tidy.as_deref()]
+                    .contains(&Some(schedule.id.as_str()));
+                if wakes_it || own {
                     source.remove(&schedule.id).await?;
                 }
             }
@@ -547,6 +567,20 @@ impl AgentControl {
                     bot.name, bot.folder, bot.id
                 ))
             }
+            // A bot the owner may make (Orca's `bot create --offer`): the chat draws it as a card with Create bot,
+            // and nothing is made until the owner presses it.
+            "offer" => {
+                let name = args.name.as_deref().unwrap_or("").trim();
+                if name.is_empty() {
+                    return fail("offer needs name.");
+                }
+                if self.bot_named(name).is_ok() {
+                    return fail(format!("A bot named {name} already exists."));
+                }
+                Ok(format!(
+                    "Offered the bot {name}: the owner sees a card with Create bot in this chat. Nothing is made until they press it; do not create it yourself."
+                ))
+            }
             "list" => Ok(self.bots_text()),
             "pause" | "resume" => {
                 let bot = wanted()?;
@@ -687,22 +721,47 @@ impl AgentControl {
 
     /// Turns a bot's Look around routine on (daily at `time`, default 09:00, into its home chat) or off.
     pub(crate) async fn look_around(&self, id: &str, on: bool, time: Option<&str>) -> R<String> {
+        self.bot_routine(id, on, time, Routine::LookAround).await
+    }
+
+    /// Turns a bot's memory upkeep routine on (daily at `time`, default 03:00, into its home chat) or off.
+    pub(crate) async fn tidy_memory(&self, id: &str, on: bool, time: Option<&str>) -> R<String> {
+        self.bot_routine(id, on, time, Routine::Tidy).await
+    }
+
+    /// One of a bot's own daily routines on or off: one schedule that wakes its home chat, its id on the record.
+    async fn bot_routine(
+        &self,
+        id: &str,
+        on: bool,
+        time: Option<&str>,
+        routine: Routine,
+    ) -> R<String> {
         let Some(bot) = self.bots().find(id).cloned() else {
             return fail("That bot is gone.");
         };
         let Some(source) = self.schedule_source(None) else {
             return fail("Scheduled runs are not available on this computer.");
         };
+        let (label, prompt, default_time) = match routine {
+            Routine::LookAround => ("Look around", LOOK_AROUND_PROMPT, "09:00"),
+            Routine::Tidy => ("Memory upkeep", TIDY_PROMPT, "03:00"),
+        };
+        let held = match routine {
+            Routine::LookAround => bot.look_around.clone(),
+            Routine::Tidy => bot.tidy.clone(),
+        };
+        let keep = |record: &mut BotRecord, schedule: Option<String>| match routine {
+            Routine::LookAround => record.look_around = schedule,
+            Routine::Tidy => record.tidy = schedule,
+        };
         // One the owner already deleted in Settings is gone anyway.
-        if let Some(old) = bot.look_around.as_deref() {
+        if let Some(old) = held.as_deref() {
             let _ = source.remove(old).await;
         }
         if !on {
-            self.change_bot(&bot.id, |record| record.look_around = None)?;
-            return Ok(format!(
-                "Turned off the Look around of the bot {}.",
-                bot.name
-            ));
+            self.change_bot(&bot.id, |record| keep(record, None))?;
+            return Ok(format!("Turned off the {label} of the bot {}.", bot.name));
         }
         let Some(home) = bot.home.clone() else {
             return fail(format!(
@@ -710,14 +769,14 @@ impl AgentControl {
                 bot.name, bot.folder
             ));
         };
-        let time = time.unwrap_or("09:00");
+        let time = time.unwrap_or(default_time);
         if !is_time(time) {
             return fail("time is HH:MM, 00:00 to 23:59.");
         }
         let row = source
             .save(&ScheduleDraft {
-                name: format!("{}: Look around", bot.name),
-                prompt: LOOK_AROUND_PROMPT.to_owned(),
+                name: format!("{}: {label}", bot.name),
+                prompt: prompt.to_owned(),
                 cwd: bot.folder.clone(),
                 frequency: ScheduleFrequency::Daily {
                     time: time.to_owned(),
@@ -729,13 +788,21 @@ impl AgentControl {
                 wake_session: Some(home),
                 precheck: None,
                 results_to: None,
+                thinking: None,
+                worktree: None,
             })
             .await?;
-        self.change_bot(&bot.id, |record| record.look_around = Some(row.id.clone()))?;
-        Ok(format!(
-            "The bot {} looks around daily at {time} (schedule {}); its suggestions arrive as planned items.",
-            bot.name, row.id
-        ))
+        self.change_bot(&bot.id, |record| keep(record, Some(row.id.clone())))?;
+        Ok(match routine {
+            Routine::LookAround => format!(
+                "The bot {} looks around daily at {time} (schedule {}); its suggestions arrive as planned items.",
+                bot.name, row.id
+            ),
+            Routine::Tidy => format!(
+                "The bot {} tidies its memory daily at {time} (schedule {}).",
+                bot.name, row.id
+            ),
+        })
     }
 
     /// Hands `target` to `bot`: the bot's home chat becomes its opener, and `text` goes to it as a message from the bot.
@@ -911,10 +978,46 @@ impl AgentControl {
     pub async fn bots_command(&self, request: Value) -> R<Value> {
         let text = |key: &str| request.get(key).and_then(Value::as_str).map(str::to_owned);
         let id = text("id").unwrap_or_default();
+        let mut refused: Option<&'static str> = None;
         match request.get("action").and_then(Value::as_str).unwrap_or("") {
             "get" => {}
             "create" => {
-                self.create_bot(&text("name").unwrap_or_default(), text("folder").as_deref())?;
+                let bot =
+                    self.create_bot(&text("name").unwrap_or_default(), text("folder").as_deref())?;
+                let skills = request
+                    .get("skills")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                if let Err(error) = bot_files::seed(
+                    Path::new(&bot.folder),
+                    &bot.name,
+                    text("purpose").as_deref(),
+                    text("soul").as_deref(),
+                    &skills,
+                ) {
+                    // A bot whose seed was refused is not made: the owner fixes the purpose and creates again. The
+                    // folder this made (still empty: a seed checks everything before it writes) goes with it.
+                    self.bots().remove(&bot.id);
+                    if text("folder").is_none() {
+                        let _ = std::fs::remove_dir(&bot.folder);
+                    }
+                    self.bots_changed();
+                    return Err(error);
+                }
+                self.bots_changed();
+            }
+            // One of the bot's own files, read or written (`BotFileRequest`): its answer, not the state.
+            "file" => {
+                let bot = self.bot_named(&id)?;
+                return bot_files::file_request(Path::new(&bot.folder), &request);
+            }
+            // Other apps' bots on this computer an import can bring over: `{sources}`, not the state.
+            "importSources" => {
+                let sources = bot_files::home_folder()
+                    .map(|home| bot_files::import_sources(&home, &|name| std::env::var(name).ok()))
+                    .unwrap_or_default();
+                return Ok(json!({ "sources": sources }));
             }
             "update" => {
                 let bot = self.bot_named(&id)?;
@@ -964,15 +1067,41 @@ impl AgentControl {
                     if let Some(reach) = reach {
                         record.reach = reach;
                     }
+                    if let Some(quiet) = request.get("quiet").and_then(Value::as_array) {
+                        record.quiet = QUIET_KINDS
+                            .iter()
+                            .filter(|kind| quiet.iter().any(|given| given.as_str() == Some(**kind)))
+                            .map(|kind| (*kind).to_owned())
+                            .collect();
+                    }
                 })?;
+                match request.get("picture") {
+                    Some(Value::Null) => bot_files::set_picture(Path::new(&bot.folder), None)?,
+                    Some(Value::String(uri)) => {
+                        bot_files::set_picture(Path::new(&bot.folder), Some(uri))?;
+                    }
+                    _ => {}
+                }
+                if request.get("picture").is_some() {
+                    self.bots_changed();
+                }
                 if let Some(look) = request.get("lookAround").filter(|look| look.is_object()) {
                     let on = look.get("on").and_then(Value::as_bool).unwrap_or(false);
                     self.look_around(&bot.id, on, look.get("time").and_then(Value::as_str))
                         .await?;
                 }
+                if let Some(tidy) = request.get("tidy").filter(|tidy| tidy.is_object()) {
+                    let on = tidy.get("on").and_then(Value::as_bool).unwrap_or(false);
+                    self.tidy_memory(&bot.id, on, tidy.get("time").and_then(Value::as_str))
+                        .await?;
+                }
             }
             "delete" => self.delete_bot(&id).await?,
-            "item" => self.owner_item(&request).await?,
+            "item" => refused = self.owner_item(&request).await?,
+            "itemsOpened" => self.items_opened(&id)?,
+            "roomCreate" | "roomUpdate" | "roomDelete" | "roomPost" | "roomStop" => {
+                self.owner_room(&request).await?;
+            }
             "handTo" => {
                 let bot = self.bot_named(&id)?;
                 let session = text("session").unwrap_or_default();
@@ -996,7 +1125,12 @@ impl AgentControl {
             }
             other => return fail(format!("bots: no action {other}")),
         }
-        Ok(self.bots_state())
+        let mut state = self.bots_state();
+        // The owner's answer named a question the bot has since replaced: nothing was written.
+        if let Some(code) = refused {
+            state["refused"] = json!(code);
+        }
+        Ok(state)
     }
 }
 

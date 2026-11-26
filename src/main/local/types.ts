@@ -4,6 +4,7 @@
  * the main process instead of forwarding them to omp.
  */
 import type { LeftProcesses } from "../../../resources/gui-bridge/restart-core";
+import type { SessionProcessHandle } from "../session-processes";
 
 /** The user's installed omp CLI, resolved and version-checked once. */
 export interface OmpRuntime {
@@ -45,6 +46,8 @@ export interface LocalCommandContext {
 	 * reader of its output; absent for a tab that took over nothing (`SessionProcesses`' handle `leftover`).
 	 */
 	leftProcesses?(): Promise<LeftProcesses | undefined>;
+	/** The tab's processes on this computer and what they listen on (`SessionProcesses`' handle); absent without a tag. */
+	processes?: Pick<SessionProcessHandle, "ports" | "endPort">;
 }
 
 /** The returned value becomes `response.data`; a throw becomes `success: false` with the error message. */

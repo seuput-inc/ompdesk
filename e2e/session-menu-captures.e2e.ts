@@ -75,6 +75,8 @@ for (const language of ["en", "ko"] as const)
 			text("sidebar.menu.moveDown"),
 			text("sidebar.menu.moveToProject"),
 			text("sidebar.menu.archive"),
+			text("sidebar.menu.emoji"),
+			text("sidebar.menu.setParent"),
 		];
 		const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-session-menu-")));
 		let host: RemoteInstance | null = null;
@@ -147,13 +149,16 @@ for (const language of ["en", "ko"] as const)
 				text("sidebar.menu.openSplit"),
 				text("sidebar.openInNewWindow"),
 				edits[0],
-				// Links are this computer's own too (stores/session-links.ts).
 				text("sidebar.menu.links"),
 				edits[1],
 				// Muting is this computer's own: a host's session has no such item.
 				text("sidebar.menu.mute"),
-				...edits.slice(2),
+				...edits.slice(2, 5),
+				// Handing over is this computer's own: its bots are (components/bots/HandToBotDialog.tsx).
+				text("bots.hand.menu"),
+				...edits.slice(5),
 				text("sidebar.menu.hideFromAgents"),
+				text("sidebar.menu.copyTitle"),
 				text("sidebar.menu.reveal"),
 				text("common.delete"),
 			]);
@@ -169,7 +174,11 @@ for (const language of ["en", "ko"] as const)
 			expect(await menuLabels(a)).toEqual([
 				text("sidebar.menu.openSplit"),
 				text("sidebar.openInNewWindow"),
-				...edits,
+				edits[0],
+				// Links are the host's, read and changed there (panels-sidebar.md › The host owns its rows).
+				text("sidebar.menu.links"),
+				...edits.slice(1),
+				text("sidebar.menu.copyTitle"),
 				text("common.delete"),
 			]);
 			await captureMenu(a, `host-stored-${language}`);

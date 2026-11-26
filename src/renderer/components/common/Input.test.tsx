@@ -140,6 +140,46 @@ it("grows an auto-grow field to its content plus its border, so an empty field h
 	}
 });
 
+it("grows an auto-grow field to a value set by code, as a sheet's prefill sets it after the field mounted", async () => {
+	const PADDING = 16;
+	const BORDER = 2;
+	const LINE = 18;
+	const height = (element: Element) => Number.parseFloat((element as HTMLElement).style.height) || 0;
+	const prototype = HTMLElement.prototype;
+	Object.defineProperties(prototype, {
+		scrollHeight: {
+			configurable: true,
+			get: function (this: Element) {
+				return PADDING + LINE * ("value" in this ? String(this.value) : "").split("\n").length;
+			},
+		},
+		offsetHeight: {
+			configurable: true,
+			get: function (this: Element) {
+				return Math.max(height(this), PADDING + BORDER);
+			},
+		},
+		clientHeight: {
+			configurable: true,
+			get: function (this: Element) {
+				return Math.max(height(this) - BORDER, PADDING);
+			},
+		},
+	});
+	try {
+		await render(<TextArea autoGrow label="First message" onChange={() => {}} value="" />);
+		await act(async () =>
+			root?.render(
+				<TextArea autoGrow label="First message" onChange={() => {}} value={"Work on #12.\n\nTitle\nBody"} />,
+			),
+		);
+		const textarea = document.body.querySelector("textarea") as unknown as HTMLElement;
+		expect(textarea.style.height).toBe(`${PADDING + LINE * 4 + BORDER}px`);
+	} finally {
+		for (const key of ["scrollHeight", "offsetHeight", "clientHeight"]) Reflect.deleteProperty(prototype, key);
+	}
+});
+
 it("makes a search field the combobox of the list it drives, naming the list and its highlighted row", async () => {
 	await render(
 		<I18nProvider>

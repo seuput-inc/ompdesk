@@ -17,9 +17,10 @@ import { CoreError } from "../../core/process";
 import { SerialChain } from "../../serial-chain";
 import { stockHelperRequest } from "../../stock-helper";
 import { type BridgeClient, LocalCommandError } from "../types";
+import { primaryRoot, repoRoot } from "./changes";
 import { coreGit, coreHeld, DEFAULT_TIMEOUT_MS, withRepoLock } from "./exec";
 import { worktreeSlug } from "./parse";
-import { prepareWorktree, WORKTREE_PREPARE_BUDGET_MS } from "./worktree-seed";
+import { archiveHookRefusal, prepareWorktree, SETUP_TIMEOUT_MS, WORKTREE_PREPARE_BUDGET_MS } from "./worktree-seed";
 
 /** `git worktree add` checks out the whole tree: minutes on a large repository. */
 export const WORKTREE_ADD_TIMEOUT_MS = 300_000;
@@ -41,9 +42,11 @@ export const WORKTREE_COMMAND_BUDGETS_MS = {
 	// Planning (its fetch of the remote default branch included), stock's location, waiting for the lock and every
 	// attempt share one cancellable step.
 	worktree_create: PLAN_AND_ADD_MS + WORKTREE_PREPARE_BUDGET_MS,
+	// The seed and setup of a worktree `worktree_create {prepare: false}` made (the new task sheet's own step).
+	worktree_prepare: 2 * DEFAULT_TIMEOUT_MS + WORKTREE_PREPARE_BUDGET_MS,
 	worktree_prefetch: PLAN_ROUNDS * DEFAULT_TIMEOUT_MS + BASE_FETCH_TIMEOUT_MS,
-	// Repo root, primary root, status, prune, and `worktree remove` itself.
-	worktree_remove: 4 * DEFAULT_TIMEOUT_MS + WORKTREE_REMOVE_TIMEOUT_MS,
+	// Repo root, primary root, status, the archive hook, prune, and `worktree remove` itself.
+	worktree_remove: 4 * DEFAULT_TIMEOUT_MS + SETUP_TIMEOUT_MS + WORKTREE_REMOVE_TIMEOUT_MS,
 } as const;
 
 /** The codes the core refuses a worktree step with, which the page gets as the command's `code`. */
@@ -90,16 +93,21 @@ export async function stockWorktreeLocation(
 /** The branch a worktree gets when the caller names it (`RpcCommand` `worktree_create.branch`), or undefined when malformed. */
 export type WorktreeBranchSource = {
 	name: string;
-	mode: "new" | "local" | "remote";
+	mode: "new" | "local" | "remote" | "reuse";
 	remote?: string;
-	/** `new` only: the ref the branch starts at (default the folder's HEAD). */
+	/** `new` and `reuse`: the ref a new branch starts at (default the create's base). */
 	from?: string;
 };
 
 export function worktreeBranchSource(value: unknown): WorktreeBranchSource | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	const { name, mode, remote, from } = value as Record<string, unknown>;
-	if (typeof name !== "string" || !name || (mode !== "new" && mode !== "local" && mode !== "remote")) return undefined;
+	if (
+		typeof name !== "string" ||
+		!name ||
+		(mode !== "new" && mode !== "local" && mode !== "remote" && mode !== "reuse")
+	)
+		return undefined;
 	if (mode === "remote" && (typeof remote !== "string" || !remote || remote.startsWith("-"))) return undefined;
 	if (from !== undefined && (typeof from !== "string" || !from || from.startsWith("-"))) return undefined;
 	return {
@@ -116,9 +124,53 @@ interface CreateInput {
 	baseRef?: string;
 	branchPrefix?: string;
 	branch?: WorktreeBranchSource;
+	/** A preset of the repository's `.ompdesk/sparse` (core `git/sparse.rs`): only its folders are checked out. */
+	sparse?: string;
+	/** False: leave the seed and setup hook to `prepareCreatedWorktree`, the caller's next step. */
+	prepare?: boolean;
 }
 
 const createRequests = new Map<string, { args: string; made: Promise<RpcWorktreeCreateResult>; at: number }>();
+
+let recordedFolders: () => Promise<readonly string[]> = async () => [];
+
+/**
+ * The folders saved sessions recorded as their working folder (index.ts: the session index). A new worktree never
+ * takes one (FX22): stock keys a session's history by its folder, so a removed worktree's sessions would read as the
+ * new one's and open in it.
+ */
+export function setRecordedFoldersSource(source: () => Promise<readonly string[]>): void {
+	recordedFolders = source;
+}
+
+/** The repository's sparse checkout presets (`.ompdesk/sparse` in its main checkout); none outside a repository. */
+export function sparsePresets(cwd: string): Promise<{ name: string; folders: string[] }[]> {
+	return worktreeGit("git.sparsePresets", { cwd }, 3);
+}
+
+let branchRenamed: (path: string, from: string, branch: string) => void = () => {};
+
+/** Who follows a renamed branch in the tabs bound to its worktree (index.ts: the pool's records). */
+export function setBranchRenamedListener(listener: (path: string, from: string, branch: string) => void): void {
+	branchRenamed = listener;
+}
+
+/**
+ * A new task's worktree branch named for its work (FS91): `from` becomes `to` (or `to-2`…) in the checkout at `cwd`
+ * while it is still out there and never published; `branch` null when nothing was renamed (core `rename_unpushed`).
+ * It holds the lock the Changes panel's push takes in that checkout (`scm.ts` `mutate`, keyed by its root), so no push
+ * of ours runs between its checks and `git branch -m`; an agent's own push is caught by the core's check after it.
+ * Every tab bound to that worktree on `from` then names the new branch.
+ */
+export async function renameUnpushedBranch(cwd: string, from: string, to: string): Promise<{ branch: string | null }> {
+	const root = (await repoRoot(cwd)) ?? cwd;
+	// Two `ls-remote` per remote at 30 s each (core `LS_REMOTE_MS`) beside a dozen local reads.
+	const renamed = await withRepoLock(root, () =>
+		worktreeGit<{ branch: string | null }>("git.renameUnpushed", { cwd, from, to }, 12, 60_000),
+	);
+	if (renamed.branch) branchRenamed(cwd, from, renamed.branch);
+	return renamed;
+}
 
 /**
  * A create that names its request (`caller`: the paired device asking, else "local"; `id`: the caller's id for this
@@ -141,6 +193,8 @@ export function createWorktree(
 		args.baseRef,
 		args.branchPrefix,
 		args.branch,
+		args.sparse,
+		args.prepare,
 	]);
 	const known = createRequests.get(key);
 	if (known) {
@@ -169,7 +223,22 @@ async function createWorktreeOnce(
 ): Promise<RpcWorktreeCreateResult> {
 	const step = new SerialChain({ name: "worktree create", maxStepMs: PLAN_AND_ADD_MS });
 	const { primary, made, base } = await step.run(() => planAndAdd(sessionCwd, input, bridge), input.name);
-	return { ...made, ...(base ? { base } : {}), ...(await prepareWorktree(primary, made.path)) };
+	const prepared = input.prepare === false ? {} : await prepareWorktree(primary, made.path);
+	return { ...made, ...(base ? { base } : {}), ...prepared };
+}
+
+/**
+ * The seed and setup hook of a worktree a `worktree_create {prepare: false}` made, as their own step (the new task
+ * sheet shows each step on its row): `worktreePath` must be a linked worktree of `baseCwd`'s repository.
+ */
+export async function prepareCreatedWorktree(
+	baseCwd: string,
+	worktreePath: string,
+): Promise<Pick<RpcWorktreeCreateResult, "seed" | "setup">> {
+	const [primary, own] = await Promise.all([primaryRoot(baseCwd), primaryRoot(worktreePath)]);
+	if (own !== primary || path.resolve(worktreePath) === path.resolve(primary))
+		throw new LocalCommandError(`Not a worktree of ${primary}: ${worktreePath}`, "not_a_worktree");
+	return prepareWorktree(primary, worktreePath);
 }
 
 async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<BridgeClient, "request">) {
@@ -210,6 +279,8 @@ async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<B
 		BASE_FETCH_TIMEOUT_MS,
 	);
 	const { root, hash } = await stockWorktreeLocation(bridge, primary);
+	// Only a worktree's folder name can collide; the core compares the full path.
+	const taken = (await recordedFolders().catch(() => [])).filter(folder => path.basename(folder).startsWith("gui-"));
 
 	const made = await withRepoLock(primary, async () => {
 		try {
@@ -223,6 +294,8 @@ async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<B
 					slug,
 					branchPrefix,
 					startPoint,
+					...(input.sparse ? { sparse: input.sparse } : {}),
+					taken,
 					source: input.branch,
 					addTimeoutMs: WORKTREE_ADD_TIMEOUT_MS,
 				},
@@ -266,6 +339,11 @@ export async function removeWorktree(
 		{ path: input.path, root, force: input.force === true },
 		4,
 	);
+	// The repository's archive hook runs once the removal is cleared (Orca `execute-worktree-removal.ts:162-188`); its
+	// failure keeps the worktree unless the person forces the removal.
+	const hookRefusal = await archiveHookRefusal(primary, worktreePath);
+	if (hookRefusal && input.force !== true)
+		throw new LocalCommandError(`The worktree was kept: ${hookRefusal}.`, "worktree_archive_failed");
 	return withRepoLock(primary, () =>
 		worktreeGit<{ removed: true }>(
 			"git.worktreeRemove",

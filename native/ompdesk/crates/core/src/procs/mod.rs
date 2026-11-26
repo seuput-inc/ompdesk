@@ -10,6 +10,11 @@
 //! and, with `sampleMs`, the CPU they use. It never answers a command line's arguments, which can hold tokens.
 //! `procs.end` with `only` ends just the processes named by their id and start.
 //!
+//! `procs.ports` answers the TCP ports the processes of some tags listen on (Orca's workspace ports,
+//! `src/main/ports/local-workspace-platform-port-scanner.ts:74-145`, read by the session tag instead of the folder):
+//! each listener with its id and start, the same pair `procs.end` `only` takes to end it. Stock's shared workers
+//! (`keepArg`) and the pids in `exclude` (a tab's own omp, whose browser relay listens) are left out.
+//!
 //! Reading another process's environment and command line: Windows reads the process's own memory (its PEB's
 //! `RTL_USER_PROCESS_PARAMETERS`, `sys.rs`), macOS asks `sysctl(KERN_PROCARGS2)`, Linux (tests and CI) reads
 //! `/proc/<pid>/environ` and `cmdline`. The list is a Toolhelp32 snapshot on Windows and
@@ -80,6 +85,38 @@ struct Pinned {
     pid: u32,
     started_ms: u64,
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PortsParams {
+    env: String,
+    tags: Vec<String>,
+    timeout_ms: u64,
+    #[serde(default)]
+    keep_arg: Option<String>,
+    /// Processes never listed: the tabs' own omps.
+    #[serde(default)]
+    exclude: Vec<u32>,
+}
+
+/// One tagged process that listens on TCP, a row of `procs.ports`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Listener {
+    pub tag: String,
+    pub pid: u32,
+    /// As `procs.end` `only` names the process.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_ms: Option<u64>,
+    pub name: String,
+    /// Ascending, each once.
+    pub ports: Vec<u16>,
+}
+
+/// The variable a session's tag is in (`SESSION_TAG_ENV`, `src/main/omp-launch.ts`).
+pub(crate) const SESSION_TAG_ENV: &str = "OMP_GUI_SESSION_TAG";
+/// Stock's shared workers (`STOCK_WORKER_ARG`, `src/main/session-processes.ts`): theirs, never a session's server.
+pub(crate) const STOCK_WORKER_ARG: &str = "__omp_worker_";
 
 /// What is known of the other end of a closed output path, from least to most certain that the reader is gone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -186,6 +223,29 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&consoles(params).await?)
         })
     });
+    registry.add("procs.ports", |call| {
+        Box::pin(async move {
+            let params: PortsParams = call.params()?;
+            check_env(&params.env)?;
+            if params.keep_arg.as_deref() == Some("") {
+                return Err(Fault::new(
+                    "invalid_params",
+                    "keepArg is empty, which every argument starts with",
+                ));
+            }
+            Reply::json(
+                &listeners(
+                    &params.env,
+                    &params.tags,
+                    params.keep_arg.as_deref(),
+                    &params.exclude,
+                    params.timeout_ms,
+                    call.scope,
+                )
+                .await?,
+            )
+        })
+    });
 }
 
 /// A name a variable can have: not empty, no `=` (which ends a name) and no NUL (which ends an entry).
@@ -213,6 +273,74 @@ fn check_tag(tag: &str) -> Result<(), Fault> {
         "invalid_params",
         format!("{tag:?} is no session tag"),
     ))
+}
+
+/// The TCP ports the processes of `tags` listen on, by process: each by its id and start, ordered by its lowest port.
+/// Stock's workers (`keep_arg`) and what they started, and the pids of `exclude`, are not listed.
+pub(crate) async fn listeners(
+    env: &str,
+    tags: &[String],
+    keep_arg: Option<&str>,
+    exclude: &[u32],
+    timeout_ms: u64,
+    scope: Scope,
+) -> Result<Vec<Listener>, Fault> {
+    for tag in tags {
+        check_tag(tag)?;
+    }
+    if tags.is_empty() {
+        return Ok(Vec::new());
+    }
+    let tags: HashSet<String> = tags.iter().cloned().collect();
+    // A detailed scan reads each start to the millisecond, as `procs.end` `only` compares it.
+    let rows = scan(env, timeout_ms, scope, tags.clone(), true).await?;
+    let kept: HashSet<usize> = match keep_arg {
+        Some(keep_arg) => plan(&rows, std::process::id(), &tags, Some(keep_arg))
+            .kept
+            .into_iter()
+            .collect(),
+        None => HashSet::new(),
+    };
+    let tagged: Vec<Row> = rows
+        .into_iter()
+        .enumerate()
+        .filter(|(index, row)| {
+            !kept.contains(index)
+                && !exclude.contains(&row.pid)
+                && row.tag.as_ref().is_some_and(|tag| tags.contains(tag))
+        })
+        .map(|(_, row)| row)
+        .collect();
+    if tagged.is_empty() {
+        return Ok(Vec::new());
+    }
+    let pids: Vec<u32> = tagged.iter().map(|row| row.pid).collect();
+    let ports = blocking(move || Ok(crate::sys::listening_ports(&pids))).await?;
+    Ok(listening(tagged, ports))
+}
+
+/// Each tagged row that listens, with its ports ascending, ordered by its lowest port.
+fn listening(rows: Vec<Row>, mut ports: HashMap<u32, Vec<u16>>) -> Vec<Listener> {
+    let mut found: Vec<Listener> = rows
+        .into_iter()
+        .filter_map(|row| {
+            let mut listened = ports.remove(&row.pid)?;
+            if listened.is_empty() {
+                return None;
+            }
+            listened.sort_unstable();
+            listened.dedup();
+            Some(Listener {
+                tag: row.tag?,
+                pid: row.pid,
+                started_ms: row.started_ms,
+                name: row.name,
+                ports: listened,
+            })
+        })
+        .collect();
+    found.sort_by_key(|listener| (listener.ports[0], listener.pid));
+    found
 }
 
 async fn list(params: ListParams, scope: Scope) -> Result<Vec<Row>, Fault> {
@@ -2338,6 +2466,30 @@ mod tests {
         );
         assert_eq!(ports.get(&12), Some(&vec![3000, 9229]));
         assert_eq!(ports.get(&40), Some(&vec![5173]));
+    }
+
+    #[test]
+    fn lists_each_listening_process_by_its_lowest_port_with_its_start() {
+        let tag = "a".repeat(32);
+        let rows = vec![
+            row(30, 1, 3_000, Some(&tag)),
+            row(20, 1, 2_000, Some(&tag)),
+            row(10, 1, 1_000, Some(&tag)),
+        ];
+        let ports = HashMap::from([(30, vec![9229, 3000, 3000]), (20, vec![5173]), (10, vec![])]);
+        let found = listening(rows, ports);
+        let read: Vec<(u32, Option<u64>, Vec<u16>)> = found
+            .iter()
+            .map(|listener| (listener.pid, listener.started_ms, listener.ports.clone()))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (30, Some(3_000), vec![3000, 9229]),
+                (20, Some(2_000), vec![5173]),
+            ]
+        );
+        assert!(found.iter().all(|listener| listener.tag == tag));
     }
 
     #[test]

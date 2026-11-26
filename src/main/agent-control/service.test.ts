@@ -2400,11 +2400,11 @@ describe("ompdesk_schedule", () => {
 					model: "model",
 					device: "local",
 				},
-				"name: Too small: expected string to have >=1 characters; prompt: Too small: expected string to have >=1 characters; every_minutes: Too small: expected number to be >=1; days goes with daily_at; create needs name; create needs prompt; create needs exactly one of every_minutes, daily_at, at, in_minutes or on; target self wakes this session: it takes no folder; target self wakes this session: it takes no model; target self wakes this session on this computer: it takes no device",
+				"name: Too small: expected string to have >=1 characters; prompt: Too small: expected string to have >=1 characters; every_minutes: Too small: expected number to be >=1; days goes with daily_at; create needs name; create needs prompt; create needs exactly one of every_minutes, daily_at, cron, at, in_minutes or on; target self wakes this session: it takes no folder; target self wakes this session: it takes no model; target self wakes this session on this computer: it takes no device",
 			],
 			[
 				{ action: "create", days: "[2]", extra: true },
-				'Unrecognized key: "extra"; days goes with daily_at; create needs name; create needs prompt; create needs exactly one of every_minutes, daily_at, at, in_minutes or on',
+				'Unrecognized key: "extra"; days goes with daily_at; create needs name; create needs prompt; create needs exactly one of every_minutes, daily_at, cron, at, in_minutes or on',
 			],
 			[{ action: "create", at: "bad" }, "at: at is an ISO 8601 moment; create needs name; create needs prompt"],
 			[{ action: "create", at: 20 }, "at: Invalid input: expected string, received number"],
@@ -2464,7 +2464,7 @@ describe("ompdesk_schedule", () => {
 			(await service.run("main0001", T.schedule, { ...base, every_minutes: 60, folder: "relative/dir" })).text,
 		).toMatch(/absolute/);
 		expect((await service.run("main0001", T.schedule, { ...base })).text).toMatch(
-			/exactly one of every_minutes, daily_at, at, in_minutes or on/,
+			/exactly one of every_minutes, daily_at, cron, at, in_minutes or on/,
 		);
 		expect((await service.run("main0001", T.schedule, { ...base, every_minutes: 60, in_minutes: 5 })).text).toMatch(
 			/exactly one of/,
@@ -4077,6 +4077,33 @@ describe("autoClose: opened sessions whose work landed", () => {
 			expect(closes(host), JSON.stringify(messages.at(-1))).toHaveLength(0);
 			const [item] = await service.reviewItems("main0001");
 			expect(item?.state).not.toBe("running");
+		}
+	});
+
+	it("keeps a restored child its opener still owes a message", async () => {
+		// relaunch-child-ids.e2e.ts (main 45802157176, probe 45833528703): the opener's steer was unread when the app
+		// quit, and the first pass after the relaunch closed the child it was owed to (its last answer ends Result: ok).
+		const dir = mkdtempSync(join(tmpdir(), "agent-owed-child-"));
+		try {
+			const host = new FakeHost({ tabId: "main0001", title: "Boss", sessionPath: "/s/boss.jsonl" });
+			host.files.sendOutbox = join(dir, "send-outbox.json");
+			host.sentMarks = async () => ({ instance: "omp-a", journaled: [] });
+			const service = control(host, { sendReadyWaitMs: 200 });
+			await service.run("main0001", T.open, { message: "do it" });
+			const child = [...host.tabsById.values()].find(tab => tab.tabId !== "main0001") as FakeTab;
+			Object.assign(child, { busy: false, sessionPath: "/s/kid.jsonl", autoClosable: true, status: "starting" });
+			const sent = await service.run("main0001", T.send, { session: child.tabId, message: "Also do C" });
+			expect(sent.text).toContain("kept; it is still starting");
+			Object.assign(child, {
+				status: "ready",
+				restored: true,
+				lastRun: { id: 1, stopReason: "stop" },
+				last: "Done: parser fixed.\nResult: ok",
+			});
+			await service.autoClose("main0001");
+			expect(closes(host)).toHaveLength(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 });

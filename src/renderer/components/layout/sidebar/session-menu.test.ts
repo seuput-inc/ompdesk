@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { type SessionMenuActions, type SessionMenuFacts, sessionMenuItems } from "./session-menu";
+import {
+	pickedMenuItems,
+	type SessionMenuActions,
+	type SessionMenuFacts,
+	sessionMenuItems,
+	sessionSwipeItems,
+} from "./session-menu";
 
 const t = (key: string, params?: Record<string, string | number>) =>
 	params ? `${key}:${Object.values(params).join(",")}` : key;
@@ -37,6 +43,7 @@ const every: SessionMenuActions = {
 	moveToProject: noop,
 	toggleArchive: noop,
 	toggleAgentHidden: noop,
+	copyTitle: noop,
 	reveal: noop,
 	saveBundle: noop,
 	remove: noop,
@@ -48,7 +55,7 @@ const ids = (facts: Partial<SessionMenuFacts>, actions?: SessionMenuActions) =>
 	build(facts, actions).map(item => item.id);
 
 describe("sessionMenuItems", () => {
-	it("lists a stored session no tab holds in groups: open, edit, show in folder, delete last", () => {
+	it("lists a stored session no tab holds in groups: open, edit, copy title and show in folder, delete last", () => {
 		const items = build({});
 		expect(items.map(item => item.id)).toEqual([
 			"session-open-split",
@@ -61,6 +68,7 @@ describe("sessionMenuItems", () => {
 			"session-move",
 			"session-archive",
 			"session-agent-hidden",
+			"session-copy-title",
 			"session-reveal",
 			"session-delete",
 		]);
@@ -68,7 +76,7 @@ describe("sessionMenuItems", () => {
 		expect(items.filter(item => item.separatorBefore).map(item => item.id)).toEqual([
 			"session-open-split",
 			"session-rename",
-			"session-reveal",
+			"session-copy-title",
 			"session-delete",
 		]);
 		expect(items.at(-1)?.danger).toBe(true);
@@ -94,6 +102,7 @@ describe("sessionMenuItems", () => {
 			"session-move-down",
 			"session-move",
 			"session-archive",
+			"session-copy-title",
 			"session-delete",
 		]);
 		expect(ids({}, { remove: noop })).toEqual(["session-delete"]);
@@ -115,6 +124,7 @@ describe("sessionMenuItems", () => {
 			"session-move",
 			"session-archive",
 			"session-agent-hidden",
+			"session-copy-title",
 			"session-reveal",
 			"session-dump-bundle",
 			"session-delete",
@@ -211,5 +221,61 @@ describe("sessionMenuItems", () => {
 			{ unread: true },
 		])
 			expect(ids({ hasTab: true, ...facts }, marking)).not.toContain("session-mark-unread");
+	});
+
+	it("opens and stops each port the open tab's processes listen on, lowest first, after the view group", () => {
+		const openPort = vi.fn();
+		const stopPort = vi.fn();
+		const vite = { pid: 7, startedMs: 100, name: "node", ports: [5173] };
+		const api = { pid: 9, name: "bun", ports: [3000] };
+		const items = build({ hasTab: true, ports: [vite, api] }, { ...every, openPort, stopPort });
+		const portIds = items.map(item => item.id).filter(id => id.startsWith("session-port"));
+		expect(portIds).toEqual([
+			"session-port-open-3000",
+			"session-port-stop-3000",
+			"session-port-open-5173",
+			"session-port-stop-5173",
+		]);
+		expect(items.find(item => item.id === "session-port-open-3000")?.separatorBefore).toBe(true);
+		// A process whose start nobody knows cannot be told from a later one with its id: it is not stopped from here.
+		expect(items.find(item => item.id === "session-port-stop-3000")?.disabled).toBe(true);
+		items.find(item => item.id === "session-port-open-5173")?.onSelect?.();
+		items.find(item => item.id === "session-port-stop-5173")?.onSelect?.();
+		expect(openPort).toHaveBeenCalledWith(5173);
+		expect(stopPort).toHaveBeenCalledWith(vite, 5173);
+		// A session no tab holds has no processes of its own to list.
+		expect(ids({ ports: [vite] }, { ...every, openPort, stopPort }).some(id => id.startsWith("session-port"))).toBe(
+			false,
+		);
+	});
+});
+
+describe("pickedMenuItems", () => {
+	it("archives only the picked rows no tab holds, refuses when every one is held, and deletes them all, last", () => {
+		const actions = { toggleArchive: vi.fn(), remove: vi.fn() };
+		const items = pickedMenuItems({ count: 3, archivable: 2, archived: false, actions, t });
+		expect(items.map(item => [item.id, item.label, item.disabled ?? false])).toEqual([
+			["picked-archive", "sidebar.menu.archiveCount:2", false],
+			["picked-delete", "sidebar.menu.deleteCount:3", false],
+		]);
+		expect(items.at(-1)?.danger).toBe(true);
+		const held = pickedMenuItems({ count: 2, archivable: 0, archived: false, actions, t });
+		expect(held[0]?.disabled).toBe(true);
+		expect(held[0]?.disabledReason).toBe("sidebar.archiveOpenTab");
+		const restore = pickedMenuItems({ count: 2, archivable: 2, archived: true, actions, t });
+		expect(restore[0]?.id).toBe("picked-restore");
+	});
+});
+
+describe("sessionSwipeItems", () => {
+	it("uncovers the row's enabled Mark as unread to the right and Archive or Restore to the left", () => {
+		const outOfView = sessionSwipeItems(build({ hasTab: true }, { ...every, markUnread: noop }));
+		expect(outOfView.leading?.id).toBe("session-mark-unread");
+		// Archive is disabled while a tab holds the session, so the swipe leaves it out.
+		expect(outOfView.trailing).toEqual([]);
+		const archived = sessionSwipeItems(build({ archived: true }));
+		expect(archived.leading).toBeUndefined();
+		expect(archived.trailing.map(item => item.id)).toEqual(["session-restore"]);
+		expect(sessionSwipeItems(build({})).trailing.map(item => item.id)).toEqual(["session-archive"]);
 	});
 });

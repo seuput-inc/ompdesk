@@ -61,7 +61,9 @@ export function createGithubAuthService(
 
 export function registerGithubAuthIpc(ipc: IpcRegistry, service: GithubAuthService): void {
 	ipc.handle(IPC_COMMANDS.GITHUB_AUTH_REFRESH, (_caller, force: unknown) => service.refresh(force === true));
-	ipc.handle(IPC_COMMANDS.GITHUB_AUTH_LOGIN_START, () => service.startLogin());
+	ipc.handle(IPC_COMMANDS.GITHUB_AUTH_LOGIN_START, (_caller, scopes: unknown) =>
+		service.startLogin(scopes === "project" ? "project" : undefined),
+	);
 	ipc.handle(IPC_COMMANDS.GITHUB_AUTH_LOGIN_OPEN, () => service.openLogin());
 	ipc.handle(IPC_COMMANDS.GITHUB_AUTH_LOGIN_CANCEL, () => service.cancelLogin());
 	ipc.handle(IPC_COMMANDS.GITHUB_AUTH_LOGOUT, () => service.logout());

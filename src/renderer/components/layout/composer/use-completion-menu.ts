@@ -17,6 +17,7 @@ import { useT } from "../../../lib/i18n";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { useModelStore } from "../../../stores/model";
 import { compactModelLabel, compactModelLabels, compactModelText } from "../../settings/providers/provider-marks";
+import { composerExtras } from "./composer-extras";
 import { fileMentionFor } from "./composer-files";
 import {
 	MAX_LIST_MENU_ITEMS,
@@ -29,6 +30,7 @@ import {
 	mentionToken,
 	searchMentionFiles,
 } from "./input-area-utils";
+import type { MentionSession } from "./mention-sessions";
 
 /** Wait before a typed folder of a cut-off `@` listing is asked for on its own. */
 const MENTION_DIR_DEBOUNCE_MS = 150;
@@ -195,6 +197,7 @@ export function arrowKeepsMenu(
 export function useCompletionMenu({
 	text,
 	filePaths,
+	sessions,
 	commands,
 	emojiAutocomplete,
 	textareaRef,
@@ -202,6 +205,8 @@ export function useCompletionMenu({
 }: {
 	text: string;
 	filePaths: string[];
+	/** The sessions the `@` menu offers after the files (mention-sessions.ts), read when the menu is derived. */
+	sessions: () => readonly MentionSession[];
 	commands: AvailableCommand[];
 	emojiAutocomplete: boolean;
 	textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -468,12 +473,25 @@ export function useCompletionMenu({
 				}
 			}
 			const { matches, total } = searchMentionFiles(q, sources);
-			const items: CompletionItem[] = matches.map(({ path, label, ranges }) => ({
-				value: `${fileMentionFor(path, "")} `,
-				label,
-				highlights: ranges,
-			}));
+			// This computer's bots first (Orca lists them above the files), then the files.
+			const items: CompletionItem[] = [
+				...(composerExtras()?.botMentionItems(q, {
+					paused: t("bots.row.paused"),
+					bot: t("input.mention.bot"),
+				}) ?? []),
+				...matches.map(({ path, label, ranges }) => ({
+					value: `${fileMentionFor(path, "")} `,
+					label,
+					highlights: ranges,
+				})),
+			];
 			const lowerQuery = q.toLowerCase();
+			const sessionItems =
+				composerExtras()?.sessionMentionItems(sessions(), q, {
+					child: t("input.mention.childSession"),
+					session: t("input.mention.session"),
+				}) ?? [];
+			items.push(...sessionItems);
 			let schemes = 0;
 			for (const scheme of MENTION_SCHEMES) {
 				const at = scheme.toLowerCase().indexOf(lowerQuery);
@@ -485,7 +503,13 @@ export function useCompletionMenu({
 			if (truncated && items.length === 0) {
 				setArgHint(t("input.menu.filesTruncated", { count: MENTION_FS_MAX_ENTRIES.toLocaleString(uiLocale()) }));
 			}
-			apply({ source: "mention", rangeStart: mention.start, items, total: total + schemes, truncated });
+			apply({
+				source: "mention",
+				rangeStart: mention.start,
+				items,
+				total: total + sessionItems.length + schemes,
+				truncated,
+			});
 			return () => {
 				cancelled = true;
 				window.clearTimeout(timer);
@@ -561,6 +585,19 @@ export function useCompletionMenu({
 		return () => {
 			cancelled = true;
 		};
-	}, [text, selection, models, filePaths, commands, emojiAutocomplete, textareaRef, setMenu, t, rpc, dirTick]);
+	}, [
+		text,
+		selection,
+		models,
+		filePaths,
+		sessions,
+		commands,
+		emojiAutocomplete,
+		textareaRef,
+		setMenu,
+		t,
+		rpc,
+		dirTick,
+	]);
 	return argHint;
 }

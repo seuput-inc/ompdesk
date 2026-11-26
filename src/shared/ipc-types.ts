@@ -52,6 +52,7 @@ import type {
 	ExtensionErrorFrame,
 	ExtensionUIRequest,
 	ExtensionUIResponse,
+	ImageContent,
 	ModelCatalogUpdateFrame,
 	PromptResultFrame,
 	RpcBtwFrame,
@@ -65,6 +66,7 @@ import type {
 	SubagentFrame,
 } from "./rpc-types";
 import type { SchedulesApi, SchedulesState } from "./schedules";
+import type { SessionLinksCommand } from "./session-links";
 import type { SessionListDelta, VersionedSessionList } from "./session-list-delta";
 import type { SummariesChanged, VersionedSummaries } from "./session-summary";
 import type { SessionArtworks, SessionTargetQuery, SessionTargets } from "./session-target";
@@ -75,6 +77,7 @@ import type { SplitLayout } from "./split-layout";
 import type { SshToolsApi } from "./ssh-tools";
 import type { StartupMark } from "./startup-timing";
 import type { TerminalApi } from "./terminal-types";
+import type { TrackersApi } from "./trackers";
 import type { UiLanguage } from "./ui-language";
 
 // ============================================================================
@@ -153,7 +156,10 @@ export const IPC_EVENTS = {
 	REMOTE_OPENED_TABS_CHANGED: "sessions:remote-opened-changed",
 	/** The session files this computer's windows' tabs hold changed (`string[]`, `SESSIONS_HELD`) */
 	SESSIONS_HELD_CHANGED: "sessions:held-changed",
-	/** A session's attached links on this computer changed (`session_link_add`/`_remove`, a delete): read them again. */
+	/**
+	 * A computer's session links changed (`IpcSessionLinksChanged`: this computer's, or a paired host's `device`): a
+	 * window or page showing its rows reads them again.
+	 */
 	SESSION_LINKS_CHANGED: "sessions:links-changed",
 	/** Log line appended */
 	LOG_LINE: "log:line",
@@ -226,6 +232,11 @@ export const IPC_COMMANDS = {
 	LOG_SNAPSHOT: "log:snapshot",
 	/** Quit the app through the main-process guard, which confirms while sessions work. */
 	APP_QUIT: "app:quit",
+	/**
+	 * "Remove OMPdesk from this computer" (Settings › Updates & about): the `ompdesk` launchers go, the app is shown
+	 * in Finder or its Windows uninstaller starts, and the app quits (IpcRemoveFromComputerResult).
+	 */
+	APP_REMOVE: "app:remove-from-computer",
 	/** Send an RPC command, get response */
 	RPC_COMMAND: "rpc:command",
 	/** Send an RPC command to a specific tab's sidecar (IpcRpcCommandForTabPayload). */
@@ -274,6 +285,8 @@ export const IPC_COMMANDS = {
 	SESSIONS_ARTWORK: "sessions:artwork",
 	/** The pull request of a row's branch, read in its repository root (`{root, branch}` → `GithubBranchPr | null`) */
 	SESSIONS_PULL_REQUEST: "sessions:pull-request",
+	/** Read or change a computer's session links (`IpcSessionLinksPayload`; the answer of `answerSessionLinks`) */
+	SESSIONS_LINKS: "sessions:links",
 	/** Save one open session's diagnostic bundle: stock's `/dump all|anon` zip plus OMPdesk's diagnostics text (`DiagnosticBundleRequest` → `DiagnosticBundleResult`) */
 	SESSIONS_DUMP_BUNDLE: "sessions:dump-bundle",
 	/** Fetch stats endpoint */
@@ -388,9 +401,20 @@ export const IPC_COMMANDS = {
 	/** A picture in a format models refuse (HEIC, TIFF, BMP, ...) made model-safe with stock's image path. */
 	IMAGE_TO_MODEL: "image:to-model",
 	FS_SAVE_COPY: "fs:save-copy",
+	/** A composer draft's picture kept on this device's computer until the draft drops it (main/draft-pictures.ts). */
+	DRAFT_PICTURES_PUT: "draft-pictures:put",
+	/** A kept draft picture's bytes as base64; null when it is not kept. A web page may get `{blobUrl}` (shim.ts). */
+	DRAFT_PICTURES_READ: "draft-pictures:read",
+	DRAFT_PICTURES_REMOVE: "draft-pictures:remove",
 	FS_REVEAL_COPY: "fs:reveal-copy",
 	/** Open a session (or a fresh window) in a new parallel window with its own sidecar */
 	SESSION_OPEN_NEW_WINDOW: "session:open-new-window",
+	/** A new window that opens on the all-sessions board (its tab is the usual empty start tab) */
+	BOARD_OPEN_WINDOW: "board:open-window",
+	/** What each live session holds (processes, bytes), its Stop per process, and giving a quiet tab's omp back */
+	RESOURCES_READ: "resources:read",
+	RESOURCES_END_PROCESS: "resources:end-process",
+	RESOURCES_GIVE_BACK: "resources:give-back",
 	/** Fresh window pulls the session it was opened for (one-shot) */
 	SESSION_CONSUME_PENDING: "session:consume-pending",
 	/** Spawn a tab (own sidecar) bound to the calling window */
@@ -830,12 +854,20 @@ export type UpdateStatus =
 			restartAt?: number;
 			installing?: true;
 	  }
-	| { state: "not-available"; version: string }
+	/** `unsupportedSystem`: a newer release exists that this Mac's macOS cannot run (the macOS notice names it). */
+	| { state: "not-available"; version: string; unsupportedSystem?: UnsupportedSystemUpdate }
 	/** `message` is user-facing copy in the UI language; `detail` keeps the raw
 	 * technical cause (network/updater error text) for a secondary line or tooltip. */
 	| { state: "error"; message: string; detail?: string; showInBanner?: boolean }
 	/** The release repo refused an anonymous request, or the token cannot read it (it is private again). Settings-only, never a banner. */
 	| { state: "auth-required"; reason: "missing" | "invalid" | "denied" };
+
+/** A release the updater withheld because this Mac runs a macOS below the one it needs. */
+export interface UnsupportedSystemUpdate {
+	version: string;
+	/** The major macOS version the release needs, e.g. "15". */
+	minimumMacOS: string;
+}
 
 /**
  * OMPdesk itself on the machine a tab runs on (Settings on a paired host's
@@ -1396,6 +1428,17 @@ export type IpcNotifyResult = "shown" | "muted" | "dropped" | "blocked";
 
 /** The test banner: shown (or no word from the system, as on macOS), refused (Windows' `failed`), or none can show. */
 export type IpcNotifyTestResult = "shown" | "failed" | "unsupported";
+
+/**
+ * What "Remove OMPdesk from this computer" did: the launcher files it removed, memory's terminal wiring (`none`: was
+ * not on), and how the app itself leaves (`finder`: shown in Finder to move to the Bin; `uninstaller`: Windows'
+ * uninstaller started; `none`: an unpackaged run, or no uninstaller found). The app quits after answering.
+ */
+export interface IpcRemoveFromComputerResult {
+	removed: string[];
+	terminal: "removed" | "failed" | "none";
+	app: "finder" | "uninstaller" | "none";
+}
 
 /** The test push: sent, the subscription expired (and is forgotten), the push service failed, or no subscription. */
 export type IpcPushTestResult = "sent" | "gone" | "failed" | "none";
@@ -2143,6 +2186,33 @@ export interface SessionInfo {
 	heldOnHost?: true;
 }
 
+/** One process a session's tab started (or its omp), as the All sessions page's Resources view lists it. */
+export interface SessionUseProcess {
+	pid: number;
+	name: string;
+	/** Resident bytes. */
+	bytes: number;
+	/** When it started (ms since the epoch); the person's Stop names it with the pid. */
+	startedMs?: number;
+	/** The session's omp itself, which has no Stop. */
+	omp: boolean;
+}
+
+/** What one live session holds on this computer (`RESOURCES_READ`, `SessionProcesses.use`). */
+export interface SessionUse {
+	/** Its tab's omp now: what the person's Stop and Give back name the session by. */
+	ompPid?: number;
+	/** Its tab here, and whether that tab may give its omp back now (quiet, nothing it started still runs). */
+	tabId?: string;
+	quiet?: boolean;
+	cwd: string;
+	sessionPath?: string;
+	/** The paired device this computer runs it for. */
+	device?: string;
+	bytes: number;
+	processes: SessionUseProcess[];
+}
+
 // ============================================================================
 // Remote Devices Types
 // ============================================================================
@@ -2184,6 +2254,17 @@ export interface IpcSessionsChanged {
 	device?: string;
 	/** What changed (`session-list-delta.ts`): a feed holding `list.base` applies it; any other reads the list again. */
 	list?: SessionListDelta;
+}
+
+/** The `sessions:links-changed` push: whose links changed, absent for this computer's own. */
+export interface IpcSessionLinksChanged {
+	device?: string;
+}
+
+export interface IpcSessionLinksPayload {
+	command: SessionLinksCommand;
+	/** The paired host whose session it is; absent for this computer's. */
+	device?: string;
 }
 
 /**
@@ -2351,6 +2432,8 @@ export interface OmpApi {
 	bots: BotsApi;
 	/** This computer's mail accounts for email routines (Settings › Schedules › Email accounts); passwords go one way. */
 	mailAccounts: MailAccountsApi;
+	/** This computer's Linear and Jira connections and their work items (Agents › GitHub's source bar); tokens go one way. */
+	trackers: TrackersApi;
 	/** The sidebar's project list of this computer or a paired host (src/main/sidebar-projects.ts). */
 	sidebarProjects: SidebarProjectsApi;
 	/** OMPdesk's own ssh on this computer: port forwards, port watch, agent state, prompts (Settings › SSH). */
@@ -2376,6 +2459,11 @@ export interface OmpApi {
 		 * shuts the focused window and leaves the rest of the session behind.
 		 */
 		quit(): void;
+		/**
+		 * "Remove OMPdesk from this computer": the running-work guard asks first (null: kept working, nothing removed);
+		 * then the launchers go, the app leaves as its platform allows, and it quits.
+		 */
+		removeFromComputer(): Promise<IpcRemoveFromComputerResult | null>;
 	};
 	rpc: SessionRpcClient & {
 		commandForTab(tabId: string, cmd: RpcCommand, timeoutMs?: number): Promise<RpcResponse>;
@@ -2425,8 +2513,8 @@ export interface OmpApi {
 		onRemoteOpenedChanged(callback: (tabs: RemoteOpenedTab[]) => void): () => void;
 		/** The session files this computer's windows' tabs hold changed (the whole list, `SESSIONS_HELD`). */
 		onHeldSessionsChanged(callback: (files: string[]) => void): () => void;
-		/** A session's attached links on this computer changed (`SESSION_LINKS_CHANGED`): read `session_links` again. */
-		onSessionLinksChanged(callback: () => void): () => void;
+		/** A computer's session links changed (`SESSION_LINKS_CHANGED`): read that computer's again. */
+		onSessionLinksChanged(callback: (change: IpcSessionLinksChanged) => void): () => void;
 		onLogBatch(callback: (batch: LogBatch) => void): () => void;
 		onMenuAction(callback: (action: MenuAction) => void): () => void;
 		onDeepLink(callback: (link: DeepLinkPayload) => void): () => void;
@@ -2584,7 +2672,8 @@ export interface OmpApi {
 	/** This machine's GitHub CLI sign-in; remote tabs never use it (their host signs in on its own). */
 	githubAuth: {
 		refresh(force?: boolean): Promise<GithubAuthState>;
-		startLogin(): Promise<GithubAuthState>;
+		/** `scopes: "project"` adds the project scope to the sign-in there is (Agents › GitHub › Projects). */
+		startLogin(scopes?: "project"): Promise<GithubAuthState>;
 		openLogin(): Promise<GithubAuthState>;
 		cancelLogin(): Promise<GithubAuthState>;
 		logout(): Promise<GithubAuthState>;
@@ -2628,6 +2717,11 @@ export interface OmpApi {
 		/** The pull request of a row's branch, read in its repository root on that computer; null: it has none. */
 		pullRequest(root: string, branch: string, device?: string): Promise<GithubBranchPr | null>;
 		/**
+		 * Read or change session links on the computer that runs the session (`device`, else this one): `session_links`
+		 * answers path → `SessionLink[]`, an add the `SessionLink` kept, a remove the session's links left.
+		 */
+		links(command: SessionLinksCommand, device?: string): Promise<unknown>;
+		/**
 		 * Save an open session's diagnostic bundle: the save dialog (on a paired web page, the computer's save sheet),
 		 * then stock's dump zip of the tab's omp plus `ompdesk-diagnostics.txt`. Failures resolve as results.
 		 */
@@ -2639,6 +2733,14 @@ export interface OmpApi {
 		 * call resolves true — the session is foregrounded either way.
 		 */
 		openInNewWindow(payload: IpcSessionOpenNewWindowPayload): Promise<boolean>;
+		/** A new window that opens on the all-sessions board; false on a phone's page (a page is one window). */
+		openBoardWindow(): Promise<boolean>;
+		/** What each live session holds on this computer now; null when the processes cannot be listed in time. */
+		use(): Promise<SessionUse[] | null>;
+		/** End one process a session started (never its omp); true when it ended. */
+		endProcess(ompPid: number, pid: number, startedMs: number): Promise<boolean>;
+		/** Give a quiet tab's omp back now; `busy` when something in it still runs. */
+		giveBack(tabId: string): Promise<"released" | "busy">;
 		/** One-shot: the session this window was opened to display, if any. */
 		consumePendingOpen(): Promise<string | null>;
 		/** One computer's session summaries: this computer's, or a paired host's (null while not known). */
@@ -2861,6 +2963,17 @@ export interface OmpApi {
 		 * Electron answers at once (`webUtils.getPathForFile`); a web page uploads the file to the host first.
 		 */
 		pathForFile(file: File): string | Promise<string>;
+	};
+	/**
+	 * A composer draft's pictures, kept per device on the computer this window belongs to (main/draft-pictures.ts), so a
+	 * draft in `localStorage` keeps its pictures across a relaunch. `id` is a `crypto.randomUUID()` the renderer made;
+	 * one picture's calls take effect in the order they were made.
+	 */
+	draftPictures: {
+		put(id: string, content: ImageContent): Promise<void>;
+		/** The picture's bytes as base64; null only when it is not kept. */
+		read(id: string): Promise<string | null>;
+		remove(id: string): Promise<void>;
 	};
 	editor: {
 		openExternal(content: string): Promise<{

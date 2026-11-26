@@ -1,6 +1,7 @@
 /**
  * Session side commands answered GUI-side: foreign-session import, local
- * pastes, copy targets, slash-argument completions, session stats history.
+ * pastes, copy targets, slash-argument completions, session stats history,
+ * and what the tab's processes listen on (ports, ending one).
  * Registered through `sessions.ts`.
  *
  * Foreign import, pastes, completions and journal totals run in the omp
@@ -8,7 +9,7 @@
  * reuse omp's own importers, local:// root and builtin command registry.
  */
 import { z } from "zod";
-import type { SessionStats } from "../../shared/rpc-types";
+import type { SessionPortProcess, SessionStats } from "../../shared/rpc-types";
 import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
 
 const foreignSource = z.enum(["claude", "codex"]);
@@ -54,5 +55,17 @@ export const handlers: Record<string, LocalHandler> = {
 			ctx.bridge.request<SessionStats["history"]>("sessions.usage_history"),
 		]);
 		return { ...stats, history };
+	},
+
+	// The tab's own processes on this computer that listen (Orca's workspace ports, by session tag): a paired device's
+	// ask runs here on the host, so it only ever sees and ends the processes of the tab it holds.
+	get_session_ports: async (_command, ctx): Promise<SessionPortProcess[]> => (await ctx.processes?.ports()) ?? [],
+
+	end_session_port: async (command, ctx) => {
+		const { pid, startedMs } = z
+			.object({ pid: z.number().int().positive(), startedMs: z.number().int().nonnegative() })
+			.parse(command);
+		if (!ctx.processes) throw new LocalCommandError("This tab has no processes on this computer", "unsupported");
+		return { ended: await ctx.processes.endPort(pid, startedMs) };
 	},
 };

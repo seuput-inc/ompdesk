@@ -5,7 +5,7 @@ use super::{Timing, wait};
 use crate::gh::Gh;
 use crate::routines::{
     GhApi,
-    github::{self, Kind, State},
+    github::{self, Filters, Kind, State},
 };
 use crate::run::Runner;
 use crate::schedules::triggers::Context;
@@ -36,14 +36,7 @@ pub(super) async fn run(
         );
         return;
     }
-    let order = [
-        Kind::PullRequest,
-        Kind::Issue,
-        Kind::CiFailure,
-        Kind::Release,
-        Kind::Push,
-    ];
-    let kinds: Vec<_> = order
+    let kinds: Vec<_> = Kind::ALL
         .into_iter()
         .filter(|kind| {
             event["events"]
@@ -51,6 +44,7 @@ pub(super) async fn run(
                 .is_some_and(|events| events.iter().any(|event| event == kind.name()))
         })
         .collect();
+    let filters = Filters::of(event);
     let mut state = State::restore(mark.as_ref());
     loop {
         for &kind in &kinds {
@@ -62,7 +56,7 @@ pub(super) async fn run(
                 Ok(tool) => {
                     // A trigger's read is never the person's own: it waits behind the GitHub gate (`gh/gate.rs`).
                     let gh = Gh::paced(tool.runner, scope.clone(), true);
-                    github::read(
+                    github::read_with(
                         &GhApi {
                             gh: &gh,
                             home: &tool.home,
@@ -71,6 +65,7 @@ pub(super) async fn run(
                         repo,
                         kind,
                         &mut state,
+                        &filters,
                     )
                     .await
                 }

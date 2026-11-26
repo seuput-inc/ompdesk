@@ -26,6 +26,7 @@ pub mod call_journal;
 pub mod items;
 pub mod mail_outbox;
 pub mod pending_cleanups;
+pub mod rooms;
 pub mod send_outbox;
 pub mod session_fates;
 

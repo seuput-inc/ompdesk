@@ -1,12 +1,13 @@
 import { Archive, FileText, GitBranch, MoreHorizontal, Terminal } from "lucide-react";
 import type { ReactNode } from "react";
-import { memo, useState } from "react";
+import { memo, useId, useLayoutEffect, useRef, useState } from "react";
 import { MAIL_CUSTOM_TYPE } from "../../../../resources/gui-bridge/agent-control-contracts";
 import { A2UI_TOOL } from "../../../../resources/gui-bridge/modes/a2ui-contracts";
 import { CI_MESSAGE_TYPE } from "../../../../resources/gui-bridge/modes/ci-watch-contracts";
 import { COMPUTER_USE_NOTICE_TYPE } from "../../../../resources/gui-bridge/modes/computer-use-contracts";
 import { MEMORY_RECALL_MESSAGE_TYPE } from "../../../../resources/gui-bridge/modes/memory-recall-contracts";
 import { parseAgentMessage } from "../../../shared/agent-control";
+import { isQuietResult } from "../../../shared/bots";
 import { extractFileMentions, replaceFileMentions, splitAttachedMentions } from "../../../shared/file-mentions";
 import type { AgentMessage, ImageContent, MessageContent, ToolCallContent } from "../../../shared/rpc-types";
 import { useShellInput } from "../../hooks/use-shell-mode";
@@ -40,6 +41,7 @@ import { A2uiChatCard } from "../tools";
 import { isAbsoluteChatPath, referencedFiles } from "../tools/media/chat-media";
 import { ToolImage } from "../tools/media/ToolImage";
 import { type RunningIndicator, ToolCard } from "../tools/ToolCard";
+import { ItemNote, isItemMail, QuietReply, useBotChat } from "./bots/bot-card-kind";
 import { CiNote } from "./CiNote";
 import { ComputerUseNote } from "./ComputerUseNote";
 import { CustomMessageCard, isCustomMessageCardType, MailNote, MemoryRecallNote, RecapCard } from "./CustomMessageCard";
@@ -235,6 +237,63 @@ function MentionedFile({ file }: { file: NonNullable<AgentMessage["files"]>[numb
 				</pre>
 			</Collapse>
 		</Card>
+	);
+}
+
+/** A prompt longer than this, or of more lines, starts folded (Orca's `native-chat-user-message-fold.ts:1-12`). */
+const PROMPT_FOLD_CHARS = 600;
+const PROMPT_FOLD_LINES = 8;
+
+/** Prompts the reader unfolded, so a row the virtualizer recycles comes back as they left it. */
+const unfoldedPrompts = new Set<string>();
+
+/** Decided from the text alone, so the row's first layout is already its folded one. */
+export function promptFolds(text: string): boolean {
+	return text.length > PROMPT_FOLD_CHARS || text.split("\n").length > PROMPT_FOLD_LINES;
+}
+
+/**
+ * A long prompt shows its first lines and "Show full message" (Orca's `NativeChatUserMessageFold.tsx`); one the clip
+ * already fits (a long line of short words, measured once laid out) draws no button.
+ */
+function PromptFold({ foldKey, text, children }: { foldKey: string; text: string; children: ReactNode }) {
+	const t = useT();
+	const long = promptFolds(text);
+	const [open, setOpen] = useState(() => unfoldedPrompts.has(foldKey));
+	const [fits, setFits] = useState(false);
+	const clipRef = useRef<HTMLDivElement>(null);
+	const clipId = useId();
+	const folded = long && !fits && !open;
+	useLayoutEffect(() => {
+		const clip = clipRef.current;
+		// Unmeasured (no layout yet) keeps the fold.
+		if (folded && clip && clip.scrollHeight > 0) setFits(clip.scrollHeight <= clip.clientHeight);
+	}, [folded]);
+	if (!long) return <>{children}</>;
+	return (
+		<>
+			<div className="omp-prompt-fold" data-prompt-folded={folded ? "" : undefined} id={clipId} ref={clipRef}>
+				{children}
+			</div>
+			{fits ? null : (
+				<div className="mt-1 -mb-1 flex justify-end">
+					<Button
+						aria-controls={clipId}
+						aria-expanded={open}
+						data-prompt-fold-toggle
+						onClick={() => {
+							if (open) unfoldedPrompts.delete(foldKey);
+							else unfoldedPrompts.add(foldKey);
+							setOpen(!open);
+						}}
+						size="sm"
+						variant="ghost"
+					>
+						{open ? t("chat.prompt.showLess") : t("chat.prompt.showFull")}
+					</Button>
+				</div>
+			)}
+		</>
 	);
 }
 
@@ -469,6 +528,7 @@ export const MessageBubble = memo(function MessageBubble({
 	const tabId = useRuntimeTabId();
 	const [branching, setBranching] = useState(false);
 	const switchPending = useSessionStore(state => state.switchPending !== null);
+	const botChat = useBotChat(tabId);
 	if (message.role === "bashExecution" || message.role === "pythonExecution") {
 		return <ExecutionBubble message={message} />;
 	}
@@ -479,7 +539,8 @@ export const MessageBubble = memo(function MessageBubble({
 		if (message.display === false) return null;
 		if (isRestartNote(message.customType)) return <RestartNote message={message} />;
 		if (message.customType === "recap") return <RecapCard message={message} />;
-		if (message.customType === MAIL_CUSTOM_TYPE) return <MailNote message={message} />;
+		if (message.customType === MAIL_CUSTOM_TYPE)
+			return isItemMail(message) ? <ItemNote message={message} /> : <MailNote message={message} />;
 		if (message.customType === MEMORY_RECALL_MESSAGE_TYPE) return <MemoryRecallNote message={message} />;
 		if (message.customType === COMPUTER_USE_NOTICE_TYPE) return <ComputerUseNote message={message} />;
 		if (message.customType === CI_MESSAGE_TYPE) return <CiNote message={message} />;
@@ -569,6 +630,16 @@ export const MessageBubble = memo(function MessageBubble({
 		}
 	};
 
+	// A bot chat's turn that ended in NO_REPLY had nothing to say: one quiet line (Orca hides such a turn).
+	if (
+		isAssistant &&
+		botChat &&
+		!stopped &&
+		!content.some(block => block.type === "toolCall") &&
+		isQuietResult(messageText())
+	)
+		return <QuietReply text={messageText()} />;
+
 	if (isUser) {
 		return (
 			<div className="omp-user-turn group flex justify-end px-6 py-2.5">
@@ -609,20 +680,22 @@ export const MessageBubble = memo(function MessageBubble({
 							})}
 						</div>
 					)}
-					{userMentions.blocks.map((block, i) => {
-						if (block.type === "text") {
-							if (block.text.trim() === "") return null;
-							return (
-								<div key={i} className="omp-user-text">
-									<MarkdownRenderer content={block.text} userText />
-								</div>
-							);
-						}
-						if (block.type === "image") {
-							return <InlineImage key={i} gallery={userGallery} image={block} />;
-						}
-						return null;
-					})}
+					<PromptFold foldKey={String(message.timestamp)} text={messageText()}>
+						{userMentions.blocks.map((block, i) => {
+							if (block.type === "text") {
+								if (block.text.trim() === "") return null;
+								return (
+									<div key={i} className="omp-user-text">
+										<MarkdownRenderer content={block.text} userText />
+									</div>
+								);
+							}
+							if (block.type === "image") {
+								return <InlineImage key={i} gallery={userGallery} image={block} />;
+							}
+							return null;
+						})}
+					</PromptFold>
 					<PromptFiles files={userMentions.files} />
 				</div>
 				<MessageActions

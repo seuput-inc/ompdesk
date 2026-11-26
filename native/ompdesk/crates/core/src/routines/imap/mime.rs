@@ -36,6 +36,10 @@ pub(super) fn headers(raw: &[u8]) -> BTreeMap<String, String> {
             continue;
         };
         let name = js_trim(name).to_lowercase();
+        // Only the topmost `Authentication-Results` is the receiving server's own; a sender can write more below it.
+        if name == "authentication-results" && headers.contains_key(&name) {
+            continue;
+        }
         let value = words(js_trim(value));
         if let Some(previous) = headers
             .get_mut(&name)

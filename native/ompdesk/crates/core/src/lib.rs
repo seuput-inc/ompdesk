@@ -7,16 +7,19 @@ pub mod aimemory;
 mod archive;
 pub mod autopilot;
 pub mod browsers;
+pub mod browsing;
 pub mod care;
 pub mod clients;
 pub mod clock;
 pub mod control;
 mod diagnostic_bundle;
 pub mod disk;
+pub mod emulator;
 pub mod ext;
 pub mod fs;
 pub mod gh;
 pub mod git;
+mod glab;
 mod http;
 pub mod hub;
 pub mod ipc;
@@ -54,6 +57,7 @@ pub mod supervise;
 mod sys;
 pub mod tailscale;
 mod termhistory;
+mod trackers;
 // shortcut: the contract the units T2.2-T2.5 fill is unused until they land; drop this allow with the last of them.
 #[allow(dead_code)]
 mod tools;
@@ -84,4 +88,6 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(windows)]
-pub use sys::{end_children_with_this_process, ensure_console};
+pub use sys::{
+    close_inherited_handles, end_children_with_this_process, ensure_console, stdio_not_inherited,
+};

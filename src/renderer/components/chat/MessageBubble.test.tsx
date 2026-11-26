@@ -944,6 +944,36 @@ describe("MessageBubble on a touch screen", () => {
 	});
 });
 
+describe("MessageBubble long prompts", () => {
+	it("folds a long prompt under Show full message, opens it, and leaves a short one whole", async () => {
+		const container = document.createElement("div");
+		document.body.appendChild(container);
+		const root = createRoot(container);
+		const long = Array.from({ length: 12 }, (_, i) => `line ${i + 1}`).join("\n");
+		try {
+			await act(async () => {
+				root.render(
+					<I18nProvider>
+						<MessageBubble message={{ role: "user", content: long, timestamp: 77 }} />
+						<MessageBubble message={{ role: "user", content: "short prompt", timestamp: 78 }} />
+					</I18nProvider>,
+				);
+			});
+			expect(container.querySelectorAll("[data-prompt-folded]")).toHaveLength(1);
+			const toggle = container.querySelector<HTMLButtonElement>("[data-prompt-fold-toggle]");
+			expect(toggle?.textContent).toBe("Show full message");
+			expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+			await act(async () => toggle?.dispatchEvent(new Event("click", { bubbles: true })));
+			expect(container.querySelector("[data-prompt-folded]")).toBeNull();
+			expect(toggle?.textContent).toBe("Show less");
+			expect(container.querySelectorAll("[data-prompt-fold-toggle]")).toHaveLength(1);
+		} finally {
+			await act(async () => root.unmount());
+			container.remove();
+		}
+	});
+});
+
 describe("MessageBubble attached images", () => {
 	it("draws attached bytes and shows a collected blob or empty data as a chip, never a broken data URL", () => {
 		const html = renderToStaticMarkup(

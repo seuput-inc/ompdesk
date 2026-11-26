@@ -6,7 +6,7 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir, release } from "node:os";
-import { basename, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import {
 	app,
@@ -65,8 +65,9 @@ import {
 	TOOLS_AUTO_UPDATE_PREF,
 } from "../shared/desktop-prefs";
 import { ECC_PREF } from "../shared/ecc";
-import { IPC_COMMANDS, IPC_EVENTS, type SessionKind } from "../shared/ipc-types";
+import { IPC_COMMANDS, IPC_EVENTS, type IpcRemoveFromComputerResult, type SessionKind } from "../shared/ipc-types";
 import { KEYCHAIN_WOULD_ASK } from "../shared/keychain";
+import { LAUNCH_INCIDENT_PREF, launchIncidentOf } from "../shared/launch-incident";
 import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
 import { MOBILE_WEB_COMMAND, MOBILE_WEB_GET_STATE, MOBILE_WEB_PORT, MOBILE_WEB_STATE } from "../shared/mobile-web";
 import { MODEL_SETUP_RESEARCH_PICK_PREF } from "../shared/model-setup";
@@ -74,7 +75,7 @@ import type { OmpUpdateState } from "../shared/omp-update";
 import { VISUAL_SCHEME } from "../shared/preview";
 import { PSTACK_PREF } from "../shared/pstack";
 import { REPLY_LANGUAGE_PREF } from "../shared/reply-language";
-import { SCHEDULES_STATE } from "../shared/schedules";
+import { SCHEDULES_STATE } from "../shared/schedule-channels";
 import type { SetupState } from "../shared/setup";
 import { isMutedFolder, readSidebarPrefs, SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import {
@@ -95,7 +96,15 @@ import { registerAiMemoryIpc } from "./ai-memory/ipc";
 import { AiMemoryService, pidFileControl } from "./ai-memory/service";
 import { MemorySync, serveConclusionPull, serveConclusionPush, servePull, servePush } from "./ai-memory/sync";
 import { MemoryUpkeep } from "./ai-memory/upkeep";
-import { installQuitGuard, quitApproved, quitRisk, requestQuit, setQuitResumes, startQuitLog } from "./app-quit";
+import {
+	confirmQuit,
+	installQuitGuard,
+	quitApproved,
+	quitRisk,
+	requestQuit,
+	setQuitResumes,
+	startQuitLog,
+} from "./app-quit";
 import { sweepStaleTemps } from "./atomic-file";
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
@@ -103,7 +112,7 @@ import { onBotsState } from "./bots";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
 import { answersWithin, ConnectivityMonitor, PROBE_TIMEOUT_MS, probeTarget, reaches } from "./connectivity";
 import { CONSOLE_POLL_MS, ConsoleWindowWatch, listConsoleWindows } from "./console-window-watch";
-import { installCliLaunchers } from "./control-socket/cli-install";
+import { installCliLaunchers, removeCliLaunchers } from "./control-socket/cli-install";
 import { takeHubMinute } from "./core/hub";
 import { core, shutdownCore } from "./core/process";
 import { routeCoreSaves } from "./core-saves";
@@ -118,6 +127,7 @@ import { SavedWorktreeStore, setSavedWorktreeStore } from "./disk/saved-worktree
 import { ScratchCare } from "./disk/scratch";
 import { diskFull } from "./disk-full";
 import { bindDiskFullNotice, describeFiles } from "./disk-full-notice";
+import { DraftPictures, registerDraftPicturesIpc } from "./draft-pictures";
 import { EMPTY_APPLY_PLAN } from "./extension-reload";
 import { createGithubAuthService, registerGithubAuthIpc } from "./github-auth/ipc";
 import type { GithubAuthService } from "./github-auth/service";
@@ -125,10 +135,18 @@ import { applyLaunchDecision, type LaunchDecision, softwareCompositing } from ".
 import { installHangWatchdog, markMainStep } from "./hang-watchdog";
 import { startLowDiskWatch } from "./health-watch";
 import { getMainLanguage, mainT } from "./i18n";
+import { canGiveBack } from "./idle-release";
 import { startupCwd } from "./initial-cwd";
+import { spawnDetachedOffThread } from "./installer-spawn";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
 import { shellRunner } from "./local/git/exec";
-import { stockWorktreeLocation, tablessWorktreeBridge } from "./local/git/worktree";
+import {
+	createWorktree,
+	setBranchRenamedListener,
+	setRecordedFoldersSource,
+	stockWorktreeLocation,
+	tablessWorktreeBridge,
+} from "./local/git/worktree";
 import { renameStoredSession } from "./local/session-files";
 import { LocalEngines, localEngineSettings } from "./local-engines";
 import { LogWatcher } from "./log-watcher";
@@ -141,7 +159,7 @@ import { installMainFailureLogging } from "./main-failures";
 import { McpHub } from "./mcp-hub";
 import { onMcpChange } from "./mcp-live";
 import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
-import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading } from "./memory-sampler";
+import { listProcesses, readMemory, SAMPLE_TIMEOUT_MS, testMemoryReading, watchProcesses } from "./memory-sampler";
 import { startMemoryWatch } from "./memory-watch";
 import { configureNativeBin, nativeBinPath } from "./native-bin";
 import { quietBotTurn } from "./notify-triage";
@@ -164,6 +182,7 @@ import { routinePorts } from "./routines/ports";
 import { writeRuntimeLog } from "./runtime-log";
 import { layoutsToSave } from "./saved-layouts";
 import { ompRunLauncher, ScheduleService } from "./schedules";
+import type { SecretBox } from "./secret-files";
 import { whenSessionFree } from "./session-free";
 import { SessionIndex } from "./session-index";
 import { SessionKindStore } from "./session-kinds";
@@ -221,6 +240,7 @@ import { configureTerminalHistory, saveTerminalsForQuit } from "./terminal/histo
 import { exitWithLauncher } from "./test-launcher-exit";
 import { ToolsClient } from "./tools/client";
 import { registerToolsIpc } from "./tools/ipc";
+import { TrackerAccounts } from "./tracker-accounts";
 import { InterruptedTurnStore, limitLook, retryDelays, TurnResume } from "./turn-resume";
 import { recordTurnStop, setTurnStopLog } from "./turn-stop-log";
 import { journalWait, TurnWaitWatch, WAIT_SWEEP_MS } from "./turn-wait-watch";
@@ -239,6 +259,7 @@ import {
 	setupUpdater,
 	updateStatus,
 } from "./updater";
+import { macBundlePath } from "./updater-state";
 import { FileEditReports } from "./web/file-edit-reports";
 import { IPC_POLICY } from "./web/ipc-policy";
 import { IpcRegistry } from "./web/ipc-registry";
@@ -496,6 +517,8 @@ function firstWindowLoaded(): Promise<void> {
 }
 /** The owner's mail accounts for email routines (Settings › Schedules › Email accounts). */
 let mailAccounts: MailAccounts | null = null;
+/** This computer's Linear and Jira connections (tracker-accounts.ts). */
+let trackerAccounts: TrackerAccounts | null = null;
 /** Keep-awake while this computer's own tabs run a turn (Settings › General › Window). */
 let workAwakePolicy: KeepAwakePolicy | null = null;
 /** A charging laptop's lid close never stops work a keep-awake blocker holds (src/main/power/lid-awake.ts). */
@@ -647,6 +670,7 @@ async function spawnWindow(
 	pendingSessionPath?: string,
 	kind?: SessionKind,
 	device?: string,
+	page?: "board",
 ): Promise<BrowserWindow | null> {
 	// An approved quit has torn the services down (or is doing so): a window built now has nothing to run on, and
 	// restoring the layout on it would drop what a disposed `RemoteDevices` cannot open from the saved session.
@@ -673,7 +697,8 @@ async function spawnWindow(
 		win.close();
 		return null;
 	}
-	const restoreSavedLayout = cwd === undefined && pendingSessionPath === undefined && kind === undefined;
+	const restoreSavedLayout =
+		cwd === undefined && pendingSessionPath === undefined && kind === undefined && page === undefined;
 	if (restoreSavedLayout) {
 		const [saved] = readSavedTabLayouts();
 		if (saved) {
@@ -686,7 +711,7 @@ async function spawnWindow(
 	const target = resolveWindowSpawnTarget(cwd, pendingSessionPath, kind, fallback, work);
 	// The tab's omp starts on the session file (`--session`), as a tab spawn's does: the renderer's boot switch it
 	// used to wait for never ran in a window whose tab list had not named its tab yet.
-	const win = windowManager.createWindow({ cwd: target.cwd });
+	const win = windowManager.createWindow({ cwd: target.cwd, ...(page ? { page } : {}) });
 	const sidecar = sidecarPool.acquire(
 		target.cwd,
 		win,
@@ -784,7 +809,23 @@ app.whenReady().then(async () => {
 	});
 	// A second instance quits at once: it must not take the running one's marker, nor watch anything.
 	if (gotLock) {
-		for (const report of await consumeHangReports()) writeRuntimeLog(report);
+		const hangReports = await consumeHangReports();
+		for (const report of hangReports) writeRuntimeLog(report);
+		// A freeze or a crash loop the last launches left is offered for a report once (LaunchIncidentNotice).
+		const incident = launchIncidentOf(hangReports, safeMode, Date.now());
+		if (incident) prefsStore().set(LAUNCH_INCIDENT_PREF, incident);
+		// A test run starts with every first-visit tour and feature tip seen, so no spotlight takes a spec's click or a
+		// capture's frame (stores/starter-guide.ts `seenAll`); OMP_GUI_TEST_TOURS=1 keeps them for a spec about them.
+		if (
+			process.env.OMP_GUI_HEADLESS === "1" &&
+			process.env.OMP_GUI_TEST_TOURS !== "1" &&
+			prefsStore().get("starterGuide") === undefined
+		)
+			prefsStore().set("starterGuide", { seenAll: true });
+		// A test run's bot faces stay at rest, so every capture draws the same frame (common/BotFace.tsx);
+		// OMP_GUI_TEST_BOT_FACES=1 lets them move for a spec about them.
+		if (process.env.OMP_GUI_HEADLESS === "1")
+			prefsStore().set("botFaces", process.env.OMP_GUI_TEST_BOT_FACES === "1" ? "live" : "rest");
 		installHangWatchdog(postWatchdog);
 		// A slow step leaves a line (slow-steps.ts): main's blocked thread, a handler, a wait on the core, an omp's start.
 		installSlowSteps({
@@ -860,14 +901,56 @@ app.whenReady().then(async () => {
 	});
 	configureTerminalHistory({ userData: app.getPath("userData"), notice: () => mainT("terminal.restored") });
 	// The CLI the app ships (bun run build:native stages it for an unpacked run).
-	await installCliLaunchers({
+	const cliLaunchers = {
 		binary: nativeBinPath("ompdesk"),
 		userData: app.getPath("userData"),
 		platform,
 		packaged: app.isPackaged,
 		env: process.env,
 		home: homedir(),
-	});
+	};
+	await installCliLaunchers(cliLaunchers);
+	/**
+	 * Settings › Updates & about › "Remove OMPdesk from this computer" (Orca FS119,
+	 * settings/advanced/uninstall/use-orca-uninstall.ts:76). The running-work guard asks first (refused: nothing is
+	 * removed, null). Then memory's wiring in the terminal omp goes when it is on (Memory's own switch path), the
+	 * launchers go, the app shows its bundle in Finder or starts its Windows uninstaller (off main's thread, as an
+	 * update's setup: installer-spawn.ts), and quits. Sessions, memory, omp and settings stay.
+	 */
+	const removeFromComputer = async (): Promise<IpcRemoveFromComputerResult | null> => {
+		if (!(await confirmQuit())) return null;
+		// A failure leaves the wiring; the launchers and the app still go.
+		const terminal = aiMemoryService?.state().wiring.terminal
+			? await aiMemoryService.setTerminal(false).then(
+					() => "removed" as const,
+					() => "failed" as const,
+				)
+			: ("none" as const);
+		const removed = await removeCliLaunchers(cliLaunchers);
+		let leaves: IpcRemoveFromComputerResult["app"] = "none";
+		const exe = app.isPackaged ? app.getPath("exe") : null;
+		const bundle = exe && process.platform === "darwin" ? macBundlePath(exe) : undefined;
+		if (bundle) {
+			shell.showItemInFolder(bundle);
+			leaves = "finder";
+		} else if (exe && process.platform === "win32") {
+			// electron-builder's NSIS uninstaller beside the app (`Uninstall ${productName}.exe`); it keeps app data.
+			const uninstaller = join(dirname(exe), "Uninstall OMPdesk.exe");
+			if (existsSync(uninstaller))
+				leaves = await spawnDetachedOffThread(uninstaller, []).then(
+					() => "uninstaller" as const,
+					() => "none" as const,
+				);
+		}
+		writeRuntimeLog({
+			source: "app-quit",
+			message: "remove from this computer",
+			details: { removed: removed.length, app: leaves, terminal },
+		});
+		// After the answer has left for the page; the guard already asked.
+		setTimeout(() => requestQuit("command", { detail: "remove from this computer" }), 0);
+		return { removed, app: leaves, terminal };
+	};
 	const builtinDir = app.isPackaged
 		? join(process.resourcesPath, "omp-builtin")
 		: join(devResourcesDir, "omp-builtin");
@@ -1406,6 +1489,14 @@ app.whenReady().then(async () => {
 	// Orphaned worktrees (worktree-orphans.ts): a folder is open when a tab of this computer or a tab it hosts for a
 	// paired device runs in it (`hostServices.workspaceDirs()` is the cwd of every hosted tab, a superset of its `summarySources()`).
 	setOpenFoldersSource(() => [...sidecarPool.workspaceDirs(), ...hostServices.workspaceDirs()]);
+	setRecordedFoldersSource(async () => (await sessionIndex.listKnown())?.map(info => info.cwd) ?? []);
+	// A new task's branch renamed for its work (FS91): every tab bound to that worktree on the old name follows.
+	setBranchRenamedListener((path, from, branch) => {
+		for (const { tabs } of sidecarPool.controlTabs())
+			for (const tab of tabs)
+				if (tab.worktree?.path === path && tab.worktree.branch === from)
+					sidecarPool.bindWorktree(tab.tabId, { ...tab.worktree, branch });
+	});
 	let hostOmpVersion: string | null = null;
 	void systemOmp().then(resolution => {
 		if (resolution.ok) hostOmpVersion = resolution.runtime.version;
@@ -2073,6 +2164,18 @@ app.whenReady().then(async () => {
 		extensionArgs: cwd => aiMemoryService?.extensionArgs(cwd) ?? Promise.resolve([]),
 		extensionEnv: () => mcpHub?.ompEnv() ?? Promise.resolve({}),
 		creditSpend: () => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))),
+		// A `worktree` schedule's run gets a new worktree each time, as a worktree tab's (seed and setup included);
+		// disk care removes it once its branch landed.
+		worktree: async schedule => {
+			const slug = schedule.name
+				.replace(/^\[agent\]\s*/, "")
+				.toLowerCase()
+				.replace(/[^a-z0-9]+/g, "-");
+			const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 12);
+			const name = `routine-${slug.replace(/^-+|-+$/g, "").slice(0, 24) || "run"}-${stamp}`;
+			const made = await createWorktree(schedule.cwd, { name, baseCwd: schedule.cwd }, tablessWorktreeBridge);
+			return made.path;
+		},
 	});
 	// The Bots page of every window follows the core's bots state (BOTS_STATE).
 	onBotsState(state => {
@@ -2085,7 +2188,9 @@ app.whenReady().then(async () => {
 		logDir: join(app.getPath("userData"), "schedule-runs"),
 		launch: launchScheduledRun,
 		onState: state => {
-			for (const win of BrowserWindow.getAllWindows()) {
+			// A paired phone's page shows this computer's Settings › Schedules too: without the push a run it started read
+			// "Running" until a reload (parity schedule-runs, run 45730681219).
+			for (const win of [...BrowserWindow.getAllWindows(), ...(webHost?.windows.all() ?? [])]) {
 				if (!win.isDestroyed()) win.webContents.send(SCHEDULES_STATE, state);
 			}
 			// Devices showing this computer's schedules (Settings › Schedules on a tab here) follow.
@@ -2134,18 +2239,26 @@ app.whenReady().then(async () => {
 					};
 		},
 	});
+	const secretBox: SecretBox = {
+		available: () => safeStorage.isEncryptionAvailable(),
+		blocked: () => (keychainWouldAskForTests ? KEYCHAIN_WOULD_ASK : safeStorageUnavailableReason()),
+		encrypt: text => safeStorage.encryptString(text),
+		decrypt: data => safeStorage.decryptString(data),
+	};
 	// The owner's mailboxes for email routines; each password is kept encrypted by the OS keystore (mail-accounts.ts).
 	mailAccounts = new MailAccounts({
 		dir: app.getPath("userData"),
 		...(keychainWouldAskForTests ? { rememberSaved: false } : {}),
 		// A test launch reaches its fake IMAP server over plain TCP on this computer; a real launch always uses TLS.
 		plainLoopback: Boolean(process.env.OMP_GUI_TEST_IMAP_PLAIN),
-		box: {
-			available: () => safeStorage.isEncryptionAvailable(),
-			blocked: () => (keychainWouldAskForTests ? KEYCHAIN_WOULD_ASK : safeStorageUnavailableReason()),
-			encrypt: text => safeStorage.encryptString(text),
-			decrypt: data => safeStorage.decryptString(data),
-		},
+		box: secretBox,
+	});
+	// Linear and Jira connections (Agents › GitHub's source bar); their requests run in the core (trackers/).
+	trackerAccounts = new TrackerAccounts({
+		dir: app.getPath("userData"),
+		box: secretBox,
+		core: async (params, timeoutMs) => (await core().call("trackers.request", params, { timeoutMs })).result,
+		proxyPref: () => prefsStore().get("proxyUrl"),
 	});
 	// Before the first window exists, so its page load is seen (it also writes the update's start mark, below).
 	const firstWindowReady = firstWindowLoaded();
@@ -2503,6 +2616,10 @@ app.whenReady().then(async () => {
 	registerDiskCareIpc(ipc, care);
 	void care.start();
 
+	// A composer draft's pictures, per device, until the draft drops them (draft-pictures.ts).
+	const draftPictures = new DraftPictures(join(app.getPath("userData"), "draft-pictures"));
+	registerDraftPicturesIpc(ipc, draftPictures);
+
 	// Register all handlers and sidecar listeners before loading the renderer.
 	// Paired pages' Files-edit reports live in the core's web router; main reads them for the control tools.
 	const fileEditReports = new FileEditReports({
@@ -2511,6 +2628,7 @@ app.whenReady().then(async () => {
 	});
 	registerIpcHandlers({
 		openPageExternal,
+		removeFromComputer,
 		admitNotification,
 		fileEditReports,
 		ipc,
@@ -2548,8 +2666,26 @@ app.whenReady().then(async () => {
 			attachHere: (name, bytes) => hostUploads().attachHere(name, bytes),
 			goneIn: (text, cwd) => hostUploads().goneIn(text, cwd),
 		},
+		resources: {
+			use: async () => {
+				const use = await sessionProcesses.use();
+				if (!use) return null;
+				const tabs = sidecarPool.memoryTabs();
+				return use.map(entry => {
+					const tab = tabs.find(candidate => candidate.pid !== undefined && candidate.pid === entry.ompPid);
+					return tab ? { ...entry, tabId: tab.tabId, quiet: tab.quiet } : entry;
+				});
+			},
+			endProcess: (ompPid, pid, startedMs) => sessionProcesses.endProcess(ompPid, pid, startedMs),
+			giveBack: async tabId => {
+				const tab = sidecarPool.memoryTabs().find(candidate => candidate.tabId === tabId);
+				if (!canGiveBack(tab, await watchProcesses())) return "busy";
+				return (await sidecarPool.releaseIdle(tabId)) ? "released" : "busy";
+			},
+		},
 		schedules: () => scheduleService,
 		mailAccounts: () => mailAccounts,
+		trackerAccounts: () => trackerAccounts,
 		sidebarProjects,
 		// `webHost` is created below: the prompt origins read it when a prompt is sent, never at registration.
 		promptOrigins: {
@@ -2627,7 +2763,10 @@ app.whenReady().then(async () => {
 		if (!quiet) webHost?.tabActivity(activity);
 	});
 	webTabNotice.current = (tabId, notice) => webHost?.tabNotice(tabId, notice);
-	webHost.devices.onRevoked(deviceId => webTabLayouts.drop(deviceId));
+	webHost.devices.onRevoked(deviceId => {
+		webTabLayouts.drop(deviceId);
+		void draftPictures.removeDevice(deviceId).catch(() => {});
+	});
 	const host = webHost;
 	// Mobile web's Tailscale side (src/main/tailscale/): the switch, Tailscale's own setup and the published
 	// address. The server it starts is the WebHost above. `OMP_GUI_TEST_TAILSCALE_OPEN` is a test's stand-in

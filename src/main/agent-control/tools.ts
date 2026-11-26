@@ -10,7 +10,14 @@ import { AUTOPILOT_AREAS } from "../../../resources/gui-bridge/modes/autopilot-c
 import { AGENT_SCHEDULE_PREFIX, type AgentControlToolName, AGENT_CONTROL_TOOLS as T } from "../../shared/agent-control";
 import { ITEM_STATUSES } from "../../shared/bots";
 import type { HostToolDefinition } from "../../shared/rpc-types";
-import { GITHUB_EVENT_KINDS, GITHUB_REPO, SESSION_EVENT_KINDS } from "../../shared/schedules";
+import {
+	GITHUB_EVENT_KINDS,
+	GITHUB_REPO,
+	SCHEDULE_THINKING_LEVELS,
+	SESSION_EVENT_KINDS,
+	WEBHOOK_FILTER_LIMITS,
+	WEBHOOK_WHERE_OPS,
+} from "../../shared/schedules";
 import { MAIL_KINDS } from "./mail";
 
 /** An attachment as the tool takes it (exactly one field): a file where the caller's omp runs, or one of its conversation's pictures. */
@@ -46,6 +53,11 @@ const BOT_NAME_MAX = 80;
 const ITEM_TITLE_MAX = 200;
 const ITEM_DESCRIPTION_MAX = 20_000;
 const ITEM_TEXT_MAX = 8_000;
+/** Questions one ask holds and one question's words, at most (`DECISIONS_MAX`, `DECISION_MAX` in the core). */
+const ITEM_ASKS_MAX = 5;
+const ITEM_ASK_MAX = 500;
+/** One room post, at most (`POST_MAX` in the core's `work/rooms.rs`). */
+const ROOM_POST_MAX = 20_000;
 
 const SESSION = {
 	type: "string",
@@ -447,7 +459,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Schedule an OMPdesk run",
 		description:
 			"Create, list, change or cancel scheduled runs and routines: on a timer, once, or on an event.\n" +
-			`Create, list, change or cancel a scheduled run: a prompt that OMPdesk runs as a fresh print-mode session in a folder, only while the app is open on that device (its Settings › Schedules shows it, marked ${AGENT_SCHEDULE_PREFIX.trim()}). device picks the computer it runs on (default: the one your session runs on). create needs name, prompt and exactly one start: every_minutes, daily_at (HH:MM, optional days 0-6), at or in_minutes (once), or on (an event: webhook, github, files, git, session, email, calendar; with by or within_minutes it is a wait that runs once, on the event or at the deadline). With target "self" the prompt is instead delivered into your own session each time (a routine of yours, or a follow-up to check later). results_to sends a fresh run's answer into this session or a notification, unless the run ends its answer with NO_REPLY. precheck runs a shell command before each start and starts the run only when it succeeds; the user confirms every precheck. update changes an agent-made one by id; pause, resume and run (a test run now) act on one; runs shows its run history with failure reasons. No card by default; the user confirms a new one only if they turned off "Let agents manage other sessions". It never runs with auto-approve, and you can change or cancel only agent-made schedules. See skill://ompdesk.`,
+			`Create, list, change or cancel a scheduled run: a prompt that OMPdesk runs as a fresh print-mode session in a folder, only while the app is open on that device (its Settings › Schedules shows it, marked ${AGENT_SCHEDULE_PREFIX.trim()}). device picks the computer it runs on (default: the one your session runs on). create needs name, prompt and exactly one start: every_minutes, daily_at (HH:MM, optional days 0-6), cron (five fields, local time), at or in_minutes (once), or on (an event: webhook, github, files, git, session, email, calendar; with by or within_minutes it is a wait that runs once, on the event or at the deadline). With target "self" the prompt is instead delivered into your own session each time (a routine of yours, or a follow-up to check later). results_to sends a fresh run's answer into this session or a notification, unless the run ends its answer with NO_REPLY. thinking sets a fresh run's thinking level and worktree starts each fresh run in a new worktree of the folder. precheck runs a shell command before each start and starts the run only when it succeeds; the user confirms every precheck. update changes an agent-made one by id; pause, resume and run (a test run now) act on one; runs shows its run history with failure reasons. No card by default; the user confirms a new one only if they turned off "Let agents manage other sessions". It never runs with auto-approve, and you can change or cancel only agent-made schedules. See skill://ompdesk.`,
 		parameters: {
 			type: "object",
 			properties: {
@@ -485,7 +497,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				on: {
 					type: "object",
 					description:
-						'create, update: start on an event instead of a clock. {"source":"webhook"} (POST to this computer\'s OMPdesk web server, the answer gives the URL path and key; Mobile web must be on); {"source":"github","repo":"owner/name","events":["pull_request"|"issue"|"ci_failure"|"release"|"push"]} (asked with the user\'s gh every 5 min); {"source":"files","path":"/abs/path"} (a file or folder changed); {"source":"git","repo":"/abs/repo","branch":"main"} (new local commits); {"source":"session","events":["done"|"failed"|"waiting"],"folder":"text"} (another session on this computer finished, failed or waits for the user; never the session a "self" one wakes or ones it opened); {"source":"email","account":"label","from":"text","subject":"text","to":"owner+ci@"} (new mail in a mailbox the user added in Settings › Schedules › Email accounts, by its label, checked every 2 min; from, subject and to are optional text the mail must contain; a reply sent from that mailbox or an automatic mail never starts it; this computer only); {"source":"calendar","url":"https://…/basic.ics","lead_minutes":10} (each event of an ICS calendar feed, lead_minutes (1-1440, default 10) before it starts; the feed is read every 5 min). Events during a run start one more run after it.',
+						'create, update: start on an event instead of a clock. {"source":"webhook","where":[{"path":"body.action","op":"=","values":["opened"]}],"contains":"text","pick":["body.pull_request.title"]} (POST to this computer\'s OMPdesk web server, the answer gives the URL path and key; Mobile web must be on; where (paths start at body. or headers.; op =, !=, contains, exists, !exists), contains and pick are optional: only calls that match start it, and the run is quoted the picked fields with the whole body in a file; a signing secret is set only by the user in Settings, never by you); {"source":"github","repo":"owner/name","events":["pull_request"|"pr_merged"|"pr_closed"|"issue"|"issue_closed"|"comment"|"labeled"|"ci_failure"|"ci_passed"|"workflow_finished"|"release"|"push"],"from":["login"],"contains":"text","label":"name"} (asked with the user\'s gh every 5 min; from, contains and label are optional filters); {"source":"files","path":"/abs/path"} (a file or folder changed); {"source":"git","repo":"/abs/repo","branch":"main"} (new local commits); {"source":"session","events":["done"|"failed"|"waiting"],"folder":"text"} (another session on this computer finished, failed or waits for the user; never the session a "self" one wakes or ones it opened); {"source":"email","account":"label","from":"ann@example.com","subject":"text","to":"owner+ci@"} (new mail in a mailbox the user added in Settings › Schedules › Email accounts, by its label, checked every 2 min; subject and to are optional text the mail must contain; from is an optional address or domain, and matches only mail naming that one sender whose domain the mailbox\'s own server says passed DMARC; a reply sent from that mailbox or an automatic mail never starts it; this computer only); {"source":"calendar","url":"https://…/basic.ics","lead_minutes":10} (each event of an ICS calendar feed, lead_minutes (1-1440, default 10) before it starts; the feed is read every 5 min). Events during a run start one more run after it; a sender\'s retry of a webhook delivery runs once.',
 					properties: {
 						source: {
 							type: "string",
@@ -497,10 +509,17 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 						branch: { type: "string" },
 						folder: { type: "string" },
 						account: { type: "string" },
-						from: { type: "string" },
+						from: {
+							description: "email: text in the sender; github: logins.",
+							anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+						},
 						subject: { type: "string" },
 						to: { type: "string" },
 						url: { type: "string" },
+						where: { type: "array", items: { type: "object" } },
+						contains: { type: "string" },
+						pick: { type: "array", items: { type: "string" } },
+						label: { type: "string" },
 						lead_minutes: { type: "integer" },
 					},
 					required: ["source"],
@@ -527,6 +546,21 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 						'create, update: a fresh run\'s answer goes into THIS session as a note ("self") or into a notification ("notify"); a run that ends its answer with the line NO_REPLY sends nothing. Not with target.',
 				},
 				model: { type: "string", description: "create, update: provider/id; default omp's default model." },
+				cron: {
+					type: "string",
+					description:
+						'create, update: a start on five-field cron in local time ("minute hour day month weekday", e.g. "30 9 * * 1-5").',
+				},
+				thinking: {
+					type: "string",
+					enum: ["off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"],
+					description: "create, update: a fresh run's thinking level.",
+				},
+				worktree: {
+					type: "boolean",
+					description:
+						"create, update: each fresh run starts in a new git worktree of the folder (seeded as a worktree tab's), not in the folder itself.",
+				},
 				device: {
 					...DEVICE,
 					description: `${DEVICE.description} The computer whose schedules these are. Default: the device your own session runs on.`,
@@ -689,15 +723,16 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "OMPdesk bot",
 		description:
 			"Make, list, pause or set up a bot: a folder whose sessions are its chats.\n" +
+			"offer {name, text} proposes a bot instead of making it: the owner sees a card in this chat with its name, what it would do (text) and Create bot, and nothing is made until they press it. " +
 			'A bot is a folder on this computer (default ~/.omp/bots/<name>); every session in that folder is one of its chats, the first its home chat. create {name, folder?} makes the folder and sends nothing: the owner writes first (asks the user first only if they turned off "Let agents manage other sessions"). list shows each bot with its folder, home chat, pause, specialty (from its SOUL.md) and open and owner-waiting items. pause {bot} holds every message to it until resume {bot}, which hands each held one over once; a send to a paused bot is refused. set {bot, model?, auto_approve?, stale_days?, reach?} sets the model its new chats and routines use ("" for omp\'s default), whether its routines run without asking, after how many untouched days an open item reads stale (0 never), and the paired devices whose agents may message it. look_around {bot, on, time?} turns on (daily at time, HH:MM, default 09:00) or off its Look around routine: it reads its projects and saves at most 5 suggestions as planned items. hand {bot, session, text} hands a session to the bot: the bot\'s home chat becomes its opener and the text reaches it from the bot. Only the owner deletes a bot. See skill://ompdesk/references/bots.md.',
 		parameters: {
 			type: "object",
 			properties: {
 				action: {
 					type: "string",
-					enum: ["create", "list", "pause", "resume", "set", "look_around", "hand"],
+					enum: ["create", "offer", "list", "pause", "resume", "set", "look_around", "hand"],
 				},
-				name: { type: "string", maxLength: BOT_NAME_MAX, description: "create: the bot's name." },
+				name: { type: "string", maxLength: BOT_NAME_MAX, description: "create, offer: the bot's name." },
 				folder: {
 					type: "string",
 					description: "create: an absolute folder for it; default ~/.omp/bots/<name>, made unique.",
@@ -722,7 +757,8 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				text: {
 					type: "string",
 					maxLength: MESSAGE_MAX_CHARS,
-					description: "hand: what the bot asks of it, sent as its first message from the bot.",
+					description:
+						"hand: what the bot asks of it, sent as its first message from the bot. offer: what the bot would do, one or two sentences.",
 				},
 			},
 			required: ["action"],
@@ -734,7 +770,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Bot item",
 		description:
 			"Keep a bot's work and its questions to the owner as items (a bot's chat only).\n" +
-			"Items are what a bot works on for its owner and what it needs from them, numbered per bot; the owner sees them on the Bots page. add {title, description?, done_means?, status?} (status planned by default); set {item, …}: status (planned, working, waiting, needs_you, done, canceled), title, description, ask with options and recommended (a question only the owner can answer: the item waits on them, and their answer arrives here as a message that starts a turn), wait and until (what it waits on outside you and the owner), snooze_until (hidden until then; \"\" wakes it); comment {item, text}; done {item, note?} and cancel {item, note?} close it (a line goes into memory/journal/YYYY-MM.md in the bot's folder); link {item, url | file | session | pr}; list {status?} (open ones by default); show {item}. item is its number or id. The owner's changes reach you as notes, once each. See skill://ompdesk/references/bots.md.",
+			"Items are what a bot works on for its owner and what it needs from them, numbered per bot; the owner sees them on the Bots page. add {title, description?, done_means?, status?} (status planned by default); set {item, …}: status (planned, working, waiting, needs_you, done, canceled), title, description, ask with options and recommended (a question only the owner can answer: the item waits on them, and their answer arrives here as a message that starts a turn), or asks (up to 5 questions at once, each with its options; ask is then the words around them), wait and until (what it waits on outside you and the owner), snooze_until (hidden until then; \"\" wakes it); comment {item, text}; done {item, note?} and cancel {item, note?} close it (a line goes into memory/journal/YYYY-MM.md in the bot's folder); link {item, url | file | session | pr}; list {status?} (open ones by default); show {item}. item is its number or id. The owner's changes reach you as notes, once each. See skill://ompdesk/references/bots.md.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -779,6 +815,40 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				file: { type: "string", description: "link: an absolute path." },
 				session: { type: "string", description: "link: a session (id or tab id)." },
 				pr: { type: "string", description: "link: a pull request URL or owner/repo#n." },
+				asks: {
+					type: "array",
+					maxItems: ITEM_ASKS_MAX,
+					description: "set: several questions for the owner at once; the item becomes needs_you.",
+					items: {
+						type: "object",
+						properties: {
+							question: { type: "string", maxLength: ITEM_ASK_MAX },
+							options: { type: "array", maxItems: 8, items: { type: "string" } },
+							recommended: { type: "integer", minimum: 0, description: "The option you recommend (0-based)." },
+							multi: { type: "boolean", description: "The owner may pick several options." },
+						},
+						required: ["question"],
+						additionalProperties: false,
+					},
+				},
+			},
+			required: ["action"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: T.room,
+		label: "Bot room",
+		description:
+			"Talk with the other bots of a group and its owner in the group's room (a bot's chat only).\n" +
+			"A group is bots the owner put together; its room is where the owner posts and members answer. When the owner's post or another member's @mention asks you, a message says so: answer with post {room, text}, or post nothing when you have nothing to add. @Name in your post asks that member to answer too. list shows your groups; read {room, limit?} shows the newest posts (20 by default). room is its id or name. See skill://ompdesk/references/bots.md.",
+		parameters: {
+			type: "object",
+			properties: {
+				action: { type: "string", enum: ["list", "read", "post"] },
+				room: { type: "string", description: "read, post: the room's id or its group's name." },
+				text: { type: "string", maxLength: ROOM_POST_MAX, description: "post: what you say in the room." },
+				limit: { type: "integer", minimum: 1, maximum: 200, description: "read: how many of the newest posts." },
 			},
 			required: ["action"],
 			additionalProperties: false,
@@ -1039,12 +1109,39 @@ export const ARGS = {
 				.optional(),
 			on: z
 				.discriminatedUnion("source", [
-					z.object({ source: z.literal("webhook") }).strict(),
+					z
+						.object({
+							source: z.literal("webhook"),
+							where: z
+								.array(
+									z
+										.object({
+											path: z.string().trim().min(1).max(WEBHOOK_FILTER_LIMITS.path),
+											op: z.enum(WEBHOOK_WHERE_OPS),
+											values: z
+												.array(z.string().max(WEBHOOK_FILTER_LIMITS.value))
+												.max(WEBHOOK_FILTER_LIMITS.values)
+												.optional(),
+										})
+										.strict(),
+								)
+								.max(WEBHOOK_FILTER_LIMITS.where)
+								.optional(),
+							contains: z.string().trim().min(1).max(200).optional(),
+							pick: z
+								.array(z.string().trim().min(1).max(WEBHOOK_FILTER_LIMITS.path))
+								.max(WEBHOOK_FILTER_LIMITS.pick)
+								.optional(),
+						})
+						.strict(),
 					z
 						.object({
 							source: z.literal("github"),
 							repo: z.string().trim().regex(GITHUB_REPO, "repo is owner/name"),
 							events: z.array(z.enum(GITHUB_EVENT_KINDS)).min(1).max(GITHUB_EVENT_KINDS.length),
+							from: z.array(z.string().trim().min(1).max(39)).min(1).max(20).optional(),
+							contains: z.string().trim().min(1).max(200).optional(),
+							label: z.string().trim().min(1).max(200).optional(),
 						})
 						.strict(),
 					z.object({ source: z.literal("files"), path: z.string().trim().min(1).max(4096) }).strict(),
@@ -1098,6 +1195,9 @@ export const ARGS = {
 			precheck: z.string().trim().max(2000).optional(),
 			results_to: z.enum(["self", "notify"]).optional(),
 			model: z.string().trim().min(1).max(200).optional(),
+			cron: z.string().trim().min(9).max(200).optional(),
+			thinking: z.union([z.enum(SCHEDULE_THINKING_LEVELS), z.literal("")]).optional(),
+			worktree: z.boolean().optional(),
 			id: z.string().trim().min(1).max(200).optional(),
 			device: deviceArg.optional(),
 			target: z
@@ -1116,7 +1216,7 @@ export const ARGS = {
 		.strict(),
 	[T.bot]: z
 		.object({
-			action: z.enum(["create", "list", "pause", "resume", "set", "look_around", "hand"]),
+			action: z.enum(["create", "offer", "list", "pause", "resume", "set", "look_around", "hand"]),
 			name: z.string().trim().min(1).max(BOT_NAME_MAX).optional(),
 			folder: z.string().trim().min(1).max(4096).optional(),
 			bot: z.string().trim().min(1).max(200).optional(),
@@ -1153,6 +1253,28 @@ export const ARGS = {
 			file: z.string().trim().min(1).max(4096).optional(),
 			session: sessionArg.optional(),
 			pr: z.string().trim().min(1).max(4096).optional(),
+			asks: z
+				.array(
+					z
+						.object({
+							question: z.string().trim().min(1).max(ITEM_ASK_MAX),
+							options: z.array(z.string().trim().min(1).max(200)).max(8).optional(),
+							recommended: z.number().int().min(0).max(7).optional(),
+							multi: z.boolean().optional(),
+						})
+						.strict(),
+				)
+				.min(1)
+				.max(ITEM_ASKS_MAX)
+				.optional(),
+		})
+		.strict(),
+	[T.room]: z
+		.object({
+			action: z.enum(["list", "read", "post"]),
+			room: z.string().trim().min(1).max(200).optional(),
+			text: z.string().trim().min(1).max(ROOM_POST_MAX).optional(),
+			limit: z.number().int().min(1).max(200).optional(),
 		})
 		.strict(),
 } as const;

@@ -11,7 +11,7 @@ import { trackFilePick } from "../../../lib/file-pick";
 import { formatBytes } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { pasteMarkerText, storePaste } from "../../../lib/paste-blobs";
-import type { ComposerImage } from "../../../stores/composer";
+import { useComposerStore } from "../../../stores/composer";
 import { useHostView } from "../../../stores/remote";
 import { toast } from "../../../stores/toast";
 import { webRuntime } from "../../../web/runtime";
@@ -54,7 +54,6 @@ export function useComposerAttach({
 	runtimeTabId,
 	mountedRef,
 	insertAtCaret,
-	setImages,
 	textareaRef,
 	regionRef,
 }: {
@@ -65,13 +64,13 @@ export function useComposerAttach({
 	mountedRef: RefObject<boolean>;
 	/** Splice text in at the caret, space-separated from its neighbours. */
 	insertAtCaret: (insert: string) => void;
-	setImages: (next: (current: ComposerImage[]) => ComposerImage[]) => void;
 	/** The field: it takes focus when an attach is done, and says which mentions the draft already holds. */
 	textareaRef: RefObject<HTMLTextAreaElement | null>;
 	/** The composer's own region: a drop anywhere in its session pane (the transcript included) lands here. */
 	regionRef: RefObject<HTMLElement | null>;
 }): ComposerAttach {
 	const t = useT();
+	const attachImages = useComposerStore(s => s.attachImages);
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	/** Ends the file pick in flight (lib/file-pick.ts) once its files landed in the composer. */
 	const endPickRef = useRef<(() => void) | null>(null);
@@ -172,22 +171,20 @@ export function useComposerAttach({
 				const read = await Promise.all(
 					intake.images.map(file =>
 						// A format models refuse goes through stock's conversion in main; a web page's host converts it.
-						fileToImage(file, webRuntime() ? undefined : window.omp.fs.imageToModel).catch(() => {
-							notImages.add(file);
-							return null;
-						}),
+						fileToImage(file, webRuntime() ? undefined : window.omp.fs.imageToModel).then(
+							// The name lets a picture a saved draft lost be attached again in its place.
+							image => ({ ...image, name: file.name }),
+							() => {
+								notImages.add(file);
+								return null;
+							},
+						),
 					),
 				);
 				if (notImages.size > 0 && mountedRef.current) await attachFiles([...notImages], { asFiles: notImages });
 				const added = read.filter(image => image !== null);
-				if (mountedRef.current && added.length > 0)
-					setImages(previous => {
-						// The same picture twice (same bytes) is one attachment.
-						const seen = new Set(previous.map(image => image.content.data));
-						const next = added.filter(image => !seen.has(image.content.data) && seen.add(image.content.data));
-						duplicates += added.length - next.length;
-						return next.length > 0 ? [...previous, ...next] : previous;
-					});
+				// The same picture twice (same bytes) is one attachment.
+				if (mountedRef.current && added.length > 0) duplicates += attachImages(added);
 			}
 			if (duplicates > 0) toast({ variant: "info", message: t("input.files.duplicates", { count: duplicates }) });
 		} finally {

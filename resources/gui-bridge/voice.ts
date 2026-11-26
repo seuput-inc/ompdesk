@@ -5,11 +5,17 @@
 
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { guard } from "./health";
+import { completeOnSmol, type NextPromptSession } from "./modes/next-prompt-engine";
 import { currentReplyLanguage } from "./modes/reply-language";
 import { asRecord, requiredString } from "./params";
+import type { SttStreamStart } from "./stt-language-contracts";
 import {
+	cleanedDictation,
+	DICTATION_CLEANUP_DEADLINE_MS,
+	dictationCleanupRequest,
 	SttDictation,
 	type SttSetup,
+	SttStreams,
 	speechLanguageOfName,
 	transcribeDeadlineMs,
 	transcribeWithin,
@@ -73,7 +79,56 @@ async function transcribe(session: AgentSession, params: unknown) {
 		transcribeDeadlineMs(samples.length / sampleRate),
 		() => sttClient.terminate(),
 	);
-	return { text };
+	// The language heard: the page drops its filler words (`lib/dictation-text.ts`).
+	return { text, ...(language ? { language } : {}) };
+}
+
+/** A live take's audio as the page sends it: 16 kHz mono PCM16, little-endian, base64 (no WAV header). */
+function decodePcm16(base64: string): Float32Array {
+	const bytes = Buffer.from(base64, "base64");
+	const samples = new Float32Array(Math.floor(bytes.length / 2));
+	for (let i = 0; i < samples.length; i += 1) samples[i] = bytes.readInt16LE(i * 2) / 32768;
+	return samples;
+}
+
+const streams = new SttStreams();
+
+/** A live take on stock's streaming session (the worker's endpointer commits segments as the speaker pauses). */
+async function startStream(session: AgentSession, params: unknown): Promise<SttStreamStart> {
+	const route = await dictation.streamModel(params, await sttSetup(session));
+	if (!route) return { streamId: null };
+	const { sttClient } = await import("./omp/pi-coding-agent/stt/asr-client");
+	return {
+		streamId: streams.start(
+			events => sttClient.startStream(route.modelKey, { language: route.language, ...events }),
+			route.language,
+		),
+	};
+}
+
+async function stopStream(params: unknown): Promise<{ text: string; language?: string }> {
+	const { sttClient } = await import("./omp/pi-coding-agent/stt/asr-client");
+	return streams.stop(requiredString(params, "streamId"), () => sttClient.terminate());
+}
+
+/**
+ * The person's opt-in model cleanup (Settings › Dictation): one request on stock's `tiny` role, then `smol`, through
+ * the bridge's one cheap-request path. Throws when no model answers in time; the page then keeps the words as tidied.
+ */
+async function cleanUp(session: AgentSession, params: unknown): Promise<{ text: string }> {
+	const text = requiredString(params, "text");
+	const raw = asRecord(params).terms;
+	const terms = Array.isArray(raw) ? raw.filter((term): term is string => typeof term === "string") : [];
+	const request = dictationCleanupRequest(text, terms);
+	const reply = await completeOnSmol(session as unknown as NextPromptSession, {
+		...request,
+		roles: ["tiny", "smol"],
+		maxTokens: Math.min(4_096, 256 + text.length),
+		temperature: 0,
+		purpose: "dictation-cleanup",
+		deadlineMs: DICTATION_CLEANUP_DEADLINE_MS,
+	});
+	return { text: cleanedDictation(reply.text) ?? text };
 }
 
 /**
@@ -127,6 +182,19 @@ export const methods: BridgeMethods = {
 	...guard("dictation", {
 		transcribe_audio: async (params, env) => transcribe(env.session(), params),
 		stt_prepare: async (params, env) => dictation.sttPrepare(params, await sttSetup(env.session())),
+		// Stock's `#warmModel`: a model already here is loaded before the first take needs it.
+		stt_warm: async (params, env) => dictation.warm(params, await sttSetup(env.session())),
+		stt_stream_start: async (params, env) => startStream(env.session(), params),
+		stt_stream_audio: async params =>
+			streams.push(requiredString(params, "streamId"), decodePcm16(requiredString(params, "audioBase64"))),
+		stt_stream_stop: async params => stopStream(params),
+		stt_stream_cancel: async params => {
+			streams.cancel(requiredString(params, "streamId"));
+			return {};
+		},
+	}),
+	...guard("dictationCleanup", {
+		dictation_cleanup: async (params, env) => cleanUp(env.session(), params),
 	}),
 	...guard("readAloud", {
 		synthesize_speech: async (params, env) => {

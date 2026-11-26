@@ -40,6 +40,7 @@ import {
 	Wrench,
 } from "lucide-react";
 import { type ComponentType, Suspense } from "react";
+import { AGENT_CONTROL_TOOLS } from "../../../shared/agent-control";
 import { agentDesktopCommand, agentDesktopSummary, isAgentDesktopTool } from "../../lib/agent-desktop-name";
 import { lazyChunk } from "../../lib/chunk-load";
 import { resultDetails, sanitizeToolText } from "../../lib/format";
@@ -273,6 +274,7 @@ const REGISTRY: Record<string, ComponentType<ToolRendererProps>> = {
 	think: ThinkRenderer,
 	yield: YieldRenderer,
 	a2ui: A2uiChatCard,
+	[AGENT_CONTROL_TOOLS.schedule]: ScheduleRenderer,
 	...NOTE_DEVICES,
 };
 
@@ -280,6 +282,20 @@ const REGISTRY: Record<string, ComponentType<ToolRendererProps>> = {
 const LazyAgentDesktopRenderer = lazyChunk(() =>
 	import("./renderers/AgentDesktopRenderer").then(module => ({ default: module.AgentDesktopRenderer })),
 );
+
+// Its own chunk too: the schedule card's trigger words (shared/schedules, lib/schedule-text) stay off the phone's first
+// screen.
+const LazyScheduleRenderer = lazyChunk(() =>
+	import("./renderers/ScheduleRenderer").then(module => ({ default: module.ScheduleRenderer })),
+);
+
+function ScheduleRenderer(props: ToolRendererProps) {
+	return (
+		<Suspense fallback={null}>
+			<LazyScheduleRenderer {...props} />
+		</Suspense>
+	);
+}
 
 function AgentDesktopRenderer(props: ToolRendererProps) {
 	return (

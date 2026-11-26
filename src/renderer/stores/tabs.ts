@@ -73,6 +73,7 @@ import {
 	shownSessionName,
 	type TitleParts,
 } from "../lib/session-title";
+import { useTabHistoryStore } from "../lib/tab-history";
 import { beginTabRoute, openingTab, reconcileTabRoute, resetTabRoute, settleTabRoute } from "../lib/tab-routing";
 import { isSessionHeld } from "../lib/tab-signal";
 import { limitTabs, readTabSnapshot, rememberTabs, tabSnapshotEntry } from "../lib/tab-snapshot";
@@ -207,7 +208,7 @@ function carryGhostComposer(ghostId: string, tabId: string): void {
 	if (!from || !to) return;
 	const held = to.getState();
 	if (from.draft !== "" && held.draft === "") held.setDraft(from.draft);
-	if (from.images.length > 0 && held.images.length === 0) held.setImages(from.images);
+	if (from.pictureSlots.length > 0 && held.pictureSlots.length === 0) held.setPictureSlots(from.pictureSlots);
 }
 
 // Focus routing is window-global. Serialize changes so rapid tab clicks cannot
@@ -625,13 +626,14 @@ export function useScheduledRetry(): (IpcScheduledRetry & { tabId: string }) | n
 	return tab?.scheduledRetry ? { tabId: tab.id, ...tab.scheduledRetry } : null;
 }
 
-/** A closed tab whose saved session can be opened again (⌥⌘T). */
+/** A closed tab whose saved session can be opened again (⌥⌘T), and where in the strip it stood. */
 export interface ClosedTab {
 	sessionPath: string;
 	cwd: string;
 	kind: SessionKind;
 	device?: string;
 	title?: string;
+	index?: number;
 }
 
 /** Closed tabs remembered for reopening, oldest dropped first. */
@@ -793,7 +795,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 					(!info || tabSessionChanged(tab, info)) &&
 					(Boolean(
 						composer?.draft ||
-							composer?.images.length ||
+							composer?.pictureSlots.length ||
 							composer?.sending ||
 							composer?.submissionUncertain ||
 							composer?.cancelSubmit ||
@@ -1299,11 +1301,14 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 		if (state.split && splitTabIds(state.split).includes(id)) {
 			await get().removePane(id);
 		} else if (id === state.activeTabId) {
-			// Activate a neighbor BEFORE releasing — main's routing needs a live
-			// target and the window keeps painting a real session. Prefer the
-			// right neighbor (it shifts into the closed slot), else the left.
-			const neighbor = state.tabs[index + 1] ?? state.tabs[index - 1];
-			if (neighbor) await get().switchTab(neighbor.id);
+			// Activate the tab focused before it BEFORE releasing — main's routing needs a live target and the window
+			// keeps painting a real session (Orca's `pickNextActiveTab`, tab-selection-history.ts:49-66). With no
+			// such tab, the right neighbour (it shifts into the closed slot), else the left.
+			const open = new Set(state.tabs.map(tab => tab.id));
+			const next =
+				useTabHistoryStore.getState().mru.find(tabId => tabId !== id && open.has(tabId)) ??
+				(state.tabs[index + 1] ?? state.tabs[index - 1])?.id;
+			if (next) await get().switchTab(next);
 		}
 		const closed = state.tabs[index];
 		const forget = () => {
@@ -1317,6 +1322,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 								kind: closed.kind,
 								...(closed.device === undefined ? {} : { device: closed.device }),
 								...(closed.title ? { title: closed.title } : {}),
+								index,
 							},
 						].slice(-CLOSED_TAB_LIMIT)
 					: current.closedTabs;
@@ -1400,8 +1406,11 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 			kind: entry.kind,
 			...(entry.device === undefined ? {} : { device: entry.device }),
 		});
-		if (tabId !== null)
-			set(current => ({ closedTabs: current.closedTabs.filter(item => item.sessionPath !== entry.sessionPath) }));
+		if (tabId === null) return null;
+		set(current => ({ closedTabs: current.closedTabs.filter(item => item.sessionPath !== entry.sessionPath) }));
+		// Back where it stood when it closed (Orca's `insertTabAtRecentlyClosedPosition`,
+		// recently-closed-tab-position.ts:110-122); `moveTab` clamps a place past the strip's end.
+		if (entry.index !== undefined) await get().moveTab(tabId, entry.index);
 		return tabId;
 	},
 
@@ -1832,6 +1841,7 @@ export function restoreTabComposer(
 		useComposerStore.setState(current => ({
 			draft: prependToDraft(draft, current.draft),
 			images: [...images, ...current.images],
+			pictureSlots: [...images, ...current.pictureSlots],
 		}));
 		return;
 	}
@@ -1839,6 +1849,7 @@ export function restoreTabComposer(
 	composer.setState(current => ({
 		draft: prependToDraft(draft, current.draft),
 		images: [...images, ...current.images],
+		pictureSlots: [...images, ...current.pictureSlots],
 	}));
 }
 

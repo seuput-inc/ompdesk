@@ -335,14 +335,14 @@ export function entriesFixture(tabId: string): Entry[] {
 	}));
 }
 
-/**
- * `?stress=1` on the harness page appends turns that hold what overflows a narrow screen: an unbroken URL, a wide
- * table, a very long code line, a diff, a mermaid chart and tool calls with long paths and commands. The
- * responsive audit reads it; the default pages never carry it.
- */
-function stressMessages(base: number): Record<string, unknown>[] {
-	const longLine = `const result = await someVeryLongFunctionName(argumentNumberOne, argumentNumberTwo, argumentNumberThree, argumentNumberFour, argumentNumberFive);`;
-	const text = [
+/** The stress turn's prompt; the fake omp answers it with {@link stressReplyText} too (the parity sheet's `stress`). */
+export const STRESS_PROMPT = "Show me everything that tends to overflow on a phone.";
+
+const longLine = `const result = await someVeryLongFunctionName(argumentNumberOne, argumentNumberTwo, argumentNumberThree, argumentNumberFour, argumentNumberFive);`;
+
+/** The stress turn's reply text: what overflows a narrow screen, one of each. */
+export function stressReplyText(): string {
+	return [
 		"Here is the unbroken link https://example.com/a/very/long/path/that/never/breaks/and/keeps/going/and/going/forever/index.html?query=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa and an identifier `SomeExtremelyLongIdentifierNameThatHasNoSpacesAtAllAndKeepsGoingPastTheEdge`.",
 		"",
 		"| Name | Status | Duration | Owner | Notes |",
@@ -370,8 +370,16 @@ function stressMessages(base: number): Record<string, unknown>[] {
 		"1. A numbered item with a long explanation that must wrap inside the column rather than push the page sideways when it is read on a phone.",
 		"> A quoted line that also runs long enough to wrap on a narrow screen, with `inline code` in the middle of it.",
 	].join("\n");
+}
+
+/**
+ * `?stress=1` on the harness page appends turns that hold what overflows a narrow screen: an unbroken URL, a wide
+ * table, a very long code line, a diff, a mermaid chart and tool calls with long paths and commands. The
+ * responsive audit reads it; the default pages never carry it.
+ */
+function stressMessages(base: number): Record<string, unknown>[] {
 	return [
-		{ role: "user", content: "Show me everything that tends to overflow on a phone.", timestamp: base },
+		{ role: "user", content: STRESS_PROMPT, timestamp: base },
 		{
 			role: "assistant",
 			content: [
@@ -416,7 +424,7 @@ function stressMessages(base: number): Record<string, unknown>[] {
 		},
 		{
 			role: "assistant",
-			content: [{ type: "text", text }],
+			content: [{ type: "text", text: stressReplyText() }],
 			stopReason: "stop",
 			model: MODEL.id,
 			timestamp: base + 10_000,
@@ -724,6 +732,20 @@ export function githubFixture(op: string): unknown {
 			return null;
 		case "pr_template":
 			return { body: null };
+		case "project_list":
+			return {
+				projects: [
+					{
+						id: "PVT_1",
+						owner: "dev",
+						ownerType: "user",
+						number: 3,
+						title: "Session work",
+						url: "https://github.com/users/dev/projects/3",
+					},
+				],
+				partialFailure: null,
+			};
 		default:
 			return op.endsWith("_list") ? [] : {};
 	}

@@ -397,7 +397,7 @@ mod tests {
         let browser = Browser::launch(LaunchConfig {
             executable,
             profile_root: scratch.join(format!("measurement-{}", std::process::id())),
-            command_timeout: Duration::from_secs(10),
+            command_timeout: LaunchConfig::COMMAND_TIMEOUT,
         })
         .await
         .unwrap();

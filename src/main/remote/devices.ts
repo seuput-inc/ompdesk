@@ -27,6 +27,7 @@ import {
 	IPC_EVENTS,
 	type IpcHostOmpUpdate,
 	type IpcHostSchedules,
+	type IpcSessionLinksChanged,
 	type IpcSessionsChanged,
 	type RemoteDirListing,
 	type RemoteOpenedTab,
@@ -73,6 +74,8 @@ import {
 	NameParams,
 	OMP_UPDATE_EVENT,
 	OmpUpdateStateSchema,
+	PORT_TUNNEL_EVENT,
+	PortTunnelEvent,
 	PREVIEW_RELAY_EVENT,
 	PROJECTS_EVENT,
 	PreviewRelayEvent,
@@ -82,6 +85,7 @@ import {
 	RemoteOpenedTabSchema,
 	SCHEDULES_EVENT,
 	SchedulesStateSchema,
+	SESSION_LINKS_EVENT,
 	SESSIONS_CHANGED_EVENT,
 	SESSIONS_DELETED_EVENT,
 	SESSIONS_DELETED_MAX_PATHS,
@@ -105,6 +109,7 @@ import { type KeepAwakeBlocker, KeepAwakePolicy } from "./keep-awake";
 import { LinkRelaySocket } from "./link-relay-socket";
 import { PeerQuota, type QuotaReservation } from "./peer-quota";
 import type { PeerInfo } from "./peers-store";
+import { DevicePortTunnels } from "./port-tunnels";
 import { REFUSAL_CODES } from "./protocol";
 import { PendingTabCloses, RemoteSidecar, type RemoteSidecarOptions } from "./remote-sidecar";
 import { SharingCore, type SharingSnapshot, type TailnetAccess } from "./sharing";
@@ -221,6 +226,10 @@ export class RemoteDevices {
 	/** Every host's transcripts this device read (subagent journals, tail pages): one folder for all tabs and hosts. */
 	readonly #transcripts: TranscriptCache;
 	readonly #links = new Map<string, HostLink>();
+	/** Stand-ins here for the dev servers of host tabs (`hostPort`). */
+	readonly #ports = new DevicePortTunnels(deviceId =>
+		this.#links.has(deviceId) ? (method, params) => this.request(deviceId, method, params) : null,
+	);
 	#host: RemoteHost | null = null;
 	#disposed = false;
 	readonly #keepAwake: KeepAwakePolicy;
@@ -727,6 +736,7 @@ export class RemoteDevices {
 			onDispose: () => {
 				const current = this.#links.get(deviceId) ?? link;
 				if (current.tabs.get(rtab) === sidecar) current.tabs.delete(rtab);
+				this.#ports.closeTab(deviceId, rtab);
 			},
 			deferClose: closing => (this.#links.get(deviceId) ?? link).closes.defer(closing),
 			...(this.#deps.keepHostTabsOnQuit ? { keepOnHost: this.#deps.keepHostTabsOnQuit } : {}),
@@ -766,6 +776,15 @@ export class RemoteDevices {
 		return socket;
 	}
 
+	/**
+	 * The address on this computer's loopback that shows the dev server the host's tab `rtab` runs on `port`
+	 * (`host.portTunnel.*`): the host connects only to a port the tab's own processes listen on.
+	 */
+	async hostPort(deviceId: string, rtab: string, port: number): Promise<string> {
+		if (!this.#links.has(deviceId)) throw codedError("remote_unknown_device", "The device is not paired");
+		return this.#ports.open(deviceId, rtab, port);
+	}
+
 	/** This machine's omp updater changed state: devices using it as a host show it. */
 	hostOmpUpdateChanged(state: OmpUpdateState): void {
 		this.#deps.services.ompUpdateChanged(state);
@@ -784,6 +803,11 @@ export class RemoteDevices {
 	/** This machine's models.yml changed by itself (a local engine): devices showing its providers read them again. */
 	hostModelsChanged(): void {
 		this.#deps.services.modelsChanged();
+	}
+
+	/** A session's links here changed: devices showing this computer's rows read them again. */
+	hostSessionLinksChanged(): void {
+		this.#deps.services.sessionLinksChanged();
 	}
 
 	/** This machine's sidebar project list changed: devices showing its section follow. */
@@ -851,6 +875,7 @@ export class RemoteDevices {
 		this.#quota.close();
 		this.#keepAwake.dispose();
 		for (const deviceId of [...this.#links.keys()]) this.#unlink(deviceId);
+		this.#ports.dispose();
 		this.#deps.services.disposeAll();
 		await this.#host?.stop();
 		this.#host = null;
@@ -930,6 +955,8 @@ export class RemoteDevices {
 			for (const tab of link.tabs.values()) tab.linkStateChanged(state);
 			// The agent's tunnel to a host tab's relay ends with the link (the host closes its end as the connection ends).
 			if (state !== "online") for (const relay of [...link.relays.values()]) relay.linkLost();
+			// So does a host tab's dev server here: the host ends its side with the connection.
+			if (state !== "online") this.#ports.linkLost(deviceId);
 			// What the host worked on is unknown while the link is down: its rows go quiet rather than stay lit.
 			if (state !== "online") {
 				this.#deps.modelWait?.setHostCounts(deviceId, undefined);
@@ -987,6 +1014,12 @@ export class RemoteDevices {
 				this.#deps.broadcast(IPC_EVENTS.MODELS_CONFIG_CHANGED, undefined);
 				return;
 			}
+			if (event === SESSION_LINKS_EVENT) {
+				this.#deps.broadcast(IPC_EVENTS.SESSION_LINKS_CHANGED, {
+					device: deviceId,
+				} satisfies IpcSessionLinksChanged);
+				return;
+			}
 			if (event === SUMMARIES_EVENT) {
 				const delta = SummaryDeltaSchema.safeParse(data);
 				if (!delta.success || link.client.state !== "online") return;
@@ -1042,6 +1075,11 @@ export class RemoteDevices {
 			if (event === PREVIEW_RELAY_EVENT) {
 				const relay = PreviewRelayEvent.safeParse(data);
 				if (relay.success) link.relays.get(relay.data.rtab)?.receive(relay.data);
+				return;
+			}
+			if (event === PORT_TUNNEL_EVENT) {
+				const port = PortTunnelEvent.safeParse(data);
+				if (port.success) this.#ports.receive(port.data);
 				return;
 			}
 			if (event !== TAB_EVENT) return;

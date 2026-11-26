@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en" data-scheme="light">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<title>OMPdesk notifications</title>
+<style>
+:root {
+	--bg: #ffffff;
+	--fg: #17171c;
+	--muted: #5b5d6b;
+	--line: #e4e4ea;
+	--hover: #f4f4f7;
+	color-scheme: light;
+}
+:root[data-scheme="dark"] {
+	--bg: #0a0a0a;
+	--fg: #ededf0;
+	--muted: #9a9cab;
+	--line: #26262c;
+	--hover: #17171c;
+	color-scheme: dark;
+}
+* { box-sizing: border-box; margin: 0; }
+html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); }
+body {
+	font: 13px/18px -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+	-webkit-user-select: none;
+	user-select: none;
+	cursor: default;
+}
+#stack > * + * { border-top: 1px solid var(--line); }
+.card {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	height: 64px;
+	padding: 0 68px 0 14px;
+}
+.card:hover { background: var(--hover); }
+.card.enter { animation: enter 160ms cubic-bezier(0.2, 0, 0, 1); }
+@keyframes enter { from { opacity: 0; transform: translateY(8px); } }
+:root.still .card.enter { animation: none; }
+.icon { flex: none; width: 32px; height: 32px; background: center / contain no-repeat url("__ICON__"); }
+.text { min-width: 0; flex: 1; }
+.title, .body { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.title { font-weight: 600; font-size: 14px; line-height: 20px; }
+.body { color: var(--muted); }
+.tool {
+	position: absolute;
+	top: 8px;
+	width: 24px;
+	height: 24px;
+	border: 0;
+	border-radius: 6px;
+	padding: 0;
+	background: transparent;
+	color: var(--muted);
+	display: grid;
+	place-items: center;
+}
+.tool:hover, .tool[aria-expanded="true"] { background: var(--line); color: var(--fg); }
+.tool svg { width: 14px; height: 14px; }
+.gear { right: 36px; }
+.close { right: 8px; }
+.more {
+	height: 28px;
+	padding: 0 14px;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 27px;
+}
+.menu { height: 104px; padding: 4px; }
+.menu button {
+	display: block;
+	width: 100%;
+	height: 32px;
+	padding: 0 10px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--fg);
+	font: inherit;
+	text-align: left;
+}
+.menu button:hover { background: var(--hover); }
+</style>
+</head>
+<body>
+<div id="stack" role="status" aria-live="polite"></div>
+<script>
+"use strict";
+// The page has no IPC: it asks through its title, which the shell reads (notification_popup/mod.rs `action`). The
+// count keeps two equal asks two title changes.
+let asked = 0;
+const go = (action, query = "") => {
+	asked += 1;
+	document.title = `ompdesk-popup:${action}?${query ? `${query}&` : ""}n=${asked}`;
+};
+const GEAR = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v1.8M8 12.7v1.8M14.5 8h-1.8M3.3 8H1.5M12.6 3.4l-1.3 1.3M4.7 11.3l-1.3 1.3M12.6 12.6l-1.3-1.3M4.7 4.7 3.4 3.4"/></svg>';
+const CROSS = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>';
+let known = new Set();
+
+function element(tag, className, text) {
+	const node = document.createElement(tag);
+	node.className = className;
+	if (text !== undefined) node.textContent = text;
+	return node;
+}
+
+function tool(className, label, svg, onClick) {
+	const button = element("button", `tool ${className}`);
+	button.type = "button";
+	button.setAttribute("aria-label", label);
+	button.title = label;
+	// The icons are fixed markup of this page, never text from a notification.
+	button.innerHTML = svg;
+	button.addEventListener("click", event => { event.stopPropagation(); onClick(); });
+	return button;
+}
+
+function card({ id, title, body }, state) {
+	const row = element("div", known.has(id) ? "card" : "card enter");
+	row.dataset.id = String(id);
+	const text = element("div", "text");
+	text.append(element("div", "title", title), element("div", "body", body));
+	const gear = tool("gear", state.labels.options, GEAR, () => go("menu"));
+	gear.setAttribute("aria-haspopup", "menu");
+	gear.setAttribute("aria-expanded", String(state.menu));
+	row.append(element("div", "icon"), text, gear, tool("close", state.labels.close, CROSS, () => go("close", `id=${id}`)));
+	row.addEventListener("click", () => go("click", `id=${id}`));
+	return row;
+}
+
+/** 08:00 tomorrow in this computer's time zone, which only the page knows. */
+function tomorrowMorning() {
+	const at = new Date();
+	at.setDate(at.getDate() + 1);
+	at.setHours(8, 0, 0, 0);
+	return at.getTime();
+}
+
+function menu(labels) {
+	const box = element("div", "menu");
+	box.setAttribute("role", "menu");
+	const item = (label, onClick) => {
+		const button = element("button", "", label);
+		button.type = "button";
+		button.setAttribute("role", "menuitem");
+		button.addEventListener("click", onClick);
+		box.append(button);
+	};
+	item(labels.muteHour, () => go("mute", `until=${Date.now() + 3_600_000}`));
+	item(labels.muteTomorrow, () => go("mute", `until=${tomorrowMorning()}`));
+	item(labels.settings, () => go("settings"));
+	return box;
+}
+
+// What the shell sends (`window.rs` `view`): the scheme, the cards on screen oldest first, the "+N more" row, the
+// gear's menu, and which corner the popup sits in. The newest card sits nearest the corner; the menu and "+N more"
+// take the far edge, where the window grows.
+window.render = state => {
+	const root = document.documentElement;
+	root.dataset.scheme = state.dark ? "dark" : "light";
+	root.lang = state.lang;
+	if (state.background) root.style.setProperty("--bg", state.background);
+	root.classList.toggle("still", state.reducedMotion);
+	const cards = state.cards.map(item => card(item, state));
+	const far = [];
+	if (state.menu) far.push(menu(state.labels));
+	if (state.more > 0) far.push(element("div", "more", state.labels.more));
+	const rows = state.corner === "top" ? [...cards.reverse(), ...far.reverse()] : [...far, ...cards];
+	known = new Set(state.cards.map(item => item.id));
+	document.getElementById("stack").replaceChildren(...rows);
+};
+go("ready");
+</script>
+</body>
+</html>

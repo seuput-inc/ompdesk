@@ -746,6 +746,13 @@ html[data-platform="darwin"] .omp-sidebar-search {
 	outline: none;
 }
 
+/* A row ⌘/Shift-click picked for a batch action: an accent wash, under the current row's own look. */
+.omp-sidebar-session-row[data-picked] {
+	background-color: color-mix(in srgb, var(--sc-accent) 14%, transparent);
+	outline: 1px solid color-mix(in srgb, var(--sc-accent) 45%, transparent);
+	outline-offset: -1px;
+}
+
 /* An unseen finish reads bold as well as by its ✓ (Orca's unread card). */
 .omp-sidebar-session-row[data-unseen] button[data-roving-item] {
 	font-weight: var(--sc-weight-semibold);

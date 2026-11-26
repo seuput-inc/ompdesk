@@ -113,16 +113,24 @@ fn install_delegate(center: &AnyObject) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether this process runs from an application bundle. `+[UNUserNotificationCenter currentNotificationCenter]` raises
+/// an Objective-C exception (which aborts the process) otherwise, and a bare executable with an embedded Info.plist has
+/// a bundle identifier all the same, so the bundle's path is what tells.
+fn bundled() -> bool {
+    // SAFETY: NSBundle getters on the main bundle; the path is read once.
+    unsafe {
+        let bundle: Retained<AnyObject> = msg_send![class!(NSBundle), mainBundle];
+        let identifier: Option<Retained<NSString>> = msg_send![&*bundle, bundleIdentifier];
+        let path: Option<Retained<NSString>> = msg_send![&*bundle, bundlePath];
+        identifier.is_some() && path.is_some_and(|path| path.to_string().ends_with(".app"))
+    }
+}
+
 /// Asks for permission (once the user decided it is immediate), then posts the notification. Errors that arrive later
 /// (permission refused, the center rejecting the request) come back as a `failed` event.
 pub fn show(spec: &ToastSpec, emit: Emit) -> Result<(), String> {
     let _ = EMIT.set(emit);
-    // SAFETY: NSBundle's main bundle identifier is nil for a bare executable, which UNUserNotificationCenter cannot serve.
-    let identifier: Option<Retained<NSString>> = unsafe {
-        let bundle: Retained<AnyObject> = msg_send![class!(NSBundle), mainBundle];
-        msg_send![&*bundle, bundleIdentifier]
-    };
-    if identifier.is_none() {
+    if !bundled() {
         return Err("macOS notifications need the app to run from an application bundle".into());
     }
     let center = center();
@@ -178,6 +186,9 @@ pub fn show(spec: &ToastSpec, emit: Emit) -> Result<(), String> {
 
 /// Removes the notification from the screen and the notification centre; an unknown id is not an error.
 pub fn close(id: u64) {
+    if !bundled() {
+        return;
+    }
     let ids = NSArray::from_retained_slice(&[ns(&id.to_string())]);
     let center = center();
     // SAFETY: both messages take an NSArray of identifier strings.

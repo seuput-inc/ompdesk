@@ -37,7 +37,7 @@ import {
 	privacyPaneUrl,
 	reviewFromDevice,
 } from "../shared/agent-control";
-import { BOTS_COMMAND, BOTS_FOLDER, type BotsRequest } from "../shared/bots";
+import { BOTS_COMMAND, BOTS_FOLDER, type BotsCall } from "../shared/bots";
 import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
@@ -86,8 +86,10 @@ import type {
 	IpcPrefsSetPayload,
 	IpcPushTestResult,
 	IpcRemoteListDirsPayload,
+	IpcRemoveFromComputerResult,
 	IpcRpcCommandForTabPayload,
 	IpcRpcCommandPayload,
+	IpcSessionLinksPayload,
 	IpcSessionOpenNewWindowPayload,
 	IpcSessionOwner,
 	IpcSessionsArtworkPayload,
@@ -109,6 +111,7 @@ import type {
 	NotificationClickPayload,
 	SessionContentMatch,
 	SessionKind,
+	SessionUse,
 } from "../shared/ipc-types";
 import {
 	HOST_UPDATE_ACTIONS,
@@ -117,13 +120,14 @@ import {
 	IPC_EVENTS,
 	type IpcInstallBrowserRelayPayload,
 	type IpcInstallBrowserRelayResult,
+	type IpcSessionLinksChanged,
 	type IpcSessionsChanged,
 } from "../shared/ipc-types";
 import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
 import { isMacPermission } from "../shared/mac-permissions";
 import { MAIL_ACCOUNTS_COMMAND, type MailAccountDraft } from "../shared/mail-accounts";
 import { type ModelSetupRequest, parseResearchPick } from "../shared/model-setup";
-import { PREVIEW_VISUAL, type PreviewVisualEvent } from "../shared/preview";
+import { PREVIEW_HOST_PORT, PREVIEW_OPEN_FILE, PREVIEW_VISUAL, type PreviewVisualEvent } from "../shared/preview";
 import { isReplyLanguagePref, REPLY_LANGUAGE_PREF } from "../shared/reply-language";
 import type {
 	AgentMessage,
@@ -133,12 +137,14 @@ import type {
 	RpcSessionState,
 	SidecarStatus,
 } from "../shared/rpc-types";
-import { SCHEDULES_COMMAND, SCHEDULES_LOG, type Schedule, type SchedulesRequest } from "../shared/schedules";
+import { SCHEDULES_COMMAND, SCHEDULES_LOG } from "../shared/schedule-channels";
+import type { Schedule, SchedulesRequest } from "../shared/schedules";
 import { hostedSummaries, type SummariesChanged } from "../shared/session-summary";
 import { SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import { SIDEBAR_PROJECTS_COMMAND } from "../shared/sidebar-projects";
 import { parseTerminalCommands, TERMINAL_COMMANDS_PREF } from "../shared/terminal-commands";
 import { SCRATCH_TERMINAL_TAB } from "../shared/terminal-types";
+import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND } from "../shared/tracker-channels";
 import { isUiLanguage } from "../shared/ui-language";
 import {
 	findChromiumBrowsers,
@@ -171,13 +177,7 @@ import type { MainTextKey } from "./i18n-text";
 import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { noteTypedPrompt } from "./local/prompt-origin";
-import {
-	answerSessionLinks,
-	dropSessionLinks,
-	onSessionLinksChanged,
-	handlers as sessionLinkHandlers,
-} from "./local/session-links";
-import { LocalCommandError } from "./local/types";
+import { answerSessionLinks, dropSessionLinks, onSessionLinksChanged, SessionLinksParams } from "./local/session-links";
 import type { LogWatcher } from "./log-watcher";
 import type { MacPermissions } from "./mac-permissions";
 import { type LocalMachine, type MachineServices, machineFor as pickMachine } from "./machine-services";
@@ -189,7 +189,7 @@ import { type AdmitNotification, createNotifyHandler } from "./notify-triage";
 import { systemOmp } from "./omp-runtime";
 import { openLocalPath } from "./open-path";
 import { prefsFile } from "./prefs-store";
-import { registerPreviewHost } from "./preview/host";
+import { coreBrowsingHistory, registerPreviewHost } from "./preview/host";
 import { createTabCheck } from "./preview/preview-check";
 import { runVisualizeTool, VISUALIZE_TOOL, VisualStore } from "./preview/visuals";
 import {
@@ -234,6 +234,7 @@ import { closeWindowTab, type TabReleaseDeps } from "./tab-release";
 import { type SessionFolderState, type SpawnTabRemote, sessionFolderState, spawnTabForWindow } from "./tab-spawn";
 import { TERMINAL_READ_TOOL } from "./terminal/agent-tool";
 import { closeTabTerminals, readTabTerminals, registerTerminalIpc } from "./terminal/ipc";
+import { parseTrackersAccountsRequest, parseTrackersRequest, type TrackerAccounts } from "./tracker-accounts";
 import { personsPrompt, type RelaunchContinuation, trackMove } from "./turn-resume";
 import { dispatchedCommand, STOP_COMMANDS } from "./turn-stop-log";
 import { appVersion } from "./updater";
@@ -267,6 +268,8 @@ function agentCaller(win: ClientWindow): IpcCaller {
 
 export interface IpcDeps {
 	openPageExternal(url: string): Promise<void>;
+	/** "Remove OMPdesk from this computer": asks the running-work guard, removes the launchers, starts the app's removal. */
+	removeFromComputer(): Promise<IpcRemoveFromComputerResult | null>;
 	admitNotification: AdmitNotification;
 	/** What paired web pages report about unsaved Files edits (WebHost forgets a page's report when it drops). */
 	fileEditReports: FileEditReports;
@@ -328,12 +331,20 @@ export interface IpcDeps {
 	 * of another app): the phones' upload folder (web/uploads.ts), its limits and its 24-hour lifetime.
 	 */
 	uploads?: Pick<UploadStore, "attachHere" | "goneIn">;
+	/** All sessions › Resources: what each live session holds, a process's Stop, a quiet tab's omp given back now. */
+	resources?: {
+		use(): Promise<SessionUse[] | null>;
+		endProcess(ompPid: number, pid: number, startedMs: number): Promise<boolean>;
+		giveBack(tabId: string): Promise<"released" | "busy">;
+	};
 	/** A preference was written through PREFS_SET (main-side effects such as keep-awake). */
 	onPrefChanged?: (key: string) => void;
 	/** The Schedules service, created later than the handlers: read per use. */
 	schedules?: () => Pick<ScheduleService, "command" | "create" | "prune"> | null;
 	/** The owner's mail accounts for email routines, created with the Schedules service: read per use. */
 	mailAccounts?: () => Pick<MailAccounts, "state" | "save" | "remove" | "test"> | null;
+	/** This computer's Linear and Jira connections (tracker-accounts.ts): read per use. */
+	trackerAccounts?: () => Pick<TrackerAccounts, "command" | "accounts"> | null;
 	/** This computer's sidebar project list: it looks for new folders when the session index changes. */
 	sidebarProjects?: Pick<SidebarProjects, "schedule" | "layoutChanged">;
 	/**
@@ -584,7 +595,28 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			const target = deps.sidecarPool.tabTarget(win, tabId);
 			return target?.device ? deps.remoteDevices.previewRelay(target.device, target.tabId) : null;
 		},
+		coreBrowsingHistory(app.getPath("userData")),
 	);
+	// A person's "Open in Preview" on a page or picture of the Files viewer (Orca's workspace document preview,
+	// `browser-pane/workspace-doc/**`): the file becomes a visual of the tab, in the same confined visual session as
+	// the agent's `gui_visualize`, and the tab's window shows it.
+	ipc.handle(PREVIEW_OPEN_FILE, async (caller, tabId: unknown, file: unknown) => {
+		if (typeof tabId !== "string" || typeof file !== "string" || !caller.win) throw new Error("Invalid file");
+		const target = deps.sidecarPool.tabTarget(caller.win, tabId);
+		const sidecar = target && !target.device ? deps.sidecarPool.sidecarOf(target.tabId) : null;
+		if (!target || !sidecar) throw new Error("Only a tab on this computer shows its files in the Preview");
+		const { record } = await visuals.open(target.tabId, sidecar.cwd, { target: file });
+		caller.win.webContents.send(PREVIEW_VISUAL, { tabId, visualId: record.id } satisfies PreviewVisualEvent);
+	});
+	// A paired host tab's dev server in this window's Preview (Orca's paired server forwards, H105): a stand-in here
+	// whose connections the host dials only to a port the tab's own processes listen on (remote/port-tunnels.ts).
+	ipc.handle(PREVIEW_HOST_PORT, async (caller, tabId: unknown, port: unknown) => {
+		if (typeof tabId !== "string" || !Number.isInteger(port) || (port as number) < 1 || (port as number) > 65_535)
+			throw new Error("Invalid port");
+		const target = caller.win ? deps.sidecarPool.tabTarget(caller.win, tabId) : null;
+		if (!target?.device) throw new Error("Only a tab on a paired computer needs its server brought here");
+		return deps.remoteDevices.hostPort(target.device, target.tabId, port as number);
+	});
 	/** The paired host a window's running benchmark is on, so closing the window stops it there. */
 	const remoteBenchmarks = new Map<number, string>();
 	/** The same for a window's model setup research. */
@@ -757,8 +789,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		deps.sidebarProjects?.schedule();
 	};
 	// A session's links changed (a window, a phone page, an agent here or a paired device's tab here): every window and
-	// page here reads them again.
-	onSessionLinksChanged(() => everywhere(IPC_EVENTS.SESSION_LINKS_CHANGED, undefined));
+	// page here and every paired device reads them again.
+	onSessionLinksChanged(() => {
+		everywhere(IPC_EVENTS.SESSION_LINKS_CHANGED, {} satisfies IpcSessionLinksChanged);
+		remoteDevices.hostSessionLinksChanged();
+	});
 	// What every row shows of this computer's sessions: each change reaches every window and phone page here (a push no
 	// router drops for a hidden page) and every paired device; a view whose copy is on another version reads it whole.
 	deps.summaries.onChange(delta => {
@@ -904,23 +939,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				success: true,
 				data: desktopSlot.state(),
 			};
-		}
-		// A window's (or phone page's) session links are this computer's, its rows', whatever tab it shows: answered here
-		// like the slot. An agent's (no channel) go through its tab below, to the computer its session runs on.
-		if (channel !== undefined && Object.hasOwn(sessionLinkHandlers, slotCommand)) {
-			try {
-				const data = answerSessionLinks(payload.command, undefined);
-				return { id: payload.command.id, type: "response", command: slotCommand, success: true, data };
-			} catch (err) {
-				return {
-					id: payload.command.id,
-					type: "response",
-					command: slotCommand,
-					success: false,
-					error: err instanceof Error ? err.message : String(err),
-					...(err instanceof LocalCommandError ? { code: err.code } : {}),
-				};
-			}
 		}
 		// A tab whose omp is still starting (its place in the start queue, its first answer, a stalled start begun again)
 		// is waited for, not refused: a relaunch's restored tabs got "Sidecar not ready" for every read while they started.
@@ -1591,7 +1609,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// What the control service reads synchronously in main changed: its snapshot is pushed (a tab's activity, the
 	// preferences above, an outside caller and the tombstones push theirs where they happen).
 	deps.summaries.onChange(() => agentControl.control.changed());
-	deps.remoteDevices.onHostOnline(() => agentControl.control.changed());
+	deps.remoteDevices.onHostOnline(host => {
+		agentControl.control.changed();
+		// A host's links may have changed while its link was down: the windows read that host's again.
+		everywhere(IPC_EVENTS.SESSION_LINKS_CHANGED, { device: host } satisfies IpcSessionLinksChanged);
+	});
 	deps.sessionWake.current = (schedule, runId) => agentControl.wakeSession(schedule, runId);
 	deps.tabReport.current = (tabId, report) => agentControl.reportFor(tabId, report);
 	deps.agentOpening.current = () => agentControl.opening();
@@ -1755,6 +1777,14 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return device ? remoteDevices.request(device, "sessions.pullRequest", params) : sessionPullRequest(params);
 	});
 
+	ipc.handle(IPC_COMMANDS.SESSIONS_LINKS, async (_caller, payload: IpcSessionLinksPayload) => {
+		const params = SessionLinksParams.parse({ command: payload?.command });
+		const device = deviceOf(payload?.device);
+		return device
+			? remoteDevices.request(device, "sessions.links", params)
+			: answerSessionLinks(params.command, undefined);
+	});
+
 	// Open a session (or a fresh project window) in a NEW parallel window with
 	// its own sidecar. The calling window's sidecar is left running untouched —
 	// this is the explicit parallel action. Returns false when the window's
@@ -1808,6 +1838,25 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			);
 		return (await deps.spawnWindow(folder?.folder ?? cwd, sessionPath, kind, device)) !== null;
 	});
+
+	// The all-sessions board in a window of its own (Orca's pop-out dashboard): a new window on its usual start tab
+	// that opens on the board page.
+	ipc.handle(
+		IPC_COMMANDS.BOARD_OPEN_WINDOW,
+		async () => (await deps.spawnWindow(undefined, undefined, undefined, undefined, "board")) !== null,
+	);
+
+	// All sessions › Resources (Orca's resource usage and sleep): what each live session holds, a process's Stop, and a
+	// quiet tab's omp given back now (index.ts wires them to SessionProcesses, the pool and idle release's rule).
+	ipc.handle(IPC_COMMANDS.RESOURCES_READ, async () => (await deps.resources?.use()) ?? null);
+	ipc.handle(IPC_COMMANDS.RESOURCES_END_PROCESS, async (_caller, payload: unknown) => {
+		const { ompPid, pid, startedMs } = (payload ?? {}) as Record<string, unknown>;
+		if (!Number.isInteger(ompPid) || !Number.isInteger(pid) || typeof startedMs !== "number") return false;
+		return (await deps.resources?.endProcess(ompPid as number, pid as number, startedMs)) ?? false;
+	});
+	ipc.handle(IPC_COMMANDS.RESOURCES_GIVE_BACK, async (_caller, tabId: unknown) =>
+		typeof tabId === "string" && deps.resources ? deps.resources.giveBack(tabId) : "busy",
+	);
 
 	// ========================================================================
 	// Session tabs — in-window parallel sessions. Each tab owns a pooled
@@ -2057,6 +2106,10 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// session behind it.
 	ipc.on(IPC_COMMANDS.APP_QUIT, caller => {
 		requestQuit("command", caller.connId ? { detail: "from a paired device" } : undefined);
+	});
+	ipc.handle(IPC_COMMANDS.APP_REMOVE, caller => {
+		if (caller.connId) throw new Error("Remove OMPdesk from this computer runs on that computer's own window");
+		return deps.removeFromComputer();
 	});
 
 	// System
@@ -2541,7 +2594,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// The Bots page: this computer's bots and their items (the owner's own; agents use ompdesk_bot and ompdesk_item).
 	ipc.handle(BOTS_COMMAND, (_caller, request: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid bots request");
-		return agentControl.bots(request as BotsRequest);
+		return agentControl.bots(request as BotsCall);
 	});
 	// Settings › Schedules › Email accounts: this computer's own (a password goes in and never comes back out).
 	ipc.handle(MAIL_ACCOUNTS_COMMAND, async (_caller, request: unknown) => {
@@ -2558,6 +2611,17 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		if (action === "remove" && typeof id === "string") return accounts.remove(id);
 		if (action === "test" && typeof id === "string") return accounts.test(id);
 		throw new Error("Invalid mail accounts request");
+	});
+	// Agents › GitHub's Linear and Jira sources: this computer's accounts; a token goes in and never comes back out.
+	ipc.handle(TRACKERS_COMMAND, (_caller, request: unknown) => {
+		const trackers = deps.trackerAccounts?.();
+		if (!trackers) throw new Error("Trackers are not available yet");
+		return trackers.command(parseTrackersRequest(request));
+	});
+	ipc.handle(TRACKERS_ACCOUNTS, (_caller, request: unknown) => {
+		const trackers = deps.trackerAccounts?.();
+		if (!trackers) throw new Error("Trackers are not available yet");
+		return trackers.accounts(parseTrackersAccountsRequest(request));
 	});
 	ipc.handle(SCHEDULES_LOG, (caller, runId: unknown, device?: unknown) => {
 		if (typeof runId !== "string") throw new Error("Invalid run id");

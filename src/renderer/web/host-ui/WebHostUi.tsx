@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
+import { previewUrl } from "../../../shared/preview";
 import { useOverlayPresence } from "../../hooks/use-overlay-presence";
 import { translate } from "../../lib/i18n";
 import { toast } from "../../stores/toast";
+import { useUiStore } from "../../stores/ui";
 import { registerWebHostHooks } from "../host-hooks";
 import { webRuntime } from "../runtime";
 import { ConfirmSheet } from "./ConfirmSheet";
@@ -39,7 +41,8 @@ function WebHostSheets() {
 	useEffect(
 		() =>
 			registerWebHostHooks({
-				// A link opens on this device at once; the computer is one tap away in the toast that follows.
+				// A link opens on this device at once; the computer, or the Preview here (the page the computer browses,
+				// streamed to this device; Orca's mobile link choice, FM51), is one tap away in the toast that follows.
 				openExternal: async url => {
 					window.open(url, "_blank", "noopener,noreferrer");
 					const host = webRuntime()?.host;
@@ -52,6 +55,14 @@ function WebHostSheets() {
 							label: translate("hostUi.link.onComputer"),
 							run: () => void host.openExternalOnComputer(url).catch(() => undefined),
 						},
+						...(previewUrl(url)
+							? {
+									secondAction: {
+										label: translate("hostUi.link.inPreview"),
+										run: () => useUiStore.getState().openPreview(url),
+									},
+								}
+							: {}),
 					});
 				},
 				openPath: (path, tabId, host) =>

@@ -71,10 +71,12 @@ import type { ClientWindow } from "./web/client-window";
 /**
  * The omp the lane spawns: answers `ready`, then `get_state` with the session it is on (its `--session`, else a new
  * one), and moves to another session on `switch_session` / `new_session` (stock's responses name no file). It keeps a
- * record of how it was started and the session it is on in `$LAUNCH_PARITY_DIR/omps/<pid>.json`, and reads what the
- * case wants from `$LAUNCH_PARITY_DIR/mode.json` (`writesNewSession`, `answersState`) at each use.
+ * record of how it was started and the session it is on in `$LAUNCH_PARITY_DIR/omps/<pid>-<uuid>.json` (Windows hands
+ * an exited omp's pid to the next one at once, so a pid alone named a later omp's record over an earlier one's), and
+ * reads what the case wants from `$LAUNCH_PARITY_DIR/mode.json` (`writesNewSession`, `answersState`) at each use.
  */
 const FAKE_OMP = `
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createInterface } from "node:readline";
@@ -82,13 +84,14 @@ const dir = process.env.LAUNCH_PARITY_DIR ?? "";
 const mode = () => JSON.parse(fs.readFileSync(path.join(dir, "mode.json"), "utf8"));
 const args = process.argv.slice(2);
 const at = args.indexOf("--session");
-const created = path.join(dir, "new-" + process.pid + ".jsonl");
+const id = process.pid + "-" + randomUUID();
+const created = path.join(dir, "new-" + id + ".jsonl");
 const write = frame => process.stdout.write(JSON.stringify(frame) + "\\n");
 let session = at >= 0 ? (args[at + 1] ?? created) : created;
 // A new session's file: stock writes it at the first answer, which a tab that worked has had.
 if (at < 0 && mode().writesNewSession) fs.writeFileSync(created, JSON.stringify({ type: "session", id: "new" }) + "\\n");
 fs.mkdirSync(path.join(dir, "omps"), { recursive: true });
-const record = () => fs.writeFileSync(path.join(dir, "omps", process.pid + ".json"), JSON.stringify({ args, env: process.env, pid: process.pid, ppid: process.ppid, session, at: Date.now() }));
+const record = () => fs.writeFileSync(path.join(dir, "omps", id + ".json"), JSON.stringify({ args, env: process.env, pid: process.pid, ppid: process.ppid, session, at: Date.now() }));
 record();
 createInterface({ input: process.stdin }).on("line", line => {
 	const frame = JSON.parse(line);
@@ -109,6 +112,8 @@ write({ type: "ready", protocolVersion: 1, supportedProtocolVersions: [1] });
 
 /** One spawned omp, as its record says: how it was started and the session it is on now. */
 interface FakeOmp {
+	/** Its record's file name: unique per process, where a pid is not. */
+	id: string;
 	args: string[];
 	env: Record<string, string>;
 	pid: number;
@@ -125,6 +130,8 @@ let dir: string;
 let omps: FakeOmp[];
 /** The managers the factory made, so `settle()` can tell when none is still on its way somewhere. */
 let made: SidecarManager[];
+/** The records of omps `crash()` ended: a restarted omp may run under the same pid, and is told apart by its record. */
+let crashed: Set<string>;
 const mode = { writesNewSession: true, answersState: true };
 
 function writeMode(): void {
@@ -137,8 +144,8 @@ function readOmps(): FakeOmp[] {
 	return readdirSync(folder)
 		.flatMap(name => {
 			try {
-				const record = JSON.parse(readFileSync(join(folder, name), "utf8")) as Omit<FakeOmp, "exit">;
-				return [{ ...record, exit: () => void process.kill(record.pid) }];
+				const record = JSON.parse(readFileSync(join(folder, name), "utf8")) as Omit<FakeOmp, "id" | "exit">;
+				return [{ ...record, id: name, exit: () => void process.kill(record.pid) }];
 			} catch {
 				// Being written.
 				return [];
@@ -151,6 +158,7 @@ beforeEach(async () => {
 	dir = mkdtempSync(join(tmpdir(), "launch-parity-"));
 	omps = [];
 	made = [];
+	crashed = new Set();
 	initDeletedSessions(null);
 	spawned.ompInstalled = true;
 	mode.writesNewSession = true;
@@ -230,8 +238,10 @@ async function settle(): Promise<void> {
 				const { status } = sidecar;
 				if ((status === "starting" || status === "restarting") && sidecar.processAlive && !mode.answersState) {
 					// On Windows the stand-in runs behind a `.cmd` shell: the manager's pid is its parent's.
-					if (!omps.some(omp => omp.pid === sidecar.pid || omp.ppid === sidecar.pid))
-						throw new Error("no record yet");
+					const own = omps.some(
+						omp => !crashed.has(omp.id) && (omp.pid === sidecar.pid || omp.ppid === sidecar.pid),
+					);
+					if (!own) throw new Error("no record yet");
 				} else if (status === "starting" || status === "restarting") {
 					throw new Error(`a tab is ${status}`);
 				}
@@ -245,6 +255,7 @@ async function settle(): Promise<void> {
 async function crash(omp: FakeOmp | undefined): Promise<void> {
 	if (!omp) return;
 	const owner = made.find(sidecar => sidecar.processAlive && (sidecar.pid === omp.pid || sidecar.pid === omp.ppid));
+	crashed.add(omp.id);
 	omp.exit(1);
 	await vi.waitFor(
 		() => {

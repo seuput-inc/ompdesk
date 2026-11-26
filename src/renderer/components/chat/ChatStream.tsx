@@ -64,6 +64,7 @@ import {
 import { FirstRunSetupSlot, useFirstRunActive } from "../onboarding/FirstRunSlot";
 import { ReadGroupCard } from "../tools/renderers/ReadGroupCard";
 import { ToolCard } from "../tools/ToolCard";
+import { BotCardsInRun, RunBotCards } from "./bots/bot-card-kind";
 import { ConversationNavigator } from "./ConversationNavigator";
 import {
 	buildConversationAnchors,
@@ -109,6 +110,7 @@ import { StreamingText } from "./StreamingText";
 import { installSelectionDrag, selectionRowSpan } from "./selection-drag";
 import { ThinkingBlock } from "./ThinkingBlock";
 import { FoldedReminders } from "./TodoReminderNote";
+import { TranscriptFind } from "./TranscriptFind";
 import { TurnEndAnnouncer } from "./TurnEndAnnouncer";
 import { estimateRowSize, RowSizeLearner, rowSizeKey } from "./transcript-row-estimate";
 import { ChildrenAtWork, useHasChildrenAtWork } from "./work/ChildrenAtWork";
@@ -1032,6 +1034,24 @@ function SessionTranscript() {
 		},
 		[virtualizer],
 	);
+	// Find (⌘F): a step centres its row once; the bar then brings the match itself mid-view (TranscriptFind.tsx).
+	const showFindRow = useCallback(
+		(rowIndex: number) => {
+			prependAnchorRef.current = null;
+			userScrollIntentRef.current = false;
+			gestureAnchorRef.current = null;
+			gestureTowardTailRef.current = null;
+			setPinned(false);
+			const offset = virtualizer.getOffsetForIndex(rowIndex, "center")?.[0];
+			if (offset !== undefined) virtualizer.scrollToOffset(offset);
+		},
+		[virtualizer],
+	);
+	const scrollFindBy = useCallback(
+		(delta: number) => virtualizer.scrollToOffset((virtualizer.scrollOffset ?? 0) + delta),
+		[virtualizer],
+	);
+	const firstRowInView = useCallback(() => virtualizer.range?.startIndex ?? 0, [virtualizer]);
 	const updateProcessExpanded = useCallback((key: string, expanded: boolean) => {
 		setExpandedProcessKeys(current => {
 			if (current.has(key) === expanded) return current;
@@ -1267,6 +1287,15 @@ function SessionTranscript() {
 				</div>
 			</div>
 			<JumpToLatest className="bottom-5" onClick={jumpToLatest} pinned={pinned} />
+			<TranscriptFind
+				firstRowInView={firstRowInView}
+				mountedKey={`${rows.length}:${virtualItems[0]?.index ?? -1}:${virtualItems.at(-1)?.index ?? -1}`}
+				rows={rows}
+				scrollBy={scrollFindBy}
+				scrollerRef={parentRef}
+				showRow={showFindRow}
+				tabId={tabId}
+			/>
 			<Suspense fallback={null}>
 				<TranscriptQuote rootRef={parentRef} tabId={tabId} />
 			</Suspense>
@@ -1407,37 +1436,40 @@ export const ProcessGroup = memo(function ProcessGroup({
 			{hasWork ? (
 				<div className={WORK_TURN_CLASS}>
 					<StageCallContext.Provider value={stageCall}>
-						<ExecutionGroup
-							expanded={expanded}
-							failureCount={row.failedEvents}
-							stoppedAt={row.stoppedAt}
-							live={live}
-							onExpandedChange={changeExpanded}
-							output={output}
-							notes={row.notes}
-							leadingSkills={row.skills}
-							superseded={superseded}
-							stepCount={row.stepCount + liveCards.length + (hasThinking ? 1 : 0)}
-							thinkingLive={hasThinking && !hasText}
-							toolCallIds={toolCallIds}
-							revealRequest={reveal}
-							todoSnapshots={row.todoSnapshots}
-							turn={turn}
-							endsTurn={endsTurn}
-						>
-							<div className="omp-process-group">
-								<StepGroups appendOnly={live} messages={row.messages} />
-								{hasThinking || liveCards.length > 0 ? (
-									<div className="omp-process-group--live">
-										{hasThinking ? <ThinkingBlock live /> : null}
-										<StreamingCards cards={liveCards} listed={row.messages.length > 0} />
-									</div>
-								) : null}
-							</div>
-						</ExecutionGroup>
+						<BotCardsInRun.Provider value>
+							<ExecutionGroup
+								expanded={expanded}
+								failureCount={row.failedEvents}
+								stoppedAt={row.stoppedAt}
+								live={live}
+								onExpandedChange={changeExpanded}
+								output={output}
+								notes={row.notes}
+								leadingSkills={row.skills}
+								superseded={superseded}
+								stepCount={row.stepCount + liveCards.length + (hasThinking ? 1 : 0)}
+								thinkingLive={hasThinking && !hasText}
+								toolCallIds={toolCallIds}
+								revealRequest={reveal}
+								todoSnapshots={row.todoSnapshots}
+								turn={turn}
+								endsTurn={endsTurn}
+							>
+								<div className="omp-process-group">
+									<StepGroups appendOnly={live} messages={row.messages} />
+									{hasThinking || liveCards.length > 0 ? (
+										<div className="omp-process-group--live">
+											{hasThinking ? <ThinkingBlock live /> : null}
+											<StreamingCards cards={liveCards} listed={row.messages.length > 0} />
+										</div>
+									) : null}
+								</div>
+							</ExecutionGroup>
+						</BotCardsInRun.Provider>
 					</StageCallContext.Provider>
 				</div>
 			) : null}
+			{row.messages.length > 0 ? <RunBotCards messages={row.messages} /> : null}
 			{streaming && !answerFirst && hasText ? <StreamingReply /> : null}
 		</>
 	);

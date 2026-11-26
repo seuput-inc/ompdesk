@@ -464,4 +464,34 @@ pub static ROW_NOT_WRITTEN: &[(&str, Decision)] = &[
         "launch-config",
         Decision::Never("launch profiles inject prompts, tools and config into every session"),
     ),
+    (
+        "stt.enabled",
+        Decision::Never("dictation opens this computer's microphone; the person switches it on"),
+    ),
+    (
+        "stt.submitTrigger",
+        Decision::Never(
+            "whether the person's spoken words send themselves is the person's own call",
+        ),
+    ),
+    (
+        "dictationMicrophone",
+        Decision::Never(
+            "a microphone is this device's own input, picked where the person hears its level",
+        ),
+    ),
+    (
+        "dictationTerms",
+        Decision::Never("the person's own word list"),
+    ),
+    (
+        "dictationCleanup",
+        Decision::Never("it sends what the person says to a model; the person turns that on"),
+    ),
+    (
+        "desktopPet",
+        Decision::Never(
+            "a pet on the person's screen, and the picture it shows; the person's own choice",
+        ),
+    ),
 ];

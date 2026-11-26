@@ -45,11 +45,13 @@ import { useProjectOrigins } from "../../../stores/project-origins";
 import { useQueueStore } from "../../../stores/queue";
 import { useRemoteStateSync, useRemoteStore } from "../../../stores/remote";
 import { useSessionStore } from "../../../stores/session";
+import { useSessionLinksStore } from "../../../stores/session-links";
 import { resetSessionListFeeds, sessionListFeed } from "../../../stores/session-list";
 import { deleteSessionRuntime, setFocusedSessionRuntime } from "../../../stores/session-runtime-context";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { useSidebarPrefs } from "../../../stores/sidebar-prefs";
 import { useSidebarProjects } from "../../../stores/sidebar-projects";
+import { askSidebar, useSidebarRequest } from "../../../stores/sidebar-request";
 import { useSidebarSubagentsStore } from "../../../stores/sidebar-subagents";
 import { ensureTabRuntime } from "../../../stores/tab-runtime";
 import { useTabsStore } from "../../../stores/tabs";
@@ -100,6 +102,7 @@ interface MockOmp {
 		search: Mock<(query: string, scope: string) => Promise<string[]>>;
 		openInNewWindow: Mock<(payload: { sessionPath?: string }) => Promise<boolean>>;
 		move: Mock<(path: string, cwd: string) => Promise<string>>;
+		links: Mock<(command: { type: string }, device?: string) => Promise<unknown>>;
 	};
 	events: {
 		onSessionsChanged: Mock<() => () => void>;
@@ -153,6 +156,7 @@ function installMockOmp(sessionList: SessionInfo[]): MockOmp {
 			search: vi.fn(async () => []),
 			openInNewWindow: vi.fn(async () => true),
 			move: vi.fn(async (path: string, cwd: string) => `${cwd}/${path.slice(path.lastIndexOf("/") + 1)}`),
+			links: vi.fn(async () => ({})),
 		},
 		events: {
 			onSessionsChanged: vi.fn(() => () => {}),
@@ -414,6 +418,7 @@ afterEach(async () => {
 	});
 	useSidebarPrefs.getState().reset();
 	useSidebarProjects.getState().reset();
+	useSessionLinksStore.getState().reset();
 	resetLastReadForTest();
 	useSidebarFolds.getState().reset();
 	useAgentReviewStore.getState().reset();
@@ -510,21 +515,31 @@ function groupToggle(cwd: string): Element {
 
 describe("Sidebar menus and pinned ordering", () => {
 	it("leads with the nav rows (Bots only once the bots feature is available) and ends with Settings and a help menu", async () => {
+		useBotsFeature.setState({ available: false });
 		installMockOmp(LIST);
 		seedStores();
 		await mount(<Sidebar />);
 		const nav = container.querySelector("[data-sidebar-nav]");
 		const navRows = () =>
 			[...container.querySelectorAll("[data-sidebar-nav-row]")].map(row => row.getAttribute("data-sidebar-nav-row"));
-		expect(navRows()).toEqual(["agents", "schedules", "stats", "phone"]);
+		expect(navRows()).toEqual(["board", "agents", "schedules", "stats", "phone"]);
 		expect(container.querySelector("[data-sidebar-bots]")).toBeNull();
 		await act(async () => useBotsFeature.setState({ available: true }));
-		expect(navRows()).toEqual(["agents", "schedules", "bots", "stats", "phone"]);
-		expect(container.querySelector("[data-sidebar-bots]")?.textContent).toContain("No bots yet");
+		expect(navRows()).toEqual(["board", "agents", "schedules", "bots", "stats", "phone"]);
+		// With no bot yet the section is one card that makes the first (Orca's SidebarBotsEmptyState).
+		const bots = container.querySelector("[data-sidebar-bots]");
+		expect(bots?.textContent).toContain("Your AI teammate");
+		expect([...(bots?.querySelectorAll("button") ?? [])].map(button => button.textContent)).toEqual(
+			expect.arrayContaining(["New bot", "Templates"]),
+		);
 		await fire(container.querySelector('[data-sidebar-nav-row="bots"]'), "onClick");
 		expect(useUiStore.getState().destination).toBe("bots");
 		await act(async () => useBotsFeature.setState({ available: false }));
-		expect(nav?.textContent).toContain("⌥A");
+		// The Agents shortcut is the cell's tooltip and aria-keyshortcuts: a half-width cell has no room for it.
+		expect(nav?.textContent).not.toContain("⌥A");
+		expect(container.querySelector('[data-sidebar-nav-row="agents"]')?.getAttribute("aria-keyshortcuts")).toBe(
+			"Alt+A",
+		);
 
 		await fire(container.querySelector('[data-sidebar-nav-row="stats"]'), "onClick");
 		expect(useUiStore.getState().destination).toBe("insights");
@@ -541,7 +556,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		await fire(container.querySelector('[data-sidebar-nav-row="stats"]'), "onContextMenu");
 		expect(menuItemLabels()).toEqual(["Hide from sidebar"]);
 		await fire(menuItem("Hide from sidebar"), "onClick");
-		expect(navRows()).toEqual(["agents", "schedules", "phone"]);
+		expect(navRows()).toEqual(["board", "agents", "schedules", "phone"]);
 		expect(useSidebarFolds.getState().navHidden).toEqual({ stats: true });
 
 		const footer = container.querySelector("[data-sidebar-destinations]");
@@ -554,12 +569,12 @@ describe("Sidebar menus and pinned ordering", () => {
 		await fire(footer?.querySelector('[data-destination="settings"]') ?? null, "onClick");
 		expect(useUiStore.getState()).toMatchObject({ destination: "settings", settingsTab: "general" });
 
-		// Help: shortcuts, palette, features, what's new, feedback, about, then Customize sidebar.
+		// Help: shortcuts, palette, what OMPdesk can do, what's new, feedback, about, then Customize sidebar.
 		await fire(footer?.querySelector('[aria-label="Help"]') ?? null, "onClick");
 		expect(menuItemLabels().map(label => label.replace(/⌘.*$/, ""))).toEqual([
 			"Keyboard shortcuts",
 			"Command palette",
-			"What OMPdesk adds",
+			"What OMPdesk can do",
 			"What's new",
 			"Send feedback",
 			"About OMPdesk",
@@ -576,7 +591,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(document.body.querySelector("[data-sidebar-pins]")).not.toBeNull();
 		expect(useUiStore.getState()).toMatchObject({ destination: "settings", settingsTab: "keyboard" });
 		await fire(document.body.querySelector("#sidebar-nav-stats"), "onClick");
-		expect(navRows()).toEqual(["agents", "schedules", "stats", "phone"]);
+		expect(navRows()).toEqual(["board", "agents", "schedules", "stats", "phone"]);
 	});
 
 	it("pins only the usage block by default (it draws nothing without a subscription account); other pinned ones sit above the destinations in a fixed order and open their view", async () => {
@@ -623,7 +638,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		await fire(menuItem("Customize sidebar…"), "onClick");
 		const sheet = document.body.querySelector("[data-sidebar-pins]");
 		// A desktop window's usage block is the status bar's, so its sheet offers no usage switch (a phone's does).
-		expect(sheet?.querySelectorAll('[role="switch"]')).toHaveLength(9);
+		expect(sheet?.querySelectorAll('[role="switch"]')).toHaveLength(10);
 		const switchFor = (pin: string) => document.body.querySelector(`#sidebar-pin-${pin}`);
 		expect(switchFor("usage")).toBeNull();
 		expect(switchFor("files")?.getAttribute("aria-checked")).toBe("false");
@@ -1044,7 +1059,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		]);
 		await mount(<Sidebar />);
 		expect(container.querySelector("[data-reveal]")).toBeNull();
-		// The title bar's tab strip picks the other session: its row is outlined, the one left is not.
+		// The tab overview or a tab shortcut picks the other session: its row is outlined, the one left is not.
 		await act(async () => useTabsStore.setState({ activeTabId: "t2" }));
 		expect(rowFor("Next run").hasAttribute("data-reveal")).toBe(true);
 		expect(rowFor("Audit session").hasAttribute("data-reveal")).toBe(false);
@@ -1360,7 +1375,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		const labels = menuItemLabels();
 		expect(labels.some(label => label.includes("New agent session here"))).toBe(true);
 		expect(labels.some(label => label.includes("New chat session here"))).toBe(false);
-		expect(labels.some(label => label.includes("New worktree tab here"))).toBe(true);
+		expect(labels.some(label => label.includes("New task here"))).toBe(true);
 		expect(labels.some(label => label.includes("Rename"))).toBe(true);
 		expect(labels.some(label => label.includes("Move up"))).toBe(true);
 		expect(labels.some(label => label.includes("Move down"))).toBe(true);
@@ -1370,7 +1385,30 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(labels.some(label => label.includes("Remove from sidebar"))).toBe(false);
 		expect(labels.filter(label => label.includes("Delete"))).toEqual(["Delete"]);
 		expect(labels.at(-1)).toBe("Delete");
-		expect(labels).toHaveLength(9);
+		expect(labels.some(label => label.includes("Appearance…"))).toBe(true);
+		expect(labels.some(label => label.includes("Move to group…"))).toBe(true);
+		expect(labels).toHaveLength(11);
+	});
+
+	it("lists a project group's projects under its header, and folding the group hides them", async () => {
+		installMockOmp(LIST);
+		seedStores();
+		useSidebarPrefs.setState({
+			hydrated: true,
+			projectGroups: { "/work/alpha": "Clients", "/work/beta": "Clients" },
+			projectEmoji: { "/work/beta": "🚀" },
+		});
+		await mount(<Sidebar />);
+		const header = () => container.querySelector('[data-project-section="Clients"]');
+		expect(header()?.textContent).toContain("Clients");
+		expect(header()?.textContent).toContain("2");
+		expect(container.querySelector('[data-workspace-group="/work/beta"] [data-project-emoji]')?.textContent).toBe(
+			"🚀",
+		);
+		await fire(header()?.querySelector("button[aria-expanded]") as unknown as Element, "onClick");
+		expect(container.querySelector('[data-workspace-group="/work/alpha"]')).toBeNull();
+		expect(container.querySelector('[data-workspace-group="/work/beta"]')).toBeNull();
+		expect(header()).not.toBeNull();
 	});
 
 	it("each project header offers + in place of a count, and Move moves the project", async () => {
@@ -1650,7 +1688,10 @@ describe("Sidebar menus and pinned ordering", () => {
 			"Move down",
 			"Move to project…",
 			"Archive",
+			"Emoji…",
+			"Set parent…",
 			"Hide from other agents",
+			"Copy title",
 			"Show in folder",
 			"Delete",
 		]);
@@ -2058,7 +2099,10 @@ describe("Sidebar menus and pinned ordering", () => {
 			"Move down",
 			"Move to project…",
 			"Archive",
+			"Emoji…",
+			"Set parent…",
 			"Hide from other agents",
+			"Copy title",
 			"Show in folder",
 			"Delete",
 		]);
@@ -2286,6 +2330,35 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(container.querySelector('[data-workspace-group="/work/alpha"]')).toBeNull();
 		expect(container.querySelectorAll('[data-session-path^="/work/alpha/"]')).toHaveLength(0);
 		expect(container.querySelector('[data-workspace-group="/work/beta"]')).not.toBeNull();
+	});
+
+	it("folds the projects deleted from this list at its end, and Show lists one again", async () => {
+		const omp = installMockOmp(LIST);
+		omp.sidebarProjects.lists.local = {
+			projects: [{ path: "/work/alpha", addedAt: 1 }],
+			removed: ["/work/old", "/work/beta"],
+			worktrees: {},
+		};
+		seedStores();
+		await mount(<Sidebar />);
+		const section = () => container.querySelector('[data-sidebar-removed-projects="local"]');
+		expect(section()?.textContent).toContain("Deleted projects (2)");
+		expect(section()?.querySelector("[data-removed-project]")).toBeNull();
+
+		await fire(section()?.querySelector("button[aria-expanded]") as unknown as Element, "onClick");
+		// Newest removal first.
+		expect(
+			[...(section()?.querySelectorAll("[data-removed-project]") ?? [])].map(row =>
+				row.getAttribute("data-removed-project"),
+			),
+		).toEqual(["/work/beta", "/work/old"]);
+
+		await fire(
+			section()?.querySelector('[data-removed-project="/work/beta"] button') as unknown as Element,
+			"onClick",
+		);
+		expect(omp.sidebarProjects.command).toHaveBeenCalledWith({ action: "add", path: "/work/beta" }, undefined);
+		expect(section()?.textContent).toContain("Deleted projects (1)");
 	});
 
 	it("lists a project with no session, and Delete takes it out without deleting anything unless asked to", async () => {
@@ -3015,6 +3088,8 @@ describe("Sidebar families: the sessions an agent opened", () => {
 		const child = family?.querySelector("[data-sidebar-opened-session]");
 		expect(child?.textContent).toContain("Child on the host");
 		expect(child?.querySelector('[data-family-status="running"]')).not.toBeNull();
+		// The host's own child sits under the host's name already: no device label, as in the host's own window.
+		expect(child?.querySelector("[data-family-device]")).toBeNull();
 		// A row of its opener's family, not a row of the device's list beside it.
 		expect(
 			[...(device?.querySelectorAll("[data-device-session]") ?? [])].map(row => row.textContent),
@@ -4034,6 +4109,45 @@ describe("Sidebar device sections", () => {
 			);
 		});
 
+		it("names no device on the host's own children, and names the third computer a host's session opened one on", async () => {
+			await mountHost(hostRows(path => ({ openedBySession: path === BOSS ? null : BOSS })));
+			act(() => {
+				const remote = useRemoteStore.getState().state;
+				if (!remote) throw new Error("no remote state");
+				useRemoteStore.getState().apply({
+					...remote,
+					hosts: [
+						{
+							deviceId: "dev-studio",
+							name: "studio",
+							state: "online",
+							remoteOpened: [
+								{
+									tabId: "tz",
+									device: "dev-desk",
+									sessionPath: "C:\\s\\on-desk.jsonl",
+									cwd: "C:\\work",
+									kind: "agent",
+									openedBySession: BOSS,
+									status: "running",
+									task: "Build on the desk",
+								},
+							],
+						},
+						{ deviceId: "dev-desk", name: "desk", state: "online" },
+					],
+				});
+				useSidebarSubagentsStore.setState({ expanded: new Set([BOSS_KEY]) });
+			});
+			await flush();
+			const family = device()?.querySelector(`[data-sidebar-family="${BOSS_KEY}"]`);
+			const atWork = family?.querySelector(`[data-session-path="${AT_WORK}"]`);
+			expect(atWork).not.toBeNull();
+			expect(atWork?.querySelector("[data-family-device]")).toBeNull();
+			const onDesk = family?.querySelector('[data-session-path="C:\\\\s\\\\on-desk.jsonl"]');
+			expect(onDesk?.querySelector("[data-family-device]")?.textContent).toBe("desk");
+		});
+
 		// Only the host's live summary says the child failed (its omp is in error; no review item, no childProblem, an
 		// index row that reads complete): it stays a failed row, and stays one once a tab here holds it and it is selected.
 		it("keeps a child the host's summary says failed as a failed row, held by a tab here or not", async () => {
@@ -4280,8 +4394,9 @@ describe("Sidebar device sections", () => {
 			[...container.querySelectorAll('[data-sidebar-device="dev-studio"] [data-device-session]')].map(row =>
 				row.getAttribute("data-device-session"),
 			);
-		async function mountHost() {
+		async function mountHost(setup?: (omp: MockOmp) => void) {
 			const omp = installWithRemote();
+			setup?.(omp);
 			const host = [
 				session("/s/app/one.jsonl", "/code/app", {
 					title: "App one",
@@ -4307,20 +4422,51 @@ describe("Sidebar device sections", () => {
 			return omp;
 		}
 
-		it("is the one menu this computer's rows have, less what only this computer can do (show in folder, hide from agents)", async () => {
+		it("is the one menu this computer's rows have, less what only this computer can do (show in folder, hide from agents, mute)", async () => {
 			await mountHost();
 			await fire(hostRow("/s/app/one.jsonl"), "onContextMenu");
 			expect(menuItemLabels()).toEqual([
 				"Open in split view",
 				"Open in new window",
 				"Rename session",
+				"Link a PR or issue…",
 				"Pin to top",
 				"Move up",
 				"Move down",
 				"Move to project…",
 				"Archive",
+				"Emoji…",
+				"Set parent…",
+				"Copy title",
 				"Delete",
 			]);
+		});
+
+		it("reads and changes a host's session links on the host", async () => {
+			const omp = await mountHost(omp =>
+				omp.sessions.links.mockImplementation(async (command, device) =>
+					command.type === "session_links" && device === "dev-studio"
+						? {
+								"/s/app/one.jsonl": [
+									{ url: "https://github.com/acme/app/pull/7", kind: "pr", repo: "acme/app", number: 7 },
+								],
+							}
+						: {},
+				),
+			);
+			// The host's section read them on the host when it mounted.
+			expect(omp.sessions.links).toHaveBeenCalledWith({ type: "session_links" }, "dev-studio");
+			await fire(hostRow("/s/app/one.jsonl"), "onContextMenu");
+			await fire(menuItem("Link a PR or issue…"), "onClick");
+			expect(document.querySelector("[data-session-links-dialog]")).not.toBeNull();
+			const remove = document.querySelector(
+				'[data-session-link="https://github.com/acme/app/pull/7"] button + button',
+			);
+			await fire(remove, "onClick");
+			expect(omp.sessions.links).toHaveBeenCalledWith(
+				{ type: "session_link_remove", sessionPath: "/s/app/one.jsonl", url: "https://github.com/acme/app/pull/7" },
+				"dev-studio",
+			);
 		});
 
 		it("renames through the host", async () => {
@@ -6070,6 +6216,7 @@ describe("Sidebar device sections", () => {
 					listeners.add(listener);
 					return () => listeners.delete(listener);
 				},
+				onResynced: () => () => {},
 			});
 			function LinkedSidebar() {
 				useRemoteStateSync();
@@ -6206,6 +6353,58 @@ describe("Sidebar archive and move", () => {
 		[...container.querySelectorAll(`[data-session-group="${cwd}"] .omp-sidebar-session-row`)]
 			.map(row => row.getAttribute("data-session-path") ?? "")
 			.filter(path => !path.startsWith("tab:"));
+
+	it("⌘-click picks several rows whose menu archives them all, Shift-click picks a run, Esc forgets", async () => {
+		installMockOmp(LIST);
+		seedStores();
+		useSidebarPrefs.setState({ hydrated: true });
+		await mount(<Sidebar />);
+		const click = async (text: string, keys: { metaKey?: boolean; shiftKey?: boolean }) => {
+			const button = rowFor(text).querySelector("[data-roving-item]");
+			if (!button) throw new Error("row button missing");
+			await act(async () =>
+				reactProps<{ onClick: (event: unknown) => void }>(button).onClick({
+					metaKey: false,
+					ctrlKey: false,
+					shiftKey: false,
+					...keys,
+					currentTarget: button,
+				}),
+			);
+			await flush();
+		};
+		const picked = () =>
+			[...document.querySelectorAll(".omp-sidebar-session-row[data-picked]")].map(row =>
+				row.getAttribute("data-session-path"),
+			);
+
+		await click("Session /work/alpha/two", { metaKey: true });
+		await click("Session /work/alpha/one", { shiftKey: true });
+		expect(picked().sort()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
+
+		const list = document.querySelector(".omp-sidebar-list");
+		if (!list) throw new Error("list missing");
+		await act(async () =>
+			reactProps<{ onKeyDown: (event: unknown) => void }>(list).onKeyDown({
+				key: "Escape",
+				preventDefault: () => {},
+			}),
+		);
+		await flush();
+		expect(picked()).toEqual([]);
+
+		await click("Session /work/alpha/one", { metaKey: true });
+		await click("Session /work/alpha/two", { metaKey: true });
+		expect(picked().sort()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
+		await openRowMenu(rowFor("Session /work/alpha/one"));
+		expect(menuItemLabels()).toEqual(["Archive 2 sessions", "Delete 2 sessions…"]);
+		await fire(menuItem("Archive 2 sessions"), "onClick");
+		expect([...useSidebarPrefs.getState().archivedSessions].sort()).toEqual([
+			"/work/alpha/one.jsonl",
+			"/work/alpha/two.jsonl",
+		]);
+		expect(picked()).toEqual([]);
+	});
 
 	it("archives a stored session from its row into a folded Archived section and restores it", async () => {
 		const omp = installMockOmp(LIST);
@@ -6964,7 +7163,10 @@ describe("Sidebar on a touch screen", () => {
 			"Move down",
 			"Move to project…",
 			"Archive",
+			"Emoji…",
+			"Set parent…",
 			"Hide from other agents",
+			"Copy title",
 			"Show in folder",
 			"Delete",
 		]);
@@ -7051,6 +7253,27 @@ describe("Sidebar remembered folds", () => {
 		expect(useSidebarFolds.getState().groups).toEqual({ "/work/alpha": false });
 		expect(useSidebarFolds.getState().devices).toEqual({});
 		expect([...useSidebarSubagentsStore.getState().expanded]).toEqual([LIST[0]?.path ?? "", "tab:t0"]);
+	});
+
+	it("folds every project and opens them again from the palette, and reveals the current row inside a fold", async () => {
+		installMockOmp(LIST);
+		seedStores();
+		await mount(<Sidebar />);
+		expect(container.querySelector('[data-session-group="/work/alpha"]')).not.toBeNull();
+
+		await act(async () => askSidebar("fold-projects"));
+		expect(useSidebarFolds.getState().groups).toEqual({ "/work/alpha": true, "/work/beta": true });
+		expect(container.querySelector('[data-session-group="/work/alpha"]')).toBeNull();
+
+		// The focused session's project opens again and its row is outlined; the other project stays folded.
+		await act(async () => askSidebar("reveal-current"));
+		expect(useSidebarFolds.getState().groups).toEqual({ "/work/alpha": false, "/work/beta": true });
+		const current = document.querySelector("[data-current]")?.closest(".omp-sidebar-session-row");
+		expect(current?.hasAttribute("data-reveal")).toBe(true);
+
+		await act(async () => askSidebar("unfold-projects"));
+		expect(useSidebarFolds.getState().groups).toEqual({ "/work/alpha": false, "/work/beta": false });
+		expect(useSidebarRequest.getState().request).toBeNull();
 	});
 });
 

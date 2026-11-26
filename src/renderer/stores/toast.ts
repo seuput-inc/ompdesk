@@ -24,6 +24,7 @@ export interface Toast {
 	/** Raw technical cause (error text), shown as a quiet secondary line. */
 	detail?: string;
 	action?: ToastAction;
+	secondAction?: ToastAction;
 	expiresAt: number;
 	count: number;
 	/** Set when dismissal began; the entry lingers for the exit animation. */
@@ -37,6 +38,8 @@ export interface ToastInput {
 	/** Raw technical cause, kept available under the localized message (see lib/error-detail). */
 	detail?: string;
 	action?: ToastAction;
+	/** A second follow-up beside `action`. */
+	secondAction?: ToastAction;
 	/** Auto-dismiss delay in ms (default 5000); `Infinity` keeps the toast until the user dismisses it. */
 	durationMs?: number;
 }
@@ -92,6 +95,7 @@ export const useToastStore = create<ToastStore>()(set => ({
 				message: toast.message,
 				...(toast.detail ? { detail: toast.detail } : {}),
 				...(toast.action ? { action: toast.action } : {}),
+				...(toast.secondAction ? { secondAction: toast.secondAction } : {}),
 				expiresAt,
 				count: 1,
 			};

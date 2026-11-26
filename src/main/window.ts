@@ -34,12 +34,14 @@ export interface WindowRecord {
  * target session file's stamped kind (OPEN_NEW_WINDOW resolves it from the
  * session index); omitted = agent. `device` opens the window's tab on a paired
  * host, where `cwd` and `pendingSessionPath` are that host's paths. A session's window starts its tab on that file.
+ * `page`: the destination page the window opens on (`#/board`: the all-sessions board).
  */
 export type SpawnWindow = (
 	cwd?: string,
 	pendingSessionPath?: string,
 	kind?: SessionKind,
 	device?: string,
+	page?: "board",
 ) => Promise<BrowserWindow | null>;
 
 export class WindowManager {
@@ -66,7 +68,7 @@ export class WindowManager {
 		});
 	}
 
-	createWindow(opts: { cwd: string }): BrowserWindow {
+	createWindow(opts: { cwd: string; page?: "board" }): BrowserWindow {
 		const cwd = opts.cwd;
 		// The shell places, sizes and draws the window, and shows it as `presence` says at its first paint, or 500 ms
 		// after making it in the page's background when the paint is slower (a cold WebView2 start).
@@ -94,8 +96,8 @@ export class WindowManager {
 		const record: WindowRecord = { win, id: win.webContents.id, cwd };
 		this.#records.set(record.id, record);
 
-		// OMP_GUI_STYLEGUIDE=1 opens the internal design style guide instead of the app.
-		const hash = process.env.OMP_GUI_STYLEGUIDE === "1" ? "/styleguide" : undefined;
+		// OMP_GUI_STYLEGUIDE=1 opens the internal design style guide instead of the app; `page` a destination page.
+		const hash = process.env.OMP_GUI_STYLEGUIDE === "1" ? "/styleguide" : opts.page ? `/${opts.page}` : undefined;
 		if (process.env.ELECTRON_RENDERER_URL) {
 			const url = new URL(process.env.ELECTRON_RENDERER_URL);
 			if (hash) url.hash = hash;

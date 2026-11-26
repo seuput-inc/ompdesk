@@ -918,6 +918,15 @@
 	width: 100%;
 }
 
+/* The rail's last item: the list of every loaded prompt with its filter (ConversationNavigator `PromptList`). */
+.omp-conversation-nav-list {
+	flex: 0 0 auto;
+	display: flex;
+	justify-content: center;
+	margin-top: var(--sc-space-1);
+	pointer-events: auto;
+}
+
 /* The top item of a windowed rail: how many turns lie above the ticks, one press of it moves the window a page up. */
 .omp-conversation-nav-earlier-slot {
 	position: relative;
@@ -1120,6 +1129,26 @@
 :root[data-theme="dark"] .omp-user-bubble {
 	background: color-mix(in srgb, var(--sc-text) 7%, var(--sc-bg));
 	border-color: color-mix(in srgb, var(--sc-text) 6%, transparent);
+}
+
+/* A long prompt folded (MessageBubble `PromptFold`): its first lines, fading out at the clip's foot (Orca's 11rem
+   clip and 1.75rem fade). A link under the fold stays reachable: "Show full message" opens it. */
+.omp-prompt-fold[data-prompt-folded] {
+	max-height: 11rem;
+	overflow: hidden;
+	mask-image: linear-gradient(to bottom, #000 calc(100% - 1.75rem), transparent);
+}
+
+/* Find in the conversation (chat/TranscriptFind.tsx): every match a mounted row shows, the current one stronger.
+   CSS highlights paint without touching the DOM React owns; only color and background apply. */
+::highlight(omp-find) {
+	background-color: color-mix(in srgb, var(--sc-warning) 30%, transparent);
+	color: inherit;
+}
+
+::highlight(omp-find-active) {
+	background-color: color-mix(in srgb, var(--sc-warning) 65%, transparent);
+	color: inherit;
 }
 
 /* User turn: a compact soft bubble on the right. Its actions sit at the bubble's bottom-left when the row has room
@@ -4854,37 +4883,6 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 	}
 }
 
-/* The title bar's session tabs (common/Tabs `variant="strip"`, Orca's tab bar; the owner's decision, 25 Nov 2026):
-   each a full-height box between hairlines, 96–200 px, its ✕ shown on the chosen tab and under the pointer or focus.
-   The chosen one is lifted (the text colour at 6 %) over a 2 px line along its bottom; a tab whose run finished
-   unseen wears Orca's unread wash (the working hue at 10 %). */
-.omp-tab-strip-tab {
-	min-width: 6rem;
-	max-width: 12.5rem;
-	border-right: var(--sc-hairline) solid var(--sc-border-subtle);
-	color: var(--sc-text-muted);
-	transition: background-color var(--sc-duration-fast) var(--sc-ease-standard);
-}
-
-.omp-tab-strip-tab:hover {
-	background: var(--sc-hover);
-	color: var(--sc-text);
-}
-
-.omp-tab-strip-tab-active {
-	background: color-mix(in srgb, var(--sc-text) 6%, transparent);
-	box-shadow: inset 0 -2px 0 var(--sc-text);
-	color: var(--sc-text);
-}
-
-.omp-tab-strip-tab.omp-tab-strip-tab-unread {
-	background: color-mix(in srgb, var(--sc-working) 10%, transparent);
-}
-
-.omp-tab-strip-tab:not(.omp-tab-strip-tab-active):not(:hover):not(:focus-within) > [aria-hidden] {
-	opacity: 0;
-}
-
 /* A device section's header color (lib/device-color.ts): a paired host's header wears its own hue so its rows are told
    from this computer's at a glance. Only the device glyph takes the hue (the header itself stays near-monochrome); the
    hues are not status colors, and each is drawn per scheme so the glyph keeps 3:1 against the sidebar. A repository's
@@ -4948,7 +4946,8 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 	background-color: var(--sc-hover);
 }
 .omp-device-header[data-device-color] [data-device-glyph],
-[data-device-chip][data-device-color] [data-device-glyph] {
+[data-device-chip][data-device-color] [data-device-glyph],
+[data-project-glyph][data-device-color] {
 	color: var(--device-color);
 }
 
@@ -4962,4 +4961,44 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 .omp-menu-swatch[data-device-color] {
 	background-color: var(--device-color);
 	border-color: transparent;
+}
+
+/* SwipeActions: the row slides over its actions on a touch swipe; at rest they are not drawn. */
+.omp-swipe {
+	position: relative;
+	overflow: hidden;
+	border-radius: var(--sc-radius-md);
+}
+.omp-swipe-actions {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	justify-content: space-between;
+	opacity: 0;
+}
+.omp-swipe[data-swipe-open] .omp-swipe-actions {
+	opacity: 1;
+}
+.omp-swipe-action {
+	display: flex;
+	width: 76px;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 2px;
+	background-color: var(--sc-surface-3);
+	color: var(--sc-text);
+}
+.omp-swipe-action[data-tone="accent"] {
+	background-color: var(--sc-accent);
+	color: var(--sc-accent-fg);
+}
+.omp-swipe-track {
+	position: relative;
+	background-color: var(--omp-sidebar-bg);
+	touch-action: pan-y;
+	transition: transform var(--sc-duration-med) var(--sc-ease-standard);
+}
+.omp-swipe-track.omp-swipe-dragging {
+	transition: none;
 }

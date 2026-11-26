@@ -38,6 +38,7 @@ import { useFocusedHost, useHostView } from "../../stores/remote";
 import { useSessionStore } from "../../stores/session";
 import { toast, toastError } from "../../stores/toast";
 import { runUpdaterAction, useUpdaterStore } from "../../stores/updater";
+import { webRuntime } from "../../web/runtime";
 import {
 	Badge,
 	Banner,
@@ -55,7 +56,8 @@ import { AppAutoUpdateRow } from "./AppAutoUpdateRow";
 import { DiagnosticsRow } from "./DiagnosticsRow";
 import { OmpHeldNote, OmpTestedNote, OmpUpdateFailureNotice } from "./OmpUpdateRows";
 import { ProductStar } from "./ProductStar";
-import { SettingsRow, SettingsSection } from "./SettingsLayout";
+import { RemoveFromComputerRow } from "./RemoveFromComputerRow";
+import { SettingsAdvanced, SettingsRow, SettingsSection } from "./SettingsLayout";
 
 export type UpdateOverviewState = "checking" | "healthy" | "attention" | "error";
 
@@ -83,6 +85,16 @@ const ACCESS_MESSAGE: Record<UpdateAccess, string> = {
 
 function appUpdateAvailable(status: UpdateStatus): boolean {
 	return status.state === "available" || status.state === "downloading" || status.state === "downloaded";
+}
+
+/** "Up to date", or the macOS a newer release needs when this Mac cannot run it. */
+function UpToDateBadge({ status }: { status: Extract<UpdateStatus, { state: "not-available" }> }) {
+	const t = useT();
+	return status.unsupportedSystem ? (
+		<Badge variant="warning">{t("updates.needsMacos", { macos: status.unsupportedSystem.minimumMacOS })}</Badge>
+	) : (
+		<Badge variant="success">{t("updates.upToDate")}</Badge>
+	);
 }
 
 /** Derive the honest aggregate state shown by the updates header. */
@@ -243,7 +255,7 @@ export function UpdatesSection() {
 					) : status.state === "error" ? undefined : status.state === "auth-required" ? (
 						<Badge variant="warning">{t("updates.authRequired")}</Badge>
 					) : status.state === "not-available" ? (
-						<Badge variant="success">{t("updates.upToDate")}</Badge>
+						<UpToDateBadge status={status} />
 					) : (
 						<Spinner label={t("updates.checking")} size="sm" />
 					)
@@ -254,6 +266,14 @@ export function UpdatesSection() {
 						{status.state !== "not-available" && "version" in status && status.version !== guiVersion && (
 							<p className="mt-1 text-sc-xs text-(--sc-text-muted)">
 								{t("updates.latest")} <span className="font-mono text-(--sc-text)">{status.version}</span>
+							</p>
+						)}
+						{status.state === "not-available" && status.unsupportedSystem && (
+							<p className="mt-1 text-sc-xs text-(--sc-text-muted)" data-macos-requirement-line>
+								{t("macosRequirement.description", {
+									version: status.unsupportedSystem.version,
+									macos: status.unsupportedSystem.minimumMacOS,
+								})}
 							</p>
 						)}
 						{status.state === "downloaded" && status.mode === "manual" && (
@@ -307,6 +327,13 @@ export function UpdatesSection() {
 				id="setting-about-star"
 				label={t("about.repo")}
 			/>
+
+			{/* This computer's own removal: never from a phone's page, nor while Settings show a paired host. */}
+			{!host && webRuntime() === null && (
+				<SettingsAdvanced>
+					<RemoveFromComputerRow />
+				</SettingsAdvanced>
+			)}
 		</SettingsSection>
 	);
 }
@@ -546,7 +573,7 @@ export function HostDesktopRow({ deviceId }: { deviceId: string }) {
 			) : status.state === "auth-required" ? (
 				<Badge variant="warning">{t("updates.authRequired")}</Badge>
 			) : status.state === "not-available" ? (
-				<Badge variant="success">{t("updates.upToDate")}</Badge>
+				<UpToDateBadge status={status} />
 			) : null}
 			<Button icon={<RefreshCw />} onClick={() => void run("check")} size="sm" variant="secondary">
 				{t("updates.host.check")}

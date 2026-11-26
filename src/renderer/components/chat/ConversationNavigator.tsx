@@ -1,9 +1,27 @@
-import { ChevronUp } from "lucide-react";
-import { useRef, useState } from "react";
+import { ChevronUp, ListFilter } from "lucide-react";
+import { Suspense, useRef, useState } from "react";
+import { lazyChunk, loadChunk } from "../../lib/chunk-load";
 import { cx, formatShortClock } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { revealAndFocus } from "../../lib/reveal-focus";
+import { IconButton, Popover } from "../common";
 import type { ConversationAnchor } from "./chat-stream-utils";
+import type PromptListPanelComponent from "./PromptListPanel";
+
+const loadPromptList = () => import("./PromptListPanel");
+const LazyPromptList = lazyChunk(loadPromptList);
+/** The list once its chunk loaded (AppShell's idle preload, or a pointer on the button): drawn directly, never suspended. */
+let loadedPromptList: typeof PromptListPanelComponent | undefined;
+
+/** Loads the rail's list before its first open (AppShell). */
+export function preloadPromptList(): Promise<void> {
+	return loadChunk(loadPromptList).then(
+		module => {
+			loadedPromptList = module.default;
+		},
+		() => {},
+	);
+}
 
 interface ConversationNavigatorProps {
 	activeIndex: number;
@@ -170,7 +188,53 @@ export function ConversationNavigator({ activeIndex, anchors, onNavigate }: Conv
 						</div>
 					);
 				})}
+				<PromptList activeIndex={activeIndex} anchors={anchors} onNavigate={onNavigate} />
 			</div>
 		</nav>
+	);
+}
+
+/**
+ * The rail's list of every loaded prompt with a filter (Orca's `NativeChatRailMessagePanel.tsx`): the trigger and its
+ * popover here, the list itself (`PromptListPanel.tsx`) loaded when it first opens. Prompts older than what the
+ * transcript has loaded come as the reader scrolls up, so they join the list then.
+ */
+function PromptList({ activeIndex, anchors, onNavigate }: ConversationNavigatorProps) {
+	const t = useT();
+	const [open, setOpen] = useState(false);
+	const triggerRef = useRef<HTMLButtonElement>(null);
+	const PromptListPanel = loadedPromptList ?? LazyPromptList;
+	return (
+		<div className="omp-conversation-nav-list">
+			<IconButton
+				aria-expanded={open}
+				data-prompt-list
+				icon={<ListFilter />}
+				label={t("chat.navigator.list")}
+				onClick={() => setOpen(value => !value)}
+				ref={triggerRef}
+				size="sm"
+				tooltipSide="right"
+				variant="ghost"
+			/>
+			<Popover
+				anchorRef={triggerRef}
+				ariaLabel={t("chat.navigator.list")}
+				onClose={() => setOpen(false)}
+				open={open}
+				placement="top-start"
+			>
+				<Suspense fallback={null}>
+					<PromptListPanel
+						activeIndex={activeIndex}
+						anchors={anchors}
+						onPick={rowIndex => {
+							setOpen(false);
+							onNavigate(rowIndex);
+						}}
+					/>
+				</Suspense>
+			</Popover>
+		</div>
 	);
 }

@@ -27,7 +27,8 @@ export function useGithubAuth(): GithubAuthState {
 	return state;
 }
 
-function CodeStep({ flow }: { flow: Extract<GithubLoginFlow, { state: "code" }> }) {
+/** The device code and its page (also Agents › GitHub › Projects' project access, `GithubProjects.tsx`). */
+export function CodeStep({ flow }: { flow: Extract<GithubLoginFlow, { state: "code" }> }) {
 	const t = useT();
 	const run = useGithubAuthStore(store => store.run);
 	const openGithub = async () => {

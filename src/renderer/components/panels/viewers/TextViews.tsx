@@ -23,7 +23,14 @@ import { fileExtension } from "./file-kind";
 import { HexView } from "./HexView";
 import { parseNotebook, prettyJson } from "./parse";
 import { TEXT_FULL_BYTES, useTextFile } from "./use-file-read";
-import { TruncatedNote, useReportFileInfo, ViewerFailure, ViewerLoading, ViewerToolbar } from "./viewer-chrome";
+import {
+	OpenInPreviewButton,
+	TruncatedNote,
+	useReportFileInfo,
+	ViewerFailure,
+	ViewerLoading,
+	ViewerToolbar,
+} from "./viewer-chrome";
 
 /** Table rows rendered before the "showing the first N rows" note. */
 export const TABLE_ROW_CAP = 2000;
@@ -267,6 +274,7 @@ export function HtmlFileView({ path, tabId, line }: TextViewProps) {
 				<ViewerToolbar label={t("fileViewer.toolbar")}>
 					<ModeTabs mode={mode} onChange={setMode} />
 					{mode === "source" && toggle}
+					<OpenInPreviewButton path={path} tabId={tabId} />
 				</ViewerToolbar>
 			}
 		/>

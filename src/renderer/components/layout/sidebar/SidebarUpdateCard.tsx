@@ -54,13 +54,13 @@ function manualRow(
 				tone: "busy",
 				...close,
 			};
-		case "not-available":
-			return {
-				label: t("updater.card.upToDate", { version: status.version }),
-				description: t("updater.card.upToDate", { version: status.version }),
-				tone: "ok",
-				...close,
-			};
+		case "not-available": {
+			const needs = status.unsupportedSystem;
+			const label = needs
+				? t("updater.card.needsMacos", { version: needs.version, macos: needs.minimumMacOS })
+				: t("updater.card.upToDate", { version: status.version });
+			return { label, description: label, tone: "ok", ...close };
+		}
 		case "error":
 			return {
 				label: t("updater.card.failed"),

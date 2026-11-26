@@ -1,5 +1,7 @@
 import * as fs from "node:fs/promises";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Locator, Page } from "@playwright/test";
+import { STRESS_PROMPT } from "../src/renderer/dev-harness/fixture";
 import { en } from "../src/renderer/locales/en";
 import { ko } from "../src/renderer/locales/ko";
 import type { RpcCommand } from "../src/shared/rpc-types";
@@ -97,7 +99,10 @@ export type ParitySession =
 	| "limit"
 	| "turns"
 	| "long"
-	| "cut";
+	| "cut"
+	| "stress"
+	| "schedule"
+	| "board";
 
 /** The fake omp's voice script (`voiceScript`, e2e/fixture/rpc-ui.ts); e2e/parity.e2e.ts names the file. */
 async function scriptVoice(script: Record<string, unknown>): Promise<void> {
@@ -271,7 +276,7 @@ async function ui(page: Page, action: string, ...args: unknown[]): Promise<void>
  * Show the side panel's `view` by clicks a person makes, on a real window as on the harness: the title bar's Side
  * panel button when the panel is closed, then the view's button (the panel's top bar; a phone's tab bar at its foot).
  */
-async function openPanelView(page: Page, look: Look, view: "diff" | "files" | "terminal"): Promise<void> {
+async function openPanelView(page: Page, look: Look, view: "diff" | "files" | "terminal" | "preview"): Promise<void> {
 	const button = page
 		.locator(".omp-panel-topbar:visible, [data-panel-tabbar]:visible")
 		.getByRole("button", { name: say(look, `panel.tabs.${view}`), exact: true })
@@ -291,6 +296,35 @@ async function openPanelView(page: Page, look: Look, view: "diff" | "files" | "t
 async function closePanelView(page: Page): Promise<void> {
 	const close = page.locator("[data-panel-close]:visible").first();
 	if (await close.isVisible().catch(() => false)) await close.click();
+}
+
+/** The Files view on Sidebar.tsx: by search, unless a surface before left the viewer open on it. */
+async function openSidebarFile(page: Page, look: Look): Promise<void> {
+	await openPanelView(page, look, "files");
+	const search = page.getByLabel(say(look, "filesPanel.search"), { exact: true }).first();
+	const viewer = page.locator("[data-file-viewer-head]:visible").first();
+	await search.or(viewer).first().waitFor();
+	if ((await viewer.isVisible()) && (await viewer.textContent())?.includes("Sidebar.tsx")) return;
+	if (!(await search.isVisible()))
+		await viewer.getByRole("button", { name: say(look, "filesPanel.back"), exact: true }).click();
+	await search.fill("Sidebar.tsx");
+	await page
+		.getByRole("treeitem", { name: /Sidebar\.tsx/ })
+		.first()
+		.click();
+}
+
+/** Turns Blame off again (`panel-blame` left it on), then closes the panel as `closePanelView`. */
+async function closeBlame(page: Page): Promise<void> {
+	if (
+		await page
+			.locator("[data-code-view] [data-blame-line]:visible")
+			.first()
+			.isVisible()
+			.catch(() => false)
+	)
+		await page.locator("[data-blame-toggle]:visible").first().click();
+	await closePanelView(page);
 }
 
 /** Deletes the notes `panel-notes` left (each card's Delete), then closes the panel as `closePanelView`. */
@@ -328,6 +362,49 @@ async function openWorkspaceDialog(page: Page, look: Look): Promise<void> {
 	await palette.locator('[data-command-name="switch-project"]').click();
 }
 
+/** The new task sheet through the command palette's "New task…" command (a real control on every view). */
+async function openNewTaskSheet(page: Page, look: Look): Promise<void> {
+	await clickCommandPalette(page, look);
+	const palette = page.locator('[role="dialog"]:has([data-palette-index])');
+	await palette.getByRole("combobox").fill("new-worktree-tab");
+	await palette.locator('[data-command-name="new-worktree-tab"]').click();
+}
+
+/**
+ * A new task that fails at its worktree's create, from the sheet (worktree on, a typed name, a base ref no repository
+ * has): its sidebar row stays, failed, with Retry and Close, and nothing was made (no fetch, no name step, no session).
+ */
+async function failNewTask(page: Page, look: Look): Promise<void> {
+	await openNewTaskSheet(page, look);
+	const sheet = page.locator("[role=dialog]:has([data-new-task-sheet])");
+	await sheet.locator("[data-new-task-project]").waitFor({ timeout: 15_000 });
+	await sheet.locator("input[maxlength='41']").fill("parity missing base");
+	await sheet.locator("[data-worktree-base] label").nth(2).click();
+	await sheet.locator("[data-worktree-base] input[list]").fill("no-such-base");
+	await sheet.locator("button[type=submit]").click();
+	await sheet.waitFor({ state: "detached", timeout: 15_000 });
+	// A phone's palette opened from its drawer, which stays open behind the sheet.
+	if (!(await page.locator("[data-drawer]").isVisible())) await openDrawer(page, look);
+}
+
+/** Closes every failed new task row `failNewTask` left (each row's Close; a phone's drawer is still open). */
+async function dismissNewTasks(page: Page): Promise<void> {
+	for (const close of await page.locator("[data-new-task-close]:visible").all()) await close.click();
+	await page.locator("[data-new-task]").first().waitFor({ state: "detached", timeout: 10_000 });
+}
+
+/** Agents › GitHub › Issues with the parity sheet's one issue open (B's `gh`, e2e/parity.e2e.ts `writeParityGh`). */
+async function openIssueDetail(page: Page): Promise<void> {
+	await openPageTab(page, "agents", "github");
+	await page
+		.locator("[data-github-center] li")
+		.filter({ hasText: "Closed PRs keep their session row" })
+		.locator("button")
+		.first()
+		.click({ timeout: 15_000 });
+	await page.locator("[data-github-issue-start]").waitFor({ state: "visible", timeout: 15_000 });
+}
+
 /** Put a prompt of the web host's sheet layer (`?host=1` pages) in front of the person. */
 async function hostPrompt(page: Page, prompt: Record<string, unknown>): Promise<void> {
 	await page.evaluate(prompt => {
@@ -348,6 +425,19 @@ const isPhone = (look: Look): boolean => look.width < 600;
  * window from 1100 dock it beside a column narrowed for it.
  */
 const boardIsStrip = (look: Look): boolean => look.width < 1100;
+/**
+ * The busy board a board surface waits for, as a strip (`chip`) or docked. The harness's `?board=busy` lands its
+ * turn, question and goal together 1.5 s after boot (dev-harness/boot.ts), so there both wait for the question; the
+ * parity sheet's `board` session asks none (the Escape each view presses before it shows a session would answer it),
+ * so there they wait for its running work.
+ */
+function busyBoard(page: Page): { chip: Locator; docked: Locator } {
+	const harness = page.url().includes("board=busy");
+	return {
+		chip: page.locator(harness ? "[data-work-chip][data-state='waiting']" : "[data-work-chip]").first(),
+		docked: page.locator(`.omp-work-board-slot [data-board-section='${harness ? "needs" : "now"}']`).first(),
+	};
+}
 /** The host's sheets are the paired web page's (`WebHostUi` renders nothing in the desktop app). */
 const webPage = (look: Look): boolean => look.device !== "electron";
 
@@ -377,6 +467,96 @@ async function openDrawer(page: Page, look: Look): Promise<void> {
 	await page.locator("[data-drawer]").waitFor({ state: "visible", timeout: 10_000 });
 }
 
+/** The view's own computer has a bot to show: "Parity bot", made through the app's own bots API when it has none. */
+async function ensureParityBot(page: Page): Promise<void> {
+	await page.evaluate(async () => {
+		const state = await window.omp.bots.command({ action: "get" });
+		if (state.bots.length === 0)
+			await window.omp.bots.command({
+				action: "create",
+				name: "Parity bot",
+				purpose: "Keeps an eye on the parity sheet.",
+			});
+	});
+}
+
+/** Checks `ready` every 250 ms until it holds, for `timeoutMs`; throws `what` when it never does. */
+async function until(ready: () => Promise<boolean>, what: string, timeoutMs = 30_000): Promise<void> {
+	for (const end = Date.now() + timeoutMs; Date.now() < end; ) {
+		if (await ready()) return;
+		await sleep(250);
+	}
+	throw new Error(what);
+}
+
+/**
+ * The parity bot has items to show (bot-items, bot-item): a chat opened in its folder adds two the way a bot does,
+ * `ompdesk_item add` through the fake omp's host tool (e2e/fixture/rpc-ui.ts), then closes again.
+ */
+async function ensureParityItems(page: Page): Promise<void> {
+	await ensureParityBot(page);
+	const folder = await page.evaluate(async () => {
+		const state = await window.omp.bots.command({ action: "get" });
+		return state.items.length > 0 ? null : (state.bots[0]?.folder ?? null);
+	});
+	if (!folder) return;
+	const tabId = (await page.evaluate(cwd => window.omp.tabs.spawn({ cwd }), folder))?.tabId;
+	if (!tabId) throw new Error("no chat opened in the parity bot's folder");
+	const tool = (args: Record<string, unknown>) =>
+		page.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
+			tabId,
+			`fixture:host-tool:ompdesk_item ${JSON.stringify(args)}`,
+		] as const);
+	try {
+		await until(
+			async () =>
+				(await page.evaluate(() => window.omp.tabs.list())).some(
+					tab => tab.tabId === tabId && tab.status === "ready",
+				),
+			"the parity bot's chat never became ready",
+		);
+		await tool({
+			action: "add",
+			title: "Compare the parity sheet",
+			description: "Read the three views side by side and note what differs.",
+			done_means: "Every surface agrees.",
+			status: "working",
+		});
+		await tool({ action: "add", title: "Plan the next surface" });
+		await until(
+			async () => (await page.evaluate(() => window.omp.bots.command({ action: "get" }))).items.length >= 2,
+			"the parity bot's items never arrived",
+		);
+	} finally {
+		await page.evaluate(id => window.omp.tabs.close(id), tabId);
+	}
+}
+
+/** The Bots page on the parity bot's page, its Items tab chosen and its list shown (not an item another surface opened). */
+async function openParityItems(page: Page, look: Look): Promise<void> {
+	await ensureParityItems(page);
+	await openDrawer(page, look);
+	await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+	// A phone shows the list first, and a group's room may be the page: the bot's row opens its page.
+	if ((await page.locator("[data-bot-pane]:visible").count()) === 0)
+		await page.locator("[data-bots-page-row]:visible").first().click();
+	await page.locator('[data-bot-pane-tabs] [data-tab-id="items"]:visible').first().click();
+	await closeParityItem(page);
+}
+
+/** Back from an open item page to the Items list; nothing when the list shows. */
+async function closeParityItem(page: Page): Promise<void> {
+	const back = page.locator("[data-bot-item-back]:visible").first();
+	if ((await back.count()) > 0) await back.click();
+}
+
+/** What bot-items and bot-item opened, closed: the item page back to the list, the bot page back on Activity. */
+async function closeParityItems(page: Page): Promise<void> {
+	await closeParityItem(page);
+	const activity = page.locator('[data-bot-pane-tabs] [data-tab-id="activity"]:visible').first();
+	if ((await activity.count()) > 0) await activity.click();
+}
+
 /**
  * The usage block: a desktop window's opens over its status bar from the usage summary (the owner's decision, 25 Nov
  * 2026); a phone or tablet page keeps it in the sidebar footer.
@@ -403,6 +583,13 @@ async function openProjectMenu(page: Page, look: Look): Promise<void> {
 /** Closes the menu or dialog a surface left open (Escape), so the next starts from the same window. */
 async function closeOverlay(page: Page): Promise<void> {
 	await page.keyboard.press("Escape");
+}
+
+/** An item of the sidebar footer's Help menu, as a person picks it (a phone's drawer first; a finger's action sheet). */
+async function openHelpItem(page: Page, look: Look, name: string): Promise<void> {
+	await openDrawer(page, look);
+	await page.locator("button[aria-label='Help']:visible").first().click();
+	await page.locator(":is([role=menuitem], button):visible", { hasText: name }).first().click();
 }
 
 /** Closes the queue popover, drops both lanes and stops the turn `composer-queue` started, so the session is idle again. */
@@ -669,6 +856,91 @@ async function openSettingsMailReentry(page: Page, look: Look): Promise<void> {
 	}
 }
 
+/** Settings › Schedules through the sidebar's Settings entry and the section's nav entry, as a person opens it. */
+async function openSettingsSchedules(page: Page, look: Look): Promise<void> {
+	await openDrawer(page, look);
+	await page.locator('[data-destination="settings"]').first().click();
+	const nav = page.locator('[data-settings-section="schedules"]');
+	await nav.waitFor({ state: "visible", timeout: 15_000 });
+	await nav.click();
+	await page
+		.locator("[data-settings-page] [data-schedule-new]")
+		.first()
+		.waitFor({ state: "visible", timeout: 30_000 });
+}
+
+/** The row of the schedule named `name` in the shown Settings › Schedules (the host's, in every view). */
+function scheduleRow(page: Page, name: string): Locator {
+	return page.locator("[data-settings-page] [data-schedule]").filter({ hasText: name }).first();
+}
+
+/**
+ * The schedule `name` on the shown session's computer, made through New schedule when it is not there yet: in the
+ * shown session's folder (the dialog's default), the trigger picked in its When select (`kind`), the prompt the fake
+ * omp's print mode answers at once.
+ */
+async function ensureSchedule(page: Page, name: string, kind: "interval" | "webhook"): Promise<Locator> {
+	const row = scheduleRow(page, name);
+	if ((await row.count()) > 0) return row;
+	await page.locator("[data-settings-page] [data-schedule-new]").first().click();
+	const dialog = page.getByRole("dialog");
+	await dialog.locator("[data-schedule-form]").waitFor({ state: "visible", timeout: 15_000 });
+	await dialog.locator("[data-schedule-form] input").first().fill(name);
+	await dialog.locator("textarea").fill("fixture hello");
+	await dialog.locator("[data-schedule-repeat]").selectOption(kind);
+	await dialog.locator("button[type=submit]").click();
+	await dialog.waitFor({ state: "hidden", timeout: 15_000 });
+	await row.waitFor({ state: "visible", timeout: 15_000 });
+	return row;
+}
+
+/** Deletes the schedule `name` through its row's ⋯ › Delete (and its runs with it), so the next surface finds none. */
+async function deleteSchedule(page: Page, name: string): Promise<void> {
+	const schedulesTab = page.locator("[data-settings-page] [data-schedules-view] [role='tab']").first();
+	if ((await schedulesTab.count()) > 0) await schedulesTab.click();
+	const row = scheduleRow(page, name);
+	if ((await row.count()) === 0) return;
+	await row.locator("button[aria-haspopup='menu']").click();
+	await page.locator("[role='menuitem']").last().click();
+	const words = `^(${en["schedules.delete"]}|${ko["schedules.delete"]})$`;
+	await page
+		.getByRole("dialog")
+		.getByRole("button", { name: new RegExp(words) })
+		.click();
+	await row.waitFor({ state: "detached", timeout: 15_000 });
+}
+
+/**
+ * Settings › Schedules with a webhook routine open: its URL and key rows, its actions and Recent calls, where a Send
+ * test call left one call when there was none yet.
+ */
+async function openSettingsSchedulesWebhook(page: Page, look: Look): Promise<void> {
+	await openSettingsSchedules(page, look);
+	const row = await ensureSchedule(page, "Parity webhook", "webhook");
+	const toggle = row.locator("[data-schedule-webhook-toggle]");
+	if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+	const panel = row.locator("[data-webhook-panel]");
+	await panel.waitFor({ state: "visible", timeout: 15_000 });
+	if ((await panel.locator("[data-webhook-call]").count()) === 0) await panel.locator("[data-webhook-sample]").click();
+	await panel.locator("[data-webhook-call]").first().waitFor({ state: "visible", timeout: 30_000 });
+	await panel.scrollIntoViewIfNeeded();
+}
+
+/** Settings › Schedules › All runs, holding a finished run of a schedule run once through its Run now. */
+async function openScheduleRuns(page: Page, look: Look): Promise<void> {
+	await openSettingsSchedules(page, look);
+	const row = await ensureSchedule(page, "Parity run", "interval");
+	const runs = page.locator("[data-settings-page] [data-schedule-run-row]").filter({ hasText: "Parity run" });
+	if ((await runs.count()) === 0) await row.locator("[data-schedule-run]").click();
+	await page.locator("[data-settings-page] [data-schedules-view] [role='tab']").last().click();
+	await page
+		.locator("[data-settings-page] [data-schedule-runs-table] [data-schedule-table-run]")
+		.filter({ hasText: "Parity run" })
+		.filter({ hasText: "Succeeded" })
+		.first()
+		.waitFor({ state: "visible", timeout: 60_000 });
+}
+
 /** Settings › Updates & about with the token row saying why the saved token was removed. */
 async function openSettingsUpdatesDropped(page: Page, look: Look): Promise<void> {
 	await openSettingsUpdates(page, look);
@@ -756,6 +1028,7 @@ export const SETTINGS_SECTIONS = [
 	"permissions",
 	"workspace",
 	"schedules",
+	"bots",
 	"connections",
 	"updates",
 	"advanced",
@@ -782,7 +1055,7 @@ const DIALOG_FLAGS: ReadonlyArray<{ id: string; action: string; args?: unknown[]
 	{ id: "dialog-benchmark", action: "openBenchmark", title: "Model benchmark" },
 	{ id: "dialog-model-setup", action: "openModelSetup", title: "Model setup assistant" },
 	{ id: "dialog-debug", action: "openDebug", title: "Debug console" },
-	{ id: "dialog-worktree", action: "openWorktreeDialog", title: "New worktree" },
+	{ id: "dialog-worktree", action: "openWorktreeDialog", title: "New task" },
 ];
 
 /**
@@ -964,6 +1237,9 @@ async function expectTurnRail(page: Page, want: { first: number | { atMost: numb
 	}
 	if (!fits(seen)) throw new Error(`the turn rail draws ${JSON.stringify(seen)}, not ${JSON.stringify(want)}`);
 }
+
+/** The parity work session's one prompt (parity.e2e.ts); `transcript-find` looks for it. */
+export const PARITY_WORK_PROMPT = "Show this session the same way everywhere";
 
 export const SURFACES: readonly Surface[] = [
 	// ── Area A: sidebar, transcript, composer, panels ─────────────────────────────────────────
@@ -1250,6 +1526,39 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "reply", inView: '[data-tool-agent-desktop="tree"]' },
 	},
 	{
+		id: "reply-schedule-card",
+		area: "A",
+		title: "An agent's ompdesk_schedule create of a webhook routine: the saved line and the webhook card with Copy URL",
+		open: async page => {
+			await showTurn(page, "fixture schedule card");
+			await page.getByText("Webhook routine saved.", { exact: true }).last().waitFor({ timeout: 15_000 });
+			const card = page.locator(".omp-execution-group").last();
+			const head = card.locator(".omp-execution-group-header").first();
+			if ((await head.count()) > 0 && (await head.getAttribute("aria-expanded")) !== "true") await head.click();
+			const step = card
+				.locator(".omp-tool-card")
+				.filter({ hasText: "Deploy hook" })
+				.first()
+				.locator("button[aria-expanded]")
+				.first();
+			if ((await step.getAttribute("aria-expanded")) !== "true") await step.click();
+			const webhook = card.locator("[data-tool-schedule-webhook]").first();
+			await webhook.waitFor({ state: "visible", timeout: 15_000 });
+			await page
+				.locator(".omp-transcript-scroll")
+				.first()
+				.evaluate(scroller =>
+					scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, bubbles: true, cancelable: true })),
+				);
+			await webhook.evaluate(element => element.scrollIntoView({ block: "center" }));
+		},
+		ready: "[data-tool-schedule-webhook]",
+		settle: 900,
+		// The audits' harness page has no such turn; the parity sheet asks the fake omp for it.
+		when: () => false,
+		parity: { session: "schedule", inView: "[data-tool-schedule-webhook]" },
+	},
+	{
 		id: "reply-usage",
 		area: "A",
 		title: "The usage row under a reply: model, tokens, cache, cost, duration, first token, speed and time on one line",
@@ -1314,14 +1623,19 @@ export const SURFACES: readonly Surface[] = [
 		title: "Work board strip (busy session, ?board=busy), expanded: under the header on a phone, above the composer elsewhere, where the pane cannot dock the board (docked: board-strip-open)",
 		query: "&board=busy",
 		when: boardIsStrip,
-		open: async page => {
-			// The busy fixture's turn, question and goal land 1.5 s after boot (dev-harness/boot.ts).
-			const chip = page.locator("[data-work-chip][data-state='waiting']");
-			await chip.waitFor({ state: "visible", timeout: 15_000 });
+		open: async (page, look) => {
+			const { chip, docked } = busyBoard(page);
+			await chip.or(docked).first().waitFor({ state: "visible", timeout: 15_000 });
+			// A window wide enough docks the board (the parity sheet's): the side panel takes its place, so the strip shows.
+			if ((await chip.count()) === 0) {
+				await openPanelView(page, look, "diff");
+				await chip.waitFor({ state: "visible", timeout: 15_000 });
+			}
 			if ((await chip.getAttribute("aria-expanded")) !== "true") await chip.click();
 		},
 		ready: "[data-work-strip-panel]",
 		settle: 600,
+		parity: { session: "board", after: closePanelView },
 	},
 	{
 		id: "board-strip-open",
@@ -1329,8 +1643,7 @@ export const SURFACES: readonly Surface[] = [
 		title: "Work board strip with every zone opened from its summary line: the rows a phone reaches with a tap more",
 		query: "&board=busy",
 		open: async page => {
-			const chip = page.locator("[data-work-chip][data-state='waiting']");
-			const docked = page.locator(".omp-work-board-slot [data-board-section='needs']");
+			const { chip, docked } = busyBoard(page);
 			await chip.or(docked).first().waitFor({ state: "visible", timeout: 15_000 });
 			if ((await chip.count()) === 0) return;
 			if ((await chip.getAttribute("aria-expanded")) !== "true") await chip.click();
@@ -1341,6 +1654,7 @@ export const SURFACES: readonly Surface[] = [
 		},
 		ready: "[data-work-board-panel]",
 		settle: 600,
+		parity: { session: "board" },
 	},
 	{
 		id: "sidebar",
@@ -1471,14 +1785,43 @@ export const SURFACES: readonly Surface[] = [
 		title: "Transcript scrolled to its first turn",
 		open: showTranscriptStart,
 		ready: '.omp-transcript-scroll [data-index="0"]',
+		// A 44-turn session: its first turn is a scroll away from where it opens.
+		parity: { session: "turns" },
 	},
 	{
 		id: "transcript-stress",
 		area: "A",
 		title: "Transcript at the stress turns: long URL, wide table, long code line, diff, mermaid, long tool paths",
-		open: page => showTurn(page, "Show me everything that tends to overflow on a phone."),
-		ready: '.omp-user-bubble:has-text("Show me everything that tends to overflow on a phone.")',
+		open: page => showTurn(page, STRESS_PROMPT),
+		ready: `.omp-user-bubble:has-text("${STRESS_PROMPT}")`,
 		settle: 900,
+		// B's "Parity stress" session, whose one turn the fake omp answers with the harness's stress reply.
+		parity: { session: "stress" },
+	},
+	// Find in the conversation (⌘F, chat/TranscriptFind.tsx): the bar over the transcript, its count, the marked match.
+	{
+		id: "transcript-find",
+		area: "A",
+		title: "Find in the conversation: the bar at the transcript's top right with its count",
+		// Words only the work session's first prompt holds: surfaces earlier in the order add answered turns to the
+		// session, so "fixture reply" counted 1 to 7 and started wherever the reader was (ui-parity.md › transcript-find).
+		open: async page => {
+			const mac = await page.evaluate(() => /Mac/.test(navigator.platform));
+			await page.keyboard.press(mac ? "Meta+f" : "Control+f");
+			await page.locator("[data-transcript-find] input").fill(PARITY_WORK_PROMPT);
+		},
+		ready: '[data-transcript-find] [data-find-status]:text-matches("^1/1$")',
+		settle: 400,
+		// Parity only: a real window's ⌘F over the work session. The find left the window at the first turn: `after`
+		// closes the bar and goes back to the end, where the surfaces after it expect the work session.
+		when: () => false,
+		parity: {
+			session: "work",
+			after: async page => {
+				await closeOverlay(page);
+				await showTranscriptEnd(page);
+			},
+		},
 	},
 	// The turn rail in the transcript's left gutter (ConversationNavigator). A phone's page does not draw it (its CSS
 	// hides it below a wide workspace), so there the capture is the transcript alone; the ticks are mounted all the same.
@@ -1573,13 +1916,20 @@ export const SURFACES: readonly Surface[] = [
 	{
 		id: "composer-at-menu",
 		area: "A",
-		title: "@ file menu",
+		title: "@ menu: files, then this session's opened sessions and this project's others",
 		open: async page => {
-			const input = page.locator("[data-composer-input]");
+			const input = page.locator("[data-composer-input]:visible").first();
 			await input.fill("");
 			await input.pressSequentially("@", { delay: 30 });
 		},
 		ready: '.omp-composer-anchor [role="listbox"]',
+		parity: {
+			session: "work",
+			after: async page => {
+				await page.keyboard.press("Escape");
+				await page.locator("[data-composer-input]:visible").first().fill("");
+			},
+		},
 	},
 	{
 		id: "composer-long-draft",
@@ -1644,26 +1994,121 @@ export const SURFACES: readonly Surface[] = [
 			area: "A",
 			title: `Side panel › ${panel}`,
 			open: async (page, look) => {
-				if (panel === "preview" || panel === "files") return ui(page, "setPanelTab", panel);
+				if (panel === "files") return ui(page, "setPanelTab", panel);
 				await openPanelView(page, look, panel);
 				await page
-					.locator(panel === "diff" ? "[data-scm-bar]:visible" : "[data-terminal-head]:visible")
+					.locator(
+						panel === "diff"
+							? "[data-scm-bar]:visible"
+							: panel === "preview"
+								? "[data-preview-panel]:visible"
+								: "[data-terminal-head]:visible",
+					)
 					.first()
 					.waitFor({ timeout: 20_000 });
 			},
-			// The terminal's sheet is ready once its first shell's tab shows (with the phone's key bar under it).
+			// The terminal's sheet is ready once its first shell's tab shows (with the phone's key bar under it). The
+			// Preview's empty tab shows its start page (servers, forwards, devices, recent sites).
 			ready:
 				panel === "diff"
 					? "[data-scm-bar]:visible"
 					: panel === "terminal"
 						? "[data-terminal-tab]:visible"
-						: "[data-sheet-panel], [data-panel-tabbar], .omp-panel-topbar",
-			...(panel === "diff" || panel === "terminal"
+						: panel === "preview"
+							? "[data-preview-panel]:visible"
+							: "[data-sheet-panel], [data-panel-tabbar], .omp-panel-topbar",
+			...(panel === "diff" || panel === "terminal" || panel === "preview"
 				? { parity: { session: "work" as const, after: closePanelView } }
 				: {}),
 			settle: 900,
 		}),
 	),
+	{
+		// The Preview's start page with every source filled (`OMP_GUI_TEST_PREVIEW_START=1`): the work session's dev server
+		// (the fake omp's child, `procs.ports`; on a paired computer it opens through the host), an Android emulator
+		// (e2e/parity.e2e.ts `fakeAndroidDevice`) and two recent sites (`seedPreviewHistory`).
+		id: "preview-start",
+		area: "A",
+		title: "Preview start page: the session's dev server, a running device, recent sites",
+		open: async (page, look) => {
+			await openPanelView(page, look, "preview");
+			for (const section of ["servers", "devices", "recent"])
+				await page.locator(`[data-preview-start-${section}]:visible`).first().waitFor({ timeout: 30_000 });
+		},
+		ready: "[data-preview-start]:visible",
+		// The audits' harness page has no session processes, devices or history; the parity sheet starts them.
+		when: () => false,
+		parity: {
+			session: "work",
+			after: closePanelView,
+			available: () => process.env.OMP_GUI_TEST_PREVIEW_START === "1",
+		},
+		settle: 900,
+	},
+	{
+		// The emulator pane (Orca's FT71): the start page's device opened, its screen read by `adb exec-out screencap`.
+		id: "preview-device",
+		area: "A",
+		title: "Preview device screen: an Android emulator with its keys",
+		open: async (page, look) => {
+			await openPanelView(page, look, "preview");
+			const devices = page.locator("[data-preview-start-devices]:visible").first();
+			await devices.waitFor({ timeout: 30_000 });
+			await devices.getByRole("button").first().click();
+			await page
+				.locator("[data-preview-device] img:visible")
+				.first()
+				.evaluate(
+					(image: HTMLImageElement) =>
+						image.complete && image.naturalWidth > 0
+							? undefined
+							: new Promise(resolve => image.addEventListener("load", resolve, { once: true })),
+					undefined,
+					{ timeout: 20_000 },
+				);
+		},
+		ready: "[data-preview-device]:visible",
+		when: () => false,
+		parity: {
+			session: "work",
+			after: async page => {
+				// The device's head row ends with its close button.
+				const close = page.locator("[data-preview-device]:visible > div").first().getByRole("button").last();
+				if (await close.isVisible().catch(() => false)) await close.click();
+				await closePanelView(page);
+			},
+			available: () => process.env.OMP_GUI_TEST_PREVIEW_START === "1",
+		},
+		settle: 900,
+	},
+	{
+		// A link tapped on the phone opens there; the toast after it offers the computer and the computer's Preview
+		// (Orca's FM51). A computer's window opens a link in the system browser and has no such toast, so its views show
+		// the reply with the link.
+		id: "phone-link-toast",
+		area: "B",
+		title: "Phone link toast: Open on computer and Open in Preview",
+		open: async (page, look) => {
+			await showTurn(page, "fixture reply components");
+			const link = page.locator('.markdown-body a[href="https://example.com/docs"]').first();
+			await showInReply(page, link);
+			if (!touchLook(look)) return;
+			const opened = page
+				.context()
+				.waitForEvent("page", { timeout: 10_000 })
+				.catch(() => undefined);
+			await link.click();
+			await (await opened)?.close();
+			await page
+				.getByRole("button", { name: say(look, "hostUi.link.inPreview"), exact: true })
+				.first()
+				.waitFor({ timeout: 10_000 });
+		},
+		// The audits' harness page is not a paired phone's (no host to offer); the parity sheet's phone is.
+		when: () => false,
+		parity: { session: "reply" },
+		settle: 300,
+	},
 	{
 		// The quick terminal (Orca's floating terminal): opened from the palette, its first shell's tab ready.
 		id: "quick-terminal",
@@ -1703,12 +2148,7 @@ export const SURFACES: readonly Surface[] = [
 		area: "A",
 		title: "Files viewer on a changed file",
 		open: async (page, look) => {
-			await openPanelView(page, look, "files");
-			await page.getByLabel(say(look, "filesPanel.search"), { exact: true }).first().fill("Sidebar.tsx");
-			await page
-				.getByRole("treeitem", { name: /Sidebar\.tsx/ })
-				.first()
-				.click();
+			await openSidebarFile(page, look);
 		},
 		ready: "[data-file-viewer-head]",
 		parity: { session: "work", after: closePanelView },
@@ -1762,23 +2202,12 @@ export const SURFACES: readonly Surface[] = [
 		area: "A",
 		title: "Files viewer with Blame on: the commit that last changed each run of lines",
 		open: async (page, look) => {
-			await openPanelView(page, look, "files");
-			// `panel-files-viewer` ran before in the same session, so the panel may still hold Sidebar.tsx open.
-			const search = page.getByLabel(say(look, "filesPanel.search"), { exact: true }).first();
-			const viewer = page.locator("[data-file-viewer-head]:visible").first();
-			await search.or(viewer).first().waitFor();
-			if (!(await viewer.isVisible())) {
-				await search.fill("Sidebar.tsx");
-				await page
-					.getByRole("treeitem", { name: /Sidebar\.tsx/ })
-					.first()
-					.click();
-			}
+			await openSidebarFile(page, look);
 			if (!(await page.locator("[data-code-view] [data-blame-line]").first().isVisible()))
 				await page.locator("[data-blame-toggle]:visible").first().click();
 		},
 		ready: "[data-code-view] [data-blame-line]",
-		parity: { session: "work", after: closePanelView },
+		parity: { session: "work", after: closeBlame },
 		settle: 1200,
 	},
 
@@ -1908,6 +2337,27 @@ export const SURFACES: readonly Surface[] = [
 		},
 	},
 	{
+		id: "settings-schedules",
+		area: "B",
+		title: "Settings › Schedules with a webhook routine open: URL and masked key, its actions and Recent calls",
+		open: openSettingsSchedulesWebhook,
+		ready: "[data-settings-page] [data-webhook-panel] [data-webhook-call]",
+		settle: 600,
+		// Parity only: the audits' harness page runs no schedules service.
+		when: () => false,
+		parity: { session: "work", after: page => deleteSchedule(page, "Parity webhook") },
+	},
+	{
+		id: "schedule-runs",
+		area: "B",
+		title: "Settings › Schedules › All runs: one table of every run with its trigger, status, start, length and use",
+		open: openScheduleRuns,
+		ready: "[data-settings-page] [data-schedule-runs-table] [data-schedule-table-run]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work", after: page => deleteSchedule(page, "Parity run") },
+	},
+	{
 		id: "settings-updates-token-dropped",
 		area: "B",
 		title: "Settings › Updates & about, the GitHub token row saying the saved token was removed (the keychain would ask)",
@@ -1969,6 +2419,128 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-palette-index][data-active='true']",
 		// Parity only: the audits open the palette through the harness (`dialog-command-palette`).
 		when: () => false,
+		parity: { session: "work", after: closeOverlay },
+	},
+	// Bots (orca-bots-ui): each view reads the bots of its own computer (a bot lives where its folder is), so `open`
+	// first makes "Parity bot" there when it has none; the sections and their order are what must agree.
+	{
+		id: "sidebar-bots",
+		area: "A",
+		title: "The sidebar's Bots section: the header with its options and +, a bot's row with its second line",
+		open: async (page, look) => {
+			await ensureParityBot(page);
+			await openDrawer(page, look);
+			const toggle = page.locator("[data-sidebar-bots-toggle]:visible").first();
+			if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+		},
+		ready: "[data-sidebar-bots] [data-bot-row]",
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "bot-pane",
+		area: "B",
+		title: "The Bots page: the bots' list and a bot's page (header, Activity, Chats, Settings tabs)",
+		open: async (page, look) => {
+			await ensureParityBot(page);
+			await openDrawer(page, look);
+			await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+			// A phone shows the list first: the bot's row opens its page.
+			const row = page.locator("[data-bots-page-row]:visible").first();
+			if ((await page.locator("[data-bot-pane]:visible").count()) === 0) await row.click();
+			// The page keeps the tab it was last on (bot-items leaves it on Items).
+			await page.locator('[data-bot-pane-tabs] [data-tab-id="activity"]:visible').first().click();
+		},
+		ready: "[data-bot-pane] [data-bot-activity]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "bot-items",
+		area: "B",
+		title: "A bot's Items tab: the filter, its items in groups (Working, Planned) with their rows",
+		open: openParityItems,
+		ready: "[data-bot-pane] [data-bot-items] [data-bot-item]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work", after: closeParityItems },
+	},
+	{
+		id: "bot-item",
+		area: "B",
+		title: "A bot's item page: back and step, status and links, its description, Done means, activity and the comment box",
+		open: async (page, look) => {
+			await openParityItems(page, look);
+			await page.locator("[data-bot-item-open]:visible").first().click();
+		},
+		ready: "[data-bot-item-page] [data-bot-item-activity]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work", after: closeParityItems },
+	},
+	{
+		id: "bot-room",
+		area: "B",
+		title: "A bot group's room: its faces and menu, the Room and Items tabs, the posts and the post box",
+		open: async (page, look) => {
+			await ensureParityBot(page);
+			await page.evaluate(async () => {
+				const state = await window.omp.bots.command({ action: "get" });
+				if ((state.rooms ?? []).length === 0 && state.bots[0])
+					await window.omp.bots.command({ action: "roomCreate", name: "Parity group", bots: [state.bots[0].id] });
+			});
+			await openDrawer(page, look);
+			await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+			await page.locator("[data-bots-page-room]:visible").first().click();
+		},
+		ready: "[data-bot-room] [data-bot-room-box]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "bot-cards",
+		area: "A",
+		title: "Bot cards in a chat: a new bot offer with Create bot, an ask to a bot and a tool a bot added with Sign in and Remove",
+		// The host's fake omp answers "fixture bot cards" with the three calls ended (e2e/fixture/rpc-ui.ts).
+		open: async page => {
+			await ensureParityBot(page);
+			await promptShownTab(page, "fixture bot cards");
+		},
+		ready: "[data-bot-card='toolsAdded']",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "settings-bots",
+		area: "B",
+		title: "Settings › Bots: the sidebar switch and this computer's bots",
+		open: async (page, look) => {
+			await ensureParityBot(page);
+			await openDrawer(page, look);
+			await page.locator('[data-destination="settings"]').first().click();
+			const nav = page.locator('[data-settings-section="bots"]');
+			await nav.waitFor({ state: "visible", timeout: 15_000 });
+			await nav.click();
+		},
+		ready: "[data-settings-page] [data-settings-bots]",
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "board-all",
+		area: "B",
+		title: "All sessions: the sidebar's All sessions row opens the board of every session in four lanes",
+		open: async (page, look) => {
+			await openDrawer(page, look);
+			await page.locator('[data-sidebar-nav-row="board"]:visible').first().click();
+		},
+		ready: "[data-board-lanes] [data-board-lane='idle']",
+		// Parity only: the board reads a computer's session lists, which the audits' harness page does not run.
+		when: () => false,
+		// Esc on a page goes back to the session, so the next surface starts on it.
 		parity: { session: "work", after: closeOverlay },
 	},
 	{
@@ -2042,10 +2614,16 @@ export const SURFACES: readonly Surface[] = [
 		id: "settings-list",
 		area: "B",
 		title: "Settings section list (a phone's first page)",
-		open: async page => {
-			await ui(page, "openSettings");
+		open: async (page, look) => {
+			// The harness opens it through its store; a real window or page through the sidebar's Settings entry.
+			if (await page.evaluate(() => Boolean(window.__stores))) await ui(page, "openSettings");
+			else {
+				await openDrawer(page, look);
+				await page.locator('[data-destination="settings"]').first().click();
+			}
 		},
 		ready: "[data-settings-page]",
+		parity: { session: "work" },
 	},
 	{
 		id: "settings-connections-pwa",
@@ -2066,11 +2644,47 @@ export const SURFACES: readonly Surface[] = [
 			title: `Agents › ${tab}`,
 			// Live, Pull requests and GitHub open through the palette and their tab (real controls), so the parity sheet
 			// takes them.
-			open: tab === "definitions" ? page => ui(page, "openAgents", tab) : page => openPageTab(page, "agents", tab),
+			open:
+				tab === "definitions"
+					? page => ui(page, "openAgents", tab)
+					: async page => {
+							await openPageTab(page, "agents", tab);
+							// The source bar keeps the last source a person chose; a source surface may have run first.
+							if (tab === "github") await page.locator('[data-work-source="github"]').click();
+						},
 			settle: 900,
 			...(tab === "definitions" ? {} : { parity: { session: "work" as const } }),
 		}),
 	),
+	// Agents › GitHub's work-source bar: GitLab without glab (its install card), Linear and Jira with no account yet
+	// (their connect cards); each is the surface a person meets first.
+	...(["gitlab", "linear", "jira"] as const).map(
+		(source): Surface => ({
+			id: `agents-source-${source}`,
+			area: "B",
+			title: `Agents › GitHub › the ${source} source (its first card)`,
+			open: async page => {
+				await openPageTab(page, "agents", "github");
+				await page.locator(`[data-work-source="${source}"]`).click();
+			},
+			ready: `[data-work-sources="${source}"]`,
+			settle: 1200,
+			parity: { session: "work" },
+		}),
+	),
+	{
+		id: "agents-github-projects",
+		area: "B",
+		title: "Agents › GitHub › Projects (the account's projects)",
+		open: async page => {
+			await openPageTab(page, "agents", "github");
+			await page.locator('[data-work-source="github"]').click();
+			await page.locator('[data-github-center] [role="tab"][data-tab-id="projects"]').click();
+		},
+		ready: "[data-project-list]",
+		settle: 1200,
+		parity: { session: "work" },
+	},
 	{
 		id: "agents-pr-detail",
 		area: "B",
@@ -2083,6 +2697,30 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-pr-detail]",
 		settle: 1200,
 		parity: { session: "work" },
+	},
+	{
+		id: "agents-issue-detail",
+		area: "B",
+		title: "Agents › GitHub › an issue's detail, its Start a task button first",
+		open: openIssueDetail,
+		ready: "[data-github-issue] [data-github-issue-start]",
+		settle: 900,
+		// Parity only: the issue comes from B's `gh`, which the harness page has not.
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "agents-issue-start",
+		area: "B",
+		title: "The new task sheet an issue's Start a task opens: its branch name and prompt filled from the issue",
+		open: async page => {
+			await openIssueDetail(page);
+			await page.locator("[data-github-issue-start]").click();
+		},
+		ready: "[role=dialog] [data-new-task-sheet] [data-new-task-project]",
+		settle: 700,
+		when: () => false,
+		parity: { session: "work", after: closeOverlay },
 	},
 	{
 		id: "stats",
@@ -2180,7 +2818,11 @@ export const SURFACES: readonly Surface[] = [
 						? openWorkspaceDialog(page, look)
 						: dialog.id === "dialog-model-setup"
 							? openModelSetup(page, look)
-							: ui(page, dialog.action, ...(dialog.args ?? [])),
+							: dialog.id === "dialog-worktree"
+								? openNewTaskSheet(page, look)
+								: dialog.id === "dialog-feedback"
+									? openHelpItem(page, look, "Send feedback")
+									: ui(page, dialog.action, ...(dialog.args ?? [])),
 			...(dialog.id === "dialog-command-palette"
 				? { ready: "[role=dialog] [role=listbox]", parity: { session: "work" as const } }
 				: dialog.id === "dialog-workspace"
@@ -2194,10 +2836,31 @@ export const SURFACES: readonly Surface[] = [
 								ready: "[role=dialog] [data-model-setup-evidence] [aria-haspopup=listbox]",
 								parity: { session: "work" as const, after: closeOverlay },
 							}
-						: {}),
+						: dialog.id === "dialog-worktree"
+							? {
+									// The new task sheet over the work session's project, opened from the palette's command.
+									ready: "[role=dialog] [data-new-task-sheet] [data-new-task-project]",
+									parity: { session: "work" as const, after: closeOverlay },
+								}
+							: dialog.id === "dialog-feedback"
+								? {
+										// Opened from the Help menu; ready with its picture field (Orca FB5).
+										ready: "[role=dialog] [data-feedback-picture]",
+										parity: { session: "work" as const, after: closeOverlay },
+									}
+								: {}),
 			settle: 700,
 		}),
 	),
+	{
+		id: "capabilities-sheet",
+		area: "B",
+		title: "Help › What OMPdesk can do: what the app adds, each with Open or Show me",
+		open: (page, look) => openHelpItem(page, look, "What OMPdesk can do"),
+		ready: "[data-capabilities] [data-capability='board']",
+		settle: 700,
+		parity: { session: "work", after: closeOverlay },
+	},
 	{
 		id: "toasts",
 		area: "B",
@@ -2261,11 +2924,28 @@ export const SURFACES: readonly Surface[] = [
 		title: "A session row's action menu",
 		open: async (page, look) => {
 			await openDrawer(page, look);
+			// The shown session's row where the list marks one, so every parity view opens the work session's menu (a
+			// paired computer's window lists its own sessions above the host's).
+			const rows = page.locator(".omp-list-row:has([data-sidebar-row-menu])");
+			await rows.first().waitFor({ state: "attached", timeout: 15_000 });
+			const shown = rows.and(page.locator("[data-active='true']")).first();
+			const row = (await shown.count()) > 0 ? shown : rows.first();
 			// A mouse shows the row's ⋯ on hover; a finger always has it.
-			const row = page.locator(".omp-list-row:has([data-sidebar-row-menu])").first();
 			if ((look.device ?? "touch") !== "touch") await row.hover();
 			await row.locator("[data-sidebar-row-menu]").first().click();
 		},
+		ready: "[role='menu'] [role='menuitem']",
+		parity: { session: "work", after: closeOverlay },
+	},
+	{
+		id: "sidebar-new-task-row",
+		area: "A",
+		title: "A new task's sidebar row after its worktree's create failed: the reason, Retry and Close",
+		open: failNewTask,
+		ready: "[data-new-task][data-new-task-state='failed']",
+		// Parity only: the harness page has no repository to cut a worktree from.
+		when: () => false,
+		parity: { session: "work", after: dismissNewTasks },
 	},
 	{
 		id: "sidebar-project-menu",

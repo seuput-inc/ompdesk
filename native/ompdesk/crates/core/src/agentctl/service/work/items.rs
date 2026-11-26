@@ -4,9 +4,16 @@
 //! - The owner's change raises `version`, records an event and is mailed once to the item's chat, named
 //!   `item-<id>-v<version>` (a repeat of one change is one mail). An answer to the item's question starts a turn there
 //!   (the chat is reached as a routine's wake-up reaches it); any other change is a quiet note kept until the chat
-//!   opens. A change that changes nothing, or one to an item that is gone, mails nothing and asks nothing.
-//! - Read when listed: `stale` (open and untouched for its bot's `staleDays`), each linked session's `state`, and
-//!   `limitUntil` (every live linked session waits for a usage limit: the earliest reset).
+//!   opens. A change that changes nothing, a snooze alone (the item keeps its status), or one to an item that is gone
+//!   mails nothing and asks nothing. Several items changed at once (`ids`) are one mail per chat.
+//! - A comment or an answer the owner sends carries a request id: the same request again changes nothing (Orca's
+//!   `use-bot-item-pending-comments.ts`). An answer names the question it answers; when the bot has asked another one
+//!   since, the change is refused as `question_changed` and nothing is written.
+//! - Every event says what it was: a status its old status and note, an edit its field before and after, a linked
+//!   session's report (`worker`) its first line (Orca's `BotItemActivityList.tsx`).
+//! - Read when listed: `stale` (Orca's `isBotItemStale`: Needs you untouched for its bot's `staleDays`, In progress or
+//!   Waiting with no live linked session for as long, Planned for three times that; never while snoozed), each linked
+//!   session's `state`, and `limitUntil` (every live linked session waits for a usage limit: the earliest reset).
 //! - A closed item adds one line to `<bot folder>/memory/journal/YYYY-MM.md`.
 
 use std::io::Write as _;
@@ -21,7 +28,8 @@ use super::super::types::{ControlTab, ItemArgs, TabStatus};
 use super::bots::new_id;
 use crate::agentctl::journal::bots::BotRecord;
 use crate::agentctl::journal::items::{
-    ItemLink, ItemQuestion, ItemRecord, ItemWait, STATUSES, is_open, parse_iso,
+    DECISIONS_MAX, ItemDecision, ItemLink, ItemQuestion, ItemRecord, ItemWait, STATUSES, is_open,
+    parse_iso,
 };
 use crate::agentctl::rules::mail::{Mail, MailKind};
 use crate::aimemory::value::iso;
@@ -32,8 +40,18 @@ pub const TITLE_MAX: usize = 200;
 pub const DESCRIPTION_MAX: usize = 20_000;
 /// A comment, a note or a question, at most.
 pub const TEXT_MAX: usize = 8_000;
+/// What a Waiting item waits on, at most: one line (Orca's `BOT_ITEM_LIMITS.wait`).
+pub const WAIT_MAX: usize = 200;
+/// One question of several, at most (Orca's `BOT_ITEM_ASK_LIMITS.prompt`).
+const DECISION_MAX: usize = 500;
+/// Quick replies one question takes, at most.
+const OPTIONS_MAX: usize = 8;
+/// The owner's answer named a question the bot has since replaced (`BotsState.refused`).
+pub const QUESTION_CHANGED: &str = "question_changed";
 
 const DAY_MS: f64 = 24.0 * 60.0 * 60_000.0;
+/// Planned items wait this many times longer before they read as stale (Orca's `BOT_ITEM_PLANNED_STALE_FACTOR`).
+const PLANNED_STALE_FACTOR: f64 = 3.0;
 
 fn too_long(what: &str, text: &str, max: usize) -> R<()> {
     if text.chars().count() > max {
@@ -42,13 +60,58 @@ fn too_long(what: &str, text: &str, max: usize) -> R<()> {
     Ok(())
 }
 
+fn cut(text: &str, max: usize) -> String {
+    text.chars().take(max).collect()
+}
+
+/// An ask as plain words (Orca's `botItemAskText`): the words around it, then each question and its quick replies.
+fn ask_words(context: &str, decisions: &[ItemDecision]) -> String {
+    let several = decisions.len() > 1;
+    let parts = decisions.iter().enumerate().map(|(at, decision)| {
+        let head = if several {
+            format!("{}. {}", at + 1, decision.question)
+        } else {
+            decision.question.clone()
+        };
+        let options = decision.options.iter().enumerate().map(|(index, option)| {
+            let recommended = if decision.recommended == Some(index as u32) {
+                " (recommended)"
+            } else {
+                ""
+            };
+            format!("   - {option}{recommended}")
+        });
+        std::iter::once(head)
+            .chain(options)
+            .collect::<Vec<_>>()
+            .join("\n")
+    });
+    std::iter::once(context.trim().to_owned())
+        .filter(|context| !context.is_empty())
+        .chain(parts)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 /// One line of an item in a list.
 fn item_line(item: &ItemRecord) -> String {
     let mut line = format!("- #{} [{}] {}", item.number, item.status, item.title);
     if let Some(question) = &item.question {
-        line.push_str(&format!(" — asks: {}", question.text));
-        if !question.options.is_empty() {
-            line.push_str(&format!(" ({})", question.options.join(" / ")));
+        if question.decisions.is_empty() {
+            line.push_str(&format!(" — asks: {}", question.text));
+            if !question.options.is_empty() {
+                line.push_str(&format!(" ({})", question.options.join(" / ")));
+            }
+        } else {
+            let asked: Vec<String> = question
+                .decisions
+                .iter()
+                .map(|decision| match decision.options.is_empty() {
+                    true => decision.question.clone(),
+                    false => format!("{} ({})", decision.question, decision.options.join(" / ")),
+                })
+                .collect();
+            line.push_str(&format!(" — asks: {}", asked.join("; ")));
         }
     }
     if let Some(wait) = &item.wait {
@@ -96,6 +159,40 @@ pub(crate) fn journal_line(folder: &Path, item: &ItemRecord, at: &str) {
     }
 }
 
+/// Whether `item` reads as stale after `days` (Orca's `isBotItemStale`); `live`: a linked session still works.
+fn is_stale(item: &ItemRecord, days: f64, live: bool, now: f64) -> bool {
+    if !item.is_open() || item.snoozed(now) {
+        return false;
+    }
+    // Back from a snooze, its clock starts again then.
+    let woke = item
+        .snoozed_until
+        .as_deref()
+        .and_then(parse_iso)
+        .filter(|until| *until <= now)
+        .unwrap_or(0.0);
+    let idle = now - item.touched.max(woke);
+    match item.status.as_str() {
+        "planned" => idle >= days * PLANNED_STALE_FACTOR * DAY_MS,
+        "working" | "waiting" => idle >= days * DAY_MS && !live,
+        _ => idle >= days * DAY_MS,
+    }
+}
+
+/// Records an edit of `field`, its words before and after.
+fn edited(
+    item: &mut ItemRecord,
+    at: &str,
+    field: &str,
+    before: Option<String>,
+    after: Option<String>,
+) {
+    let event = item.event(at, "bot", "edited", None);
+    event.field = Some(field.to_owned());
+    event.before = before;
+    event.after = after;
+}
+
 impl AgentControl {
     /// An item as listed now: its read-time `stale`, `limitUntil` and linked sessions' states.
     pub(crate) fn read_item(
@@ -106,12 +203,9 @@ impl AgentControl {
         now: f64,
     ) -> ItemRecord {
         let mut read = item.clone();
-        read.stale = bot
-            .and_then(|bot| bot.stale_days)
-            .filter(|days| *days > 0.0 && item.is_open() && now - item.touched > days * DAY_MS)
-            .map(|_| true);
         let mut limits: Vec<f64> = Vec::new();
         let mut live = 0;
+        let mut working = false;
         for link in read.links.iter_mut().filter(|link| link.kind == "session") {
             let tab = state.tabs.iter().find(|tab| {
                 tab.tab_id == link.target
@@ -124,7 +218,9 @@ impl AgentControl {
                     if let Some(retry) = tab.scheduled_retry.as_ref().filter(|retry| retry.limit) {
                         limits.push(retry.at);
                     }
-                    session_state(tab).to_owned()
+                    let state = session_state(tab);
+                    working |= state == "working" || state == "waiting";
+                    state.to_owned()
                 }
                 None if state.deleted_at_path(&link.target, None).is_some() => "gone".to_owned(),
                 None => "done".to_owned(),
@@ -133,6 +229,10 @@ impl AgentControl {
         read.limit_until = (live > 0 && limits.len() == live)
             .then(|| limits.iter().copied().fold(f64::INFINITY, f64::min))
             .map(|at| iso(at.max(0.0) as u64));
+        read.stale = bot
+            .and_then(|bot| bot.stale_days)
+            .filter(|days| *days > 0.0 && is_stale(item, *days, working, now))
+            .map(|_| true);
         read
     }
 
@@ -207,15 +307,15 @@ impl AgentControl {
                 title,
                 description: args.description.clone().filter(|text| !text.is_empty()),
                 done_means: args.done_means.clone().filter(|text| !text.is_empty()),
-                status,
+                status: status.clone(),
                 created_at: at.clone(),
                 updated_at: at.clone(),
                 touched: now,
                 version: 1,
                 ..ItemRecord::default()
             };
-            item.event(&at, "bot", "made", None);
-            self.items().add(item.clone());
+            item.event(&at, "bot", "made", Some(&status));
+            let item = self.items().add(item);
             self.items_changed();
             return Ok(format!(
                 "Added item #{} “{}” ({}).",
@@ -272,14 +372,18 @@ impl AgentControl {
             }
             for event in read.events.iter().rev().take(10) {
                 lines.push(format!(
-                    "{} {} {}{}",
+                    "{} {} {}{}{}",
                     event.at,
                     event.actor,
                     event.kind,
                     event
                         .text
                         .as_deref()
-                        .map_or_else(String::new, |text| format!(": {text}"))
+                        .map_or_else(String::new, |text| format!(": {text}")),
+                    event
+                        .note
+                        .as_deref()
+                        .map_or_else(String::new, |note| format!(" ({note})"))
                 ));
             }
             return Ok(lines.join("\n"));
@@ -296,6 +400,28 @@ impl AgentControl {
                 }
                 if let Some(ask) = &args.ask {
                     too_long("ask", ask, TEXT_MAX)?;
+                }
+                if let Some(wait) = &args.wait {
+                    too_long("wait", wait, TEXT_MAX)?;
+                }
+                let asks = args.asks.as_deref().unwrap_or(&[]);
+                if asks.len() > DECISIONS_MAX {
+                    return fail(format!("asks takes up to {DECISIONS_MAX} questions."));
+                }
+                for ask in asks {
+                    if ask.question.trim().is_empty() {
+                        return fail("Each of asks needs its question.");
+                    }
+                    too_long("A question of asks", &ask.question, DECISION_MAX)?;
+                    if ask.options.len() > OPTIONS_MAX {
+                        return fail(format!("A question takes up to {OPTIONS_MAX} options."));
+                    }
+                    if ask
+                        .recommended
+                        .is_some_and(|index| index as usize >= ask.options.len())
+                    {
+                        return fail("recommended is not one of that question's options.");
+                    }
                 }
                 if let Some(status) = &args.status
                     && !STATUSES.contains(&status.as_str())
@@ -358,27 +484,68 @@ impl AgentControl {
         };
         let Some(changed) = self.items().change(&found.id, |item| {
             let before = item.status.clone();
+            let mut note: Option<String> = None;
             match action {
                 "set" => {
                     if let Some(title) = args
                         .title
                         .as_deref()
                         .map(str::trim)
-                        .filter(|t| !t.is_empty())
+                        .filter(|t| !t.is_empty() && *t != item.title)
                     {
-                        item.title = title.to_owned();
+                        let was = std::mem::replace(&mut item.title, title.to_owned());
+                        edited(item, &at, "title", Some(was), Some(title.to_owned()));
                     }
                     if let Some(description) = &args.description {
-                        item.description = Some(description.clone()).filter(|d| !d.is_empty());
+                        let next = Some(description.clone()).filter(|d| !d.is_empty());
+                        if next != item.description {
+                            let was = std::mem::replace(&mut item.description, next.clone());
+                            edited(item, &at, "description", was, next);
+                        }
                     }
                     if let Some(done) = &args.done_means {
-                        item.done_means = Some(done.clone()).filter(|d| !d.is_empty());
+                        let next = Some(done.clone()).filter(|d| !d.is_empty());
+                        if next != item.done_means {
+                            let was = std::mem::replace(&mut item.done_means, next.clone());
+                            edited(item, &at, "doneMeans", was, next);
+                        }
                     }
-                    if let Some(ask) = args.ask.as_deref().filter(|ask| !ask.trim().is_empty()) {
+                    let decisions: Vec<ItemDecision> = args
+                        .asks
+                        .iter()
+                        .flatten()
+                        .map(|ask| ItemDecision {
+                            question: ask.question.trim().to_owned(),
+                            options: ask.options.clone(),
+                            recommended: ask.recommended,
+                            multi: ask.multi,
+                        })
+                        .collect();
+                    let context = args
+                        .ask
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|ask| !ask.is_empty());
+                    if context.is_some() || !decisions.is_empty() {
+                        let text = context.unwrap_or("").to_owned();
+                        let words = if decisions.is_empty() {
+                            text.clone()
+                        } else {
+                            ask_words(&text, &decisions)
+                        };
+                        item.event(&at, "bot", "asked", Some(&words));
+                        let single = decisions.is_empty();
+                        // A new ask gets the id of its event as the store saves it.
                         item.question = Some(ItemQuestion {
-                            text: ask.to_owned(),
-                            options: args.options.clone().unwrap_or_default(),
-                            recommended: args.recommended,
+                            text,
+                            options: if single {
+                                args.options.clone().unwrap_or_default()
+                            } else {
+                                Vec::new()
+                            },
+                            recommended: if single { args.recommended } else { None },
+                            id: 0,
+                            decisions,
                         });
                         item.status = "needs_you".to_owned();
                     } else if let Some(question) = item.question.as_mut() {
@@ -394,7 +561,9 @@ impl AgentControl {
                         item.wait = Some(ItemWait {
                             text: wait.to_owned(),
                             until: args.until.clone().filter(|until| !until.is_empty()),
+                            at: Some(at.clone()),
                         });
+                        note = Some(wait.to_owned());
                         if args.status.is_none() {
                             item.status = "waiting".to_owned();
                         }
@@ -403,15 +572,27 @@ impl AgentControl {
                         item.status = status.clone();
                     }
                     if let Some(snooze) = &args.snooze_until {
-                        item.snoozed_until = Some(snooze.clone()).filter(|s| !s.is_empty());
-                        item.event(&at, "bot", "snoozed", item.snoozed_until.clone().as_deref());
+                        let until = Some(snooze.clone()).filter(|s| !s.is_empty());
+                        if until != item.snoozed_until {
+                            item.snoozed_until = until.clone();
+                            match until {
+                                Some(until) => {
+                                    item.event(&at, "bot", "snoozed", Some(&until));
+                                }
+                                None => {
+                                    item.event(&at, "bot", "unsnoozed", None);
+                                }
+                            }
+                        }
                     }
-                    item.event(&at, "bot", "edited", None);
                 }
-                "comment" => item.event(&at, "bot", "commented", args.text.as_deref()),
+                "comment" => {
+                    item.event(&at, "bot", "commented", args.text.as_deref());
+                }
                 "done" | "cancel" => {
                     item.status = if action == "done" { "done" } else { "canceled" }.to_owned();
                     item.close_note = args.note.clone().filter(|note| !note.is_empty());
+                    note = item.close_note.clone();
                 }
                 "link" => {
                     let (kind, target) = if let Some(session) = &session_link {
@@ -438,7 +619,7 @@ impl AgentControl {
                 }
                 _ => {}
             }
-            settle_status(item, &before, &at, now, "bot");
+            settle_status(item, &before, &at, now, "bot", note.as_deref());
             item.version += 1;
             item.updated_at = at.clone();
             item.touched = now;
@@ -462,134 +643,315 @@ impl AgentControl {
         tokio::spawn(async move { control.bots_tick().await });
     }
 
-    /// The owner's change to an item (`BotsRequest` `item`): mailed once to the item's chat, an answer as a turn.
-    pub(crate) async fn owner_item(&self, request: &Value) -> R<()> {
-        let id = request.get("id").and_then(Value::as_str).unwrap_or("");
+    /// The owner opened a bot's Items tab (`BotsRequest` `itemsOpened`): what its items hold now is seen.
+    pub(crate) fn items_opened(&self, bot: &str) -> R<()> {
+        let bot = self.bot_named(bot)?;
+        let newest = self.items().newest_event(&bot.id);
+        if newest > bot.items_seen {
+            self.bots()
+                .change(&bot.id, |record| record.items_seen = newest);
+            self.bots_changed();
+        }
+        Ok(())
+    }
+
+    /// A session an item links reported to its opener that it is done or blocked: the item's Activity says so.
+    pub(crate) fn item_worker_report(&self, caller: &ControlTab, kind: &str, text: &str) {
+        let path = caller.session_path.clone().filter(|path| !path.is_empty());
+        let mut targets = vec![caller.tab_id.as_str()];
+        if let Some(path) = path.as_deref() {
+            targets.push(path);
+        }
+        let ids = self.items().linking(&targets);
+        if ids.is_empty() {
+            return;
+        }
         let now = self.now();
         let at = iso(now.max(0.0) as u64);
-        // A change to an item that is gone mails nothing and asks nothing.
-        let Some(found) = self.items().get(id).cloned() else {
-            return Ok(());
+        let subject = cut(
+            text.lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or(""),
+            240,
+        );
+        let link = path.unwrap_or_else(|| caller.tab_id.clone());
+        for id in ids {
+            self.items().change(&id, |item| {
+                let event = item.event(
+                    &at,
+                    "bot",
+                    "worker",
+                    Some(subject.as_str()).filter(|subject| !subject.is_empty()),
+                );
+                event.link = Some(link.clone());
+                event.state = Some(kind.to_owned());
+                item.version += 1;
+                item.updated_at = at.clone();
+                item.touched = now;
+            });
+        }
+        self.items_changed();
+    }
+
+    /// The owner's change to one item (`id`) or several (`ids`), `BotsRequest` `item`: mailed once to each item's
+    /// chat, an answer as a turn. Answers `question_changed` when an answer names a question the bot replaced.
+    pub(crate) async fn owner_item(&self, request: &Value) -> R<Option<&'static str>> {
+        let ids: Vec<String> = match request.get("ids").and_then(Value::as_array) {
+            Some(ids) => ids
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect(),
+            None => request
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .into_iter()
+                .collect(),
         };
-        let status = request
-            .get("status")
-            .and_then(Value::as_str)
-            .filter(|status| STATUSES.contains(status) && *status != found.status)
-            .map(str::to_owned);
-        let answer: Option<String> = request.get("answer").and_then(|answer| {
-            let picked = answer
-                .get("choice")
-                .and_then(Value::as_u64)
-                .and_then(|choice| {
-                    found
-                        .question
-                        .as_ref()?
-                        .options
-                        .get(choice as usize)
-                        .cloned()
-                });
-            let written = answer
-                .get("text")
+        let now = self.now();
+        let at = iso(now.max(0.0) as u64);
+        let text_of = |key: &str, max: usize| {
+            request
+                .get(key)
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|text| !text.is_empty())
-                .map(|text| text.chars().take(TEXT_MAX).collect::<String>());
-            match (picked, written) {
-                (Some(picked), Some(written)) => Some(format!("{picked} — {written}")),
-                (picked, written) => picked.or(written),
-            }
-        });
-        let answer = answer.filter(|_| found.question.is_some());
-        let comment = request
-            .get("comment")
+                .map(|text| cut(text, max))
+        };
+        let comment = text_of("comment", TEXT_MAX);
+        let note = text_of("note", TEXT_MAX);
+        let wait = text_of("wait", WAIT_MAX);
+        let request_id = text_of("requestId", 200);
+        let asked_status = request
+            .get("status")
             .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(|text| text.chars().take(TEXT_MAX).collect::<String>());
+            .filter(|status| STATUSES.contains(status))
+            .map(str::to_owned)
+            .or_else(|| wait.as_ref().map(|_| "waiting".to_owned()));
         let snooze: Option<Option<String>> = match request.get("snoozeUntil") {
             Some(Value::Null) => Some(None),
             Some(Value::String(until)) if parse_iso(until).is_some() => Some(Some(until.clone())),
             _ => None,
-        }
-        .filter(|snooze| *snooze != found.snoozed_until);
-        // An empty change: no version, no event, no mail.
-        if status.is_none() && answer.is_none() && comment.is_none() && snooze.is_none() {
-            return Ok(());
-        }
-        let Some(changed) = self.items().change(id, |item| {
-            let before = item.status.clone();
-            if let Some(answer) = &answer {
-                item.event(&at, "owner", "answered", Some(answer));
-                item.question = None;
-                if status.is_none() && item.status == "needs_you" {
-                    item.status = "working".to_owned();
+        };
+        let named = request
+            .get("answer")
+            .and_then(|answer| answer.get("question"))
+            .and_then(Value::as_u64);
+        // Per chat: its lines, the first change's mail id, whether one is an answer.
+        let mut mails: Vec<(String, Vec<String>, String, bool)> = Vec::new();
+        let mut refused: Option<&'static str> = None;
+        let mut changed_any = false;
+        for id in &ids {
+            // A change to an item that is gone mails nothing and asks nothing.
+            let Some(found) = self.items().get(id).cloned() else {
+                continue;
+            };
+            if request_id
+                .as_deref()
+                .is_some_and(|request| found.has_request(request))
+            {
+                continue;
+            }
+            let answer: Option<String> = request.get("answer").and_then(|answer| {
+                let picked = answer
+                    .get("choice")
+                    .and_then(Value::as_u64)
+                    .and_then(|choice| {
+                        found
+                            .question
+                            .as_ref()?
+                            .options
+                            .get(choice as usize)
+                            .cloned()
+                    });
+                let written = answer
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(|text| cut(text, TEXT_MAX));
+                match (picked, written) {
+                    (Some(picked), Some(written)) => Some(format!("{picked} — {written}")),
+                    (picked, written) => picked.or(written),
                 }
+            });
+            let (answer, comment) = match (answer, &found.question) {
+                (Some(answer), Some(question))
+                    if named.is_none_or(|named| named == question.id) =>
+                {
+                    (Some(answer), comment.clone())
+                }
+                // The bot asked another question since: nothing is written, the owner reads it first.
+                (Some(_), Some(_)) => {
+                    refused = Some(QUESTION_CHANGED);
+                    continue;
+                }
+                // Nothing waits on an answer any more: the words stay as a comment.
+                (Some(answer), None) => (
+                    None,
+                    Some(match &comment {
+                        Some(comment) => format!("{answer}\n\n{comment}"),
+                        None => answer,
+                    }),
+                ),
+                (None, _) => (None, comment.clone()),
+            };
+            // Waiting again on a Waiting item edits what it waits on.
+            let status = asked_status.clone().filter(|status| {
+                *status != found.status || (status == "waiting" && wait.is_some())
+            });
+            let snooze = snooze
+                .clone()
+                .filter(|snooze| *snooze != found.snoozed_until);
+            // An empty change: no version, no event, no mail.
+            if status.is_none() && answer.is_none() && comment.is_none() && snooze.is_none() {
+                continue;
+            }
+            let Some(changed) = self.items().change(id, |item| {
+                let before = item.status.clone();
+                if let Some(answer) = &answer {
+                    let question = item.question.as_ref().map(|question| question.id);
+                    let event = item.event(&at, "owner", "answered", Some(answer));
+                    event.question = question;
+                    event.request = request_id.clone();
+                    item.question = None;
+                    if status.is_none() && item.status == "needs_you" {
+                        item.status = "working".to_owned();
+                    }
+                }
+                if let Some(status) = &status {
+                    if status == "waiting"
+                        && let Some(wait) = &wait
+                    {
+                        item.wait = Some(ItemWait {
+                            text: wait.clone(),
+                            until: None,
+                            at: Some(at.clone()),
+                        });
+                        if before == "waiting" {
+                            let event = item.event(&at, "owner", "status", Some("waiting"));
+                            event.from = Some(before.clone());
+                            event.note = Some(wait.clone());
+                        }
+                    }
+                    item.status = status.clone();
+                }
+                if let Some(comment) = &comment {
+                    item.event(&at, "owner", "commented", Some(comment)).request =
+                        request_id.clone();
+                }
+                if let Some(snooze) = &snooze {
+                    let early = item.snoozed(now);
+                    item.snoozed_until = snooze.clone();
+                    match snooze {
+                        Some(until) => {
+                            item.event(&at, "owner", "snoozed", Some(until));
+                        }
+                        None if early => {
+                            item.event(&at, "owner", "unsnoozed", None);
+                        }
+                        None => {}
+                    }
+                }
+                let why = if item.status == "waiting" {
+                    wait.as_deref()
+                } else {
+                    note.as_deref()
+                };
+                settle_status(item, &before, &at, now, "owner", why);
+                item.version += 1;
+                item.updated_at = at.clone();
+                item.touched = now;
+                if !item.is_open() && item.close_note.is_none() {
+                    item.close_note = note.clone().or_else(|| comment.clone());
+                }
+            }) else {
+                continue;
+            };
+            changed_any = true;
+            if !changed.is_open()
+                && is_open(&found.status)
+                && let Some(bot) = self.bots().find(&changed.bot).cloned()
+            {
+                journal_line(Path::new(&bot.folder), &changed, &at);
+            }
+            let mut lines: Vec<String> = Vec::new();
+            if let Some(answer) = &answer {
+                lines.push(format!("The owner answered: {answer}"));
             }
             if let Some(status) = &status {
-                item.status = status.clone();
+                lines.push(match (status.as_str(), wait.as_deref(), note.as_deref()) {
+                    ("waiting", Some(wait), _) => {
+                        format!("The owner set it to waiting on: {wait}.")
+                    }
+                    (_, _, Some(note)) => format!("The owner set it to {status}: {note}"),
+                    _ => format!("The owner set it to {status}."),
+                });
             }
             if let Some(comment) = &comment {
-                item.event(&at, "owner", "commented", Some(comment));
+                lines.push(format!("The owner commented: {comment}"));
             }
-            if let Some(snooze) = &snooze {
-                item.snoozed_until = snooze.clone();
-                item.event(&at, "owner", "snoozed", snooze.as_deref());
+            // A snooze alone mails nobody: the item keeps its status (Orca's `BotItemSnooze.tsx`).
+            if lines.is_empty() {
+                continue;
             }
-            settle_status(item, &before, &at, now, "owner");
-            item.version += 1;
-            item.updated_at = at.clone();
-            item.touched = now;
-            if !item.is_open() && item.close_note.is_none() {
-                item.close_note = comment.clone();
-            }
-        }) else {
-            return Ok(());
-        };
-        if !changed.is_open()
-            && is_open(&found.status)
-            && let Some(bot) = self.bots().find(&changed.bot).cloned()
-        {
-            journal_line(Path::new(&bot.folder), &changed, &at);
-        }
-        let mut lines: Vec<String> = Vec::new();
-        if let Some(answer) = &answer {
-            lines.push(format!("The owner answered: {answer}"));
-        }
-        if let Some(status) = &status {
-            lines.push(format!("The owner set it to {status}."));
-        }
-        if let Some(comment) = &comment {
-            lines.push(format!("The owner commented: {comment}"));
-        }
-        if let Some(snooze) = &snooze {
-            lines.push(match snooze {
-                Some(until) => format!("The owner snoozed it until {until}."),
-                None => "The owner woke it from its snooze.".to_owned(),
-            });
-        }
-        let text = format!(
-            "Item #{} “{}” [{}]: {}",
-            changed.number,
-            changed.title,
-            changed.status,
-            lines.join(" ")
-        );
-        let mail_id = format!("item-{}-v{}", changed.id, changed.version);
-        let kind = if answer.is_some() {
-            MailKind::Question
-        } else {
-            MailKind::Note
-        };
-        let mut mail = Mail::new(&mail_id, "ompdesk", "the owner", "", kind, &text, now);
-        if answer.is_some() {
-            mail.instruction = Some(
-                "The owner answered your item's question: go on with the item now.".to_owned(),
+            let line = format!(
+                "Item #{} “{}” [{}]: {}",
+                changed.number,
+                changed.title,
+                changed.status,
+                lines.join(" ")
             );
+            match mails
+                .iter_mut()
+                .find(|(session, ..)| *session == changed.session)
+            {
+                Some((_, lines, _, answered)) => {
+                    lines.push(line);
+                    *answered |= answer.is_some();
+                }
+                None => mails.push((
+                    changed.session.clone(),
+                    vec![line],
+                    format!("item-{}-v{}", changed.id, changed.version),
+                    answer.is_some(),
+                )),
+            }
         }
-        self.mail_session(&changed.session, mail, answer.is_some())
-            .await;
-        self.items_changed();
-        Ok(())
+        for (session, lines, id, answered) in mails {
+            // Several items in one move are one mail, named by its first change and how many it holds.
+            let id = if lines.len() > 1 {
+                format!("{id}+{}", lines.len())
+            } else {
+                id
+            };
+            let kind = if answered {
+                MailKind::Question
+            } else {
+                MailKind::Note
+            };
+            let mut mail = Mail::new(
+                &id,
+                "ompdesk",
+                "the owner",
+                "",
+                kind,
+                &lines.join("\n"),
+                now,
+            );
+            if answered {
+                mail.instruction = Some(
+                    "The owner answered your item's question: go on with the item now.".to_owned(),
+                );
+            }
+            self.mail_session(&session, mail, answered).await;
+        }
+        if changed_any {
+            self.items_changed();
+        }
+        Ok(refused)
     }
 
     /// `ompdesk_session_open {item}` from a bot's chat: each child it opened is linked to the item, and a planned
@@ -604,6 +966,7 @@ impl AgentControl {
         let now = self.now();
         let at = iso(now.max(0.0) as u64);
         self.items().change(&found.id, |item| {
+            let before = item.status.clone();
             if !item
                 .links
                 .iter()
@@ -618,8 +981,8 @@ impl AgentControl {
             item.event(&at, "bot", "linked", Some(child_tab));
             if item.status == "planned" {
                 item.status = "working".to_owned();
-                item.event(&at, "bot", "status", Some("working"));
             }
+            settle_status(item, &before, &at, now, "bot", None);
             item.version += 1;
             item.updated_at = at.clone();
             item.touched = now;
@@ -629,11 +992,22 @@ impl AgentControl {
     }
 }
 
-/// After a change: a closed item records when it closed, a reopened one forgets it, and an item that no longer asks
-/// drops its question.
-fn settle_status(item: &mut ItemRecord, before: &str, at: &str, now: f64, actor: &str) {
+/// After a change: a status change is recorded with what it left and why, a closed item records when it closed, a
+/// reopened one forgets it, an item that no longer asks drops its question (and one no longer waiting its wait), and
+/// a close or a new question ends a snooze early.
+fn settle_status(
+    item: &mut ItemRecord,
+    before: &str,
+    at: &str,
+    now: f64,
+    actor: &str,
+    note: Option<&str>,
+) {
     if item.status != before {
-        item.event(at, actor, "status", Some(&item.status.clone()));
+        let to = item.status.clone();
+        let event = item.event(at, actor, "status", Some(&to));
+        event.from = Some(before.to_owned());
+        event.note = note.map(str::to_owned);
     }
     if item.is_open() {
         item.closed = None;
@@ -647,6 +1021,13 @@ fn settle_status(item: &mut ItemRecord, before: &str, at: &str, now: f64, actor:
     }
     if item.status != "waiting" {
         item.wait = None;
+    }
+    let ends_snooze = !item.is_open() || (item.status == "needs_you" && before != "needs_you");
+    if ends_snooze
+        && let Some(until) = item.snoozed_until.take()
+        && parse_iso(&until).is_some_and(|until| until > now)
+    {
+        item.event(at, actor, "unsnoozed", None).early = true;
     }
 }
 

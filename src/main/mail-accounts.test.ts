@@ -5,8 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ipcErrorCode } from "../shared/ipc-error-codes";
 import { KEYCHAIN_WOULD_ASK } from "../shared/keychain";
 import type { MailAccountDraft } from "../shared/mail-accounts";
-import { MailAccounts, type SecretBox } from "./mail-accounts";
+import { MailAccounts } from "./mail-accounts";
 import { type FakeImap, startFakeImap } from "./routines/fake-imap";
+import type { SecretBox } from "./secret-files";
 import { createSafeStorage } from "./shell-host/electron/safe-storage";
 
 /** A keystore that marks what it sealed, so a test can tell a sealed password from a plain one. */

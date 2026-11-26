@@ -58,6 +58,7 @@ import {
 	transcriptRunStart,
 } from "../../resources/gui-bridge/transcript-page";
 import { GuiBridgeClient } from "../../src/main/bridge-client";
+import { STRESS_PROMPT, stressReplyText } from "../../src/renderer/dev-harness/fixture";
 import { blockedAccountUsage } from "../../src/renderer/dev-harness/fixture-usage";
 import { REPLY_SHOWCASE } from "../../src/renderer/dev-harness/reply-showcase";
 import type {
@@ -82,6 +83,20 @@ const E2E_DIR = nodePath.dirname(import.meta.dir);
  * plays op by op with its own text, so the README clips show a natural prompt and answer instead of a fixture phrase.
  */
 const README_SCENE = process.env.OMP_GUI_README_SCENE === "1";
+
+/**
+ * `OMP_GUI_TEST_PREVIEW_START=1` (the `preview-start` parity surface): this omp starts a dev server, as an agent's
+ * `bun run dev` would, so the Preview's start page lists the session's port. It is a child of this omp (it carries the
+ * tab's tag, `procs.ports`) and ends when this omp is gone.
+ */
+function startDevServer(): void {
+	const server = `const http = require("node:http");
+const page = "<!doctype html><title>Fixture app</title><h1>Fixture app</h1><p>Served by the session's dev server.</p>";
+http.createServer((_req, res) => { res.setHeader("content-type", "text/html"); res.end(page); }).listen(0, "127.0.0.1");
+const parent = ${process.pid};
+setInterval(() => { try { process.kill(parent, 0); } catch { process.exit(0); } }, 500);`;
+	spawn(process.execPath, ["-e", server], { stdio: "ignore", windowsHide: true }).unref();
+}
 
 /**
  * The fake omp's `--mode rpc-ui`: stock RPC on stdin/stdout, plus the gui-bridge extension's socket (loaded
@@ -4816,6 +4831,74 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			appendMessage(answer);
 			write({ type: "message_end", message: answer });
 			endTurn([user, call, ...results, answer]);
+		} else if (message === "fixture bot cards") {
+			// A bot's chat cards (FC70, FC71, FC76): it offers a new bot, asks the parity bot something and adds an MCP
+			// server that needs a sign-in; each call ends as stock's host tools answer them.
+			const steps = [
+				{
+					id: "fixture-bot-offer",
+					name: "ompdesk_bot",
+					args: {
+						action: "offer",
+						name: "Release watch",
+						text: "Watches the release branch and says what broke.",
+					},
+					text: "Offered the bot Release watch: the owner sees a card with Create bot in this chat.",
+				},
+				{
+					id: "fixture-bot-ask",
+					name: "ompdesk_session_send",
+					args: { session: "bot:Parity bot", message: "Which surfaces changed since yesterday?" },
+					text: "Sent to the bot Parity bot's home chat.",
+				},
+				{
+					id: "fixture-bot-tool",
+					name: "ompdesk_app",
+					args: {
+						action: "extensions.install_mcp",
+						args: { name: "tracker", transport: "http", url: "https://mcp.example.test" },
+					},
+					text: 'Added the MCP server tracker. It needs a sign-in: run extensions.mcp_sign_in with name "tracker".',
+				},
+			];
+			const call: AgentMessage = {
+				role: "assistant",
+				timestamp: Date.now(),
+				content: steps.map(step => ({ type: "toolCall", id: step.id, name: step.name, arguments: step.args })),
+				provider: model.provider,
+				model: model.id,
+				stopReason: "toolUse",
+			};
+			write({ type: "message_start", message: call });
+			appendMessage(call);
+			write({ type: "message_end", message: call });
+			const results: AgentMessage[] = steps.map(step => {
+				const result = { content: [{ type: "text" as const, text: step.text }] };
+				write({ type: "tool_execution_start", toolCallId: step.id, toolName: step.name, args: step.args });
+				write({ type: "tool_execution_end", toolCallId: step.id, toolName: step.name, result, isError: false });
+				const entry: AgentMessage = {
+					role: "toolResult",
+					toolCallId: step.id,
+					toolName: step.name,
+					...result,
+					isError: false,
+					timestamp: Date.now(),
+				};
+				appendMessage(entry);
+				write({ type: "message_end", message: entry });
+				return entry;
+			});
+			const answer: AgentMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "Offered Release watch, asked Parity bot and added the tracker." }],
+				timestamp: Date.now(),
+				provider: model.provider,
+				model: model.id,
+				stopReason: "stop",
+			};
+			appendMessage(answer);
+			write({ type: "message_end", message: answer });
+			endTurn([user, call, ...results, answer]);
 		} else if (message === "fixture subagent screenshots") {
 			// A subagent reads two PNGs back. Its transcript comes from its JSONL the way
 			// stock serves it: image bytes persisted as `blob:sha256:` references. One
@@ -5330,6 +5413,67 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				write({ type: "message_end", message: entry });
 			}
 			endTurn([user, note, answer]);
+		} else if (message === "fixture schedule card") {
+			// An agent's `ompdesk_schedule` create of a webhook routine, answered with the core's webhook line (parity
+			// `reply-schedule-card`: the transcript's schedule card shows the path, never the key).
+			const id = `schedule-card-${Date.now()}`;
+			const name = "ompdesk_schedule";
+			const args = {
+				action: "create",
+				name: "Deploy hook",
+				prompt: "Deploy what the call names",
+				on: { source: "webhook" },
+			};
+			const call: AgentMessage = {
+				role: "assistant",
+				content: [{ type: "toolCall", id, name, arguments: args }],
+				timestamp: Date.now(),
+				provider: model.provider,
+				model: model.id,
+				stopReason: "toolUse",
+			};
+			appendMessage(call);
+			write({ type: "message_start", message: call });
+			write({ type: "message_end", message: call });
+			write({ type: "tool_execution_start", toolCallId: id, toolName: name, args });
+			setTimeout(() => {
+				const content = [
+					{
+						type: "text" as const,
+						text: 'Scheduled “[agent] Deploy hook” on a webhook call in this folder on this computer; id parity-hook; waits for its event. Webhook: POST /hooks/parity-hook on that computer\'s OMPdesk web server (on while Mobile web is on: http://127.0.0.1:<its port> there, or its Mobile web link from the tailnet) with the header "Authorization: Bearer parity-key-0123456789abcdef"; the request body is passed to the run.',
+					},
+				];
+				const result: AgentMessage = {
+					role: "toolResult",
+					toolCallId: id,
+					toolName: name,
+					content,
+					details: {},
+					isError: false,
+					timestamp: Date.now(),
+				};
+				write({
+					type: "tool_execution_end",
+					toolCallId: id,
+					toolName: name,
+					result: { content, details: {} },
+					isError: false,
+				});
+				appendMessage(result);
+				write({ type: "message_end", message: result });
+				const answer: AgentMessage = {
+					role: "assistant",
+					content: [{ type: "text", text: "Webhook routine saved." }],
+					timestamp: Date.now(),
+					provider: model.provider,
+					model: model.id,
+					stopReason: "stop",
+				};
+				appendMessage(answer);
+				write({ type: "message_start", message: answer });
+				write({ type: "message_end", message: answer });
+				endTurn([user, call, result, answer]);
+			}, 250);
 		} else if (message === "fixture agent-desktop") {
 			// agent-desktop's MCP tools as stock hands them to the transcript: `mcp__agent_desktop_desktop_<command>`
 			// calls whose text block is the JSON envelope (again as `details.structuredContent`, image bytes left out).
@@ -6149,27 +6293,29 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 									? replyMedia()
 									: message === "fixture reply components"
 										? REPLY_SHOWCASE
-										: message === "fixture math"
-											? MATH_REPLY
-											: message === "fixture image"
-												? "Here is the chart:\n\n![chart](pixel.png)"
-												: message === "fixture svg"
-													? SVG_REPLY
-													: message === "fixture figures"
-														? FIGURES_REPLY
-														: message === "fixture svg viewbox"
-															? SVG_VIEWBOX_REPLY
-															: message === "fixture markdown"
-																? MARKDOWN_REPLY
-																: message === "fixture paths"
-																	? PATHS_REPLY
-																	: message === "fixture reply actions"
-																		? ACTIONS_REPLY
-																		: message === "fixture documents"
-																			? DOCUMENTS_REPLY
-																			: message.startsWith("Parity turn ")
-																				? `Answer to ${message}`
-																				: `Local fixture reply${message.includes("fixture:result-ok") ? "\nResult: ok" : message.includes("fixture:result-problem") ? "\nResult: problem — tests failed" : ""}`,
+										: message === STRESS_PROMPT
+											? stressReplyText()
+											: message === "fixture math"
+												? MATH_REPLY
+												: message === "fixture image"
+													? "Here is the chart:\n\n![chart](pixel.png)"
+													: message === "fixture svg"
+														? SVG_REPLY
+														: message === "fixture figures"
+															? FIGURES_REPLY
+															: message === "fixture svg viewbox"
+																? SVG_VIEWBOX_REPLY
+																: message === "fixture markdown"
+																	? MARKDOWN_REPLY
+																	: message === "fixture paths"
+																		? PATHS_REPLY
+																		: message === "fixture reply actions"
+																			? ACTIONS_REPLY
+																			: message === "fixture documents"
+																				? DOCUMENTS_REPLY
+																				: message.startsWith("Parity turn ")
+																					? `Answer to ${message}`
+																					: `Local fixture reply${message.includes("fixture:result-ok") ? "\nResult: ok" : message.includes("fixture:result-problem") ? "\nResult: problem — tests failed" : ""}`,
 					},
 				],
 				timestamp: Date.now(),
@@ -7667,6 +7813,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			maxFrameBytes: MAX_FRAME_BYTES,
 			maxReassembledFrameBytes: MAX_REASSEMBLED_BYTES,
 		});
+		if (process.env.OMP_GUI_TEST_PREVIEW_START === "1") startDevServer();
 		createInterface({ input: process.stdin })
 			.on("line", line => handleCommand(JSON.parse(line)))
 			// Like stock rpc mode: the host closing stdin ends the process (a running stream timer would not), and a

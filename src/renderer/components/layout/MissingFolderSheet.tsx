@@ -1,9 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import { useSessionList } from "../../hooks/use-session-list";
 import { useShellMode } from "../../hooks/use-shell-mode";
 import { useT } from "../../lib/i18n";
 import { sessionDisplayTitle } from "../../lib/session-title";
-import { readTranscriptSnapshot } from "../../lib/transcript-snapshot";
 import { useHostView } from "../../stores/remote";
 import { useSidebarPrefs } from "../../stores/sidebar-prefs";
 import { useProjectList, useSidebarProjects } from "../../stores/sidebar-projects";
@@ -12,46 +10,7 @@ import { toastError } from "../../stores/toast";
 import type { MissingFolderRequest } from "../../stores/ui";
 import { Banner, Button, PanelErrorBoundary, Sheet } from "../common";
 import { SubagentTranscript } from "../panels/SubagentTranscript";
-import type { SubagentTranscriptState } from "../panels/use-subagent-transcript";
-
-/**
- * A stored session's transcript with no omp behind it (`sessions.messages`: this computer's journal, or the paired
- * host's). It paints the last transcript this computer kept of the session at once when it has one (the snapshot of a
- * tab that showed it; a first visit, or a host's session never opened here, shows the transcript's static skeleton) and
- * replaces it in place with the read.
- */
-function useStoredTranscript(sessionPath: string, device: string | undefined): SubagentTranscriptState {
-	const [state, setState] = useState(() => ({
-		messages: readTranscriptSnapshot({ sessionPath, ...(device === undefined ? {} : { device }) })?.messages ?? [],
-		loading: true,
-		error: null as string | null,
-	}));
-	const generation = useRef(0);
-	const load = useCallback(() => {
-		const mine = ++generation.current;
-		setState(prev => (prev.error === null ? prev : { ...prev, loading: true, error: null }));
-		window.omp.sessions.messages(sessionPath, device).then(
-			messages => {
-				if (mine === generation.current) setState({ messages, loading: false, error: null });
-			},
-			cause => {
-				if (mine === generation.current)
-					setState(prev => ({
-						...prev,
-						loading: false,
-						error: cause instanceof Error ? cause.message : String(cause),
-					}));
-			},
-		);
-	}, [sessionPath, device]);
-	useEffect(() => {
-		load();
-		return () => {
-			generation.current++;
-		};
-	}, [load]);
-	return { ...state, busy: false, hasMore: false, loadMore: () => undefined, reload: load };
-}
+import { useStoredTranscript } from "../panels/use-stored-transcript";
 
 /**
  * The sheet a click on a stored session whose folder is gone opens instead of resuming work there (main refuses the
@@ -117,14 +76,28 @@ export function MissingFolderSheet({
 						{t("missingFolder.restore")}
 					</Button>
 				) : (
-					<Button
-						data-missing-folder-archive
-						disabled={!canArchive}
-						onClick={() => void archive()}
-						variant="primary"
-					>
-						{t("missingFolder.archive")}
-					</Button>
+					<>
+						<Button
+							data-missing-folder-locate
+							onClick={() =>
+								void import("../../lib/relocate-folder")
+									.then(module => module.relocateFolder({ device, from: folder, sessions }))
+									.then(moved => moved && onClose())
+									.catch((error: unknown) => toastError({ title: t("sidebar.project.addFailed"), error }))
+							}
+							variant="secondary"
+						>
+							{t("sidebar.menu.locateFolder")}
+						</Button>
+						<Button
+							data-missing-folder-archive
+							disabled={!canArchive}
+							onClick={() => void archive()}
+							variant="primary"
+						>
+							{t("missingFolder.archive")}
+						</Button>
+					</>
 				)
 			}
 			onClose={onClose}

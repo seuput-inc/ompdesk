@@ -30,7 +30,11 @@ import { useSessionStore } from "../../stores/session";
 import { useTabsStore } from "../../stores/tabs";
 import { type PageDestination, setSidebarDrawerMode, useUiStore } from "../../stores/ui";
 import { webRuntime } from "../../web/runtime";
+import { preloadPromptList } from "../chat/ConversationNavigator";
+import { preloadTranscriptFind } from "../chat/TranscriptFind";
 import { Button, IconButton, Skeleton, Tooltip } from "../common";
+import { useFirstVisitTour } from "../onboarding/surface-tours";
+import { preloadComposerExtras } from "./composer/composer-extras";
 import { PanelContainer, preloadPanelViews } from "./PanelContainer";
 import { EdgeSwipeZone, SidebarDrawer } from "./SidebarDrawer";
 import { StatusBar } from "./status-bar/StatusBar";
@@ -48,7 +52,10 @@ import { ViewSheetHost } from "./ViewSheetHost";
 import { WhatsNewCard } from "./WhatsNewCard";
 
 const AgentsPage = lazyChunk(() => import("../agents/AgentsPage").then(m => ({ default: m.AgentsPage })));
+const BoardPage = lazyChunk(() => import("../board/BoardPage").then(m => ({ default: m.BoardPage })));
 const BotsPage = lazyChunk(() => import("../bots/BotsPage").then(m => ({ default: m.BotsPage })));
+// A tip row decides once per launch; its own chunk keeps it off a phone's first screen.
+const FeatureTipCard = lazyChunk(() => import("./FeatureTipCard").then(m => ({ default: m.FeatureTipCard })));
 const InsightsPage = lazyChunk(() => import("../insights/InsightsPage").then(m => ({ default: m.InsightsPage })));
 const SettingsPage = lazyChunk(() => import("../settings/SettingsPage").then(m => ({ default: m.SettingsPage })));
 /**
@@ -59,6 +66,7 @@ const SettingsPage = lazyChunk(() => import("../settings/SettingsPage").then(m =
 const loadedPages: Partial<Record<PageDestination, ComponentType>> = {};
 const PAGE_LOADERS: Record<PageDestination, () => Promise<ComponentType>> = {
 	agents: () => import("../agents/AgentsPage").then(m => m.AgentsPage),
+	board: () => import("../board/BoardPage").then(m => m.BoardPage),
 	bots: () => import("../bots/BotsPage").then(m => m.BotsPage),
 	insights: () => import("../insights/InsightsPage").then(m => m.InsightsPage),
 	settings: () => import("../settings/SettingsPage").then(m => m.SettingsPage),
@@ -80,11 +88,20 @@ function preloadForIntent(target: EventTarget | null): void {
 	const destination = element
 		?.closest(":is([data-sidebar-nav], [data-sidebar-destinations]) [data-destination]")
 		?.getAttribute("data-destination");
-	if (destination === "agents" || destination === "bots" || destination === "insights" || destination === "settings") {
+	if (
+		destination === "agents" ||
+		destination === "board" ||
+		destination === "bots" ||
+		destination === "insights" ||
+		destination === "settings"
+	) {
 		if (!loadedPages[destination]) void preloadPage(destination);
 		return;
 	}
 	if (element?.closest('[data-tour="panel"], [data-rail-pin]')) void preloadPanelViews();
+	// The composer's `@` sessions and paste links, before the first `@` or paste lands in it.
+	else if (element?.closest("[data-composer-input]")) void preloadComposerExtras();
+	else if (element?.closest("[data-prompt-list]")) void preloadPromptList();
 }
 /** How long a paired web page lets its first screen settle before the idle preloads start. */
 const WEB_PRELOAD_DELAY_MS = 5000;
@@ -93,6 +110,7 @@ const IDLE_PRELOAD_TIMEOUT_MS = 3000;
 
 const PAGE_LABEL_KEY: Record<PageDestination, string> = {
 	agents: "destination.agents",
+	board: "destination.board",
 	bots: "destination.bots",
 	insights: "destination.insights",
 	settings: "destination.settings",
@@ -109,7 +127,9 @@ function DestinationPage({ destination }: { destination: PageDestination }): Rea
 	const [Page] = useState<ComponentType>(
 		() =>
 			loadedPages[destination] ??
-			{ agents: AgentsPage, bots: BotsPage, insights: InsightsPage, settings: SettingsPage }[destination],
+			{ agents: AgentsPage, board: BoardPage, bots: BotsPage, insights: InsightsPage, settings: SettingsPage }[
+				destination
+			],
 	);
 	return (
 		<div className="omp-page-in flex min-h-0 flex-1 flex-col">
@@ -326,6 +346,8 @@ export function AppShell() {
 		});
 	}, [drawer]);
 	const onPage = destination !== "session";
+	// The shell's own tour: nav rows, search, sessions, status bar, side panel (on the session view).
+	useFirstVisitTour("shell", !onPage);
 	const panelOpen = !onPage && panelVisible;
 	const panelDocked = panelOpen && !compact;
 	// A closed panel stays mounted for its exit: a docked one slides out (`fast`), a sheet closes on its own (`med`).
@@ -369,6 +391,9 @@ export function AppShell() {
 					void (webRuntime()?.linkAnswered() ?? Promise.resolve()).then(() => {
 						for (const page of ["settings", "agents", "insights"] as const) void preloadPage(page);
 						void preloadPanelViews().catch(() => {});
+						void preloadComposerExtras();
+						void preloadTranscriptFind();
+						void preloadPromptList();
 					});
 				}, IDLE_PRELOAD_TIMEOUT_MS);
 			},
@@ -423,6 +448,9 @@ export function AppShell() {
 						<UpdateBanner />
 						<MailReentryNoticeGate />
 						<WhatsNewCard />
+						<Suspense fallback={null}>
+							<FeatureTipCard />
+						</Suspense>
 						<SplitWorkspace />
 					</div>
 					{onPage && (

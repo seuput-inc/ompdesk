@@ -22,6 +22,7 @@ mod draft;
 pub(crate) mod gate;
 mod json;
 mod pr;
+mod projects;
 mod review;
 
 use std::collections::BTreeMap;

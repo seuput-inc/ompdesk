@@ -1,32 +1,49 @@
 /**
- * The sidebar's nav rows (Orca's `SidebarNav`, the owner's decision of 25 Nov 2026): under the search line, one row per
- * place the app goes besides a session: Agents, Schedules, Bots (only while the bots feature is available,
- * `useBotsAvailable`), Stats and Phone (pairing a phone; not on the phone's own page). A row's right click (long press,
- * Shift+F10) hides it from this device's sidebar; Customize sidebar shows it again (`navHidden`, device-local).
+ * The sidebar's nav rows (Orca's `SidebarNav`, the owner's decision of 25 Nov 2026): under the search line, one cell per
+ * place the app goes besides a session: All sessions (the board, with how many sessions need the person and work now;
+ * Orca's dashboard entry), Agents, Schedules, Bots (only while the bots feature is available, `useBotsAvailable`), Stats
+ * and Phone (pairing a phone; not on the phone's own page). Two cells to a row (the owner's request, 26 Nov 2026), one
+ * per row in a sidebar under 260 px (sidebar.css); All sessions takes a whole row, its counts need the room. A
+ * half-width cell has no room for the Agents shortcut, so it is the cell's tooltip and `aria-keyshortcuts`. A cell's
+ * right click (long press, Shift+F10) hides it from this device's sidebar; Customize sidebar shows it again
+ * (`navHidden`, device-local).
  */
-import { BarChart3, Bot, BotMessageSquare, CalendarClock, type LucideIcon, Smartphone } from "lucide-react";
-import { type KeyboardEvent as ReactKeyboardEvent, useState } from "react";
+import { BarChart3, Bot, BotMessageSquare, CalendarClock, Columns3, type LucideIcon, Smartphone } from "lucide-react";
+import { type KeyboardEvent as ReactKeyboardEvent, Suspense, useState } from "react";
+import { useShellInput } from "../../../hooks/use-shell-mode";
 import { useBotsAvailable } from "../../../lib/bots-source";
+import { lazyChunk } from "../../../lib/chunk-load";
 import { cx } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
-import { actionKbd } from "../../../lib/keymap";
+import { actionKbd, ariaKeyShortcut } from "../../../lib/keymap";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { useUiStore } from "../../../stores/ui";
 import { webRuntime } from "../../../web/runtime";
-import { anchorFromEvent, Button, ContextMenu, type ContextMenuAnchor, Kbd } from "../../common";
+import { anchorFromEvent, Button, ContextMenu, type ContextMenuAnchor, Tooltip } from "../../common";
 
-export const SIDEBAR_NAV = ["agents", "schedules", "bots", "stats", "phone"] as const;
+// Its own chunk: the sidebar is on a phone's first screen, the figures are not needed for its first frame.
+const BoardNavCounts = lazyChunk(() =>
+	import("../../board/board-counts").then(module => ({ default: module.BoardNavCounts })),
+);
+
+export const SIDEBAR_NAV = ["board", "agents", "schedules", "bots", "stats", "phone"] as const;
 export type SidebarNavRow = (typeof SIDEBAR_NAV)[number];
 
 interface NavRowSpec {
 	labelKey: string;
 	icon: LucideIcon;
 	/** The `data-destination` a page row carries (AppShell preloads its page when a pointer reaches it). */
-	destination?: "agents" | "bots" | "insights";
+	destination?: "agents" | "board" | "bots" | "insights";
 	open: () => void;
 }
 
 export const SIDEBAR_NAV_ROWS: Record<SidebarNavRow, NavRowSpec> = {
+	board: {
+		labelKey: "destination.board",
+		icon: Columns3,
+		destination: "board",
+		open: () => useUiStore.getState().openBoard(),
+	},
 	agents: {
 		labelKey: "destination.agents",
 		icon: Bot,
@@ -70,6 +87,7 @@ export function SidebarNav() {
 	const settingsTab = useUiStore(s => s.settingsTab);
 	const keymapOverrides = useUiStore(s => s.keymapOverrides);
 	const hidden = useSidebarFolds(s => s.navHidden);
+	const touch = useShellInput() === "touch";
 	const rows = useOfferedNavRows().filter(row => hidden[row] !== true);
 	const [menu, setMenu] = useState<{ row: SidebarNavRow; anchor: ContextMenuAnchor } | null>(null);
 	if (rows.length === 0) return null;
@@ -80,7 +98,7 @@ export function SidebarNav() {
 		setMenu({ row, anchor: { x: rect.left || 8, y: rect.bottom || 8 } });
 	};
 	return (
-		<nav aria-label={t("sidebar.nav.label")} className="flex flex-col gap-px" data-sidebar-nav>
+		<nav aria-label={t("sidebar.nav.label")} className="omp-sidebar-nav" data-sidebar-nav>
 			{rows.map(row => {
 				const { labelKey, icon: Icon, destination: page, open } = SIDEBAR_NAV_ROWS[row];
 				const shortcut = row === "agents" ? actionKbd("agents.hub", keymapOverrides) : undefined;
@@ -88,11 +106,12 @@ export function SidebarNav() {
 					row === "schedules"
 						? destination === "settings" && settingsTab.startsWith("schedules")
 						: page === destination;
-				return (
+				const cell = (
 					<Button
 						aria-current={here ? "page" : undefined}
+						aria-keyshortcuts={shortcut ? ariaKeyShortcut(shortcut) : undefined}
 						className={cx(
-							"omp-sidebar-nav-row w-full min-w-0 justify-start gap-2.5 px-2.5",
+							"omp-sidebar-nav-row w-full min-w-0 justify-start gap-2 px-2",
 							here ? "bg-(--sc-selected) text-(--sc-text)" : "text-(--sc-text-secondary)",
 						)}
 						data-destination={page}
@@ -105,8 +124,20 @@ export function SidebarNav() {
 						variant="ghost"
 					>
 						<span className="min-w-0 flex-1 truncate text-left">{t(labelKey)}</span>
-						{shortcut && <Kbd className="omp-sidebar-kbd" shortcut={shortcut} />}
+						{row === "board" && (
+							<Suspense fallback={null}>
+								<BoardNavCounts />
+							</Suspense>
+						)}
 					</Button>
+				);
+				// A finger's long press is the cell's menu, and a phone has no shortcut to show.
+				return shortcut && !touch ? (
+					<Tooltip content={t(labelKey)} describe={false} key={row} shortcut={shortcut}>
+						{cell}
+					</Tooltip>
+				) : (
+					cell
 				);
 			})}
 			{menu && (

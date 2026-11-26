@@ -25,6 +25,24 @@ const SESSION_REPLACING_COMMANDS: Record<string, true> = { new: true, clear: tru
 // `drop` is a GUI alias for `delete`, no longer advertised by Core.
 const GUI_CONFIRMATION_COMMANDS = new Set(["share", "live", "btw", "delete", "drop"]);
 
+/**
+ * `/compact` or `/compact <focus>` as the `compact` RPC's request; undefined for any other command and for
+ * `/compact <mode> …` (a token among stock's own `/compact` subcommands), which stays stock's slash command. Without
+ * stock's command list (not read yet) only the bare `/compact` takes the RPC, since a mode cannot be told from focus.
+ */
+export function compactRequest(
+	message: string,
+	commands: readonly AvailableCommand[],
+): { instructions?: string } | undefined {
+	const parsed = parseSlashCommand(message.trim());
+	if (parsed?.name !== "compact" || parsed.text.charAt(1 + parsed.name.length) === ":") return undefined;
+	if (!parsed.args) return {};
+	const modes = commands.find(command => command.name === "compact")?.subcommands;
+	if (!modes) return undefined;
+	const first = parsed.args.split(/\s/, 1)[0]?.toLowerCase();
+	return modes.some(mode => mode.name.toLowerCase() === first) ? undefined : { instructions: parsed.args };
+}
+
 export type ComposerSubmit =
 	/** Session-replacing command while busy — draft stays, warning toasted. */
 	| { kind: "blocked" }
@@ -153,19 +171,23 @@ export function planComposerSubmit(input: {
 	if (isSlashCommand && message.trim() === "/clear") {
 		return { kind: "clear" };
 	}
-	// Manual compaction can spend minutes in provider summarization. Route the
-	// exact command through its dedicated RPC so it gets the compact timeout
-	// instead of timing out as an 8s prompt while still blocking the RPC queue;
-	// the status row shows it running with Esc and Cancel.
-	if (isSlashCommand && message.trim() === "/compact") {
+	// Manual compaction can spend minutes in provider summarization. Route `/compact` and `/compact <focus>` through
+	// the dedicated RPC so it gets the compact timeout instead of timing out as an 8s prompt while still blocking the
+	// RPC queue; the status row shows it running with Esc and Cancel. `/compact <mode> …` stays stock's slash command:
+	// the RPC takes no mode.
+	const compact = isSlashCommand ? compactRequest(message, commands) : undefined;
+	if (compact) {
 		return {
 			kind: "send",
 			request: async () => {
-				const { response, cancelled } = await runManualMaintenance("compact", () => rpc.compact());
-				if (!cancelled) return response;
-				// The reader stopped it: the command ran its course, so no draft comes back and no failure shows.
-				toast({ variant: "info", message: translate("command.compactCancelled") });
-				return { type: "response", command: "compact", success: true, data: { cancelled: true } };
+				const { response, cancelled, skipped } = await runManualMaintenance("compact", () =>
+					rpc.compact(compact.instructions),
+				);
+				if (!cancelled && !skipped) return response;
+				// The reader stopped it, or there was nothing to compact (said by runManualMaintenance): the command ran
+				// its course, so no draft comes back and no failure shows.
+				if (cancelled) toast({ variant: "info", message: translate("command.compactCancelled") });
+				return { type: "response", command: "compact", success: true, data: { cancelled, skipped } };
 			},
 		};
 	}

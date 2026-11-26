@@ -21,6 +21,7 @@ import type { RpcQueuedMessage } from "../../../../shared/rpc-types";
 import { useShellMode } from "../../../hooks/use-shell-mode";
 import { cx } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
+import { formatShortcut } from "../../../lib/keymap";
 import { queueChipLabel } from "../../../lib/queue-chip";
 import { useComposerStore } from "../../../stores/composer";
 import { type QueueLane, useQueuedMessages, useQueueStore } from "../../../stores/queue";
@@ -119,7 +120,7 @@ const QueueRow = memo(function QueueRow({
 			{imageCount > 0 && <QueueImageTiles count={imageCount} images={item.images} />}
 			<span className="flex shrink-0 items-center gap-2 [--hit-gap-x:8px] [--hit-gap-y:20px]">
 				{steerNow && (
-					<Tooltip content={t("composerQueue.steerNowTip")} describe={false}>
+					<Tooltip content={t("composerQueue.steerNowTip", { chord: formatShortcut("⌘↵") })} describe={false}>
 						<Button
 							aria-label={notConnected ?? t("composerQueue.steerNowAria", { text: name })}
 							data-queue-primary

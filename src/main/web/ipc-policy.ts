@@ -32,6 +32,10 @@ import {
 } from "../../shared/mobile-web";
 import {
 	PREVIEW_COMMAND,
+	PREVIEW_DEVICE,
+	PREVIEW_HISTORY,
+	PREVIEW_HOST_PORT,
+	PREVIEW_OPEN_FILE,
 	PREVIEW_PAGE,
 	PREVIEW_SAVE_PDF,
 	PREVIEW_STATE,
@@ -43,7 +47,7 @@ import {
 	PREVIEW_VISUAL,
 	PREVIEW_VISUALS,
 } from "../../shared/preview";
-import { SCHEDULES_COMMAND, SCHEDULES_LOG, SCHEDULES_STATE } from "../../shared/schedules";
+import { SCHEDULES_COMMAND, SCHEDULES_LOG, SCHEDULES_STATE } from "../../shared/schedule-channels";
 import { SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "../../shared/sidebar-projects";
 import {
 	SSH_TOOLS_AGENT,
@@ -52,6 +56,7 @@ import {
 	SSH_TOOLS_PROMPTS,
 	SSH_TOOLS_STATE,
 } from "../../shared/ssh-tools";
+import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND } from "../../shared/tracker-channels";
 import type { WebPermission } from "../../shared/web-protocol";
 
 /** Every channel between a page and main. */
@@ -62,6 +67,10 @@ export type IpcChannel =
 	| typeof PREVIEW_SAVE_PDF
 	| typeof PREVIEW_PAGE
 	| typeof PREVIEW_VISUALS
+	| typeof PREVIEW_HISTORY
+	| typeof PREVIEW_OPEN_FILE
+	| typeof PREVIEW_HOST_PORT
+	| typeof PREVIEW_DEVICE
 	| typeof PREVIEW_STREAM_POLL
 	| typeof PREVIEW_STREAM_INPUT
 	| typeof PREVIEW_STREAM_DIALOG
@@ -71,6 +80,8 @@ export type IpcChannel =
 	| typeof PREVIEW_VISUAL
 	| typeof SCHEDULES_COMMAND
 	| typeof MAIL_ACCOUNTS_COMMAND
+	| typeof TRACKERS_COMMAND
+	| typeof TRACKERS_ACCOUNTS
 	| typeof SCHEDULES_LOG
 	| typeof SCHEDULES_STATE
 	| typeof BOTS_COMMAND
@@ -111,7 +122,8 @@ export type ChannelPolicy =
 	| { dir: RequestDirection; permission: "pairing-admin"; mode: "boundary" }
 	/** The core's router answers it for a page itself (main registers no handler). */
 	| { dir: RequestDirection; permission: WebPermission; mode: "core" }
-	| { dir: "push"; mode: "pass" }
+	/** `permission`: the core's router pushes it only to a device holding that grant. */
+	| { dir: "push"; mode: "pass"; permission?: WebPermission }
 	| { dir: "push"; mode: "transform" | "client"; web: string };
 
 const C = IPC_COMMANDS;
@@ -130,6 +142,12 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		permission: "host-admin",
 		mode: "web",
 		web: "Restart or quit from a confirmation sheet that counts the running turns",
+	},
+	[C.APP_REMOVE]: {
+		dir: "invoke",
+		permission: "host-admin",
+		mode: "web",
+		web: "Never asked: a phone never removes OMPdesk from its host (the row shows on a desktop window only; the shim refuses)",
 	},
 	[C.BRIDGE_HEALTH_TAKE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[BRIDGE_HEALTH_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
@@ -152,6 +170,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[C.SESSIONS_TARGETS]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_ARTWORK]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_PULL_REQUEST]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.SESSIONS_LINKS]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_DUMP_BUNDLE]: {
 		dir: "invoke",
 		permission: "workspace",
@@ -164,6 +183,15 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		mode: "web",
 		web: "Open as a new tab on this device (a web page is one window)",
 	},
+	[C.BOARD_OPEN_WINDOW]: {
+		dir: "invoke",
+		permission: "workspace",
+		mode: "web",
+		web: "A page is one window: the board shows no such button there, and the page answers false",
+	},
+	[C.RESOURCES_READ]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.RESOURCES_END_PROCESS]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.RESOURCES_GIVE_BACK]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSION_CONSUME_PENDING]: {
 		dir: "invoke",
 		permission: "workspace",
@@ -358,6 +386,10 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		mode: "web",
 		web: "The page uploads the file to this computer first (POST /upload); the router reads it back and sends it on",
 	},
+	// A paired page keeps a draft's pictures in the page (pageSafeMoment holds a reload while it has any); it files none here.
+	[C.DRAFT_PICTURES_PUT]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.DRAFT_PICTURES_READ]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.DRAFT_PICTURES_REMOVE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.IMAGE_TO_MODEL]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.FS_REVEAL_COPY]: {
 		dir: "invoke",
@@ -392,6 +424,10 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	},
 	[PREVIEW_PAGE]: { dir: "invoke", permission: "workspace", mode: "web", web: "Runs on the streamed offscreen page" },
 	[PREVIEW_VISUALS]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[PREVIEW_HISTORY]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[PREVIEW_OPEN_FILE]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[PREVIEW_HOST_PORT]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[PREVIEW_DEVICE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[PREVIEW_STREAM_POLL]: {
 		dir: "invoke",
 		permission: "workspace",
@@ -487,6 +523,9 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[BOTS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
 	// Mail accounts for email routines: a password is sent to main only, never read back.
 	[MAIL_ACCOUNTS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
+	// Linear and Jira: a paired page reads the host's lists (its token stays on the host); connecting is an account's.
+	[TRACKERS_COMMAND]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[TRACKERS_ACCOUNTS]: { dir: "invoke", permission: "accounts-admin", mode: "pass" },
 	[SCHEDULES_LOG]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[SIDEBAR_PROJECTS_COMMAND]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[SSH_TOOLS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
@@ -602,7 +641,8 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	},
 	[PREVIEW_STATE]: { dir: "push", mode: "transform", web: "The streamed page's state for this device" },
 	[PREVIEW_VISUAL]: { dir: "push", mode: "pass" },
-	[SCHEDULES_STATE]: { dir: "push", mode: "pass" },
+	// A webhook routine's key rides in the state: only a device that may run schedules gets it.
+	[SCHEDULES_STATE]: { dir: "push", mode: "pass", permission: "extensions-admin" },
 	[BOTS_STATE]: { dir: "push", mode: "pass" },
 	[SSH_TOOLS_STATE]: { dir: "push", mode: "pass" },
 	[SSH_TOOLS_PROMPT]: { dir: "push", mode: "pass" },

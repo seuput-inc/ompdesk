@@ -28,10 +28,9 @@ import { useCurrentSessionTitle } from "../../hooks/use-current-session-title";
 import { useOverlayPresence } from "../../hooks/use-overlay-presence";
 import { useSessionAttention } from "../../hooks/use-session-attention";
 import { useSessionList } from "../../hooks/use-session-list";
-import { useDrawerMode, useShellMode } from "../../hooks/use-shell-mode";
+import { useDrawerMode } from "../../hooks/use-shell-mode";
 import { useFocusedRun } from "../../hooks/use-tab-run";
 import { ATTENTION_LABEL_KEY } from "../../lib/attention";
-import { loadChunk } from "../../lib/chunk-load";
 import { cx, formatCost, formatDuration, formatPercent, formatTokens } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
@@ -51,6 +50,7 @@ import { toastError } from "../../stores/toast";
 import { useToolsStore } from "../../stores/tools";
 import { useUiStore } from "../../stores/ui";
 import { useWebLinkLost } from "../../web/link-status";
+import { BotHomeBanner } from "../bots/BotHomeBanner";
 import {
 	AutoTitleButton,
 	Badge,
@@ -67,31 +67,6 @@ import {
 import { DeviceChip } from "../remote/DeviceChip";
 import { ForkParent } from "./ForkParent";
 import { sessionCacheHitPercent, sessionExecutionDurationMs } from "./session-metrics";
-import type { SessionTabStrip as SessionTabStripComponent } from "./tab-strip/SessionTabStrip";
-
-/**
- * The tab strip comes in its own chunk (a desktop window's only, so a phone's first screen never loads it); until it
- * lands the bar shows the session's name as before, and once loaded it stays for every later bar.
- */
-let loadedTabStrip: typeof SessionTabStripComponent | null = null;
-
-function useTabStripChunk(wanted: boolean): typeof SessionTabStripComponent | null {
-	const [Strip, setStrip] = useState(() => loadedTabStrip);
-	useEffect(() => {
-		if (!wanted || Strip) return;
-		let live = true;
-		loadChunk(() => import("./tab-strip/SessionTabStrip"))
-			.then(module => {
-				loadedTabStrip = module.SessionTabStrip;
-				if (live) setStrip(() => module.SessionTabStrip);
-			})
-			.catch(() => {});
-		return () => {
-			live = false;
-		};
-	}, [wanted, Strip]);
-	return Strip;
-}
 
 /**
  * `pending`: the connection is coming up or back (starting, waiting, reconnecting): a still hollow dot, never a spinner.
@@ -244,6 +219,7 @@ export function TitleBar() {
 	// A remote tab names its host; while the link is down the tab is reconnecting,
 	// not failed. A host that is gone from the device list (unpaired) never comes back.
 	const device = useTabsStore(s => s.tabs.find(tab => tab.id === tabId)?.device);
+	const sessionPathOfTab = useTabsStore(s => s.tabs.find(tab => tab.id === tabId)?.sessionPath);
 	const host = useHostView(device);
 	const remoteLoaded = useRemoteStore(s => s.state !== null);
 	// Unknown before the device list loads: no host is not "removed" and not "reconnecting" yet. The chip is
@@ -256,12 +232,6 @@ export function TitleBar() {
 	const statsMessageCount = useMessagesStore(s => s.messages.length);
 	const sidebarVisible = useUiStore(s => s.sidebarVisible);
 	const drawer = useDrawerMode();
-	// The window's open sessions as tabs (Orca's tab bar, a desktop window's), once the window lists its tab; a phone
-	// or tablet page keeps its one title.
-	const listed = useTabsStore(s => s.tabs.some(tab => tab.id === s.activeTabId));
-	const wantStrip = useShellMode() === null && listed;
-	const SessionTabStrip = useTabStripChunk(wantStrip);
-	const tabStrip = wantStrip && SessionTabStrip !== null;
 	const panelVisible = useUiStore(s => s.panelVisible);
 	const keymapOverrides = useUiStore(s => s.keymapOverrides);
 	const groupAliases = useSidebarPrefs(s => s.groupAliases);
@@ -469,13 +439,7 @@ export function TitleBar() {
 				/>
 			)}
 
-			<nav
-				aria-label={t("titlebar.breadcrumb")}
-				className={cx(
-					"omp-titlebar-identity no-drag flex min-w-0 items-center",
-					tabStrip && "h-full flex-1 self-stretch",
-				)}
-			>
+			<nav aria-label={t("titlebar.breadcrumb")} className="omp-titlebar-identity no-drag flex min-w-0 items-center">
 				{device !== undefined && (
 					<span className="mr-1 flex shrink-0 items-center">
 						<DeviceChip deviceId={device} />
@@ -576,12 +540,6 @@ export function TitleBar() {
 							</p>
 						)}
 					</div>
-				) : tabStrip && SessionTabStrip ? (
-					<SessionTabStrip
-						activeContent={<SessionTitle noTooltip parts={displayParts} swapScope={sessionId ?? ""} />}
-						activeTitle={displayName}
-						onRenameActive={startRename}
-					/>
 				) : (
 					<Tooltip content={`${displayName} · ${t("titlebar.rename")}`} describe={false} side="bottom">
 						<Button
@@ -610,6 +568,7 @@ export function TitleBar() {
 						</span>
 					</Tooltip>
 				)}
+				{!editingName && <BotHomeBanner cwd={device === undefined ? cwd : null} sessionPath={sessionPathOfTab} />}
 			</nav>
 
 			<div

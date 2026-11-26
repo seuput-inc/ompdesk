@@ -5,6 +5,8 @@ mod app_window;
 mod assets;
 #[cfg(feature = "test-automation")]
 mod automation;
+#[cfg(windows)]
+mod boot_paint;
 mod core_pages;
 mod diagnostic_bundle_name;
 mod entry;
@@ -19,6 +21,7 @@ mod migrate_watch;
 mod native_chrome;
 mod native_services;
 mod network;
+mod notification_popup;
 mod notify_triage;
 mod page_push;
 mod page_watch;
@@ -44,6 +47,8 @@ mod update_commands;
 mod update_files;
 #[cfg(target_os = "macos")]
 mod update_stage;
+#[cfg(target_os = "macos")]
+mod web_view_keys;
 #[cfg(windows)]
 mod window_activation;
 mod window_bounds;
@@ -812,7 +817,8 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         builder = builder.position(x, y);
     }
     // Painted in the page's own background until the page paints: the window may show before it (app_window.rs
-    // `SHOW_BEFORE_PAINT`). A Mica window draws its backdrop instead.
+    // `SHOW_BEFORE_PAINT`; on Windows already while it is built, boot_paint.rs). A Mica window draws its backdrop
+    // instead.
     if !plan.mica
         && let Some(colour) = theme::window_background()
     {
@@ -852,7 +858,20 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             return Err(failed(error));
         }
     };
-    let window = match builder.build() {
+    #[cfg(windows)]
+    let boot = boot_paint::arm(
+        wc,
+        &runtime().user_data,
+        theme::new_window_dark(),
+        plan.mica,
+        boot_paint::EarlyShow::for_first_show(plan.first_show(), plan.maximize),
+    );
+    let built = builder.build();
+    #[cfg(windows)]
+    let shown_while_built = boot.is_some_and(boot_paint::Armed::finish);
+    #[cfg(not(windows))]
+    let shown_while_built = false;
+    let window = match built {
         Ok(window) => window,
         Err(error) => {
             runtime().registry.lock().expect("registry").remove(wc);
@@ -871,6 +890,8 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     }
     #[cfg(windows)]
     page_watch::attach(&window, wc);
+    #[cfg(target_os = "macos")]
+    web_view_keys::attach(&window, wc);
     apply_size(&window, bounds.width, bounds.height, false)?;
     let webview = runtime()
         .app
@@ -940,7 +961,11 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         _ => {}
     });
     let maximize = plan.maximize;
-    app_window::opened(win, wc, plan);
+    // A window that showed while it was built gets its first show again through Tauri, before any other op, so
+    // Tauri's visibility agrees and a later style change does not hide it.
+    if let Some(op) = app_window::opened(win, wc, plan, shown_while_built) {
+        win_op(&json!({"winId": win, "op": op, "args": {}}))?;
+    }
     if maximize {
         win_op(&json!({"winId": win, "op": "maximize", "args": {}}))?;
     }
@@ -1273,7 +1298,7 @@ fn dispatch(call: host::Call) {
             .notify_triage
             .lock()
             .expect("notification triage")
-            .admit(&call.params);
+            .admit(&call.params, notification_popup::window::muted());
         match plan {
             Some(plan) => call.ok(plan),
             None => call.err("invalid", "invalid notification admission"),
@@ -1588,6 +1613,10 @@ fn ensure_current(identity: Identity) -> Result<(), Value> {
 
 #[tauri::command]
 async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Result<Value, Value> {
+    // The notification popup's page is written from a fixed document and asks only by navigation (window.rs).
+    if webview.label() == notification_popup::window::LABEL {
+        return Err(json!({"code":"denied","message":"the notification popup has no IPC"}));
+    }
     let url = webview
         .url()
         .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
@@ -2152,6 +2181,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             });
             *runtime().instance_thread.lock().expect("instance thread") = Some(instance_thread);
             page_watch::run();
+            notification_popup::window::install();
             host::serve(
                 listener,
                 token.clone(),

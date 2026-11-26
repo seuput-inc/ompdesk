@@ -10,6 +10,8 @@
 
 /** Exact keys (dotted paths as `prefs.set` takes them). */
 export const DEVICE_LOCAL_PREF_KEYS: readonly string[] = [
+	// The interface's language: a phone set to Korean never turns the desktop Korean (Orca's per-device UI language).
+	"language",
 	// Theme.
 	"theme",
 	"themeName",
@@ -32,6 +34,8 @@ export const DEVICE_LOCAL_PREF_KEYS: readonly string[] = [
 	"gui.panelWidth",
 	"panelSide",
 	"defaultPanelTab",
+	// The microphone dictation opens: an input of the device the page runs on.
+	"dictationMicrophone",
 ];
 
 /** `displayPreferences.<field>`: the transcript display switches and the paste threshold. */

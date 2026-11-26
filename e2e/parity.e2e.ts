@@ -14,22 +14,25 @@
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
+import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { type Browser, chromium, devices, expect, type Locator, type Page, test } from "@playwright/test";
+import { STRESS_PROMPT } from "../src/renderer/dev-harness/fixture";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
-import { writeShellGh } from "./fixture/shell-gh";
+import { writeShellBin, writeShellGh } from "./fixture/shell-gh";
 import { FIXTURE_NEWER_OMP_VERSION } from "./fixture/version";
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, REMOTE_LOGIN, type RemoteInstance } from "./remote-harness";
 import { crashed, type Look, panelCrash } from "./responsive-audit";
-import { type ParitySession, SURFACES, type Surface } from "./responsive-surfaces";
+import { PARITY_WORK_PROMPT, type ParitySession, SURFACES, type Surface } from "./responsive-surfaces";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
 /**
  * B's `gh`: signed in, the project's repository `o/r` with one open PR whose detail has a file, a passing check and an
- * open review thread, and one open issue (`agents-prs`, `agents-pr-detail`, `agents-github`). The project's own branch
+ * open review thread, one open issue with its detail and one project (`agents-prs`, `agents-pr-detail`, `agents-github`,
+ * `agents-github-projects`, `agents-issue-detail`, `agents-issue-start`). The project's own branch
  * has no PR (`--head`), so the sidebar rows show none and the Changes panel offers to link one.
  */
 async function writeParityGh(bin: string): Promise<void> {
@@ -108,6 +111,8 @@ async function writeParityGh(bin: string): Promise<void> {
 			"#!/bin/sh",
 			'case "$*" in',
 			`"auth status"*) echo "github.com" >&2; echo "  ✓ Logged in to github.com account dev (keyring)" >&2 ;;`,
+			// Agents › GitHub › Projects: the account's one project (both discovery reads name `projectsV2`).
+			`"api"*projectsV2*) echo '{"data":{"viewer":{"login":"dev","projectsV2":{"nodes":[{"id":"PVT_1","number":3,"title":"Session work","url":"https://github.com/users/dev/projects/3","owner":{"__typename":"User","login":"dev"}}]},"organizations":{"nodes":[]}}}}' ;;`,
 			`"api"*graphql*) cat "${bin}/graphql.json" ;;`,
 			`"api"*rate_limit*) echo '{"resources":{"core":{"limit":5000,"remaining":4990,"reset":1900000000},"graphql":{"limit":5000,"remaining":4990,"reset":1900000000}}}' ;;`,
 			`"api user"*) echo '{"login":"dev"}' ;;`,
@@ -118,6 +123,7 @@ async function writeParityGh(bin: string): Promise<void> {
 			`"pr view"*comments,reviews*) cat "${bin}/comments.json" ;;`,
 			`"pr view"*) cat "${bin}/view.json" ;;`,
 			`"pr diff"*) cat "${bin}/pr.diff" ;;`,
+			`"issue view"*) echo '{"number":12,"title":"Closed PRs keep their session row","state":"OPEN","author":{"login":"reviewer"},"labels":[{"name":"bug"}],"comments":[],"updatedAt":"2026-11-20T09:00:00Z","url":"https://github.com/o/r/issues/12","body":"A session whose pull request closed still shows the PR beside its row."}' ;;`,
 			`"issue list"*) echo '[{"number":12,"title":"Closed PRs keep their session row","state":"OPEN","author":{"login":"reviewer"},"labels":[{"name":"bug"}],"comments":[],"updatedAt":"2026-11-20T09:00:00Z","url":"https://github.com/o/r/issues/12"}]' ;;`,
 			`"label list"*|"release list"*|"run list"*|"workflow list"*|"repo list"*) echo '[]' ;;`,
 			"*) exit 1 ;;",
@@ -129,21 +135,91 @@ async function writeParityGh(bin: string): Promise<void> {
 
 /**
  * B's project is a git checkout with uncommitted work, so the work session's Changes panel shows its source control
- * and a changed file list, and its Files view has a nested file to open (`panel-diff`, `panel-files-viewer`).
+ * and a changed file list, and its Files view has a nested file to open (`panel-diff`, `panel-files-viewer`). Its
+ * history forks and joins (a feature branch of two commits merged beside a commit on main), so `panel-graph` draws
+ * lanes, and Sidebar.tsx's lines come from two commits and the working tree, so `panel-blame` shows each.
  */
 async function seedProject(project: string): Promise<void> {
 	const nested = path.join(project, "src/renderer/components/layout/sidebar");
+	const sidebar = path.join(nested, "Sidebar.tsx");
 	await fs.mkdir(nested, { recursive: true });
 	await fs.writeFile(path.join(project, "README.md"), "# Project\n");
-	await fs.writeFile(path.join(nested, "Sidebar.tsx"), "export const rows = 1;\n");
+	await fs.writeFile(sidebar, "export const rows = 2;\n");
 	git(project, "init", "-q", "-b", "main");
 	git(project, "config", "user.email", "parity@example.com");
 	git(project, "config", "user.name", "Parity");
 	git(project, "config", "commit.gpgsign", "false");
 	git(project, "add", ".");
 	git(project, "commit", "-qm", "feat: seed the project");
-	await fs.writeFile(path.join(nested, "Sidebar.tsx"), "export const rows = 2;\nexport const gap = 4;\n");
+	git(project, "checkout", "-q", "-b", "feature/sidebar-gap");
+	await fs.writeFile(sidebar, "export const rows = 2;\nexport const gap = 4;\n");
+	git(project, "commit", "-qam", "feat(sidebar): a gap between rows");
+	await fs.writeFile(path.join(project, "README.md"), "# Project\n\nThe sidebar keeps a gap between rows.\n");
+	git(project, "commit", "-qam", "docs: say what the gap is for");
+	git(project, "checkout", "-q", "main");
+	await fs.writeFile(path.join(project, "package.json"), '{ "name": "project" }\n');
+	git(project, "add", "package.json");
+	git(project, "commit", "-qm", "chore: name the package");
+	git(
+		project,
+		"merge",
+		"-q",
+		"--no-ff",
+		"--no-edit",
+		"-m",
+		"Merge branch 'feature/sidebar-gap'",
+		"feature/sidebar-gap",
+	);
+	await fs.writeFile(sidebar, "export const rows = 2;\nexport const gap = 4;\nexport const pad = 8;\n");
 	await fs.writeFile(path.join(project, "wait-for.ts"), "export const waitFor = () => {};\n");
+}
+
+/**
+ * The Preview start page's device (`OMP_GUI_TEST_PREVIEW_START=1`, the `preview-start` and `preview-device` surfaces):
+ * an Android emulator `adb` reports, with a phone app's screen, behind an adb server answering on 5037 (core
+ * `emulator.rs` runs adb only then). Returns the folder to put first on both apps' PATH and what ends the adb server's
+ * stand-in.
+ */
+async function fakeAndroidDevice(parent: string, browser: Browser): Promise<{ bin: string; close(): Promise<void> }> {
+	const bin = path.join(parent, "adbbin");
+	await fs.mkdir(bin, { recursive: true });
+	const screen = await browser.newPage({ viewport: { width: 360, height: 760 }, deviceScaleFactor: 2 });
+	await screen.setContent(`<!doctype html><body style="margin:0;font:16px system-ui,sans-serif;background:#f4f1ea;color:#1f2328">
+<header style="background:#2f6f4f;color:#fff;padding:36px 20px 16px;font-size:22px;font-weight:600">Fixture app</header>
+<main style="padding:20px;display:flex;flex-direction:column;gap:12px">
+${["Today", "Upcoming", "Done"].map(label => `<div style="background:#fff;border-radius:12px;padding:16px">${label}</div>`).join("")}
+</main></body>`);
+	await screen.screenshot({ path: path.join(bin, "screen.png") });
+	await screen.close();
+	await writeShellBin(
+		bin,
+		"adb",
+		[
+			"#!/bin/sh",
+			'case "$*" in',
+			'"devices -l") printf "List of devices attached\\nemulator-5554          device product:sdk_gphone64 model:Pixel_8 device:emu64a transport_id:1\\n" ;;',
+			'*"screencap -p") cat "$(dirname "$0")/screen.png" ;;',
+			"esac",
+			"",
+		].join("\n"),
+	);
+	// A real adb server already up on this machine answers the same; the fake `adb` first on PATH still lists the device.
+	const server = net.createServer(socket => socket.destroy());
+	await new Promise<void>(resolve => {
+		server.once("error", () => resolve());
+		server.listen(5037, "127.0.0.1", () => resolve());
+	});
+	return { bin, close: () => new Promise<void>(resolve => server.close(() => resolve())) };
+}
+
+/** Two recent sites in a computer's Preview history (`<userData>/preview-history.json`, core `browsing.rs`). */
+async function seedPreviewHistory(userData: string): Promise<void> {
+	const at = Date.now();
+	const entries = [
+		{ url: "https://example.com/", title: "Example Domain", at, visits: 3 },
+		{ url: "https://www.w3.org/WAI/", title: "Web Accessibility Initiative", at: at - 60_000, visits: 1 },
+	];
+	await fs.writeFile(path.join(userData, "preview-history.json"), JSON.stringify({ entries }), { mode: 0o600 });
 }
 
 const dir = process.env.OMP_GUI_PARITY;
@@ -263,6 +339,7 @@ if (dir) {
 		let proxy: ServeProxy | undefined;
 		const browser = await chromium.launch();
 		const pageErrors: string[] = [];
+		let android: { bin: string; close(): Promise<void> } | undefined;
 		try {
 			const ghBin = path.join(parent, "ghbin");
 			await writeParityGh(ghBin);
@@ -272,6 +349,10 @@ if (dir) {
 			if (surfaces.some(surface => surface.id === "settings-omp-tested")) {
 				await fs.writeFile(hostOmpVersion, `${FIXTURE_NEWER_OMP_VERSION}\n`);
 			}
+			// `preview-start`, `preview-device`: both computers see the same emulator (each lists its own devices).
+			const previewStart = process.env.OMP_GUI_TEST_PREVIEW_START === "1";
+			if (previewStart) android = await fakeAndroidDevice(parent, browser);
+			const devicePath = android ? `${android.bin}${path.delimiter}` : "";
 			const hostProfile = await makeRemoteProfile(parent, "host", {
 				language: DESKTOP.lang,
 				theme: DESKTOP.theme,
@@ -282,7 +363,7 @@ if (dir) {
 				env: {
 					OMP_GUI_START_SLOW_MS: "1500",
 					OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1",
-					PATH: `${ghBin}${path.delimiter}${process.env.PATH}`,
+					PATH: `${devicePath}${ghBin}${path.delimiter}${process.env.PATH}`,
 					OMP_GUI_TEST_VERSION_FILE: hostOmpVersion,
 				},
 			});
@@ -292,7 +373,10 @@ if (dir) {
 				theme: DESKTOP.theme,
 				port: hostProfile.port,
 				prefs: { displayPreferences: { showTokenUsage: true }, ...(BLOCKED_USAGE ? { sidebarWidth: 227 } : {}) },
-				env: { OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1" },
+				env: {
+					OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1",
+					...(devicePath ? { PATH: `${devicePath}${process.env.PATH}` } : {}),
+				},
 			});
 			// `settings-updates-token-dropped`: a token the keychain would not release was removed at an earlier launch, and
 			// the marker it left is what Settings › Updates shows (src/main/update-auth.ts).
@@ -300,6 +384,8 @@ if (dir) {
 				for (const profile of [hostProfile, clientProfile])
 					await fs.writeFile(path.join(profile.desktop, "update-token.dropped"), "keychain-would-ask");
 			}
+			if (previewStart)
+				for (const profile of [hostProfile, clientProfile]) await seedPreviewHistory(profile.desktop);
 			host = await launchRemote(hostProfile);
 			client = await launchRemote(clientProfile);
 			const b = host.page;
@@ -320,7 +406,7 @@ if (dir) {
 				start,
 			);
 			const input = b.locator("textarea").first();
-			await input.fill("Show this session the same way everywhere");
+			await input.fill(PARITY_WORK_PROMPT);
 			await input.press("Enter");
 			await expect(b.getByText("Local fixture reply").first()).toBeVisible({ timeout: 30_000 });
 			await expect
@@ -592,6 +678,39 @@ if (dir) {
 				answered.set("Parity long", session);
 				return session;
 			};
+			/**
+			 * A session of its own whose board has every zone but Needs you (`board-strip*`): a todo list with two
+			 * instructions since it changed (`fixture todo behind`), a turn that fixed a failing test (`fixture turn
+			 * recovered`) and subagents left at work (`fixture:subagents`) for the rest of the run. Each view reads them
+			 * from the host (`get_state`, `get_subagents`, the transcript). Nothing waits on Escape, which each view presses
+			 * before it shows a session (`openRow`): it would answer a question and stop a running turn (the first capture,
+			 * run 45778111707, left its turn held open, and `board-strip-open` showed it interrupted).
+			 */
+			const boardSession = async (): Promise<HostSession> => {
+				const made = answered.get("Parity board");
+				if (made) return made;
+				const tabId = await titledTab("Parity board");
+				for (const [message, answer] of [
+					["fixture todo behind", "Local fixture reply"],
+					["fixture turn recovered", "The tests pass now."],
+				] as const) {
+					await b.evaluate(([id, sent]) => window.omp.rpc.commandForTab(id, { type: "prompt", message: sent }), [
+						tabId,
+						message,
+					] as const);
+					await untilAnswered(b, tabId, { text: answer, after: message });
+				}
+				await b.evaluate(
+					id => window.omp.rpc.commandForTab(id, { type: "bash", command: "fixture:subagents" }),
+					tabId,
+				);
+				const sessionPath =
+					(await b.evaluate(() => window.omp.tabs.list())).find(entry => entry.tabId === tabId)?.sessionPath ?? "";
+				if (!sessionPath) throw new Error("the board session has no file");
+				const session = { path: sessionPath, cwd: work.cwd };
+				answered.set("Parity board", session);
+				return session;
+			};
 			/** B's `session` as it is when a view shows it. */
 			const hostSession = async (session: ParitySession): Promise<HostSession> =>
 				session === "work"
@@ -617,7 +736,19 @@ if (dir) {
 													? longSession()
 													: session === "cut"
 														? cutSession()
-														: limitSession();
+														: session === "stress"
+															? // The harness's stress turn as one turn of a session of its own (fake omp: `STRESS_PROMPT`).
+																answeredSession("Parity stress", [
+																	[STRESS_PROMPT, "Here is the unbroken link"],
+																])
+															: session === "schedule"
+																? // An agent's ompdesk_schedule create of a webhook routine (`reply-schedule-card`).
+																	answeredSession("Parity schedule", [
+																		["fixture schedule card", "Webhook routine saved."],
+																	])
+																: session === "board"
+																	? boardSession()
+																	: limitSession();
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {
@@ -857,6 +988,9 @@ if (dir) {
 					await fs.mkdir(folder, { recursive: true });
 					for (const view of VIEWS) {
 						const page = pages[view];
+						// One line per view, so a capture the job's timeout cuts off names where it stood (forward runs
+						// 45798443670 and 45816609957 stalled about 20 minutes on a surface no output named).
+						console.log(`[parity] ${new Date().toISOString().slice(11, 19)} ${surface.id} › ${view}`);
 						try {
 							await show[view](surface.parity.session);
 							await page.locator("[data-composer-input]").first().waitFor({ state: "visible", timeout: 60_000 });
@@ -934,6 +1068,7 @@ if (dir) {
 			await browser.close().catch(() => undefined);
 			await proxy?.close().catch(() => undefined);
 			for (const instance of [client, host]) if (instance) await exitApp(instance.app);
+			await android?.close().catch(() => undefined);
 			await fs.rm(parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => undefined);
 		}
 	};

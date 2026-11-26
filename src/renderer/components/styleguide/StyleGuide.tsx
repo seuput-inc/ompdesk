@@ -62,6 +62,7 @@ import {
 	ErrorDetail,
 	FieldLabel,
 	FieldShell,
+	FindBar,
 	HoverCard,
 	IconButton,
 	InlineNotice,
@@ -105,6 +106,7 @@ import {
 	Spinner,
 	StatusDot,
 	SwapText,
+	SwipeActions,
 	Switch,
 	SwitchField,
 	SwitchTile,
@@ -915,6 +917,21 @@ export default function StyleGuide() {
 					<Block label="Chip — toggles, removable with a text action, plain">
 						<ChipSamples />
 					</Block>
+					<Block label="FindBar — the field with its count, previous, next, close">
+						<FindBar
+							canStep
+							className="flex w-80 items-center gap-1"
+							closeLabel="Close find"
+							label="Find in page"
+							nextLabel="Next match"
+							onClose={() => {}}
+							onQuery={() => {}}
+							onStep={() => {}}
+							previousLabel="Previous match"
+							query="preview"
+							status="2/7"
+						/>
+					</Block>
 					<Block className="flex items-center gap-4" label="Kbd (platform-formatted)">
 						<Kbd shortcut="⌘K" />
 						<Kbd shortcut="⇧⌘T" />
@@ -1184,6 +1201,13 @@ export default function StyleGuide() {
 								title="The project page loads every provider's accounts in one request instead of one per row"
 								titleLines={2}
 							/>
+						</Block>
+						<Block className="space-y-px" label="SwipeActions (swipe the row on a touch screen)">
+							<SwipeActions
+								trailing={[{ id: "archive", label: "Archive", icon: GitBranch, onSelect: () => {} }]}
+							>
+								<ListRow leading={<GitBranch />} onClick={() => {}} title="Swipe me left" />
+							</SwipeActions>
 						</Block>
 						<Block className="space-y-px" label="ListRow size=sm (a side panel's list)">
 							<ListRow
