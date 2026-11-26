@@ -123,6 +123,7 @@ export const en: Record<string, string> = {
 	"sidebar.removedProjects.show": "Show",
 	"sidebar.removedProjects.showOne": "Show {name} in the sidebar again",
 	"sidebar.project.addFailed": "Couldn't add the project",
+	"sidebar.entryFailed": "Couldn't save the change",
 	"sidebar.menu.locateFolder": "Locate folder…",
 	"sidebar.project.locateTitle": "Where is {name} now?",
 	"sidebar.project.located": "Sessions moved to {name}: {count}",

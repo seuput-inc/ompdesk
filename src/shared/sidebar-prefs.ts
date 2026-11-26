@@ -67,7 +67,32 @@ export interface SidebarPrefs {
 	mutedGroups: string[];
 	/** Session files whose notifications are muted (a session row's menu); this computer's sessions only. */
 	mutedSessions: string[];
+	/** The group each project is filed under (cwd → the group's name); a group lives while a project names it. */
+	projectGroups: Record<string, string>;
+	/** A project's chosen color (cwd → one of `PROJECT_COLORS`), drawn on its header's glyph. */
+	projectColors: Record<string, string>;
+	/** A project's chosen emoji (cwd → the emoji), drawn in place of its folder glyph. */
+	projectEmoji: Record<string, string>;
+	/** A session's chosen emoji (session file → the emoji), drawn before its title. */
+	sessionEmoji: Record<string, string>;
+	/**
+	 * The parent the person gave a session (session file → its parent's session file), over the automatic opener;
+	 * `""` = no parent, even where an agent opened it.
+	 */
+	sessionParents: Record<string, string>;
 }
+
+/** The keyed text entries one `set-entry` change sets, each `Record<key, string>`. */
+export const SIDEBAR_ENTRY_FIELDS = [
+	"projectGroups",
+	"projectColors",
+	"projectEmoji",
+	"sessionEmoji",
+	"sessionParents",
+] as const;
+export type SidebarEntryField = (typeof SIDEBAR_ENTRY_FIELDS)[number];
+/** Entries kept per field, the newest set last; the oldest go first. */
+const MAX_ENTRIES = 500;
 
 /**
  * One change to the blob, naming only what it sets. A pin or a flag is set, never toggled, so two pages that both
@@ -85,7 +110,14 @@ export type SidebarChange =
 	| { op: "set-session-order"; list: string; order: string[]; move?: { path: string; over: string } }
 	| { op: "set-sessions-archived"; ids: string[]; archived: boolean }
 	| { op: "set-rail-pin"; pin: RailPin; pinned: boolean }
-	| { op: "touch-workspace"; cwd: string };
+	| { op: "touch-workspace"; cwd: string }
+	/**
+	 * One keyed entry: `value` null removes it. Text is trimmed and an empty text removes it, except a session's
+	 * parent, whose `""` says "no parent".
+	 */
+	| { op: "set-entry"; field: SidebarEntryField; key: string; value: string | null }
+	/** Every project filed under group `from` moves to group `to`, or out of any group (`null`). */
+	| { op: "rename-project-group"; from: string; to: string | null };
 
 const MAX_RECENT_WORKSPACES = 100;
 /** Lists whose session order is kept (the most recently ordered first), and sessions kept per list. */
@@ -149,6 +181,11 @@ export function readSidebarPrefs(value: unknown): SidebarPrefs {
 		agentHidden: stringList(blob.agentHidden),
 		mutedGroups: stringList(blob.mutedGroups),
 		mutedSessions: stringList(blob.mutedSessions),
+		projectGroups: validAliases(blob.projectGroups),
+		projectColors: validAliases(blob.projectColors),
+		projectEmoji: validAliases(blob.projectEmoji),
+		sessionEmoji: validAliases(blob.sessionEmoji),
+		sessionParents: validAliases(blob.sessionParents),
 	};
 }
 
@@ -271,5 +308,27 @@ export function sidebarPatch(
 					MAX_RECENT_WORKSPACES,
 				),
 			};
+		case "set-entry": {
+			const value = change.field === "sessionParents" ? change.value : change.value?.trim() || null;
+			const current = state[change.field];
+			if ((current[change.key] ?? null) === value) return {};
+			const { [change.key]: _previous, ...rest } = current;
+			const entries = value === null ? rest : { ...rest, [change.key]: value };
+			return { [change.field]: Object.fromEntries(Object.entries(entries).slice(-MAX_ENTRIES)) };
+		}
+		case "rename-project-group": {
+			const to = change.to?.trim() || null;
+			if (to === change.from) return {};
+			let moved = false;
+			const projectGroups: Record<string, string> = {};
+			for (const [cwd, group] of Object.entries(state.projectGroups)) {
+				if (group !== change.from) projectGroups[cwd] = group;
+				else {
+					moved = true;
+					if (to !== null) projectGroups[cwd] = to;
+				}
+			}
+			return moved ? { projectGroups } : {};
+		}
 	}
 }

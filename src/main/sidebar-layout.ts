@@ -52,12 +52,21 @@ export class SidebarLayoutScope {
 			const visible = order.filter(path => this.#lists.get(path) === list);
 			if (visible.length) sessionOrder[list] = visible;
 		}
+		const shown = (entries: Record<string, string>, visible: (key: string) => boolean) =>
+			Object.fromEntries(Object.entries(entries).filter(([key]) => visible(key)));
+		const group = (key: string) => this.#groups.has(key);
+		const session = (key: string) => this.#lists.has(key);
 		return {
 			pinnedGroups: prefs.pinnedGroups.filter(key => this.#groups.has(key)),
 			pinnedSessions: prefs.pinnedSessions.filter(key => this.#lists.has(key)),
 			archivedSessions: prefs.archivedSessions.filter(id => this.#ids.has(id)),
 			groupOrder: prefs.groupOrder.filter(key => this.#groups.has(key)),
 			sessionOrder,
+			projectGroups: shown(prefs.projectGroups, group),
+			projectColors: shown(prefs.projectColors, group),
+			projectEmoji: shown(prefs.projectEmoji, group),
+			sessionEmoji: shown(prefs.sessionEmoji, session),
+			sessionParents: shown(prefs.sessionParents, session),
 		};
 	}
 
@@ -94,6 +103,17 @@ export class SidebarLayoutScope {
 					order: reorder(prefs.sessionOrder[list] ?? [], order, key => slots.has(key)),
 				};
 			}
+			case "set-entry": {
+				const visible =
+					change.field === "projectGroups" || change.field === "projectColors" || change.field === "projectEmoji"
+						? this.#groups.has(change.key)
+						: this.#lists.has(change.key) &&
+							(change.field !== "sessionParents" || !change.value || this.#lists.has(change.value));
+				if (visible) return change;
+				break;
+			}
+			case "rename-project-group":
+				return change;
 		}
 		throw new Error("The sidebar row is not available on this host");
 	}

@@ -122,6 +122,7 @@ export const ko: Record<string, string> = {
 	"sidebar.removedProjects.show": "다시 보이기",
 	"sidebar.removedProjects.showOne": "사이드바에 {name} 다시 보이기",
 	"sidebar.project.addFailed": "프로젝트를 추가하지 못했어요",
+	"sidebar.entryFailed": "변경을 저장하지 못했어요",
 	"sidebar.menu.locateFolder": "폴더 찾기…",
 	"sidebar.project.locateTitle": "{name} 폴더는 지금 어디에 있나요?",
 	"sidebar.project.located": "세션 {count}개를 {name} 폴더로 옮겼어요",

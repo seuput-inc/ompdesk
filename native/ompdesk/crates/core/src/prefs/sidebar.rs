@@ -37,6 +37,32 @@ const MAX_ORDERED_LISTS: usize = 300;
 const MAX_ORDERED_SESSIONS: usize = 500;
 /// `z.string().max(4096)` of a layout path: zod counts a string's code points, not its UTF-16 units.
 const MAX_LAYOUT_PATH: usize = 4096;
+/// Entries kept per keyed field (`MAX_ENTRIES`), the newest set last.
+const MAX_ENTRIES: usize = 500;
+
+/// The keyed text fields one `set-entry` sets (`SIDEBAR_ENTRY_FIELDS`), each `Record<key, string>`.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EntryField {
+    ProjectGroups,
+    ProjectColors,
+    ProjectEmoji,
+    SessionEmoji,
+    /// `""` says "no parent", so it is never trimmed away.
+    SessionParents,
+}
+
+impl EntryField {
+    fn name(self) -> &'static str {
+        match self {
+            EntryField::ProjectGroups => "projectGroups",
+            EntryField::ProjectColors => "projectColors",
+            EntryField::ProjectEmoji => "projectEmoji",
+            EntryField::SessionEmoji => "sessionEmoji",
+            EntryField::SessionParents => "sessionParents",
+        }
+    }
+}
 
 /// One change, naming only what it sets (`SidebarChange`). Unknown fields are dropped, as zod's object did.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -88,6 +114,17 @@ pub enum Change {
     TouchWorkspace {
         cwd: String,
     },
+    /// One keyed entry of an `EntryField`: `value` null removes it.
+    SetEntry {
+        field: EntryField,
+        key: String,
+        value: Option<String>,
+    },
+    /// Every project filed under group `from` moves to `to`, or out of any group (null).
+    RenameProjectGroup {
+        from: String,
+        to: Option<String>,
+    },
 }
 
 /// `move` of a session order: present means an object, never null.
@@ -125,6 +162,14 @@ impl Change {
             Change::SetGroupAlias { cwd, .. } => !cwd.is_empty() && raw.get("alias").is_some(),
             Change::SetRailPin { pin, .. } => RAIL_PINS.contains(&pin.as_str()),
             Change::TouchWorkspace { cwd } => !cwd.is_empty(),
+            Change::SetEntry { key, value, .. } => {
+                layout_path(key)
+                    && value
+                        .as_ref()
+                        .is_none_or(|value| value.chars().count() <= MAX_LAYOUT_PATH)
+                    && raw.get("value").is_some()
+            }
+            Change::RenameProjectGroup { from, .. } => !from.is_empty() && raw.get("to").is_some(),
         }
     }
 
@@ -141,6 +186,8 @@ impl Change {
             Change::SetSessionsArchived { .. } => "set-sessions-archived",
             Change::SetRailPin { .. } => "set-rail-pin",
             Change::TouchWorkspace { .. } => "touch-workspace",
+            Change::SetEntry { .. } => "set-entry",
+            Change::RenameProjectGroup { .. } => "rename-project-group",
         }
     }
 
@@ -300,6 +347,16 @@ pub fn read(value: Option<&Value>) -> Map<String, Value> {
         "mutedSessions".into(),
         strings(&string_list(field("mutedSessions"))),
     );
+    for entries in [
+        EntryField::ProjectGroups,
+        EntryField::ProjectColors,
+        EntryField::ProjectEmoji,
+        EntryField::SessionEmoji,
+        EntryField::SessionParents,
+    ] {
+        let name = entries.name();
+        out.insert(name.into(), Value::Object(valid_aliases(field(name))));
+    }
     out
 }
 
@@ -451,6 +508,53 @@ pub fn patch(state: &Map<String, Value>, change: &Change, now: f64) -> Map<Strin
                 "workspaceLastUsed",
                 Value::Object(entries.into_iter().collect()),
             )
+        }
+        Change::SetEntry { field, key, value } => {
+            let name = field.name();
+            let value = match field {
+                EntryField::SessionParents => value.clone(),
+                _ => value
+                    .as_deref()
+                    .map(js::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned),
+            };
+            let mut entries = valid_aliases(state.get(name));
+            if entries.get(key).and_then(Value::as_str) == value.as_deref() {
+                return Map::new();
+            }
+            entries.shift_remove(key);
+            if let Some(value) = value {
+                entries.insert(key.clone(), json!(value));
+            }
+            let skip = entries.len().saturating_sub(MAX_ENTRIES);
+            one(
+                name,
+                Value::Object(entries.into_iter().skip(skip).collect()),
+            )
+        }
+        Change::RenameProjectGroup { from, to } => {
+            let to = to.as_deref().map(js::trim).filter(|to| !to.is_empty());
+            if to == Some(from.as_str()) {
+                return Map::new();
+            }
+            let mut moved = false;
+            let mut next = Map::new();
+            for (cwd, group) in valid_aliases(state.get("projectGroups")) {
+                if group.as_str() != Some(from.as_str()) {
+                    next.insert(cwd, group);
+                } else {
+                    moved = true;
+                    if let Some(to) = to {
+                        next.insert(cwd, json!(to));
+                    }
+                }
+            }
+            if moved {
+                one("projectGroups", Value::Object(next))
+            } else {
+                Map::new()
+            }
         }
     }
 }
