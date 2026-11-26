@@ -64,6 +64,7 @@ import {
 import { FirstRunSetupSlot, useFirstRunActive } from "../onboarding/FirstRunSlot";
 import { ReadGroupCard } from "../tools/renderers/ReadGroupCard";
 import { ToolCard } from "../tools/ToolCard";
+import { BotCardsInRun, RunBotCards } from "./bots/bot-card-kind";
 import { ConversationNavigator } from "./ConversationNavigator";
 import {
 	buildConversationAnchors,
@@ -1422,37 +1423,40 @@ export const ProcessGroup = memo(function ProcessGroup({
 			{hasWork ? (
 				<div className={WORK_TURN_CLASS}>
 					<StageCallContext.Provider value={stageCall}>
-						<ExecutionGroup
-							expanded={expanded}
-							failureCount={row.failedEvents}
-							stoppedAt={row.stoppedAt}
-							live={live}
-							onExpandedChange={changeExpanded}
-							output={output}
-							notes={row.notes}
-							leadingSkills={row.skills}
-							superseded={superseded}
-							stepCount={row.stepCount + liveCards.length + (hasThinking ? 1 : 0)}
-							thinkingLive={hasThinking && !hasText}
-							toolCallIds={toolCallIds}
-							revealRequest={reveal}
-							todoSnapshots={row.todoSnapshots}
-							turn={turn}
-							endsTurn={endsTurn}
-						>
-							<div className="omp-process-group">
-								<StepGroups appendOnly={live} messages={row.messages} />
-								{hasThinking || liveCards.length > 0 ? (
-									<div className="omp-process-group--live">
-										{hasThinking ? <ThinkingBlock live /> : null}
-										<StreamingCards cards={liveCards} listed={row.messages.length > 0} />
-									</div>
-								) : null}
-							</div>
-						</ExecutionGroup>
+						<BotCardsInRun.Provider value>
+							<ExecutionGroup
+								expanded={expanded}
+								failureCount={row.failedEvents}
+								stoppedAt={row.stoppedAt}
+								live={live}
+								onExpandedChange={changeExpanded}
+								output={output}
+								notes={row.notes}
+								leadingSkills={row.skills}
+								superseded={superseded}
+								stepCount={row.stepCount + liveCards.length + (hasThinking ? 1 : 0)}
+								thinkingLive={hasThinking && !hasText}
+								toolCallIds={toolCallIds}
+								revealRequest={reveal}
+								todoSnapshots={row.todoSnapshots}
+								turn={turn}
+								endsTurn={endsTurn}
+							>
+								<div className="omp-process-group">
+									<StepGroups appendOnly={live} messages={row.messages} />
+									{hasThinking || liveCards.length > 0 ? (
+										<div className="omp-process-group--live">
+											{hasThinking ? <ThinkingBlock live /> : null}
+											<StreamingCards cards={liveCards} listed={row.messages.length > 0} />
+										</div>
+									) : null}
+								</div>
+							</ExecutionGroup>
+						</BotCardsInRun.Provider>
 					</StageCallContext.Provider>
 				</div>
 			) : null}
+			{row.messages.length > 0 ? <RunBotCards messages={row.messages} /> : null}
 			{streaming && !answerFirst && hasText ? <StreamingReply /> : null}
 		</>
 	);

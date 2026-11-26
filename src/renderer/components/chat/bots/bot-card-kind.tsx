@@ -2,13 +2,14 @@
  * Which transcript entries draw as a bot card (`BotCards.tsx`, its own chunk so the phone's first screen stays in its
  * budget), and the lazy entries ToolCard and MessageBubble render.
  */
-import { Suspense, useEffect } from "react";
+import { createContext, Suspense, useEffect } from "react";
 import { AGENT_CONTROL_TOOLS } from "../../../../shared/agent-control";
 import type { AgentMessage } from "../../../../shared/rpc-types";
 import { lazyChunk } from "../../../lib/chunk-load";
 import { resultDetails } from "../../../lib/format";
 import { botOfFolder, useBotsStore } from "../../../stores/bots";
 import { useTabsStore } from "../../../stores/tabs";
+import { selectToolEntry, toolEntryKey, useToolsStore } from "../../../stores/tools";
 import { type ChatCardKind, ensureHiddenCards, useHiddenCards } from "./hidden-cards";
 
 export type BotCardKind = ChatCardKind;
@@ -81,6 +82,49 @@ export function BotToolCard(props: {
 			<LazyBotToolCard {...props} />
 		</Suspense>
 	);
+}
+
+/**
+ * Set inside a work run: its tool rows stay rows there, since the run's bot cards show under it (`RunBotCards`), where
+ * Create bot or Sign in is seen without opening the run.
+ */
+export const BotCardsInRun = createContext(false);
+
+/** A finished run's bot cards, in call order, under the run. */
+export function RunBotCards({ messages }: { messages: readonly AgentMessage[] }) {
+	const calls = messages.flatMap(message =>
+		message.role === "assistant" && Array.isArray(message.content)
+			? message.content.flatMap(block =>
+					block.type === "toolCall" && botCardOf(block.name, block.arguments ?? {}) ? [block] : [],
+				)
+			: [],
+	);
+	if (calls.length === 0) return null;
+	return (
+		<div className="flex flex-col" data-run-bot-cards>
+			{calls.map(call => (
+				<RunBotCard args={call.arguments ?? {}} entryKey={toolEntryKey(call)} key={call.id} toolName={call.name} />
+			))}
+		</div>
+	);
+}
+
+function RunBotCard({
+	entryKey,
+	toolName,
+	args,
+}: {
+	entryKey: string;
+	toolName: string;
+	args: Record<string, unknown>;
+}) {
+	const entry = useToolsStore(s => selectToolEntry(s, entryKey));
+	const kind = botCardOf(toolName, args);
+	const hidden = useCardHidden(kind);
+	if (!kind || hidden || !entry || (entry.status !== "done" && entry.status !== "error")) return null;
+	const failed = entry.status === "error" || Boolean(entry.isError);
+	if (failed && kind !== "botRequests") return null;
+	return <BotToolCard args={args} failed={failed} kind={kind} result={entry.result} toolName={toolName} />;
 }
 
 export function ItemNote({ message }: { message: AgentMessage }) {
