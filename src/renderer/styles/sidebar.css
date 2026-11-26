@@ -19,6 +19,20 @@ html[data-input="touch"] :is(.omp-session-sidebar, .omp-sidebar-session-rename) 
 	--omp-sidebar-head-h: 2rem;
 }
 
+/* The sidebar is rows to press and drag, not text to select (the owner's report: a drag across rows selected their
+   words). One rule for the whole sidebar, a window's and the phone's drawer alike; a text field (the search, an inline
+   rename) selects as always. Tooltips and menus are portalled outside it. Touch input, long press and swipe are
+   pointer events and are untouched. Pinned by `e2e/sidebar-no-select.e2e.ts`. */
+.omp-session-sidebar {
+	-webkit-user-select: none;
+	user-select: none;
+}
+
+.omp-session-sidebar :is(input, textarea, [contenteditable="true"]) {
+	-webkit-user-select: text;
+	user-select: text;
+}
+
 .omp-session-sidebar .omp-sidebar-session-row,
 .omp-session-sidebar [data-sidebar-gap="session"],
 .omp-sidebar-session-rename {
