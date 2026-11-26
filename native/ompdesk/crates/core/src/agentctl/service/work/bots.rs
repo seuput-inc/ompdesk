@@ -891,7 +891,7 @@ impl AgentControl {
     }
 
     /// Changes a bot and tells main.
-    fn change_bot(&self, id: &str, change: impl FnOnce(&mut BotRecord)) -> R<BotRecord> {
+    pub(crate) fn change_bot(&self, id: &str, change: impl FnOnce(&mut BotRecord)) -> R<BotRecord> {
         let Some(bot) = self.bots().change(id, change) else {
             return fail("That bot is gone.");
         };
