@@ -2572,11 +2572,17 @@ export const SURFACES: readonly Surface[] = [
 	{
 		id: "bot-cards",
 		area: "A",
-		title: "Bot cards in a chat: a new bot offer with Create bot, an ask to a bot and a tool a bot added with Sign in and Remove",
+		title: "Bot cards in a chat: a new bot offer with Create bot, an ask to a bot and a tool a bot added with Sign in and Remove; both bots wear their face at rest",
 		// The host's fake omp answers "fixture bot cards" with the three calls ended (e2e/fixture/rpc-ui.ts).
 		open: async page => {
 			await ensureParityBot(page);
 			await promptShownTab(page, "fixture bot cards");
+			// The offer's new bot and the asked bot wear BotFace (no picture), drawn at rest: a test run's `botFaces` is "rest".
+			for (const card of ["botOffers", "botRequests"])
+				await page
+					.locator(`[data-bot-card='${card}'] [data-bot-face] [data-face-part='body']`)
+					.first()
+					.waitFor({ state: "attached", timeout: 15_000 });
 		},
 		ready: "[data-bot-card='toolsAdded']",
 		settle: 600,

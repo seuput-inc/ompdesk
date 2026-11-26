@@ -982,6 +982,12 @@ if (dir) {
 				for (const n of [1, 2, 3]) await stored(phone, work.cwd, `Parity stored ${n}`);
 				for (const n of [1, 2, 3]) await stored(a, clientProfile.project, `Parity stored ${n}`);
 				await a.reload();
+				// A's own project starts folded (its window shows B's session): unfolded once, so its rows can be reached.
+				const fold = a.locator(
+					`[data-workspace-group=${cssString(clientProfile.project)}] button[aria-expanded='false']`,
+				);
+				await a.locator(`[data-workspace-group=${cssString(clientProfile.project)}]`).waitFor({ timeout: 30_000 });
+				if ((await fold.count()) > 0) await fold.first().click();
 			};
 
 			const records: SurfaceRecord[] = [];
