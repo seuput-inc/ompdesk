@@ -302,7 +302,7 @@ export function setNewTaskAnnouncer(announce: (made: RpcWorktreeCreateResult) =>
 async function run(id: string): Promise<void> {
 	for (;;) {
 		const task = useNewTasksStore.getState().tasks[id];
-		if (!task || task.status !== "running") return;
+		if (task?.status !== "running") return;
 		const next = task.steps.find(step => step.state !== "done");
 		if (!next) {
 			// Its session's row takes over.
@@ -346,7 +346,7 @@ export function startNewTask(request: NewTaskRequest, rpc: TabRpc): string {
 /** Run a failed task again from the step that failed. */
 export function retryNewTask(id: string): void {
 	const task = useNewTasksStore.getState().tasks[id];
-	if (!task || task.status !== "failed") return;
+	if (task?.status !== "failed") return;
 	patch(id, current => ({
 		status: "running",
 		error: undefined,
