@@ -242,7 +242,7 @@ describe("POST /hooks/<id> through serve", () => {
 		expect(prompts).toEqual([]);
 		expect((await throughServe(id, bearer(), "from the tailnet")).status).toBe(202);
 		await expect.poll(() => prompts.length).toBe(1);
-		expect(prompts[0]).toContain("Webhook call: from the tailnet");
+		expect(prompts[0]).toContain(" · from the tailnet");
 	});
 
 	it("refuses a login that is not allowed, a tagged node, a wrong Origin and a cross-site request before the key is looked at", async () => {
