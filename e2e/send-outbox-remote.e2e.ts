@@ -278,9 +278,10 @@ for (const resume of [true, false])
 		expect(await doneReports(a, opener)).toEqual(["d3"]);
 
 		// The id A's agent was given before the relaunch still names the child. Without the resume nothing held the child's
-		// turn: B's new omp ran both follow-ups at once, and the child's tab, done with `Result: ok`, closed by itself
-		// (`auto_close.rs`) within a second of its restore, often before the test's first look at the tab list (nightly
-		// 45767457980: every read listed only the opener). Its done report names the tab it had.
+		// turn: B's new omp ran both follow-ups at once, and the child's tab reported done (`Result: ok`) and was gone
+		// from A's tab list, the finished child closing by itself (`auto_close.rs`), often before the test's first look
+		// (nightly 45767457980: every read listed only the opener, whose transcript held the child's done report). Its done
+		// report names the tab it had.
 		if (!resume) kid = (await doneMail(a, opener))[0]?.from ?? "";
 		expect(kid).not.toBe("");
 		expect(kid).not.toBe(oldId);
