@@ -4813,6 +4813,74 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			appendMessage(answer);
 			write({ type: "message_end", message: answer });
 			endTurn([user, call, ...results, answer]);
+		} else if (message === "fixture bot cards") {
+			// A bot's chat cards (FC70, FC71, FC76): it offers a new bot, asks the parity bot something and adds an MCP
+			// server that needs a sign-in; each call ends as stock's host tools answer them.
+			const steps = [
+				{
+					id: "fixture-bot-offer",
+					name: "ompdesk_bot",
+					args: {
+						action: "offer",
+						name: "Release watch",
+						text: "Watches the release branch and says what broke.",
+					},
+					text: "Offered the bot Release watch: the owner sees a card with Create bot in this chat.",
+				},
+				{
+					id: "fixture-bot-ask",
+					name: "ompdesk_session_send",
+					args: { session: "bot:Parity bot", message: "Which surfaces changed since yesterday?" },
+					text: "Sent to the bot Parity bot's home chat.",
+				},
+				{
+					id: "fixture-bot-tool",
+					name: "ompdesk_app",
+					args: {
+						action: "extensions.install_mcp",
+						args: { name: "tracker", transport: "http", url: "https://mcp.example.test" },
+					},
+					text: 'Added the MCP server tracker. It needs a sign-in: run extensions.mcp_sign_in with name "tracker".',
+				},
+			];
+			const call: AgentMessage = {
+				role: "assistant",
+				timestamp: Date.now(),
+				content: steps.map(step => ({ type: "toolCall", id: step.id, name: step.name, arguments: step.args })),
+				provider: model.provider,
+				model: model.id,
+				stopReason: "toolUse",
+			};
+			write({ type: "message_start", message: call });
+			appendMessage(call);
+			write({ type: "message_end", message: call });
+			const results: AgentMessage[] = steps.map(step => {
+				const result = { content: [{ type: "text" as const, text: step.text }] };
+				write({ type: "tool_execution_start", toolCallId: step.id, toolName: step.name, args: step.args });
+				write({ type: "tool_execution_end", toolCallId: step.id, toolName: step.name, result, isError: false });
+				const entry: AgentMessage = {
+					role: "toolResult",
+					toolCallId: step.id,
+					toolName: step.name,
+					...result,
+					isError: false,
+					timestamp: Date.now(),
+				};
+				appendMessage(entry);
+				write({ type: "message_end", message: entry });
+				return entry;
+			});
+			const answer: AgentMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "Offered Release watch, asked Parity bot and added the tracker." }],
+				timestamp: Date.now(),
+				provider: model.provider,
+				model: model.id,
+				stopReason: "stop",
+			};
+			appendMessage(answer);
+			write({ type: "message_end", message: answer });
+			endTurn([user, call, ...results, answer]);
 		} else if (message === "fixture subagent screenshots") {
 			// A subagent reads two PNGs back. Its transcript comes from its JSONL the way
 			// stock serves it: image bytes persisted as `blob:sha256:` references. One
