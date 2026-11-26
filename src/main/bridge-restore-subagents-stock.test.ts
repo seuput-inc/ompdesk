@@ -246,6 +246,7 @@ async function startOmp(provider: Provider, isolated: string, root: string, resu
 		OMP_PROFILE: "",
 		PI_PROFILE: "",
 		OMP_GUI_BRIDGE: address,
+		OMP_GUI_TEST_A2UI: "1",
 	};
 	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
 	for (const key of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]) Reflect.deleteProperty(env, key);
@@ -542,6 +543,7 @@ describe.skipIf(!existsSync(omp))("revived subagents on stock omp", () => {
 		expect(live?.system).toContain("<background-checks>");
 		expect(revived?.system).toBe(live?.system);
 		// Only the main agent shows surfaces to the person (modes/a2ui.ts): a subagent, live or revived, has no `a2ui`.
+		expect(provider.parentCalls.flatMap(call => call.tools)).toContain("a2ui");
 		expect([...(live?.tools ?? []), ...(revived?.tools ?? [])]).not.toContain("a2ui");
 	}, 240_000);
 
