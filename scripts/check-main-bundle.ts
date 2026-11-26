@@ -511,7 +511,10 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // "N sleeping" line (`SidebarSleeping`), the sort and sleep rules in `sidebarRows` and the minute clock they read are
 // on the phone's first screen: 2,247,759 bytes in branch run 45838019432 at ef8cfafa5 over its base's budget of
 // 2,247,284, so 555 bytes with the 80 added to the budget.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_255_567;
+// The Bots section as the Bots page's entry (its header's title button), every nav cell's tooltip and the list of
+// deleted projects gone (27 Nov 2026): 2,253,761 bytes in branch run 45866719061 at d87201a7b (budget 2,253,717), the
+// 44-byte excess plus 80 bytes carried into the merged budget.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_255_691;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
