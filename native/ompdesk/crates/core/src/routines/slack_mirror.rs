@@ -115,19 +115,24 @@ pub(crate) fn post_of<'a>(row: &'a Object, id: &str) -> Option<&'a Object> {
         .find(|post| post.get("id").and_then(Value::as_str) == Some(id))
 }
 
-/// Whether the channel reaches outside the workspace (Slack Connect): a direct message never does.
+/// A DM can include a member of another organization. The channel prefix is not evidence of privacy.
 pub(crate) async fn external(token: &str, channel: &str) -> Result<bool, String> {
-    if channel.starts_with('D') {
-        return Ok(false);
-    }
-    let info =
-        connectors::slack_api(token, "conversations.info", &json!({ "channel": channel })).await?;
-    let shared = |key: &str| {
-        info.pointer(&format!("/channel/{key}"))
+    let query: String = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("channel", channel)
+        .finish();
+    let method = format!("conversations.info?{query}");
+    let info = connectors::slack_request(token, &method, None).await?;
+    Ok(requires_external_consent(&info))
+}
+
+fn requires_external_consent(info: &Value) -> bool {
+    info.pointer("/channel/is_ext_shared")
+        .and_then(Value::as_bool)
+        != Some(false)
+        || info
+            .pointer("/channel/is_pending_ext_shared")
             .and_then(Value::as_bool)
             == Some(true)
-    };
-    Ok(shared("is_ext_shared") || shared("is_pending_ext_shared") || shared("is_shared"))
 }
 
 /// Posts the owner's message into the thread; Slack's `ts` of it.
@@ -188,6 +193,20 @@ mod tests {
         );
         assert_eq!(thread_key(&github), None);
         assert_eq!(thread_key("a plain line"), None);
+    }
+
+    #[test]
+    fn only_a_known_internal_conversation_can_mirror_without_consent() {
+        for channel in [
+            json!({"id":"D123","is_ext_shared":true}),
+            json!({"id":"D123"}),
+            json!({"is_ext_shared":false,"is_pending_ext_shared":true}),
+        ] {
+            assert!(requires_external_consent(&json!({"channel":channel})));
+        }
+        assert!(!requires_external_consent(&json!({
+            "channel":{"is_shared":true,"is_org_shared":true,"is_ext_shared":false}
+        })));
     }
 
     #[test]

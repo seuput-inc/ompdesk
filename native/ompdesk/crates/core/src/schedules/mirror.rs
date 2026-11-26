@@ -1,7 +1,7 @@
 //! A bot's Slack thread chats as main reaches them (`routines/slack_mirror.rs` holds the rules):
 //! - `schedules.threadChat {service, run, session}`: the chat main opened for a thread's first ask.
 //! - `schedules.mirror {service, session, text, botToken}`: the owner typed `text` in `session`; when it is a thread's
-//!   chat set to post, it posts there (after asking Slack, once, whether the thread is a Slack Connect one). Answers
+//!   chat set to post, it posts there (checking Slack Connect before each post). Answers
 //!   `{posted: bool}`. The bot token comes from main's keystore for this one call and is never kept.
 //! - `schedules.mirrorAction {service, id, key, op, post?, on?, botToken?}`: the owner's `set` (the chat's switch),
 //!   `retry` and `dismiss` of a failed post, `delete` of a posted one from Slack.
@@ -71,11 +71,25 @@ async fn send(
     let Some((_, channel, thread)) = place_of(key) else {
         return false;
     };
-    service.with(|engine| {
+    let external = slack_mirror::external(token, channel).await.unwrap_or(true);
+    let admitted = service.with(|engine| {
+        let mut admitted = false;
         engine.change_thread(id, key, |row| {
-            slack_mirror::with_post(row, post_id, Some(post_row(post_id, text, "posting", now)));
-        })
+            row.insert("external".into(), external.into());
+            admitted = slack_mirror::posts(row);
+            if admitted {
+                slack_mirror::with_post(
+                    row,
+                    post_id,
+                    Some(post_row(post_id, text, "posting", now)),
+                );
+            }
+        });
+        admitted
     });
+    if !admitted {
+        return false;
+    }
     let sent = slack_mirror::post(token, channel, thread, text).await;
     let now = service.at(None);
     let posted = sent.is_ok();
@@ -113,25 +127,6 @@ async fn mirror(call: Call) -> Result<Reply, Fault> {
     if params.text.trim().is_empty() || !slack_mirror::may_post(&row) {
         return Reply::json(&json!({ "posted": false }));
     }
-    let mut row = row;
-    if row.get("external").and_then(Value::as_bool).is_none() {
-        let Some((_, channel, _)) = place_of(&key) else {
-            return Reply::json(&json!({ "posted": false }));
-        };
-        // Unknown is never posted on: a Slack Connect thread reaches people outside the workspace.
-        let Ok(external) = slack_mirror::external(&params.bot_token, channel).await else {
-            return Reply::json(&json!({ "posted": false }));
-        };
-        service.with(|engine| {
-            engine.change_thread(&id, &key, |row| {
-                row.insert("external".into(), external.into());
-            })
-        });
-        row.insert("external".into(), external.into());
-    }
-    if !slack_mirror::posts(&row) {
-        return Reply::json(&json!({ "posted": false }));
-    }
     let post_id = format!("post-{now}-{}", super::uuid());
     let posted = send(
         &service,
@@ -165,9 +160,12 @@ async fn action(call: Call) -> Result<Reply, Fault> {
             service.with(|engine| {
                 engine.change_thread(&params.id, &params.key, |row| {
                     row.insert("mirror".into(), on.into());
-                    // Turned on by the owner: a Slack Connect thread posts too; a block is cleared to try again.
+                    // Only a switch shown as external grants permission to post outside the workspace.
                     if on {
-                        row.insert("chosen".into(), true.into());
+                        row.insert(
+                            "chosen".into(),
+                            (row.get("external") == Some(&Value::Bool(true))).into(),
+                        );
                         row.shift_remove("blocked");
                     }
                 })

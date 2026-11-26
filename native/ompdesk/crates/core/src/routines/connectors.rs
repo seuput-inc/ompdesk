@@ -539,16 +539,25 @@ fn links(text: &str) -> String {
 
 /// Slack's Web API: one `POST` with the bot's token; its `ok`, else its error code.
 pub(crate) async fn slack_api(token: &str, method: &str, body: &Value) -> Result<Value, String> {
+    let body = serde_json::to_vec(body).map_err(|error| error.to_string())?;
+    slack_request(token, method, Some(&body)).await
+}
+
+/// Slack supports JSON for write methods; reads use a GET with query parameters.
+pub(super) async fn slack_request(
+    token: &str,
+    method: &str,
+    body: Option<&[u8]>,
+) -> Result<Value, String> {
     let url = format!("https://slack.com/api/{method}");
     let bearer = format!("Bearer {token}");
-    let body = serde_json::to_vec(body).map_err(|error| error.to_string())?;
     let answer = http::send(Request {
         url: &url,
         headers: &[
             ("authorization", bearer.as_str()),
             ("content-type", "application/json; charset=utf-8"),
         ],
-        body: Some(&body),
+        body,
         proxy: None,
     })
     .await
