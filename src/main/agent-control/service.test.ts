@@ -4079,6 +4079,33 @@ describe("autoClose: opened sessions whose work landed", () => {
 			expect(item?.state).not.toBe("running");
 		}
 	});
+
+	it("keeps a restored child its opener still owes a message", async () => {
+		// relaunch-child-ids.e2e.ts (main 45802157176, probe 45833528703): the opener's steer was unread when the app
+		// quit, and the first pass after the relaunch closed the child it was owed to (its last answer ends Result: ok).
+		const dir = mkdtempSync(join(tmpdir(), "agent-owed-child-"));
+		try {
+			const host = new FakeHost({ tabId: "main0001", title: "Boss", sessionPath: "/s/boss.jsonl" });
+			host.files.sendOutbox = join(dir, "send-outbox.json");
+			host.sentMarks = async () => ({ instance: "omp-a", journaled: [] });
+			const service = control(host, { sendReadyWaitMs: 200 });
+			await service.run("main0001", T.open, { message: "do it" });
+			const child = [...host.tabsById.values()].find(tab => tab.tabId !== "main0001") as FakeTab;
+			Object.assign(child, { busy: false, sessionPath: "/s/kid.jsonl", autoClosable: true, status: "starting" });
+			const sent = await service.run("main0001", T.send, { session: child.tabId, message: "Also do C" });
+			expect(sent.text).toContain("kept; it is still starting");
+			Object.assign(child, {
+				status: "ready",
+				restored: true,
+				lastRun: { id: 1, stopReason: "stop" },
+				last: "Done: parser fixed.\nResult: ok",
+			});
+			await service.autoClose("main0001");
+			expect(closes(host)).toHaveLength(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
 
 const desktop: ControlDevice = { id: "dev-win-1", name: "DESKTOP-91ID999", state: "online" };
