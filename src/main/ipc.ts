@@ -37,7 +37,7 @@ import {
 	privacyPaneUrl,
 	reviewFromDevice,
 } from "../shared/agent-control";
-import { BOT_CONNECTORS_COMMAND } from "../shared/bot-connectors";
+import { BOT_CONNECTORS_COMMAND } from "../shared/bot-connector-channels";
 import { BOTS_COMMAND, BOTS_FOLDER, type BotsCall } from "../shared/bots";
 import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";

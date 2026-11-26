@@ -11,8 +11,6 @@
  */
 import type { Schedule, ScheduleEvent } from "./schedules";
 
-export const BOT_CONNECTORS_COMMAND = "bot-connectors:command";
-
 export const BOT_CONNECTOR_SERVICES = ["slack", "github", "linear", "google"] as const;
 export type BotConnectorService = (typeof BOT_CONNECTOR_SERVICES)[number];
 

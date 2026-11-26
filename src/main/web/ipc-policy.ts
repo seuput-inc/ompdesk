@@ -10,7 +10,7 @@
  * unchanged; `transform` = the host rewrites it for a web page; `client` = the page makes it itself.
  */
 import { AGENT_CONTROL_APP, AGENT_CONTROL_REVIEW, AGENT_CONTROL_VIEW } from "../../shared/agent-control";
-import { BOT_CONNECTORS_COMMAND } from "../../shared/bot-connectors";
+import { BOT_CONNECTORS_COMMAND } from "../../shared/bot-connector-channels";
 import { BOTS_COMMAND, BOTS_STATE } from "../../shared/bots";
 import { BRIDGE_HEALTH_GET } from "../../shared/bridge-health";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";

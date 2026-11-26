@@ -31,7 +31,8 @@ import type {
 	AiMemorySweep,
 	AiMemoryWriteInput,
 } from "./ai-memory";
-import { BOT_CONNECTORS_COMMAND, type BotConnectorsApi } from "./bot-connectors";
+import { BOT_CONNECTORS_COMMAND } from "./bot-connector-channels";
+import type { BotConnectorsApi } from "./bot-connectors";
 import { BOTS_COMMAND, BOTS_STATE, type BotsState } from "./bots";
 import type { CliToolId, CliUpdateState } from "./cli-update";
 import type { CreditSpendState } from "./credit-spend";
