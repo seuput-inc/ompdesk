@@ -918,6 +918,15 @@
 	width: 100%;
 }
 
+/* The rail's last item: the list of every loaded prompt with its filter (ConversationNavigator `PromptList`). */
+.omp-conversation-nav-list {
+	flex: 0 0 auto;
+	display: flex;
+	justify-content: center;
+	margin-top: var(--sc-space-1);
+	pointer-events: auto;
+}
+
 /* The top item of a windowed rail: how many turns lie above the ticks, one press of it moves the window a page up. */
 .omp-conversation-nav-earlier-slot {
 	position: relative;
@@ -1120,6 +1129,26 @@
 :root[data-theme="dark"] .omp-user-bubble {
 	background: color-mix(in srgb, var(--sc-text) 7%, var(--sc-bg));
 	border-color: color-mix(in srgb, var(--sc-text) 6%, transparent);
+}
+
+/* A long prompt folded (MessageBubble `PromptFold`): its first lines, fading out at the clip's foot (Orca's 11rem
+   clip and 1.75rem fade). A link under the fold stays reachable: "Show full message" opens it. */
+.omp-prompt-fold[data-prompt-folded] {
+	max-height: 11rem;
+	overflow: hidden;
+	mask-image: linear-gradient(to bottom, #000 calc(100% - 1.75rem), transparent);
+}
+
+/* Find in the conversation (chat/TranscriptFind.tsx): every match a mounted row shows, the current one stronger.
+   CSS highlights paint without touching the DOM React owns; only color and background apply. */
+::highlight(omp-find) {
+	background-color: color-mix(in srgb, var(--sc-warning) 30%, transparent);
+	color: inherit;
+}
+
+::highlight(omp-find-active) {
+	background-color: color-mix(in srgb, var(--sc-warning) 65%, transparent);
+	color: inherit;
 }
 
 /* User turn: a compact soft bubble on the right. Its actions sit at the bubble's bottom-left when the row has room

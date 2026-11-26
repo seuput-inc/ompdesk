@@ -245,6 +245,16 @@ describe("ModelPicker pick", () => {
 		expect(setModel).toHaveBeenCalledWith("openai", "gpt-5");
 		expect(setModelRole).not.toHaveBeenCalled();
 	});
+
+	it("asks the providers again from its Refresh models button", async () => {
+		await mount();
+		const refresh = vi.fn(useModelStore.getState().refreshAvailableModels);
+		await act(async () => useModelStore.setState({ refreshAvailableModels: refresh }));
+		const button = document.querySelector("[data-model-refresh]") as unknown as HTMLElement;
+		expect(button.getAttribute("aria-label")).toBe("Refresh models");
+		await act(async () => button.click());
+		expect(refresh).toHaveBeenCalledWith(true);
+	});
 });
 
 describe("ModelPicker compact layout", () => {

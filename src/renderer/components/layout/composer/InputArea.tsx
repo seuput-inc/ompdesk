@@ -97,6 +97,9 @@ export function InputArea() {
 	const setText = useComposerStore(s => s.setDraft);
 	const images = useComposerStore(s => s.images);
 	const setImages = useComposerStore(s => s.setImages);
+	/** Every picture of the draft in order, restored ones still being checked or missing included. */
+	const pictureSlots = useComposerStore(s => s.pictureSlots);
+	const setPictureSlots = useComposerStore(s => s.setPictureSlots);
 	/** A queued message is being edited in the field (ComposerQueueEdit.tsx): the saved draft is the one it replaced. */
 	const editingQueued = useComposerStore(s => s.editingQueued);
 	/** ⌃G: the composer expands in place to fill the session pane. */
@@ -141,7 +144,7 @@ export function InputArea() {
 	useComposerDraft({
 		// While a queued message is edited the field holds it, not the draft: the saved draft stays the one it replaced.
 		text: editingQueued ? editingQueued.snapshot.draft : text,
-		imageCount: images.length,
+		pictures: editingQueued ? editingQueued.snapshot.pictureSlots : pictureSlots,
 		runtimeTabId,
 		device: historyDevice,
 		sessionFile,
@@ -159,7 +162,6 @@ export function InputArea() {
 		runtimeTabId,
 		mountedRef,
 		insertAtCaret,
-		setImages,
 		textareaRef,
 		regionRef,
 	});
@@ -212,8 +214,8 @@ export function InputArea() {
 		cwd,
 		owner: `${runtimeTabId}:${sessionId}`,
 		device: historyDevice,
-		images,
-		setImages,
+		pictureSlots,
+		setPictureSlots,
 		placeDraft,
 	});
 
@@ -271,6 +273,8 @@ export function InputArea() {
 			const composer = sessionRuntimeStore<ComposerStore>(runtimeTabId, "composer") ?? useComposerStore;
 			// Edit queued: Send saves the message back into the queue instead of sending the field.
 			if (composer.getState().editingQueued) return queueEdit.save(composer.getState().draft);
+			// A restored picture still being checked, or one to attach again, is never left out of a send silently.
+			if (composer.getState().pictureSlots.length !== composer.getState().images.length) return false;
 			const hadContent = (overrideText ?? composer.getState().draft).trim() !== "" || images.length > 0;
 			dispatchSend(overrideText);
 			const after = composer.getState();
@@ -309,7 +313,7 @@ export function InputArea() {
 	const keys = useComposerKeys({
 		rpc,
 		text,
-		images,
+		images: pictureSlots,
 		setImages,
 		textareaRef,
 		placeDraft,
@@ -336,6 +340,7 @@ export function InputArea() {
 		(sendStatus !== "ready" && sendStatus !== "starting") ||
 		sending ||
 		submissionUncertain ||
+		pictureSlots.length !== images.length ||
 		(!text.trim() && images.length === 0);
 	// The toolbar is memoised: its handlers keep their identity while the draft changes.
 	const sendFromToolbar = useStableCallback(() => {
@@ -382,7 +387,7 @@ export function InputArea() {
 	const showSuggestionHint = shownPrompt !== undefined && text === "";
 	const menuId = useId();
 	/** While a turn runs, an empty draft makes the action button Stop (send-slot.ts). */
-	const hasDraft = text.trim() !== "" || images.length > 0;
+	const hasDraft = text.trim() !== "" || pictureSlots.length > 0;
 
 	return (
 		<div
@@ -482,10 +487,10 @@ export function InputArea() {
 						<ComposerRestoredQueue onSettled={focusField} />
 						<ComposerOutbox onSettled={focusField} />
 						<ComposerAttachments
-							images={images}
+							onAttachAgain={openFilePicker}
+							pictureSlots={pictureSlots}
 							placeDraft={placeDraft}
 							sendingFiles={sendingFiles}
-							setImages={setImages}
 							setText={setText}
 							text={text}
 							textareaRef={textareaRef}

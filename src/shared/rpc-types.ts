@@ -3087,6 +3087,9 @@ export type AgentSessionEvent =
 			errorMessage?: string;
 			skipped?: boolean;
 	  }
+	/** One pair per manual compaction (RPC `compact`, `/compact`, a handoff, an extension's `ctx.compact()`), whoever asked. */
+	| { type: "manual_compaction_start"; mode?: string }
+	| { type: "manual_compaction_end"; result?: unknown; aborted: boolean; skipped?: boolean; errorMessage?: string }
 	| {
 			type: "auto_retry_start";
 			attempt: number;

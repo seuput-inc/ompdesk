@@ -6143,6 +6143,14 @@ shell quoting of a dropped path (src/shared/shell-quote.ts), the scrollback find
 colours and its safe find (src/renderer/components/panels/TerminalFind.tsx) and Option's word
 motions (src/renderer/lib/terminal-keys.ts).
 
+Conversation code adapted from the same Orca commit, with changes:
+
+- src/renderer/components/layout/composer/pasted-links.ts, from
+  src/renderer/src/components/native-chat/paste/native-chat-pasted-links.ts and
+  src/shared/clipboard/clipboard-link-html.ts (links kept in a paste, a URL over a selection)
+- src/renderer/components/chat/transcript-find.ts (`findScrollDelta`), from
+  src/renderer/src/components/native-chat/viewport/find/native-chat-find-visibility.ts
+
 Permission is hereby granted, free of charge, to any person obtaining a copy of the palettes
 and associated documentation files (the "Software"), to deal in the Software without
 restriction, including without limitation the rights to use, copy, modify, merge, publish,

@@ -46,6 +46,8 @@ mod update_commands;
 mod update_files;
 #[cfg(target_os = "macos")]
 mod update_stage;
+#[cfg(target_os = "macos")]
+mod web_view_keys;
 #[cfg(windows)]
 mod window_activation;
 mod window_bounds;
@@ -887,6 +889,8 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     }
     #[cfg(windows)]
     page_watch::attach(&window, wc);
+    #[cfg(target_os = "macos")]
+    web_view_keys::attach(&window, wc);
     apply_size(&window, bounds.width, bounds.height, false)?;
     let webview = runtime()
         .app

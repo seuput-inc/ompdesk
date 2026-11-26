@@ -207,7 +207,7 @@ async fn real_node_gateway_loopback_and_credit() {
         shell_preview::LaunchConfig {
             executable,
             profile_root: dir.join("browser"),
-            command_timeout: Duration::from_secs(15),
+            command_timeout: shell_preview::LaunchConfig::COMMAND_TIMEOUT,
         },
         navigation.clone(),
         Arc::new(sessions::preview::Initializer),

@@ -132,7 +132,8 @@ export function TurnErrorNotice({
 				await retryLastTurn(onEmpty, rpc, tabId);
 				return;
 			}
-			const { response, cancelled } = await runManualMaintenance("compact", () => rpc.compact(), tabId);
+			const { response, cancelled, skipped } = await runManualMaintenance("compact", () => rpc.compact(), tabId);
+			if (skipped) return;
 			if (cancelled) {
 				toast({ variant: "info", message: t("command.compactCancelled") });
 				return;

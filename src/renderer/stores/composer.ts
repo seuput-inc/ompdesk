@@ -18,6 +18,58 @@ import { createScopedStoreHook } from "./session-runtime-context";
 export interface ComposerImage {
 	content: ImageContent;
 	preview: string;
+	/** The picture's file name, when it came from a file: a missing draft picture is attached again by it. */
+	name?: string;
+	/** The saved draft picture this one was read back from (draft-persistence.ts). */
+	draftRef?: DraftPictureRef;
+}
+
+/** A draft picture kept by reference with the saved draft: its bytes are read back after a relaunch. */
+export interface DraftPictureRef {
+	id: string;
+	name: string;
+	mimeType: string;
+}
+
+/**
+ * One place in the draft's picture strip: a ready picture, or a saved one not read back yet (`pending`) or gone
+ * (`missing`, attached again by name). Only ready pictures are sendable; the rest are never `ImageContent`.
+ */
+export type DraftPictureSlot = ComposerImage | { ref: DraftPictureRef; status: "pending" | "missing" };
+
+export const isReadyPicture = (slot: DraftPictureSlot): slot is ComposerImage => "content" in slot;
+
+const readyOf = (slots: readonly DraftPictureSlot[]): ComposerImage[] => slots.filter(isReadyPicture);
+
+/** The slots once the ready pictures are `ready`: unread ones keep their places, gone pictures leave, new ones go last. */
+function withReady(slots: readonly DraftPictureSlot[], ready: readonly ComposerImage[]): DraftPictureSlot[] {
+	const left = new Set(ready);
+	const kept = slots.filter(slot => !isReadyPicture(slot) || left.delete(slot));
+	return [...kept, ...left];
+}
+
+/**
+ * Pictures attached to the draft: the same bytes twice are one, and a picture whose name an unread saved one
+ * has takes that one's place (the first such, only). Returns the slots and how many were dropped as duplicates.
+ */
+function attachToSlots(
+	slots: readonly DraftPictureSlot[],
+	added: readonly ComposerImage[],
+): { slots: DraftPictureSlot[]; duplicates: number } {
+	const next = [...slots];
+	const seen = new Set(readyOf(slots).map(image => image.content.data));
+	let duplicates = 0;
+	for (const image of added) {
+		if (seen.has(image.content.data)) {
+			duplicates++;
+			continue;
+		}
+		seen.add(image.content.data);
+		const at = image.name ? next.findIndex(slot => !isReadyPicture(slot) && slot.ref.name === image.name) : -1;
+		if (at === -1) next.push(image);
+		else next[at] = image;
+	}
+	return { slots: next, duplicates };
 }
 
 /** How long the first Esc of a stop (or of a draft's clear) waits for its second. */
@@ -67,7 +119,7 @@ export interface EditingQueued {
 	/** Settles once the core holds the message and stock's queue let it go (true), or the edit could not begin (false). */
 	began: Promise<boolean>;
 	/** The draft and pictures the field held before the edit took it over. */
-	snapshot: { draft: string; images: ComposerImage[] };
+	snapshot: { draft: string; pictureSlots: DraftPictureSlot[] };
 }
 
 export interface ComposerStore {
@@ -127,11 +179,28 @@ export interface ComposerStore {
 	}) => void;
 	/** Leave the edit: the draft and pictures it replaced come back exactly. */
 	endEditQueued: () => void;
+	/** The draft's ready (sendable) pictures, in strip order: always `pictureSlots`' ready ones. */
 	images: ComposerImage[];
+	/** The draft's picture strip in order, saved pictures not read back yet included. */
+	pictureSlots: DraftPictureSlot[];
 	/** Replace the draft, or compute the next value from the current one
 	 * (React setState parity — InputArea's updater-form call sites unchanged). */
 	setDraft: (next: string | ((current: string) => string)) => void;
+	/**
+	 * A list replaces the whole strip (unread saved pictures too); an updater maps the ready pictures, and unread
+	 * saved ones keep their places.
+	 */
 	setImages: (next: ComposerImage[] | ((current: ComposerImage[]) => ComposerImage[])) => void;
+	setPictureSlots: (next: DraftPictureSlot[] | ((current: DraftPictureSlot[]) => DraftPictureSlot[])) => void;
+	/** Attach pictures (see {@link attachToSlots}); returns how many were already attached. */
+	attachImages: (added: readonly ComposerImage[]) => number;
+	/** Put a saved draft's pictures in the strip as unread places, at once; a ref already there is not added twice. */
+	restorePictureRefs: (refs: readonly DraftPictureRef[]) => void;
+	/**
+	 * A saved picture's read ended: its picture, or null when it is gone or could not be read. Lands only in the
+	 * place still waiting for that very ref (the field's or a queued edit's parked draft); otherwise nothing.
+	 */
+	resolvePictureRef: (ref: DraftPictureRef, image: ComposerImage | null) => void;
 	reset: () => void;
 }
 
@@ -184,6 +253,7 @@ export const createComposerStore = () =>
 					restoredQueue: state.restoredQueue.filter(item => !taken.includes(item)),
 					draft: text ? prependToDraft(text, state.draft) : state.draft,
 					images: [...state.images, ...taken.flatMap(item => item.images)],
+					pictureSlots: [...state.pictureSlots, ...taken.flatMap(item => item.images)],
 					stopArmedAt: null,
 				};
 			}),
@@ -199,10 +269,11 @@ export const createComposerStore = () =>
 					images,
 					token,
 					began,
-					snapshot: state.editingQueued?.snapshot ?? { draft: state.draft, images: state.images },
+					snapshot: state.editingQueued?.snapshot ?? { draft: state.draft, pictureSlots: state.pictureSlots },
 				},
 				draft: text,
 				images: [],
+				pictureSlots: [],
 				stopArmedAt: null,
 			})),
 		endEditQueued: () =>
@@ -212,21 +283,68 @@ export const createComposerStore = () =>
 				return {
 					editingQueued: null,
 					draft: editing.snapshot.draft,
-					images: editing.snapshot.images,
+					images: readyOf(editing.snapshot.pictureSlots),
+					pictureSlots: editing.snapshot.pictureSlots,
 					stopArmedAt: null,
 				};
 			}),
 		images: [],
+		pictureSlots: [],
 		setDraft: next =>
 			set(state => {
 				const draft = typeof next === "function" ? next(state.draft) : next;
 				return draft === state.draft ? state : { draft, stopArmedAt: null };
 			}),
-		setImages: next => set(state => ({ images: typeof next === "function" ? next(state.images) : next })),
+		setImages: next =>
+			set(state => {
+				if (typeof next !== "function") return { images: next, pictureSlots: next };
+				const pictureSlots = withReady(state.pictureSlots, next(state.images));
+				return { images: readyOf(pictureSlots), pictureSlots };
+			}),
+		setPictureSlots: next =>
+			set(state => {
+				const pictureSlots = typeof next === "function" ? next(state.pictureSlots) : next;
+				return { pictureSlots, images: readyOf(pictureSlots) };
+			}),
+		attachImages: added => {
+			const { slots, duplicates } = attachToSlots(get().pictureSlots, added);
+			if (duplicates < added.length) set({ pictureSlots: slots, images: readyOf(slots) });
+			return duplicates;
+		},
+		restorePictureRefs: refs =>
+			set(state => {
+				const held = new Set(
+					state.pictureSlots.map(slot => (isReadyPicture(slot) ? slot.draftRef?.id : slot.ref.id)),
+				);
+				const fresh = refs.filter(ref => !held.has(ref.id));
+				if (fresh.length === 0) return state;
+				return {
+					pictureSlots: [...state.pictureSlots, ...fresh.map(ref => ({ ref, status: "pending" as const }))],
+				};
+			}),
+		resolvePictureRef: (ref, image) =>
+			set(state => {
+				const settle = (slots: DraftPictureSlot[]): DraftPictureSlot[] | null => {
+					const at = slots.findIndex(
+						slot => !isReadyPicture(slot) && slot.ref === ref && slot.status === "pending",
+					);
+					if (at === -1) return null;
+					const next = [...slots];
+					next[at] = image ? { ...image, name: ref.name, draftRef: ref } : { ref, status: "missing" };
+					return next;
+				};
+				const pictureSlots = settle(state.pictureSlots);
+				if (pictureSlots) return { pictureSlots, images: readyOf(pictureSlots) };
+				const editing = state.editingQueued;
+				const parked = editing && settle(editing.snapshot.pictureSlots);
+				if (!editing || !parked) return state;
+				return { editingQueued: { ...editing, snapshot: { ...editing.snapshot, pictureSlots: parked } } };
+			}),
 		reset: () =>
 			set({
 				draft: "",
 				images: [],
+				pictureSlots: [],
 				sending: false,
 				submissionUncertain: false,
 				cancelSubmit: null,

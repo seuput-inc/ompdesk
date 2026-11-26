@@ -467,7 +467,7 @@ async fn serve(
                     LaunchConfig {
                         executable,
                         profile_root: profile_root.clone(),
-                        command_timeout: Duration::from_secs(30),
+                        command_timeout: LaunchConfig::COMMAND_TIMEOUT,
                     },
                     Arc::new(NavigationGate(Arc::clone(&pages))),
                     Arc::new(initialize::Initializer),

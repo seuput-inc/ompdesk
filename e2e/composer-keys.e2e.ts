@@ -164,13 +164,20 @@ for (const language of variants(["en", "ko"] as const))
 				await expect(input).toHaveValue("hi");
 				await input.fill("");
 
-				// A click on the transcript focuses it without a ring, and a key that stays there (Backspace) draws
+				// A click on the transcript focuses it without a ring, and a key that stays there (ArrowDown) draws
 				// none either; reached from the keyboard (Shift+F6 from the composer) it shows its ring.
 				const ring = () =>
 					scroller.evaluate(el => (el.matches(":focus") ? getComputedStyle(el).outlineStyle : "unfocused"));
 				await scroller.click({ position: { x: 300, y: 200 } });
-				await page.keyboard.press("Backspace");
+				await page.keyboard.press("ArrowDown");
 				expect(await ring()).toBe("none");
+				// Backspace there hands focus to the composer and deletes nothing (Orca's root key routing).
+				await input.fill("kept");
+				await scroller.click({ position: { x: 300, y: 200 } });
+				await page.keyboard.press("Backspace");
+				await expect(input).toBeFocused();
+				await expect(input).toHaveValue("kept");
+				await input.fill("");
 				await input.focus();
 				await page.keyboard.press("Shift+F6");
 				expect(await ring()).toBe("solid");

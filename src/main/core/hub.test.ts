@@ -146,6 +146,22 @@ describe("the hub connection", () => {
 		expect(core().pid).not.toBe(before);
 	});
 
+	it("names the silent side of a lost wait truly under a test's fake clock", () => {
+		// turn-resume-limit.test.ts lost a wait with its clock set back two weeks and moved on by days: the trace
+		// compared that fake time with the worker's real one and said the thread never took the wait.
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(new Date("2026-11-12T02:08:02Z"));
+			vi.advanceTimersByTime(319_918_000);
+			const hub = new Hub();
+			const instance = probe(hub);
+			expect(() => hub.call(instance.id, "wait")).toThrow(CoreError);
+			expect(instance.lost[0]?.message).toMatch(/its thread took the wait after \d+ ms/);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("never hands a question of the next core the answer to one the lost core asked", async () => {
 		const hub = new Hub();
 		const stale = Promise.withResolvers<string>();

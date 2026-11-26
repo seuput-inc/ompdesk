@@ -12,7 +12,7 @@ afterEach(() => {
 	document.body.innerHTML = "";
 });
 
-function setup(composerScroll = { top: 0, client: 40, height: 40 }) {
+function setup(composerScroll = { top: 0, client: 40, height: 40 }, platform: "mac" | "windows" = "mac") {
 	document.body.innerHTML = `<div class="omp-session-pane">
 		<div class="transcript" tabindex="0"><button id="tool">Expand</button><input id="field"></div>
 		<div class="omp-composer-anchor"><textarea class="omp-composer-input"></textarea></div>
@@ -28,7 +28,7 @@ function setup(composerScroll = { top: 0, client: 40, height: 40 }) {
 		composer.focused = true;
 	};
 	const page = vi.fn((_direction: "up" | "down", event: KeyboardEvent) => event.preventDefault());
-	cleanup = installPaneKeys(pane, page);
+	cleanup = installPaneKeys(pane, page, platform);
 	return { composer, page };
 }
 
@@ -81,5 +81,38 @@ describe("installPaneKeys", () => {
 		press("textarea", { key: "PageUp" });
 		press("textarea", { key: "PageDown" });
 		expect(page).not.toHaveBeenCalled();
+	});
+
+	it("focuses the composer on Backspace or Delete outside a field, deleting nothing", () => {
+		const { composer } = setup();
+		expect(press("#tool", { key: "Backspace" }).defaultPrevented).toBe(true);
+		expect(composer.focused).toBe(true);
+		composer.focused = undefined;
+		press(".transcript", { key: "Delete" });
+		expect(composer.focused).toBe(true);
+		composer.focused = undefined;
+		press("#field", { key: "Backspace" });
+		press("#tool", { key: "Backspace", metaKey: true });
+		expect(composer.focused).toBeUndefined();
+	});
+
+	it("focuses the composer before the platform's paste chord lands, leaving the paste to the browser", () => {
+		const mac = setup();
+		expect(press(".transcript", { key: "v", metaKey: true }).defaultPrevented).toBe(false);
+		expect(mac.composer.focused).toBe(true);
+		mac.composer.focused = undefined;
+		press(".transcript", { key: "v", ctrlKey: true });
+		press("#field", { key: "v", metaKey: true });
+		expect(mac.composer.focused).toBeUndefined();
+		cleanup();
+		const windows = setup(undefined, "windows");
+		press(".transcript", { key: "v", ctrlKey: true });
+		expect(windows.composer.focused).toBe(true);
+		windows.composer.focused = undefined;
+		press("#tool", { key: "Insert", shiftKey: true });
+		expect(windows.composer.focused).toBe(true);
+		windows.composer.focused = undefined;
+		press("#tool", { key: "v", metaKey: true });
+		expect(windows.composer.focused).toBeUndefined();
 	});
 });
