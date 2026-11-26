@@ -4727,6 +4727,36 @@ describe("SidecarPool and a lost core", () => {
 		expect(pool.releaseTab("tab-b", after)).toBe(true);
 		expect(pool.size).toBe(1);
 	});
+
+	it("keeps who opened each tab through a lost core, for the devices' list and the next layout", () => {
+		const { pool } = fakePool();
+		const fw = fakeWindow(1);
+		pool.acquire("/a", fw.win, "tab-boss", "/sessions/boss.jsonl");
+		pool.acquire("/wt/x", fw.win, "tab-child", "/sessions/child.jsonl");
+		pool.setTabOpener("tab-child", "tab-boss");
+		// Restored from a layout: only the opener's file is known.
+		pool.restoreLayout(fakeWindow(2).win, {
+			version: 1,
+			activeIndex: 0,
+			tabs: [{ cwd: "/wt/y", kind: "agent", sessionPath: "/sessions/old.jsonl", openedBy: "/sessions/boss.jsonl" }],
+		});
+		const openers = [
+			["/sessions/child.jsonl", "/sessions/boss.jsonl"],
+			["/sessions/old.jsonl", "/sessions/boss.jsonl"],
+		];
+		expect([...pool.sessionOpeners()]).toEqual(openers);
+
+		core().abandon("a test ends the core");
+		expect([...pool.sessionOpeners()]).toEqual(openers);
+		expect(pool.tabsForWindow(fw.win).find(tab => tab.tabId === "tab-child")).toMatchObject({
+			openedBy: "tab-boss",
+			openedBySession: "/sessions/boss.jsonl",
+		});
+		expect(pool.tabLayoutForWindow(fw.win)?.tabs.map(tab => tab.openedBy)).toEqual([
+			undefined,
+			"/sessions/boss.jsonl",
+		]);
+	});
 });
 
 describe("the core's page sends (C4, docs/rust-node-removal.md)", () => {

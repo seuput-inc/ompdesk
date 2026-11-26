@@ -626,7 +626,8 @@ impl Host {
     }
 
     /// `setOpener {tabId, openerTabId}`: `openerTabId` becomes `tabId`'s opener, as a session it opened would have it
-    /// (the pool's `setTabOpener`, kept across a relaunch): a session handed to a bot.
+    /// (the pool's `setTabOpener`, kept across a relaunch): a session handed to a bot, or one whose lost opener the call
+    /// journal names (`Runtime::recover_openers`).
     pub async fn set_opener(&self, tab_id: &str, opener_tab_id: &str) -> R<()> {
         self.ask(
             "setOpener",
