@@ -1524,6 +1524,15 @@ describe("tabs store applyTabStatus", () => {
 		expect(useTabsStore.getState().tabs.find(tab => tab.id === "t1")?.unreadDone).toBe(false);
 	});
 
+	it("marks a tab unread by hand until the next visit", async () => {
+		seedTabs();
+		useTabsStore.getState().markUnread("t1");
+		expect(useTabsStore.getState().tabs.find(tab => tab.id === "t1")?.unreadDone).toBe(true);
+
+		await useTabsStore.getState().switchTab("t1");
+		expect(useTabsStore.getState().tabs.find(tab => tab.id === "t1")?.unreadDone).toBe(false);
+	});
+
 	it("lets a held command go after the two-minute cap when the tab never comes up", async () => {
 		vi.useFakeTimers();
 		try {
@@ -2986,14 +2995,12 @@ describe("a web page's own done marks", () => {
 		tabInfo("t2", "/t2"),
 	];
 
-	it("writes the tabs with a done mark and the running ones whenever the tab list changes", async () => {
+	it("writes the tabs with a done mark, a manual one too, and the running ones whenever the tab list changes", async () => {
 		omp.tabs.list.mockResolvedValue(list("running"));
 		await useTabsStore.getState().reconcileTabs();
 		expect(readUnreadMarks()).toEqual({ unread: [], running: ["t1"] });
 
-		useTabsStore.setState(state => ({
-			tabs: state.tabs.map(tab => (tab.id === "t2" ? { ...tab, unreadDone: true } : tab)),
-		}));
+		useTabsStore.getState().markUnread("t2");
 		expect(readUnreadMarks().unread).toContain("t2");
 	});
 

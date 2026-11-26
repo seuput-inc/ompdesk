@@ -49,6 +49,7 @@ import {
 	FILE_TREE,
 	GIT_CHANGES,
 	GIT_DIFFS,
+	githubFixture,
 	MODELS,
 	PR_DETAIL,
 	PR_LIST,
@@ -517,15 +518,7 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 			case "pr_comments":
 				return respond(command, { entries: [] });
 			case "github":
-				// The GitHub center: one host, the checkout's repository, and no rows in any list.
-				return respond(
-					command,
-					command.request.op === "hosts"
-						? { hosts: ["github.com"], repo: PR_REPO.repo }
-						: command.request.op.endsWith("_list")
-							? []
-							: {},
-				);
+				return respond(command, githubFixture(command.request.op));
 			case "pr_repo":
 				return respond(command, PR_REPO);
 			case "pr_list":

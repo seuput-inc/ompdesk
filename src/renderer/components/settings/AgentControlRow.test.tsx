@@ -29,7 +29,10 @@ const prefs = {
 		stored[key] = value;
 	}),
 };
-Object.assign(window as unknown as Record<string, unknown>, { omp: { prefs } });
+let socketFailure: string | null = null;
+Object.assign(window as unknown as Record<string, unknown>, {
+	omp: { prefs, controlSocket: { failure: async () => socketFailure } },
+});
 
 let root: Root;
 async function mount(query = "") {
@@ -51,6 +54,7 @@ function toggle(id = "setting-gui-agentControl"): HTMLButtonElement {
 afterEach(async () => {
 	await act(async () => root?.unmount());
 	stored = {};
+	socketFailure = null;
 	vi.clearAllMocks();
 });
 
@@ -128,5 +132,16 @@ describe("AgentControlRow", () => {
 	it("hides under a search that does not match it", async () => {
 		await mount("proxy");
 		expect(document.querySelector('[role="switch"]')).toBeNull();
+	});
+
+	it("says under the switch why the ompdesk command cannot reach this OMPdesk", async () => {
+		await mount();
+		expect(document.querySelector("[data-control-socket-failure]")).toBeNull();
+		await act(async () => root.unmount());
+		socketFailure = "listen EADDRINUSE: address already in use";
+		await mount();
+		expect(document.querySelector("[data-control-socket-failure]")?.textContent).toContain(
+			"control socket did not start (listen EADDRINUSE: address already in use)",
+		);
 	});
 });

@@ -566,7 +566,8 @@ pub fn process_gone(wc: u64, details: &Value, killed: bool) {
         }) == Some(true)
     {
         // A crash inside the cooldown would leave the window black for good, and a dead page cannot show a dialog.
-        ask_restart(wc, "crash", "error", "crash-recovery");
+        // Its reason picks the text: an out-of-memory crash asks to free memory (Orca D21).
+        ask_restart(wc, "crash", Some(reason), "error", "crash-recovery");
     }
 }
 
@@ -589,17 +590,23 @@ fn ask_restart_for_resources(wc: u64, current: Option<Identity>) {
             "currentSize": size(current),
         })),
     );
-    ask_restart(wc, "resources", "question", "restart-prompt");
+    ask_restart(wc, "resources", None, "question", "restart-prompt");
 }
 
 /// Asks Node for the dialog's text, shows it over the window and, on its first button, relaunches through the quit
 /// chain as an approved quit: running work was already weighed by the person here.
-fn ask_restart(wc: u64, kind: &'static str, style: &'static str, asker: &'static str) {
+fn ask_restart(
+    wc: u64,
+    kind: &'static str,
+    reason: Option<String>,
+    style: &'static str,
+    asker: &'static str,
+) {
     let win = with(wc, |record| record.win);
     tauri::async_runtime::spawn_blocking(move || {
         let text = match host::request_blocking(
             "window.notice",
-            json!({"kind": kind}),
+            json!({"kind": kind, "reason": reason}),
             Duration::from_secs(10),
         ) {
             Ok(text) => text,

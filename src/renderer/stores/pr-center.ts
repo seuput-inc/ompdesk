@@ -1,6 +1,7 @@
 import { create } from "zustand";
-import type { RpcPrDetail, RpcPrListItem, RpcPrListView, RpcPrRepo } from "../../shared/rpc-types";
+import type { RpcPrDetail, RpcPrListFilter, RpcPrListItem, RpcPrListView, RpcPrRepo } from "../../shared/rpc-types";
 import type { FocusedScope } from "../lib/focused-scope";
+import { github } from "../lib/github";
 import {
 	afterFailure,
 	afterSuccess,
@@ -27,6 +28,8 @@ interface PrCenterStore {
 	listState: "open" | "closed" | "merged" | "all";
 	/** Every PR, those waiting on your review, or yours. */
 	listView: RpcPrListView;
+	/** gh's author, label, assignee and draft filters past the view (Orca `PRFilterSections.tsx`). */
+	listFilter: RpcPrListFilter;
 	list: RpcPrListItem[];
 	listLoading: boolean;
 	selected: number | null;
@@ -51,13 +54,18 @@ interface PrCenterStore {
 	refresh: (background?: boolean) => Promise<void>;
 	setListState: (state: "open" | "closed" | "merged" | "all") => void;
 	setListView: (view: RpcPrListView) => void;
+	setListFilter: (filter: RpcPrListFilter) => void;
 	/** Re-read the selected PR and the list after an action changed it (merge, review, edit). */
 	reloadSelected: () => Promise<void>;
 	select: (number: number) => Promise<void>;
 	/** Close the selected PR's detail (a phone's back from the detail). */
 	deselect: () => void;
 	toggleFile: (path: string) => Promise<void>;
-	checkout: (number: number) => Promise<void>;
+	/** Open every file's diff from one read of the whole PR diff (Orca's combined diff), or fold them all. */
+	expandAll: () => Promise<void>;
+	collapseAll: () => void;
+	/** Check the PR out into a worktree and open a session there; the new tab's id, or null when it failed (toasted). */
+	checkout: (number: number) => Promise<string | null>;
 	reset: () => void;
 	/**
 	 * While the panel is shown: a return to the window reads the list and the PR again when a minute old and not held,
@@ -70,7 +78,9 @@ const NO_SCOPE: FocusedScope = { device: undefined, cwd: "" };
 
 /** The snapshot keys of one repository (the folder names it); a diff or a log is only remembered in memory. */
 const repoKey = (scope: FocusedScope) => `pr:repo:${scope.cwd}`;
-const listKey = (scope: FocusedScope, state: string, view: string) => `pr:list:${scope.cwd}:${state}:${view}`;
+/** A filter adds its part to a list's key; no filter adds none, so the plain lists keep their keys. */
+const listKey = (scope: FocusedScope, state: string, view: string, filter: RpcPrListFilter) =>
+	`pr:list:${scope.cwd}:${state}:${view}${Object.values(filter).some(Boolean) ? `:${JSON.stringify(filter)}` : ""}`;
 const detailKey = (scope: FocusedScope, number: number) => `pr:detail:${scope.cwd}:${number}`;
 const diffKey = (scope: FocusedScope, number: number, path: string) => `pr:diff:${scope.cwd}:${number}:${path}`;
 
@@ -79,6 +89,7 @@ const initialState = {
 	repo: null,
 	listState: "open" as const,
 	listView: "all" as const,
+	listFilter: {},
 	list: [],
 	listLoading: false,
 	selected: null,
@@ -131,14 +142,20 @@ function apply(patch: Partial<PrCenterStore>): void {
 
 async function readList(gen: number, background: boolean): Promise<void> {
 	listRunning = { gen, timer: setTimeout(() => settleList(gen), READ_EXPIRES_MS) };
-	const { scope, listState, listView } = store();
-	const key = listKey(scope, listState, listView);
+	const { scope, listState, listView, listFilter } = store();
+	const key = listKey(scope, listState, listView, listFilter);
 	const current = () => {
 		const now = store();
-		return gen === listGen && now.scope === scope && now.listState === listState && now.listView === listView;
+		return (
+			gen === listGen &&
+			now.scope === scope &&
+			now.listState === listState &&
+			now.listView === listView &&
+			now.listFilter === listFilter
+		);
 	};
 	try {
-		const response = await window.omp.rpc.prList(listState, 50, listView, background);
+		const response = await window.omp.rpc.prList(listState, 50, listView, background, listFilter);
 		if (response.success) {
 			const list = response.data as RpcPrListItem[];
 			rememberRead(scope.device, key, list);
@@ -195,11 +212,12 @@ async function readDetail(number: number, background: boolean): Promise<void> {
 /** The window came back: read again, in place and in the background, what is a minute old and not held. */
 function freshen(): void {
 	if (watchers === 0 || hidden()) return;
-	const { scope, repo, listState, listView, selected } = store();
+	const { scope, repo, listState, listView, listFilter, selected } = store();
 	if (!repo?.available) return;
 	const now = Date.now();
 	if ((store().pausedUntil ?? 0) > now) return;
-	if (!listRunning && shouldReread(fresh.get(listKey(scope, listState, listView)), now)) void store().refresh(true);
+	if (!listRunning && shouldReread(fresh.get(listKey(scope, listState, listView, listFilter)), now))
+		void store().refresh(true);
 	if (selected === null || detailReads > 0) return;
 	if (shouldReread(fresh.get(detailKey(scope, selected)), now)) void readDetail(selected, true);
 	else if (pendingTimer === undefined) schedulePending();
@@ -237,11 +255,11 @@ export const usePrCenterStore = create<PrCenterStore>()((set, get) => ({
 	enter: scope => {
 		const current = get().scope;
 		if (current.device === scope.device && current.cwd === scope.cwd) return;
-		const { listState, listView } = get();
+		const { listState, listView, listFilter } = get();
 		set({
 			scope,
 			repo: lastRead<RpcPrRepo>(scope.device, repoKey(scope)) ?? null,
-			list: lastRead<RpcPrListItem[]>(scope.device, listKey(scope, listState, listView)) ?? [],
+			list: lastRead<RpcPrListItem[]>(scope.device, listKey(scope, listState, listView, listFilter)) ?? [],
 			selected: null,
 			detail: null,
 			detailLoading: false,
@@ -287,10 +305,10 @@ export const usePrCenterStore = create<PrCenterStore>()((set, get) => ({
 
 	setListState: state => {
 		if (state === get().listState) return;
-		const { scope, listView } = get();
+		const { scope, listView, listFilter } = get();
 		set({
 			listState: state,
-			list: lastRead<RpcPrListItem[]>(scope.device, listKey(scope, state, listView)) ?? [],
+			list: lastRead<RpcPrListItem[]>(scope.device, listKey(scope, state, listView, listFilter)) ?? [],
 			selected: null,
 			detail: null,
 			expandedFiles: {},
@@ -300,10 +318,22 @@ export const usePrCenterStore = create<PrCenterStore>()((set, get) => ({
 
 	setListView: view => {
 		if (view === get().listView) return;
-		const { scope, listState } = get();
+		const { scope, listState, listFilter } = get();
 		set({
 			listView: view,
-			list: lastRead<RpcPrListItem[]>(scope.device, listKey(scope, listState, view)) ?? [],
+			list: lastRead<RpcPrListItem[]>(scope.device, listKey(scope, listState, view, listFilter)) ?? [],
+			selected: null,
+			detail: null,
+			expandedFiles: {},
+		});
+		void get().refresh();
+	},
+
+	setListFilter: filter => {
+		const { scope, listState, listView } = get();
+		set({
+			listFilter: filter,
+			list: lastRead<RpcPrListItem[]>(scope.device, listKey(scope, listState, listView, filter)) ?? [],
 			selected: null,
 			detail: null,
 			expandedFiles: {},
@@ -370,12 +400,49 @@ export const usePrCenterStore = create<PrCenterStore>()((set, get) => ({
 		}
 	},
 
+	expandAll: async () => {
+		const { selected: number, detail, scope } = get();
+		if (number === null || !detail) return;
+		set(state => ({
+			expandedFiles: Object.fromEntries(
+				detail.files.map(file => [file.path, state.expandedFiles[file.path] ?? { phase: "loading" as const }]),
+			),
+		}));
+		try {
+			const diffs = await github({ op: "pr_diffs", number });
+			if (get().selected !== number) return;
+			for (const [path, diff] of Object.entries(diffs)) {
+				rememberRead(scope.device, diffKey(scope, number, path), diff, false);
+			}
+			set(state => ({
+				expandedFiles: Object.fromEntries(
+					Object.keys(state.expandedFiles).map(path => {
+						const diff = diffs[path];
+						return [path, diff === undefined ? { phase: "error" as const } : { phase: "ready" as const, diff }];
+					}),
+				),
+			}));
+		} catch {
+			if (get().selected !== number) return;
+			set(state => ({
+				expandedFiles: Object.fromEntries(
+					Object.entries(state.expandedFiles).map(([path, entry]) => [
+						path,
+						entry.phase === "loading" ? { phase: "error" as const } : entry,
+					]),
+				),
+			}));
+		}
+	},
+
+	collapseAll: () => set({ expandedFiles: {} }),
+
 	checkout: async number => {
 		try {
 			const response = await window.omp.rpc.prCheckout(number);
 			if (!response.success) {
 				toastError({ title: translate("prCenter.checkoutFailed"), error: response });
-				return;
+				return null;
 			}
 			const result = response.data as { path: string; branch: string };
 			const repo = get().repo;
@@ -390,8 +457,10 @@ export const usePrCenterStore = create<PrCenterStore>()((set, get) => ({
 			});
 			if (tabId)
 				toast({ variant: "success", message: translate("prCenter.checkoutOpened", { number: String(number) }) });
+			return tabId;
 		} catch (error) {
 			toastError({ title: translate("prCenter.checkoutFailed"), error });
+			return null;
 		}
 	},
 

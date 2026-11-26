@@ -16,7 +16,8 @@
 //!   it; a migration that changed something is written like any change.
 //!
 //! Hub kind `prefs` (no state per instance): `get {file, key}` → `{value}` or `{}` when nothing is there, `has`,
-//! `set {file, key, value}`, `delete {file, key}`, `store {file}` → the whole store, `replace {file, value}`.
+//! `set {file, key, value}`, `delete {file, key}`, `store {file}` → the whole store, `replace {file, value}`,
+//! `recovered {}` → the files `recover` repaired since the last ask.
 //! The owners of single keys, each a read, change and write under the file's one lock (`launch_profile.rs`,
 //! `sidebar.rs`): `launchProfile {file, cwd}` → the profile, `updateLaunchProfile {file, cwd, patch}` → the profile
 //! stored, `launchFlags {file, cwd}` → a spawn's flags, `updateSidebar {file, change, from}` → `{change, log}` (both
@@ -57,6 +58,8 @@ struct State {
     /// A change not yet handed to the disk.
     dirty: bool,
     writing: bool,
+    /// When this core last wrote the file's backup (`<file>.bak`).
+    backed_up: Option<Instant>,
 }
 
 struct Prefs {
@@ -75,7 +78,9 @@ fn stamp(file: &Path) -> Option<Stamp> {
     Some((meta.len(), meta.modified().ok()))
 }
 
-/// The store a file holds: nothing for a file that is not there, a fault for one that is not a JSON object.
+/// The store a file holds: nothing for a file that is not there. A file that is not a JSON object (a disk error, a
+/// hand edit) is moved aside and replaced by its last good copy, or by nothing (`recover`), so a damaged file never
+/// fails every read and the launch with it.
 fn read(file: &Path) -> Result<Map<String, Value>, Fault> {
     let text = match std::fs::read_to_string(file) {
         Ok(text) => text,
@@ -86,11 +91,90 @@ fn read(file: &Path) -> Result<Map<String, Value>, Fault> {
     };
     match serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) {
         Ok(Value::Object(store)) => Ok(store),
-        _ => Err(Fault::new(
-            "invalid_json",
-            format!("The config file `{}` is not valid JSON.", file.display()),
-        )),
+        _ => recover(file),
     }
+}
+
+/// How often a file's backup is written again while the core runs.
+const BACKUP_EVERY: Duration = Duration::from_secs(60 * 60);
+
+fn backup_of(file: &Path) -> PathBuf {
+    let mut name = file.as_os_str().to_owned();
+    name.push(".bak");
+    PathBuf::from(name)
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis() as i64)
+}
+
+/// Keeps `store` as the file's last good copy, at most once per `BACKUP_EVERY`. An empty store (a file not there yet,
+/// or one emptied by `recover`) never replaces a copy that holds something.
+fn back_up(file: &Path, state: &mut State) {
+    if state.store.is_empty()
+        || state
+            .backed_up
+            .is_some_and(|at| at.elapsed() < BACKUP_EVERY)
+    {
+        return;
+    }
+    state.backed_up = Some(Instant::now());
+    let copy = json!({ "savedAt": now_ms(), "store": state.store });
+    if let Err(fault) = crate::disk::tree::write_atomic_if(
+        &backup_of(file),
+        copy.to_string().as_bytes(),
+        None,
+        0o777,
+        &|| true,
+    ) {
+        eprintln!(
+            "ompdesk-core: no backup of {}: {}",
+            file.display(),
+            fault.message
+        );
+    }
+}
+
+/// Files put back from their backup (or emptied) since main last asked (`recovered`).
+static RECOVERED: LazyLock<Mutex<Vec<Value>>> = LazyLock::new(Mutex::default);
+
+/// Moves the unreadable file to `<file>.corrupt-<ms>` and writes its backup (or an empty store) in its place.
+/// Approach after Orca (MIT, stablyai/orca: a damaged profile is quarantined and restored from its rolling backup).
+fn recover(file: &Path) -> Result<Map<String, Value>, Fault> {
+    let mut aside = file.as_os_str().to_owned();
+    aside.push(format!(".corrupt-{}", now_ms()));
+    let aside = PathBuf::from(aside);
+    let quarantined = std::fs::rename(file, &aside).ok().and_then(|()| {
+        aside
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    });
+    let backup = std::fs::read_to_string(backup_of(file))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|copy| match copy.get("store") {
+            Some(Value::Object(store)) => Some((store.clone(), copy.get("savedAt").cloned())),
+            _ => None,
+        });
+    let store = backup
+        .as_ref()
+        .map(|(store, _)| store.clone())
+        .unwrap_or_default();
+    write_kept(file, document(&store).as_bytes(), None, 0o777)?;
+    lock(&RECOVERED).push(json!({
+        "file": file.file_name().map(|name| name.to_string_lossy().into_owned()),
+        "quarantined": quarantined,
+        "restored": backup.is_some(),
+        "backupAt": backup.and_then(|(_, at)| at),
+    }));
+    Ok(store)
+}
+
+/// The files repaired since the last call, each once: `[{file, quarantined, restored, backupAt}]`.
+pub fn recovered() -> Vec<Value> {
+    std::mem::take(&mut *lock(&RECOVERED))
 }
 
 impl Prefs {
@@ -102,6 +186,7 @@ impl Prefs {
         if state.seen.is_none() || (settled && state.seen != Some(now)) {
             state.store = read(&self.file)?;
             state.seen = Some(now);
+            back_up(&self.file, &mut state);
             let migrated = self.file.file_name() == Some(std::ffi::OsStr::new("prefs.json"))
                 && self
                     .file
@@ -137,6 +222,9 @@ impl Prefs {
         let mut state = lock(&self.state);
         state.writing = false;
         state.seen = Some(stamp(&self.file));
+        if result.is_ok() {
+            back_up(&self.file, &mut state);
+        }
         drop(state);
         if let Err(fault) = result
             && !disk_full(&fault)
@@ -180,6 +268,7 @@ fn prefs(file: &str) -> Result<Arc<Prefs>, Fault> {
                 seen: None,
                 dirty: false,
                 writing: false,
+                backed_up: None,
             }),
         })
     })))
@@ -441,6 +530,7 @@ fn call(_: u64, method: &str, raw: &RawValue) -> Outcome {
         }),
         "moveSidebarPin" => params::<Owned>(raw)
             .and_then(|o| sidebar::move_pin(&o.file, &o.from, &o.to).map(|moved| json!(moved))),
+        "recovered" => Ok(json!(recovered())),
         _ => Err(Fault::new("no_method", format!("prefs has no {method}"))),
     };
     Outcome::Now(done)

@@ -249,7 +249,8 @@ for (const { engine, device } of variants(
 			// own: a tap between the two lands on one of them, never on nothing.
 			const keys = await hitSizes(bar.locator("[data-terminal-key]"));
 			expect(keys.length).toBeGreaterThan(0);
-			for (const { visual, hit } of keys) expect(hit.height).toBeGreaterThan(visual.height);
+			// A phone draws a key 44 px (the owner's decision, 25 Nov 2026), its hit no smaller; elsewhere the hit is larger.
+			for (const { visual, hit } of keys) expect(hit.height).toBeGreaterThanOrEqual(visual.height);
 			const reach = await page.evaluate(() => {
 				const missed: string[] = [];
 				const keyBottoms: number[] = [];

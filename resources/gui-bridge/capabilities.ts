@@ -204,6 +204,7 @@ export const FEATURES = {
 	turnStages: "Turn stages recorded when a turn waits long for the model or ends without output (gui-runtime.jsonl)",
 	askForm: "An ask form's paragraphs, tables and pictures on its question card",
 	imageSubscription: "Image generation only on the ChatGPT subscription's image model, never on a billed API key",
+	a2ui: "Interactive surfaces the agent draws in the chat (A2UI)",
 } as const;
 
 export type FeatureId = keyof typeof FEATURES;
@@ -2309,6 +2310,16 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	/** image-subscription.ts: the public `tool_call` hook (`input`, `block`) only. Imports nothing from omp. */
 	imageSubscription: {},
+	/**
+	 * modes/a2ui.ts: the extension API's tool registration (the `a2ui` tool, registered on the main bind by index.ts's
+	 * factory) and active tool set (no button waits in a run with `ask` off), its zod for the tool schema, and pi-ai's
+	 * JSON-Schema validator for the A2UI messages. The person's answer is the public `ctx.ui.formDialog`.
+	 */
+	a2ui: {
+		pkg: ["z.object()", "z.array()", "z.record()", "z.string()", "z.unknown()"],
+		api: ["registerTool()", "getActiveTools()"],
+		modules: { "@oh-my-pi/pi-ai": ["validateJsonSchemaValue()"] },
+	},
 };
 
 export const ALL_FEATURES = Object.keys(FEATURES) as FeatureId[];

@@ -1045,3 +1045,14 @@ fn reads_a_runs_answer_and_tells_a_quiet_one() {
         assert!(!quiet_result(loud), "{loud}");
     }
 }
+
+#[test]
+fn a_dark_wake_is_told_by_the_missing_graphics_capability() {
+    let full =
+        "Current System Capabilities are: CPU Graphics Audio Network \nCurrent Power State: 4\n";
+    let dark = "Current System Capabilities are: CPU Network \nCurrent Power State: 4\n";
+    assert!(!super::is_dark_wake(full));
+    assert!(super::is_dark_wake(dark));
+    // An output without the line is read as awake: a run is never held on a guess.
+    assert!(!super::is_dark_wake("pmset: unknown\n"));
+}

@@ -119,6 +119,18 @@ describe("stage, unstage, discard", () => {
 		expect(await fs.readFile(path.join(root, "scratch.txt"), "utf8")).toBe("keep\n");
 	});
 
+	it("refuses a path whose folder links out of the repository before changing anything", async () => {
+		const outside = path.join(dir, "outside");
+		await fs.mkdir(outside);
+		await fs.writeFile(path.join(outside, "f.txt"), "keep\n");
+		// A junction on Windows needs no privilege; elsewhere the type is ignored.
+		await fs.symlink(outside, path.join(root, "link"), "junction");
+		await fs.writeFile(path.join(root, "README.md"), "changed\n");
+		await expect(scm.discard(root, ["README.md", "link/f.txt"])).rejects.toMatchObject({ code: "invalid_path" });
+		expect(await fs.readFile(path.join(outside, "f.txt"), "utf8")).toBe("keep\n");
+		expect(await fs.readFile(path.join(root, "README.md"), "utf8")).toBe("changed\n");
+	});
+
 	it("never widens a malformed native selection to all paths", async () => {
 		await fs.writeFile(path.join(root, "scratch.txt"), "keep\n");
 		for (const paths of [[], ["scratch.txt", 7], false, "all", {}]) {

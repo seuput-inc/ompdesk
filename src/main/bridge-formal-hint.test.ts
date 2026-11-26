@@ -62,6 +62,29 @@ describe("isFormalRequest", () => {
 	});
 });
 
+describe("a /skill:<name> turn", () => {
+	// Stock's prompts/skills/user-invocation.md, rendered; interfaces-stock.test.ts checks stock's own rendering.
+	const invoke = (name: string, body: string, args?: string) =>
+		[
+			`[IMPORTANT: User invoked the "${name}" skill; follow its instructions. Full skill below.]`,
+			"",
+			body,
+			"",
+			"---",
+			"",
+			`[Skill directory: /builtin/interfaces/skills/${name}]`,
+			"Resolve relative paths in this skill against this absolute directory.",
+			...(args ? [`User: ${args}`] : []),
+		].join("\n");
+	const body = "---\nname: state-machine\n---\n\n# State machine\n\nRender every state; a race in the mock is fine.";
+
+	it("reads only the person's words, never the skill's body", () => {
+		expect(isFormalRequest(invoke("state-machine", body))).toBe(false);
+		expect(isFormalRequest(invoke("state-machine", body, "the checkout card"))).toBe(false);
+		expect(isFormalRequest(invoke("state-machine", body, "fix the race in turn resume"))).toBe(true);
+	});
+});
+
 describe("install", () => {
 	let hook: Parameters<FormalHost["on"]>[1] | undefined;
 	const host: FormalHost = {

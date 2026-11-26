@@ -113,14 +113,47 @@ fn a_file_edited_on_disk_is_read_again() {
 }
 
 #[test]
-fn a_file_that_is_not_json_is_refused_and_left_alone() {
+fn a_file_that_is_not_json_is_moved_aside_and_its_last_good_copy_comes_back() {
+    // One test for both cases: `recovered` is the process's one list, and another test asking it would take ours.
     let dir = temp();
     let file = dir.path().join("prefs.json");
-    std::fs::write(&file, "{ not json").unwrap();
     let name = file.to_str().unwrap();
-    assert_eq!(get(name, "a").unwrap_err().code, "invalid_json");
-    assert!(set(name, "a", json!(1)).is_err());
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), "{ not json");
+    set(name, "theme", json!("dark")).unwrap();
+    flush(Duration::from_secs(10));
+    assert!(dir.path().join("prefs.json.bak").exists());
+    std::fs::write(&file, "{ not json").unwrap();
+
+    assert_eq!(get(name, "theme").unwrap(), Some(json!("dark")));
+    set(name, "language", json!("ko")).unwrap();
+    flush(Duration::from_secs(10));
+    let aside: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.starts_with("prefs.json.corrupt-"))
+        .collect();
+    assert_eq!(aside.len(), 1);
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(&aside[0])).unwrap(),
+        "{ not json"
+    );
+
+    // No good copy: the store starts empty.
+    let bare = dir.path().join("window-state.json");
+    std::fs::write(&bare, "").unwrap();
+    let bare_name = bare.to_str().unwrap();
+    assert!(store(bare_name).unwrap().is_empty());
+
+    let ours = |entry: &Value| {
+        entry["quarantined"].as_str().is_some_and(|q| {
+            aside.iter().any(|a| a == q) || q.starts_with("window-state.json.corrupt-")
+        })
+    };
+    let told: Vec<Value> = super::recovered().into_iter().filter(ours).collect();
+    assert_eq!(told.len(), 2, "{told:?}");
+    assert_eq!(told[0]["file"], json!("prefs.json"));
+    assert_eq!(told[0]["restored"], json!(true));
+    assert_eq!(told[1]["file"], json!("window-state.json"));
+    assert_eq!(told[1]["restored"], json!(false));
 }
 
 #[test]

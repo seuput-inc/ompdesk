@@ -32,13 +32,15 @@ describe("gh through the core", () => {
 			await ghText(cwd, node, script("process.stdout.write('o'); process.stderr.write('e'); process.exit(3)")),
 		).toEqual({ code: 3, stdout: "o", stderr: "e" });
 		const env =
-			"const e = process.env; process.stdout.write(JSON.stringify([e.GH_PROMPT_DISABLED, e.GH_NO_UPDATE_NOTIFIER, e.NO_COLOR, e.GH_HOST ?? null]))";
-		expect(JSON.parse(await gh(cwd, node, script(env)))).toEqual(["1", "1", "1", null]);
+			"const e = process.env; process.stdout.write(JSON.stringify([e.GH_PROMPT_DISABLED, e.GH_NO_UPDATE_NOTIFIER, e.NO_COLOR, e.GH_HOST ?? null, e.GH_TELEMETRY]))";
+		const telemetry = process.env.GH_TELEMETRY ?? "false";
+		expect(JSON.parse(await gh(cwd, node, script(env)))).toEqual(["1", "1", "1", null, telemetry]);
 		expect(JSON.parse(await gh(cwd, node, script(env), { env: { GH_HOST: "ghe.example.com" } }))).toEqual([
 			"1",
 			"1",
 			"1",
 			"ghe.example.com",
+			telemetry,
 		]);
 		const missing = path.join(cwd, "ompdesk-no-such-gh");
 		await expect(gh(cwd, missing, ["api"])).rejects.toThrow(`spawn ${missing} ENOENT`);

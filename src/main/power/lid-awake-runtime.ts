@@ -19,16 +19,23 @@ export async function windowsHasBattery(file: string, prefix: readonly string[] 
 	return result;
 }
 
-function backendFor(userData: string): LidBackend | null {
+function backendFor(userData: string, log: LidAwakeLog): LidBackend | null {
 	if (process.platform === "darwin") {
 		return new MacLidBackend({
-			caffeinate: () => {
+			caffeinate: onExit => {
 				const child = spawn("/usr/bin/caffeinate", ["-s", "-w", String(process.pid)], { stdio: "ignore" });
-				child.on("error", () => {});
+				let ended = false;
+				const end = () => {
+					if (!ended) onExit();
+					ended = true;
+				};
+				child.once("error", end);
+				child.once("exit", end);
 				child.unref();
 				return { stop: () => child.kill() };
 			},
 			batteryReport: async () => (await run("/usr/bin/pmset", ["-g", "batt"], { encoding: "utf8" })).stdout,
+			log,
 		});
 	}
 	if (process.platform === "win32") {
@@ -48,6 +55,6 @@ function backendFor(userData: string): LidBackend | null {
 }
 
 export function createLidAwake(options: { userData: string; onAc: boolean; log: LidAwakeLog }): LidAwake | null {
-	const backend = backendFor(options.userData);
+	const backend = backendFor(options.userData, options.log);
 	return backend ? new LidAwake({ backend, onAc: options.onAc, log: options.log }) : null;
 }

@@ -1,6 +1,8 @@
 import { create } from "zustand";
 import type { CustomProviderView, IpcSavedFolder, SessionInfo } from "../../shared/ipc-types";
+import type { SshTarget } from "../../shared/ssh-tools";
 import { KEYMAP_ACTIONS, type KeymapOverrides, sanitizeOverrides } from "../lib/keymap";
+import type { NotificationTone } from "../lib/notification-sound";
 import { PREFS_BOOT_RETRY_MS, readPref } from "../lib/prefs-read";
 import { readSidebarVisible, writeSidebarVisible } from "../lib/sidebar-memory";
 import { readPrepaintThemeMode, type ThemeMode } from "../lib/theme";
@@ -80,9 +82,9 @@ export function withFileTab(tabs: FileTab[], path: string, keep: boolean): FileT
 
 /**
  * What fills the main area: the open session (transcript + composer) or one
- * of the three destination pages. The sidebar stays visible for all of them.
+ * of the destination pages. The sidebar stays visible for all of them.
  */
-export type Destination = "session" | "agents" | "insights" | "settings";
+export type Destination = "session" | "agents" | "bots" | "insights" | "settings";
 export type PageDestination = Exclude<Destination, "session">;
 export type AgentsTab = "live" | "definitions" | "prs" | "github";
 export type InsightsTab = "stats" | "usage";
@@ -165,6 +167,15 @@ interface UiStore {
 	discardedForTabClose: string | null;
 	/** Terminal session the Terminal panel selects once it lists it ("Run in terminal", /cleanse); cleared then. */
 	terminalFocusId: string | null;
+	/**
+	 * A terminal asked for (the keymap's `terminal.new`, the palette, Settings › SSH's Open terminal): the Terminal panel,
+	 * or the quick terminal with `scratch`, starts one for each `seq` it has not answered, running `ssh`'s host when set.
+	 */
+	terminalNew: { seq: number; scratch?: boolean; ssh?: SshTarget };
+	newTerminal: (options?: { scratch?: boolean; ssh?: SshTarget }) => void;
+	/** The quick terminal (Orca's floating terminal): this window's terminals in the home folder, and its notes. */
+	quickTerminalOpen: boolean;
+	setQuickTerminalOpen: (open: boolean) => void;
 	/** The Files drawer's viewer asked for a wider docked panel (not persisted; the drag width stays the pref). */
 	filePreviewExpanded: boolean;
 	/** The Terminal panel asked for a wider docked panel, like `filePreviewExpanded` (not persisted). */
@@ -243,6 +254,8 @@ interface UiStore {
 	notificationSound: boolean;
 	/** Chime volume, 0–100. */
 	notificationVolume: number;
+	/** Which built-in sound plays (Settings › General, default the chime). */
+	notificationTone: NotificationTone;
 	/** Left-clicked web links in replies open in the Preview panel instead of the browser. */
 	linkPreview: boolean;
 	/** Which edge the side panel docks to (Settings › General › Window). */
@@ -298,6 +311,8 @@ interface UiStore {
 	/** Back to the session view (Esc on a page, selecting a session). */
 	closeDestination: () => void;
 	openAgents: (tab?: AgentsTab) => void;
+	/** The Bots page (only reachable while `useBotsAvailable`, lib/bots-source.ts). */
+	openBots: () => void;
 	openInsights: (tab?: InsightsTab, scope?: InsightsStatsScope) => void;
 	/** Settings page; without `tab` a cold open lands on the default section and a re-open keeps the current one. */
 	openSettings: (tab?: string) => void;
@@ -456,6 +471,9 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 	pendingFileSwitch: null,
 	discardedForTabClose: null,
 	terminalFocusId: null,
+	terminalNew: { seq: 0 },
+	quickTerminalOpen: false,
+	setQuickTerminalOpen: open => set({ quickTerminalOpen: open }),
 	filePreviewExpanded: false,
 	terminalExpanded: false,
 	fileViewModes: new Map(),
@@ -475,6 +493,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 	notifications: true,
 	notificationSound: false,
 	notificationVolume: 60,
+	notificationTone: "chime",
 	linkPreview: false,
 	panelSide: "right",
 	thinkingExpanded: false,
@@ -494,6 +513,11 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 		const next = { panelTab: tab, panelVisible: true };
 		if (get().fileEditDirty && tab !== get().panelTab) set({ pendingFileSwitch: next });
 		else set(next);
+	},
+	newTerminal: options => {
+		if (options?.scratch) set({ quickTerminalOpen: true });
+		else get().setPanelTab("terminal");
+		set({ terminalNew: { seq: get().terminalNew.seq + 1, ...options } });
 	},
 	openSubagentPanel: subagent => {
 		const next = { panelSubagent: subagent, panelTab: "subagent" as const, panelVisible: true };
@@ -586,11 +610,13 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 		if (destination === "settings") get().openSettings(section);
 		else if (destination === "agents")
 			get().openAgents(section && AGENTS_TABS.includes(section) ? (section as AgentsTab) : undefined);
+		else if (destination === "bots") get().openBots();
 		else get().openInsights(section && INSIGHTS_TABS.includes(section) ? (section as InsightsTab) : undefined);
 	},
 	closeDestination: () => transitionView(() => set({ destination: "session" })),
 	openAgents: tab =>
 		transitionView(() => set(state => ({ destination: "agents", agentsTab: tab ?? state.agentsTab }))),
+	openBots: () => transitionView(() => set({ destination: "bots" })),
 	openInsights: (tab, scope) =>
 		transitionView(() =>
 			set(state => ({

@@ -132,13 +132,12 @@ function mentionLink(mention: PathMention, children: ElementContent[]): Element 
 	};
 }
 
-/** Prose text split into text and path links; null when it names no path. */
-export function linkifyProse(value: string): ElementContent[] | null {
+/** Every path prose names in `value`: where it starts and ends (its trailing line reference included), and what it is. */
+export function prosePaths(value: string): Array<{ start: number; end: number; mention: PathMention }> {
 	// Every branch of PROSE_PATH needs a `/` or `\`; most text nodes have neither, and the
 	// Unicode-aware lookbehind scan over them cost ~4 ms of a long session's open.
-	if (!value.includes("/") && !value.includes("\\")) return null;
-	const out: ElementContent[] = [];
-	let last = 0;
+	if (!value.includes("/") && !value.includes("\\")) return [];
+	const found: Array<{ start: number; end: number; mention: PathMention }> = [];
 	PROSE_PATH.lastIndex = 0;
 	for (let match = PROSE_PATH.exec(value); match; match = PROSE_PATH.exec(value)) {
 		const path = match.groups?.file || match.groups?.folder || "";
@@ -151,12 +150,23 @@ export function linkifyProse(value: string): ElementContent[] | null {
 				end += trailing.consumed;
 			}
 		}
-		if (match.index > last) out.push({ type: "text", value: value.slice(last, match.index) });
-		out.push(mentionLink({ path, ...location }, [{ type: "text", value: value.slice(match.index, end) }]));
-		last = end;
+		found.push({ start: match.index, end, mention: { path, ...location } });
 		PROSE_PATH.lastIndex = end;
 	}
-	if (out.length === 0) return null;
+	return found;
+}
+
+/** Prose text split into text and path links; null when it names no path. */
+export function linkifyProse(value: string): ElementContent[] | null {
+	const found = prosePaths(value);
+	if (found.length === 0) return null;
+	const out: ElementContent[] = [];
+	let last = 0;
+	for (const { start, end, mention } of found) {
+		if (start > last) out.push({ type: "text", value: value.slice(last, start) });
+		out.push(mentionLink(mention, [{ type: "text", value: value.slice(start, end) }]));
+		last = end;
+	}
 	if (last < value.length) out.push({ type: "text", value: value.slice(last) });
 	return out;
 }

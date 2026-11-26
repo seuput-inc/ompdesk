@@ -90,6 +90,7 @@ import type { ModelWaitTracker } from "../model-wait-count";
 import { noteOmpExit } from "../omp-exits";
 import { ompRestartDecision } from "../omp-restart";
 import type { PrefsStore } from "../prefs-store";
+import type { DesktopPresence } from "../presence";
 import { RpcTimeoutError } from "../rpc-client";
 import type { SessionIndex } from "../session-index";
 import { SessionListShare } from "../session-list-share";
@@ -101,7 +102,14 @@ import {
 	sessionDeleteInProgress,
 } from "../session-mutations";
 import type { SessionSummaries, SummaryFacts, SummarySource } from "../session-summaries";
-import { SessionArtworkParams, SessionTargetsParams, sessionArtwork, sessionTargets } from "../session-targets";
+import {
+	SessionArtworkParams,
+	SessionPullRequestParams,
+	SessionTargetsParams,
+	sessionArtwork,
+	sessionPullRequest,
+	sessionTargets,
+} from "../session-targets";
 import type { SidecarSessionIdentity } from "../sidecar";
 import { type SidecarPool, STOP_SESSION_WAIT_MS } from "../sidecar-pool";
 import {
@@ -121,7 +129,7 @@ import { stockHelperRequest } from "../stock-helper";
 import { MAX_FORMER_TAB_IDS } from "../tab-layout";
 import { sessionFolderState } from "../tab-spawn";
 import { MAX_TERMINAL_READ_LINES } from "../terminal/agent-tool";
-import { disposeTerminals, readTerminalOutput, terminalRequest } from "../terminal/requests";
+import { disposeTerminals, readTerminalOutput, terminalRequest, validPageOperation } from "../terminal/requests";
 import { detectShells } from "../terminal/shells";
 import {
 	MovesInFlight,
@@ -374,6 +382,8 @@ export interface HostServicesDeps {
 	 * nothing is kept and such a call waits for the device.
 	 */
 	keptCallsFile?: string;
+	/** Whether the person is at each paired computer (`presence.report`; presence.ts), for this computer's phone pushes. */
+	presence?: Pick<DesktopPresence, "report" | "forget">;
 }
 
 /** A call of the omp's that a device answers; `delivered` once a connection was handed it. */
@@ -545,6 +555,7 @@ const OpenParams = z.object({
 });
 const RestartParams = z.object({ rtab: Rtab, cwd: AbsolutePath.optional(), sessionPath: SessionPath.optional() });
 const AdoptCwdParams = z.object({ rtab: Rtab, cwd: AbsolutePath });
+const PresenceReportParams = z.object({ away: z.boolean() });
 const CommandParams = z.object({
 	rtab: Rtab,
 	command: z.object({ type: z.string().min(1) }).passthrough(),
@@ -1297,7 +1308,13 @@ export class LocalHostServices implements HostServices {
 		return tab.sessionFile ? (this.#deps.localTabs.sessionOwner(tab.sessionFile)?.tabId ?? null) : null;
 	}
 
-	async call(peer: PeerInfo, method: string, params: unknown, conn: HostConnection): Promise<unknown> {
+	async call(
+		peer: PeerInfo,
+		method: string,
+		params: unknown,
+		conn: HostConnection,
+		signal?: AbortSignal,
+	): Promise<unknown> {
 		if (!this.#conns.has(conn)) {
 			const counts = this.#deps.localTabs.modelWait?.snapshot.local;
 			if (counts && Object.keys(counts).length > 0) emitSafely(conn, MODEL_WAIT_EVENT, { counts });
@@ -1411,9 +1428,11 @@ export class LocalHostServices implements HostServices {
 			case "sessions.search": {
 				const { query, scope, cwd } = parse(SessionsSearchParams, method, params);
 				const candidates = await this.#deps.sessionIndex.list(scope, cwd);
+				// A read the device may give up on: its search in the core stops with it (`signal`).
 				return this.#deps.sessionIndex.searchContent(
 					query,
 					candidates.map(info => info.path),
+					signal,
 				);
 			}
 			case "sessions.messages": {
@@ -1466,19 +1485,20 @@ export class LocalHostServices implements HostServices {
 				return sessionTargets(parse(SessionTargetsParams, method, params));
 			case "sessions.artwork":
 				return sessionArtwork(parse(SessionArtworkParams, method, params));
+			case "sessions.pullRequest":
+				return sessionPullRequest(parse(SessionPullRequestParams, method, params));
 			// C114: the tab's terminals run here, in the tab's folder, with this machine's shells.
 			case "terminal.shells":
 				return detectShells();
 			case "terminal.request": {
 				const { rtab, operation } = parse(TerminalParams, method, params);
 				const tab = this.#tab(peer, rtab);
+				// A device names neither the program a PTY here runs nor this computer's saved SSH hosts.
+				const asked = operation as TerminalOperation;
+				if (!validPageOperation(asked) || (asked.action === "create" && asked.ssh))
+					throw new Error("Invalid terminal operation");
 				// A paired device's terminal here is never told where this computer's control socket is.
-				return terminalRequest(
-					{ deviceId: peer.deviceId, rtab },
-					tab.sidecar.cwd,
-					operation as TerminalOperation,
-					controlEnvFor(true),
-				);
+				return terminalRequest({ deviceId: peer.deviceId, rtab }, tab.sidecar.cwd, asked, controlEnvFor(true));
 			}
 			case "terminal.read": {
 				const { rtab, read } = parse(TerminalReadParams, method, params);
@@ -1720,6 +1740,10 @@ export class LocalHostServices implements HostServices {
 					peer.deviceId,
 					parse(MemoryConclusionPushParams, method, params),
 				);
+			// The device says whether its person is at it: a person there keeps this computer's phones quiet.
+			case "presence.report":
+				this.#deps.presence?.report(peer.deviceId, parse(PresenceReportParams, method, params).away);
+				return null;
 			default:
 				throw codedError("unsupported", `Unknown method ${method}`);
 		}
@@ -1728,6 +1752,7 @@ export class LocalHostServices implements HostServices {
 	disconnected(peer: PeerInfo, conn: HostConnection): void {
 		this.#conns.delete(conn);
 		if (this.#connOf.get(peer.deviceId) === conn) this.#connOf.delete(peer.deviceId);
+		if (this.#connOf.get(peer.deviceId) === undefined) this.#deps.presence?.forget(peer.deviceId);
 		// Nobody is left to read the result.
 		void this.#deps.machine.abortBenchmark(benchCaller(peer.deviceId));
 		void this.#deps.machine.abortModelSetup(benchCaller(peer.deviceId));

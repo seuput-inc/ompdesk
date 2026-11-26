@@ -60,7 +60,7 @@ export class WindowManager {
 	constructor() {
 		serveWindows({
 			log: (wcId, entry) => writeRuntimeLog(entry, { windowId: wcId, cwd: this.#records.get(wcId)?.cwd }),
-			notice: kind => this.#notice(kind),
+			notice: (kind, reason) => this.#notice(kind, reason),
 			quitAsked: (asker, ask, approved) => (approved ? approveQuit(asker, ask) : logQuitAsked(asker, ask)),
 			saves: (file, waiting) => (waiting ? diskFull.report(file) : diskFull.clear(file)),
 		});
@@ -124,7 +124,7 @@ export class WindowManager {
 	}
 
 	/** The shell's notice about a stuck page (shown here), or the text of a restart dialog it shows. */
-	#notice(kind: WindowNotice): { message: string; detail: string; buttons: string[] } | null {
+	#notice(kind: WindowNotice, reason?: string): { message: string; detail: string; buttons: string[] } | null {
 		const language = getMainLanguage();
 		if (kind === "hang") {
 			new Notification({ title: mainT("rendererHang.title"), body: mainT("rendererHang.body") }).show();
@@ -140,7 +140,7 @@ export class WindowManager {
 		}
 		return {
 			message: mainT("crash.title", language),
-			detail: mainT("crash.body", language, { logPath: runtimeLogPath() }),
+			detail: mainT(reason === "oom" ? "crash.bodyMemory" : "crash.body", language, { logPath: runtimeLogPath() }),
 			buttons: [mainT("restart.now", language), mainT("crash.close", language)],
 		};
 	}

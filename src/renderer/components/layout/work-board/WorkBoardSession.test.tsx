@@ -764,8 +764,8 @@ describe("Same checkout row", () => {
 		// A paired device's session this computer runs: no owner here, so its file opens as a tab.
 		await press(items()[2] ?? null);
 		expect(openTab).toHaveBeenCalledWith({ sessionPath: "/s/phone.jsonl" });
-		// A session hidden from agents has nothing to open.
-		expect(items()[3]?.tagName).not.toBe("BUTTON");
+		// A session hidden from agents has nothing to open: a tap only opens its row in place.
+		expect(items()[3]?.getAttribute("aria-expanded")).toBe("false");
 	});
 });
 

@@ -25,6 +25,28 @@ export const MAIN_TEXT = {
 		en: "OMPdesk couldn't save {what}; it will retry.",
 		ko: "디스크가 가득 차서 {what} 저장에 실패했어요. 자동으로 다시 시도할게요.",
 	},
+	// A preference file that no longer parsed, moved aside by the core (crates/core/src/prefs `recover`).
+	"storeRecovered.title": { en: "Settings file was damaged", ko: "설정 파일이 손상됐어요" },
+	"storeRecovered.restored": {
+		en: "OMPdesk couldn't read {file}, so it put back the last good copy. Changes from the last hour may be missing.",
+		ko: "설정 파일 {file}을 읽을 수 없어서 마지막으로 정상이던 사본으로 되돌렸어요. 최근 한 시간의 변경은 빠졌을 수 있어요.",
+	},
+	"storeRecovered.reset": {
+		en: "OMPdesk couldn't read {file} and had no good copy, so those settings start from the defaults.",
+		ko: "설정 파일 {file}을 읽을 수 없고 정상 사본도 없어서 해당 설정을 기본값으로 시작해요.",
+	},
+	// The volume with OMPdesk's data under 10 GB free (health-watch.ts): at most once a day.
+	"diskLow.title": { en: "Disk is almost full", ko: "디스크 공간이 거의 없어요" },
+	"diskLow.body": {
+		en: "Only {gb} GB is free. Free up space before OMPdesk and your sessions can no longer save.",
+		ko: "남은 공간이 {gb} GB뿐이에요. OMPdesk와 세션이 저장하지 못하게 되기 전에 공간을 확보하세요.",
+	},
+	// macOS showed its folder dialog on OMPdesk's account (mac-tcc-watch.ts): once ever; a click opens Full Disk Access.
+	"folderAccess.title": { en: "macOS keeps asking about folders", ko: "macOS가 폴더 접근을 계속 물어봐요" },
+	"folderAccess.body": {
+		en: "Sessions read your Documents, Desktop or Downloads, so macOS asks for OMPdesk each time. Click to turn on Full Disk Access for OMPdesk and stop the dialogs.",
+		ko: "세션이 문서·데스크탑·다운로드 폴더를 읽을 때마다 macOS가 OMPdesk 이름으로 물어봐요. 눌러서 OMPdesk에 전체 디스크 접근 권한을 켜면 더 이상 묻지 않아요.",
+	},
 	// An omp runners found breaking this release, which OMPdesk holds back (the core's tools/omp/hold.rs): once, then after a day.
 	"ompHold.title": { en: "omp {version} is on hold", ko: "omp {version} 판을 보류하고 있어요" },
 	"ompHold.body": {
@@ -84,6 +106,10 @@ export const MAIN_TEXT = {
 	"crash.body": {
 		en: "This window crashed repeatedly and can't recover on its own. The failure is in the runtime log ({logPath}). Restarting may help; send the log via Help → Send Feedback so we can fix it.",
 		ko: "이 창이 반복해서 충돌해 스스로 복구할 수 없어요. 실패 내용은 런타임 로그({logPath})에 있어요. 재시작하면 해결될 수 있어요. 도움말 → 피드백 보내기로 로그를 보내 주시면 수정에 도움이 돼요.",
+	},
+	"crash.bodyMemory": {
+		en: "This window ran out of memory and keeps failing. Close other apps or sessions to free memory, then restart OMPdesk. Details are in the runtime log ({logPath}).",
+		ko: "이 창이 메모리가 부족해 계속 실패하고 있어요. 다른 앱이나 세션을 닫아 메모리를 확보한 뒤 OMPdesk를 다시 시작하세요. 자세한 내용은 런타임 로그({logPath})에 있어요.",
 	},
 	"crash.close": { en: "Close", ko: "닫기" },
 	"crash.title": { en: "OMPdesk window crashed", ko: "OMPdesk 창이 충돌했어요" },
@@ -341,6 +367,9 @@ export const MAIN_TEXT = {
 	"push.hidden.completion": { en: "A task finished", ko: "작업이 끝났어요" },
 	"push.hidden.error": { en: "A task stopped with an error", ko: "작업이 오류로 중단됐어요" },
 	"push.hidden.ask": { en: "A task needs you", ko: "작업에 확인이 필요해요" },
+	// The test banner and the test push Settings sends (ipc.ts `SYSTEM_NOTIFY_TEST`, `WebHost.testPush`).
+	"push.test.title": { en: "OMPdesk", ko: "OMPdesk" },
+	"push.test.body": { en: "Test notification", ko: "테스트 알림" },
 	// Status of a tab whose omp runs on a paired device that is unreachable.
 	"remote.offline": {
 		en: "The device running this session is offline. Reconnecting…",

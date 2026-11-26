@@ -22,6 +22,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import aiMemorySource from "../native/memory/ompdesk.json" with { type: "json" };
 import cefPin from "../native/ompdesk/crates/shell/cef-pin.json" with { type: "json" };
+import interfacesPin from "../resources/omp-builtin/interfaces/interfaces-config.json" with { type: "json" };
 import ponytailPin from "../resources/omp-builtin/ponytail/ponytail-config.json" with { type: "json" };
 import agentDesktopPin from "./agent-desktop-pin.json" with { type: "json" };
 import { committedCrateList } from "./gen-crate-notices";
@@ -309,6 +310,13 @@ function vendoredSections(): string {
 			read("LICENSES/MIT-ponytail.txt"),
 		].join("\n"),
 		[
+			`Interface skills ${interfacesPin.version} by Jakub Krehel (https://github.com/${interfacesPin.repo}, commit ${interfacesPin.commit})`,
+			`${interfacesPin.curation.kept.length} unmodified skill folders (Markdown only) in resources/omp-builtin/interfaces/skills/, copied by scripts/sync-interfaces.ts. No plugin manifest or Codex metadata is bundled.`,
+			"Licensed under the MIT License (full text below and in LICENSES/MIT-interfaces.txt).",
+			"",
+			read("LICENSES/MIT-interfaces.txt"),
+		].join("\n"),
+		[
 			"dot-prop 10.2.0 (https://github.com/sindresorhus/dot-prop) and conf 16.0.0",
 			"(https://github.com/sindresorhus/conf). dot-prop's parsePath and conf's own-property get, set and",
 			"delete of a dotted key, which electron-store gave the preference files, are ported to Rust in",
@@ -343,6 +351,15 @@ function vendoredSections(): string {
 			"- GitHub Primer primitives, https://github.com/primer/primitives, Copyright (c) 2018 GitHub Inc.",
 			"- Orca (OMPdesk Light and Dark, and the app's elevation shadows), https://github.com/stablyai/orca,",
 			"  Copyright (c) 2026 Lovecast Inc.",
+			"",
+			MIT_TEXT,
+		].join("\n"),
+		[
+			"Terminal panel code adapted from Orca (https://github.com/stablyai/orca, commit 02cecc98),",
+			"Copyright (c) 2026 Lovecast Inc.: the OSC 52 clipboard parser (src/renderer/lib/terminal-osc52.ts),",
+			"shell quoting of a dropped path (src/shared/shell-quote.ts), the scrollback find bar's decoration",
+			"colours and its safe find (src/renderer/components/panels/TerminalFind.tsx) and Option's word",
+			"motions (src/renderer/lib/terminal-keys.ts).",
 			"",
 			MIT_TEXT,
 		].join("\n"),

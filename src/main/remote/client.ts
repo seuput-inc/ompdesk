@@ -378,6 +378,14 @@ export class RemoteClient {
 		const timer = setTimeout(() => {
 			this.#pending.delete(id);
 			reject(new RemoteError("timeout", `${method} timed out after ${timeoutMs} ms`));
+			// The host stops a read it can still stop; a write it started runs on, and an older host ignores the frame.
+			if (this.#link === link) {
+				try {
+					link.send({ t: "cancel", id });
+				} catch {
+					// The link is going: its end aborts the host's requests too.
+				}
+			}
 		}, timeoutMs);
 		this.#pending.set(id, { resolve, reject, timer });
 		try {

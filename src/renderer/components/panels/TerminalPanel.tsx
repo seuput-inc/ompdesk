@@ -1,18 +1,42 @@
 import type { ITheme, Terminal } from "@xterm/xterm";
 import {
+	Bookmark,
 	ChevronDown,
 	ClipboardPaste,
+	Columns2,
 	Copy,
+	Eraser,
 	Keyboard,
 	Maximize2,
 	Minimize2,
+	Pencil,
 	Plus,
+	RotateCcw,
 	RotateCw,
+	Rows2,
+	Search,
+	Square,
+	SquareTerminal,
 	Terminal as TerminalIcon,
+	TextSelect,
 	Trash2,
+	X,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
+	type DragEvent,
+	type MouseEvent as ReactMouseEvent,
+	useCallback,
+	useEffect,
+	useId,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from "react";
+import { shellKindOf, shellQuote } from "../../../shared/shell-quote";
+import type { SshTarget } from "../../../shared/ssh-tools";
+import { commandInput, commandsFor } from "../../../shared/terminal-commands";
+import {
+	TERMINAL_OUTPUT_BUDGET,
 	TERMINAL_SHELL_PREF,
 	type TerminalLeaseState,
 	type TerminalOperation,
@@ -20,8 +44,20 @@ import {
 	type TerminalSnapshot,
 } from "../../../shared/terminal-types";
 import { currentShellMode, useCompactShell, useShellInput } from "../../hooks/use-shell-mode";
+import { FILE_DRAG_TYPE, readFileDrag } from "../../lib/file-drag";
 import { cx } from "../../lib/format";
 import { useT } from "../../lib/i18n";
+import {
+	actionKbd,
+	chordFromEvent,
+	compileKeymap,
+	KEYMAP_ACTIONS,
+	type KeymapOverrides,
+	PLATFORM,
+} from "../../lib/keymap";
+import { openLocalPath, verifyPath } from "../../lib/markdown-path-link";
+import { openExternal } from "../../lib/open-external";
+import { markTabOnBell } from "../../lib/terminal-bell";
 import {
 	applyModifiers,
 	clampFontScale,
@@ -30,18 +66,56 @@ import {
 	fontSizeFor,
 	type HeldModifiers,
 	isSingleKey,
+	optionWordMotion,
 	type TerminalKey,
+	zoomKey,
 } from "../../lib/terminal-keys";
+import { isLinkClick, pathLinkProvider } from "../../lib/terminal-links";
 import { TerminalLocalEcho } from "../../lib/terminal-local-echo";
+import { osc52Handler } from "../../lib/terminal-osc52";
+import {
+	closeTerminal,
+	focusedTerminal,
+	NO_PANES,
+	pickTerminal,
+	type SplitDirection,
+	splitTerminal,
+	type TerminalPanes,
+	unsplit,
+} from "../../lib/terminal-panes";
 import { pollTerminal } from "../../lib/terminal-poll";
 import { chromePlatform } from "../../lib/window-chrome";
 import { useTabsStore } from "../../stores/tabs";
+import { ensureTerminalCommands, useTerminalCommandsStore } from "../../stores/terminal-commands";
+import { toast } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";
-import { Banner, Button, EmptyState, ErrorDetail, IconButton, MenuButton, Spinner, Tabs } from "../common";
+import {
+	anchorFromEvent,
+	Banner,
+	Button,
+	ConfirmDialog,
+	ContextMenu,
+	type ContextMenuAnchor,
+	type ContextMenuItem,
+	EmptyState,
+	ErrorDetail,
+	IconButton,
+	Input,
+	MenuButton,
+	Modal,
+	Spinner,
+	Tabs,
+} from "../common";
+import { AddToChatButton } from "./notes/AddToChat";
+import { TerminalCommandsDialog } from "./TerminalCommandsDialog";
+import { TerminalFind, type TerminalSearch } from "./TerminalFind";
 import { TerminalKeyBar } from "./TerminalKeyBar";
 import "@xterm/xterm/css/xterm.css";
 
 const FONT_SCALE_KEY = "omp.terminalFontScale";
+const MAC = PLATFORM === "mac";
+/** How long a close waits to learn whether a command runs before it asks anyway (Orca's 4 s probe deadline). */
+const BUSY_PROBE_MS = 4000;
 
 function readFontScale(): number {
 	try {
@@ -97,25 +171,82 @@ export interface TerminalMount {
 		| "dispose"
 		| "attachCustomKeyEventHandler"
 	> &
-		/** xterm always has them; a test double without one never paints predictions or draws another viewer's size. */
-		Partial<Pick<Terminal, "buffer" | "resize" | "reset">>;
+		/** xterm always has them; a test double without one never paints predictions, draws another viewer's size or rings. */
+		Partial<
+			Pick<
+				Terminal,
+				| "buffer"
+				| "resize"
+				| "reset"
+				| "onBell"
+				| "onTitleChange"
+				| "selectAll"
+				| "clearSelection"
+				| "parser"
+				| "registerLinkProvider"
+			>
+		>;
 	fit(): void;
+	/** Find in the scrollback (`@xterm/addon-search`). */
+	search?: TerminalSearch;
+	/** A web link's click (`@xterm/addon-web-links`), routed by the viewport that holds the screen. */
+	onUrl?: (event: MouseEvent, uri: string) => void;
 }
 export async function mountTerminal(element: HTMLElement): Promise<TerminalMount> {
 	// Browser-only UMD modules require `self`; keep them out of Node/linkedom import paths.
-	const [{ Terminal }, { FitAddon }] = await Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]);
+	const [{ Terminal }, { FitAddon }, { SearchAddon }, { WebLinksAddon }] = await Promise.all([
+		import("@xterm/xterm"),
+		import("@xterm/addon-fit"),
+		import("@xterm/addon-search"),
+		import("@xterm/addon-web-links"),
+	]);
 	const terminal = new Terminal({
 		cursorBlink: true,
 		fontSize: 12,
-		fontFamily: "monospace",
+		// The app's own monospace face (Orca FT20: one right answer, so no font setting).
+		fontFamily: getComputedStyle(element).getPropertyValue("--sc-font-mono").trim() || "monospace",
 		scrollback: 10000,
 		theme: terminalTheme(element),
-		allowProposedApi: false,
+		// Search highlights are decorations, a proposed API in xterm 6.
+		allowProposedApi: true,
+		// Option composes text (accents, other layouts); Option+B/F/D still move by word (`optionWordMotion`).
+		macOptionIsMeta: false,
 	});
 	const fit = new FitAddon();
+	const search = new SearchAddon();
 	terminal.loadAddon(fit);
+	terminal.loadAddon(search);
+	const mount: TerminalMount = { terminal, fit: () => fit.fit(), search };
+	terminal.loadAddon(new WebLinksAddon((event, uri) => mount.onUrl?.(event, uri)));
 	terminal.open(element);
-	return { terminal, fit: () => fit.fit() };
+	return mount;
+}
+
+/** The screen cleared here as the PTY's kept output was: the scrollback and the visible rows. */
+function clearScreen(view: TerminalMount): void {
+	view.terminal.clear();
+	view.terminal.write("\u001b[2J\u001b[3J\u001b[H");
+}
+
+/** The keymap's terminal actions a focused terminal takes before its shell sees the key. */
+let compiledKeymap: { overrides: KeymapOverrides; map: Map<string, string> } | null = null;
+function terminalAction(event: KeyboardEvent): "terminal.find" | "terminal.new" | "terminal.quick" | null {
+	const chord = chordFromEvent(event);
+	if (!chord) return null;
+	const overrides = useUiStore.getState().keymapOverrides;
+	if (compiledKeymap?.overrides !== overrides)
+		compiledKeymap = { overrides, map: compileKeymap(KEYMAP_ACTIONS, overrides) };
+	const action = compiledKeymap.map.get(chord);
+	return action === "terminal.find" || action === "terminal.new" || action === "terminal.quick" ? action : null;
+}
+
+/** One notice per page when a program's OSC 52 copy could not reach the clipboard. */
+let osc52Warned = false;
+
+/** The items a terminal's menu adds for its panel (rename, split) and the close, which goes last. */
+export interface TerminalMenuExtra {
+	panes: ContextMenuItem[];
+	close?: ContextMenuItem;
 }
 
 export function TerminalViewport({
@@ -131,6 +262,12 @@ export function TerminalViewport({
 	onLease,
 	claimTick = 0,
 	takeFocus = true,
+	shell,
+	onTitle,
+	onZoom,
+	onFocusPane,
+	menu,
+	exited = false,
 }: {
 	tabId: string;
 	id: string;
@@ -150,6 +287,16 @@ export function TerminalViewport({
 	onLease?: (lease: TerminalLeaseState | undefined) => void;
 	/** Bumped after this viewer took the PTY's size (`claim`): it fits and resizes again. */
 	claimTick?: number;
+	/** The shell's program name: how a dropped path is quoted. */
+	shell?: string;
+	/** The program set the terminal's title (OSC 0/2). */
+	onTitle?: (title: string) => void;
+	/** ⌘= ⌘− ⌘0 in the terminal. */
+	onZoom?: (change: "smaller" | "larger" | "reset") => void;
+	/** The keyboard or a pointer went into this screen (a split panel's pane takes the focus). */
+	onFocusPane?: () => void;
+	menu?: TerminalMenuExtra;
+	exited?: boolean;
 }) {
 	const element = useRef<HTMLDivElement>(null);
 	const t = useT();
@@ -158,10 +305,31 @@ export function TerminalViewport({
 	/** This viewer sizes the PTY (the screen fits its box); otherwise it draws another viewer's size and scrolls. */
 	const [sized, setSized] = useState(true);
 	const fontChanged = useRef<(() => void) | null>(null);
-	const latest = useRef({ transform, fontSize, onLease, takeFocus });
-	latest.current = { transform, fontSize, onLease, takeFocus };
+	const latest = useRef({ transform, fontSize, onLease, takeFocus, onTitle, onZoom, shell, t });
+	latest.current = { transform, fontSize, onLease, takeFocus, onTitle, onZoom, shell, t };
 	/** Bumped when xterm's parser stuck: the effect builds a new screen, which reads the kept scrollback again (U172). */
 	const [screen, setScreen] = useState(0);
+	const [search, setSearch] = useState<TerminalSearch | null>(null);
+	const [finding, setFinding] = useState(false);
+	const [menuAt, setMenuAt] = useState<(ContextMenuAnchor & { selection: boolean }) | null>(null);
+	const write = useCallback(
+		(data: string) =>
+			window.omp.terminal.request(tabId, { action: "write", id, data }).catch(error => onError(String(error))),
+		[tabId, id, onError],
+	);
+	const copy = useCallback(async () => {
+		const view = handle.current;
+		const text = view?.terminal.getSelection() ?? "";
+		if (!text) return;
+		await navigator.clipboard.writeText(text).catch(error => onError(String(error)));
+	}, [handle, onError]);
+	const paste = useCallback(async () => {
+		const text = await navigator.clipboard.readText().catch(error => {
+			onError(String(error));
+			return "";
+		});
+		if (text) await write(text);
+	}, [write, onError]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: screen explicitly replaces a stuck xterm.
 	useEffect(() => {
 		if (!element.current) return;
@@ -175,6 +343,7 @@ export function TerminalViewport({
 				return;
 			}
 			handle.current = view;
+			setSearch(view.search ?? null);
 			const request = async (operation: TerminalOperation) => {
 				try {
 					return await window.omp.terminal.request(tabId, operation);
@@ -199,19 +368,73 @@ export function TerminalViewport({
 				echo?.input(data);
 				void request({ action: "write", id, data: latest.current.transform?.(data) ?? data });
 			});
+			const bell = view.terminal.onBell?.(() => markTabOnBell(tabId));
+			const title = view.terminal.onTitleChange?.(value => latest.current.onTitle?.(value));
+			// Output read back from the kept scrollback (this screen catching up, or starting over after a cut) is
+			// history: a program's clipboard copy in it is old and must not overwrite a newer one.
+			let replaying = true;
+			const osc52 = view.terminal.parser?.registerOscHandler(
+				52,
+				osc52Handler({
+					replaying: () => replaying,
+					write: text => navigator.clipboard.writeText(text),
+					onFailure: () => {
+						if (osc52Warned) return;
+						osc52Warned = true;
+						toast({ variant: "warning", message: latest.current.t("panel.terminal.osc52Failed") });
+					},
+				}),
+			);
+			// ⌘-click (Ctrl-click on Windows) opens a link; Shift takes the other way for a web link (Orca FT10).
+			view.onUrl = (event, uri) => {
+				if (!isLinkClick(event, MAC)) return;
+				const ui = useUiStore.getState();
+				if (ui.linkPreview !== event.shiftKey && /^https?:\/\//i.test(uri)) ui.openPreview(uri);
+				else openExternal(uri);
+			};
+			const links = view.terminal.registerLinkProvider?.(
+				pathLinkProvider({
+					buffer: () => view.terminal.buffer?.active,
+					cols: () => view.terminal.cols,
+					exists: async path => (await verifyPath(path, tabId)) !== "missing",
+					open: (event, path, line) => {
+						if (isLinkClick(event, MAC)) void openLocalPath(path, tabId, line);
+					},
+				}),
+			);
 			view.terminal.attachCustomKeyEventHandler(event => {
 				if (event.type !== "keydown") return true;
-				const copy =
+				const action = terminalAction(event);
+				if (action === "terminal.find") {
+					event.preventDefault();
+					setFinding(true);
+					return false;
+				}
+				// The keymap (App) starts the terminal; the shell never sees the chord.
+				if (action === "terminal.new" || action === "terminal.quick") return false;
+				const zoom = zoomKey(event, MAC);
+				if (zoom && latest.current.onZoom) {
+					event.preventDefault();
+					latest.current.onZoom(zoom);
+					return false;
+				}
+				const motion = MAC ? optionWordMotion(event) : null;
+				if (motion) {
+					event.preventDefault();
+					void request({ action: "write", id, data: motion });
+					return false;
+				}
+				const copyKey =
 					(event.metaKey && event.key === "c") ||
 					(event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "c");
-				const paste =
+				const pasteKey =
 					(event.metaKey && event.key === "v") ||
 					(event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "v");
-				if (copy) {
+				if (copyKey) {
 					void navigator.clipboard.writeText(view.terminal.getSelection()).catch(error => onError(String(error)));
 					return false;
 				}
-				if (paste) {
+				if (pasteKey) {
 					void navigator.clipboard
 						.readText()
 						.then(data => request({ action: "write", id, data }))
@@ -230,6 +453,8 @@ export function TerminalViewport({
 				void request({ action: "resize", id, cols: view.terminal.cols, rows: view.terminal.rows });
 			};
 			const onSnapshot = (snapshot: TerminalSnapshot) => {
+				// An answer with nothing new: this screen has caught up with the PTY.
+				if (!snapshot.output) replaying = false;
 				if (snapshot.lease !== lease) {
 					lease = snapshot.lease;
 					setSized(lease !== "other");
@@ -290,12 +515,19 @@ export function TerminalViewport({
 				},
 				write: output => {
 					const { promise, resolve } = Promise.withResolvers<void>();
-					view.terminal.write(echo ? echo.output(output) : output, resolve);
+					view.terminal.write(echo ? echo.output(output) : output, () => {
+						// An answer the budget did not cut reached the PTY's end: what follows is live.
+						if (output.length < TERMINAL_OUTPUT_BUDGET) replaying = false;
+						resolve();
+					});
 					return promise;
 				},
 				onSnapshot,
 				// The answer starts past the kept scrollback's head: what is on screen has a hole after it (H139).
-				reset: () => view.terminal.reset?.(),
+				reset: () => {
+					replaying = true;
+					view.terminal.reset?.();
+				},
 				// A full-screen program whose first frame was cut leaves the screen blank: only then it is asked to draw
 				// again (H137); a screen with anything on it is left alone.
 				settled: () => {
@@ -331,9 +563,15 @@ export function TerminalViewport({
 				observer.disconnect();
 				theme.disconnect();
 				input.dispose();
+				bell?.dispose();
+				title?.dispose();
+				osc52?.dispose();
+				links?.dispose();
 				echo?.dispose();
+				view.onUrl = undefined;
 				view.terminal.dispose();
 				if (handle.current === view) handle.current = null;
+				setSearch(null);
 			};
 		})().catch(error => {
 			if (!stopped) onError(String(error));
@@ -349,30 +587,218 @@ export function TerminalViewport({
 	useEffect(() => {
 		if (claimTick > 0) refit.current?.();
 	}, [claimTick]);
+	const windows = PLATFORM === "windows";
+	/**
+	 * Windows' terminals paste on a right click (copy when text is selected; Orca FT14), with Ctrl held it opens the
+	 * menu. The press is taken before xterm reports it, so a mouse-aware program never pastes a second time.
+	 */
+	const onMouseDownCapture = (event: ReactMouseEvent) => {
+		if (!windows || event.button !== 2 || event.ctrlKey) return;
+		event.preventDefault();
+		event.stopPropagation();
+		handle.current?.terminal.focus();
+	};
+	const onContextMenu = (event: ReactMouseEvent) => {
+		const view = handle.current;
+		if (!view) return;
+		const selection = Boolean(view.terminal.getSelection());
+		if (windows && !event.ctrlKey) {
+			event.preventDefault();
+			if (selection) void copy().then(() => view.terminal.clearSelection?.());
+			else if (!exited) void paste();
+			return;
+		}
+		setMenuAt({ ...anchorFromEvent(event), selection });
+	};
+	/** A file dropped from the computer or the Files panel types its quoted path, as a terminal does (Orca FT11). */
+	const onDrop = async (event: DragEvent) => {
+		const fromFiles = readFileDrag(event.dataTransfer);
+		const files = [...event.dataTransfer.files];
+		if (!fromFiles && files.length === 0) return;
+		event.preventDefault();
+		// shortcut: a paired host's tab takes only Files-panel paths; this computer's files need an upload first.
+		const paths = fromFiles
+			? [fromFiles.path]
+			: predict
+				? []
+				: await Promise.all(files.map(file => Promise.resolve(window.omp.fs.pathForFile(file)).catch(() => "")));
+		const kind = shellKindOf(latest.current.shell, windows);
+		const typed = paths
+			.filter(Boolean)
+			.map(path => shellQuote(path, kind))
+			.join(" ");
+		if (typed) await write(`${typed} `);
+		handle.current?.terminal.focus();
+	};
+	const items: ContextMenuItem[] = menuAt
+		? [
+				{
+					id: "copy",
+					label: t("panel.terminal.copy"),
+					icon: Copy,
+					disabled: !menuAt.selection,
+					shortcut: MAC ? "⌘C" : "⇧⌃C",
+					onSelect: () => void copy(),
+				},
+				{
+					id: "paste",
+					label: t("panel.terminal.paste"),
+					icon: ClipboardPaste,
+					disabled: exited,
+					shortcut: MAC ? "⌘V" : "⇧⌃V",
+					onSelect: () => void paste(),
+				},
+				{
+					id: "select-all",
+					label: t("panel.terminal.selectAll"),
+					icon: TextSelect,
+					onSelect: () => handle.current?.terminal.selectAll?.(),
+				},
+				...(search
+					? [
+							{
+								id: "find",
+								label: t("panel.terminal.find.open"),
+								icon: Search,
+								shortcut: actionKbd("terminal.find", useUiStore.getState().keymapOverrides) || undefined,
+								onSelect: () => setFinding(true),
+							},
+						]
+					: []),
+				...(menu?.panes ?? []).map((item, index) => (index === 0 ? { ...item, separatorBefore: true } : item)),
+				{
+					id: "clear",
+					label: t("panel.terminal.clear"),
+					icon: Eraser,
+					separatorBefore: true,
+					onSelect: () => {
+						const view = handle.current;
+						void window.omp.terminal
+							.request(tabId, { action: "clear", id })
+							.then(() => {
+								if (view && handle.current === view) clearScreen(view);
+							})
+							.catch(error => onError(String(error)));
+					},
+				},
+				{
+					id: "reset",
+					label: t("panel.terminal.reset"),
+					icon: RotateCcw,
+					tooltip: t("panel.terminal.resetHint"),
+					onSelect: () => {
+						const view = handle.current;
+						void window.omp.terminal
+							.request(tabId, { action: "clear", id })
+							.then(() => {
+								if (view && handle.current === view) view.terminal.reset?.();
+							})
+							.catch(error => onError(String(error)));
+					},
+				},
+				...(menu?.close ? [{ ...menu.close, separatorBefore: true }] : []),
+			]
+		: [];
 	return (
 		<div
-			aria-label={t("panel.terminal.title")}
-			className={`min-h-0 min-w-0 flex-1 p-2 ${sized ? "overflow-hidden" : "overflow-auto"}`}
-			data-terminal-viewport
-			ref={element}
-		/>
+			className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+			data-terminal-screen={id}
+			onContextMenu={onContextMenu}
+			onDragOver={event => {
+				const types = [...event.dataTransfer.types];
+				if (!types.includes("Files") && !types.includes(FILE_DRAG_TYPE)) return;
+				event.preventDefault();
+				event.dataTransfer.dropEffect = "copy";
+			}}
+			onDrop={event => void onDrop(event)}
+			onFocusCapture={() => onFocusPane?.()}
+			onMouseDownCapture={onMouseDownCapture}
+		>
+			<div
+				aria-label={t("panel.terminal.title")}
+				className={`min-h-0 min-w-0 flex-1 p-2 ${sized ? "overflow-hidden" : "overflow-auto"}`}
+				data-terminal-viewport
+				ref={element}
+			/>
+			{finding && search && (
+				<TerminalFind
+					onClose={() => {
+						setFinding(false);
+						handle.current?.terminal.focus();
+					}}
+					search={search}
+				/>
+			)}
+			{menuAt && (
+				<ContextMenu
+					ariaLabel={t("panel.terminal.menu")}
+					items={items}
+					onClose={() => setMenuAt(null)}
+					x={menuAt.x}
+					y={menuAt.y}
+				/>
+			)}
+		</div>
 	);
 }
 
-function TabTerminalPanel({ tabId }: { tabId: string }) {
+/**
+ * Each terminal's name on its tab (Orca FT2/FT8): the name a person gave it, else the program's own title, else its
+ * shell's name; a name two tabs share gets their number.
+ */
+export function terminalLabels(
+	sessions: readonly Pick<TerminalSnapshot, "id" | "title" | "shell">[],
+	titles: Readonly<Record<string, string>>,
+	fallback: (number: number) => string,
+): string[] {
+	const base = sessions.map(
+		(session, index) => session.title || titles[session.id]?.trim() || session.shell || fallback(index + 1),
+	);
+	const seen = new Map<string, number>();
+	return base.map(label => {
+		if (base.filter(other => other === label).length < 2) return label;
+		const count = (seen.get(label) ?? 0) + 1;
+		seen.set(label, count);
+		return `${label} ${count}`;
+	});
+}
+
+/** Terminal requests (`ui.terminalNew`) each set has answered, across its mounts: the Terminal panel's and the quick terminal's. */
+const terminalNewSeen = { panel: 0, scratch: 0 };
+
+/**
+ * One set of terminals: a tab's (the Terminal panel) or, with `scratch`, this window's quick terminal in the home folder
+ * (`SCRATCH_TERMINAL_TAB`), which no session keeps.
+ */
+export function TerminalSet({ tabId, scratch = false }: { tabId: string; scratch?: boolean }) {
 	const t = useT();
 	const [sessions, setSessions] = useState<TerminalSnapshot[]>([]);
-	const [selected, setSelected] = useState<string | null>(null);
+	const [layout, setLayout] = useState<TerminalPanes>(NO_PANES);
+	const selected = focusedTerminal(layout);
+	const select = useCallback((id: string | null) => setLayout(current => pickTerminal(current, id)), []);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [attempt, setAttempt] = useState(0);
-	const handle = useRef<TerminalMount | null>(null);
+	const handles = useRef(new Map<string, { current: TerminalMount | null }>());
+	const handleFor = (id: string) => {
+		let handle = handles.current.get(id);
+		if (!handle) {
+			handle = { current: null };
+			handles.current.set(id, handle);
+		}
+		return handle;
+	};
 	const tabsRef = useRef<HTMLDivElement>(null);
 	/** The arrow keys switched sessions: the new shell leaves focus on the tab, so the next arrow moves on. */
 	const keyboardSwitch = useRef(false);
 	/** The tab (session id) or "new" (New terminal) that takes focus once a Delete's close has rendered. */
 	const focusAfterClose = useRef<string | null>(null);
 	const [shells, setShells] = useState<TerminalShell[]>([]);
+	/** Titles the programs in the terminals set (OSC 0/2), by terminal. */
+	const [titles, setTitles] = useState<Record<string, string>>({});
+	const [renaming, setRenaming] = useState<{ id: string; value: string } | null>(null);
+	const [closing, setClosing] = useState<{ index: number; fromKeys: boolean } | null>(null);
+	const renameForm = useId();
 	const expanded = useUiStore(s => s.terminalExpanded);
 	const compact = useCompactShell();
 	// A paired host's terminal answers over the network: typed characters are predicted (C109).
@@ -387,17 +813,19 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 	/** Another viewer sizes the active PTY (lease.ts): this screen draws it at that size until it claims. */
 	const [lease, setLease] = useState<TerminalLeaseState | undefined>();
 	const [claimTick, setClaimTick] = useState(0);
-	const changeFont = (change: "smaller" | "larger" | "reset") => {
-		const next = clampFontScale(
-			change === "reset" ? FONT_SCALE_DEFAULT : fontScale + (change === "larger" ? 1 : -1) * FONT_SCALE_STEP,
-		);
-		setFontScale(next);
-		try {
-			window.localStorage.setItem(FONT_SCALE_KEY, String(next));
-		} catch {
-			// Storage may be blocked (private mode); the size still applies until the page closes.
-		}
-	};
+	const changeFont = useCallback((change: "smaller" | "larger" | "reset") => {
+		setFontScale(scale => {
+			const next = clampFontScale(
+				change === "reset" ? FONT_SCALE_DEFAULT : scale + (change === "larger" ? 1 : -1) * FONT_SCALE_STEP,
+			);
+			try {
+				window.localStorage.setItem(FONT_SCALE_KEY, String(next));
+			} catch {
+				// Storage may be blocked (private mode); the size still applies until the page closes.
+			}
+			return next;
+		});
+	}, []);
 	/** Typed data with the held Ctrl/Alt applied; a single key spends them. */
 	const transform = useCallback((data: string) => {
 		const mods = heldRef.current;
@@ -452,7 +880,11 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 		void (async () => {
 			let result = await request({ action: "list", offsets: {} });
 			if (cancelled) return;
-			if (result?.length === 0) {
+			// A terminal asked for elsewhere (`ui.terminalNew`) starts once loading ends: no default shell beside it.
+			const asked = useUiStore.getState().terminalNew;
+			const pending =
+				Boolean(asked.scratch) === scratch && asked.seq > terminalNewSeen[scratch ? "scratch" : "panel"];
+			if (result?.length === 0 && !pending) {
 				// Settings › General › Terminal shell; main ignores a path it no longer finds.
 				const preferred = await window.omp.prefs.get(TERMINAL_SHELL_PREF).catch(() => undefined);
 				if (cancelled) return;
@@ -464,7 +896,7 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 				});
 			}
 			if (cancelled) return;
-			setSelected(result?.[0]?.id ?? null);
+			select(result?.[0]?.id ?? null);
 			setLoading(false);
 		})();
 		return () => {
@@ -477,7 +909,8 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 			if (
 				current?.exited === snapshot.exited &&
 				current?.error === snapshot.error &&
-				current?.exitCode === snapshot.exitCode
+				current?.exitCode === snapshot.exitCode &&
+				current?.title === snapshot.title
 			)
 				return previous;
 			return previous.map(item => (item.id === snapshot.id ? { ...snapshot, output: "" } : item));
@@ -487,24 +920,51 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 	const focusId = useUiStore(s => s.terminalFocusId);
 	useEffect(() => {
 		if (!focusId || !sessions.some(session => session.id === focusId)) return;
-		setSelected(focusId);
+		select(focusId);
 		useUiStore.setState({ terminalFocusId: null });
-	}, [focusId, sessions]);
+	}, [focusId, sessions, select]);
 	const active = sessions.find(session => session.id === selected);
-	const add = async (shell?: string) => {
-		const preferred = shell ?? (await window.omp.prefs.get(TERMINAL_SHELL_PREF).catch(() => undefined));
+	/**
+	 * A new terminal: shown in the pane in focus, or beside it with `split`. `ssh` runs a saved host in place of a shell;
+	 * `input` is typed once it starts (the worker holds it until the shell is ready, D90).
+	 */
+	const add = async (
+		shell?: string,
+		split?: SplitDirection,
+		extra: { ssh?: SshTarget; title?: string; input?: string | ((row: TerminalSnapshot) => string) } = {},
+	) => {
+		const preferred =
+			extra.ssh || shell ? shell : await window.omp.prefs.get(TERMINAL_SHELL_PREF).catch(() => undefined);
 		const result = await request({
 			action: "create",
 			cols: 80,
 			rows: 24,
 			...(typeof preferred === "string" && preferred ? { shell: preferred } : {}),
+			...(extra.ssh ? { ssh: extra.ssh, title: extra.ssh.name } : {}),
+			...(extra.title ? { title: extra.title } : {}),
 		});
-		if (!result) return;
+		const row = result?.at(-1);
+		const created = row?.id;
+		if (!row || !created) return;
+		const input = typeof extra.input === "function" ? extra.input(row) : extra.input;
+		if (input) void request({ action: "write", id: created, data: input });
 		keyboardSwitch.current = false;
-		setSelected(result.at(-1)?.id ?? null);
+		setLayout(current => (split ? splitTerminal(current, created, split) : pickTerminal(current, created)));
 	};
+	// A terminal asked for elsewhere (the keymap's `terminal.new`, the palette, Settings › SSH), once this set can start one.
+	const asked = useUiStore(s => s.terminalNew);
+	const set = scratch ? "scratch" : "panel";
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a request is answered once, when the set can start a shell.
+	useEffect(() => {
+		if (loading || Boolean(asked.scratch) !== scratch || asked.seq <= terminalNewSeen[set]) return;
+		terminalNewSeen[set] = asked.seq;
+		void add(undefined, undefined, asked.ssh ? { ssh: asked.ssh } : {});
+	}, [asked, loading]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: a session just chosen starts with nobody known to hold its size.
-	useEffect(() => setLease(undefined), [selected]);
+	useEffect(() => {
+		setLease(undefined);
+		setClaimTick(0);
+	}, [selected]);
 	const sendKey = (key: TerminalKey) => {
 		if (key.data === undefined || !selected) return;
 		void request({ action: "write", id: selected, data: transform(key.data) });
@@ -520,21 +980,52 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 	// A closed tab that was chosen gives its place to the session after it (the one before it when it was the last).
 	// Closed from the keyboard (Delete on a tab), focus stays on the strip: the tab that took its place, or New terminal
 	// when none is left. Closed by the pointer, the surviving terminal takes focus, as a click on a tab gives it.
-	const close = async (index: number) => {
+	const closeNow = async (index: number, fromKeys: boolean) => {
 		const id = sessions[index]?.id;
 		if (!id) return;
-		const focused = document.activeElement;
-		const fromKeys = focused?.getAttribute("role") === "tab" && tabsRef.current?.contains(focused) === true;
 		const result = await request({ action: "close", id });
-		if (!result || id !== activeId) return;
+		if (!result) return;
+		handles.current.delete(id);
 		const survivor = result[Math.min(index, result.length - 1)]?.id ?? null;
+		setTitles(({ [id]: _, ...rest }) => rest);
+		setLayout(current =>
+			closeTerminal(
+				current,
+				id,
+				result.map(session => session.id),
+				survivor,
+			),
+		);
+		if (id !== activeId) return;
 		keyboardSwitch.current = fromKeys;
-		setSelected(survivor);
 		if (fromKeys) focusAfterClose.current = survivor ?? "new";
 	};
+	/** A terminal running a command asks first (Orca FT22); one at its prompt, or ended, closes at once. */
+	const close = async (index: number) => {
+		const session = sessions[index];
+		if (!session) return;
+		const focused = document.activeElement;
+		const fromKeys = focused?.getAttribute("role") === "tab" && tabsRef.current?.contains(focused) === true;
+		if (session.exited) {
+			await closeNow(index, fromKeys);
+			return;
+		}
+		const { promise: deadline, resolve: giveUp } = Promise.withResolvers<null>();
+		const timer = setTimeout(giveUp, BUSY_PROBE_MS, null);
+		const answer = await Promise.race([
+			window.omp.terminal.request(tabId, { action: "busy", id: session.id }).catch(() => null),
+			deadline,
+		]).finally(() => clearTimeout(timer));
+		// No answer in time, an old host or an unreadable shell: as Orca, never end work nobody looked at.
+		if (answer?.find(row => row.id === session.id)?.busy === false) await closeNow(index, fromKeys);
+		else setClosing({ index, fromKeys });
+	};
+	const labels = terminalLabels(sessions, titles, number => t("panel.terminal.session", { number }));
 	const copy = async () => {
 		try {
-			await navigator.clipboard.writeText(handle.current?.terminal.getSelection() ?? "");
+			await navigator.clipboard.writeText(
+				(selected ? handles.current.get(selected)?.current?.terminal.getSelection() : "") ?? "",
+			);
 		} catch (cause) {
 			setError(String(cause));
 		}
@@ -546,16 +1037,186 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 			setError(String(cause));
 		}
 	};
+	const rename = (id: string) => {
+		const index = sessions.findIndex(session => session.id === id);
+		setRenaming({ id, value: sessions[index]?.title ?? labels[index] ?? "" });
+	};
+	const tab = useTabsStore(state => state.tabs.find(item => item.id === tabId));
+	// Saved commands of this tab's folder and every project's; the quick terminal (home folder) has every project's.
+	const commands = useTerminalCommandsStore(state => state.commands);
+	const folder = scratch ? undefined : tab?.cwd;
+	const [commandsOpen, setCommandsOpen] = useState(false);
+	useEffect(() => ensureTerminalCommands(), []);
+	const runCommand = (command: string) => {
+		if (selected && !active?.exited) void request({ action: "write", id: selected, data: commandInput(command) });
+		else void add(undefined, undefined, { input: commandInput(command) });
+	};
+	const commandItems: ContextMenuItem[] = [
+		...commandsFor(commands, folder).map(item => ({
+			id: `run-${item.id}`,
+			label: item.label,
+			description: item.command,
+			onSelect: () => runCommand(item.command),
+		})),
+		{
+			id: "commands-edit",
+			label: t(commands.length ? "panel.terminal.commands.manage" : "panel.terminal.commands.addFirst"),
+			icon: Pencil,
+			separatorBefore: commands.length > 0,
+			onSelect: () => setCommandsOpen(true),
+		},
+	];
+	// Orca's "Continue in terminal" (FC69): this computer's session, picked up by `omp --resume` in a new terminal.
+	// While this tab holds the session, stock moves the terminal's run to a new file of its own (`open-elsewhere`).
+	const sessionPath = !scratch && !remote ? tab?.sessionPath : undefined;
+	const moreItems: ContextMenuItem[] = [
+		...(shells.length > 1
+			? shells.map(shell => ({
+					id: shell.path,
+					label: t("panel.terminal.newWith", { name: shell.name }),
+					description: shell.path,
+					onSelect: () => void add(shell.path),
+				}))
+			: []),
+		...(sessionPath
+			? [
+					{
+						id: "resume",
+						label: t("panel.terminal.resume"),
+						tooltip: t("panel.terminal.resumeHint"),
+						icon: SquareTerminal,
+						separatorBefore: shells.length > 1,
+						onSelect: () =>
+							void add(undefined, undefined, {
+								// The program's own name, in every language.
+								title: "omp",
+								input: row =>
+									commandInput(
+										`omp --resume ${shellQuote(sessionPath, shellKindOf(row.shell, PLATFORM === "windows"))}`,
+									),
+							}),
+					},
+				]
+			: []),
+	];
+	const clearSelected = () => {
+		if (!selected) return;
+		const view = handles.current.get(selected)?.current;
+		void request({ action: "clear", id: selected }).then(result => {
+			if (!result || !view || handles.current.get(selected)?.current !== view) return;
+			clearScreen(view);
+		});
+	};
+	// A phone's head holds one row of buttons: its saved commands and Clear join the More menu there.
+	const headMenu: ContextMenuItem[] = compact
+		? [
+				...moreItems,
+				...commandItems.map((item, index) =>
+					index === 0 && moreItems.length > 0 ? { ...item, separatorBefore: true } : item,
+				),
+				{
+					id: "clear",
+					label: t("panel.terminal.clear"),
+					icon: Trash2,
+					separatorBefore: true,
+					disabled: !selected,
+					onSelect: clearSelected,
+				},
+			]
+		: moreItems;
+	const split = layout.panes.length > 1;
+	const menuFor = (id: string): TerminalMenuExtra => {
+		const index = sessions.findIndex(session => session.id === id);
+		return {
+			panes: [
+				{ id: "rename", label: t("panel.terminal.rename"), icon: Pencil, onSelect: () => rename(id) },
+				...(split
+					? [
+							{
+								id: "unsplit",
+								label: t("panel.terminal.unsplit"),
+								icon: Square,
+								onSelect: () => setLayout(current => unsplit(pickTerminal(current, id))),
+							},
+						]
+					: [
+							{
+								id: "split-right",
+								label: t("panel.terminal.splitRight"),
+								icon: Columns2,
+								onSelect: () => void add(undefined, "right"),
+							},
+							{
+								id: "split-down",
+								label: t("panel.terminal.splitDown"),
+								icon: Rows2,
+								onSelect: () => void add(undefined, "down"),
+							},
+						]),
+			],
+			close: {
+				id: "close",
+				label: t("panel.terminal.closeTerminal"),
+				icon: X,
+				danger: true,
+				onSelect: () => void close(index),
+			},
+		};
+	};
+	const pane = (id: string, index: number) => {
+		const session = sessions.find(item => item.id === id);
+		const focused = id === selected;
+		return (
+			<div
+				className={cx(
+					"flex min-h-0 min-w-0 flex-1 flex-col",
+					index > 0 &&
+						(layout.direction === "down" || compact
+							? "border-t border-(--sc-divider)"
+							: "border-l border-(--sc-divider)"),
+				)}
+				data-pane-focus={split && focused ? "" : undefined}
+				data-terminal-pane={id}
+				key={id}
+			>
+				<TerminalViewport
+					claimTick={focused ? claimTick : 0}
+					exited={Boolean(session?.exited)}
+					fontSize={fontSizeFor(fontScale)}
+					handle={handleFor(id)}
+					id={id}
+					key={`${id}:${attempt}`}
+					menu={menuFor(id)}
+					onError={setError}
+					onFocusPane={() => {
+						if (!focused) select(id);
+					}}
+					onLease={focused ? setLease : undefined}
+					onStatus={onStatus}
+					onTitle={title => setTitles(current => (current[id] === title ? current : { ...current, [id]: title }))}
+					onZoom={changeFont}
+					predict={remote}
+					shell={session?.shell}
+					tabId={tabId}
+					takeFocus={focused && !keyboardSwitch.current}
+					transform={transform}
+				/>
+			</div>
+		);
+	};
+	const closingSession = closing ? sessions[closing.index] : undefined;
 	return (
 		<div className="flex min-h-0 min-w-0 flex-1 flex-col bg-(--sc-surface-1)">
 			<div
 				className={cx(
 					"flex min-h-(--sc-space-10) min-w-0 shrink-0 items-center border-b border-(--sc-divider) px-3 py-2",
 					touch ? "gap-2.5 [--hit-gap-x:10px]" : "gap-1",
+					// A phone's row of touch-sized buttons leaves the tabs no room: they take a row of their own.
+					compact && "flex-wrap",
 				)}
 				data-terminal-head
 			>
-				<div className="flex min-w-0 flex-1 items-center" ref={tabsRef}>
+				<div className={cx("flex min-w-0 flex-1 items-center", compact && "basis-full")} ref={tabsRef}>
 					<Tabs
 						activeId={activeId}
 						ariaLabel={t("panel.terminal.title")}
@@ -563,15 +1224,22 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 						compact
 						onChange={(id, via) => {
 							keyboardSwitch.current = via === "key";
-							setSelected(id);
+							select(id);
 						}}
 						tabs={sessions.map((session, index) => ({
 							id: session.id,
-							label: t("panel.terminal.session", { number: index + 1 }),
+							label: labels[index] ?? "",
+							tooltip: labels[index],
 							attrs: { "data-terminal-tab": session.id },
 							className: "max-w-40",
+							// Orca FT8 renames on a double click; a phone's long press opens the same menu (FM57).
+							onDoubleClick: () => rename(session.id),
+							onContextMenu: event => {
+								event.preventDefault();
+								rename(session.id);
+							},
 							onClose: () => void close(index),
-							closeLabel: t("panel.terminal.closeFor", { number: index + 1 }),
+							closeLabel: t("panel.terminal.closeFor", { name: labels[index] ?? "" }),
 						}))}
 						variant="pills"
 					/>
@@ -584,21 +1252,33 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 					onClick={() => void add()}
 					size="sm"
 				/>
-				{shells.length > 1 && (
+				{headMenu.length > 0 && (
 					<MenuButton
+						data-terminal-more
 						disabled={loading}
 						icon={<ChevronDown />}
-						items={shells.map(shell => ({
-							id: shell.path,
-							label: t("panel.terminal.newWith", { name: shell.name }),
-							description: shell.path,
-							onSelect: () => void add(shell.path),
-						}))}
-						label={t("panel.terminal.newWithMenu")}
+						items={headMenu}
+						label={t(compact ? "panel.more" : "panel.terminal.newWithMenu")}
 						size="sm"
 					/>
 				)}
-				<div className="ml-auto flex shrink-0 items-center gap-0.5">
+				{!compact && (
+					<MenuButton
+						data-terminal-commands-menu
+						disabled={loading}
+						icon={<Bookmark />}
+						items={commandItems}
+						label={t("panel.terminal.commands.menu")}
+						size="sm"
+					/>
+				)}
+				{/* On a phone the buttons flow on the head's second row instead of a third. */}
+				<div
+					className={cx(
+						compact ? "contents" : "ml-auto flex shrink-0 items-center",
+						!compact && (touch ? "gap-2.5" : "gap-0.5"),
+					)}
+				>
 					{touch && (
 						<IconButton
 							data-terminal-keys-toggle
@@ -607,6 +1287,15 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 							onClick={() => setKeysOpen(open => !open)}
 							pressed={keysOpen}
 							size="sm"
+						/>
+					)}
+					{!scratch && (
+						<AddToChatButton
+							disabled={!selected}
+							read={() =>
+								(selected ? handles.current.get(selected)?.current?.terminal.getSelection() : "") ?? ""
+							}
+							tabId={tabId}
 						/>
 					)}
 					<IconButton
@@ -623,23 +1312,16 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 						onClick={() => void paste()}
 						size="sm"
 					/>
-					<IconButton
-						icon={<Trash2 />}
-						label={t("panel.terminal.clear")}
-						disabled={!selected}
-						onClick={() => {
-							if (selected) {
-								const view = handle.current;
-								void request({ action: "clear", id: selected }).then(result => {
-									if (!result || handle.current !== view) return;
-									view?.terminal.clear();
-									view?.terminal.write("\u001b[2J\u001b[3J\u001b[H");
-								});
-							}
-						}}
-						size="sm"
-					/>
 					{!compact && (
+						<IconButton
+							icon={<Trash2 />}
+							label={t("panel.terminal.clear")}
+							disabled={!selected}
+							onClick={clearSelected}
+							size="sm"
+						/>
+					)}
+					{!compact && !scratch && (
 						<IconButton
 							icon={expanded ? <Minimize2 /> : <Maximize2 />}
 							label={t(expanded ? "fileViewer.collapse" : "fileViewer.expand")}
@@ -688,20 +1370,15 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 			{loading ? (
 				<Spinner className="p-3" label={t("panel.terminal.starting")} size="sm" />
 			) : selected ? (
-				<TerminalViewport
-					claimTick={claimTick}
-					fontSize={fontSizeFor(fontScale)}
-					handle={handle}
-					id={selected}
-					key={`${selected}:${attempt}`}
-					onError={setError}
-					onLease={setLease}
-					onStatus={onStatus}
-					predict={remote}
-					tabId={tabId}
-					takeFocus={!keyboardSwitch.current}
-					transform={transform}
-				/>
+				<div
+					className={cx(
+						"flex min-h-0 min-w-0 flex-1",
+						layout.direction === "down" || compact ? "flex-col" : "flex-row",
+					)}
+					data-terminal-split={split ? layout.direction : undefined}
+				>
+					{layout.panes.map(pane)}
+				</div>
 			) : (
 				<EmptyState
 					icon={<TerminalIcon />}
@@ -743,6 +1420,56 @@ function TabTerminalPanel({ tabId }: { tabId: string }) {
 					</Button>
 				</div>
 			)}
+			<ConfirmDialog
+				confirmLabel={t("panel.terminal.closeRunning.confirm")}
+				message={t("panel.terminal.closeRunning.message", {
+					name: closing ? (labels[closing.index] ?? "") : "",
+				})}
+				onCancel={() => setClosing(null)}
+				onConfirm={() => {
+					const pending = closing;
+					setClosing(null);
+					if (pending && closingSession && sessions[pending.index]?.id === closingSession.id)
+						void closeNow(pending.index, pending.fromKeys);
+				}}
+				open={closing !== null}
+				title={t("panel.terminal.closeRunning.title")}
+			/>
+			<Modal
+				footer={
+					<>
+						<Button onClick={() => setRenaming(null)} type="button" variant="ghost">
+							{t("common.cancel")}
+						</Button>
+						<Button form={renameForm} type="submit" variant="primary">
+							{t("rename.submit")}
+						</Button>
+					</>
+				}
+				onClose={() => setRenaming(null)}
+				open={renaming !== null}
+				size="sm"
+				title={t("panel.terminal.renameTitle")}
+			>
+				<form
+					id={renameForm}
+					onSubmit={event => {
+						event.preventDefault();
+						if (renaming) void request({ action: "rename", id: renaming.id, title: renaming.value });
+						setRenaming(null);
+					}}
+				>
+					<Input
+						autoFocus
+						hint={t("panel.terminal.renameHint")}
+						label={t("panel.terminal.renameLabel")}
+						maxLength={200}
+						onChange={event => setRenaming(current => current && { ...current, value: event.target.value })}
+						value={renaming?.value ?? ""}
+					/>
+				</form>
+			</Modal>
+			<TerminalCommandsDialog folder={folder} onClose={() => setCommandsOpen(false)} open={commandsOpen} />
 		</div>
 	);
 }
@@ -751,5 +1478,5 @@ export function TerminalPanel() {
 	const tabId = useTabsStore(state => state.activeTabId);
 	// A paired host's tab gets the host's terminals, in the tab's folder there (C114).
 	if (!tabId) return <EmptyState icon={<TerminalIcon />} size="sm" title={t("panel.terminal.noTab")} />;
-	return <TabTerminalPanel key={tabId} tabId={tabId} />;
+	return <TerminalSet key={tabId} tabId={tabId} />;
 }

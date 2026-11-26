@@ -638,6 +638,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/bridge-first-use-stock.test.ts",
 			"src/main/ecc/ecc-stock.test.ts",
 			"src/main/formal/formal-stock.test.ts",
+			"src/main/interfaces/interfaces-stock.test.ts",
 		],
 	},
 	{
@@ -1821,7 +1822,42 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"@oh-my-pi/pi-coding-agent/tools/gh-common",
 			"@oh-my-pi/pi-coding-agent/utils/github",
 		],
-		tests: ["src/main/bridge-ci-watch.test.ts", "src/main/bridge-capabilities.test.ts"],
+		tests: [
+			"src/main/bridge-ci-watch.test.ts",
+			"src/main/bridge-ci-watch-stock.test.ts",
+			"src/main/bridge-capabilities.test.ts",
+		],
+	},
+	{
+		id: "B67",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"Formal-verification hint on a `/skill:<name>` turn: the hook's prompt is stock's `prompts/skills/user-invocation.md` rendering (the whole skill body, then a `User:` line), and the hint matches only the `User:` line; an unrecognized shape falls back to matching the whole text.",
+		files: ["resources/gui-bridge/modes/formal-hint-core.ts"],
+		stock: ["prompts/skills/user-invocation.md", "@oh-my-pi/pi-coding-agent/extensibility/skills"],
+		tests: ["src/main/interfaces/interfaces-stock.test.ts", "src/main/bridge-formal-hint.test.ts"],
+	},
+	{
+		id: "B68",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"A2UI: the `a2ui` tool through the extension API (`registerTool` in the factory's main bind, before stock builds the session; `getActiveTools` to refuse a button in a run with `ask` off), the person's answer through `ctx.ui.formDialog` (stock's RPC `form` request carrying OMPdesk's marker form), and A2UI messages checked by pi-ai's root `validateJsonSchemaValue`, which resolves local refs only and treats `unevaluatedProperties` as permissive.",
+		files: [
+			"resources/gui-bridge/modes/a2ui.ts",
+			"resources/gui-bridge/index.ts",
+			"resources/gui-bridge/modes/a2ui-core.ts",
+			"resources/gui-bridge/omp/pi-ai.ts",
+			"resources/gui-bridge/capabilities.ts",
+		],
+		stock: [
+			"omp://extensions.md#registerTool",
+			"omp://rpc.md#extension_ui_request",
+			"@oh-my-pi/pi-ai",
+			"tools/html-form/parse.ts parseHtmlForm",
+		],
+		tests: ["src/main/bridge-a2ui-stock.test.ts", "src/main/bridge-a2ui.test.ts"],
 	},
 	{
 		id: "H01",

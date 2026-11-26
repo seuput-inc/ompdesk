@@ -364,6 +364,12 @@ export type RpcCommand =
 	| { id?: string; type: "desktop_slot_stop" }
 	| { id?: string; type: "desktop_slot_retry" }
 	| { id?: string; type: "desktop_slot_kill" }
+	// Links a person or an agent attached to a session (src/main/local/session-links.ts): main answers them, never omp.
+	// A window's are this computer's, and its `session_links` without `sessionPath` lists every session; through a tab
+	// (an agent's) they go to the computer the session runs on, a missing `sessionPath` naming the tab's own session.
+	| { id?: string; type: "session_links"; sessionPath?: string; all?: true }
+	| { id?: string; type: "session_link_add"; sessionPath?: string; url: string }
+	| { id?: string; type: "session_link_remove"; sessionPath?: string; url: string }
 	/** Main's own calls into the bridge's desktop slot module (src/main/local/desktop-slot.ts allow-lists the methods); never sent by a renderer. */
 	| { id?: string; type: "desktop_slot_bridge"; method: string; params?: unknown }
 	// Delegation strength (composer chip): gui-bridge modes/delegation.ts
@@ -567,6 +573,7 @@ export type RpcCommand =
 			state?: "open" | "closed" | "merged" | "all";
 			limit?: number;
 			view?: RpcPrListView;
+			filter?: RpcPrListFilter;
 			background?: boolean;
 	  }
 	| { id?: string; type: "pr_get"; number: number; background?: boolean }
@@ -581,6 +588,9 @@ export type RpcCommand =
 	| { id?: string; type: "pr_edit"; number: number; title?: string; body?: string; base?: string }
 	// Agents › GitHub over gh (src/main/local/git/github.ts; contract src/shared/github.ts).
 	| { id?: string; type: "github"; request: GithubRequest; background?: boolean }
+	// What a web page says about itself, for a conversation link's hover card (core `webPeek.get`,
+	// native/ompdesk/crates/core/src/web_peek.rs: https only, public addresses only, 5 s, 256 KiB).
+	| { id?: string; type: "web_peek"; url: string }
 	// Source control in the Changes panel (src/main/local/git/scm.ts): plain git
 	// mutations on the session checkout; git_commit_message runs stock
 	// `omp commit --dry-run` and never commits.
@@ -1377,6 +1387,13 @@ export interface RpcSafeRemoval {
 	remote?: RpcRemoteCopy;
 }
 
+/** web_peek: a page's `<title>` (or `og:title`), `og:description`/`description` and `og:site_name`; null when it names none. */
+export interface RpcWebPeek {
+	title: string | null;
+	description: string | null;
+	siteName?: string;
+}
+
 /** pr_repo: gh availability + the session cwd's GitHub repo, or the typed reason it's unusable. */
 export type RpcPrRepo =
 	| { available: true; repo: string; defaultBranch: string | null }
@@ -1415,12 +1432,40 @@ export interface RpcPrDetail {
 	deletions: number;
 	reviewDecision: string | null;
 	files: Array<{ path: string; changeType: string; additions: number; deletions: number }>;
-	checks: Array<{ name: string; status: string; conclusion: string | null }>;
+	checks: RpcPrCheck[];
+	/** The PR's GraphQL node id (viewed marks). */
+	id?: string;
+	headRefOid?: string;
+	/** While auto-merge is on: the method it will merge with and who turned it on. */
+	autoMerge?: { method: RpcPrMergeMethod; by: string } | null;
+	/** Requested reviewers: a user's login, a team's slug. */
+	reviewRequests?: string[];
+	assignees?: string[];
+	labels?: string[];
+}
+
+/** One check of a PR's rollup. */
+export interface RpcPrCheck {
+	name: string;
+	status: string;
+	conclusion: string | null;
+	/** Its details page: an Actions job's `…/actions/runs/<run>/job/<job>`, or a status's target. */
+	url?: string;
+	workflow?: string;
+	startedAt?: string;
+	completedAt?: string;
 }
 
 export type RpcPrMergeMethod = "merge" | "squash" | "rebase";
 /** PR Center list view: every PR, those waiting on your review, or yours. */
 export type RpcPrListView = "all" | "review" | "mine";
+/** PR Center list filters past the view: gh's `--author`, `--label`, `--assignee`, `--draft`. */
+export interface RpcPrListFilter {
+	author?: string;
+	label?: string;
+	assignee?: string;
+	draft?: boolean;
+}
 export type RpcPrReviewEvent = "approve" | "request_changes" | "comment";
 
 export interface RpcPrComments {

@@ -4,16 +4,31 @@
  * the menu holds and in what order. An action the list does not support is absent, never a disabled item (a host
  * has no project rename).
  *
- * Groups, each set apart: new sessions · edit (rename, pin, move up and down, archive all) · Delete, last. There is
- * ONE Delete: it takes the project out of its computer's project list, and its confirm (`ProjectDeleteDialog`)
- * offers to delete the project's saved sessions with it. There is no separate "Remove from sidebar".
+ * Groups, each set apart: new sessions · edit (rename, pin, move up and down, mute notifications, archive all) ·
+ * Delete, last. There is ONE Delete: it takes the project out of its computer's project list, and its confirm
+ * (`ProjectDeleteDialog`) offers to delete the project's saved sessions with it. There is no separate "Remove from
+ * sidebar".
  */
-import { Archive, ArrowDown, ArrowUp, GitBranchPlus, Pencil, Pin, PinOff, SquareTerminal, Trash2 } from "lucide-react";
+import {
+	Archive,
+	ArrowDown,
+	ArrowUp,
+	Bell,
+	BellOff,
+	GitBranchPlus,
+	Pencil,
+	Pin,
+	PinOff,
+	SquareTerminal,
+	Trash2,
+} from "lucide-react";
 import type { ContextMenuItem } from "../../common";
 
 /** What is true of the project; every list answers these the same way. */
 export interface ProjectMenuFacts {
 	pinned: boolean;
+	/** Its notifications are muted (this computer's projects only). */
+	muted: boolean;
 	canMoveUp: boolean;
 	canMoveDown: boolean;
 	/** Sessions "Archive all" can take (none held by a tab): zero disables the item. */
@@ -26,6 +41,7 @@ export interface ProjectMenuActions {
 	newWorktree?: () => void;
 	rename?: () => void;
 	togglePin?: () => void;
+	toggleMute?: () => void;
 	moveUp?: () => void;
 	moveDown?: () => void;
 	archiveAll?: () => void;
@@ -83,6 +99,13 @@ export function projectMenuItems({ facts, actions, t }: ProjectMenuInput): Conte
 			label: facts.pinned ? t("sidebar.menu.unpin") : t("sidebar.menu.pin"),
 			icon: facts.pinned ? PinOff : Pin,
 			onSelect: actions.togglePin,
+		});
+	if (actions.toggleMute)
+		edit.push({
+			id: "group-mute",
+			label: facts.muted ? t("sidebar.menu.unmute") : t("sidebar.menu.mute"),
+			icon: facts.muted ? Bell : BellOff,
+			onSelect: actions.toggleMute,
 		});
 	if (actions.archiveAll)
 		edit.push({

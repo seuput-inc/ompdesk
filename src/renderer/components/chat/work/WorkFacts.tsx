@@ -5,6 +5,7 @@ import {
 	CircleAlert,
 	CircleX,
 	FileDiff,
+	GitPullRequest,
 	Globe,
 	type LucideIcon,
 	Shield,
@@ -21,7 +22,7 @@ export interface WorkFact {
 	/** The `data-work-finding` value the tests and captures look for; `error` for every failed fact. */
 	finding: string;
 	tone: WorkFactTone;
-	icon: "files" | "check" | "error" | "note" | "preview" | "stopped" | "skill" | "peers" | "protected";
+	icon: "files" | "check" | "error" | "note" | "preview" | "stopped" | "skill" | "peers" | "protected" | "pr";
 	label: string;
 	figure?: ReactNode;
 	/** A verdict block's cause: the first line of output that says what failed. */
@@ -46,6 +47,7 @@ const ICONS: Record<WorkFact["icon"], LucideIcon> = {
 	skill: BookOpen,
 	peers: Users,
 	protected: Shield,
+	pr: GitPullRequest,
 };
 
 function FactIcon({ fact }: { fact: WorkFact }) {

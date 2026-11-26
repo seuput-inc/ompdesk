@@ -8,7 +8,8 @@ use serde_json::Value;
 
 use crate::number::js_trim;
 use crate::protocol::{
-    CONTROL_DIR_ENV, CONTROL_OFF_ENV, CONTROL_SOCKET_ENV, ENDPOINT_FILE, TOKEN_FILE,
+    CONTROL_DIR_ENV, CONTROL_OFF_ENV, CONTROL_SOCKET_ENV, ENDPOINT_FILE, START_FAILURE_FILE,
+    TOKEN_FILE,
 };
 use crate::run::Io;
 
@@ -69,7 +70,17 @@ pub fn read_endpoint(socket: Option<&str>, io: &Io) -> Result<Endpoint, String> 
         None => {
             let file = dir.join(ENDPOINT_FILE);
             if !file.exists() {
-                return Err(format!("OMPdesk is not running (no {})", file.display()));
+                // A running OMPdesk whose socket could not start says why (main's control-socket/index.ts).
+                let why = fs::read_to_string(dir.join(START_FAILURE_FILE))
+                    .ok()
+                    .map(|text| text.trim().to_string())
+                    .filter(|text| !text.is_empty())
+                    .map(|text| format!("; its control socket did not start: {text}"))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "OMPdesk is not running (no {}){why}",
+                    file.display()
+                ));
             }
             let endpoint: Value = fs::read_to_string(&file)
                 .ok()

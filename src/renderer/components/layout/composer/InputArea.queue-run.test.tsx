@@ -281,7 +281,9 @@ describe("the field's placeholder, by priority", () => {
 	it("puts a pending question above everything, a queued edit above the lane", async () => {
 		await mount({ streaming: true, steering: [queued("s1", "queued text")] });
 		await act(async () =>
-			useComposerStore.getState().beginEditQueued({ id: "s1", lane: "steering", text: "", token: "k1" }),
+			useComposerStore
+				.getState()
+				.beginEditQueued({ id: "s1", lane: "steering", text: "", token: "k1", began: Promise.resolve(true) }),
 		);
 		expect(placeholder()).toBe("Edit the queued message…");
 		await act(async () =>
@@ -301,14 +303,20 @@ describe("Edit queued", () => {
 	const holds = () =>
 		rpcCommand.mock.calls.map(([command]) => command).filter(command => command.type === "queue_hold");
 
-	async function mountEditing(streaming = true): Promise<void> {
+	async function mountEditing(streaming = true, began = Promise.resolve(true)): Promise<void> {
 		await mount({ streaming, steering: [queued("s1", "queued text")] });
 		await act(async () => {
 			useComposerStore.getState().setDraft("my draft");
 			useComposerStore.getState().setImages([image]);
 			// The row's Edit held the message in the core and took it out of stock's queue (ComposerQueue.test.tsx).
 			useQueueStore.getState().setFromFrame({ steering: [], followUp: [] });
-			useComposerStore.getState().beginEditQueued({ id: "s1", lane: "steering", text: "queued text", token: "k1" });
+			useComposerStore.getState().beginEditQueued({
+				id: "s1",
+				lane: "steering",
+				text: "queued text",
+				token: "k1",
+				began,
+			});
 		});
 	}
 
@@ -346,6 +354,22 @@ describe("Edit queued", () => {
 		expect(holds()).toEqual([{ type: "queue_hold", token: "k1" }]);
 		expect(document.querySelector("[data-queue-edit-banner]")).toBeNull();
 		expect(fieldValue()).toBe("my draft");
+	});
+
+	it("after an Esc that came before the core answered, queues the original only once it is out of stock's queue, and keeps the pill away until then", async () => {
+		const { promise: began, resolve } = Promise.withResolvers<boolean>();
+		await mountEditing(true, began);
+		// Another message still waits, so the pill could show; it waits until the original is queued again.
+		await act(async () => useQueueStore.getState().setFromFrame({ steering: [queued("s2", "other")], followUp: [] }));
+		await press("Escape");
+		await flush();
+		expect(fieldValue()).toBe("my draft");
+		expect(prompt).not.toHaveBeenCalled();
+		expect(document.querySelector("[data-queue-pill]")).toBeNull();
+		await act(async () => resolve(true));
+		await flush();
+		expect(prompt).toHaveBeenCalledWith("queued text", undefined, "steer");
+		expect(document.querySelector("[data-queue-pill]")).not.toBeNull();
 	});
 
 	it("on Cancel after the turn ended holds the original in the restored tray instead of starting a turn", async () => {

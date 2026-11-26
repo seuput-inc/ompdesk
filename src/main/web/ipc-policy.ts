@@ -134,6 +134,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[C.BRIDGE_HEALTH_TAKE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[BRIDGE_HEALTH_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.DISK_FULL_GET]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.CONTROL_SOCKET_FAILURE]: { dir: "invoke", permission: "host-admin", mode: "pass" },
 
 	// Sessions and their tabs.
 	[C.RPC_COMMAND]: { dir: "invoke", permission: "workspace", mode: "pass" },
@@ -150,6 +151,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[C.SESSIONS_MOVE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_TARGETS]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_ARTWORK]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.SESSIONS_PULL_REQUEST]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_DUMP_BUNDLE]: {
 		dir: "invoke",
 		permission: "workspace",
@@ -178,6 +180,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[C.SET_TAB_VIEW]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.REORDER_TABS]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.GET_TABS]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.TABS_SEEN_SINCE_RUN]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.GET_SESSION_OWNER]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSION_SUMMARIES]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.REMOTE_OPENED_TABS]: { dir: "invoke", permission: "workspace", mode: "pass" },
@@ -251,6 +254,25 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		mode: "web",
 		web: "In-page toast or the service worker's notification; the host's OS notification only on request",
 	},
+	[C.SYSTEM_DESKTOP_AWAY]: {
+		dir: "invoke",
+		permission: "device-self",
+		mode: "web",
+		web: "Never asked: a page's own visibility is its presence (the shim answers null)",
+	},
+	[C.SYSTEM_NOTIFY_TEST]: {
+		dir: "invoke",
+		permission: "device-self",
+		mode: "web",
+		web: "Never asked: a page tests its own push (WEB_PUSH_TEST); the shim answers unsupported",
+	},
+	[C.SYSTEM_NOTIFY_SETTINGS]: {
+		dir: "invoke",
+		permission: "device-self",
+		mode: "web",
+		web: "Never asked: the host's system settings are not the phone's (the shim does nothing)",
+	},
+	[C.WEB_PUSH_TEST]: { dir: "invoke", permission: "device-self", mode: "pass" },
 	[E.TRAY_STATE_PUSH]: {
 		dir: "send",
 		permission: "device-self",
@@ -541,6 +563,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[E.SESSION_SUMMARIES_CHANGED]: { dir: "push", mode: "pass" },
 	[E.REMOTE_OPENED_TABS_CHANGED]: { dir: "push", mode: "pass" },
 	[E.SESSIONS_HELD_CHANGED]: { dir: "push", mode: "pass" },
+	[E.SESSION_LINKS_CHANGED]: { dir: "push", mode: "pass" },
 	[E.LOG_LINE]: { dir: "push", mode: "pass" },
 	[E.MENU_ACTION]: {
 		dir: "push",

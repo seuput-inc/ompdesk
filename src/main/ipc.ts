@@ -9,7 +9,7 @@
  * (`remote_path_native`): this machine cannot see that disk.
  */
 
-import { promises as fsp } from "node:fs";
+import { promises as fsp, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { app, BrowserWindow, dialog, Notification, screen, shell } from "electron";
@@ -78,10 +78,13 @@ import type {
 	IpcGetSessionOwnerPayload,
 	IpcModelSetupRunResult,
 	IpcNotifyPayload,
+	IpcNotifyResult,
+	IpcNotifyTestResult,
 	IpcOpenPathResult,
 	IpcPrefsChangedPayload,
 	IpcPrefsGetPayload,
 	IpcPrefsSetPayload,
+	IpcPushTestResult,
 	IpcRemoteListDirsPayload,
 	IpcRpcCommandForTabPayload,
 	IpcRpcCommandPayload,
@@ -92,6 +95,7 @@ import type {
 	IpcSessionsListPayload,
 	IpcSessionsMessagesPayload,
 	IpcSessionsMovePayload,
+	IpcSessionsPullRequestPayload,
 	IpcSessionsRenamePayload,
 	IpcSessionsSearchPayload,
 	IpcSessionsTargetsPayload,
@@ -133,6 +137,8 @@ import { SCHEDULES_COMMAND, SCHEDULES_LOG, type Schedule, type SchedulesRequest 
 import { hostedSummaries, type SummariesChanged } from "../shared/session-summary";
 import { SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import { SIDEBAR_PROJECTS_COMMAND } from "../shared/sidebar-projects";
+import { parseTerminalCommands, TERMINAL_COMMANDS_PREF } from "../shared/terminal-commands";
+import { SCRATCH_TERMINAL_TAB } from "../shared/terminal-types";
 import { isUiLanguage } from "../shared/ui-language";
 import {
 	findChromiumBrowsers,
@@ -154,7 +160,7 @@ import {
 	readCheckoutPlace,
 } from "./checkout-peers";
 import { createControlBackend } from "./control-socket/backend";
-import { startControlSocket } from "./control-socket/index";
+import { controlSocketFailure, startControlSocket } from "./control-socket/index";
 import { defaultWorkspace } from "./default-workspace";
 import { deliverOnce } from "./delivery-ledger";
 import { DesktopSlotHost } from "./desktop-slot-host";
@@ -165,13 +171,20 @@ import type { MainTextKey } from "./i18n-text";
 import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { noteTypedPrompt } from "./local/prompt-origin";
+import {
+	answerSessionLinks,
+	dropSessionLinks,
+	onSessionLinksChanged,
+	handlers as sessionLinkHandlers,
+} from "./local/session-links";
+import { LocalCommandError } from "./local/types";
 import type { LogWatcher } from "./log-watcher";
 import type { MacPermissions } from "./mac-permissions";
 import { type LocalMachine, type MachineServices, machineFor as pickMachine } from "./machine-services";
 import type { MailAccounts } from "./mail-accounts";
 import type { MediaStreams } from "./media-stream";
 import { modelsPath } from "./models-config";
-import { type NoticeKind, NotificationBatcher, type ShownNotice } from "./notification-batch";
+import { type NoticeKind, NotificationBatcher, type ShownInfo, type ShownNotice } from "./notification-batch";
 import { type AdmitNotification, createNotifyHandler } from "./notify-triage";
 import { systemOmp } from "./omp-runtime";
 import { openLocalPath } from "./open-path";
@@ -197,7 +210,14 @@ import type { RunProcess, ScheduleService } from "./schedules";
 import type { SessionIndex } from "./session-index";
 import { deleteSession, moveSession, onSessionDeleted, recordSessionDelete, renameSession } from "./session-mutations";
 import type { SessionSummaries } from "./session-summaries";
-import { SessionArtworkParams, SessionTargetsParams, sessionArtwork, sessionTargets } from "./session-targets";
+import {
+	SessionArtworkParams,
+	SessionPullRequestParams,
+	SessionTargetsParams,
+	sessionArtwork,
+	sessionPullRequest,
+	sessionTargets,
+} from "./session-targets";
 import { resolveEditorCommand, shellSpawnEnv } from "./shell-env";
 import { publishLanguage } from "./shell-host/electron/index";
 import { readClipboardText } from "./shell-host/shell-calls";
@@ -209,6 +229,7 @@ import { registerSshToolsIpc } from "./ssh/ipc";
 import { markStartupFromRenderer } from "./startup-timing";
 import { stockHelperRequest } from "./stock-helper";
 import { shellEngine } from "./system-version";
+import { TabAttention } from "./tab-attention";
 import { closeWindowTab, type TabReleaseDeps } from "./tab-release";
 import { type SessionFolderState, type SpawnTabRemote, sessionFolderState, spawnTabForWindow } from "./tab-spawn";
 import { TERMINAL_READ_TOOL } from "./terminal/agent-tool";
@@ -220,6 +241,7 @@ import { type ClientWindow, isWebWindow } from "./web/client-window";
 import type { FileEditReports } from "./web/file-edit-reports";
 import type { IpcCaller, IpcRegistry } from "./web/ipc-registry";
 import type { UploadStore } from "./web/uploads";
+import { WebClientWindow } from "./web/web-client-window";
 import type { SpawnWindow, WindowManager } from "./window";
 import { sanitizeChromeColors, TOP_BAR_HEIGHT } from "./window-chrome";
 import {
@@ -344,6 +366,16 @@ export interface IpcDeps {
 	checkoutFilesRef: { current: ((sidecar: object) => void) | null };
 	/** How a tab whose omp came up with an autopilot run `running` goes on (TurnResume's `relaunchContinuation`). */
 	relaunchContinuation: (tabId: string) => RelaunchContinuation;
+	/** The tab's project has its notifications muted (its project menu): no banner, no phone push. */
+	notifyMuted?: (tabId: string) => boolean;
+	/** The person looked at the tab: the paired phones' banners about it are retracted (`WebHost.tabSeen`). */
+	onTabSeen?: (tabId: string) => void;
+	/** A paired page's window is in the foreground (`WebHost.pageVisible`). */
+	pageVisible?: (win: ClientWindow) => boolean;
+	/** Whether the person is away from this computer (presence.ts `readDesktopAway`). */
+	desktopAway?: () => boolean | undefined;
+	/** One test push to a paired device's own subscription (`WebHost.testPush`); undefined while there is no web host. */
+	testPush?: (deviceId: string) => Promise<IpcPushTestResult> | undefined;
 }
 
 /**
@@ -372,10 +404,21 @@ function targetFor(deps: IpcDeps, caller: IpcCaller, tabId?: string) {
 function cwdFor(deps: IpcDeps, caller: IpcCaller, tabId?: string): string | null {
 	const win = caller.win;
 	if (!win) return null;
+	if (tabId === SCRATCH_TERMINAL_TAB) return quickNotesFolder();
 	const target = deps.sidecarPool.tabTarget(win, tabId);
 	if (tabId) return target && !target.device ? target.sidecar.cwd : null;
 	if (target && !target.device) return target.sidecar.cwd;
 	return deps.windowManager.recordFor(win)?.cwd ?? null;
+}
+
+/** The quick terminal's files are its scratch notes, `<userData>/notes` (made at first use, this user's alone). */
+let notesFolder: string | null = null;
+function quickNotesFolder(): string {
+	if (notesFolder) return notesFolder;
+	const folder = path.join(app.getPath("userData"), "notes");
+	mkdirSync(folder, { recursive: true, mode: 0o700 });
+	notesFolder = folder;
+	return folder;
 }
 
 /** The caller's cwd when its active tab runs on `device` (undefined = this machine), else null. */
@@ -465,16 +508,33 @@ const TYPED_COMMANDS: ReadonlySet<string> = new Set(["prompt", "steer", "follow_
 const liveNotifications = new Set<Notification>();
 /** Windows whose close already cancels their pending notification summary. */
 const notifyBatchedWindows = new Set<number>();
+/** The banners about each tab, closed once the person looks at it; when it was looked at (tab-attention.ts). */
+const tabAttention = new TabAttention();
+/**
+ * The system refused the last banner (Windows reports `failed`; macOS reports nothing, Electron has no read of its
+ * permission): the next notify answers `blocked`, and the window says so once.
+ */
+let bannersFailing = false;
 
-/** One OS notification; one about a tab switches to it on click. */
-function showNotification(windowId: number, notice: ShownNotice): { close: () => void } {
+/** One OS notification; one about a tab switches to it on click. A lone banner about a tab closes once it is seen. */
+function showNotification(windowId: number, notice: ShownNotice, info?: ShownInfo | null): { close: () => void } {
 	const win = BrowserWindow.getAllWindows().find(candidate => candidate.webContents.id === windowId);
 	const notification = new Notification({ title: notice.title, body: notice.body });
 	const { tabId } = notice;
+	notification.on("failed", () => {
+		bannersFailing = true;
+	});
+	notification.on("show", () => {
+		bannersFailing = false;
+	});
 	if (win && tabId) {
 		// Held until clicked or dismissed: a collected Notification drops its click.
 		liveNotifications.add(notification);
-		const release = () => liveNotifications.delete(notification);
+		const forget = info?.summary ? () => undefined : tabAttention.banner(tabId, notification);
+		const release = () => {
+			liveNotifications.delete(notification);
+			forget();
+		};
 		notification.on("close", release);
 		notification.on("click", () => {
 			release();
@@ -530,6 +590,12 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	/** The same for a window's model setup research. */
 	const remoteModelSetups = new Map<number, string>();
 	const { sidecarPool, sessionIndex, logWatcher, windowManager, remoteDevices } = deps;
+	/** The person looked at the tab: its banners close here and on the phones, and a pending summary forgets it. */
+	const tabSeen = (tabId: string) => {
+		tabAttention.seen(tabId);
+		for (const winId of notifyBatchedWindows) notificationBatcher.forget(winId, tabId);
+		deps.onTabSeen?.(tabId);
+	};
 	const prefsStore = prefsFile<PrefsSchema>("prefs");
 	const remoteMachine = { request: remoteDevices.request.bind(remoteDevices), statsText: mainT };
 	/**
@@ -690,6 +756,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		remoteDevices.hostSessionsChanged();
 		deps.sidebarProjects?.schedule();
 	};
+	// A session's links changed (a window, a phone page, an agent here or a paired device's tab here): every window and
+	// page here reads them again.
+	onSessionLinksChanged(() => everywhere(IPC_EVENTS.SESSION_LINKS_CHANGED, undefined));
 	// What every row shows of this computer's sessions: each change reaches every window and phone page here (a push no
 	// router drops for a hidden page) and every paired device; a view whose copy is on another version reads it whole.
 	deps.summaries.onChange(delta => {
@@ -835,6 +904,23 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				success: true,
 				data: desktopSlot.state(),
 			};
+		}
+		// A window's (or phone page's) session links are this computer's, its rows', whatever tab it shows: answered here
+		// like the slot. An agent's (no channel) go through its tab below, to the computer its session runs on.
+		if (channel !== undefined && Object.hasOwn(sessionLinkHandlers, slotCommand)) {
+			try {
+				const data = answerSessionLinks(payload.command, undefined);
+				return { id: payload.command.id, type: "response", command: slotCommand, success: true, data };
+			} catch (err) {
+				return {
+					id: payload.command.id,
+					type: "response",
+					command: slotCommand,
+					success: false,
+					error: err instanceof Error ? err.message : String(err),
+					...(err instanceof LocalCommandError ? { code: err.code } : {}),
+				};
+			}
 		}
 		// A tab whose omp is still starting (its place in the start queue, its first answer, a stalled start begun again)
 		// is waited for, not refused: a relaunch's restored tabs got "Sidecar not ready" for every read while they started.
@@ -1524,6 +1610,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// factory hands over; index.ts reaches it through `deps.autopilotRef` (TurnResume, the factory).
 	autopilot.attachControl(agentControl.control);
 
+	ipc.handle(IPC_COMMANDS.CONTROL_SOCKET_FAILURE, () => controlSocketFailure());
+
 	ipc.handle(IPC_COMMANDS.RPC_COMMAND, async (caller, payload: IpcRpcCommandPayload) => {
 		const win = caller.win;
 		if (!win)
@@ -1661,6 +1749,12 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return device ? remoteDevices.request(device, "sessions.artwork", params) : sessionArtwork(params);
 	});
 
+	ipc.handle(IPC_COMMANDS.SESSIONS_PULL_REQUEST, async (_caller, payload: IpcSessionsPullRequestPayload) => {
+		const params = SessionPullRequestParams.parse({ root: payload?.root, branch: payload?.branch });
+		const device = deviceOf(payload?.device);
+		return device ? remoteDevices.request(device, "sessions.pullRequest", params) : sessionPullRequest(params);
+	});
+
 	// Open a session (or a fresh project window) in a NEW parallel window with
 	// its own sidecar. The calling window's sidecar is left running untouched —
 	// this is the explicit parallel action. Returns false when the window's
@@ -1790,25 +1884,51 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return Object.fromEntries(folders.map((cwd, index) => [cwd, origins[index] ?? null]));
 	});
 
+	/**
+	 * The person looks at the window's shown tabs: a focused, unminimized desktop window, or a paired page in the
+	 * foreground. Their banners close, on this computer and the phones (tab-attention.ts, web-push-notifier.ts).
+	 */
+	const lookedAt = (caller: IpcCaller, tabIds: readonly string[]) => {
+		const win = caller.browserWindow;
+		const looking = win
+			? win.isFocused() && !win.isMinimized()
+			: caller.win !== null && deps.pageVisible?.(caller.win) === true;
+		if (looking) for (const tabId of tabIds) tabSeen(tabId);
+	};
 	// Move full event forwarding to the window's active tab (listeners move,
 	// never duplicate). The renderer calls this before hydrateSession().
 	ipc.handle(IPC_COMMANDS.SET_ACTIVE_TAB, (caller, payload: IpcSetActiveTabPayload) => {
 		const win = caller.win;
 		if (!win || typeof payload?.tabId !== "string") return false;
-		return deps.sidecarPool.setActiveTab(win, payload.tabId);
+		const switched = deps.sidecarPool.setActiveTab(win, payload.tabId);
+		if (switched) lookedAt(caller, [payload.tabId]);
+		return switched;
 	});
 
 	ipc.handle(IPC_COMMANDS.SET_TAB_VIEW, (caller, payload: IpcSetTabViewPayload) => {
 		const win = caller.win;
 		if (!win || typeof payload?.focusedTabId !== "string" || !Array.isArray(payload.visibleTabIds)) return false;
-		return deps.sidecarPool.setTabView(
+		const shown = deps.sidecarPool.setTabView(
 			win,
 			payload.focusedTabId,
 			payload.visibleTabIds,
 			payload.split,
 			payload.rememberedSplits,
 		);
+		if (shown) lookedAt(caller, payload.visibleTabIds);
+		return shown;
 	});
+	// Coming back to a window is looking at the tab it shows.
+	const onWindowFocus = (_event: unknown, win: BrowserWindow) => {
+		const tabId = deps.sidecarPool.activeTabForWindow(win);
+		if (tabId) tabSeen(tabId);
+	};
+	app.on("browser-window-focus", onWindowFocus);
+	deps.sidecarPool.observeTabs(activity => {
+		if (activity.type === "idle" && activity.outcome) tabAttention.settled(activity.tabId);
+		else if (activity.type === "released") tabAttention.released(activity.tabId);
+	});
+	ipc.handle(IPC_COMMANDS.TABS_SEEN_SINCE_RUN, () => tabAttention.seenSinceRun());
 
 	ipc.handle(IPC_COMMANDS.REORDER_TABS, (caller, payload: { tabIds?: unknown }) => {
 		const win = caller.win;
@@ -2000,7 +2120,64 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		},
 		lastTurn: tabId => ({ cwd: sidecarPool.sidecarOf(tabId)?.cwd, reply: lastReplies.get(tabId) }),
 	});
-	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY, (caller, payload: IpcNotifyPayload) => notifyHandler(caller, payload));
+	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY, async (caller, payload: IpcNotifyPayload): Promise<IpcNotifyResult> => {
+		if (typeof payload?.tabId === "string" && deps.notifyMuted?.(payload.tabId)) return "muted";
+		// No banner can show at all; the window says so once and plays its sound.
+		if (!Notification.isSupported()) return "blocked";
+		const failing = bannersFailing;
+		// A quiet bot turn or a repeat another window already reported: nothing shows, and nothing sounds.
+		if (!(await notifyHandler(caller, payload))) return "dropped";
+		return failing ? "blocked" : "shown";
+	});
+	ipc.handle(IPC_COMMANDS.SYSTEM_DESKTOP_AWAY, () => deps.desktopAway?.() ?? null);
+	// Settings › General's test banner. Windows reports a refused banner (`failed`); macOS reports nothing and Electron
+	// cannot read its permission there, so no word within the wait reads as shown and the page points at the settings.
+	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY_TEST, (): IpcNotifyTestResult | Promise<IpcNotifyTestResult> => {
+		if (!Notification.isSupported()) return "unsupported";
+		const notification = new Notification({ title: mainT("push.test.title"), body: mainT("push.test.body") });
+		const { promise, resolve } = Promise.withResolvers<IpcNotifyTestResult>();
+		// Held until it answers: a collected Notification drops its events.
+		liveNotifications.add(notification);
+		const timer = setTimeout(() => resolve("shown"), 1500);
+		notification.once("show", () => {
+			bannersFailing = false;
+			resolve("shown");
+		});
+		notification.once("failed", () => {
+			bannersFailing = true;
+			resolve("failed");
+		});
+		notification.show();
+		return promise.finally(() => {
+			clearTimeout(timer);
+			liveNotifications.delete(notification);
+		});
+	});
+	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY_SETTINGS, async () => {
+		const panes =
+			process.platform === "darwin"
+				? [
+						"x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+						// macOS 12 and older name the pane this way.
+						"x-apple.systempreferences:com.apple.preference.notifications",
+					]
+				: process.platform === "win32"
+					? ["ms-settings:notifications"]
+					: [];
+		for (const pane of panes) {
+			try {
+				await shell.openExternal(pane);
+				return;
+			} catch {
+				// The next name, if any.
+			}
+		}
+	});
+	ipc.handle(
+		IPC_COMMANDS.WEB_PUSH_TEST,
+		async (caller): Promise<IpcPushTestResult> =>
+			caller.win instanceof WebClientWindow ? ((await deps.testPush?.(caller.win.deviceId)) ?? "none") : "none",
+	);
 
 	// Preferences
 	ipc.handle(IPC_COMMANDS.PREFS_GET, (_caller, payload: IpcPrefsGetPayload) => {
@@ -2023,9 +2200,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	};
 	// A deleted session leaves the closed-children record (its opener's family) with its file, also
 	// when a paired device asked the delete; a delete before this rule left its record, which goes now.
-	onSessionDeleted(() => {
+	onSessionDeleted((sessionPath, device) => {
 		agentControl.control.changed();
 		void agentControl.forgetDeleted();
+		// A paired host's file keeps its links there, and its own delete drops them.
+		if (!device) dropSessionLinks(sessionPath);
 	});
 	void agentControl.forgetDeleted();
 	ipc.handle(IPC_COMMANDS.PREFS_SET, (caller, payload: IpcPrefsSetPayload) => {
@@ -2064,6 +2243,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		}
 		if (payload.key === JUDGE_ASSIST_PREF && typeof payload.value !== "boolean") {
 			throw codedError("invalid_preference_key", "Invalid judge assist preference");
+		}
+		// Saved terminal commands run in a shell as typed: only a list that reads whole is stored.
+		if (
+			payload.key === TERMINAL_COMMANDS_PREF &&
+			(!Array.isArray(payload.value) || parseTerminalCommands(payload.value).length !== payload.value.length)
+		) {
+			throw codedError("invalid_preference_key", "Invalid saved terminal commands");
 		}
 		if (payload.key === DELEGATION_PREF && !isDelegationMode(payload.value)) {
 			throw codedError("invalid_preference_key", "Invalid delegation strength");

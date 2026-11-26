@@ -9,12 +9,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::json::{self, get, or};
-use super::{BodyFile, Tools, pr};
+use super::{BodyFile, Tools, pr, review};
 use crate::fs::order::{is_js_space, js_trim};
 use crate::run::Opts;
 use crate::server::{Fault, Reply};
 
-const ISSUE_FIELDS: &str = "number,title,state,author,labels,comments,updatedAt,url";
+const ISSUE_FIELDS: &str = "number,title,state,author,labels,assignees,comments,updatedAt,url";
 const RUN_FIELDS: &str =
     "databaseId,workflowName,displayTitle,status,conclusion,headBranch,event,createdAt,url";
 const RELEASE_FIELDS: &str = "tagName,name,isDraft,isPrerelease,isLatest,publishedAt,createdAt";
@@ -128,22 +128,106 @@ enum Op {
         id: String,
     },
     NotificationReadAll,
+    PrState {
+        number: u64,
+        state: String,
+    },
+    PrAutoMerge {
+        number: u64,
+        enable: bool,
+        method: Option<String>,
+    },
+    /// `kind`: `pr` or `issue`.
+    People {
+        kind: String,
+        number: u64,
+        #[serde(default)]
+        add: review::People,
+        #[serde(default)]
+        remove: review::People,
+    },
+    Assignable,
+    LabelList,
+    PrConversation {
+        number: u64,
+    },
+    ThreadReply {
+        number: u64,
+        comment_id: u64,
+        body: String,
+    },
+    ThreadResolve {
+        thread_id: String,
+        resolved: bool,
+    },
+    Reaction {
+        subject_id: String,
+        content: String,
+        add: bool,
+    },
+    PrFilesViewed {
+        number: u64,
+    },
+    PrFileViewed {
+        pull_request_id: String,
+        path: String,
+        viewed: bool,
+    },
+    PrStack {
+        number: u64,
+    },
+    PrForBranch {
+        branch: String,
+    },
+    PrTemplate,
+    PrDiffs {
+        number: u64,
+    },
+    RateLimit,
+    ItemPeek {
+        number: u64,
+    },
+    /// `data`: the image's bytes in base64.
+    ImageUpload {
+        name: String,
+        content_type: String,
+        data: String,
+    },
+    /// A private attachment's signed URL, read into a `data:` URL.
+    Attachment {
+        url: String,
+    },
 }
 
-struct Center<'a> {
-    tools: &'a Tools,
-    cwd: &'a str,
+pub(super) struct Center<'a> {
+    pub(super) tools: &'a Tools,
+    pub(super) cwd: &'a str,
     host: Option<&'a str>,
     named: Option<&'a str>,
 }
 
 impl Center<'_> {
     /// One gh run on the chosen host; its failure is `github_failed`, or `gh_unauthenticated` by gh's words.
-    async fn call(&self, args: &[&str], timeout_ms: Option<u64>) -> Result<String, Fault> {
+    pub(super) async fn call(
+        &self,
+        args: &[&str],
+        timeout_ms: Option<u64>,
+    ) -> Result<String, Fault> {
+        self.send(args, timeout_ms, None).await
+    }
+
+    /// `call` with `input` on gh's stdin (an upload's bytes, `--input -`).
+    pub(super) async fn send(
+        &self,
+        args: &[&str],
+        timeout_ms: Option<u64>,
+        input: Option<&[u8]>,
+    ) -> Result<String, Fault> {
         let host = self.host.map(|host| [("GH_HOST", host)]);
         let opts = Opts {
             timeout_ms,
             env: host.as_ref().map_or(&[], |host| host.as_slice()),
+            input,
             ..Opts::default()
         };
         self.tools
@@ -168,12 +252,17 @@ impl Center<'_> {
             })
     }
 
-    async fn json(&self, args: &[&str]) -> Result<Value, Fault> {
+    /// The chosen host, else github.com (gh's own default host is not read here).
+    pub(super) fn host_name(&self) -> &str {
+        self.host.unwrap_or("github.com")
+    }
+
+    pub(super) async fn json(&self, args: &[&str]) -> Result<Value, Fault> {
         json::parse(&self.call(args, None).await?)
     }
 
     /// `--repo` for repository operations: the named repository (on the chosen host) or the checkout's.
-    async fn repo(&self) -> Result<String, Fault> {
+    pub(super) async fn repo(&self) -> Result<String, Fault> {
         match (self.named, self.host) {
             (Some(repo), Some(host)) => Ok(format!("{host}/{repo}")),
             (Some(repo), None) => Ok(repo.to_owned()),
@@ -182,7 +271,7 @@ impl Center<'_> {
     }
 
     /// `gh api` with `--hostname` on a chosen host.
-    async fn api(&self, rest: &[&str]) -> Result<String, Fault> {
+    pub(super) async fn api(&self, rest: &[&str]) -> Result<String, Fault> {
         let mut args = vec!["api"];
         if let Some(host) = self.host {
             args.extend(["--hostname", host]);
@@ -213,6 +302,7 @@ struct Issue {
     state: &'static str,
     author: Value,
     labels: Vec<Value>,
+    assignees: Vec<Value>,
     comment_count: usize,
     updated_at: Value,
     url: Value,
@@ -231,6 +321,15 @@ fn issue(row: &Value) -> Issue {
         labels: json::rows(row, "labels")
             .iter()
             .filter_map(|label| label.get("name").filter(|name| json::truthy(name)).cloned())
+            .collect(),
+        assignees: json::rows(row, "assignees")
+            .iter()
+            .filter_map(|person| {
+                person
+                    .get("login")
+                    .filter(|login| json::truthy(login))
+                    .cloned()
+            })
             .collect(),
         comment_count: get(row, "comments")
             .and_then(Value::as_array)
@@ -297,6 +396,9 @@ struct RepoDetail {
     homepage: Value,
     license: Value,
     ssh_url: Value,
+    /// `OWNER/NAME` of the repository a fork was made from, else null: the issue list's Upstream/Origin choice (Orca
+    /// `IssueSourceSelector.tsx`).
+    parent: Value,
 }
 
 #[derive(Serialize)]
@@ -345,12 +447,19 @@ fn run(row: &Value) -> Run {
     }
 }
 
+/// A job of a run; `annotations` of a failed one (Orca `editor/check-details/panel`): `{path, line, level, title,
+/// message}`.
 #[derive(Serialize)]
 struct Job {
+    id: Value,
     name: Value,
     status: Value,
     conclusion: Value,
+    annotations: Vec<Value>,
 }
+
+/// The failed jobs whose annotations a run's detail reads, at most.
+const ANNOTATED_JOBS: usize = 5;
 
 #[derive(Serialize)]
 struct RunDetail {
@@ -654,16 +763,23 @@ pub async fn command(
         }
         Op::RepoGet => {
             let repo = center.repo().await?;
-            let fields = format!("{REPO_FIELDS},defaultBranchRef,homepageUrl,sshUrl,licenseInfo");
+            let fields =
+                format!("{REPO_FIELDS},defaultBranchRef,homepageUrl,sshUrl,licenseInfo,parent");
             let row = center
                 .json(&["repo", "view", &repo, "--json", &fields])
                 .await?;
+            let parent = get(&row, "parent").and_then(|parent| {
+                let owner = get(parent, "owner").and_then(|owner| json::text(owner, "login"))?;
+                let name = json::text(parent, "name")?;
+                Some(Value::from(format!("{owner}/{name}")))
+            });
             Reply::json(&RepoDetail {
                 item: repo_item(&row),
                 default_branch: json::name_of(&row, "defaultBranchRef"),
                 homepage: or(&row, "homepageUrl", ""),
                 license: json::name_of(&row, "licenseInfo"),
                 ssh_url: or(&row, "sshUrl", ""),
+                parent: parent.unwrap_or(Value::Null),
             })
         }
         Op::RepoCreate {
@@ -772,16 +888,28 @@ pub async fn command(
             let row = center
                 .json(&["run", "view", &id, "--repo", &repo, "--json", &fields])
                 .await?;
+            let mut jobs = Vec::new();
+            let mut annotated = 0;
+            for job in json::rows(&row, "jobs") {
+                let failed = json::text(job, "conclusion") == Some("failure");
+                let annotations = match get(job, "databaseId").and_then(Value::as_u64) {
+                    Some(job_id) if failed && annotated < ANNOTATED_JOBS => {
+                        annotated += 1;
+                        review::annotations(&center, &repo, job_id).await
+                    }
+                    _ => Vec::new(),
+                };
+                jobs.push(Job {
+                    id: or(job, "databaseId", 0),
+                    name: or(job, "name", ""),
+                    status: or(job, "status", ""),
+                    conclusion: or(job, "conclusion", ""),
+                    annotations,
+                });
+            }
             Reply::json(&RunDetail {
                 run: run(&row),
-                jobs: json::rows(&row, "jobs")
-                    .iter()
-                    .map(|job| Job {
-                        name: or(job, "name", ""),
-                        status: or(job, "status", ""),
-                        conclusion: or(job, "conclusion", ""),
-                    })
-                    .collect(),
+                jobs,
             })
         }
         Op::RunLog { id, failed_only } => {
@@ -977,6 +1105,53 @@ pub async fn command(
             center.api(&["-X", "PUT", "notifications"]).await?;
             Reply::json(&DONE)
         }
+        Op::PrState { number, state } => review::pr_state(&center, number, &state).await,
+        Op::PrAutoMerge {
+            number,
+            enable,
+            method,
+        } => review::pr_auto_merge(&center, number, enable, method.as_deref()).await,
+        Op::People {
+            kind,
+            number,
+            add,
+            remove,
+        } => review::people(&center, kind == "pr", number, &add, &remove).await,
+        Op::Assignable => review::assignable(&center).await,
+        Op::LabelList => review::labels(&center).await,
+        Op::PrConversation { number } => review::conversation(&center, number).await,
+        Op::ThreadReply {
+            number,
+            comment_id,
+            body,
+        } => review::thread_reply(&center, number, comment_id, &body).await,
+        Op::ThreadResolve {
+            thread_id,
+            resolved,
+        } => review::thread_resolve(&center, &thread_id, resolved).await,
+        Op::Reaction {
+            subject_id,
+            content,
+            add,
+        } => review::reaction(&center, &subject_id, &content, add).await,
+        Op::PrFilesViewed { number } => review::files_viewed(&center, number).await,
+        Op::PrFileViewed {
+            pull_request_id,
+            path,
+            viewed,
+        } => review::file_viewed(&center, &pull_request_id, &path, viewed).await,
+        Op::PrStack { number } => review::pr_stack(&center, number).await,
+        Op::PrForBranch { branch } => Reply::json(&pr::for_branch(tools, cwd, &branch).await?),
+        Op::PrTemplate => review::pr_template(&center).await,
+        Op::PrDiffs { number } => Reply::json(&pr::all_diffs(tools, cwd, number).await?),
+        Op::RateLimit => review::rate_limit(&center).await,
+        Op::ItemPeek { number } => review::item_peek(&center, number).await,
+        Op::ImageUpload {
+            name,
+            content_type,
+            data,
+        } => review::image_upload(&center, &name, &content_type, &data).await,
+        Op::Attachment { url } => review::attachment(&url).await,
     }
 }
 
