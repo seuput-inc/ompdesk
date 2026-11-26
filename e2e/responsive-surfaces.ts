@@ -530,15 +530,29 @@ async function ensureParityItems(page: Page): Promise<void> {
 	}
 }
 
-/** The Bots page on the parity bot's page, its Items tab chosen. */
+/** The Bots page on the parity bot's page, its Items tab chosen and its list shown (not an item another surface opened). */
 async function openParityItems(page: Page, look: Look): Promise<void> {
 	await ensureParityItems(page);
 	await openDrawer(page, look);
 	await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
-	// A phone shows the list first: the bot's row opens its page.
+	// A phone shows the list first, and a group's room may be the page: the bot's row opens its page.
 	if ((await page.locator("[data-bot-pane]:visible").count()) === 0)
 		await page.locator("[data-bots-page-row]:visible").first().click();
 	await page.locator('[data-bot-pane-tabs] [data-tab-id="items"]:visible').first().click();
+	await closeParityItem(page);
+}
+
+/** Back from an open item page to the Items list; nothing when the list shows. */
+async function closeParityItem(page: Page): Promise<void> {
+	const back = page.locator("[data-bot-item-back]:visible").first();
+	if ((await back.count()) > 0) await back.click();
+}
+
+/** What bot-items and bot-item opened, closed: the item page back to the list, the bot page back on Activity. */
+async function closeParityItems(page: Page): Promise<void> {
+	await closeParityItem(page);
+	const activity = page.locator('[data-bot-pane-tabs] [data-tab-id="activity"]:visible').first();
+	if ((await activity.count()) > 0) await activity.click();
 }
 
 /**
@@ -2310,7 +2324,7 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-bot-pane] [data-bot-items] [data-bot-item]",
 		settle: 600,
 		when: () => false,
-		parity: { session: "work" },
+		parity: { session: "work", after: closeParityItems },
 	},
 	{
 		id: "bot-item",
@@ -2323,7 +2337,7 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-bot-item-page] [data-bot-item-activity]",
 		settle: 600,
 		when: () => false,
-		parity: { session: "work" },
+		parity: { session: "work", after: closeParityItems },
 	},
 	{
 		id: "bot-room",
