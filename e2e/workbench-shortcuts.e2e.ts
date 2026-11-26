@@ -160,7 +160,10 @@ for (const [language, theme] of variants([
 			const picker = page.getByRole("dialog");
 			await pressShortcutUntilVisible(page, "ControlOrMeta+Shift+f", picker);
 			await page.keyboard.type("haystack-marker");
-			const hit = picker.getByRole("option").filter({ hasText: "haystack-marker" });
+			// The last row offers a worktree named after the query; the hit is the session's row.
+			const hit = picker
+				.locator('[role="option"]:not([data-session-picker-create])')
+				.filter({ hasText: "haystack-marker" });
 			await expect(hit).toBeVisible();
 			// The title line is never blank, and the excerpt shows the transcript line that matched.
 			await expect(hit.locator("span.block").first()).not.toBeEmpty();
