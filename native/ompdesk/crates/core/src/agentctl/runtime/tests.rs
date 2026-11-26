@@ -450,6 +450,52 @@ async fn the_openers_are_the_tabs_that_opened_a_session_the_auto_close_may_close
 }
 
 #[tokio::test]
+async fn a_tab_no_opener_names_gets_back_the_one_the_call_journal_names() {
+    use crate::agentctl::journal::call_journal::CallBegin;
+    // Relaunched after a core loss: the child's tab has a new id, its layout named no opener.
+    let mut kid = tab("kid-now", "/s/kid.jsonl");
+    kid["formerIds"] = json!(["kid-before"]);
+    let mut remote = tab("remote-kid", "/s/r.jsonl");
+    remote["formerIds"] = json!(["remote-before"]);
+    let st = state(vec![
+        tab("boss-now", "/s/boss.jsonl"),
+        kid,
+        remote,
+        tab("person", "/s/p.jsonl"),
+    ]);
+    let files = Files {
+        calls: Some(JournalFile { file: None }),
+        ..Files::default()
+    };
+    let (control, runtime, told) = rig(7_413, st, files, |_, _| Ok(Value::Null));
+    {
+        let mut calls = control.calls().unwrap();
+        for (key, opened) in [
+            ("\n/s/boss.jsonl\ncall-1", "kid-before"),
+            // A paired device's session opened this one: no session here is its opener.
+            ("dev\n/s/boss.jsonl\ncall-2", "remote-before"),
+        ] {
+            calls
+                .begin(CallBegin {
+                    key: key.into(),
+                    tool: "ompdesk_session_open".into(),
+                    caller_tab_id: "boss-before".into(),
+                    intent: None,
+                    opened: None,
+                })
+                .unwrap();
+            calls.note(key, opened).unwrap();
+        }
+    }
+    runtime.recover_openers().await;
+    assert_eq!(
+        told_of(&told, "setOpener"),
+        vec![json!({ "tabId": "kid-now", "openerTabId": "boss-now" })]
+    );
+    control.host.port().close();
+}
+
+#[tokio::test]
 async fn a_deleted_session_leaves_the_closed_list_and_its_ids_keep_naming_it() {
     let record = |path: &str, device: Option<&str>| {
         let mut row = json!({ "path": path, "openedBySession": "/s/parent.jsonl", "title": path, "cwd": "/repo", "closedAt": 1.0, "tabIds": ["t-1"] });
