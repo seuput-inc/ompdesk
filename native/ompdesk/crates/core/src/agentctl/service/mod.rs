@@ -388,8 +388,7 @@ impl AgentControl {
             arrived: tokio::sync::Notify::new(),
             app: std::sync::OnceLock::new(),
         }));
-        // Main holds the state from the start: a bot chat's first spawn reads its launch flags there.
-        control.bots_changed();
+        control.hold_paused();
         control
     }
 

@@ -1851,7 +1851,7 @@ async fn look_around_is_on_for_a_new_bot_every_four_hours_on_weekdays_and_follow
 #[tokio::test]
 async fn a_look_replaces_the_suggestions_list_and_a_dismissed_one_stays_out() {
     let root = Scratch::new();
-    let (control, _, id) = ada(9_712, &root, Mails::default(), |_, _| None).await;
+    let (control, _, id) = ada(9_716, &root, Mails::default(), |_, _| None).await;
     let suggest = |list: Value| {
         let control = control.clone();
         async move {
