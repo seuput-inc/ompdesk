@@ -915,6 +915,9 @@ if (dir) {
 					await fs.mkdir(folder, { recursive: true });
 					for (const view of VIEWS) {
 						const page = pages[view];
+						// One line per view, so a capture the job's timeout cuts off names where it stood (forward runs
+						// 45798443670 and 45816609957 stalled about 20 minutes on a surface no output named).
+						console.log(`[parity] ${new Date().toISOString().slice(11, 19)} ${surface.id} › ${view}`);
 						try {
 							await show[view](surface.parity.session);
 							await page.locator("[data-composer-input]").first().waitFor({ state: "visible", timeout: 60_000 });
