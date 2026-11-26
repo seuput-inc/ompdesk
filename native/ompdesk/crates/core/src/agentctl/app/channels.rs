@@ -228,6 +228,9 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("extension-update:now", Risk::Never(OPERATOR)),
     ("schedules:command", Risk::Never(OPERATOR)),
     ("mail-accounts:command", Risk::Never(CREDENTIALS)),
+    // Linear and Jira: the accounts hold the person's tokens; an agent reads its tracker through its own tools.
+    ("trackers:command", Risk::Never(OWN_TOOLS)),
+    ("trackers:accounts", Risk::Never(OPERATOR)),
     ("schedules:log", Risk::Never(DENY)),
     // The owner's own Bots page; agents have ompdesk_bot and ompdesk_item.
     ("bots:command", Risk::Never(OPERATOR)),
