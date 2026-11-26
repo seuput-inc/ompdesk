@@ -58,7 +58,7 @@ export default function SlackThreadBar({ tabId }: { tabId: string }) {
 		...posts.filter(post => post.state !== "failed").slice(0, SHOWN_POSTS),
 	];
 	return (
-		<Card className="mx-4 mt-2 flex flex-col gap-2" data-slack-thread-bar={chat.key} padding="sm">
+		<Card className="absolute inset-x-4 top-2 z-10 flex flex-col gap-2" data-slack-thread-bar={chat.key} padding="sm">
 			<div className="flex items-center gap-2">
 				<Hash aria-hidden className="size-4 shrink-0 text-(--sc-text-muted)" />
 				<div className="flex min-w-0 flex-1 flex-col">

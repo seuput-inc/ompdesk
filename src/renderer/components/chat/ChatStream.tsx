@@ -1110,11 +1110,9 @@ function SessionTranscript() {
 		<div className="omp-transcript-editorial relative min-h-0 flex-1 bg-transparent">
 			<TurnEndAnnouncer />
 			{botChat && tabId ? (
-				<div className="pointer-events-none absolute inset-x-0 top-0 z-10 [&>*]:pointer-events-auto">
-					<Suspense fallback={null}>
-						<SlackThreadBar tabId={tabId} />
-					</Suspense>
-				</div>
+				<Suspense fallback={null}>
+					<SlackThreadBar tabId={tabId} />
+				</Suspense>
 			) : null}
 			<div
 				ref={parentRef}
