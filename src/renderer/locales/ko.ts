@@ -214,6 +214,7 @@ export const ko: Record<string, string> = {
 	"newTask.close": "닫기",
 	"newTask.closeWhileRunning": "아직 만드는 중이에요",
 	"newTask.fileNotSent": "{name}을 첨부하지 못했어요",
+	"newTask.sessionDidNotStart": "세션이 시작되지 않았어요. 다시 시도하면 다시 열어요",
 
 	// Worktree tab close prompt
 	"worktreeClose.title": "워크트리 탭 “{name}” 닫기",

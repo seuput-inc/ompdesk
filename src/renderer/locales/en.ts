@@ -217,6 +217,7 @@ export const en: Record<string, string> = {
 	"newTask.close": "Close",
 	"newTask.closeWhileRunning": "It is still being made",
 	"newTask.fileNotSent": "{name} couldn't be attached",
+	"newTask.sessionDidNotStart": "The session didn't start; Retry opens it again",
 
 	// Worktree tab close prompt
 	"worktreeClose.title": "Close worktree tab “{name}”",

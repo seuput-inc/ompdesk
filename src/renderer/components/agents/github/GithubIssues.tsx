@@ -1,6 +1,7 @@
 import { CircleDot, CircleOff, Copy, ExternalLink, MessageSquare, Pencil, Play, Plus, RefreshCw } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import type { GithubIssueDetail, GithubIssueState } from "../../../../shared/github";
+import { issueTaskPrompt } from "../../../lib/fix-prompts";
 import { copyText, formatTimeAgo } from "../../../lib/format";
 import { github, useGithubLoad } from "../../../lib/github";
 import { uploadGithubImage } from "../../../lib/github-image";
@@ -190,7 +191,7 @@ function IssueDetail({
 						onClick={() =>
 							useUiStore.getState().openWorktreeDialog({
 								name: issueBranch(issue),
-								prompt: `${t("github.issues.promptLead", { number: issue.number, title: issue.title })}\n${issue.url}\n\n${issue.body}`,
+								prompt: issueTaskPrompt(issue),
 							})
 						}
 						size="sm"

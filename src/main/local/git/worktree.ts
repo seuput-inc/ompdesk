@@ -143,13 +143,25 @@ export function sparsePresets(cwd: string): Promise<{ name: string; folders: str
 	return worktreeGit("git.sparsePresets", { cwd }, 3);
 }
 
+let branchRenamed: (path: string, from: string, branch: string) => void = () => {};
+
+/** Who follows a renamed branch in the tabs bound to its worktree (index.ts: the pool's records). */
+export function setBranchRenamedListener(listener: (path: string, from: string, branch: string) => void): void {
+	branchRenamed = listener;
+}
+
 /**
  * A new task's worktree branch named for its work (FS91): `from` becomes `to` (or `to-2`…) in the checkout at `cwd`
  * while it is still out there and never published; `branch` null when nothing was renamed (core `rename_unpushed`).
+ * Every tab bound to that worktree on `from` then names the new branch.
  */
 export async function renameUnpushedBranch(cwd: string, from: string, to: string): Promise<{ branch: string | null }> {
 	const primary = await primaryRoot(cwd);
-	return withRepoLock(primary, () => worktreeGit("git.renameUnpushed", { cwd, from, to }, 8));
+	const renamed = await withRepoLock(primary, () =>
+		worktreeGit<{ branch: string | null }>("git.renameUnpushed", { cwd, from, to }, 8),
+	);
+	if (renamed.branch) branchRenamed(cwd, from, renamed.branch);
+	return renamed;
 }
 
 /**

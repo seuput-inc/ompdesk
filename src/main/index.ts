@@ -132,6 +132,7 @@ import { type IpcDeps, registerIpcHandlers } from "./ipc";
 import { shellRunner } from "./local/git/exec";
 import {
 	createWorktree,
+	setBranchRenamedListener,
 	setRecordedFoldersSource,
 	stockWorktreeLocation,
 	tablessWorktreeBridge,
@@ -1416,6 +1417,13 @@ app.whenReady().then(async () => {
 	// paired device runs in it (`hostServices.workspaceDirs()` is the cwd of every hosted tab, a superset of its `summarySources()`).
 	setOpenFoldersSource(() => [...sidecarPool.workspaceDirs(), ...hostServices.workspaceDirs()]);
 	setRecordedFoldersSource(async () => (await sessionIndex.listKnown())?.map(info => info.cwd) ?? []);
+	// A new task's branch renamed for its work (FS91): every tab bound to that worktree on the old name follows.
+	setBranchRenamedListener((path, from, branch) => {
+		for (const { tabs } of sidecarPool.controlTabs())
+			for (const tab of tabs)
+				if (tab.worktree?.path === path && tab.worktree.branch === from)
+					sidecarPool.bindWorktree(tab.tabId, { ...tab.worktree, branch });
+	});
 	let hostOmpVersion: string | null = null;
 	void systemOmp().then(resolution => {
 		if (resolution.ok) hostOmpVersion = resolution.runtime.version;

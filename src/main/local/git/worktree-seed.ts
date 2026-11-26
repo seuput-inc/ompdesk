@@ -92,9 +92,9 @@ export async function runWorktreeHook(
 }
 
 /**
- * The repository's archive hook before a removal of `worktree` (every removal OMPdesk makes: the person's Remove, an
- * agent session's safe removal, disk care's sweep, an orphan's and an unused open's): null when it has none or it ran
- * well, else the clause that says why the worktree stays.
+ * The repository's archive hook before a removal of `worktree` (the person's Remove, an agent session's safe removal,
+ * disk care's sweep, an orphan's and an unused open's; stock's `worktree.onExit` removal runs none): null when it has
+ * none or it ran well, else the clause that says why the worktree stays.
  */
 export async function archiveHookRefusal(primary: string, worktree: string): Promise<string | null> {
 	const script = WORKTREE_HOOK_SCRIPTS.archive;

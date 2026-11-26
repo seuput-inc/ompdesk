@@ -20,7 +20,7 @@ import { translate } from "../lib/i18n";
 import { createTabRpc, type TabRpc } from "../lib/tab-rpc";
 import { webRuntime } from "../web/runtime";
 import { ensureTabRuntime } from "./tab-runtime";
-import { useTabsStore } from "./tabs";
+import { type SessionTab, useTabsStore } from "./tabs";
 import { toast } from "./toast";
 
 export type NewTaskStepId = "fetch" | "name" | "create" | "prepare" | "start";
@@ -232,47 +232,64 @@ async function runStep(id: string, step: NewTaskStepId): Promise<void> {
 			if (!request.prompt.trim() && request.files.length === 0) return;
 			const runtime = ensureTabRuntime(tabId);
 			const { text, images } = await firstMessage(task, tabId, cwd);
-			answered(await createTabRpc(runtime.command).prompt(text, images));
-			return;
+			// The task's id rides every try, so a Retry after a lost answer reaches omp once (main's delivery-ledger.ts).
+			const send = () => runtime.command({ type: "prompt", message: text, images, deliveryId: id });
+			// A tab just opened answers `sidecar_not_ready` until its omp is up: that waits, as the outbox does, a bounded
+			// number of times (a tab that reads ready and still refuses fails the step, which Retry sends again).
+			for (let tries = 1; ; tries++) {
+				await whenTabReady(tabId);
+				const response = await send();
+				if (response.success || response.code !== "sidecar_not_ready" || tries >= 20) {
+					answered(response);
+					return;
+				}
+			}
 		}
 	}
 }
 
+/** Resolves once tab `tabId` reads ready (or running); rejects when it is gone, exited or failed. */
+function whenTabReady(tabId: string): Promise<void> {
+	const { promise, resolve, reject } = Promise.withResolvers<void>();
+	const check = (tabs: readonly SessionTab[]): boolean => {
+		const tab = tabs.find(entry => entry.id === tabId);
+		if (tab?.status === "ready" || tab?.status === "running") resolve();
+		else if (!tab || tab.status === "exited" || tab.status === "error")
+			reject(new Error(translate("newTask.sessionDidNotStart")));
+		else return false;
+		return true;
+	};
+	if (!check(useTabsStore.getState().tabs)) {
+		const unsubscribe = useTabsStore.subscribe(state => {
+			if (check(state.tabs)) unsubscribe();
+		});
+	}
+	return promise;
+}
+
 /**
- * FS91 (Orca `first-work-branch-rename.ts:95-134,185-271`): a worktree named only by the fallback takes its session's
- * first title as its branch's name, renamed by the tab's own computer while nothing published it (main refuses once
- * it has an upstream or a remote copy). The tab's record follows here; the folder keeps its name.
+ * FS91 (Orca `first-work-branch-rename.ts:95-134,185-271`): a worktree named only by the fallback takes a name for its
+ * session's first title once there is one (the title model, in English: `worktree_name_suggest`), renamed by the tab's
+ * own computer while nothing published the branch (main refuses once it has an upstream or a remote copy, and points
+ * the tab's record at the new name). The folder keeps its name.
  */
 function renameOnFirstTitle(tabId: string, made: RpcWorktreeCreateResult, branchPrefix: string | undefined): void {
 	const prefix = branchPrefix ?? GUI_WORKTREE_BRANCH_PREFIX;
 	if (!made.branch.startsWith(prefix)) return;
 	const unsubscribe = useTabsStore.subscribe(state => {
 		const tab = state.tabs.find(entry => entry.id === tabId);
-		if (!tab) {
-			unsubscribe();
-			return;
-		}
-		const slug = tab.title ? worktreeSlug(tab.title) : "";
-		if (!slug) return;
+		if (tab && !tab.title?.trim()) return;
 		unsubscribe();
-		void createTabRpc(ensureTabRuntime(tabId).command)
-			.worktreeRenameBranch(made.branch, `${prefix}${slug}`)
-			.then(
-				response => {
-					const branch = response.success
-						? (response.data as { branch?: string | null } | undefined)?.branch
-						: null;
-					if (!branch) return;
-					useTabsStore.setState(current => ({
-						tabs: current.tabs.map(entry =>
-							entry.id === tabId && entry.worktree
-								? { ...entry, worktree: { ...entry.worktree, branch } }
-								: entry,
-						),
-					}));
-				},
-				() => undefined,
-			);
+		if (!tab?.title) return;
+		const rpc = createTabRpc(ensureTabRuntime(tabId).command);
+		void rpc
+			.worktreeNameSuggest(tab.title)
+			.then(answer => {
+				const title = answer.success ? (answer.data as { title?: string | null } | undefined)?.title : null;
+				const slug = title ? worktreeSlug(title) : "";
+				return slug ? rpc.worktreeRenameBranch(made.branch, `${prefix}${slug}`) : undefined;
+			})
+			.catch(() => undefined);
 	});
 }
 

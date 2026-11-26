@@ -212,6 +212,46 @@ describe("a new task's steps", () => {
 		expect(ids).toEqual([id, id]);
 		expect(useNewTasksStore.getState().tasks[id]).toBeUndefined();
 	});
+
+	it("sends the first message once the new tab's omp is up, through a refusal while it starts, under one delivery id", async () => {
+		const { rpc } = fakeRpc();
+		const sent: RpcCommand[] = [];
+		let refusals = 1;
+		Object.assign(window, {
+			omp: {
+				rpc: {
+					commandForTab: async (_tab: string, command: RpcCommand): Promise<RpcResponse> => {
+						sent.push(command);
+						if (refusals-- > 0)
+							return {
+								type: "response",
+								command: command.type,
+								success: false,
+								error: "not ready",
+								code: "sidecar_not_ready",
+							};
+						return { type: "response", command: command.type, success: true };
+					},
+				},
+			},
+		});
+		const openTab = vi.fn(async () => {
+			useTabsStore.setState({
+				tabs: [{ kind: "agent", id: "t2", cwd: MADE.path, status: "starting", unreadDone: false }],
+			});
+			return "t2";
+		});
+		useTabsStore.setState({ tabs: [], openTab });
+		const id = startNewTask({ ...request, prompt: "Fix the login" }, rpc);
+		await flush();
+		await flush();
+		expect(sent).toEqual([]);
+		useTabsStore.setState(state => ({ tabs: state.tabs.map(tab => ({ ...tab, status: "ready" as const })) }));
+		await flush();
+		await flush();
+		expect(sent.map(command => (command.type === "prompt" ? command.deliveryId : command.type))).toEqual([id, id]);
+		expect(useNewTasksStore.getState().tasks[id]).toBeUndefined();
+	});
 });
 
 describe("announcePreparation", () => {
