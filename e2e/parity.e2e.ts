@@ -612,36 +612,33 @@ if (dir) {
 			};
 			/**
 			 * A session of its own whose board has every zone but Needs you (`board-strip*`): a todo list with two
-			 * instructions since it changed (`fixture todo behind`), then a turn left running on its test rerun (`fixture
-			 * turn recovered live`) with subagents at work (`fixture:subagents`), for the rest of the run. Each view reads
-			 * them from the host (`get_state`, `get_subagents`, the transcript). No question: the Escape each view presses
-			 * before it shows a session (`openRow`) would answer it.
+			 * instructions since it changed (`fixture todo behind`), a turn that fixed a failing test (`fixture turn
+			 * recovered`) and subagents left at work (`fixture:subagents`) for the rest of the run. Each view reads them
+			 * from the host (`get_state`, `get_subagents`, the transcript). Nothing waits on Escape, which each view presses
+			 * before it shows a session (`openRow`): it would answer a question and stop a running turn (the first capture,
+			 * run 45778111707, left its turn held open, and `board-strip-open` showed it interrupted).
 			 */
 			const boardSession = async (): Promise<HostSession> => {
 				const made = answered.get("Parity board");
 				if (made) return made;
 				const tabId = await titledTab("Parity board");
+				for (const [message, answer] of [
+					["fixture todo behind", "Local fixture reply"],
+					["fixture turn recovered", "The tests pass now."],
+				] as const) {
+					await b.evaluate(([id, sent]) => window.omp.rpc.commandForTab(id, { type: "prompt", message: sent }), [
+						tabId,
+						message,
+					] as const);
+					await untilAnswered(b, tabId, { text: answer, after: message });
+				}
 				await b.evaluate(
-					id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "fixture todo behind" }),
+					id => window.omp.rpc.commandForTab(id, { type: "bash", command: "fixture:subagents" }),
 					tabId,
 				);
-				await untilAnswered(b, tabId);
-				for (const command of [
-					{ type: "prompt", message: "fixture turn recovered live" },
-					{ type: "bash", command: "fixture:subagents" },
-				] as const)
-					await b.evaluate(([id, sent]) => window.omp.rpc.commandForTab(id, sent), [tabId, command] as const);
-				let sessionPath = "";
-				await expect
-					.poll(
-						async () => {
-							const tab = (await b.evaluate(() => window.omp.tabs.list())).find(entry => entry.tabId === tabId);
-							sessionPath = tab?.status === "running" ? (tab.sessionPath ?? "") : "";
-							return sessionPath;
-						},
-						{ timeout: 30_000 },
-					)
-					.not.toBe("");
+				const sessionPath =
+					(await b.evaluate(() => window.omp.tabs.list())).find(entry => entry.tabId === tabId)?.sessionPath ?? "";
+				if (!sessionPath) throw new Error("the board session has no file");
 				const session = { path: sessionPath, cwd: work.cwd };
 				answered.set("Parity board", session);
 				return session;
