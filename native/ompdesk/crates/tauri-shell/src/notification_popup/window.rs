@@ -236,7 +236,11 @@ fn act(action: Action) {
         }
         Action::Settings => {
             with(|state| state.stack.toggle_menu());
-            entry::activate();
+            // As the tray's Open: the window the person last used comes forward, then its page opens Settings.
+            if let Some(win) = entry::target(&entry::app_windows()) {
+                entry::op(win, "show");
+                entry::op(win, "focus");
+            }
             entry::menu_action("open-settings");
         }
     }

@@ -217,6 +217,7 @@ impl Stack {
 }
 
 /// A rectangle in physical pixels.
+#[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
     pub x: i32,
@@ -225,6 +226,7 @@ pub struct Rect {
     pub height: u32,
 }
 
+#[cfg(any(windows, test))]
 impl Rect {
     fn contains(&self, x: f64, y: f64) -> bool {
         x >= f64::from(self.x)
@@ -235,6 +237,7 @@ impl Rect {
 }
 
 /// One monitor: its whole rectangle, its work area (without the taskbar) and its scale.
+#[cfg(any(windows, test))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Screen {
     pub bounds: Rect,
@@ -244,6 +247,7 @@ pub struct Screen {
 
 /// Where the stack of logical `size` goes on Windows, in physical pixels: the bottom-right of the work area of the
 /// monitor under the pointer (the screen the person looks at), else the primary one, else the first.
+#[cfg(any(windows, test))]
 pub fn place(
     screens: &[Screen],
     primary: Option<usize>,

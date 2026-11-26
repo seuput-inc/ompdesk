@@ -3,6 +3,7 @@
 //! OMPdesk's window behind other apps; a click in a non-activating panel does not. Main thread.
 #![allow(unsafe_code)]
 
+use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyObject, Bool};
 use objc2::{class, msg_send};
 use objc2_foundation::{NSPoint, NSRect, NSSize};
@@ -23,49 +24,46 @@ pub fn adopt(ns_window: isize) -> Result<isize, String> {
         return Err("no NSWindow".into());
     }
     // SAFETY: AppKit calls on the main thread on live objects: `window` is the caller's window, `content` its content
-    // view (retained across the move, released once), `panel` a panel this function allocates and keeps.
+    // view (held by `Retained` across the move), `panel` a panel this function makes and leaks on purpose.
     unsafe {
-        let content: *mut AnyObject = msg_send![window, contentView];
-        if content.is_null() {
-            return Err("the window has no content view".into());
-        }
-        let _: *mut AnyObject = msg_send![content, retain];
-        let placeholder: *mut AnyObject = msg_send![class!(NSView), new];
-        let _: () = msg_send![window, setContentView: placeholder];
-        let _: () = msg_send![placeholder, release];
+        let content: Option<Retained<AnyObject>> = msg_send![window, contentView];
+        let content = content.ok_or("the window has no content view")?;
+        let placeholder: Retained<AnyObject> = msg_send![class!(NSView), new];
+        let _: () = msg_send![window, setContentView: &*placeholder];
         let rect = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(360.0, 64.0));
-        let panel: *mut AnyObject = msg_send![class!(NSPanel), alloc];
-        let panel: *mut AnyObject = msg_send![
+        let panel: Allocated<AnyObject> = msg_send![class!(NSPanel), alloc];
+        let panel: Option<Retained<AnyObject>> = msg_send![
             panel,
             initWithContentRect: rect,
             styleMask: STYLE,
             backing: BACKING_BUFFERED,
             defer: Bool::NO
         ];
-        if panel.is_null() {
-            let _: () = msg_send![content, release];
-            return Err("NSPanel could not be made".into());
+        let panel = panel.ok_or("NSPanel could not be made")?;
+        let _: () = msg_send![&*panel, setReleasedWhenClosed: Bool::NO];
+        let _: () = msg_send![&*panel, setFloatingPanel: Bool::YES];
+        let _: () = msg_send![&*panel, setBecomesKeyOnlyIfNeeded: Bool::YES];
+        let _: () = msg_send![&*panel, setHidesOnDeactivate: Bool::NO];
+        let _: () = msg_send![&*panel, setLevel: STATUS_WINDOW_LEVEL];
+        let _: () = msg_send![&*panel, setCollectionBehavior: BEHAVIOR];
+        let _: () = msg_send![&*panel, setOpaque: Bool::NO];
+        let clear: Retained<AnyObject> = msg_send![class!(NSColor), clearColor];
+        let _: () = msg_send![&*panel, setBackgroundColor: &*clear];
+        let _: () = msg_send![&*panel, setHasShadow: Bool::YES];
+        let _: () = msg_send![&*panel, setContentView: &*content];
+        let _: () = msg_send![&*content, setWantsLayer: Bool::YES];
+        let layer: Option<Retained<AnyObject>> = msg_send![&*content, layer];
+        if let Some(layer) = layer {
+            let _: () = msg_send![&*layer, setCornerRadius: CORNER_RADIUS];
+            let _: () = msg_send![&*layer, setMasksToBounds: Bool::YES];
         }
-        let _: () = msg_send![panel, setReleasedWhenClosed: Bool::NO];
-        let _: () = msg_send![panel, setFloatingPanel: Bool::YES];
-        let _: () = msg_send![panel, setBecomesKeyOnlyIfNeeded: Bool::YES];
-        let _: () = msg_send![panel, setHidesOnDeactivate: Bool::NO];
-        let _: () = msg_send![panel, setLevel: STATUS_WINDOW_LEVEL];
-        let _: () = msg_send![panel, setCollectionBehavior: BEHAVIOR];
-        let _: () = msg_send![panel, setOpaque: Bool::NO];
-        let clear: *mut AnyObject = msg_send![class!(NSColor), clearColor];
-        let _: () = msg_send![panel, setBackgroundColor: clear];
-        let _: () = msg_send![panel, setHasShadow: Bool::YES];
-        let _: () = msg_send![panel, setContentView: content];
-        let _: () = msg_send![content, release];
-        let _: () = msg_send![content, setWantsLayer: Bool::YES];
-        let layer: *mut AnyObject = msg_send![content, layer];
-        if !layer.is_null() {
-            let _: () = msg_send![layer, setCornerRadius: CORNER_RADIUS];
-            let _: () = msg_send![layer, setMasksToBounds: Bool::YES];
-        }
-        Ok(panel as isize)
+        Ok(Retained::into_raw(panel) as isize)
     }
+}
+
+fn inside(point: NSPoint, rect: NSRect) -> bool {
+    (rect.origin.x..rect.origin.x + rect.size.width).contains(&point.x)
+        && (rect.origin.y..rect.origin.y + rect.size.height).contains(&point.y)
 }
 
 /// The visible frame (without the menu bar and the Dock) of the screen under the pointer, else the main screen.
@@ -78,11 +76,7 @@ fn visible_frame() -> Option<NSRect> {
         for at in 0..count {
             let screen: *mut AnyObject = msg_send![screens, objectAtIndex: at];
             let frame: NSRect = msg_send![screen, frame];
-            if mouse.x >= frame.origin.x
-                && mouse.x < frame.origin.x + frame.size.width
-                && mouse.y >= frame.origin.y
-                && mouse.y < frame.origin.y + frame.size.height
-            {
+            if inside(mouse, frame) {
                 return Some(msg_send![screen, visibleFrame]);
             }
         }
@@ -128,10 +122,7 @@ pub fn contains_mouse(panel: isize) -> bool {
         }
         let frame: NSRect = msg_send![panel as *mut AnyObject, frame];
         let mouse: NSPoint = msg_send![class!(NSEvent), mouseLocation];
-        mouse.x >= frame.origin.x
-            && mouse.x < frame.origin.x + frame.size.width
-            && mouse.y >= frame.origin.y
-            && mouse.y < frame.origin.y + frame.size.height
+        inside(mouse, frame)
     }
 }
 
