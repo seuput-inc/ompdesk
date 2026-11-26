@@ -7,8 +7,9 @@ import { closeBrowser, launchBrowser } from "./harness";
 // One live dictation take on a phone page, in Chromium and in WebKit (the engine of the shipped Mac app) where it has
 // Web Audio: the page's capture (a 16 kHz AudioContext made in the press, a ScriptProcessorNode) hears a fake
 // microphone's tone, streams PCM16 to the harness's `stt_stream_audio`, shows the words while speaking, and lands
-// stock's transcript in the draft. Playwright's WebKit on Windows, where e2e runs, has no Web Audio: there the leg
-// checks that a press fails the take and the next press tries again, and the capture in WebKit goes unexercised.
+// stock's transcript in the draft. Playwright's WebKit on Windows, where CI's e2e runs, has no Web Audio: there the leg
+// checks that a press fails the take and the next press tries again. The live WebKit leg runs on a Mac (Playwright
+// WebKit 27.2 passed it locally, 26 Nov 2026).
 // The rest is covered without a browser: the take's flow, tail, silence stop and Retry (src/renderer/lib/voice.test.ts),
 // the press rule (dictation-press.test.ts), the phone slot's held press (ComposerToolbar.phone.test.tsx), the tidy
 // pass (dictation-text.test.ts) and the bridge's stream (src/main/bridge-stt-language.test.ts).

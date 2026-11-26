@@ -140,9 +140,13 @@ export function useDictationTake({
 			// Still "Transcribing…" while the words are tidied (and, when on, cleaned): nothing lands meanwhile.
 			const skip = new AbortController();
 			polishing.current = skip;
-			// Loaded when a take first lands: off the phone's first screen.
-			const { polishDictation } = await import("../lib/dictation-text");
-			const text = await polishDictation(result.text.trim(), result.language, skip.signal);
+			// Loaded when a take first lands: off the phone's first screen. A chunk that fails to load (a stale one after
+			// an update, a dropped phone link) lands the words as heard.
+			const heard = result.text.trim();
+			const text = await import("../lib/dictation-text").then(
+				({ polishDictation }) => polishDictation(heard, result.language, skip.signal),
+				() => heard,
+			);
 			polishing.current = null;
 			if (!mountedRef.current) return;
 			setPhase("idle");

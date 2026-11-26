@@ -196,11 +196,19 @@ export async function recordAndTranscribe(listener: DictationListener = {}): Pro
 	// The stream opens, and the take's code loads, while the mic does.
 	const streamOpening = openStream();
 	const live = import("./dictation-live");
+	const microphone = chosenMicrophone().then(openMicrophone);
 	let stream: MediaStream;
 	let runTake: Awaited<typeof live>["runTake"];
 	try {
-		[stream, { runTake }] = await Promise.all([chosenMicrophone().then(openMicrophone), live]);
+		[stream, { runTake }] = await Promise.all([microphone, live]);
 	} catch (cause) {
+		// The take's code may fail to load (a stale chunk after an update) once the microphone opened: let it go.
+		void microphone.then(
+			opened => {
+				for (const track of opened.getTracks()) track.stop();
+			},
+			() => {},
+		);
 		void context.close();
 		void streamOpening.then(dropStream);
 		return { error: cause instanceof Error ? cause.message : String(cause), failure: classifyMicError(cause) };
