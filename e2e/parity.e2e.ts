@@ -128,20 +128,42 @@ async function writeParityGh(bin: string): Promise<void> {
 
 /**
  * B's project is a git checkout with uncommitted work, so the work session's Changes panel shows its source control
- * and a changed file list, and its Files view has a nested file to open (`panel-diff`, `panel-files-viewer`).
+ * and a changed file list, and its Files view has a nested file to open (`panel-diff`, `panel-files-viewer`). Its
+ * history forks and joins (a feature branch of two commits merged beside a commit on main), so `panel-graph` draws
+ * lanes, and Sidebar.tsx's lines come from two commits and the working tree, so `panel-blame` shows each.
  */
 async function seedProject(project: string): Promise<void> {
 	const nested = path.join(project, "src/renderer/components/layout/sidebar");
+	const sidebar = path.join(nested, "Sidebar.tsx");
 	await fs.mkdir(nested, { recursive: true });
 	await fs.writeFile(path.join(project, "README.md"), "# Project\n");
-	await fs.writeFile(path.join(nested, "Sidebar.tsx"), "export const rows = 1;\n");
+	await fs.writeFile(sidebar, "export const rows = 2;\n");
 	git(project, "init", "-q", "-b", "main");
 	git(project, "config", "user.email", "parity@example.com");
 	git(project, "config", "user.name", "Parity");
 	git(project, "config", "commit.gpgsign", "false");
 	git(project, "add", ".");
 	git(project, "commit", "-qm", "feat: seed the project");
-	await fs.writeFile(path.join(nested, "Sidebar.tsx"), "export const rows = 2;\nexport const gap = 4;\n");
+	git(project, "checkout", "-q", "-b", "feature/sidebar-gap");
+	await fs.writeFile(sidebar, "export const rows = 2;\nexport const gap = 4;\n");
+	git(project, "commit", "-qam", "feat(sidebar): a gap between rows");
+	await fs.writeFile(path.join(project, "README.md"), "# Project\n\nThe sidebar keeps a gap between rows.\n");
+	git(project, "commit", "-qam", "docs: say what the gap is for");
+	git(project, "checkout", "-q", "main");
+	await fs.writeFile(path.join(project, "package.json"), '{ "name": "project" }\n');
+	git(project, "add", "package.json");
+	git(project, "commit", "-qm", "chore: name the package");
+	git(
+		project,
+		"merge",
+		"-q",
+		"--no-ff",
+		"--no-edit",
+		"-m",
+		"Merge branch 'feature/sidebar-gap'",
+		"feature/sidebar-gap",
+	);
+	await fs.writeFile(sidebar, "export const rows = 2;\nexport const gap = 4;\nexport const pad = 8;\n");
 	await fs.writeFile(path.join(project, "wait-for.ts"), "export const waitFor = () => {};\n");
 }
 
