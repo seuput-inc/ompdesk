@@ -491,7 +491,10 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // that moves it loads after the page's `load` as its own chunk (`lib/bot-face-motion.ts` and what it imports): 4,452
 // bytes over the budget of its base (2,253,082 in CI run 45852447692 at a789da035, whose budget was 2,248,630), added
 // to the budget with 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_253_162;
+// The changelog window opens at its top (27 Nov 2026, parity-gaps-1127): the notes take the dialog's first focus and
+// the body goes back to its top (`dialogs/ChangelogDialog.tsx`, mounted by App on every screen): measured 2,253,188
+// (branch run 45868695500 at b9624c8b04), 26 bytes over. The budget is that measure plus 80 bytes.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_253_268;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
