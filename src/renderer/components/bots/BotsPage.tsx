@@ -16,7 +16,8 @@ import { BotPane } from "./BotPane";
 import { openBotDialog } from "./bot-launch";
 import { useBotPage } from "./bot-page";
 import { sortBots } from "./bot-view";
-import { BotRoom, GroupFaces, roomBots, roomPreview } from "./rooms/BotRoom";
+import { BotRoom } from "./rooms/BotRoom";
+import { GroupFaces, roomBots, roomPreview } from "./rooms/room-faces";
 import { useBotFacts } from "./use-bot-facts";
 
 export function BotsPage() {

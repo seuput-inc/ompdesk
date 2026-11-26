@@ -723,15 +723,16 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "OMPdesk bot",
 		description:
 			"Make, list, pause or set up a bot: a folder whose sessions are its chats.\n" +
+			"offer {name, text} proposes a bot instead of making it: the owner sees a card in this chat with its name, what it would do (text) and Create bot, and nothing is made until they press it. " +
 			'A bot is a folder on this computer (default ~/.omp/bots/<name>); every session in that folder is one of its chats, the first its home chat. create {name, folder?} makes the folder and sends nothing: the owner writes first (asks the user first only if they turned off "Let agents manage other sessions"). list shows each bot with its folder, home chat, pause, specialty (from its SOUL.md) and open and owner-waiting items. pause {bot} holds every message to it until resume {bot}, which hands each held one over once; a send to a paused bot is refused. set {bot, model?, auto_approve?, stale_days?, reach?} sets the model its new chats and routines use ("" for omp\'s default), whether its routines run without asking, after how many untouched days an open item reads stale (0 never), and the paired devices whose agents may message it. look_around {bot, on, time?} turns on (daily at time, HH:MM, default 09:00) or off its Look around routine: it reads its projects and saves at most 5 suggestions as planned items. hand {bot, session, text} hands a session to the bot: the bot\'s home chat becomes its opener and the text reaches it from the bot. Only the owner deletes a bot. See skill://ompdesk/references/bots.md.',
 		parameters: {
 			type: "object",
 			properties: {
 				action: {
 					type: "string",
-					enum: ["create", "list", "pause", "resume", "set", "look_around", "hand"],
+					enum: ["create", "offer", "list", "pause", "resume", "set", "look_around", "hand"],
 				},
-				name: { type: "string", maxLength: BOT_NAME_MAX, description: "create: the bot's name." },
+				name: { type: "string", maxLength: BOT_NAME_MAX, description: "create, offer: the bot's name." },
 				folder: {
 					type: "string",
 					description: "create: an absolute folder for it; default ~/.omp/bots/<name>, made unique.",
@@ -756,7 +757,8 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				text: {
 					type: "string",
 					maxLength: MESSAGE_MAX_CHARS,
-					description: "hand: what the bot asks of it, sent as its first message from the bot.",
+					description:
+						"hand: what the bot asks of it, sent as its first message from the bot. offer: what the bot would do, one or two sentences.",
 				},
 			},
 			required: ["action"],
@@ -1214,7 +1216,7 @@ export const ARGS = {
 		.strict(),
 	[T.bot]: z
 		.object({
-			action: z.enum(["create", "list", "pause", "resume", "set", "look_around", "hand"]),
+			action: z.enum(["create", "offer", "list", "pause", "resume", "set", "look_around", "hand"]),
 			name: z.string().trim().min(1).max(BOT_NAME_MAX).optional(),
 			folder: z.string().trim().min(1).max(4096).optional(),
 			bot: z.string().trim().min(1).max(200).optional(),

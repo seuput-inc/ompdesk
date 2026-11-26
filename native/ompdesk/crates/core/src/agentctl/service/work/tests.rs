@@ -1302,6 +1302,22 @@ async fn a_bot_is_made_in_its_own_folder_and_its_first_chat_becomes_its_home_onc
         text.contains(&*root.0.join("bo-2").to_string_lossy()),
         "{text}"
     );
+    // An offer makes nothing: the owner's Create bot on its card does; a taken name cannot be offered.
+    let (text, is_error) = run(
+        &control,
+        "ompdesk_bot",
+        json!({ "action": "offer", "name": "Cy", "text": "Watches the release." }),
+    )
+    .await;
+    assert!(!is_error && text.contains("Create bot"), "{text}");
+    assert!(control.bot_named("Cy").is_err());
+    let (text, is_error) = run(
+        &control,
+        "ompdesk_bot",
+        json!({ "action": "offer", "name": "Ada" }),
+    )
+    .await;
+    assert!(is_error && text.contains("already exists"), "{text}");
     // Another chat joins; the home stays the first.
     let mut world = bot_world(&root.0.join("ada").to_string_lossy());
     world["tabs"][3]["cwd"] = json!(root.0.join("ada").to_string_lossy());

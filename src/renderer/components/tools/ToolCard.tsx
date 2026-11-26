@@ -8,6 +8,7 @@ import { selectDesktopSlotPosition, useDesktopSlotStore } from "../../stores/des
 import { useRuntimeTabId } from "../../stores/session-runtime-context";
 import { selectToolEntry, useToolsStore } from "../../stores/tools";
 import { useUiStore } from "../../stores/ui";
+import { BotToolCard, botCardOf, useCardHidden } from "../chat/bots/bot-card-kind";
 import { stepIntent } from "../chat/work/work-steps";
 import { Collapse, DisclosureButton, Spinner, StatusDot } from "../common";
 import { type DiffStats, toolDiffStats } from "./diff-stats";
@@ -342,6 +343,13 @@ export function ToolCard({
 			DIAGNOSTIC_TOOLS[toolName] && !failed && result != null ? resultDiagnostics(resultDetails(result)) : [],
 		[toolName, result, failed],
 	);
+	// A bot's offer, a request to a bot, an item change or a tool it added draws as its card once the call ended.
+	const botCard = botCardOf(toolName, args);
+	const botCardHidden = useCardHidden(botCard);
+	if (botCard && !isPartial && !isAborted && (!failed || botCard === "botRequests")) {
+		if (botCardHidden) return null;
+		return <BotToolCard args={args} failed={failed} kind={botCard} result={result} toolName={toolName} />;
+	}
 
 	return (
 		<div

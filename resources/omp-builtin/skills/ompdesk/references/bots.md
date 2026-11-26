@@ -6,6 +6,7 @@ A bot is a folder on this computer (default `~/.omp/bots/<name>`); every session
 
 `action`:
 - `create` — `name`, `folder` (absolute; default `~/.omp/bots/<name>`, made unique). Makes the folder and sends nothing: the owner writes first. Asks the user first only when "Let agents manage other sessions" is off.
+- `offer` — `name`, `text` (what it would do, one or two sentences): proposes a bot instead of making it. The owner sees a card in this chat with Create bot; nothing is made until they press it, so do not `create` it yourself afterwards. Prefer it when the owner has not asked for the bot by name.
 - `list` — each bot with its folder, home chat, pause, specialty, open items and the items waiting on the owner.
 - `pause` / `resume` — `bot` (name or id). A paused bot takes nothing: a send to one of its chats, a routine's wake-up and a hand-over are refused ("The bot <name> is paused"), and reports to it are held. `resume` hands each held report over once.
 - `set` — `bot`, `model` (its new chats and routines; `""` = omp's default), `auto_approve` (its routines run every tool without asking), `stale_days` (an open item untouched this long reads stale; `0` never), `reach` (paired devices whose agents may message it; `[]` = this computer only).

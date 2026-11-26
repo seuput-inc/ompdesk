@@ -49,7 +49,7 @@ import { BotLineText } from "../../bots/BotLineText";
 import { openBotDialog, openBotHome } from "../../bots/bot-launch";
 import { openBotPage, openRoomPage } from "../../bots/bot-page";
 import { type BotFacts, foldedFaces, sortBots } from "../../bots/bot-view";
-import { GroupFaces, roomBots, roomPreview } from "../../bots/rooms/BotRoom";
+import { GroupFaces, roomBots, roomPreview } from "../../bots/rooms/room-faces";
 import {
 	anchorFromEvent,
 	Button,

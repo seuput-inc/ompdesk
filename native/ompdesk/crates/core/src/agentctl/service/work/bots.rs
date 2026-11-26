@@ -567,6 +567,20 @@ impl AgentControl {
                     bot.name, bot.folder, bot.id
                 ))
             }
+            // A bot the owner may make (Orca's `bot create --offer`): the chat draws it as a card with Create bot,
+            // and nothing is made until the owner presses it.
+            "offer" => {
+                let name = args.name.as_deref().unwrap_or("").trim();
+                if name.is_empty() {
+                    return fail("offer needs name.");
+                }
+                if self.bot_named(name).is_ok() {
+                    return fail(format!("A bot named {name} already exists."));
+                }
+                Ok(format!(
+                    "Offered the bot {name}: the owner sees a card with Create bot in this chat. Nothing is made until they press it; do not create it yourself."
+                ))
+            }
             "list" => Ok(self.bots_text()),
             "pause" | "resume" => {
                 let bot = wanted()?;

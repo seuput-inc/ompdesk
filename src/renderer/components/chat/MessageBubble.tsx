@@ -6,6 +6,7 @@ import { CI_MESSAGE_TYPE } from "../../../../resources/gui-bridge/modes/ci-watch
 import { COMPUTER_USE_NOTICE_TYPE } from "../../../../resources/gui-bridge/modes/computer-use-contracts";
 import { MEMORY_RECALL_MESSAGE_TYPE } from "../../../../resources/gui-bridge/modes/memory-recall-contracts";
 import { parseAgentMessage } from "../../../shared/agent-control";
+import { isQuietResult } from "../../../shared/bots";
 import { extractFileMentions, replaceFileMentions, splitAttachedMentions } from "../../../shared/file-mentions";
 import type { AgentMessage, ImageContent, MessageContent, ToolCallContent } from "../../../shared/rpc-types";
 import { useShellInput } from "../../hooks/use-shell-mode";
@@ -38,6 +39,7 @@ import {
 import { isAbsoluteChatPath, referencedFiles } from "../tools/media/chat-media";
 import { ToolImage } from "../tools/media/ToolImage";
 import { type RunningIndicator, ToolCard } from "../tools/ToolCard";
+import { ItemNote, isItemMail, QuietReply, useBotChat } from "./bots/bot-card-kind";
 import { CiNote } from "./CiNote";
 import { ComputerUseNote } from "./ComputerUseNote";
 import { CustomMessageCard, isCustomMessageCardType, MailNote, MemoryRecallNote, RecapCard } from "./CustomMessageCard";
@@ -524,6 +526,7 @@ export const MessageBubble = memo(function MessageBubble({
 	const tabId = useRuntimeTabId();
 	const [branching, setBranching] = useState(false);
 	const switchPending = useSessionStore(state => state.switchPending !== null);
+	const botChat = useBotChat(tabId);
 	if (message.role === "bashExecution" || message.role === "pythonExecution") {
 		return <ExecutionBubble message={message} />;
 	}
@@ -534,7 +537,8 @@ export const MessageBubble = memo(function MessageBubble({
 		if (message.display === false) return null;
 		if (isRestartNote(message.customType)) return <RestartNote message={message} />;
 		if (message.customType === "recap") return <RecapCard message={message} />;
-		if (message.customType === MAIL_CUSTOM_TYPE) return <MailNote message={message} />;
+		if (message.customType === MAIL_CUSTOM_TYPE)
+			return isItemMail(message) ? <ItemNote message={message} /> : <MailNote message={message} />;
 		if (message.customType === MEMORY_RECALL_MESSAGE_TYPE) return <MemoryRecallNote message={message} />;
 		if (message.customType === COMPUTER_USE_NOTICE_TYPE) return <ComputerUseNote message={message} />;
 		if (message.customType === CI_MESSAGE_TYPE) return <CiNote message={message} />;
@@ -623,6 +627,16 @@ export const MessageBubble = memo(function MessageBubble({
 			setBranching(false);
 		}
 	};
+
+	// A bot chat's turn that ended in NO_REPLY had nothing to say: one quiet line (Orca hides such a turn).
+	if (
+		isAssistant &&
+		botChat &&
+		!stopped &&
+		!content.some(block => block.type === "toolCall") &&
+		isQuietResult(messageText())
+	)
+		return <QuietReply text={messageText()} />;
 
 	if (isUser) {
 		return (

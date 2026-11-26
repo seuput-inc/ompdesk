@@ -14,7 +14,7 @@
 import { AtSign, MoreHorizontal, Send, Square, Trash2, UsersRound } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Bot, Room, RoomMessage, RoomReplyMode } from "../../../../shared/bots";
-import { cx, formatClock, formatTimeAgo } from "../../../lib/format";
+import { formatClock, formatTimeAgo } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { isImeKeyEvent } from "../../../lib/ime";
 import { MarkdownRenderer } from "../../../lib/markdown";
@@ -39,36 +39,7 @@ import { BotAvatar } from "../BotAvatar";
 import { openBotChat, openBotDialog } from "../bot-launch";
 import { useBotPage } from "../bot-page";
 import { ItemsPane } from "../items/ItemsPane";
-
-/** Up to three members' faces, overlapped (Orca's `BotGroupFaces`). */
-export function GroupFaces({ bots, size = 20 }: { bots: readonly Bot[]; size?: number }) {
-	const shown = bots.slice(0, 3);
-	return (
-		<span className="flex shrink-0 items-center" data-bot-group-faces>
-			{shown.map((bot, index) => (
-				<span className={cx(index > 0 && "-ml-1.5")} key={bot.id}>
-					<BotAvatar bot={bot} size={size} />
-				</span>
-			))}
-		</span>
-	);
-}
-
-/** A room's members as bots, in member order. */
-export function roomBots(room: Room, bots: readonly Bot[]): Bot[] {
-	return room.members.flatMap(id => bots.find(bot => bot.id === id) ?? []);
-}
-
-/** A group row's second line: its newest post, who wrote it (Orca's `BotGroupLatestSchema`), or that it has none. */
-export function roomPreview(room: Room, bots: readonly Bot[], t: (key: string) => string): string {
-	const latest = room.messages.at(-1);
-	if (!latest) return t("bots.groups.noPosts");
-	const who =
-		latest.author === "owner"
-			? t("bots.items.activity.you")
-			: (bots.find(bot => bot.id === latest.author)?.name ?? latest.name);
-	return `${who}: ${latest.text.replace(/\s+/g, " ").slice(0, 120)}`;
-}
+import { GroupFaces, roomBots } from "./room-faces";
 
 type RoomTab = "room" | "items";
 
