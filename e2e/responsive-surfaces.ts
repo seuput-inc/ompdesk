@@ -1137,6 +1137,9 @@ async function expectTurnRail(page: Page, want: { first: number | { atMost: numb
 	if (!fits(seen)) throw new Error(`the turn rail draws ${JSON.stringify(seen)}, not ${JSON.stringify(want)}`);
 }
 
+/** The parity work session's one prompt (parity.e2e.ts); `transcript-find` looks for it. */
+export const PARITY_WORK_PROMPT = "Show this session the same way everywhere";
+
 export const SURFACES: readonly Surface[] = [
 	// ── Area A: sidebar, transcript, composer, panels ─────────────────────────────────────────
 	{
@@ -1656,16 +1659,16 @@ export const SURFACES: readonly Surface[] = [
 		id: "transcript-find",
 		area: "A",
 		title: "Find in the conversation: the bar at the transcript's top right with its count",
+		// Words only the work session's first prompt holds: surfaces earlier in the order add answered turns to the
+		// session, so "fixture reply" counted 1 to 7 and started wherever the reader was (ui-parity.md › transcript-find).
 		open: async page => {
 			const mac = await page.evaluate(() => /Mac/.test(navigator.platform));
 			await page.keyboard.press(mac ? "Meta+f" : "Control+f");
-			await page.locator("[data-transcript-find] input").fill("fixture reply");
+			await page.locator("[data-transcript-find] input").fill(PARITY_WORK_PROMPT);
 		},
-		// Any match: surfaces earlier in the order add answered turns to the work session, and a new query starts at the
-		// first match at or below the reader's row (ui-parity.md › transcript-find).
-		ready: '[data-transcript-find] [data-find-status]:text-matches("^[1-9][0-9]*/")',
+		ready: '[data-transcript-find] [data-find-status]:text-matches("^1/1$")',
 		settle: 400,
-		// Parity only: a real window's ⌘F over the work session's answered turns.
+		// Parity only: a real window's ⌘F over the work session.
 		when: () => false,
 		parity: { session: "work", after: closeOverlay },
 	},
