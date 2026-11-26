@@ -90,6 +90,8 @@ export interface Surface {
 
 export type ParitySession =
 	| "work"
+	| "routing-bot"
+	| "routing-worker"
 	| "reply"
 	| "steer"
 	| "advisor"
@@ -2511,6 +2513,31 @@ export const SURFACES: readonly Surface[] = [
 		settle: 600,
 		when: () => false,
 		parity: { session: "work" },
+	},
+	{
+		id: "bot-routed-ask",
+		area: "A",
+		title: "The bot receives the badge question from its worker",
+		open: async page => {
+			await page
+				.locator("[data-agent-mail='question']")
+				.filter({ hasText: "Which color should the badge be?" })
+				.waitFor();
+		},
+		ready: "[data-agent-mail='question']",
+		when: () => false,
+		parity: { session: "routing-bot" },
+	},
+	{
+		id: "bot-owner-dock-empty",
+		area: "A",
+		title: "The worker waits for its bot without asking the owner",
+		open: async page => {
+			await page.getByText("Choose the badge color fixture:bot-form", { exact: false }).last().waitFor();
+			if (await page.locator("[data-prompt-card]").count()) throw new Error("The routed form reached the owner");
+		},
+		when: () => false,
+		parity: { session: "routing-worker" },
 	},
 	{
 		id: "bot-cards",

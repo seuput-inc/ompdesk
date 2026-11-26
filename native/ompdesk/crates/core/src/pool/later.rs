@@ -4,7 +4,7 @@
 
 use serde_json::{Map, Value, json};
 
-use super::routes::stop_settled;
+use super::routes::{ESCALATED_PREFIX, stop_settled};
 use super::state::{Ctx, R, owner_key};
 
 impl Ctx {
@@ -118,6 +118,11 @@ impl Ctx {
         choice: &str,
         claim: Option<u64>,
     ) -> R<()> {
+        // A paired computer forwards the displayed id unchanged; only its host resolves the proxy.
+        let proxy = id.strip_prefix(ESCALATED_PREFIX).filter(|_| {
+            !self.with(|pool| tab.and_then(|tab| pool.entry(tab)).is_some_and(|entry| entry.device.is_some()))
+        });
+        let id = proxy.unwrap_or(id);
         // An agent's answer holds this question while its attachments go in: only the holder's answer passes.
         if let Err(held) = self.guard_ask(id, claim) {
             self.settle_err(token, Some(&held.code), &held.message);
@@ -129,8 +134,32 @@ impl Ctx {
             Go { seq: u64, tab: String, shared: bool },
         }
         let begin = self.with(|pool| {
+            let routed = pool.routed.get(id);
+            if proxy.is_some() {
+                let Some(super::state::Routed::Escalated(chat)) = routed else {
+                    return Begin::Unknown;
+                };
+                if tab != Some(chat.as_str())
+                    || !responder.is_some_and(|win| pool.entry(chat).is_some_and(|entry| entry.shown_in(win)))
+                    || !pool.request_owners.contains(&id.to_string())
+                {
+                    return Begin::Unknown;
+                }
+            } else if routed.is_some()
+                && (responder.is_some() || matches!(routed, Some(super::state::Routed::Escalated(_))))
+            {
+                return Begin::Unknown;
+            }
+            if routed.is_some() && proxy.is_none()
+                && !tab.and_then(|tab| pool.entry(tab)).is_some_and(|entry| pool.request_owners.get(&id.to_owned()) == Some(&entry.seq))
+            {
+                return Begin::Unknown;
+            }
+            if routed.is_some() && pool.answering.contains(id) {
+                return Begin::Refused;
+            }
             let entry = match tab {
-                Some(tab) if !tab.is_empty() => pool.entry(tab),
+                Some(tab) if !tab.is_empty() && proxy.is_none() => pool.entry(tab),
                 _ => pool
                     .request_owners
                     .get(&id.to_string())
@@ -183,7 +212,11 @@ impl Ctx {
             Begin::Go { seq, tab, shared } => (seq, tab, shared),
         };
         let ctx = self.clone();
-        let (id, frame, choice) = (id.to_string(), frame.clone(), choice.to_string());
+        let mut frame = frame.clone();
+        if proxy.is_some() {
+            frame["id"] = json!(id);
+        }
+        let (id, choice) = (id.to_string(), choice.to_string());
         super::spawn(async move {
             // The holder's answer ends its claim whether or not it was delivered (the question reopens to anyone).
             struct EndClaim(Ctx, String, Option<u64>);
@@ -224,7 +257,7 @@ impl Ctx {
     }
 
     /// What follows a delivered answer: the request closes, observers hear it, the other windows' cards close.
-    async fn route_answered(
+    pub(super) async fn route_answered(
         &self,
         seq: u64,
         id: &str,
@@ -251,6 +284,7 @@ impl Ctx {
                     title,
                 )
             });
+            self.drop_routed(id, responder);
             self.announce(json!({
                 "type": "askClosed", "tabId": tab, "requestId": id,
                 "answered": {"title": title, "choice": choice},

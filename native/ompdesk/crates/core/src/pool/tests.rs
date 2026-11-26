@@ -880,3 +880,179 @@ async fn a_tab_seen_after_its_last_run_ended_is_named_and_one_that_ran_again_sin
     call_at(&mut main, 3, "feed", run("b", end)).await;
     assert_eq!(main.call("seenSinceRun", json!({})).await, json!(["a"]));
 }
+
+/// What main heard of tab activity, by type, in order.
+fn activities(main: &Main, kind: &str) -> Vec<Value> {
+    main.asked
+        .iter()
+        .filter(|(q, item)| q == "announce" && item["activity"]["type"] == kind)
+        .map(|(_, item)| item["activity"].clone())
+        .collect()
+}
+
+/// A run started by a message of the session saved as `chat`, carrying request `m-1`.
+fn bot_run() -> Value {
+    let text = crate::agentctl::service::wrap::wrap_agent_message(
+        "Fill in the form.\n\n[ompdesk request m-1]",
+        "Ada",
+        Some("chat"),
+    );
+    json!([{"type": "agent_start"}, {"type": "message_end", "message": {"role": "user", "text": text}}])
+}
+
+fn ask_feed(tab: &str, request: &Value) -> Value {
+    json!({"tab": tab, "event": "extensionUi",
+           "payload": {"request": request, "kinds": {"blocking": true, "signIn": false, "approval": false}}})
+}
+
+#[tokio::test]
+async fn a_bot_s_question_waits_off_the_owner_s_windows_and_shows_in_its_chat_once_escalated() {
+    let mut main = Main::start(opts()).await;
+    main.acquire("work", 1, None, false).await;
+    main.acquire("chat", 2, None, false).await;
+    main.call("delegatedPrompt", json!({"tab": "work", "text": bot_run()[1]["message"]["text"]})).await;
+    main.call(
+        "feed",
+        json!({"tab": "work", "event": "events", "payload": bot_run()}),
+    )
+    .await;
+    let request = json!({"type": "extension_ui_request", "id": "r1", "method": "form", "html": "<form></form>"});
+    main.call("feed", ask_feed("work", &request)).await;
+    // No window shows it, and only the held announcement goes out: nobody is told of an ask yet.
+    assert!(main.sends("EXTENSION_UI").is_empty());
+    assert!(activities(&main, "ask").is_empty());
+    let held = activities(&main, "askHeld");
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0]["origin"], json!({"session": "chat", "mark": "m-1"}));
+    assert_eq!(
+        main.call("openRequests", json!({"win": 1})).await,
+        json!([])
+    );
+    // The bot holds it: still nobody's card.
+    assert_eq!(
+        main.call(
+            "routeAsk",
+            json!({"tab": "work", "id": "r1", "chat": "/s/1_chat.jsonl"})
+        )
+        .await,
+        true
+    );
+    assert!(main.sends("EXTENSION_UI").is_empty());
+    assert!(activities(&main, "ask").is_empty());
+    // Passed on: it shows in the bot chat's window, under that chat, and nowhere else.
+    assert_eq!(
+        main.call(
+            "routeAsk",
+            json!({"tab": "work", "id": "r1", "chat": "chat", "escalate": true})
+        )
+        .await,
+        true
+    );
+    let shown = main.sends("EXTENSION_UI");
+    let mut shown_request = request.clone();
+    shown_request["id"] = json!("ompdesk-escalated:r1");
+    assert_eq!(
+        shown,
+        vec![(vec![2], json!({"tabId": "chat", "request": shown_request}))]
+    );
+    assert_eq!(
+        main.call("openRequests", json!({"win": 1})).await,
+        json!([])
+    );
+    assert_eq!(
+        main.call("openRequests", json!({"win": 2})).await,
+        json!([{"tabId": "chat", "request": shown_request}])
+    );
+    // The owner answers it there: the answer goes to the tab that asked, once.
+    let answer = json!({"token": 1, "id": shown_request["id"], "tab": "chat", "frame": {"type": "extension_ui_response", "id": shown_request["id"], "data": {}}, "responder": 2, "choice": "sent"});
+    main.call(
+        "routeSideChannel",
+        answer.clone(),
+    )
+    .await;
+    for _ in 0..10 {
+        main.call("size", json!({})).await;
+    }
+    main.call("routeSideChannel", answer).await;
+    let delivered: Vec<&Value> = main
+        .asked
+        .iter()
+        .filter(|(q, _)| q == "sideChannelLater")
+        .map(|(_, item)| item)
+        .collect();
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0]["tab"], "work");
+    assert_eq!(delivered[0]["frame"]["id"], "r1");
+    assert_eq!(activities(&main, "askClosed").len(), 1);
+    assert_eq!(
+        main.call("openRequests", json!({"win": 2})).await,
+        json!([])
+    );
+}
+
+#[tokio::test]
+async fn the_owner_s_own_run_and_a_bot_message_that_only_joined_it_keep_today_s_card() {
+    let mut main = Main::start(opts()).await;
+    main.acquire("work", 1, None, false).await;
+    // The owner's own prompt started the run; a bot's message steered in later changes nothing.
+    let run = bot_run();
+    let steer = &run[1];
+    main.call("delegatedPrompt", json!({"tab": "work", "text": steer["message"]["text"]})).await;
+    main.call(
+        "feed",
+        json!({"tab": "work", "event": "events", "payload": [
+            {"type": "agent_start"},
+            {"type": "message_end", "message": {"role": "user", "text": "Do the thing"}},
+            {"type": "message_end", "message": {"role": "assistant"}},
+            steer,
+        ]}),
+    )
+    .await;
+    let request =
+        json!({"type": "extension_ui_request", "id": "r1", "method": "confirm", "title": "Go?"});
+    main.call("feed", ask_feed("work", &request)).await;
+    assert_eq!(main.sends("EXTENSION_UI")[0].0, vec![1]);
+    assert_eq!(activities(&main, "ask").len(), 1);
+    assert!(activities(&main, "askHeld").is_empty());
+    // A run the bot's message started, whose question the core leaves with the owner: shown then, and announced.
+    // Replaying the wrapped text after that steer was consumed does not authorize a new turn.
+    main.call("feed", json!({"tab": "work", "event": "events", "payload": run})).await;
+    let copied = json!({"type": "extension_ui_request", "id": "copy", "method": "ask", "questions": []});
+    main.call("feed", ask_feed("work", &copied)).await;
+    assert!(activities(&main, "askHeld").is_empty());
+    main.call("delegatedPrompt", json!({"tab": "work", "text": steer["message"]["text"]})).await;
+    main.call(
+        "feed",
+        json!({"tab": "work", "event": "events", "payload": bot_run()}),
+    )
+    .await;
+    let held =
+        json!({"type": "extension_ui_request", "id": "r2", "method": "ask", "questions": []});
+    main.call("feed", ask_feed("work", &held)).await;
+    assert_eq!(main.sends("EXTENSION_UI").len(), 2);
+    assert_eq!(
+        main.call("routeAsk", json!({"tab": "work", "id": "r2"}))
+            .await,
+        true
+    );
+    let sent = main.sends("EXTENSION_UI");
+    assert_eq!(sent.len(), 3);
+    assert_eq!(sent[2].0, vec![1]);
+    assert_eq!(sent[2].1["request"], held);
+    assert_eq!(activities(&main, "ask").len(), 3);
+    // Decided once: a second word changes nothing.
+    assert_eq!(
+        main.call("routeAsk", json!({"tab": "work", "id": "r2"}))
+            .await,
+        false
+    );
+    // A tool approval of a bot's run is never held.
+    let approval = json!({"type": "extension_ui_request", "id": "r3", "method": "select", "title": "Allow tool: bash", "options": ["Approve", "Deny"]});
+    main.call(
+        "feed",
+        json!({"tab": "work", "event": "extensionUi",
+               "payload": {"request": approval, "kinds": {"blocking": true, "signIn": false, "approval": true}}}),
+    )
+    .await;
+    assert_eq!(main.sends("EXTENSION_UI").len(), 4);
+}

@@ -41,7 +41,8 @@ export function createControlBackend(
 		run: (caller, tool, args) => runtime.runOutside(caller, tool, args),
 		resolve: (caller, name) => runtime.resolveOutside(caller, name),
 		snapshots: () => runtime.controlTabs(),
-		observe: listener => pool.observeTabs(listener),
+		// A question held while agent control decides whose it is reaches the outside only as the `ask` it may become.
+		observe: listener => pool.observeTabs(activity => activity.type !== "askHeld" && listener(activity)),
 		onOutsideMail: listener => runtime.onOutsideMail(listener),
 		release: caller => runtime.releaseOutside(caller),
 	};

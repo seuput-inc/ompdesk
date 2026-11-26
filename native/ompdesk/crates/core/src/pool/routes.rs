@@ -4,8 +4,56 @@
 use serde_json::{Map, Value, json};
 
 use super::state::{
-    ANSWERED_KEPT, Answered, Ctx, Entry, Held, Kinds, Owner, Pool, R, StopWait, owner_key,
+    ANSWERED_KEPT, Answered, Ctx, Entry, Held, Kinds, Opening, Owner, Pool, R, Routed, RunOrigin,
+    StopWait, owner_key,
 };
+use crate::agentctl::service::wrap::{AGENT_CARD_PREFIX, message_request, parse_agent_message};
+
+pub(super) const ESCALATED_PREFIX: &str = "ompdesk-escalated:";
+
+/// The run's prompt messages say whose request it serves (`turn-origin.ts`'s rule): the first one after `agent_start`
+/// decides, a run with none (stock's retry) keeps the run before it, and a message that joins a running turn (a steer,
+/// an aside) changes nothing. Only another session's wrapped message names a request; a person's prompt, a mail or a
+/// continuation names none.
+pub(super) fn note_run_message(entry: &mut Entry, message: &Value) {
+    let role = message["role"].as_str().unwrap_or("");
+    let admitted = role == "user"
+        && message["text"]
+            .as_str()
+            .is_some_and(|text| entry.delegated_prompts.remove(text));
+    match (entry.opening, role) {
+        (_, "assistant" | "toolResult") => entry.opening = Opening::Closed,
+        (Opening::First, _) => {
+            entry.run_origin = admitted
+                .then(|| message["text"].as_str().and_then(run_origin))
+                .flatten();
+            entry.opening = Opening::More;
+        }
+        _ => {}
+    }
+}
+
+fn run_origin(text: &str) -> Option<RunOrigin> {
+    let wrapped = parse_agent_message(text.trim())?;
+    Some(RunOrigin {
+        session: wrapped.session?,
+        mark: Some(message_request(&wrapped.body)?),
+    })
+}
+
+impl Ctx {
+    pub(super) fn delegated_prompt(&self, tab: &str, text: String, revoke: bool) {
+        self.with(|pool| {
+            if let Some(entry) = pool.entry_mut(tab) {
+                if revoke {
+                    entry.delegated_prompts.remove(&text);
+                } else if run_origin(&text).is_some() {
+                    entry.delegated_prompts.insert(text);
+                }
+            }
+        });
+    }
+}
 
 impl Pool {
     /// `#dropSessionOwner`: the entry lets go of its file mapping when it still points at this entry.
@@ -194,21 +242,193 @@ impl Ctx {
     }
 
     /// `#announceAsk`: a blocking request a person has to answer (not a provider sign-in's own traffic) came to the tab.
-    pub(super) async fn announce_ask(&self, tab: &str, request: &Value, kinds: Kinds) -> R<()> {
+    /// One held for routing (`origin`) is announced as `askHeld`: only agentctl's host reads it, and the ask that the
+    /// owner then gets is announced again as an `ask` (`route_ask`).
+    pub(super) async fn announce_ask(
+        &self,
+        tab: &str,
+        request: &Value,
+        kinds: Kinds,
+        origin: Option<&RunOrigin>,
+    ) -> R<()> {
         let id = request["id"].as_str().unwrap_or("").to_string();
         let skip = self.with(|pool| !kinds.blocking || pool.sign_in_requests.contains(&id));
         if skip {
             return Ok(());
         }
         let text = request["title"].as_str().unwrap_or("");
-        self.announce(json!({"type": "ask", "tabId": tab, "requestId": id, "text": text}))
-            .await
+        let activity = match origin {
+            Some(origin) => json!({
+                "type": "askHeld", "tabId": tab, "requestId": id,
+                "origin": {"session": origin.session, "mark": origin.mark},
+            }),
+            None => json!({"type": "ask", "tabId": tab, "requestId": id, "text": text}),
+        };
+        self.announce(activity).await
     }
 
     /// One request the tab held is closed (answered elsewhere, withdrawn, its omp gone).
     pub(super) async fn announce_ask_closed(&self, tab: &str, id: &str) -> R<()> {
+        self.drop_routed(id, None);
         self.announce(json!({"type": "askClosed", "tabId": tab, "requestId": id}))
             .await
+    }
+
+    // ---- asks a bot holds -----------------------------------------------------------------------------------------
+
+    /// The request a blocking ask of the tab serves, when agentctl may route it to the bot that asked for the work: a
+    /// question or form of this computer's own tab whose run another session's message started. Never a tool approval,
+    /// a provider sign-in's own request or a card OMPdesk raises itself (`[OMPdesk] …`).
+    pub(super) fn routable_origin(
+        pool: &Pool,
+        seq: u64,
+        request: &Value,
+        kinds: Kinds,
+    ) -> Option<RunOrigin> {
+        let entry = pool.by_seq(seq)?;
+        let id = request["id"].as_str()?;
+        let question = matches!(request["method"].as_str(), Some("ask" | "form"));
+        let ours = request["title"]
+            .as_str()
+            .is_some_and(|title| title.starts_with(AGENT_CARD_PREFIX));
+        let routable = kinds.blocking
+            && !kinds.approval
+            && !kinds.sign_in
+            && !pool.sign_in_requests.contains(id)
+            && entry.device.is_none()
+            && !entry.hosted_view
+            && question
+            && !ours;
+        if routable {
+            entry.run_origin.clone()
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn send_view_question(&self, tab: &str, request: &Value) {
+        self.with(|pool| {
+            if let Some(entry) = pool.entry(tab) {
+                for view in &entry.device_views {
+                    self.push(&json!({"k": "emitView", "tab": tab, "view": view, "event": "extensionUi", "arg": request}));
+                }
+            }
+        });
+    }
+
+    /// The `EXTENSION_UI` frame of an escalated ask: the asking tab's request, shown in the bot's chat `chat`.
+    pub(super) fn escalated_frame(pool: &Pool, id: &str, chat: &str) -> Option<(Value, Vec<i64>)> {
+        let held = pool.request_bodies.get(&id.to_string())?;
+        let entry = pool.entry(chat)?;
+        let mut request = held.request.clone();
+        request["id"] = json!(format!("{ESCALATED_PREFIX}{id}"));
+        Some((
+            json!({"tabId": chat, "request": request}),
+            Pool::windows_of(entry),
+        ))
+    }
+
+    /// Where agentctl sent a held ask (`routeAsk`). No `chat`: to the owner, as any other ask (its windows show the card
+    /// and observers hear an `ask`). A `chat`: the bot of that chat holds it, off the owner's windows. `escalate`: that
+    /// bot passed it on, and the owner answers it in the chat's windows. False when the ask is not open or not held.
+    pub(super) async fn route_ask(
+        &self,
+        tab: &str,
+        id: &str,
+        chat: Option<String>,
+        escalate: bool,
+    ) -> R<bool> {
+        enum Next {
+            No,
+            Owner(u64, Value, Kinds),
+            Kept,
+            Show(Value, Vec<i64>),
+        }
+        let next = self.with(|pool| {
+            let key = id.to_string();
+            let Some(seq) = pool.entry(tab).map(|entry| entry.seq) else {
+                return Next::No;
+            };
+            if pool.request_owners.get(&key) != Some(&seq) {
+                pool.routed.remove(id);
+                return Next::No;
+            }
+            let Some(routed) = pool.routed.get(id).cloned() else {
+                return Next::No;
+            };
+            match (chat, escalate, routed) {
+                (None, _, Routed::Deciding | Routed::Bot) => {
+                    pool.routed.remove(id);
+                    match pool.request_bodies.get(&key) {
+                        Some(held) => Next::Owner(seq, held.request.clone(), held.kinds),
+                        None => Next::No,
+                    }
+                }
+                (Some(_), false, Routed::Deciding) => {
+                    pool.routed.insert(key, Routed::Bot);
+                    Next::Kept
+                }
+                (Some(chat), true, Routed::Deciding | Routed::Bot) => {
+                    match Ctx::escalated_frame(pool, id, &chat) {
+                        Some((frame, wins)) => {
+                            pool.routed.insert(key, Routed::Escalated(chat));
+                            Next::Show(frame, wins)
+                        }
+                        None => Next::No,
+                    }
+                }
+                _ => Next::No,
+            }
+        });
+        match next {
+            Next::No => Ok(false),
+            Next::Kept => Ok(true),
+            Next::Show(frame, wins) => {
+                if let Some(chat) = frame["tabId"].as_str() {
+                    self.send_view_question(chat, &frame["request"]);
+                }
+                self.send(wins, "EXTENSION_UI", frame);
+                Ok(true)
+            }
+            Next::Owner(seq, request, kinds) => {
+                let (frame, wins) = self.with(|pool| {
+                    let frame = Ctx::ui_frame(pool, seq, &request, kinds);
+                    let wins = pool.by_seq(seq).map(Pool::windows_of).unwrap_or_default();
+                    (frame, wins)
+                });
+                self.send_view_question(tab, &request);
+                self.send(wins, "EXTENSION_UI", Value::Object(frame));
+                self.announce_ask(tab, &request, kinds, None).await?;
+                Ok(true)
+            }
+        }
+    }
+
+    /// A routed ask closed: an escalated card leaves the bot chat's windows but `answering`'s, whose own answer closed it
+    /// (answered there, or the asking session's question went: either way it takes no answer now).
+    pub(super) fn drop_routed(&self, id: &str, answering: Option<i64>) {
+        let escalated = self.with(|pool| match pool.routed.remove(id) {
+            Some(Routed::Escalated(chat)) => pool.entry(&chat).map(|entry| {
+                let mut wins = Pool::windows_of(entry);
+                wins.retain(|win| Some(*win) != answering);
+                (entry.tab_id.clone(), wins)
+            }),
+            _ => None,
+        });
+        if let Some((chat, wins)) = escalated {
+            let cancel = json!({
+                "type": "extension_ui_request",
+                "id": format!("answered:{id}"),
+                "method": "cancel",
+                "targetId": format!("{ESCALATED_PREFIX}{id}"),
+            });
+            self.send_view_question(&chat, &cancel);
+            self.send(
+                wins,
+                "EXTENSION_UI",
+                json!({"tabId": chat, "request": cancel, "answeredElsewhere": true}),
+            );
+        }
     }
 
     // ---- requests -----------------------------------------------------------------------------------------------
@@ -228,6 +448,15 @@ impl Ctx {
         for key in stale {
             pool.request_bodies.remove(&key);
             pool.sign_in_requests.remove(&key);
+        }
+        let gone: Vec<String> = pool
+            .routed
+            .keys()
+            .filter(|key| !pool.request_owners.contains(key))
+            .cloned()
+            .collect();
+        for key in gone {
+            pool.routed.remove(&key);
         }
         pool.request_bodies.insert(
             id.clone(),

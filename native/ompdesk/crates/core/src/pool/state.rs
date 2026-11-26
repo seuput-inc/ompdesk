@@ -77,6 +77,12 @@ pub(super) struct Entry {
     /// Why the tab's cut-off turn waits for the person's Continue (`off`, `crash-loop`, `failed`).
     pub cut_off: Option<String>,
     pub unsaved_prompt: Option<String>,
+    /// The request the current run serves: the agent's message that started it (`note_run_message`).
+    pub run_origin: Option<RunOrigin>,
+    /// Only prompts admitted by agent control can identify the bot that started a turn.
+    pub delegated_prompts: HashSet<String>,
+    /// Where the run's prompt messages stand: the first one after `agent_start` decides `run_origin`.
+    pub opening: Opening,
     pub scheduled_retry: Option<Value>,
     pub touched: u64,
     pub prompted: u64,
@@ -142,6 +148,9 @@ impl Entry {
             resuming: false,
             cut_off: None,
             unsaved_prompt: None,
+            run_origin: None,
+            delegated_prompts: HashSet::new(),
+            opening: Opening::Closed,
             scheduled_retry: None,
             touched: 0,
             prompted: 0,
@@ -211,6 +220,33 @@ pub(super) struct Held {
     pub kinds: Kinds,
 }
 
+/// The request a tab's run serves: the wrapped message of another session that started it, by that session's saved id
+/// and the dispatch or request id its message carried (`[ompdesk dispatch d3:`, `[ompdesk request m-…]`).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct RunOrigin {
+    pub session: String,
+    pub mark: Option<String>,
+}
+
+/// After `agent_start`, until the run's first answer: `First` while no prompt message came yet, `More` once one did.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) enum Opening {
+    #[default]
+    Closed,
+    First,
+    More,
+}
+
+/// Where a question of a run another session started goes (`routeAsk`): off the owner's windows while agentctl
+/// decides (`Deciding`) and while the bot that asked for the work holds it (`Bot`); `Escalated` shows it in the windows
+/// of that bot's chat (its tab id), where the owner answers it.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Routed {
+    Deciding,
+    Bot,
+    Escalated(String),
+}
+
 /// What a closing window runs, in the order they were added (`#whenClosed`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Closer {
@@ -266,6 +302,8 @@ pub(super) struct Pool {
     pub sign_in_requests: HashSet<String>,
     pub answering: HashSet<String>,
     pub answered: OMap<String, Answered>,
+    /// Asks of a run another session started, by request id, while they are not the owner's (`Routed`).
+    pub routed: HashMap<String, Routed>,
     pub restoring: HashSet<i64>,
     pub closers: OMap<i64, Vec<Closer>>,
     pub stop_waits: Vec<StopWait>,
