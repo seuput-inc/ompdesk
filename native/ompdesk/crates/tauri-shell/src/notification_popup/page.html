@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en" data-scheme="light">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<title>OMPdesk notifications</title>
+<style>
+:root {
+	--bg: #ffffff;
+	--fg: #17171c;
+	--muted: #5b5d6b;
+	--line: #e4e4ea;
+	--hover: #f4f4f7;
+	color-scheme: light;
+}
+:root[data-scheme="dark"] {
+	--bg: #0a0a0a;
+	--fg: #ededf0;
+	--muted: #9a9cab;
+	--line: #26262c;
+	--hover: #17171c;
+	color-scheme: dark;
+}
+* { box-sizing: border-box; margin: 0; }
+html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--fg); }
+body {
+	font: 13px/18px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+	-webkit-user-select: none;
+	user-select: none;
+	cursor: default;
+}
+.card {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	height: 64px;
+	padding: 0 40px 0 14px;
+}
+.card + .card { border-top: 1px solid var(--line); }
+.card:hover { background: var(--hover); }
+.card.enter { animation: enter 160ms cubic-bezier(0.2, 0, 0, 1); }
+@keyframes enter { from { opacity: 0; transform: translateY(8px); } }
+:root.still .card.enter { animation: none; }
+.icon { flex: none; width: 32px; height: 32px; background: center / contain no-repeat url("__ICON__"); }
+.text { min-width: 0; flex: 1; }
+.title, .body { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.title { font-weight: 600; font-size: 14px; line-height: 20px; }
+.body { color: var(--muted); }
+.close {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	width: 24px;
+	height: 24px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--muted);
+	font: 16px/24px "Segoe UI Symbol", system-ui, sans-serif;
+}
+.close:hover { background: var(--line); color: var(--fg); }
+.more {
+	height: 28px;
+	padding: 0 14px;
+	border-top: 1px solid var(--line);
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 27px;
+}
+</style>
+</head>
+<body>
+<div id="stack" role="status" aria-live="polite"></div>
+<script>
+"use strict";
+// The shell reads and cancels these navigations (notification_popup/mod.rs `action`).
+const go = (action, id) => { location.href = `ompdesk-popup:${action}?id=${id}`; };
+let known = new Set();
+
+function card({ id, title, body }, labels, fresh) {
+	const row = document.createElement("div");
+	row.className = fresh ? "card enter" : "card";
+	row.dataset.id = String(id);
+	const icon = document.createElement("div");
+	icon.className = "icon";
+	const text = document.createElement("div");
+	text.className = "text";
+	const heading = document.createElement("div");
+	heading.className = "title";
+	heading.textContent = title;
+	const line = document.createElement("div");
+	line.className = "body";
+	line.textContent = body;
+	text.append(heading, line);
+	const close = document.createElement("button");
+	close.className = "close";
+	close.type = "button";
+	close.textContent = "\u00d7";
+	close.setAttribute("aria-label", labels.close);
+	close.addEventListener("click", event => { event.stopPropagation(); go("close", id); });
+	row.addEventListener("click", () => go("click", id));
+	row.append(icon, text, close);
+	return row;
+}
+
+// What the shell sends (`window.rs` `render`): the scheme, the cards on screen oldest first, and the "+N more" row.
+window.render = state => {
+	const root = document.documentElement;
+	root.dataset.scheme = state.dark ? "dark" : "light";
+	root.lang = state.lang;
+	if (state.background) root.style.setProperty("--bg", state.background);
+	root.classList.toggle("still", state.reducedMotion);
+	const rows = state.cards.map(item => card(item, state.labels, !known.has(item.id)));
+	if (state.more > 0) {
+		const more = document.createElement("div");
+		more.className = "more";
+		more.textContent = state.labels.more;
+		rows.push(more);
+	}
+	known = new Set(state.cards.map(item => item.id));
+	document.getElementById("stack").replaceChildren(...rows);
+};
+</script>
+</body>
+</html>

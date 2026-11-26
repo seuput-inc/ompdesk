@@ -19,6 +19,7 @@ mod migrate_watch;
 mod native_chrome;
 mod native_services;
 mod network;
+mod notification_popup;
 mod notify_triage;
 mod page_push;
 mod page_watch;
@@ -2156,6 +2157,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             });
             *runtime().instance_thread.lock().expect("instance thread") = Some(instance_thread);
             page_watch::run();
+            notification_popup::window::install();
             host::serve(
                 listener,
                 token.clone(),

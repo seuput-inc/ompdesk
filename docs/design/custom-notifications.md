@@ -6,7 +6,7 @@ The owner asked for OMPdesk's notifications to appear as the app's own popup, li
 
 The admission rules stay where they are: main's `maybeNotify`, the batch, mute, dropped, presence and seen, and the shell's `app.admitNotification`. What reaches the shell is the same `notification.show {id, title, body, icon, silent, tab}` call as today, and Node hears the same `notification.event {id, name, reason}` events. The popup replaces the OS banner behind that call. It is one more destination in `crates/shell/src/notification.rs`. Nothing changes in `src/main`. A click reaches main's existing `click` listener, so it opens the tab through today's path. Closing a banner once its tab is seen (`notification.closeTab`, which orca-core-port is moving into the shell) closes the popup's card through the same `close_any(id)`.
 
-Each `show` takes one route, decided by one pure function (`route` in `notification_popup.rs`) and logged as `notification.route {id, route, reason}`:
+Each `show` takes one route, decided by one pure function (`route` in `notification_popup/mod.rs`) and logged as `notification.route {id, route, reason}`:
 
 | Route | When |
 |---|---|
@@ -35,7 +35,7 @@ A window the app draws itself bypasses the OS's suppression, so the popup asks t
 
 The webview wins on Windows, the only platform that shows the popup. The cold-start risk is bounded: the window is created at the first popup and kept, and a card whose page is not ready within 3 s goes to the OS banner instead. Nothing is pre-warmed at launch, so launches that never notify pay nothing and test runs see no extra page.
 
-The page is a self-contained HTML document compiled into the shell (`notification_popup.html`), loaded as a `data:` URL with `default-src 'none'`. It carries no app preload and no app IPC. Text goes in through `textContent` only, never markup. The shell renders through `eval(render(<json>))`. The page reports `click`, `close` and `hover` by navigating to `ompdesk-popup:<action>?id=…`. The shell's `on_navigation` reads and cancels those navigations, and every other navigation is refused.
+The page is a self-contained HTML document compiled into the shell (`notification_popup/page.html`), loaded as a `data:` URL with `default-src 'none'`. It carries no app preload and no app IPC. Text goes in through `textContent` only, never markup. The shell renders through `eval(render(<json>))`. The page reports `click` and `close` by navigating to `ompdesk-popup:<action>?id=…`. The shell's `on_navigation` reads and cancels those navigations, and every other navigation is refused. Hover needs no message: every 500 ms the shell compares the pointer with the window.
 
 ## Window
 
@@ -51,7 +51,7 @@ The page is a self-contained HTML document compiled into the shell (`notificatio
 - **Stack.** At most three cards show, newest nearest the corner. Further cards wait in order behind a "+N more"/"외 N개" row and show, with their own countdown, as slots free. A `close` from Node (tab seen, batch summary replacing its first banner) removes the card or the waiting entry.
 - **Sound.** As today's toast: Windows' default notification sound (`PlaySound` alias `Notification.Default`, async) when `silent` is not set, once at `show`, and never for a hidden or banner-routed card. The banner plays its own.
 - **Theme.** Dark or light from the shell's effective theme (`theme.setSource`), with the page background from `src/shared/window-background.json` (the app's `--sc-bg`). With reduced motion there is no slide, only the card.
-- **Motion.** The card enters with 160 ms of opacity plus an 8 px rise (`ease-out`) and leaves with 120 ms of opacity. No other animation.
+- **Motion.** The card enters with 160 ms of opacity plus an 8 px rise (`ease-out`). It leaves at once, because the window shrinks with it. No other animation.
 - **Strings.** The shell's labels (`native_labels.json`, en and ko): `notificationPopup.close`, `notificationPopup.more`.
 
 ## Settings
@@ -64,5 +64,5 @@ The phone's Web Push, main's admission and batching, `IpcNotifyResult`, macOS no
 
 ## Tests
 
-- Rust unit tests (`notification_popup.rs`): `route` over platform × OS gate × page state × test run, the stack (queue, "+N more", close of a shown or waiting card, countdown paused by hover and by idle), `place` (monitor choice, corner, taskbar edges), and the parsing of `ompdesk-popup:` actions, which refuses anything else.
+- Rust unit tests (`notification_popup/mod.rs`): `route` over platform × OS gate × test run, the stack (queue, "+N more", close of a shown or waiting card, countdown paused by hover and by idle), `place` (monitor choice, corner, a taskbar on the left), and the parsing of `ompdesk-popup:` actions, which refuses anything else.
 - `e2e/notification-popup.e2e.ts` (Windows, `OMP_GUI_TEST_NOTIFICATION_POPUP=1`): a background tab's turn finishes, the popup page shows that session's title and preview, the window log line shows the no-activate, tool-window and topmost flags, and clicking the card makes that tab the app window's active tab.
