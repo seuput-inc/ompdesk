@@ -80,10 +80,10 @@ export function BotsPage() {
 					/>
 				</div>
 			) : (
-				<div className="flex min-h-0 flex-1" data-bots-page>
+				<div className="flex min-h-0 min-w-0 flex-1" data-bots-page>
 					<MasterDetail
 						backLabel={t("destination.bots")}
-						className="min-h-0"
+						className="min-h-0 min-w-0"
 						detail={
 							shown && fact ? (
 								<BotPane

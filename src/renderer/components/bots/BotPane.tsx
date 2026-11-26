@@ -45,7 +45,7 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 	};
 	const mark = bot.paused ? "paused" : facts.needsYou > 0 ? "needsYou" : facts.failed ? "failed" : null;
 	return (
-		<div className="flex min-h-0 flex-col" data-bot-pane={bot.id}>
+		<div className="flex min-h-0 min-w-0 flex-col" data-bot-pane={bot.id}>
 			{bot.paused && (
 				<Banner
 					actions={
