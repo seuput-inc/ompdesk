@@ -18,7 +18,7 @@ The design record is `docs/design/a2ui.md`; this file holds the rules a change m
 - `@a2ui/web_core` is pinned exactly; an update is deliberate (schema drift test, `lit` refusal below).
 
 ### The bridge tool (`modes/a2ui.ts`, `a2ui-core.ts`, `a2ui-contracts.ts`)
-- Main agent only. A refused payload is a returned error result with `details.errors` (the spec's error objects); a Stop is a thrown error. Display-only returns `{shown}`; an interactive call waits on stock's form channel with `a2uiMarkerForm(toolCallId)` and returns `{action}`, `{dismissed: true}` or, from an OMPdesk that drew the marker as a plain ask, `{text}`.
+- Main agent only, registered while `A2UI_ENABLED` (`a2ui-contracts.ts`; `OMP_GUI_TEST_A2UI=1` turns it on for tests), because a call no window can draw waits on a form nobody answers. A refused payload is a returned error result with `details.errors` (the spec's error objects); a Stop is a thrown error. Display-only returns `{shown}`; an interactive call waits on stock's form channel with `a2uiMarkerForm(toolCallId)` and returns `{action}`, `{dismissed: true}` or, from an OMPdesk that drew the marker as a plain ask, `{text}`.
 - Surface ids are unique per session; an update names a surface created earlier in the same turn. Caps (§4 of the design): messages ≤ 256 KB, ≤ 200 components a surface, depth ≤ 20, data model ≤ 256 KB, answer ≤ `A2UI_ANSWER_MAX_CHARS`.
 - `Image.url` is a literal; there is no password field; no Video or AudioPlayer.
 
