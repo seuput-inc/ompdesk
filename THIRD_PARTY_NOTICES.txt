@@ -5797,6 +5797,44 @@ Ported files (OMPdesk file <- Mixdog file, both relative to their repo root):
 
 ------------------------------------------------------------------------------
 
+momobot
+A bot's drawn face, its spring rig and its acting are adapted from momobot, licensed under the MIT
+License (full text below and in LICENSES/MIT-momobot.txt). The adapted parts were modified for
+OMPdesk. Source revision read: d4558504f6bcb5567db2204423f999c3b9550ea1.
+
+Ported files (OMPdesk file <- momobot file, both relative to their repo root):
+
+- src/renderer/lib/bot-face.ts <- app/src/lib/agents/bot-face.ts
+- src/renderer/lib/bot-face-rig.ts <- app/src/lib/agents/avatar-rig.ts
+- src/renderer/lib/bot-face-acting.ts <- app/src/lib/agents/avatar-acting.ts
+- src/renderer/lib/bot-face-motion.ts <- app/src/lib/agents/avatar-motion.ts
+- src/renderer/components/common/BotFace.tsx
+  <- app/src/components/agents/bot-face.tsx, app/src/components/agents/abstract-avatar.tsx
+
+MIT License
+
+Copyright (c) 2026 CopilotKit
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------------
+
 ai-memory 3.4.7 (https://github.com/akitaonrails/ai-memory, tag v3.4.7)
 The source (vendored in native/memory/, with OMPdesk's changes) is built by OMPdesk into the binary
 (ai-memory / ai-memory.exe) that ships inside the app under resources/ai-memory-bin/ as its memory.

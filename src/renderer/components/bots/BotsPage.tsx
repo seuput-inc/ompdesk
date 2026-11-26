@@ -130,6 +130,7 @@ export function BotsPage() {
 												bot={item}
 												mark={item.paused ? "paused" : (itemFacts?.needsYou ?? 0) > 0 ? "needsYou" : null}
 												size={28}
+												working={itemFacts?.working}
 											/>
 										}
 										onClick={() => useBotPage.setState({ botId: item.id, roomId: null })}

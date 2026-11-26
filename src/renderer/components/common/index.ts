@@ -8,6 +8,7 @@ export { AsyncSection, type AsyncSectionProps } from "./AsyncSection";
 export { AutoTitleButton } from "./AutoTitleButton";
 export { Badge, type BadgeProps, type BadgeVariant } from "./Badge";
 export { Banner, type BannerProps, type BannerVariant } from "./Banner";
+export { BotFace, type BotFaceProps } from "./BotFace";
 export { BrandMark, type BrandMarkProps, type BrandMarkVariant } from "./BrandMark";
 export { Button, type ButtonProps, type ButtonSize, type ButtonVariant } from "./Button";
 export {

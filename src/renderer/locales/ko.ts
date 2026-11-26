@@ -8242,7 +8242,7 @@ export const ko: Record<string, string> = {
 	"bots.picture.previous": "이전 사진",
 	"bots.picture.next": "다음 사진",
 	"bots.picture.upload": "올리기…",
-	"bots.picture.none": "사진 없음",
+	"bots.picture.none": "자기 얼굴",
 	"bots.picture.change": "사진 바꾸기",
 	"bots.picture.hint": "직접 붙여넣거나 끌어다 놓아도 돼요.",
 	"bots.picture.unreadable": "그 사진을 읽지 못했어요.",

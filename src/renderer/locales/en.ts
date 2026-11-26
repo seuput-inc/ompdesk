@@ -8269,7 +8269,7 @@ export const en: Record<string, string> = {
 	"bots.picture.previous": "Previous picture",
 	"bots.picture.next": "Next picture",
 	"bots.picture.upload": "Upload…",
-	"bots.picture.none": "No picture",
+	"bots.picture.none": "Its own face",
 	"bots.picture.change": "Change picture",
 	"bots.picture.hint": "Or paste or drop your own.",
 	"bots.picture.unreadable": "That picture couldn't be read.",

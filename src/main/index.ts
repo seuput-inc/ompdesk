@@ -822,6 +822,10 @@ app.whenReady().then(async () => {
 			prefsStore().get("starterGuide") === undefined
 		)
 			prefsStore().set("starterGuide", { seenAll: true });
+		// A test run's bot faces stay at rest, so every capture draws the same frame (common/BotFace.tsx);
+		// OMP_GUI_TEST_BOT_FACES=1 lets them move for a spec about them.
+		if (process.env.OMP_GUI_HEADLESS === "1")
+			prefsStore().set("botFaces", process.env.OMP_GUI_TEST_BOT_FACES === "1" ? "live" : "rest");
 		installHangWatchdog(postWatchdog);
 		// A slow step leaves a line (slow-steps.ts): main's blocked thread, a handler, a wait on the core, an omp's start.
 		installSlowSteps({
