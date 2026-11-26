@@ -524,7 +524,11 @@ describe("Sidebar menus and pinned ordering", () => {
 		await fire(container.querySelector('[data-sidebar-nav-row="bots"]'), "onClick");
 		expect(useUiStore.getState().destination).toBe("bots");
 		await act(async () => useBotsFeature.setState({ available: false }));
-		expect(nav?.textContent).toContain("⌥A");
+		// The Agents shortcut is the cell's tooltip and aria-keyshortcuts: a half-width cell has no room for it.
+		expect(nav?.textContent).not.toContain("⌥A");
+		expect(container.querySelector('[data-sidebar-nav-row="agents"]')?.getAttribute("aria-keyshortcuts")).toBe(
+			"Alt+A",
+		);
 
 		await fire(container.querySelector('[data-sidebar-nav-row="stats"]'), "onClick");
 		expect(useUiStore.getState().destination).toBe("insights");
