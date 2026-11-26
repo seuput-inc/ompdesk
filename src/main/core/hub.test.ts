@@ -8,6 +8,7 @@ import {
 	Connection,
 	DATA_OFFSET,
 	HUB_CALL_DEADLINE_MS,
+	HUB_START_DEADLINE_MS,
 	Hub,
 	type HubInstanceHandler,
 	type HubItem,
@@ -161,6 +162,28 @@ describe("the hub connection", () => {
 			vi.useRealTimers();
 		}
 	});
+
+	it("waits for a core whose hub thread is held in one job for 3 s, and keeps that core", () => {
+		const hub = new Hub();
+		const instance = probe(hub);
+		const generation = hub.generation;
+		expect(hub.call(instance.id, "stall", { ms: 3_000 })).toBe(3_000);
+		expect(instance.lost).toEqual([]);
+		expect(hub.generation).toBe(generation);
+	}, 15_000);
+
+	it("loses a core whose hub thread stays in one job past the wait's limit, though it still beats", () => {
+		const hub = new Hub();
+		const instance = probe(hub);
+		const started = performance.now();
+		expect(() => hub.call(instance.id, "stall", { ms: 8_000 })).toThrow(CoreError);
+		const blocked = performance.now() - started;
+		expect(blocked).toBeGreaterThanOrEqual(HUB_START_DEADLINE_MS - 50);
+		expect(blocked).toBeLessThan(HUB_START_DEADLINE_MS + 1_000);
+		expect(instance.lost.map(error => error.code)).toEqual(["hub_lost"]);
+		// The trace names the job the hub's thread sat in: main's own call.
+		expect(instance.lost[0]?.message).toMatch(/the hub's thread was \d+ ms into this call/);
+	}, 15_000);
 
 	it("never hands a question of the next core the answer to one the lost core asked", async () => {
 		const hub = new Hub();
