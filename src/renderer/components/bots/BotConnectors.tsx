@@ -209,7 +209,7 @@ export function BotConnectorsSection({ bot }: { bot: Bot }) {
 								variant="ghost"
 							/>
 						}
-						data-bot-connector={connector.service}
+						rowProps={{ "data-bot-connector": connector.service }}
 						description={<HowToAsk bot={bot} connector={connector} />}
 						descriptionLines={2}
 						key={connector.schedule.id}
@@ -293,7 +293,7 @@ export function ConnectorDialog({
 				<div className="flex flex-col gap-1" data-connector-catalog>
 					{BOT_CONNECTOR_SERVICES.map(service => (
 						<ListRow
-							data-connector-pick={service}
+							rowProps={{ "data-connector-pick": service }}
 							description={t(`bots.connectors.catalog.${service}`)}
 							key={service}
 							leading={ICONS[service]}
