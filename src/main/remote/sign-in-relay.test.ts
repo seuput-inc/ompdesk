@@ -2,6 +2,7 @@ import { request as httpRequest } from "node:http";
 import { connect, createServer, type Server } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IpcSignInRelay } from "../../shared/ipc-types";
+import { core } from "../core/process";
 import { loopbackCallback } from "../sign-in-callback";
 import { type SignInRelay, startSignInRelay } from "./sign-in-relay";
 
@@ -41,6 +42,7 @@ const failure = () => ({ title: "Sign-in not finished", message: "Copy this page
 
 function relay(options: { callback: string; forward?: SignInRelayForward; port?: number; timeoutMs?: number }) {
 	const states: Array<IpcSignInRelay> = [];
+	const firstState = Promise.withResolvers<IpcSignInRelay>();
 	const forward = vi.fn(
 		options.forward ??
 			(async () => ({ status: 200, contentType: "text/html; charset=utf-8", body: "<p>Signed in</p>" })),
@@ -49,13 +51,40 @@ function relay(options: { callback: string; forward?: SignInRelayForward; port?:
 		authorizationUrl: authorize(options.callback),
 		forward,
 		failure,
-		onState: state => states.push(state),
+		onState: state => {
+			states.push(state);
+			firstState.resolve(state);
+		},
 		...(options.port === undefined ? {} : { port: options.port }),
 		...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
 	});
 	if (!started) throw new Error("expected a relay");
 	relays.push(started);
-	return { relay: started, states, forward };
+	return { relay: started, states, forward, firstState: firstState.promise };
+}
+
+/**
+ * The core's `remotebytes.signInEnded` events from now on: `until(free)` waits for ends until one after which `free()`
+ * holds. The core tells a relay's end once nothing of it listens; an earlier test's relay may end meanwhile too.
+ */
+function ends(): { until: (free: () => Promise<boolean>) => Promise<void>; off: () => void } {
+	let count = 0;
+	let wake: (() => void) | null = null;
+	const off = core().on("remotebytes.signInEnded", () => {
+		count += 1;
+		wake?.();
+	});
+	return {
+		off,
+		async until(free) {
+			let seen = 0;
+			for (;;) {
+				while (count === seen) await new Promise<void>(resolve => (wake = resolve));
+				seen = count;
+				if (await free()) return;
+			}
+		},
+	};
 }
 
 type SignInRelayForward = (
@@ -119,9 +148,10 @@ describe("loopbackCallback", () => {
 
 describe("startSignInRelay", () => {
 	it("listens on the callback's own port on loopback and hands the host the matching callback once", async () => {
+		const ended = ends();
 		const port = await freePort();
-		const { states, forward } = relay({ callback: `http://127.0.0.1:${port}/callback` });
-		await vi.waitFor(() => expect(states).toEqual([{ listening: true }]));
+		const { firstState, forward } = relay({ callback: `http://127.0.0.1:${port}/callback` });
+		expect(await firstState).toEqual({ listening: true });
 
 		// Another path or another flow's state never reaches the host.
 		expect((await get(port, "/favicon.ico")).status).toBe(404);
@@ -134,22 +164,23 @@ describe("startSignInRelay", () => {
 		expect(page).toEqual({ status: 200, body: "<p>Signed in</p>" });
 		expect(forward.mock.calls).toEqual([["/callback", "code=abc&state=xyz"]]);
 		// One use: the listener is gone.
-		await vi.waitFor(async () => expect(await refused(port)).toBe(true));
+		await ended.until(() => refused(port));
+		ended.off();
 		expect(forward).toHaveBeenCalledTimes(1);
 	});
 
 	it("listens for a localhost callback on both loopback families, as stock does", async () => {
 		const port = await freePort();
-		const { states, forward } = relay({ callback: `http://localhost:${port}/callback` });
-		await vi.waitFor(() => expect(states).toEqual([{ listening: true }]));
+		const { firstState, forward } = relay({ callback: `http://localhost:${port}/callback` });
+		expect(await firstState).toEqual({ listening: true });
 		expect((await get(port, "/callback?code=abc&state=xyz", `localhost:${port}`)).status).toBe(200);
 		expect(forward).toHaveBeenCalledTimes(1);
 	});
 
 	it("never answers a page asked for under another host name", async () => {
 		const port = await freePort();
-		const { states, forward } = relay({ callback: `http://127.0.0.1:${port}/callback` });
-		await vi.waitFor(() => expect(states).toEqual([{ listening: true }]));
+		const { firstState, forward } = relay({ callback: `http://127.0.0.1:${port}/callback` });
+		expect(await firstState).toEqual({ listening: true });
 		expect((await get(port, "/callback?code=abc&state=xyz", `rebound.example:${port}`)).status).toBe(403);
 		expect(forward).not.toHaveBeenCalled();
 	});
@@ -157,14 +188,14 @@ describe("startSignInRelay", () => {
 	it("tells the browser how to finish by hand when the host cannot be reached, and stays for another try", async () => {
 		const port = await freePort();
 		let reachable = false;
-		const { forward, states } = relay({
+		const { forward, firstState } = relay({
 			callback: `http://127.0.0.1:${port}/callback`,
 			forward: async () => {
 				if (!reachable) throw new Error("offline");
 				return { status: 200, contentType: "text/plain", body: "Signed in." };
 			},
 		});
-		await vi.waitFor(() => expect(states).toEqual([{ listening: true }]));
+		expect(await firstState).toEqual({ listening: true });
 		const failed = await get(port, "/callback?code=abc&state=xyz");
 		expect(failed.status).toBe(502);
 		expect(failed.body).toContain("Sign-in not finished");
@@ -177,6 +208,7 @@ describe("startSignInRelay", () => {
 	});
 
 	it("still gives the browser its page when the sign-in ends while the callback is on its way", async () => {
+		const ended = ends();
 		const port = await freePort();
 		const holder: { relay?: SignInRelay } = {};
 		const started = relay({
@@ -188,9 +220,10 @@ describe("startSignInRelay", () => {
 			},
 		});
 		holder.relay = started.relay;
-		await vi.waitFor(() => expect(started.states).toEqual([{ listening: true }]));
+		expect(await started.firstState).toEqual({ listening: true });
 		expect(await get(port, "/callback?code=abc&state=xyz")).toEqual({ status: 200, body: "Signed in." });
-		await vi.waitFor(async () => expect(await refused(port)).toBe(true));
+		await ended.until(() => refused(port));
+		ended.off();
 	});
 
 	it("says so when this computer already uses the callback's port, and listens on nothing", async () => {
@@ -198,30 +231,33 @@ describe("startSignInRelay", () => {
 		const blocker = createServer();
 		blockers.push(blocker);
 		await settled(done => blocker.listen({ host: "127.0.0.1", port }, done));
-		const { states } = relay({ callback: `http://127.0.0.1:${port}/callback` });
-		await vi.waitFor(() => expect(states).toEqual([{ listening: false, port }]));
+		const { firstState } = relay({ callback: `http://127.0.0.1:${port}/callback` });
+		expect(await firstState).toEqual({ listening: false, port });
 	});
 
 	it("listens on a port it is given instead (two apps on one computer share its loopback)", async () => {
 		const [callbackPort, port] = [await freePort(), await freePort()];
-		const { states, forward } = relay({ callback: `http://127.0.0.1:${callbackPort}/callback`, port });
-		await vi.waitFor(() => expect(states).toEqual([{ listening: true }]));
+		const { firstState, forward } = relay({ callback: `http://127.0.0.1:${callbackPort}/callback`, port });
+		expect(await firstState).toEqual({ listening: true });
 		expect((await get(port, "/callback?code=abc&state=xyz")).status).toBe(200);
 		expect(forward).toHaveBeenCalledTimes(1);
 	});
 
 	it("ends when closed and when stock's callback would have timed out", async () => {
+		// Each step waits for the core's word that a relay ended, which it gives once nothing of it listens.
+		const ended = ends();
 		const port = await freePort();
 		const closed = relay({ callback: `http://127.0.0.1:${port}/callback` });
-		await vi.waitFor(() => expect(closed.states).toEqual([{ listening: true }]));
+		expect(await closed.firstState).toEqual({ listening: true });
 		closed.relay.close();
-		await vi.waitFor(async () => expect(await refused(port)).toBe(true));
+		await ended.until(() => refused(port));
 
 		const later = await freePort();
 		const timed = relay({ callback: `http://127.0.0.1:${later}/callback`, timeoutMs: 50 });
-		await vi.waitFor(() => expect(timed.states).toEqual([{ listening: true }]));
-		await vi.waitFor(async () => expect(await nothingListens(later)).toBe(true));
+		expect(await timed.firstState).toEqual({ listening: true });
+		await ended.until(() => nothingListens(later));
 		expect(timed.forward).not.toHaveBeenCalled();
+		ended.off();
 	});
 
 	it("forwards nothing once closed, even a callback that reaches the core before the close does", async () => {
@@ -232,7 +268,7 @@ describe("startSignInRelay", () => {
 		for (let round = 0; round < 10; round++) {
 			const port = await freePort();
 			const stand = relay({ callback: `http://127.0.0.1:${port}/callback` });
-			await vi.waitFor(() => expect(stand.states).toEqual([{ listening: true }]));
+			expect(await stand.firstState).toEqual({ listening: true });
 			const callback = get(port, "/callback?code=abc&state=xyz").then(
 				page => page.status,
 				() => "refused",
