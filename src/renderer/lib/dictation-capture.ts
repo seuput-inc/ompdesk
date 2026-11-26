@@ -61,18 +61,32 @@ export function resamplerTo16k(fromRate: number): (input: Float32Array) => Float
 	};
 }
 
-/** A 16 kHz context fed by `stream`; a browser that cannot mix rates (it throws) gets its own rate and is resampled. */
-function contextFor(stream: MediaStream): { context: AudioContext; source: MediaStreamAudioSourceNode } {
+/**
+ * The context a take hears through, made while the press that started it is still on the stack: WebKit keeps a
+ * context made outside a user gesture suspended, and a suspended one hears nothing. 16 kHz when the browser allows it.
+ */
+export function captureContext(): AudioContext {
+	let context: AudioContext;
 	try {
-		const context = new AudioContext({ sampleRate: STT_SAMPLE_RATE });
-		try {
-			return { context, source: context.createMediaStreamSource(stream) };
-		} catch (cause) {
-			void context.close();
-			throw cause;
-		}
+		context = new AudioContext({ sampleRate: STT_SAMPLE_RATE });
 	} catch {
+		context = new AudioContext();
+	}
+	context.resume?.().catch(() => {});
+	return context;
+}
+
+/** `stream` into `context`; a browser that cannot mix rates (it throws) gets a context at its own rate, resampled. */
+function sourceFor(
+	stream: MediaStream,
+	given: AudioContext,
+): { context: AudioContext; source: MediaStreamAudioSourceNode } {
+	try {
+		return { context: given, source: given.createMediaStreamSource(stream) };
+	} catch {
+		void given.close();
 		const context = new AudioContext();
+		context.resume?.().catch(() => {});
 		return { context, source: context.createMediaStreamSource(stream) };
 	}
 }
@@ -85,14 +99,16 @@ export interface MicrophoneCapture {
 /**
  * Feed `stream`'s audio to `onSamples` as 16 kHz mono (each call a fresh array) and, when asked, its level to
  * `onLevels`. A ScriptProcessorNode, not a worklet: a worklet module needs a script URL the page's policy and the
- * paired page's bundle would both have to serve, and a quarter-second callback is plenty for speech.
+ * paired page's bundle would both have to serve, and a quarter-second callback is plenty for speech. `context`
+ * (from {@link captureContext}) is closed with the capture.
  */
 export function captureMicrophone(
 	stream: MediaStream,
 	onSamples: ((samples: Float32Array) => void) | null,
 	onLevels?: (levels: readonly number[]) => void,
+	given: AudioContext = captureContext(),
 ): MicrophoneCapture {
-	const { context, source } = contextFor(stream);
+	const { context, source } = sourceFor(stream, given);
 	const cleanups: (() => void)[] = [];
 	if (onSamples) {
 		const resample = resamplerTo16k(context.sampleRate);

@@ -131,6 +131,32 @@ describe("phone toolbar", () => {
 		expect(slot("send").querySelector(`[aria-label="${translate("input.send")}"]`)).not.toBeNull();
 	});
 
+	it("holding the Send slot's mic: its release ends the take, and the click it makes on Stop and send never sends", async () => {
+		useSettingsStore.setState({ sttEnabled: true });
+		const onMicDown = vi.fn();
+		const onMicUp = vi.fn();
+		const onStopAndSend = vi.fn();
+		await render({ onMicDown, onMicUp, onStopAndSend });
+		const press = (type: string) => {
+			const button = slot("send").querySelector("button") as unknown as HTMLElement;
+			return act(async () =>
+				button.dispatchEvent(Object.assign(new Event(type, { bubbles: true }), { button: 0, pointerId: 1 })),
+			);
+		};
+		await press("pointerdown");
+		expect(onMicDown).toHaveBeenCalledTimes(1);
+		// The take records: the same slot is now Stop and send under the finger.
+		await render({ onMicDown, onMicUp, onStopAndSend, dictationPhase: "recording" });
+		expect(slot("send").querySelector("button[data-dictation-send]")).not.toBeNull();
+		await press("pointerup");
+		expect(onMicUp).toHaveBeenCalledTimes(1);
+		await act(async () => (slot("send").querySelector("button") as unknown as HTMLElement).click());
+		expect(onStopAndSend).not.toHaveBeenCalled();
+		// A tap of its own sends.
+		await act(async () => (slot("send").querySelector("button") as unknown as HTMLElement).click());
+		expect(onStopAndSend).toHaveBeenCalledTimes(1);
+	});
+
 	it("keeps the empty Send slot a disabled Send when dictation is off", async () => {
 		await render();
 		expect(slot("send").querySelector(".omp-composer-mic")).toBeNull();

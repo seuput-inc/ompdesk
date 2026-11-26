@@ -54,7 +54,9 @@ export function insertDictation(target: Exclude<DictationTarget, { kind: "compos
 	const element = target.element;
 	if (!element.isConnected) return false;
 	if (target.kind === "terminal") {
-		const event = new CustomEvent(DICTATION_TEXT_EVENT, { detail: text, bubbles: true, cancelable: true });
+		// One line: a program that did not ask for bracketed paste would run a line at each newline.
+		const line = text.replace(/\s*[\r\n]+\s*/g, " ");
+		const event = new CustomEvent(DICTATION_TEXT_EVENT, { detail: line, bubbles: true, cancelable: true });
 		element.dispatchEvent(event);
 		return event.defaultPrevented;
 	}

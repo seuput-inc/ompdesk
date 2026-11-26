@@ -620,6 +620,18 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				return respond(command, PR_LIST);
 			case "pr_get":
 				return respond(command, PR_DETAIL);
+			// Dictation: a live take the harness hears and answers with fixed words (e2e/dictation-live.e2e.ts counts
+			// the audio it was fed in `calls`).
+			case "stt_warm":
+				return respond(command, { warmed: false });
+			case "stt_stream_start":
+				return respond(command, { streamId: "harness-take" });
+			case "stt_stream_audio":
+				return respond(command, { text: "Dictated", partial: "in the harness", quietMs: 0 });
+			case "stt_stream_stop":
+				return respond(command, { text: "Dictated in the harness." });
+			case "stt_stream_cancel":
+				return respond(command, {});
 			default:
 				note(`rpc:${command.type}`);
 				return respond(command);

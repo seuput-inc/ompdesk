@@ -198,6 +198,17 @@ describe("a take's edges", () => {
 		expect(rpc.sttStreamCancel).toHaveBeenCalledWith("s1");
 		expect(mic.streams[0]?.track.stopped).toBe(true);
 	});
+	it("ends a take whose held press was released while the microphone still opened, once it has", async () => {
+		const opened = Promise.withResolvers<FakeStream>();
+		mic.getUserMedia.mockImplementationOnce(() => opened.promise);
+		const take = recordAndTranscribe();
+		stopVoiceRecording();
+		opened.resolve(new FakeStream());
+		await flush();
+		mic.context().feed(SOUND());
+		await vi.advanceTimersByTimeAsync(STOP_TAIL_MS);
+		await expect(take).resolves.toMatchObject({ text: "Hello there." });
+	});
 
 	it("discards a take cancelled while the mic still opens and releases the mic once it has", async () => {
 		const opened = Promise.withResolvers<FakeStream>();

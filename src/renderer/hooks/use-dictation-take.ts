@@ -112,16 +112,18 @@ export function useDictationTake({
 	const listenerRef = useRef(listener);
 	listenerRef.current = listener;
 
+	/** The model cleanup of the take's words in flight: Esc skips it and the words land as tidied. */
+	const polishing = useRef<AbortController | null>(null);
 	const finish = useCallback(
 		async (result: DictationResult) => {
 			ownsTake.current = false;
 			if (!mountedRef.current) return;
-			setPhase("idle");
-			setStartedAt(null);
 			setPreparing(null);
 			setWords(null);
 			setLevels(SILENT);
 			if ("error" in result) {
+				setPhase("idle");
+				setStartedAt(null);
 				const kept = result.kept;
 				if (result.error)
 					setFailure({
@@ -136,8 +138,15 @@ export function useDictationTake({
 					variant: "info",
 					message: translate("voice.dictation.stoppedSilent", { seconds: SILENCE_STOP_MS / 1000 }),
 				});
-			const text = await polishDictation(result.text.trim(), result.language);
-			if (mountedRef.current) deliver.current(text.trim());
+			// Still "Transcribing…" while the words are tidied (and, when on, cleaned): nothing lands meanwhile.
+			const skip = new AbortController();
+			polishing.current = skip;
+			const text = await polishDictation(result.text.trim(), result.language, skip.signal);
+			polishing.current = null;
+			if (!mountedRef.current) return;
+			setPhase("idle");
+			setStartedAt(null);
+			deliver.current(text.trim());
 		},
 		[deliver, mountedRef],
 	);
@@ -189,6 +198,18 @@ export function useDictationTake({
 			event.stopImmediatePropagation();
 			if (finishKey) stopVoiceRecording();
 			else cancelVoiceRecording();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => window.removeEventListener("keydown", onKey, true);
+	}, [phase]);
+
+	useEffect(() => {
+		if (phase !== "transcribing") return;
+		const onKey = (event: globalThis.KeyboardEvent) => {
+			if (event.key !== "Escape" || isImeKeyEvent(event) || !polishing.current) return;
+			event.preventDefault();
+			event.stopImmediatePropagation();
+			polishing.current.abort();
 		};
 		window.addEventListener("keydown", onKey, true);
 		return () => window.removeEventListener("keydown", onKey, true);

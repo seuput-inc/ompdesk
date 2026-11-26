@@ -232,22 +232,26 @@ async function readPref(key: string): Promise<unknown> {
 
 /**
  * A take's words as they land: tidied, then, when the person turned model cleanup on, cleaned by the bridge's small
- * model (`dictation_cleanup`); a cleanup that fails or is not offered leaves the words as tidied.
+ * model (`dictation_cleanup`); a cleanup that fails, is not offered or is skipped (`skip` aborts: Esc on the bar)
+ * leaves the words as tidied (Orca's ✕ on its cleanup pill, `use-dictation-cleanup.ts:39-75`).
  */
-export async function polishDictation(text: string, language: string | undefined): Promise<string> {
+export async function polishDictation(text: string, language: string | undefined, skip?: AbortSignal): Promise<string> {
 	if (!text.trim()) return text;
 	const [rawTerms, cleanup] = await Promise.all([readPref("dictationTerms"), readPref("dictationCleanup")]);
 	const terms = parseDictationTerms(rawTerms);
 	const tidied = tidyDictation(text, language, terms);
-	if (cleanup !== true) return tidied;
-	try {
-		const response = await window.omp.rpc.dictationCleanup(
+	if (cleanup !== true || skip?.aborted) return tidied;
+	const skipped = Promise.withResolvers<string>();
+	skip?.addEventListener("abort", () => skipped.resolve(tidied), { once: true });
+	const cleaned = window.omp.rpc
+		.dictationCleanup(
 			tidied,
 			terms.map(entry => entry.term),
-		);
-		const cleaned = response.success ? (response.data as { text?: unknown } | undefined)?.text : undefined;
-		return typeof cleaned === "string" && cleaned.trim() ? cleaned.trim() : tidied;
-	} catch {
-		return tidied;
-	}
+		)
+		.then(response => {
+			const answer = response.success ? (response.data as { text?: unknown } | undefined)?.text : undefined;
+			return typeof answer === "string" && answer.trim() ? answer.trim() : tidied;
+		})
+		.catch(() => tidied);
+	return Promise.race([cleaned, skipped.promise]);
 }

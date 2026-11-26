@@ -86,19 +86,37 @@ function useMicPress(onMic: () => void, onDown: () => void, onUp: () => void) {
 	return useMemo(() => {
 		let pressed = false;
 		const release = () => latest.current.onUp();
+		/** The click a pointer press made is the press's, not a click of its own. */
+		const pressClick = () => {
+			const was = pressed;
+			pressed = false;
+			return was;
+		};
 		return {
-			onPointerDown: (event: { button: number; pointerId: number; currentTarget: Element }) => {
-				if (event.button !== 0) return;
-				pressed = true;
-				event.currentTarget.setPointerCapture?.(event.pointerId);
-				latest.current.onDown();
+			props: {
+				onPointerDown: (event: { button: number; pointerId: number; currentTarget: Element }) => {
+					if (event.button !== 0) return;
+					pressed = true;
+					event.currentTarget.setPointerCapture?.(event.pointerId);
+					latest.current.onDown();
+				},
+				onPointerUp: release,
+				onPointerCancel: release,
+				onClick: () => {
+					if (!pressClick()) latest.current.onMic();
+				},
 			},
-			onPointerUp: release,
-			onPointerCancel: release,
-			onClick: () => {
-				if (pressed) pressed = false;
-				else latest.current.onMic();
-			},
+			/**
+			 * For the Send slot's stop-and-send, which takes the mic's place under a finger still on it (one button node):
+			 * that press's release ends a held take, and its click never sends.
+			 */
+			slotProps: (onSend: () => void) => ({
+				onPointerUp: release,
+				onPointerCancel: release,
+				onClick: () => {
+					if (!pressClick()) onSend();
+				},
+			}),
 		};
 	}, []);
 }
@@ -254,7 +272,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 						disabled={!routeReady}
 						icon={<Mic />}
 						label={t("voice.mic.start")}
-						{...micPress}
+						{...micPress.props}
 						variant="secondary"
 					/>
 				) : slot.state === "dictation" ? (
@@ -266,7 +284,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 						disabled={!routeReady}
 						icon={withStopHint(<ArrowUp strokeWidth={2.25} />)}
 						label={t("voice.dictation.stopAndSend")}
-						onClick={onStopAndSend}
+						{...micPress.slotProps(onStopAndSend)}
 						variant="primary"
 					/>
 				) : (
@@ -492,7 +510,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 							)
 						}
 						label={recording ? t("voice.mic.stop") : t("voice.mic.start")}
-						{...micPress}
+						{...micPress.props}
 						shortcut={touchInput ? undefined : actionKbd("voice.dictate", keymapOverrides)}
 						size="sm"
 					/>

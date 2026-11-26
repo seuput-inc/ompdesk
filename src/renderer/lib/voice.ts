@@ -22,7 +22,14 @@ import { useMessagesStore } from "../stores/messages";
 import { useSessionStore } from "../stores/session";
 import { useSettingsStore } from "../stores/settings";
 import { toastError } from "../stores/toast";
-import { captureMicrophone, chosenMicrophone, METER_BARS, openMicrophone, STT_SAMPLE_RATE } from "./dictation-capture";
+import {
+	captureContext,
+	captureMicrophone,
+	chosenMicrophone,
+	METER_BARS,
+	openMicrophone,
+	STT_SAMPLE_RATE,
+} from "./dictation-capture";
 import { translate } from "./i18n";
 import { messageText } from "./messages";
 
@@ -128,6 +135,8 @@ let activeTake: ActiveTake | null = null;
 /** `getUserMedia` is still opening the mic; a cancel then lands once it has. */
 let startPending = false;
 let cancelBeforeStart = false;
+/** A held press released while the mic still opens: the take ends (with its tail) once it has. */
+let stopBeforeStart = false;
 
 /** The words of a live take so far: what stock's endpointer committed, then the segment still being spoken. */
 export interface DictationWords {
@@ -191,7 +200,8 @@ function keep(recording: KeptRecording, samples: Float32Array): void {
 
 /** End the take in flight: capture goes on for {@link STOP_TAIL_MS}, then the take is transcribed. */
 export function stopVoiceRecording(): void {
-	activeTake?.stop(true);
+	if (activeTake) activeTake.stop(true);
+	else if (startPending) stopBeforeStart = true;
 }
 
 /** Discard the take without transcribing (Esc while dictating, composer unmount); also while the mic still opens. */
@@ -254,12 +264,16 @@ export async function recordAndTranscribe(listener: DictationListener = {}): Pro
 	if (activeTake || startPending) return { error: translate("voice.mic.busy"), failure: "busy" };
 	startPending = true;
 	cancelBeforeStart = false;
+	stopBeforeStart = false;
+	// Made now, inside the press that started the take: WebKit keeps a context made later suspended.
+	const context = captureContext();
 	// The stream opens while the mic does: a model still loading queues the first words in its worker.
 	const streamOpening = openStream();
 	let stream: MediaStream;
 	try {
 		stream = await openMicrophone(await chosenMicrophone());
 	} catch (cause) {
+		void context.close();
 		void streamOpening.then(id => dropStream(id));
 		return { error: cause instanceof Error ? cause.message : String(cause), failure: classifyMicError(cause) };
 	} finally {
@@ -267,6 +281,7 @@ export async function recordAndTranscribe(listener: DictationListener = {}): Pro
 	}
 	if (cancelBeforeStart) {
 		for (const track of stream.getTracks()) track.stop();
+		void context.close();
 		void streamOpening.then(id => dropStream(id));
 		return { error: "" };
 	}
@@ -289,6 +304,7 @@ export async function recordAndTranscribe(listener: DictationListener = {}): Pro
 			if (!streamLost) unsent.push(samples);
 		},
 		listener.onLevels,
+		context,
 	);
 
 	const send = (): Promise<void> => {
@@ -341,6 +357,7 @@ export async function recordAndTranscribe(listener: DictationListener = {}): Pro
 	};
 	activeTake = take;
 	listener.onRecording?.();
+	if (stopBeforeStart) take.stop(true);
 	await ended.promise;
 	clearInterval(sender);
 	capture.close();

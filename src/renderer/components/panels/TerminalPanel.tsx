@@ -404,8 +404,8 @@ export function TerminalViewport({
 					},
 				}),
 			);
-			// Dictation into this terminal (DictationHost): the words go in as a paste, bracketed when the program asked,
-			// so a newline never runs a command.
+			// Dictation into this terminal (DictationHost): the words, one line, go in as a paste (bracketed when the
+			// program asked); Enter stays the person's.
 			const onDictated = (event: Event) => {
 				if (!view.terminal.paste) return;
 				event.preventDefault();

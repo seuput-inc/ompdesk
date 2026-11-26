@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
+	captureContext,
 	captureMicrophone,
 	listMicrophones,
 	METER_BARS,
@@ -80,19 +81,28 @@ export function DictationRows() {
 		const running: NonNullable<typeof test.current> = { capture: null, timer: setTimeout(stopTest, TEST_MS) };
 		test.current = running;
 		setLevel(0);
+		// Made inside the click: WebKit keeps a context made later suspended.
+		const context = captureContext();
 		openMicrophone(microphone || undefined)
 			.then(stream => {
 				if (test.current !== running) {
 					for (const track of stream.getTracks()) track.stop();
+					void context.close();
 					return;
 				}
-				running.capture = captureMicrophone(stream, null, levels =>
-					setLevel(levels.reduce((sum, value) => sum + value, 0) / METER_BARS),
+				running.capture = captureMicrophone(
+					stream,
+					null,
+					levels => setLevel(levels.reduce((sum, value) => sum + value, 0) / METER_BARS),
+					context,
 				);
 				// Labels are named once the microphone was allowed.
 				refreshInputs();
 			})
-			.catch(() => stopTest());
+			.catch(() => {
+				void context.close();
+				stopTest();
+			});
 	};
 
 	if (!sttEnabled) return null;
