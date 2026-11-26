@@ -28,6 +28,7 @@ import {
 	FileArchive,
 	FolderInput,
 	FolderSearch,
+	Globe,
 	Link2,
 	type LucideIcon,
 	MailCheck,
