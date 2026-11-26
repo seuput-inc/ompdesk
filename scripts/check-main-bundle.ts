@@ -511,10 +511,11 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // call in `Sidebar.tsx`: 181 bytes over its base (e2e-nightly run 45780059698, omp/agent/cross-device-handoff at
 // 918cb6da4), added to the budget.
 // Bots of paired computers (27 Nov 2026, orca-bots-remote): the bots store lists each host's copy after this computer's
-// bots (`stores/bots.ts` `listedBots`), and the sidebar's Bots section names a host's bot's owner and greys it while the
-// host is away (`bots/BotOwner.tsx`, `stores/remote.ts` `useLostHosts`): 818 bytes over (2,249,448 in branch run
-// 45856181245 at 5b02a4989, whose budget was 2,248,630), added to the budget.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_256_011;
+// bots (`stores/bots.ts` `listedBots`), the sidebar's Bots section names a host's bot's owner and greys it while the
+// host is away (`bots/BotOwner.tsx`, `stores/remote.ts` `useLostHosts`), and a host's section leaves its bots' folders
+// out of its projects (`SidebarDevices.tsx`); their chats load on unfolding: 989 bytes over main's measure (2,254,071 in
+// branch run 45863771730 at 4436f9dca), added to main's budget.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_256_182;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
