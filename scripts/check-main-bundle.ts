@@ -468,7 +468,13 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // (`lib/tab-accounts.ts`), the sidebar requests store, the MRU close and the reopened tab's place; the dialogs (move,
 // rename, appearance, emoji, parent, clone, locate folder) load on use: 2,316 bytes over main's measure (2,234,781 in
 // CI run 45784490025 on 9878bdec4, whose budget was 2,232,465), added to the budget.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_239_058;
+// First-visit tours, feature tips and What OMPdesk can do (26 Nov 2026, orca-onboarding). On the first screen: the
+// guide store's tour and tip tables with their seen flags (`stores/starter-guide.ts`), the first-visit check in AppShell
+// (`onboarding/surface-tours.ts`, `spotlight-target.ts`), Help's new item and the update check's macOS notice state.
+// Both tours' cards, the tip row, the sheet and the desktop-only notices load as their own chunks: 2,863 bytes
+// (2,235,624 on CI run 45786852939, omp/agent/orca-onboarding on fbe7b7b8d, against the 2,232,761 its base measured),
+// added to the budget.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_241_921;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

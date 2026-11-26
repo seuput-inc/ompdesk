@@ -6,7 +6,9 @@ import { stopCore } from "./core/process";
 import { type FeedServer, serveFeed } from "./update-feed-test-rig";
 import {
 	lookupRelease,
+	macosForDarwin,
 	RELEASE_LOOKUP_ERROR,
+	ReleaseFeedError,
 	UPDATE_COMPATIBILITY_ERROR,
 	UPDATE_METADATA_ERROR,
 	type UpdatePlatform,
@@ -156,6 +158,23 @@ describe("released and current updater compatibility", () => {
 			expect(feed?.requests.map(request => request.url)).toEqual([`${API}/releases/latest`]);
 		},
 	);
+
+	it("names the macOS a refused release needs, only when this system's version is known", async () => {
+		await expect(current("mac", "22.0.0")).rejects.toMatchObject({
+			unsupportedSystem: { version: metadata.version, minimumMacOS: "14" },
+		});
+		await expect(current("mac", "invalid")).rejects.toBeInstanceOf(ReleaseFeedError);
+		await expect(current("mac", "invalid")).rejects.toMatchObject({ unsupportedSystem: undefined });
+	});
+
+	it.each([
+		["23.0.0", "14"],
+		["24.4.0", "15"],
+		["25.0.0", "26"],
+		["19.6.0", null],
+	])("maps Darwin %s to macOS %s", (darwin, macos) => {
+		expect(macosForDarwin(darwin)).toBe(macos);
+	});
 
 	it.each(["23.0.0", "24.1.0"])("admits Darwin %s with the minimum in the release", async systemVersion => {
 		const release = await current("mac", systemVersion);

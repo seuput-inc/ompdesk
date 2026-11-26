@@ -15,7 +15,6 @@ import { AppShell } from "./components/layout/AppShell";
 import { DesktopSlotIndicator } from "./components/layout/DesktopSlotIndicator";
 import { FirstRunGate } from "./components/onboarding/FirstRunGate";
 import { SetupTakeoverHost } from "./components/onboarding/SetupTakeover";
-import { StarterTour } from "./components/onboarding/StarterTour";
 import { RemoteFolderPickerHost } from "./components/remote/RemoteFolderPicker";
 import { SshPromptDialog } from "./components/settings/SshPromptDialog";
 import { useExtensionUi } from "./hooks/use-extension-ui";
@@ -89,20 +88,40 @@ import { useRemoteStateSync } from "./stores/remote";
 import { useSessionStore } from "./stores/session";
 import { focusedRuntimeTabId } from "./stores/session-runtime-context";
 import { useSettingsStore } from "./stores/settings";
+import { useStarterGuideStore } from "./stores/starter-guide";
 import { steppingFromTabId, useActiveTabKind, useSessionTabs, useTabsStore, visibleTabIds } from "./stores/tabs";
 import { toast, toastError } from "./stores/toast";
 import { isSidebarDrawerMode, migrateDefaultPanelTab, useUiStore } from "./stores/ui";
 import { checkForUpdatesInPlace, subscribeUpdaterStatus } from "./stores/updater";
 import { FileEditReporter } from "./web/FileEditReporter";
 import { WebHostUi } from "./web/host-ui/WebHostUi";
+import { webRuntime } from "./web/runtime";
 
 // Heavy overlays code-split: they render null while closed, so they download
 // only on first open instead of bloating the eager bundle.
 const FeedbackDialog = lazyChunk(() =>
 	import("./components/dialogs/FeedbackDialog").then(m => ({ default: m.FeedbackDialog })),
 );
+const CapabilitiesSheet = lazyChunk(() =>
+	import("./components/dialogs/CapabilitiesSheet").then(m => ({ default: m.CapabilitiesSheet })),
+);
 const BenchmarkDialog = lazyChunk(() =>
 	import("./components/dialogs/BenchmarkDialog").then(m => ({ default: m.BenchmarkDialog })),
+);
+// Their own chunks: a desktop window loads them at start, a phone's page never does (its first screen's budget).
+const PetOverlay = lazyChunk(() => import("./components/pet/PetOverlay").then(m => ({ default: m.PetOverlay })));
+const MacosRequirementNotice = lazyChunk(() =>
+	import("./components/dialogs/MacosRequirementNotice").then(m => ({ default: m.MacosRequirementNotice })),
+);
+const LaunchIncidentNotice = lazyChunk(() =>
+	import("./components/dialogs/LaunchIncidentNotice").then(m => ({ default: m.LaunchIncidentNotice })),
+);
+// Loaded when a getting-started step's tour or a surface's first-visit tour starts.
+const StarterTour = lazyChunk(() =>
+	import("./components/onboarding/StarterTour").then(m => ({ default: m.StarterTour })),
+);
+const SurfaceTour = lazyChunk(() =>
+	import("./components/onboarding/SurfaceTour").then(m => ({ default: m.SurfaceTour })),
 );
 const ModelSetupDialog = lazyChunk(() =>
 	import("./components/settings/model-setup/ModelSetupDialog").then(m => ({ default: m.ModelSetupDialog })),
@@ -252,6 +271,12 @@ export function App() {
 	const themePickerOpen = useUiStore(s => s.themePickerOpen);
 	const [themePickerMounted, setThemePickerMounted] = useState(false);
 	if (themePickerOpen && !themePickerMounted) setThemePickerMounted(true);
+	// Help › What OMPdesk can do: loaded on its first open, then mounted so it closes with its own exit.
+	const capabilitiesOpen = useUiStore(s => s.capabilitiesOpen);
+	const [capabilitiesMounted, setCapabilitiesMounted] = useState(false);
+	if (capabilitiesOpen && !capabilitiesMounted) setCapabilitiesMounted(true);
+	const starterTouring = useStarterGuideStore(s => s.tour !== null);
+	const surfaceTouring = useStarterGuideStore(s => s.surfaceTour !== null);
 	// The quick terminal loads xterm: only on its first open, then stays mounted so its terminals keep their screens.
 	const quickTerminalOpen = useUiStore(s => s.quickTerminalOpen);
 	const [quickTerminalMounted, setQuickTerminalMounted] = useState(false);
@@ -981,7 +1006,23 @@ export function App() {
 				) : null}
 				<ChangelogDialog />
 				<WhatsNewNotice />
-				<StarterTour />
+				{webRuntime() === null && (
+					<Suspense fallback={null}>
+						<MacosRequirementNotice />
+						<LaunchIncidentNotice />
+						<PetOverlay />
+					</Suspense>
+				)}
+				{starterTouring && (
+					<Suspense fallback={null}>
+						<StarterTour />
+					</Suspense>
+				)}
+				{surfaceTouring && (
+					<Suspense fallback={null}>
+						<SurfaceTour />
+					</Suspense>
+				)}
 				<RemoteFolderPickerHost />
 				<WebPairingDialog />
 				<WebDeviceNotice />
@@ -1006,6 +1047,7 @@ export function App() {
 				) : null}
 				<Suspense fallback={null}>{importDialogOpen && <ImportForeignDialog />}</Suspense>
 				<Suspense fallback={null}>{feedbackOpen && <FeedbackDialog />}</Suspense>
+				<Suspense fallback={null}>{capabilitiesMounted && <CapabilitiesSheet />}</Suspense>
 			</div>
 			<SetupTakeoverHost />
 			<ToastStack />

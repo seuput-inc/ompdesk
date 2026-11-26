@@ -86,7 +86,7 @@ export function WhatsNewNotice() {
 	const ready = useSessionStore(state => state.status) === "ready";
 	const firstRunActive = useFirstRunActive();
 	const takeover = useMachineSetupStore(state => state.takeover);
-	const touring = useStarterGuideStore(state => state.tour !== null);
+	const touring = useStarterGuideStore(state => state.tour !== null || state.surfaceTour !== null);
 	const decided = useRef(false);
 
 	useEffect(() => {

@@ -565,12 +565,12 @@ describe("Sidebar menus and pinned ordering", () => {
 		await fire(footer?.querySelector('[data-destination="settings"]') ?? null, "onClick");
 		expect(useUiStore.getState()).toMatchObject({ destination: "settings", settingsTab: "general" });
 
-		// Help: shortcuts, palette, features, what's new, feedback, about, then Customize sidebar.
+		// Help: shortcuts, palette, what OMPdesk can do, what's new, feedback, about, then Customize sidebar.
 		await fire(footer?.querySelector('[aria-label="Help"]') ?? null, "onClick");
 		expect(menuItemLabels().map(label => label.replace(/⌘.*$/, ""))).toEqual([
 			"Keyboard shortcuts",
 			"Command palette",
-			"What OMPdesk adds",
+			"What OMPdesk can do",
 			"What's new",
 			"Send feedback",
 			"About OMPdesk",

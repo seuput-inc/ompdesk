@@ -198,6 +198,9 @@ pub fn register(registry: &mut Registry) {
     registry.add("control.installCli", |call| {
         Box::pin(cli_install::install(call))
     });
+    registry.add("control.removeCli", |call| {
+        Box::pin(cli_install::remove(call))
+    });
     registry.add("control.prepareDir", |call| Box::pin(prepare_dir(call)));
     registry.add("control.token", |call| Box::pin(token(call)));
     registry.add("control.listen", |call| Box::pin(listen(call)));

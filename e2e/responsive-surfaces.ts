@@ -505,6 +505,13 @@ async function closeOverlay(page: Page): Promise<void> {
 	await page.keyboard.press("Escape");
 }
 
+/** An item of the sidebar footer's Help menu, as a person picks it (a phone's drawer first; a finger's action sheet). */
+async function openHelpItem(page: Page, look: Look, name: string): Promise<void> {
+	await openDrawer(page, look);
+	await page.locator("button[aria-label='Help']:visible").first().click();
+	await page.locator(":is([role=menuitem], button):visible", { hasText: name }).first().click();
+}
+
 /** Closes the queue popover, drops both lanes and stops the turn `composer-queue` started, so the session is idle again. */
 async function endQueuedTurn(page: Page): Promise<void> {
 	await page.keyboard.press("Escape");
@@ -2536,7 +2543,9 @@ export const SURFACES: readonly Surface[] = [
 							? openModelSetup(page, look)
 							: dialog.id === "dialog-worktree"
 								? openNewTaskSheet(page, look)
-								: ui(page, dialog.action, ...(dialog.args ?? [])),
+								: dialog.id === "dialog-feedback"
+									? openHelpItem(page, look, "Send feedback")
+									: ui(page, dialog.action, ...(dialog.args ?? [])),
 			...(dialog.id === "dialog-command-palette"
 				? { ready: "[role=dialog] [role=listbox]", parity: { session: "work" as const } }
 				: dialog.id === "dialog-workspace"
@@ -2556,10 +2565,25 @@ export const SURFACES: readonly Surface[] = [
 									ready: "[role=dialog] [data-new-task-sheet] [data-new-task-project]",
 									parity: { session: "work" as const, after: closeOverlay },
 								}
-							: {}),
+							: dialog.id === "dialog-feedback"
+								? {
+										// Opened from the Help menu; ready with its picture field (Orca FB5).
+										ready: "[role=dialog] [data-feedback-picture]",
+										parity: { session: "work" as const, after: closeOverlay },
+									}
+								: {}),
 			settle: 700,
 		}),
 	),
+	{
+		id: "capabilities-sheet",
+		area: "B",
+		title: "Help › What OMPdesk can do: what the app adds, each with Open or Show me",
+		open: (page, look) => openHelpItem(page, look, "What OMPdesk can do"),
+		ready: "[data-capabilities] [data-capability='board']",
+		settle: 700,
+		parity: { session: "work", after: closeOverlay },
+	},
 	{
 		id: "toasts",
 		area: "B",

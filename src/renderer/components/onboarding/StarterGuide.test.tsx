@@ -1,8 +1,9 @@
 /**
  * Getting-started checklist at the sidebar foot: steps complete from real app
  * state (a servable model, a sent prompt, an open project, a split, the side
- * panel) and stay done; the next step offers its spotlight tour; the user can
- * hide the guide; it waits while first-run setup has the main area.
+ * panel, the theme picker) and stay done; the next step offers its spotlight tour
+ * (the look step opens the theme picker itself); the user can hide the guide; it
+ * waits while first-run setup has the main area.
  */
 
 import { parseHTML } from "linkedom";
@@ -47,7 +48,12 @@ const prefs = {
 	}),
 };
 Object.assign(window as unknown as Record<string, unknown>, {
-	omp: { prefs, models: { listProviders: vi.fn(async () => ({ providers: customConfigs, options: {} })) } },
+	omp: {
+		prefs,
+		models: { listProviders: vi.fn(async () => ({ providers: customConfigs, options: {} })) },
+		// The finished guide offers the repository's star.
+		githubAuth: { productStar: vi.fn(async () => ({ starred: false })) },
+	},
 });
 
 let root: Root | undefined;
@@ -71,6 +77,8 @@ const button = (label: string) =>
 		| HTMLElement
 		| undefined;
 const toggle = () => document.querySelector("[data-starter-guide] button[aria-expanded]") as HTMLElement | null;
+/** The guide as it is saved, with nothing of the tours and tips seen. */
+const saved = (done: string[], dismissed = false) => ({ done, dismissed, toursSeen: [], tipsSeen: [] });
 
 beforeEach(() => {
 	stored = {};
@@ -96,14 +104,14 @@ describe("StarterGuide", () => {
 			availableModels: [{ id: "m", provider: "p", contextWindow: 200_000 } as ModelInfo],
 		});
 		await mount({ projectOpened: true });
-		expect(toggle()?.textContent).toContain(translate("starter.progress", { done: 2, total: 5 }));
-		expect(stored[STARTER_GUIDE_PREF]).toEqual({ done: ["model", "project"], dismissed: false });
+		expect(toggle()?.textContent).toContain(translate("starter.progress", { done: 2, total: 6 }));
+		expect(stored[STARTER_GUIDE_PREF]).toEqual(saved(["model", "project"]));
 
 		// The panel opens and closes again: the step stays done.
 		await act(async () => useUiStore.setState({ panelVisible: true }));
 		await act(async () => useUiStore.setState({ panelVisible: false }));
-		expect(toggle()?.textContent).toContain(translate("starter.progress", { done: 3, total: 5 }));
-		expect(stored[STARTER_GUIDE_PREF]).toEqual({ done: ["model", "project", "panel"], dismissed: false });
+		expect(toggle()?.textContent).toContain(translate("starter.progress", { done: 3, total: 6 }));
+		expect(stored[STARTER_GUIDE_PREF]).toEqual(saved(["model", "project", "panel"]));
 	});
 
 	it("does not count the keyless on-device model as a connected model", async () => {
@@ -112,7 +120,7 @@ describe("StarterGuide", () => {
 			availableModels: [{ id: "on-device", provider: "apple", contextWindow: 8_192 } as ModelInfo],
 		});
 		await mount();
-		expect(toggle()?.textContent).toContain(translate("starter.progress", { done: 0, total: 5 }));
+		expect(toggle()?.textContent).toContain(translate("starter.progress", { done: 0, total: 6 }));
 		// Nothing reached, nothing saved: the step stays open for the person who has not connected one.
 		expect(stored[STARTER_GUIDE_PREF]).toBeUndefined();
 	});
@@ -124,8 +132,8 @@ describe("StarterGuide", () => {
 			availableModels: [{ id: "llama", provider: "local", contextWindow: 128_000 } as ModelInfo],
 		});
 		await mount();
-		expect(toggle()?.textContent).toContain(translate("starter.progress", { done: 1, total: 5 }));
-		expect(stored[STARTER_GUIDE_PREF]).toEqual({ done: ["model"], dismissed: false });
+		expect(toggle()?.textContent).toContain(translate("starter.progress", { done: 1, total: 6 }));
+		expect(stored[STARTER_GUIDE_PREF]).toEqual(saved(["model"]));
 	});
 
 	it("lists every step with its state and offers the next one's tour", async () => {
@@ -140,8 +148,16 @@ describe("StarterGuide", () => {
 			"project",
 			"split",
 			"panel",
+			"look",
 		]);
-		expect(items.map(item => item.getAttribute("data-done"))).toEqual(["true", "false", "false", "false", "false"]);
+		expect(items.map(item => item.getAttribute("data-done"))).toEqual([
+			"true",
+			"false",
+			"false",
+			"false",
+			"false",
+			"false",
+		]);
 		// Only the next step shows its hint and tour.
 		expect(items[1]?.textContent).toContain(translate("starter.step.prompt.hint"));
 		expect(items[2]?.textContent).not.toContain(translate("starter.step.project.hint"));
@@ -154,7 +170,7 @@ describe("StarterGuide", () => {
 		await act(async () => toggle()?.click());
 		await act(async () => button(translate("starter.hide"))?.click());
 		expect(document.querySelector("[data-starter-guide]")).toBeNull();
-		expect(stored[STARTER_GUIDE_PREF]).toEqual({ done: [], dismissed: true });
+		expect(stored[STARTER_GUIDE_PREF]).toEqual(saved([], true));
 	});
 
 	it("waits while first-run setup has the main area", async () => {
@@ -163,9 +179,21 @@ describe("StarterGuide", () => {
 		expect(document.querySelector("[data-starter-guide]")).toBeNull();
 	});
 
-	it("says all set once every step is done", async () => {
+	it("says all set once every step is done, a guide finished before the look step included", async () => {
 		stored[STARTER_GUIDE_PREF] = { done: ["model", "prompt", "project", "split", "panel"], dismissed: false };
 		await mount();
 		expect(toggle()?.textContent).toContain(translate("starter.allSet"));
+	});
+
+	it("opens the theme picker for the look step, which then counts as done", async () => {
+		stored[STARTER_GUIDE_PREF] = { done: ["model", "prompt", "project", "split"], dismissed: false };
+		useUiStore.setState({ panelVisible: true });
+		await mount();
+		await act(async () => toggle()?.click());
+		await act(async () => button(translate("starter.showMe"))?.click());
+		expect(useUiStore.getState().themePickerOpen).toBe(true);
+		expect(useStarterGuideStore.getState().tour).toBeNull();
+		expect(useStarterGuideStore.getState().done).toContain("look");
+		useUiStore.setState({ themePickerOpen: false });
 	});
 });

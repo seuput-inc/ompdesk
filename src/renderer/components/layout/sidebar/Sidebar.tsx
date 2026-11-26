@@ -308,7 +308,7 @@ function useHelpItems(customizeSidebar: () => void): ContextMenuItem[] {
 			label: t("help.features"),
 			icon: Compass,
 			separatorBefore: true,
-			onSelect: () => useUiStore.getState().openSettings("agent"),
+			onSelect: () => useUiStore.getState().openCapabilities(),
 		},
 		{
 			id: "help-whats-new",

@@ -360,6 +360,9 @@ export function createWebOmp(env: ShimEnv): WebOmp {
 		},
 		[C.SYSTEM_DESKTOP_AWAY]: async () => null,
 		[C.SYSTEM_NOTIFY_TEST]: async () => "unsupported",
+		[C.APP_REMOVE]: async () => {
+			throw new Error("Remove OMPdesk from this computer runs on that computer's own window");
+		},
 		[C.SYSTEM_NOTIFY_SETTINGS]: async () => undefined,
 		[C.SYSTEM_NOTIFY]: async (payload: unknown) => {
 			const { title, body, tabId, kind } = payload as {
