@@ -4,7 +4,7 @@
  * every Markdown file of each skill the pin's `curation.kept` names. Upstream's `agents/openai.yaml` (Codex metadata)
  * is never copied; any other file, an executable or a symlink fails the sync, and so does an upstream skill the
  * curation neither keeps nor excludes. `bun run sync:interfaces` (`INTERFACES_SRC=<clone>` uses a local clone);
- * `-- --check` compares the pin with upstream past the 3-day hold.
+ * `-- --check` compares the pin with the newest upstream.
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";

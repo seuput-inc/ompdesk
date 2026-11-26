@@ -2,9 +2,7 @@
 #
 # CI, e2e and release test the omp OMPdesk was verified against, `src/shared/omp-tested.json`, so a push or a release
 # never turns red because omp published something that day, and a green run says which omp it held. omp-latest.yml alone
-# asks for another: the newest version, read once by its `plan` job so every job of the run installs the same one. The
-# `--minimum-release-age 0` lets the named version install however new it is (bunfig.toml's 3-day hold is for the
-# repository's own dependencies).
+# asks for another: the newest version, read once by its `plan` job so every job of the run installs the same one.
 #
 # Run it after actions/checkout and oven-sh/setup-bun; it puts Bun's global bin folder on PATH.
 name: Install omp
@@ -32,7 +30,7 @@ runs:
           [0-9]*.[0-9]*.[0-9]*) SPEC="@oh-my-pi/pi-coding-agent@$WANT" ;;
           *) echo "::error::install-omp version must be tested, latest or X.Y.Z, got: $WANT"; exit 1 ;;
         esac
-        bun install -g --minimum-release-age 0 "$SPEC"
+        bun install -g "$SPEC"
         BIN=$(bun pm bin -g)
         echo "$BIN" >> "$GITHUB_PATH"
         VERSION=$("$BIN/omp" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
