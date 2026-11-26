@@ -31,6 +31,7 @@ import {
 	Fragment,
 	lazy,
 	type KeyboardEvent as ReactKeyboardEvent,
+	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
 	type PointerEvent as ReactPointerEvent,
 	Suspense,
@@ -216,7 +217,10 @@ const ProjectDialog = lazy(() => import("./ProjectDialogs"));
 type PendingDelete =
 	| { kind: "session"; session: SidebarSession }
 	| { kind: "group"; group: WorkspaceGroup }
-	| { kind: "archived"; sessions: SidebarSession[] };
+	| { kind: "archived"; sessions: SidebarSession[] }
+	| { kind: "picked"; sessions: SidebarSession[] };
+
+const NO_PICKS: ReadonlySet<string> = new Set();
 
 /** Floor for the docked column: the sidebar never folds on its own, so this is what a narrow window keeps. */
 
@@ -496,6 +500,9 @@ export function Sidebar() {
 	const [renameDraft, setRenameDraft] = useState("");
 	const [groupMenu, setGroupMenu] = useState<{ anchor: ContextMenuAnchor; group: WorkspaceGroup } | null>(null);
 	const [sessionMenu, setSessionMenu] = useState<{ anchor: ContextMenuAnchor; session: SidebarSession } | null>(null);
+	// The rows ⌘/Shift-click picked (stored sessions of this computer), whose menu acts on them all.
+	const [picked, setPicked] = useState<ReadonlySet<string>>(NO_PICKS);
+	const pickAnchor = useRef<string | null>(null);
 	/** The session whose links dialog is open. */
 	const [linksFor, setLinksFor] = useState<string | null>(null);
 	// A session row's actions are one ⋯ on every input, so the title keeps its width: at rest under touch (no hover
@@ -1301,18 +1308,24 @@ export function Sidebar() {
 		}
 	};
 
-	const confirmDeleteArchived = async (rows: readonly SidebarSession[]) => {
+	/** Delete several sessions one after another (the archived list, the picked rows); a running one stays. */
+	const confirmDeleteRows = async (rows: readonly SidebarSession[]) => {
 		setDeleting(true);
 		const deleted: string[] = [];
+		const running = rows.filter(isSessionBusy);
 		try {
 			for (const session of rows) {
+				if (running.includes(session)) continue;
 				// eslint-disable-next-line no-await-in-loop -- sequential, keep FS load bounded
-				await useTabsStore.getState().closeDeletedSession(session.path, undefined);
+				if (!(await useTabsStore.getState().closeDeletedSession(session.path, tabForSession(session)?.id)))
+					continue;
 				// eslint-disable-next-line no-await-in-loop -- sequential, keep FS load bounded
 				await deleteSession(session.path);
 				deleted.push(session.id);
 			}
 			setPendingDelete(null);
+			setPicked(NO_PICKS);
+			if (running.length > 0) toast({ variant: "warning", message: t("sidebar.menu.taskRunning") });
 		} catch (error) {
 			toastError({ title: t("sidebar.deleteFailed"), error });
 		} finally {
@@ -1320,6 +1333,39 @@ export function Sidebar() {
 			if (deleted.length > 0) void useSidebarPrefs.getState().setSessionsArchived(deleted, false);
 			setDeleting(false);
 		}
+	};
+
+	/**
+	 * ⌘/Ctrl-click adds a stored row of this computer to the picked rows or drops it, Shift-click picks the run from
+	 * the last pick (else the current session); a plain click forgets them and opens the row. Orca
+	 * worktree-list/navigation/use-selection.ts:66. Answers whether the click only picked.
+	 */
+	const pickRow = (session: SidebarSession, event: ReactMouseEvent): boolean => {
+		const toggle = event.metaKey || event.ctrlKey;
+		const pickable = session.liveTabId === undefined && session.device === undefined;
+		if (!pickable || !(toggle || event.shiftKey)) {
+			if (picked.size > 0) setPicked(NO_PICKS);
+			pickAnchor.current = pickable ? session.path : null;
+			return false;
+		}
+		const paths = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-pickable]") ?? [])].map(
+			row => row.dataset.sessionPath ?? "",
+		);
+		const anchor = pickAnchor.current ?? activeSessionKey;
+		const from = anchor ? paths.indexOf(anchor) : -1;
+		const to = paths.indexOf(session.path);
+		if (event.shiftKey && from !== -1 && to !== -1) {
+			const run = paths.slice(Math.min(from, to), Math.max(from, to) + 1);
+			setPicked(new Set([...(toggle ? picked : []), ...run]));
+			return true;
+		}
+		// The first ⌘-click keeps the row in view picked too, as Orca's selection starts from it.
+		const shown = activeSessionKey !== undefined && paths.includes(activeSessionKey) ? [activeSessionKey] : [];
+		const next = new Set(picked.size === 0 ? shown : picked);
+		if (!next.delete(session.path)) next.add(session.path);
+		pickAnchor.current = session.path;
+		setPicked(next);
+		return true;
 	};
 
 	/** Context-menu position for a keyboard-opened menu: under the focused element. */
@@ -1337,6 +1383,11 @@ export function Sidebar() {
 	// remembered (else current, else first) item the list's single tab stop.
 	const activeSessionKey = allSessions.find(isCurrentSession)?.path;
 	const onListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+		if (event.key === "Escape" && picked.size > 0) {
+			event.preventDefault();
+			setPicked(NO_PICKS);
+			return;
+		}
 		if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
 		const items = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-roving-item]") ?? [])];
 		const index = items.indexOf(document.activeElement as HTMLElement);
@@ -2045,7 +2096,8 @@ export function Sidebar() {
 							)}
 						</SessionRowEnd>
 					}
-					onClick={() => {
+					onClick={event => {
+						if (pickRow(session, event)) return;
 						// Clicking the session already in view folds/unfolds its family rows.
 						if (active && (summary?.agents.length ?? 0) + opened.length > 0) toggleSidebarSubagents(session.path);
 						openSession(session);
@@ -2057,6 +2109,8 @@ export function Sidebar() {
 							openTabId ? { id: openTabId, shown: isCurrent } : undefined,
 						),
 						onContextMenu: event => setSessionMenu({ anchor: anchorFromEvent(event), session }),
+						"data-pickable": (indexed && session.device === undefined) || undefined,
+						"data-picked": picked.has(session.path) || undefined,
 						"data-active": active,
 						"data-current": isCurrent || undefined,
 						"data-pane-focus": (isCurrent && selectionOf(openTabId).splitShown) || undefined,
@@ -2734,6 +2788,51 @@ export function Sidebar() {
 			{sessionMenu &&
 				(() => {
 					const { session } = sessionMenu;
+					// A right click on one of several picked rows acts on them all (Orca's batch menu,
+					// workspace-batch-action-labels.ts:21).
+					const pickedRows =
+						picked.has(session.path) && picked.size > 1
+							? [...allSessions, ...archivedRows].filter(row => picked.has(row.path))
+							: [];
+					if (pickedRows.length > 1) {
+						const restore = pickedRows.every(row => archivedIds.has(row.id));
+						const close = () => {
+							setSessionMenu(null);
+							setPicked(NO_PICKS);
+						};
+						return (
+							<ContextMenu
+								ariaLabel={t("sidebar.pickedMenu", { count: pickedRows.length })}
+								x={sessionMenu.anchor.x}
+								y={sessionMenu.anchor.y}
+								onClose={() => setSessionMenu(null)}
+								items={[
+									{
+										id: "picked-archive",
+										label: t(restore ? "sidebar.menu.restoreCount" : "sidebar.menu.archiveCount", {
+											count: pickedRows.length,
+										}),
+										icon: restore ? ArchiveRestore : Archive,
+										onSelect: () => {
+											close();
+											setArchived(pickedRows, !restore);
+										},
+									},
+									{
+										id: "picked-delete",
+										separatorBefore: true,
+										label: t("sidebar.menu.deleteCount", { count: pickedRows.length }),
+										icon: Trash2,
+										danger: true,
+										onSelect: () => {
+											setSessionMenu(null);
+											setPendingDelete({ kind: "picked", sessions: pickedRows });
+										},
+									},
+								]}
+							/>
+						);
+					}
 					const targetTab = tabForSession(session);
 					const { split } = useTabsStore.getState();
 					const list = sessionListOf(session);
@@ -2943,20 +3042,33 @@ export function Sidebar() {
 			{linksFor && <SessionLinksDialog onClose={() => setLinksFor(null)} sessionPath={linksFor} />}
 			<ConfirmDialog
 				open={pendingDelete !== null && pendingDelete.kind !== "group"}
-				title={pendingDelete?.kind === "archived" ? t("sidebar.deleteArchivedConfirm") : t("sidebar.deleteConfirm")}
+				title={
+					pendingDelete?.kind === "archived"
+						? t("sidebar.deleteArchivedConfirm")
+						: pendingDelete?.kind === "picked"
+							? t("sidebar.deletePickedConfirm", { count: pendingDelete.sessions.length })
+							: t("sidebar.deleteConfirm")
+				}
 				message={
 					pendingDelete?.kind === "archived"
 						? t("sidebar.deleteArchivedMessage", { count: pendingDelete.sessions.length })
-						: pendingDelete?.kind === "session"
-							? t("sidebar.deleteMessage", {
-									name: sessionDisplayTitle(pendingDelete.session, t("sidebar.untitled")),
-								})
-							: ""
+						: pendingDelete?.kind === "picked"
+							? t("sidebar.deletePickedMessage", { count: pendingDelete.sessions.length })
+							: pendingDelete?.kind === "session"
+								? t("sidebar.deleteMessage", {
+										name: sessionDisplayTitle(pendingDelete.session, t("sidebar.untitled")),
+									})
+								: ""
 				}
-				warning={pendingDelete?.kind === "archived" ? t("sidebar.deleteGroupWarning") : undefined}
+				warning={
+					pendingDelete?.kind === "archived" || pendingDelete?.kind === "picked"
+						? t("sidebar.deleteGroupWarning")
+						: undefined
+				}
 				busy={deleting}
 				onConfirm={() => {
-					if (pendingDelete?.kind === "archived") void confirmDeleteArchived(pendingDelete.sessions);
+					if (pendingDelete?.kind === "archived" || pendingDelete?.kind === "picked")
+						void confirmDeleteRows(pendingDelete.sessions);
 					else if (pendingDelete?.kind === "session") void confirmDeleteSession(pendingDelete.session);
 				}}
 				onCancel={() => setPendingDelete(null)}

@@ -30,7 +30,13 @@
  * tab stop + arrow keys), a `style` for an outline's indent.
  */
 
-import { type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode, useId } from "react";
+import {
+	type ButtonHTMLAttributes,
+	type HTMLAttributes,
+	type MouseEvent as ReactMouseEvent,
+	type ReactNode,
+	useId,
+} from "react";
 import { cx } from "../../lib/format";
 import { Tooltip } from "./Tooltip";
 
@@ -74,7 +80,7 @@ export interface ListRowProps {
 	trailing?: ReactNode;
 	selected?: boolean;
 	disabled?: boolean;
-	onClick?: () => void;
+	onClick?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
 	/** More about the row (a whole path, a status), in the kit Tooltip on hover, keyboard focus and a tap. */
 	tooltip?: ReactNode;
 	/** Native tooltip for truncated titles. */

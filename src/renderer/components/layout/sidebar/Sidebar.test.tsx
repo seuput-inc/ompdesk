@@ -6320,6 +6320,58 @@ describe("Sidebar archive and move", () => {
 			.map(row => row.getAttribute("data-session-path") ?? "")
 			.filter(path => !path.startsWith("tab:"));
 
+	it("⌘-click picks several rows whose menu archives them all, Shift-click picks a run, Esc forgets", async () => {
+		installMockOmp(LIST);
+		seedStores();
+		useSidebarPrefs.setState({ hydrated: true });
+		await mount(<Sidebar />);
+		const click = async (text: string, keys: { metaKey?: boolean; shiftKey?: boolean }) => {
+			const button = rowFor(text).querySelector("[data-roving-item]");
+			if (!button) throw new Error("row button missing");
+			await act(async () =>
+				reactProps<{ onClick: (event: unknown) => void }>(button).onClick({
+					metaKey: false,
+					ctrlKey: false,
+					shiftKey: false,
+					...keys,
+					currentTarget: button,
+				}),
+			);
+			await flush();
+		};
+		const picked = () =>
+			[...document.querySelectorAll(".omp-sidebar-session-row[data-picked]")].map(row =>
+				row.getAttribute("data-session-path"),
+			);
+
+		await click("Session /work/alpha/two", { metaKey: true });
+		await click("Session /work/alpha/one", { shiftKey: true });
+		expect(picked().sort()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
+
+		const list = document.querySelector(".omp-sidebar-list");
+		if (!list) throw new Error("list missing");
+		await act(async () =>
+			reactProps<{ onKeyDown: (event: unknown) => void }>(list).onKeyDown({
+				key: "Escape",
+				preventDefault: () => {},
+			}),
+		);
+		await flush();
+		expect(picked()).toEqual([]);
+
+		await click("Session /work/alpha/one", { metaKey: true });
+		await click("Session /work/alpha/two", { metaKey: true });
+		expect(picked().sort()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
+		await openRowMenu(rowFor("Session /work/alpha/one"));
+		expect(menuItemLabels()).toEqual(["Archive 2 sessions", "Delete 2 sessions…"]);
+		await fire(menuItem("Archive 2 sessions"), "onClick");
+		expect([...useSidebarPrefs.getState().archivedSessions].sort()).toEqual([
+			"/work/alpha/one.jsonl",
+			"/work/alpha/two.jsonl",
+		]);
+		expect(picked()).toEqual([]);
+	});
+
 	it("archives a stored session from its row into a folded Archived section and restores it", async () => {
 		const omp = installMockOmp(LIST);
 		seedStores();
