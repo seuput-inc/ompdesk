@@ -116,10 +116,10 @@ test("system omp persists settings and sessions and serves every stats route", a
 		await expect(setup.getByRole("searchbox", { name: "Search providers" })).toBeVisible();
 		// The popular providers are their own group on top, each with stock's own login id, and the rest follow.
 		const featured = setup.locator("[data-featured-provider]");
-		await expect(featured).toHaveCount(5);
+		await expect(featured).toHaveCount(4);
 		expect(
 			await featured.evaluateAll(items => items.map(item => item.getAttribute("data-featured-provider"))),
-		).toEqual(["openai-codex", "anthropic", "openrouter", "google-gemini-cli", "xai-oauth"]);
+		).toEqual(["openai-codex", "anthropic", "openrouter", "xai-oauth"]);
 		await expect(setup.locator('button[data-provider-connect="openai-codex"]')).toBeVisible();
 		await expect(setup.locator('button[data-provider-connect="anthropic"]')).toBeVisible();
 		await expect(setup.getByRole("heading", { name: "Other providers", exact: true })).toBeVisible();
