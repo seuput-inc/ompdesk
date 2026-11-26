@@ -203,6 +203,7 @@ async function expectUpdated(launched: Launched): Promise<void> {
 	await expect(page.getByText(`omp updated to ${NEWER}`)).toBeVisible({ timeout: 30_000 });
 	await expect.poll(() => boots(launched), { timeout: 30_000 }).toEqual([FLOOR, NEWER]);
 	await expect.poll(() => sidecarStatus(page), { timeout: 30_000 }).toBe("ready");
+	await expect(page.locator(".omp-composer-input").first()).toHaveValue(DRAFT);
 	// The restarted bridge answered the capabilities probe for the newer omp; goalBudget is missing there.
 	await expect(page.getByText(/lacks internals OMPdesk needs for: Goal token budget/)).toBeVisible({
 		timeout: 30_000,
