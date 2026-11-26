@@ -121,6 +121,8 @@ function ItemDetail({ item, onChanged }: { item: Detail; onChanged: () => void }
 							startOnItem({
 								name: trackerWorktreeName(item),
 								prompt: trackerStartPrompt(item, t("trackers.startAsk", { key: item.key })),
+								// Linear names the branch it links back to the issue (Orca FK-T06); Jira names none.
+								...(item.branchName ? { branch: item.branchName } : {}),
 							})
 						}
 						size="sm"

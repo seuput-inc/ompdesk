@@ -132,6 +132,8 @@ export interface NewTaskSheetContext {
 	baseCwd?: string;
 	name?: string;
 	prompt?: string;
+	/** The exact branch the worktree gets (a Linear issue's `branchName`), never prefixed or renamed. */
+	branch?: string;
 }
 
 interface UiStore {

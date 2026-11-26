@@ -418,6 +418,7 @@ pub(super) async fn add(params: AddParams, scope: Scope) -> Result<Added, Fault>
                 &params.base_cwd,
                 &path,
                 &source,
+                &params.start_point,
                 &checkout,
             )
             .await?;
@@ -492,7 +493,8 @@ struct Source {
     from: Option<String>,
 }
 
-/// A worktree at `target` on exactly the branch the caller names: a new one (from `from`, else HEAD), an existing
+/// A worktree at `target` on exactly the branch the caller names: a new one (from `from`, else the create's start
+/// point), an existing
 /// local one, or a new local one tracking `<remote>/<name>`. The name is never changed: a taken, missing or invalid
 /// one is refused, and a new branch whose `worktree add` failed is deleted again.
 async fn add_named(
@@ -501,6 +503,7 @@ async fn add_named(
     base_cwd: &str,
     target: &str,
     source: &Source,
+    start_point: &str,
     checkout: &Checkout<'_>,
 ) -> Result<(), Fault> {
     let name = source.name.as_str();
@@ -523,7 +526,9 @@ async fn add_named(
             if exists {
                 return Err(failed(format!("The branch {name} already exists.")));
             }
-            let from = source.from.as_deref().unwrap_or("HEAD");
+            // Without its own `from`, a named branch starts where the create's base points (HEAD, the fetched
+            // default branch or the ref), as a generated one does.
+            let from = source.from.as_deref().unwrap_or(start_point);
             add_new(git, primary, base_cwd, target, name, from, checkout).await
         }
         Mode::Local => {
@@ -1415,6 +1420,26 @@ mod add_tests {
         assert_eq!(
             sh(&tree, &["symbolic-ref", "--short", "HEAD"]),
             "omp/gui/fix-login-2"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_named_branch_without_its_own_start_takes_the_create_base() {
+        let primary = monorepo("named");
+        let older = sh(&primary, &["rev-parse", "HEAD~1"]);
+        let mut named = params(&primary, None, Vec::new());
+        named.start_point = "HEAD~1".into();
+        named.source = Some(Source {
+            name: "jinseo/eng-12-fix-login".into(),
+            mode: Mode::New,
+            remote: None,
+            from: None,
+        });
+        let added = add(named, Scope::detached()).await.unwrap();
+        assert_eq!(added.branch, "jinseo/eng-12-fix-login");
+        assert_eq!(
+            sh(&primary, &["rev-parse", "jinseo/eng-12-fix-login"]),
+            older
         );
     }
 }

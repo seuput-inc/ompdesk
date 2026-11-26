@@ -44,6 +44,8 @@ export interface NewTaskRequest {
 	name: string;
 	baseRef: string;
 	branchPrefix?: string;
+	/** The exact branch, cut from `baseRef` instead of `<branchPrefix><name>` (a Linear issue's `branchName`). */
+	branch?: string;
 	sparse?: string;
 	prompt: string;
 	files: readonly File[];
@@ -188,6 +190,7 @@ async function runStep(id: string, step: NewTaskStepId): Promise<void> {
 					baseCwd: request.baseCwd,
 					baseRef: request.baseRef,
 					...(request.branchPrefix ? { branchPrefix: request.branchPrefix } : {}),
+					...(request.branch ? { branch: { name: request.branch, mode: "new" as const } } : {}),
 					...(request.sparse ? { sparse: request.sparse } : {}),
 					requestId: id,
 					prepare: false,
