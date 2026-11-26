@@ -380,7 +380,8 @@ async function failNewTask(page: Page, look: Look): Promise<void> {
 	await sheet.locator("[data-worktree-base] input[list]").fill("no-such-base");
 	await sheet.locator("button[type=submit]").click();
 	await sheet.waitFor({ state: "detached", timeout: 15_000 });
-	await openDrawer(page, look);
+	// A phone's palette opened from its drawer, which stays open behind the sheet.
+	if (!(await page.locator("[data-drawer]").isVisible())) await openDrawer(page, look);
 }
 
 /** Closes every failed new task row `failNewTask` left (each row's Close; a phone's drawer is still open). */
