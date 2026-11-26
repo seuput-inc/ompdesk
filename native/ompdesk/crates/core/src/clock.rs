@@ -37,6 +37,12 @@ fn manual() -> MutexGuard<'static, Option<Manual>> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Holds the clock: whatever reads, sets or arms it waits until the guard drops.
+#[cfg(test)]
+pub(crate) fn hold() -> impl Sized {
+    manual()
+}
+
 /// Milliseconds since the epoch, as `Date.now()` reads them.
 pub fn now_ms() -> u64 {
     if let Some(clock) = manual().as_ref() {
