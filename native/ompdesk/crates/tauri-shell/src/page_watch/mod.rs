@@ -141,8 +141,9 @@ fn engine_unresponsive(wc: u64) {
     }
 }
 
-/// The content process of an app page ended: `render-process-gone`, `killed` when the host ended it.
-fn content_process_gone(wc: u64, exit_code: Option<i32>) {
+/// The content process of an app page ended: `render-process-gone`, `killed` when the host ended it, `oom` when the
+/// engine said it ran out of memory (WebView2's `OUT_OF_MEMORY`; WebKit names no reason).
+fn content_process_gone(wc: u64, exit_code: Option<i32>, oom: bool) {
     let gone = runtime()
         .registry
         .lock()
@@ -151,7 +152,14 @@ fn content_process_gone(wc: u64, exit_code: Option<i32>) {
     let Some((_, killed)) = gone else {
         return;
     };
-    let mut details = json!({"reason": if killed { "killed" } else { "crashed" }});
+    let reason = if killed {
+        "killed"
+    } else if oom {
+        "oom"
+    } else {
+        "crashed"
+    };
+    let mut details = json!({ "reason": reason });
     if let Some(code) = exit_code {
         details["exitCode"] = json!(code);
     }
@@ -171,7 +179,7 @@ pub fn content_process_ended(webview: &tauri::Webview) {
         .by_label(webview.label())
         .map(|page| page.identity.wc);
     if let Some(wc) = wc {
-        content_process_gone(wc, None);
+        content_process_gone(wc, None, false);
     }
 }
 

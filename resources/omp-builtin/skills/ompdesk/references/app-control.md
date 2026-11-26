@@ -18,7 +18,7 @@
 
 ## Which computer
 
-A session that runs on a paired host acts on that host exactly as the Settings page does while that tab is focused. Stock settings, models, usage, plugins and MCP servers already go to the host's omp. `settings.rotation` reads and writes the host's own value (`settings.get` shows it), and `sessions.saved`, `sessions.search`, `sessions.rename`, `sessions.delete`, `sidebar.projects`, `sidebar.add_project` and `sidebar.remove_project` work on the host's saved sessions and sidebar projects. `updates.status`, `updates.check` and `updates.apply` stay on this computer's OMPdesk unless you pass `host: true`, which asks the paired host's OMPdesk instead (`updates.apply` refuses while work runs there, yours included). Everything else is this device's own: its look, notifications, proxy, update switches, memory, Tailscale and phone-page sharing. To act on a computer other than your session's, see `device` below.
+A session that runs on a paired host acts on that host exactly as the Settings page does while that tab is focused. Stock settings, models, usage, plugins and MCP servers already go to the host's omp. `settings.rotation` reads and writes the host's own value (`settings.get` shows it), and `sessions.saved`, `sessions.search`, `sessions.rename`, `sessions.link`, `sessions.delete`, `sidebar.projects`, `sidebar.add_project` and `sidebar.remove_project` work on the host's saved sessions and sidebar projects. `updates.status`, `updates.check` and `updates.apply` stay on this computer's OMPdesk unless you pass `host: true`, which asks the paired host's OMPdesk instead (`updates.apply` refuses while work runs there, yours included). Everything else is this device's own: its look, notifications, proxy, update switches, memory, Tailscale and phone-page sharing. To act on a computer other than your session's, see `device` below.
 
 ### Another computer (`device`)
 
@@ -44,6 +44,10 @@ A session that runs on a paired host acts on that host exactly as the Settings p
 Arranging is this computer's own sidebar (a session on a paired host is refused): `sidebar.pin_project` and `sidebar.pin_session` (`pinned` true or false), `sidebar.order_projects` (`paths`, top first), `sidebar.rename_project` (`name`, empty clears), `sidebar.archive_sessions` (`sessionPaths`, `archived`; no file is touched). Paths must be listed by `sidebar.projects` or `sessions.saved`. The window applies each as the menu would, so you see the result there, not in the answer.
 
 `ui.open_system_privacy` (`pane`: accessibility, screen_recording, input_monitoring, automation, full_disk_access, files_and_folders, microphone, camera) only opens that macOS Privacy & Security pane; the person flips the switch, which you cannot. `updates.download` fetches the update `updates.status` says is available; `updates.apply` still installs it.
+
+## Session links
+
+`sessions.link` attaches a link to a session (`add`: a pull request, an issue or any https page), detaches one (`remove`) and answers the session's links; `session` (a path from `sessions.saved`) defaults to your own session. Attach the pull request you opened and the issue you work on, so the person sees them on the session's sidebar row and the next agent finds the session. `sessions.saved` shows each session's links, and with `link` (a pull request or issue URL, `owner/repo#n`, or a page URL) lists only the sessions linked to it.
 
 ## Sign-in
 

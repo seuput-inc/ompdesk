@@ -181,9 +181,10 @@ pub fn shipped<P: AppPorts>() -> Registry<P> {
         action("omp.bridge_health", "omp", r##"What OMPdesk's bridge self-check found for each omp version running on the computer this session runs on (a paired host's own when it runs there): whether every OMPdesk action works with it, and each unavailable action with the omp internals it lacks."##, json!({"type":"object","properties":{},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_omp_bridge_health(ctx, args))),
         action("ui.panel", "ui", r##"Open a side panel view (terminal, diff, preview, files), open a session view as a sheet (jobs = background tasks, plan = the plan document, logs, tree = the session tree, work = the work tree), or close the panel."##, json!({"type":"object","properties":{"tab":{"type":"string","enum":["terminal","diff","preview","files","jobs","plan","logs","tree","work","close"]}},"required":["tab"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_ui_panel(ctx, args))),
         action("ui.settings_open", "ui", r##"Open Settings at a section (for the user to look at or to finish a step only they may do)."##, json!({"type":"object","properties":{"section":{"type":"string","enum":["general","appearance","keyboard","models","agent","memory","tools","permissions","workspace","schedules","connections","updates","advanced"]},"sub":{"type":"string","maxLength":60}},"required":["section"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_ui_settings_open(ctx, args))),
-        action("sessions.saved", "sessions", r##"Saved sessions on the computer this session runs on (a paired host's own when it runs there): title, folder, last change, path."##, json!({"type":"object","properties":{"scope":{"type":"string","enum":["local","global"],"description":"local: this folder's sessions; global (default): all."}},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_sessions_saved(ctx, args))),
+        action("sessions.saved", "sessions", r##"Saved sessions on the computer this session runs on (a paired host's own when it runs there): title, folder, last change, path, and the links sessions.link attached. link lists only the sessions linked to a pull request or issue (its URL or owner/repo#n) or to a page URL."##, json!({"type":"object","properties":{"scope":{"type":"string","enum":["local","global"],"description":"local: this folder's sessions; global (default): all."},"link":{"type":"string","minLength":1,"maxLength":4096,"description":"A pull request or issue URL, owner/repo#n, or a page URL: only the sessions linked to it."}},"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_sessions_saved(ctx, args))),
         action("sessions.search", "sessions", r##"Search the text of saved sessions."##, json!({"type":"object","properties":{"query":{"type":"string","minLength":1,"maxLength":200},"scope":{"type":"string","enum":["local","global"],"description":"local: this folder's sessions; global (default): all."}},"required":["query"],"additionalProperties":false}), Tier::Read, |ctx, args| Box::pin(h_sessions_search(ctx, args))),
         action("sessions.rename", "sessions", r##"Rename a saved session."##, json!({"type":"object","properties":{"sessionPath":{"type":"string","minLength":1,"maxLength":4096,"description":"Session file path (.jsonl) from sessions.saved."},"name":{"type":"string","minLength":1,"maxLength":200}},"required":["sessionPath","name"],"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_sessions_rename(ctx, args))),
+        action("sessions.link", "sessions", r##"Attach a link to a saved session (a pull request, an issue or any https page), detach one, and list its links; they show on its sidebar row and in sessions.saved. Without add or remove it only lists."##, json!({"type":"object","properties":{"session":{"type":"string","minLength":1,"maxLength":4096,"description":"Session file path (.jsonl) from sessions.saved. Default: this session."},"add":{"type":"string","minLength":1,"maxLength":4096,"description":"An https URL to attach."},"remove":{"type":"string","minLength":1,"maxLength":4096,"description":"An attached URL to detach."}},"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_sessions_link(ctx, args))),
         action("sessions.delete", "sessions", r##"Delete a saved session file for good."##, json!({"type":"object","properties":{"sessionPath":{"type":"string","minLength":1,"maxLength":4096,"description":"Session file path (.jsonl) from sessions.saved."}},"required":["sessionPath"],"additionalProperties":false}), Tier::Sensitive, |ctx, args| Box::pin(h_sessions_delete(ctx, args)))
             .manage(Manage::Always { reason: r##"deleting a saved session is irreversible"##, when: None }),
         action("sessions.dump_bundle", "sessions", r##"Save a diagnostic bundle as a zip file and return its path: stock's /dump archive of an open session plus OMPdesk's own diagnostics text. Anonymized by default (message contents redacted); pass anonymized:false only when the person asked for the raw transcript. Writes to path, else the Downloads folder. Needs the session open in a tab; defaults to this session."##, json!({"type":"object","properties":{"session":{"type":"string","minLength":1,"maxLength":4096,"description":"Session file path (.jsonl) of an open session, from sessions.saved. Default: this session. A session the person hid from agents is refused."},"anonymized":{"type":"boolean","description":"Default true: stock's /dump anon. false: /dump all, the raw transcript."},"path":{"type":"string","minLength":1,"maxLength":4096,"description":"Absolute path of the zip to write (.zip is added when missing). Default: the Downloads folder."}},"additionalProperties":false}), Tier::Change, |ctx, args| Box::pin(h_sessions_dump_bundle(ctx, args))),
@@ -1610,28 +1611,226 @@ async fn h_ui_settings_open<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done {
     )))
 }
 
+/// `owner/name`: a GitHub-style owner and repository name.
+fn repo_name(text: &str) -> bool {
+    let Some((owner, name)) = text.split_once('/') else {
+        return false;
+    };
+    !owner.is_empty()
+        && !name.is_empty()
+        && owner
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// What a link is found by: `owner/repo#n` (lowercase) for a pull request or issue, given as that or as its URL on
+/// any host; any other http(s) URL lowercased without its trailing slash; `None` for text that is neither.
+fn link_key(text: &str) -> Option<String> {
+    let text = text.trim();
+    if let Some((repo, number)) = text.split_once('#')
+        && repo_name(repo)
+        && let Ok(number) = number.parse::<u64>()
+    {
+        return Some(format!("{}#{number}", repo.to_lowercase()));
+    }
+    let rest = text
+        .strip_prefix("https://")
+        .or_else(|| text.strip_prefix("http://"))?;
+    let path = rest.split(['?', '#']).next().unwrap_or("");
+    if let [_, owner, name, "pull" | "issues", number, ..] =
+        path.split('/').collect::<Vec<_>>().as_slice()
+        && let Ok(number) = number.parse::<u64>()
+        && repo_name(&format!("{owner}/{name}"))
+    {
+        return Some(format!(
+            "{}/{}#{number}",
+            owner.to_lowercase(),
+            name.to_lowercase()
+        ));
+    }
+    Some(text.trim_end_matches('/').to_lowercase())
+}
+
+/// The key of a kept link (`SessionLink`, src/shared/session-links.ts).
+fn kept_link_key(link: &Value) -> Option<String> {
+    match (
+        link.get("repo").and_then(Value::as_str),
+        link.get("number").and_then(Value::as_u64),
+    ) {
+        (Some(repo), Some(number)) => Some(format!("{}#{number}", repo.to_lowercase())),
+        _ => link_key(text_of(link.get("url"))),
+    }
+}
+
+/// `PR owner/repo#n · url`, `issue owner/repo#n · url`, or the URL.
+fn link_line(link: &Value) -> String {
+    let url = text_of(link.get("url"));
+    let kind = match text_of(link.get("kind")) {
+        "pr" => "PR",
+        "issue" => "issue",
+        _ => return url.to_string(),
+    };
+    format!(
+        "{kind} {}#{} · {url}",
+        text_of(link.get("repo")),
+        link.get("number").and_then(Value::as_u64).unwrap_or(0)
+    )
+}
+
+/// A listed session's kept links in a `session_links` answer (session path to links).
+fn kept_links<'a>(links: &'a Value, row: &Map<String, Value>) -> &'a [Value] {
+    links
+        .get(text_of(row.get("path")))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+}
+
+/// A saved session of the computer the caller runs on, or a refusal naming the path.
+async fn require_saved_session<P: AppPorts>(ctx: &Ctx<P>, path: &str) -> Result<(), Fault> {
+    let mut payload = Map::new();
+    payload.insert("scope".into(), json!("global"));
+    let saved = ctx
+        .invoke(SESSIONS_LIST, vec![with_caller_device(ctx, payload)])
+        .await?;
+    if answer_rows(&saved, usize::MAX)
+        .iter()
+        .any(|row| row.get("path").and_then(Value::as_str) == Some(path))
+    {
+        Ok(())
+    } else {
+        Err(refusal(format!(
+            "Not a saved session: {path}. Read sessions.saved for the paths."
+        )))
+    }
+}
+
 async fn h_sessions_saved<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done {
+    let wanted = match str_arg(&args, "link") {
+        None => None,
+        Some(text) => Some(link_key(text).ok_or_else(|| {
+            refusal(format!(
+                "\"{}\" names no link: give a pull request or issue URL, owner/repo#n, or a page URL.",
+                clip(text, 200)
+            ))
+        })?),
+    };
     let mut payload = Map::new();
     payload.insert("scope".into(), json!(scope_of(&args)));
     let sessions = ctx
         .invoke(SESSIONS_LIST, vec![with_caller_device(&ctx, payload)])
         .await?;
+    // Links are kept where the caller's session runs; a caller with no omp (the CLI) lists without them.
+    let read = ctx
+        .rpc(json!({"type": "session_links", "all": true}), None)
+        .await;
+    let links = match (read, &wanted) {
+        (Ok(links), _) => links,
+        (Err(error), Some(_)) => return Err(error),
+        (Err(_), None) => Value::Null,
+    };
+    let links_of = |row: &Map<String, Value>| kept_links(&links, row);
+    let rows: Vec<Value> = answer_rows(&sessions, usize::MAX)
+        .iter()
+        .filter(|row| {
+            wanted.as_ref().is_none_or(|key| {
+                row.as_object().is_some_and(|row| {
+                    links_of(row)
+                        .iter()
+                        .any(|link| kept_link_key(link).as_ref() == Some(key))
+                })
+            })
+        })
+        .take(50)
+        .cloned()
+        .collect();
     Ok(ActionResult::text(lines_of(
-        answer_rows(&sessions, 50),
+        &rows,
         |row| {
             let title = match row.get("title") {
                 Some(Value::String(title)) => title.as_str(),
                 _ => "(untitled)",
             };
+            let linked: Vec<String> = links_of(row).iter().map(link_line).collect();
             format!(
-                "- {title} · {} · {} · {}",
+                "- {title} · {} · {} · {}{}",
                 text_of(row.get("cwd")),
                 text_of(row.get("modified")),
-                text_of(row.get("path"))
+                text_of(row.get("path")),
+                if linked.is_empty() {
+                    String::new()
+                } else {
+                    format!(" · links: {}", linked.join(", "))
+                }
             )
         },
-        "No saved sessions.",
+        if wanted.is_some() {
+            "No saved session is linked to it."
+        } else {
+            "No saved sessions."
+        },
     )))
+}
+
+async fn h_sessions_link<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done {
+    let session = str_arg(&args, "session");
+    if let Some(path) = session {
+        require_saved_session(&ctx, path).await?;
+    }
+    // Without a path the command names the caller's own session (local/session-links.ts).
+    let command = |kind: &str, url: Option<&str>| {
+        let mut command = json!({"type": kind});
+        if let Some(path) = session {
+            command["sessionPath"] = json!(path);
+        }
+        if let Some(url) = url {
+            command["url"] = json!(url);
+        }
+        command
+    };
+    let mut done: Vec<String> = Vec::new();
+    let mut value = String::new();
+    if let Some(url) = str_arg(&args, "add") {
+        let link = ctx
+            .rpc(command("session_link_add", Some(url)), None)
+            .await?;
+        done.push(format!("Linked {}.", link_line(&link)));
+        value = text_of(link.get("url")).to_string();
+    }
+    if let Some(url) = str_arg(&args, "remove") {
+        ctx.rpc(command("session_link_remove", Some(url)), None)
+            .await?;
+        done.push(format!("Unlinked {url}."));
+        if value.is_empty() {
+            value = url.to_string();
+        }
+    }
+    let listed = ctx.rpc(command("session_links", None), None).await?;
+    let links: Vec<String> = listed
+        .as_object()
+        .and_then(|map| map.values().next())
+        .and_then(Value::as_array)
+        .map(|links| {
+            links
+                .iter()
+                .map(|link| format!("- {}", link_line(link)))
+                .collect()
+        })
+        .unwrap_or_default();
+    done.push(if links.is_empty() {
+        "The session has no links.".to_string()
+    } else {
+        format!("Its links:\n{}", links.join("\n"))
+    });
+    let text = done.join("\n");
+    Ok(if value.is_empty() {
+        ActionResult::text(text)
+    } else {
+        ActionResult::changed(text, "Session links", "세션 링크", value)
+    })
 }
 
 async fn h_sessions_search<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done {
@@ -2755,4 +2954,59 @@ async fn h_autopilot_stop<P: AppPorts>(ctx: Ctx<P>, args: Args) -> Done {
         request["now"] = now.clone();
     }
     Ok(ActionResult::text(ctx.autopilot(request).await?))
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::{kept_link_key, link_key, link_line};
+    use serde_json::json;
+
+    #[test]
+    fn a_pull_request_or_issue_is_found_by_its_url_or_owner_repo_number() {
+        let key = Some("acme/api#12".to_string());
+        assert_eq!(link_key("acme/api#12"), key);
+        assert_eq!(link_key(" Acme/API#012 "), key);
+        assert_eq!(link_key("https://github.com/acme/api/pull/12"), key);
+        assert_eq!(
+            link_key("https://github.com/acme/api/pull/12/files?w=1"),
+            key
+        );
+        assert_eq!(
+            link_key("https://ghe.example.com/acme/api/issues/12#c1"),
+            key
+        );
+        assert_eq!(link_key("http://github.com/acme/api/issues/12"), key);
+    }
+
+    #[test]
+    fn any_other_page_is_found_by_its_url_and_other_text_by_nothing() {
+        assert_eq!(
+            link_key("https://Example.com/docs/"),
+            Some("https://example.com/docs".to_string())
+        );
+        assert_eq!(
+            link_key("https://github.com/acme/api/pull/x"),
+            Some("https://github.com/acme/api/pull/x".to_string())
+        );
+        assert_eq!(link_key("acme/api#x"), None);
+        assert_eq!(link_key("acme#12"), None);
+        assert_eq!(link_key("ftp://example.com/a"), None);
+        assert_eq!(link_key("retry"), None);
+    }
+
+    #[test]
+    fn a_kept_link_reads_as_its_key_and_line() {
+        let pr = json!({"url": "https://github.com/acme/api/pull/12", "kind": "pr", "repo": "Acme/api", "number": 12});
+        assert_eq!(kept_link_key(&pr), Some("acme/api#12".to_string()));
+        assert_eq!(
+            link_line(&pr),
+            "PR Acme/api#12 · https://github.com/acme/api/pull/12"
+        );
+        let page = json!({"url": "https://example.com/", "kind": "url"});
+        assert_eq!(
+            kept_link_key(&page),
+            Some("https://example.com".to_string())
+        );
+        assert_eq!(link_line(&page), "https://example.com/");
+    }
 }

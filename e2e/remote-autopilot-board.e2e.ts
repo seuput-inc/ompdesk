@@ -155,7 +155,11 @@ test("a paired device's view of a run's work board shows the run's follow-ups an
 	const childFile = async () =>
 		(await tabs(host?.page)).find(tab => tab.tabId !== runTab && tab.cwd.startsWith(worktrees))?.sessionPath;
 	await expect.poll(childFile, { timeout: 30_000 }).toBeTruthy();
-	await client.page.locator("[data-work-board-panel] button[data-board-opened]").first().click({ timeout: 30_000 });
+	// The child's row that opens it, not one that only opens in place to read its tooltip.
+	await client.page
+		.locator("[data-work-board-panel] button[data-board-opened]:not([data-board-expands])")
+		.first()
+		.click({ timeout: 30_000 });
 	const file = await childFile();
 	await expect.poll(async () => (await tabs(client?.page)).find(tab => tab.active)?.sessionPath).toBe(file);
 	await fs.writeFile(gate, "");

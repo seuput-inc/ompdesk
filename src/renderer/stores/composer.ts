@@ -31,6 +31,12 @@ export function prependToDraft(restored: string, draft: string): string {
 	return draft.trim() ? `${restored}\n\n${draft}` : restored;
 }
 
+/** A quote added to the composer goes after what it holds, a blank line between, as typing it would (Orca's `appendNativeChatQuote`). */
+export function appendToDraft(added: string, draft: string): string {
+	const kept = draft.trimEnd();
+	return kept ? `${kept}\n\n${added}` : added;
+}
+
 /**
  * One queued message a Stop withdrew (stock's `abort_and_restore_queue`), or one the core kept when the tab's omp went
  * with it still queued (`kept`, core `sidecar/held_queue.rs`), held apart from the draft until the user decides: Resume
@@ -58,6 +64,8 @@ export interface EditingQueued {
 	images: ImageContent[];
 	/** The core's hold of the message while it is edited (`queue_hold`). */
 	token: string;
+	/** Settles once the core holds the message and stock's queue let it go (true), or the edit could not begin (false). */
+	began: Promise<boolean>;
 	/** The draft and pictures the field held before the edit took it over. */
 	snapshot: { draft: string; images: ComposerImage[] };
 }
@@ -86,6 +94,12 @@ export interface ComposerStore {
 	restoredTrayMounted: number;
 	/** A queued message is being edited in the field (Edit queued): its draft and pictures wait in the snapshot. */
 	editingQueued: EditingQueued | null;
+	/**
+	 * Edits that ended (Save, Cancel) whose message is not back in stock's queue yet: it is queued again only once the
+	 * core holds it and stock let it go, and a queue row shown meanwhile could name the copy about to be replaced.
+	 */
+	editsRequeueing: number;
+	noteRequeueing: (delta: 1 | -1) => void;
 	setSending: (value: boolean) => void;
 	setCancelSubmit: (cancel: (() => boolean) | null) => void;
 	setSubmissionUncertain: (value: boolean) => void;
@@ -109,6 +123,7 @@ export interface ComposerStore {
 		text: string;
 		images?: ImageContent[];
 		token: string;
+		began: Promise<boolean>;
 	}) => void;
 	/** Leave the edit: the draft and pictures it replaced come back exactly. */
 	endEditQueued: () => void;
@@ -134,6 +149,9 @@ export const createComposerStore = () =>
 		restoredQueue: [],
 		restoredTrayMounted: 0,
 		editingQueued: null,
+		// Not reset: it counts requeues in flight, and each one takes itself off when it settles.
+		editsRequeueing: 0,
+		noteRequeueing: delta => set(state => ({ editsRequeueing: Math.max(0, state.editsRequeueing + delta) })),
 		setSending: sending => set({ sending }),
 		setCancelSubmit: cancelSubmit => set({ cancelSubmit }),
 		setSubmissionUncertain: submissionUncertain => set({ submissionUncertain }),
@@ -171,7 +189,7 @@ export const createComposerStore = () =>
 			}),
 		setRestoredTrayMounted: mounted =>
 			set(state => ({ restoredTrayMounted: Math.max(0, state.restoredTrayMounted + (mounted ? 1 : -1)) })),
-		beginEditQueued: ({ id, lane, text, images = [], token }) =>
+		beginEditQueued: ({ id, lane, text, images = [], token, began }) =>
 			set(state => ({
 				// A second Edit while one runs keeps the first snapshot: Cancel still returns to what the user typed.
 				editingQueued: {
@@ -180,6 +198,7 @@ export const createComposerStore = () =>
 					original: text,
 					images,
 					token,
+					began,
 					snapshot: state.editingQueued?.snapshot ?? { draft: state.draft, images: state.images },
 				},
 				draft: text,

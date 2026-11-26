@@ -212,6 +212,8 @@ export function contrastPairs(theme: ThemeDefinition, text: number): ContrastPai
 		add(`accent as graphic (${surfaceKey})`, surface(theme, "--omp-accent"), bg, UI_BOUNDARY);
 		// The sidebar's ✓ and the transcript's "New" word: text, so the text floor.
 		add(`unread (${surfaceKey})`, surface(theme, "--omp-unread"), bg, text);
+		// The working spinner and the composer's glow: a graphic, so the 3:1 floor.
+		add(`working (${surfaceKey})`, surface(theme, "--omp-working"), bg, UI_BOUNDARY);
 		for (const [index, color] of theme.chart.entries())
 			add(`chart ${index + 1} (${surfaceKey})`, color, bg, UI_BOUNDARY);
 	}

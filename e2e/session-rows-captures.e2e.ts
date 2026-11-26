@@ -13,6 +13,7 @@ import { createServer as createNetServer } from "node:net";
 import * as path from "node:path";
 import { type Browser, chromium, expect, type Locator, type Page, test } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
+import { LANE_MIN_SIDEBAR_WIDTH } from "../src/renderer/lib/sidebar-width";
 import { cssString } from "./harness";
 
 const SHOTS = process.env.OMP_GUI_SESSION_ROWS_SHOTS;
@@ -201,8 +202,8 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	expect(twins[0]?.visible).not.toBe(twins[1]?.visible);
 
 	// The owner's order on a short line, on every row: the age gives way whole before the branch loses a letter, the
-	// branch keeps at least eight characters or goes with its mark (never the mark alone), a working arc stays, and the
-	// family chip and the ⋯ stay whole beside the line.
+	// branch keeps at least eight characters or goes with its mark (never the mark alone), a working arc stays whole in
+	// the row's leading status lane, and the family chip and the ⋯ stay whole beside the line.
 	const lines = await list.locator(".omp-sidebar-session-row:visible").evaluateAll(rows =>
 		rows.map(row => {
 			const give = row.querySelector(".omp-session-row-give")?.getBoundingClientRect();
@@ -222,8 +223,11 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 				age: shown(row.querySelector("[data-session-row-age] > time")),
 				working: Boolean(row.querySelector("[data-session-working]")),
 				arc: (() => {
+					const lane = row.querySelector("[data-status-lane]")?.getBoundingClientRect();
 					const arc = row.querySelector("[data-session-working] .omp-working-arc")?.getBoundingClientRect();
-					return Boolean(arc && give && arc.width > 0 && arc.left >= give.left - 0.5 && arc.right <= give.right);
+					return Boolean(
+						arc && lane && arc.width > 0 && arc.left >= lane.left - 0.5 && arc.right <= lane.right + 0.5,
+					);
 				})(),
 				endClear: Boolean(!end || !give || end.left >= give.right - 0.5),
 			};
@@ -232,9 +236,11 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	expect(lines.length).toBeGreaterThan(4);
 	for (const line of lines) {
 		if (line.cut || (line.hasHead && !line.head)) expect(line.age, `${line.name}: age before branch`).toBe(false);
-		if (line.working) expect(line.arc, `${line.name}: arc stays`).toBe(true);
+		if (line.working && surface.name !== "narrow") expect(line.arc, `${line.name}: arc stays`).toBe(true);
 		expect(line.endClear, `${line.name}: chip and ⋯ beside the line`).toBe(true);
 	}
+	// Below `LANE_MIN_SIDEBAR_WIDTH` the rows lead without the status lane, so the branch keeps its words.
+	if (surface.name === "narrow") await expect(list.locator("[data-status-lane]:visible")).toHaveCount(0);
 	const heads = await Promise.all(
 		(await list.locator("[data-session-head]:visible").all()).map(head => head.evaluate(readHeadIn)),
 	);
@@ -242,11 +248,11 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 		expect(head.visible.length, `${head.title}: eight characters or none`).toBeGreaterThanOrEqual(
 			Math.min(8, head.shown.length),
 		);
-		expect(head.past, head.title).toBeLessThanOrEqual(0.5);
+		expect(head.past, `${head.title} ${head.why}`).toBeLessThanOrEqual(0.5);
 	}
 
-	// The age slot (composer.md): with room, a working arc keeps the age's place, so the branch starts where it did
-	// when work starts and ends; at rest the age shows.
+	// The age slot (composer.md): work starting and ending changes only the leading status lane, so the age stays shown
+	// and the branch starts where it did.
 	const restRow = rowFor(list, sessionFile(PROJECT, "sess-1"));
 	const branchStart = () =>
 		restRow.locator("[data-session-head]").evaluate(head => Math.round(head.getBoundingClientRect().left));
@@ -259,7 +265,10 @@ async function checkRows(page: Page, surface: Surface): Promise<void> {
 	expect(await visibleAge()).toBe(true);
 	const atRest = await branchStart();
 	await setRun("running");
-	await expect(restRow.locator("[data-session-working]")).toBeVisible();
+	const working = restRow.locator("[data-status-lane] [data-session-working]");
+	if (surface.name === "narrow") await expect(working).toBeHidden();
+	else await expect(working).toBeVisible();
+	expect(await visibleAge()).toBe(true);
 	expect(await branchStart()).toBe(atRest);
 	await setRun("ready");
 	await expect(restRow.locator("[data-session-working]")).toHaveCount(0);
@@ -344,6 +353,8 @@ function readHeadIn(node: Element): {
 	shown: string;
 	visible: string;
 	past: number;
+	/** The head's geometry, for a failure to say why it stayed on a line too short for it. */
+	why: string;
 } {
 	const text = node.querySelector(".truncate");
 	const tail = node.querySelector("[data-head-tail]");
@@ -351,7 +362,16 @@ function readHeadIn(node: Element): {
 	const title = node.getAttribute("title") ?? "";
 	const onLine = Boolean(line && node.getBoundingClientRect().top < line.bottom - 1);
 	const whole = `${text?.textContent ?? ""}${tail?.textContent ?? ""}`;
-	if (!text?.firstChild || !onLine) return { title, onLine, cut: false, shown: whole, visible: "", past: 0 };
+	const why = JSON.stringify({
+		give: Math.round(line?.width ?? 0),
+		box: Math.round(node.parentElement?.getBoundingClientRect().width ?? 0),
+		head: Math.round(node.getBoundingClientRect().width),
+		top: Math.round(node.getBoundingClientRect().top - (line?.top ?? 0)),
+		min: (node as HTMLElement).style.minWidth,
+		font: getComputedStyle(node).fontFamily.slice(0, 40),
+		fonts: document.fonts.status,
+	});
+	if (!text?.firstChild || !onLine) return { title, onLine, cut: false, shown: whole, visible: "", past: 0, why };
 	const box = text.getBoundingClientRect();
 	const cut = text.scrollWidth > text.clientWidth + 0.5;
 	const style = getComputedStyle(text);
@@ -376,6 +396,7 @@ function readHeadIn(node: Element): {
 		shown: whole,
 		visible: visible + (tail?.textContent ?? ""),
 		past: line ? end - line.right : 0,
+		why,
 	};
 }
 
@@ -438,3 +459,19 @@ for (const surface of SURFACES)
 				.toContain("sess-2.jsonl");
 			await page.context().close();
 		});
+
+test("from the lane's threshold width the rows lead with the status lane and the branch keeps its words", async () => {
+	test.setTimeout(120_000);
+	const surface: Surface = { ...SURFACES[1], sidebarWidth: LANE_MIN_SIDEBAR_WIDTH };
+	const page = await openHarness(surface, "light", "en");
+	const list = sidebar(page);
+	await expect(list.locator("[data-status-lane]:visible").first()).toBeVisible();
+	for (const file of [sessionFile(PROJECT, "sess-row-2"), sessionFile(PROJECT, "sess-row-4")]) {
+		const head = rowFor(list, file).locator('[data-session-head="branch"]');
+		await head.scrollIntoViewIfNeeded();
+		const read = await head.evaluate(readHeadIn);
+		expect(read.onLine, `${read.title} ${read.why}`).toBe(true);
+		expect(read.past, `${read.title} ${read.why}`).toBeLessThanOrEqual(0.5);
+	}
+	await page.context().close();
+});

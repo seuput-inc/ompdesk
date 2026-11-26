@@ -5,6 +5,10 @@
  * message (region screenshots as images). Picking and pins run in main's
  * isolated page world (main/preview/page-scripts.ts); the page itself never
  * sees them.
+ *
+ * The comments are review notes of the session (`stores/review-notes.ts`), kept per page: another page or address
+ * shows its own, coming back shows these again, and a closed panel or a relaunch loses none (Orca C1-78: they were
+ * dropped without asking). The Changes view's notes shelf lists and sends them with the session's other notes.
  */
 import {
 	ArrowUpToLine,
@@ -16,7 +20,7 @@ import {
 	SquareDashed,
 	X,
 } from "lucide-react";
-import { type Dispatch, type SetStateAction, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
 	PreviewCssVariable,
 	PreviewElement,
@@ -25,12 +29,18 @@ import type {
 	PreviewVisualRecord,
 } from "../../../shared/preview";
 import type { ImageContent } from "../../../shared/rpc-types";
+import { handToTab } from "../../lib/composer-handoff";
 import { formatTimeAgo } from "../../lib/format";
 import { useT } from "../../lib/i18n";
+import { previewPageLines } from "../../lib/review-notes";
+import { notesOwner, previewPageKey, useReviewNotesStore } from "../../stores/review-notes";
+import { useTabsStore } from "../../stores/tabs";
 import { toastError } from "../../stores/toast";
 import { AsyncSection, Button, Chip, IconButton, Input, Modal, Select, Tooltip } from "../common";
 
 export interface PreviewNote {
+	/** The review note's id (`stores/review-notes.ts`). */
+	id: string;
 	n: number;
 	kind: "element" | "region";
 	/** The picked element, or the region's elements under it (C138's elements list). */
@@ -48,22 +58,16 @@ export function previewFeedbackMessage(
 	notes: readonly PreviewNote[],
 	changed: Readonly<Record<string, [string, string]>>,
 ): { text: string; images: ImageContent[] } {
-	const lines = [t("panel.preview.feedback.header", { title: page.title || page.url, url: page.url })];
 	const images: ImageContent[] = [];
-	for (const note of notes) {
-		const comment = note.comment.trim() ? ` — ${note.comment.trim()}` : "";
-		if (note.kind === "element") {
-			const [element] = note.elements;
-			const text = element?.text ? ` "${element.text}"` : "";
-			lines.push(`${note.n}. <${element?.tag}> \`${element?.selector}\`${text}${comment}`);
-		} else {
-			if (note.image) images.push({ type: "image", data: note.image, mimeType: "image/png" });
-			const shown = note.elements.map(element => `\`${element.selector}\``).join(", ");
-			lines.push(
-				`${note.n}. ${t("panel.preview.feedback.regionLine", { image: images.length, elements: shown || "—" })}${comment}`,
-			);
-		}
-	}
+	const lines = previewPageLines(
+		t,
+		page,
+		notes.map(note => ({
+			anchor: { n: note.n, pick: note.kind, elements: note.elements, image: note.image },
+			body: note.comment,
+		})),
+		images,
+	);
 	const variables = Object.entries(changed).filter(([, [from, to]]) => from !== to);
 	if (variables.length > 0) {
 		lines.push(t("panel.preview.feedback.variablesLine"));
@@ -77,7 +81,9 @@ const elementLabel = (element: PreviewElement | undefined) =>
 
 export interface PreviewFeedback {
 	notes: PreviewNote[];
-	setNotes: Dispatch<SetStateAction<PreviewNote[]>>;
+	/** Change a note's comment, or move its pin to another element. */
+	updateNote: (id: string, change: { comment?: string; elements?: PreviewElement[] }) => void;
+	removeNote: (id: string) => void;
 	/** The picker waiting on the page, if any. */
 	picking: "element" | "region" | null;
 	/** The page's CSS variables while the editor is open (null = closed). */
@@ -90,29 +96,48 @@ export interface PreviewFeedback {
 	closeVariables(): void;
 	setVariable(name: string, value: string): void;
 	resetVariables(): Promise<void>;
-	/** Put the message into this tab's composer (ahead of a draft) and start over. */
+	/** Put the message into this tab's composer (ahead of a draft); the page's notes are sent and go. */
 	send(): void;
 	discard(): void;
 }
 
-/** Feedback state for the shown page; it starts over whenever another page or address shows. */
+/** Feedback state for the shown page: its notes come from the session's review notes; the picker and variables start over on another page. */
 export function usePreviewFeedback(state: PreviewState, tabId: string | null): PreviewFeedback {
 	const t = useT();
-	const [notes, setNotes] = useState<PreviewNote[]>([]);
+	const owner = useTabsStore(store => {
+		const tab = store.tabs.find(entry => entry.id === tabId);
+		return tab ? notesOwner(tab) : null;
+	});
+	const pageKey = previewPageKey(state);
+	const all = useReviewNotesStore(store => store.notes);
+	const notes = useMemo<PreviewNote[]>(
+		() =>
+			all.flatMap(note =>
+				note.owner === owner && note.anchor.kind === "preview" && note.anchor.page === pageKey
+					? [
+							{
+								id: note.id,
+								n: note.anchor.n,
+								kind: note.anchor.pick,
+								elements: note.anchor.elements,
+								...(note.anchor.image ? { image: note.anchor.image } : {}),
+								comment: note.body,
+							},
+						]
+					: [],
+			),
+		[all, owner, pageKey],
+	);
 	const [picking, setPicking] = useState<"element" | "region" | null>(null);
 	const [variables, setVariables] = useState<PreviewCssVariable[] | null>(null);
 	const [changed, setChanged] = useState<Record<string, [string, string]>>({});
-	const next = useRef(1);
-	const pageKey = `${state.activeTab}\n${state.url}`;
 	const shownKey = useRef(pageKey);
 	useEffect(() => {
 		if (shownKey.current === pageKey) return;
 		shownKey.current = pageKey;
-		setNotes([]);
 		setPicking(null);
 		setVariables(null);
 		setChanged({});
-		next.current = 1;
 	}, [pageKey]);
 	const failed = useCallback(
 		(error: unknown) => toastError({ title: t("panel.preview.feedback.failed"), error }),
@@ -129,20 +154,31 @@ export function usePreviewFeedback(state: PreviewState, tabId: string | null): P
 		pinsShown.current = pinsKey;
 		void window.omp.preview.page({ action: "pins", pins: JSON.parse(pinsKey) }).catch(() => {});
 	}, [pinsKey, state.url]);
+	const addNote = (kind: "element" | "region", elements: PreviewElement[], image?: string) => {
+		if (!owner) return;
+		useReviewNotesStore.getState().add({
+			owner,
+			anchor: {
+				kind: "preview",
+				page: pageKey,
+				title: state.title,
+				url: state.url,
+				pick: kind,
+				elements,
+				...(image ? { image } : {}),
+			},
+			body: "",
+		});
+	};
 	const pick = async (kind: "element" | "region") => {
 		setPicking(kind);
 		try {
 			if (kind === "element") {
 				const element = await window.omp.preview.page({ action: "pick" });
-				if (element)
-					setNotes(current => [...current, { n: next.current++, kind, elements: [element], comment: "" }]);
+				if (element) addNote(kind, [element]);
 			} else {
 				const region = await window.omp.preview.page({ action: "region" });
-				if (region)
-					setNotes(current => [
-						...current,
-						{ n: next.current++, kind, elements: region.elements, image: region.image, comment: "" },
-					]);
+				if (region) addNote(kind, region.elements, region.image);
 			}
 		} catch (error) {
 			failed(error);
@@ -157,9 +193,18 @@ export function usePreviewFeedback(state: PreviewState, tabId: string | null): P
 			failed(error);
 		}
 	};
+	const store = useReviewNotesStore.getState;
 	return {
 		notes,
-		setNotes,
+		updateNote: (id, change) => {
+			const note = store().notes.find(entry => entry.id === id);
+			if (note?.anchor.kind !== "preview") return;
+			store().update(id, {
+				...(change.comment === undefined ? {} : { body: change.comment }),
+				...(change.elements ? { anchor: { ...note.anchor, elements: change.elements } } : {}),
+			});
+		},
+		removeNote: id => store().remove([id]),
 		picking,
 		variables,
 		changed,
@@ -186,19 +231,17 @@ export function usePreviewFeedback(state: PreviewState, tabId: string | null): P
 		},
 		send: () => {
 			const message = previewFeedbackMessage(t, state, notes, changed);
-			window.dispatchEvent(
-				new CustomEvent("omp:fill-composer", {
-					detail: { text: message.text, images: message.images, prepend: true, ...(tabId ? { tabId } : {}) },
-				}),
-			);
-			setNotes([]);
+			if (tabId) handToTab(tabId, { ...message, mode: "prepend" });
+			else
+				window.dispatchEvent(
+					new CustomEvent("omp:fill-composer", {
+						detail: { text: message.text, images: message.images, prepend: true },
+					}),
+				);
+			store().remove(notes.map(note => note.id));
 			setChanged({});
-			next.current = 1;
 		},
-		discard: () => {
-			setNotes([]);
-			next.current = 1;
-		},
+		discard: () => store().remove(notes.map(note => note.id)),
 	};
 }
 
@@ -340,12 +383,7 @@ export function PreviewFeedbackBar({
 														const parent = await window.omp.preview
 															.page({ action: "parent", selector: first.selector })
 															.catch(() => null);
-														if (parent)
-															feedback.setNotes(current =>
-																current.map(entry =>
-																	entry.n === note.n ? { ...entry, elements: [parent] } : entry,
-																),
-															);
+														if (parent) feedback.updateNote(note.id, { elements: [parent] });
 													}}
 												/>
 											</>
@@ -354,9 +392,7 @@ export function PreviewFeedbackBar({
 											label={t("panel.preview.feedback.remove", { n: note.n })}
 											icon={<X />}
 											size="sm"
-											onClick={() =>
-												feedback.setNotes(current => current.filter(entry => entry.n !== note.n))
-											}
+											onClick={() => feedback.removeNote(note.id)}
 										/>
 									</div>
 									{note.kind === "region" && (
@@ -392,12 +428,7 @@ export function PreviewFeedbackBar({
 										controlSize="sm"
 										placeholder={t("panel.preview.feedback.commentPlaceholder")}
 										value={note.comment}
-										onChange={event => {
-											const comment = event.target.value;
-											feedback.setNotes(current =>
-												current.map(entry => (entry.n === note.n ? { ...entry, comment } : entry)),
-											);
-										}}
+										onChange={event => feedback.updateNote(note.id, { comment: event.target.value })}
 									/>
 								</li>
 							);

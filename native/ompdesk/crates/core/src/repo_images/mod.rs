@@ -16,6 +16,8 @@ use crate::run::Runner;
 use crate::server::{Fault, Registry, Reply, Scope};
 
 mod discovery;
+// The page's tag reader, shared with the link card's page reader (`web_peek`).
+pub(crate) use discovery::{attribute, tags};
 mod raster;
 mod worked;
 

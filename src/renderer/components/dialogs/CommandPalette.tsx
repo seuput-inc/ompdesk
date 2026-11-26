@@ -41,6 +41,7 @@ import {
 	useState,
 } from "react";
 import type { AvailableCommand } from "../../../shared/rpc-types";
+import { commandsFor } from "../../../shared/terminal-commands";
 import { hydrateSession, hydrateTabSession } from "../../hooks/use-rpc-events";
 import {
 	buildCommandMenu,
@@ -61,6 +62,8 @@ import { isImeKeyEvent } from "../../lib/ime";
 import { useModelStore } from "../../stores/model";
 import { useSessionStore } from "../../stores/session";
 import { useSettingsStore } from "../../stores/settings";
+import { useTabsStore } from "../../stores/tabs";
+import { ensureTerminalCommands, useTerminalCommandsStore } from "../../stores/terminal-commands";
 import { toast, toastError } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";
 import {
@@ -267,6 +270,18 @@ export function CommandPalette() {
 		if (open) refreshCommands();
 	}, [open, refreshCommands]);
 
+	// Saved terminal commands of the tab's folder and every project (FT37), read on the first open.
+	const savedCommands = useTerminalCommandsStore(state => state.commands);
+	const commandTabId = useTabsStore(state => tabId ?? state.activeTabId);
+	const commandTabCwd = useTabsStore(state => state.tabs.find(tab => tab.id === commandTabId)?.cwd);
+	useEffect(() => {
+		if (open) ensureTerminalCommands();
+	}, [open]);
+	const terminalCommands = useMemo(
+		() => (commandTabId ? { tabId: commandTabId, commands: commandsFor(savedCommands, commandTabCwd) } : undefined),
+		[commandTabId, commandTabCwd, savedCommands],
+	);
+
 	// Rows backed by a shortcut show the user's remapped chord.
 	const keymapOverrides = useUiStore(state => state.keymapOverrides);
 	const menuItems = useMemo(
@@ -282,6 +297,7 @@ export function CommandPalette() {
 						prewalkArmed,
 						availableCommands,
 						keymapOverrides,
+						terminalCommands,
 					},
 					{
 						t,
@@ -302,6 +318,7 @@ export function CommandPalette() {
 			tabRpc,
 			tabId,
 			keymapOverrides,
+			terminalCommands,
 		],
 	);
 

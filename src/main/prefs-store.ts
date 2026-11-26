@@ -217,3 +217,16 @@ function coded<R>(call: () => R): R {
 export function prefsFile<T extends Record<string, unknown> = Record<string, unknown>>(name: string): PrefsStore<T> {
 	return new PrefsStore<T>(join(app.getPath("userData"), `${name}.json`));
 }
+
+/** A preference file the core found damaged, moved aside and put back from its backup (or emptied). */
+export interface RecoveredPrefs {
+	file: string;
+	quarantined: string | null;
+	restored: boolean;
+	backupAt: number | null;
+}
+
+/** The files the core repaired since the last call, each once (`crates/core/src/prefs` `recover`). */
+export function takeRecoveredPrefs(): RecoveredPrefs[] {
+	return hub().callOnce<RecoveredPrefs[]>(instance, "recovered", {});
+}

@@ -95,6 +95,7 @@ export function CodeView({
 		rows.push(
 			<span
 				className={cx("flex", isTarget && "bg-(--sc-accent-soft)")}
+				data-line={i + 1}
 				data-target-line={isTarget ? "true" : undefined}
 				key={i}
 				ref={isTarget ? targetRef : undefined}

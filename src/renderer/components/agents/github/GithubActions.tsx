@@ -12,6 +12,7 @@ import {
 	Button,
 	Card,
 	ConfirmDialog,
+	CopyButton,
 	IconButton,
 	Input,
 	ListRow,
@@ -27,10 +28,13 @@ export function RunDetail({
 	run,
 	target,
 	onChanged,
+	embedded,
 }: {
 	run: GithubRunDetail;
 	target: GithubSectionProps["target"];
 	onChanged: () => void;
+	/** Inside another surface (a PR's check): no page padding, a smaller title. */
+	embedded?: boolean;
 }) {
 	const t = useT();
 	const { busy, run: mutate } = useGithubMutation();
@@ -56,7 +60,10 @@ export function RunDetail({
 			if (ok) onChanged();
 		});
 	return (
-		<article className="flex flex-col gap-4 px-6 py-5 min-[1280px]:px-10" data-github-run={run.id}>
+		<article
+			className={embedded ? "flex flex-col gap-3" : "flex flex-col gap-4 px-6 py-5 min-[1280px]:px-10"}
+			data-github-run={run.id}
+		>
 			<header className="flex flex-col gap-2">
 				<h3 className="flex items-center gap-2 text-sc-lg font-semibold text-(--sc-text)">
 					<RunState conclusion={run.conclusion} status={run.status} />
@@ -121,9 +128,46 @@ export function RunDetail({
 				) : (
 					<ul className="flex flex-col gap-1">
 						{run.jobs.map((job, index) => (
-							<li className="flex items-center gap-2 text-sc-sm text-(--sc-text)" key={`${index}:${job.name}`}>
-								<RunState conclusion={job.conclusion} status={job.status} />
-								{job.name}
+							<li className="flex flex-col gap-1 text-sc-sm text-(--sc-text)" key={`${index}:${job.name}`}>
+								<span className="flex items-center gap-2">
+									<RunState conclusion={job.conclusion} status={job.status} />
+									{job.name}
+								</span>
+								{(job.annotations ?? []).length > 0 && (
+									<ul
+										aria-label={t("github.runs.annotations")}
+										className="ml-6 flex flex-col gap-1"
+										data-github-annotations
+									>
+										{(job.annotations ?? []).map((note, at) => (
+											<li className="text-sc-xs" key={`${at}:${note.path}:${note.line}`}>
+												<span
+													className={
+														note.level === "failure"
+															? "text-(--sc-danger)"
+															: note.level === "warning"
+																? "text-(--sc-warning)"
+																: "text-(--sc-text-muted)"
+													}
+												>
+													{t(
+														`github.runs.annotation.${note.level === "failure" || note.level === "warning" ? note.level : "notice"}`,
+													)}
+												</span>
+												{note.path && (
+													<span className="ml-1.5 font-mono text-(--sc-text-muted)">
+														{note.path}
+														{note.line ? `:${note.line}` : ""}
+													</span>
+												)}
+												<div className="whitespace-pre-wrap text-(--sc-text-secondary)">
+													{note.title ? `${note.title}: ` : ""}
+													{note.message}
+												</div>
+											</li>
+										))}
+									</ul>
+								)}
 							</li>
 						))}
 					</ul>
@@ -142,7 +186,12 @@ export function RunDetail({
 								{logLoad.data.truncated && (
 									<p className="mb-1 text-sc-xs text-(--sc-text-muted)">{t("github.runs.logTruncated")}</p>
 								)}
-								<Card padding="none" surface="1">
+								<Card className="relative" padding="none" surface="1">
+									<CopyButton
+										className="absolute top-1 right-1"
+										label={t("github.runs.copyLog")}
+										text={logLoad.data.text}
+									/>
 									<pre
 										className="max-h-[60vh] overflow-auto p-3 font-mono text-sc-xs whitespace-pre text-(--sc-text)"
 										data-github-log

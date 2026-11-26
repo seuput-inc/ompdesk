@@ -1,7 +1,7 @@
 /**
  * Window events other surfaces fill or drive the composer through, each for one tab (`tabId`, else the active tab):
  * `omp:insert-mention` appends an `@path` mention (the Files tree, a drop), `omp:fill-composer` places a text
- * and pictures (starter cards, history recall, a dequeue restore, the editor dialog), `omp:composer-action` runs
+ * and pictures (starter cards, history recall, a dequeue restore, the editor dialog, review notes, a quote), `omp:composer-action` runs
  * History / Expand / Attach (the command palette).
  */
 import { type RefObject, useEffect } from "react";
@@ -11,8 +11,9 @@ import {
 	type ComposerActionDetail,
 	type ComposerWindowAction,
 } from "../../../lib/composer-actions";
+import { composerListening } from "../../../lib/composer-handoff";
 import { dropReferencedPastes } from "../../../lib/paste-blobs";
-import { type ComposerImage, type ComposerStore, prependToDraft } from "../../../stores/composer";
+import { appendToDraft, type ComposerImage, type ComposerStore, prependToDraft } from "../../../stores/composer";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
 import { useTabsStore } from "../../../stores/tabs";
 import { fileMentionFor } from "./composer-files";
@@ -51,6 +52,8 @@ export function useComposerEvents({
 					text?: string;
 					images?: ImageContent[];
 					prepend?: boolean;
+					/** A quote: after the draft (`appendToDraft`), the caret at the end. */
+					append?: boolean;
 					clearPastes?: boolean;
 					tabId?: string;
 				}>
@@ -63,13 +66,18 @@ export function useComposerEvents({
 			if (detail?.clearPastes)
 				dropReferencedPastes(sessionRuntimeStore<ComposerStore>(runtimeTabId, "composer")?.getState().draft ?? "");
 			if (next) {
-				// prepend (dequeue restore): queued text goes ahead of any draft, TUI-style;
-				// otherwise replace (starter cards, history recall).
+				// prepend (dequeue restore, review notes): the text goes ahead of any draft, TUI-style; append (a quote):
+				// after it; otherwise replace (starter cards, history recall).
 				const current =
 					textareaRef.current?.value ??
 					sessionRuntimeStore<ComposerStore>(runtimeTabId, "composer")?.getState().draft ??
 					"";
-				placeDraft(detail?.prepend ? prependToDraft(next, current) : next, next.length);
+				const placed = detail?.prepend
+					? prependToDraft(next, current)
+					: detail?.append
+						? appendToDraft(next, current)
+						: next;
+				placeDraft(placed, detail?.append ? placed.length : next.length);
 			}
 			if (restoredImages.length > 0) {
 				setImages(current => [
@@ -79,6 +87,19 @@ export function useComposerEvents({
 						preview: `data:${content.mimeType};base64,${content.data}`,
 					})),
 				]);
+			}
+			// Orca's hand-off glow (components.css `[data-composer-glow]`): the box lights once, restarted by each fill.
+			const box = textareaRef.current?.closest<HTMLElement>(".omp-composer-box");
+			if (box) {
+				box.removeAttribute("data-composer-glow");
+				void box.offsetWidth;
+				box.setAttribute("data-composer-glow", "");
+				const end = (ended: AnimationEvent) => {
+					if (ended.animationName !== "omp-composer-glow") return;
+					box.removeAttribute("data-composer-glow");
+					box.removeEventListener("animationend", end);
+				};
+				box.addEventListener("animationend", end);
 			}
 			// Focus waits a frame: the surface that sent the text (a dialog, a menu) may still
 			// hand focus back as it closes. Focus keeps the caret placed above.
@@ -90,7 +111,11 @@ export function useComposerEvents({
 			});
 		};
 		window.addEventListener("omp:fill-composer", fillComposer);
-		return () => window.removeEventListener("omp:fill-composer", fillComposer);
+		const stopListening = runtimeTabId ? composerListening(runtimeTabId) : null;
+		return () => {
+			window.removeEventListener("omp:fill-composer", fillComposer);
+			stopListening?.();
+		};
 	}, [placeDraft, setImages, runtimeTabId, textareaRef]);
 }
 

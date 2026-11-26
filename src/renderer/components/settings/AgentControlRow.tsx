@@ -13,6 +13,7 @@
  */
 
 import { AppWindow, ShieldCheck, ShieldOff, ShieldQuestion } from "lucide-react";
+import { useEffect, useState } from "react";
 import {
 	AGENT_CONTROL_APPROVE_PREF,
 	AGENT_CONTROL_FULL_PREF,
@@ -33,6 +34,18 @@ export function AgentControlRow({ query = "" }: { query?: string }) {
 	const [approve, setApprove] = useMainPreference(AGENT_CONTROL_APPROVE_PREF, true);
 	const [manage, setManage] = useMainPreference(AGENT_CONTROL_MANAGE_PREF, true);
 	const label = t("settings.gui.agentControl");
+	// The control socket the `ompdesk` command reaches: a failed start says why under the switch (it is no modal).
+	const [socketFailure, setSocketFailure] = useState<string | null>(null);
+	useEffect(() => {
+		let live = true;
+		window.omp.controlSocket.failure().then(
+			reason => live && setSocketFailure(reason),
+			() => undefined,
+		);
+		return () => {
+			live = false;
+		};
+	}, []);
 	if (query && !`${label} ${SEARCH}`.toLowerCase().includes(query.toLowerCase())) return null;
 	const covered = on && full;
 	// A switch that is off-limits says why next to it: a pale track alone reads as half-on.
@@ -53,6 +66,13 @@ export function AgentControlRow({ query = "" }: { query?: string }) {
 			<SettingsSwitchRow
 				checked={on}
 				description={t("settings.gui.agentControlDesc")}
+				footer={
+					socketFailure ? (
+						<p className="mt-1 text-sc-xs text-(--sc-warning)" data-control-socket-failure>
+							{t("settings.gui.controlSocketFailed", { reason: socketFailure })}
+						</p>
+					) : undefined
+				}
 				icon={<AppWindow />}
 				id="setting-gui-agentControl"
 				label={label}

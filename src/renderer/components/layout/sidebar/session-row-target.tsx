@@ -6,6 +6,7 @@
  */
 import { GitBranch, GitCommitHorizontal, MessageCircle, Rocket } from "lucide-react";
 import { type ReactNode, useLayoutEffect, useRef } from "react";
+import type { GithubBranchPr } from "../../../../shared/github";
 import {
 	AGENT_BRANCH_PREFIX,
 	AUTOPILOT_BRANCH_PREFIX,
@@ -28,6 +29,8 @@ export interface SessionRowTarget {
 	artwork: string | null;
 	/** Null while nothing says it (no repository, git not answered). */
 	head: SessionHead | null;
+	/** The repository's main checkout, as the computer that runs the session answered; absent until then. */
+	root?: string;
 }
 
 /**
@@ -53,6 +56,7 @@ export function resolveRowTarget(
 		name: target.repository?.name || fallback.name,
 		artwork: picture?.src ?? null,
 		head: target.head,
+		...(root ? { root } : {}),
 	};
 }
 
@@ -93,6 +97,25 @@ export function headWords(
 		text: t("sidebar.row.detached", { commit: shortCommit(head.commit) }),
 		tip: t("sidebar.row.detachedTip", { commit: head.commit }),
 	};
+}
+
+/** The branch's pull request in words, for the row's tooltip and screen-reader text: number, state and checks. */
+export function branchPrWords(
+	t: (key: string, params?: Record<string, string | number>) => string,
+	pr: GithubBranchPr,
+): string {
+	const state = pr.isDraft && pr.state === "OPEN" ? "draft" : pr.state.toLowerCase();
+	const { failure, pending, success } = pr.checks;
+	const checks =
+		failure > 0
+			? t("sidebar.row.prChecks.failure", { count: failure })
+			: pending > 0
+				? t("sidebar.row.prChecks.pending", { count: pending })
+				: success > 0
+					? t("sidebar.row.prChecks.passing")
+					: null;
+	const words = t("sidebar.row.prTip", { number: pr.number, state: t(`sidebar.row.prState.${state}`) });
+	return checks ? `${words} · ${checks}` : words;
 }
 
 /** The worktree prefixes every agent's and Autopilot's branch shares; the row draws `…/` for them (the tooltip keeps it). */
@@ -169,6 +192,26 @@ export function SessionHeadLabel({ head, worktree }: { head: SessionHead; worktr
 		const size = width === null ? "" : `calc(var(--sc-icon-sm) + 0.25rem + ${Math.ceil(width) + 1}px)`;
 		element.style.flexBasis = size;
 		element.style.minWidth = size;
+		// The box's wrap drops a head whose floor does not fit, but Windows' Chromium kept one on the line, past the
+		// line's end and cut under the ⋯ (a 220 px sidebar): the line's own width decides too, and the age, which gives
+		// way before the branch, goes with it (`data-head-out`). The line's width never depends on the head or the age
+		// (sidebar.css `.omp-session-row-give`), so hiding them cannot change the answer.
+		const line = element.closest<HTMLElement>(".omp-session-row-give");
+		if (width === null || !line) return;
+		const place = () => {
+			element.style.display = "";
+			const out = line.clientWidth < Number.parseFloat(getComputedStyle(element).minWidth) + 1;
+			if (out) element.style.display = "none";
+			line.toggleAttribute("data-head-out", out);
+		};
+		place();
+		const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+		observer?.observe(line);
+		return () => {
+			observer?.disconnect();
+			element.style.display = "";
+			line.removeAttribute("data-head-out");
+		};
 	}, [floor]);
 	const Mark =
 		head.kind === "detached" ? GitCommitHorizontal : worktreeKindOf(head.name) === "autopilot" ? Rocket : GitBranch;
@@ -214,12 +257,12 @@ export function SessionRowArtwork({ target }: { target: SessionRowTarget | null 
 }
 
 /**
- * A session row's second line before its controls (`data-sidebar-row-end`): the marks (✓, a missing folder, the
- * waiting badge, which goes down to its ⚠), then the age and the branch, which give way in that order on a short line
- * (the owner's order, 19 Nov 2026; sidebar.css `.omp-session-row-give`): the age goes whole first (a working arc keeps
- * its place and gives up only its hidden age), then the branch ends in an ellipsis down to about eight characters, then
- * goes with its mark, never leaving the mark alone (the tooltip keeps the name). With room, a working arc reserves the
- * age's width (composer.md › The age slot), so the branch stays where it was when work starts or ends.
+ * A session row's second line before its controls (`data-sidebar-row-end`): the marks (a pin or fork, a missing
+ * folder, the waiting badge, which goes down to its ⚠), then the age and the branch, which give way in that order on a
+ * short line (the owner's order, 19 Nov 2026; sidebar.css `.omp-session-row-give`): the age goes whole first, then the
+ * branch ends in an ellipsis down to about eight characters, then goes with its mark, never leaving the mark alone (the
+ * tooltip keeps the name). Work under way and an unseen finish are the row's leading status lane, not this line, so the
+ * branch never moves when work starts or ends.
  */
 export function SessionRowLine({
 	marks,

@@ -16,32 +16,39 @@ const options: PtyOptions = {
 	cols: 80,
 	rows: 24,
 };
-function fixture(cwdOf?: (pid: number) => Promise<string | null>) {
+function fixture(
+	cwdOf?: (pid: number) => Promise<string | null>,
+	runningUnder?: (pid: number) => Promise<boolean | null>,
+) {
 	const processes: Array<{
 		pty: Pty;
 		done: { resolve: (value: { exitCode?: number }) => void };
 		chunk: (error: Error | null, text: string) => void;
 	}> = [];
-	const service = new TerminalService(() => {
-		const done = Promise.withResolvers<{ exitCode?: number }>();
-		const pid = 4001 + processes.length;
-		const entry = {
-			pty: {
-				startArgv: vi.fn((_options: PtyOptions, chunk: (error: Error | null, text: string) => void) => {
-					entry.chunk = chunk;
-					return done.promise;
-				}),
-				write: vi.fn(),
-				resize: vi.fn(),
-				kill: vi.fn(),
-				pid: () => pid,
-			},
-			done,
-			chunk: (_error: Error | null, _text: string) => {},
-		};
-		processes.push(entry);
-		return entry.pty;
-	}, cwdOf);
+	const service = new TerminalService(
+		() => {
+			const done = Promise.withResolvers<{ exitCode?: number }>();
+			const pid = 4001 + processes.length;
+			const entry = {
+				pty: {
+					startArgv: vi.fn((_options: PtyOptions, chunk: (error: Error | null, text: string) => void) => {
+						entry.chunk = chunk;
+						return done.promise;
+					}),
+					write: vi.fn(),
+					resize: vi.fn(),
+					kill: vi.fn(),
+					pid: () => pid,
+				},
+				done,
+				chunk: (_error: Error | null, _text: string) => {},
+			};
+			processes.push(entry);
+			return entry.pty;
+		},
+		cwdOf,
+		runningUnder,
+	);
 	return { service, processes };
 }
 describe("stock terminal lifecycle", () => {
@@ -109,6 +116,28 @@ describe("stock terminal lifecycle", () => {
 		});
 		expect(service.request("one", { action: "close", id: one.id }, options)).toEqual([]);
 		expect(processes[1].pty.kill).not.toHaveBeenCalled();
+	});
+	it("names a terminal by its shell, then by the name a person gave it, for every viewer (Orca FT2/FT8)", () => {
+		const { service } = fixture();
+		const [made] = service.request("tab", { action: "create", cols: 80, rows: 24 }, options);
+		expect(made).toMatchObject({ shell: "zsh" });
+		expect(made?.title).toBeUndefined();
+		service.request("tab", { action: "rename", id: made.id, title: "  api server " }, options);
+		expect(service.request("tab", { action: "list" }, options)[0]).toMatchObject({ title: "api server" });
+		service.request("tab", { action: "rename", id: made.id, title: "" }, options);
+		expect(service.request("tab", { action: "list" }, options)[0]?.title).toBeUndefined();
+	});
+	it("says whether a command runs: from the shell's process, never for an ended one, unknown when unreadable (FT22)", async () => {
+		const running = vi.fn(async (pid: number) => (pid === 4001 ? true : null));
+		const { service, processes } = fixture(undefined, running);
+		const [first] = service.request("tab", { action: "create", cols: 80, rows: 24 }, options);
+		const [, second] = service.request("tab", { action: "create", cols: 80, rows: 24 }, options);
+		expect(await service.busy("tab", first.id)).toBe(true);
+		expect(await service.busy("tab", second.id)).toBeNull();
+		processes[0].done.resolve({ exitCode: 0 });
+		await Promise.resolve();
+		expect(await service.busy("tab", first.id)).toBe(false);
+		await expect(service.busy("other", second.id)).rejects.toThrow("Terminal not found");
 	});
 });
 

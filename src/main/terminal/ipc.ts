@@ -1,5 +1,7 @@
+import * as os from "node:os";
 import { ipcErrorCode } from "../../shared/ipc-error-codes";
 import {
+	SCRATCH_TERMINAL_TAB,
 	TERMINAL_OUTPUT_BUDGET,
 	TERMINAL_POLL_MAX_WAIT_MS,
 	type TerminalLeaseState,
@@ -11,11 +13,12 @@ import { controlEnvFor } from "../control-socket/env";
 import { core } from "../core/process";
 import type { RemoteDevices } from "../remote/devices";
 import type { SidecarPool } from "../sidecar-pool";
+import { sshTerminalCommand } from "../ssh/ipc";
 import { stockHelperHost } from "../stock-helper";
 import { isWebWindow } from "../web/client-window";
 import type { IpcRegistry } from "../web/ipc-registry";
 import { terminalReadOptions } from "./agent-tool";
-import { disposeTerminals, readTerminalOutput, terminalRequest, validTerminalOperation } from "./requests";
+import { disposeTerminals, readTerminalOutput, terminalRequest, validPageOperation } from "./requests";
 import { detectShells } from "./shells";
 
 const owners = new Set<string>();
@@ -85,24 +88,28 @@ export function registerTerminalIpc(
 	});
 	ipc.handle("terminal:request", async (caller, tabId: string, operation: TerminalOperation) => {
 		const win = caller.win;
-		const target = win && typeof tabId === "string" ? pool.tabTarget(win, tabId) : null;
-		if (!target) throw new Error("Terminal tab not found");
-		if (!validTerminalOperation(operation)) throw new Error("Invalid terminal operation");
-		// The host owns the PTYs of its tabs and disposes them with the tab.
-		if (target.device)
+		if (!validPageOperation(operation)) throw new Error("Invalid terminal operation");
+		const viewer = caller.sender.id;
+		// The quick terminal (Orca's floating terminal): this window's own, in the home folder, kept by no session.
+		const scratch = tabId === SCRATCH_TERMINAL_TAB;
+		const target = !scratch && win && typeof tabId === "string" ? pool.tabTarget(win, tabId) : null;
+		if (!scratch && !target) throw new Error("Terminal tab not found");
+		// The host owns the PTYs of its tabs and disposes them with the tab; its saved SSH hosts are not this computer's.
+		if (target?.device) {
+			if (operation.action === "create" && operation.ssh) throw new Error("Invalid terminal operation");
 			return remoteDevices.request<TerminalSnapshot[]>(target.device, "terminal.request", {
 				rtab: tabId,
 				operation,
 			});
+		}
 		// The tab's PTYs are one set whichever window shows it (multi-viewer), keyed by its owner window;
 		// the owner's page going away closes them, a viewer's does not.
-		const owner = `${target.winId}:${tabId}`;
+		const ownerWin = target?.winId ?? viewer;
+		const owner = `${ownerWin}:${tabId}`;
 		if (!owners.has(owner)) {
 			owners.add(owner);
-			if (caller.sender.id === target.winId)
-				caller.sender.once("destroyed", () => closeTabTerminals(target.winId, tabId));
+			if (caller.sender.id === ownerWin) caller.sender.once("destroyed", () => closeTabTerminals(ownerWin, tabId));
 		}
-		const viewer = caller.sender.id;
 		// A list is a long poll with an output budget (the acknowledgement is the viewer's next request): a web
 		// viewer's whatever it asked for, a desktop window's as its viewport asks (bounded by validTerminalOperation).
 		let forwarded: TerminalOperation = operation;
@@ -113,16 +120,22 @@ export function registerTerminalIpc(
 				budget: Math.min(operation.budget ?? TERMINAL_OUTPUT_BUDGET, TERMINAL_OUTPUT_BUDGET),
 			};
 		}
+		// A saved SSH host's terminal runs its `ssh` (Settings › SSH, the core's checked arguments) in place of a shell.
+		if (operation.action === "create" && operation.ssh) {
+			const { ssh, ...create } = operation;
+			const { bin, args } = await sshTerminalCommand(ssh);
+			forwarded = { ...create, program: { path: bin, args } };
+		}
 		// A terminal of a tab the phone page owns is told control is off, as that tab's omp is. A tab that closes while
 		// this is on its way (the lazy Bun worker starting) gets nothing back and keeps no terminal (`terminalRequest`).
 		const host = stockHelperHost();
 		const result = await terminalRequest(
 			owner,
-			target.sidecar.cwd,
+			target?.sidecar.cwd ?? os.homedir(),
 			forwarded,
-			controlEnvFor(isWebWindow(target.winId)),
+			controlEnvFor(isWebWindow(ownerWin)),
 			viewer,
-			target.sessionFile,
+			target ? target.sessionFile : undefined,
 		);
 		if (!result.length) return result;
 		const standings = await core().call<TerminalLeaseState[]>("terminal.viewerSeen", {

@@ -35,6 +35,8 @@ export interface GithubLoad<T> {
 	/** GitHub holds reads until then (`gh_paused`): shown as one quiet line, never as `error`. */
 	pausedUntil: number | null;
 	reload: () => void;
+	/** Read again in place, in the background (a view's own timer): held while GitHub's limit or pace is spent. */
+	refresh: () => void;
 }
 
 /**
@@ -106,6 +108,9 @@ export function useGithubLoad<R extends GithubRequest>(
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `key` names the request; the ref holds its latest value
 	useEffect(() => read(false), [key, read]);
 	const reload = useCallback(() => read(false), [read]);
+	const refresh = useCallback(() => {
+		if (settled.current) read(true);
+	}, [read]);
 	const freshen = useCallback(() => {
 		const shown = fresh.current;
 		if (hidden() || !settled.current || !current.current.request || shown?.key !== current.current.key) return;
@@ -123,5 +128,13 @@ export function useGithubLoad<R extends GithubRequest>(
 	}, [paused, freshen]);
 	// Rows of this key (live, else its last snapshot), never another key's.
 	const data = loaded?.key === key ? loaded.data : snapKey ? (lastRead<Data>(scope.device, snapKey) ?? null) : null;
-	return { data, error: error?.message ?? null, errorCode: error?.code ?? null, loading, pausedUntil: paused, reload };
+	return {
+		data,
+		error: error?.message ?? null,
+		errorCode: error?.code ?? null,
+		loading,
+		pausedUntil: paused,
+		reload,
+		refresh,
+	};
 }

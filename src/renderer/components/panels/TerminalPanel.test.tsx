@@ -313,6 +313,8 @@ vi.mock("@xterm/addon-fit", () => ({
 		fit() {}
 	},
 }));
+vi.mock("@xterm/addon-search", () => ({ SearchAddon: class {} }));
+vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 
 describe("TerminalPanel on a phone", () => {
 	const snapshot = (extra: Record<string, unknown> = {}) => ({
@@ -418,7 +420,8 @@ describe("TerminalPanel on a phone", () => {
 		const request = phone(operation => {
 			if (operation.action === "list" && operation.waitMs) return new Promise(() => {});
 			if (operation.action === "close") open = open.filter(id => id !== operation.id);
-			return open.map(id => snapshot({ id }));
+			// Each shell sits at its prompt, so a close does not ask.
+			return open.map(id => snapshot({ id, busy: false }));
 		});
 		let focused: Element | null = null;
 		vi.spyOn(window.HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement) {
@@ -469,7 +472,7 @@ describe("TerminalPanel on a phone", () => {
 		phone(operation => {
 			if (operation.action === "list" && operation.waitMs) return new Promise(() => {});
 			if (operation.action === "close") open = open.filter(id => id !== operation.id);
-			return open.map(id => snapshot({ id }));
+			return open.map(id => snapshot({ id, busy: false }));
 		});
 		Object.defineProperty(document, "activeElement", { configurable: true, get: () => document.body });
 		await mount(<TerminalPanel />);
@@ -482,6 +485,31 @@ describe("TerminalPanel on a phone", () => {
 		// The shell that took the closed one's place mounted and took focus, so typing reaches it.
 		expect(terminals.length).toBeGreaterThan(before);
 		expect(terminals.at(-1)?.focus).toHaveBeenCalled();
+	});
+
+	it("asks before closing a terminal whose command still runs, and closes it only when the person confirms", async () => {
+		let open = ["first", "second"];
+		const request = phone(operation => {
+			if (operation.action === "list" && operation.waitMs) return new Promise(() => {});
+			if (operation.action === "close") open = open.filter(id => id !== operation.id);
+			return open.map(id => snapshot({ id, busy: operation.action === "busy" && id === "first" }));
+		});
+		Object.defineProperty(document, "activeElement", { configurable: true, get: () => document.body });
+		// The phone's dialog takes the back gesture (back-layer.ts).
+		Reflect.set(window, "history", { pushState: () => {}, back: () => {} });
+		await mount(<TerminalPanel />);
+		await settle();
+		const closeFirst = container.querySelector('[role=presentation] button[aria-label="Close Terminal 1"]');
+		await act(async () => closeFirst?.dispatchEvent(new window.Event("click", { bubbles: true })));
+		await settle();
+		expect(operations(request, "close")).toEqual([]);
+		expect(document.body.textContent).toContain("Close a running terminal?");
+		const confirm = Array.from(document.querySelectorAll("button")).find(
+			button => button.textContent === "Close terminal",
+		);
+		await act(async () => confirm?.dispatchEvent(new window.Event("click", { bubbles: true })));
+		await settle();
+		expect(operations(request, "close").map(operation => operation.id)).toEqual(["first"]);
 	});
 
 	it("reads with a long poll that carries the offset, one request at a time", async () => {

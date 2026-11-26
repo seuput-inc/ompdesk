@@ -1,7 +1,9 @@
 /**
- * Run by `formal-stock.test.ts` under Bun (stock omp's source needs Bun's runtime): builds a real omp session with
- * the given extension roots in the caller's isolated HOME and agent dir and prints, as one JSON line, what the
- * formal-verification skill costs and exposes. Args: `<omp package root> <cwd> <extension root>...`.
+ * Run by `formal-stock.test.ts` and `interfaces-stock.test.ts` under Bun (stock omp's source needs Bun's runtime):
+ * builds a real omp session with the given extension roots in the caller's isolated HOME and agent dir and prints, as
+ * one JSON line, what the bundled skills cost and expose. Args: `<omp package root> <cwd> <extension root>...`;
+ * `STOCK_PROBE_READ` (comma-separated `skill://` URLs) names what to read, else the formal skill's;
+ * `STOCK_PROBE_INVOKE` (JSON `[name, args][]`) renders those `/skill:<name> <args>` prompts as stock sends them.
  */
 export {};
 
@@ -10,6 +12,7 @@ const [packageRoot, cwd, ...roots] = process.argv.slice(2);
 const { createAgentSession } = await import(`${packageRoot}/src/sdk.ts`);
 const { SkillProtocolHandler } = await import(`${packageRoot}/src/internal-urls/skill-protocol.ts`);
 const { parseInternalUrl } = await import(`${packageRoot}/src/internal-urls/parse.ts`);
+const { buildSkillPromptMessage } = await import(`${packageRoot}/src/extensibility/skills.ts`);
 
 const { session } = await createAgentSession({
 	cwd,
@@ -23,13 +26,22 @@ const skills: { name: string; filePath: string; hide?: boolean; disableModelInvo
 ];
 const handler = new SkillProtocolHandler();
 const read: Record<string, string> = {};
-for (const url of ["skill://ompdesk-formal-verify", "skill://ompdesk-formal-verify/references/workflows.md"]) {
+const urls = process.env.STOCK_PROBE_READ?.split(",") ?? [
+	"skill://ompdesk-formal-verify",
+	"skill://ompdesk-formal-verify/references/workflows.md",
+];
+for (const url of urls) {
 	try {
 		const resource = await handler.resolve(parseInternalUrl(url), { skills });
 		read[url] = String(resource.content ?? "").slice(0, 300);
 	} catch (error) {
 		read[url] = `error: ${error instanceof Error ? error.message : String(error)}`;
 	}
+}
+const invoked: string[] = [];
+for (const [name, args] of JSON.parse(process.env.STOCK_PROBE_INVOKE ?? "[]") as [string, string][]) {
+	const skill = session.skills.find((entry: { name: string }) => entry.name === name);
+	invoked.push(skill ? (await buildSkillPromptMessage(skill, { args }, "user")).message : `error: no skill ${name}`);
 }
 const breakdown = await session.getContextBreakdown();
 console.log(
@@ -42,6 +54,7 @@ console.log(
 			hidden: skill.hide === true || skill.disableModelInvocation === true,
 		})),
 		read,
+		invoked,
 	}),
 );
 await session.dispose();

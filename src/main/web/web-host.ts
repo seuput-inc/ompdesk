@@ -6,7 +6,7 @@
  * address and the secret path of its serve handler.
  */
 import { z } from "zod";
-import type { PeerLimits } from "../../shared/ipc-types";
+import type { IpcPushTestResult, PeerLimits } from "../../shared/ipc-types";
 import {
 	WEB_BLOCKS_LIST,
 	WEB_BLOCKS_REMOVE,
@@ -25,6 +25,7 @@ import {
 } from "../../shared/mobile-web";
 import type { UiLanguage } from "../../shared/ui-language";
 import { WEB_PERMISSIONS, type WebFeatures } from "../../shared/web-protocol";
+import { MAIN_TEXT } from "../i18n-text";
 import { readModelsText, writeModelsText } from "../models-config";
 import { PeerQuota } from "../remote/peer-quota";
 import type { TabActivity, TabFacts } from "../sidecar-pool";
@@ -33,7 +34,7 @@ import type { TailnetPeer } from "../tailscale/whois";
 import { BlobStore } from "./blobs";
 import { WebBlocks } from "./blocks-store";
 import type { ClientWindow } from "./client-window";
-import { type WebDevice, WebDevices } from "./devices-store";
+import { pushSettingsOf, type WebDevice, WebDevices } from "./devices-store";
 import type { FileEditTarget } from "./file-edit-reports";
 import { createHostActions } from "./host-actions";
 import type { IpcRegistry } from "./ipc-registry";
@@ -96,6 +97,10 @@ export interface WebHostDeps {
 	language: () => UiLanguage;
 	/** The schedule service that answers `POST /hooks/<id>` (routine webhooks); read per call, it is made after the host. */
 	hooks?: WebServerDeps["hooks"] | undefined;
+	/** False while the person is at a desktop (presence.ts): phones are not pushed then. */
+	desktopAway?: () => boolean | undefined;
+	/** The tab's project has its notifications muted: phones hear nothing of it. */
+	notifyMuted?: (tabId: string) => boolean;
 }
 
 const DeviceId = z.string().min(1).max(128);
@@ -118,6 +123,7 @@ export class WebHost {
 	readonly confirmations: PairingConfirmations;
 	readonly #deps: WebHostDeps;
 	readonly notifier: WebPushNotifier;
+	readonly #sender: PushSender;
 	readonly #serveSecret: ServeSecretStore;
 	/** The upload sweep in flight; one at a time, and `stop` waits for it. */
 	#sweeping: Promise<number> | null = null;
@@ -167,14 +173,17 @@ export class WebHost {
 			notify: request => this.#toDesktop(WEB_PAIRING_REQUEST, request),
 			now,
 		});
+		this.#sender = new PushSender({ userData: deps.userData, transport: deps.pushTransport, log: deps.log });
 		this.notifier = new WebPushNotifier({
 			devices: this.devices,
-			sender: new PushSender({ userData: deps.userData, transport: deps.pushTransport, log: deps.log }),
+			sender: this.#sender,
 			visible: deviceId => this.router.isDeviceVisible(deviceId),
 			tabFacts: deps.tabs.facts,
 			language: deps.language,
 			setTimer: deps.pushTimers?.setTimer ?? ((fn, ms) => setTimeout(fn, ms).unref()),
 			clearTimer: deps.pushTimers?.clearTimer ?? (handle => clearTimeout(handle as NodeJS.Timeout)),
+			...(deps.desktopAway ? { desktopAway: deps.desktopAway } : {}),
+			...(deps.notifyMuted ? { muted: deps.notifyMuted } : {}),
 		});
 		const policy: RequestPolicy = {
 			host: "127.0.0.1",
@@ -283,6 +292,41 @@ export class WebHost {
 	/** A tab's notice no turn event carries (an Autopilot run's end, an agent's `ompdesk_notify`): paired phones hear it while the server runs. */
 	tabNotice(tabId: string, notice: { kind: "completion" | "error"; title: string; body: string }): void {
 		if (this.server.port !== null) this.notifier.notice(tabId, notice);
+	}
+
+	/** The person looked at the tab: its banners on the phones go (a `clear` push for each). */
+	tabSeen(tabId: string): void {
+		this.notifier.seen(tabId);
+	}
+
+	/**
+	 * Settings › Mobile web's "Send a test" on a paired page: one push to that device's own subscription, past the
+	 * batcher, its categories, presence and the page's visibility (a page in the foreground may show it too). A
+	 * subscription the push service no longer knows is forgotten, as for any push.
+	 */
+	async testPush(deviceId: string): Promise<IpcPushTestResult> {
+		const device = this.devices.get(deviceId);
+		const subscription = device && pushSettingsOf(device).subscription;
+		if (!subscription) return "none";
+		const language = this.#deps.language();
+		const result = await this.#sender.send(
+			subscription,
+			{
+				v: 1,
+				kind: "completion",
+				title: MAIN_TEXT["push.test.title"][language],
+				body: MAIN_TEXT["push.test.body"][language],
+				tag: "test",
+			},
+			{ ttl: 60, urgency: "normal" },
+		);
+		if (result === "gone") this.devices.forgetPushSubscription(deviceId, subscription.endpoint);
+		return result;
+	}
+
+	/** A paired page's window whose page is in the foreground: the person looks at what it shows. */
+	pageVisible(win: ClientWindow): boolean {
+		return win instanceof WebClientWindow && this.router.isDeviceVisible(win.deviceId);
 	}
 
 	/** The device a web window's prompts come from, as its name stands now; null for any other window. */

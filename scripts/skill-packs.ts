@@ -80,6 +80,20 @@ const PACKS: Pack[] = [
 			...FORMAL_TESTS,
 		],
 	},
+	{
+		name: "interfaces",
+		config: "resources/omp-builtin/interfaces/interfaces-config.json",
+		repo: "jakubkrehel/skills",
+		paths: ["skills", "LICENSE", ".claude-plugin/plugin.json"],
+		versionFile: ".claude-plugin/plugin.json",
+		sync: "sync:interfaces",
+		tests: [
+			"src/main/interfaces/pack-drift.test.ts",
+			"src/main/interfaces/interfaces-stock.test.ts",
+			...PACKAGING_TESTS,
+			...FORMAL_TESTS,
+		],
+	},
 ];
 
 const Pin = z.object({

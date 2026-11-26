@@ -610,14 +610,19 @@ for (const engine of ENGINES) {
 								expect(size.hit.height, `${label} ${size.label} height`).toBeGreaterThanOrEqual(min);
 							}
 						};
-						// The Run chip sits 4 px from +: its reach stops at the midpoint, so + is 30 px wide.
-						await reach(plus(page), "+", 30);
-						await reach(sendSlot(page).locator("button"), "Send/mic", 44);
-						for (const locator of [runChip(page), modelChip(page), contextRing(page)]) {
-							await reach(locator, "row chip", 30);
-							for (const size of await hitSizes(locator)) expect(size.visual.height).toBeLessThanOrEqual(28.5);
+						// Every composer control is drawn 44 px on a phone (the owner's decision, 25 Nov 2026), so each is its
+						// own 44 px target without taking a neighbour's tap.
+						for (const [locator, label] of [
+							[plus(page), "+"],
+							[contextRing(page), "context ring"],
+							[sendSlot(page).locator("button"), "Send/mic"],
+							[runChip(page), "Run chip"],
+							[modelChip(page), "model chip"],
+						] as const) {
+							await reach(locator, label, 44);
+							for (const size of await hitSizes(locator))
+								expect(size.visual.height, `${label} drawn height`).toBeGreaterThanOrEqual(43.5);
 						}
-						for (const size of await hitSizes(plus(page))) expect(size.visual.width).toBeLessThanOrEqual(28.5);
 						for (const locator of [
 							plus(page),
 							sendSlot(page).locator("button").first(),
@@ -633,13 +638,14 @@ for (const engine of ENGINES) {
 					}
 				});
 
-				test("holds twenty pictures in one scrolling row (a box of 150 px or less) and types at 40 ms or less on a 4x slower CPU", async () => {
+				test("holds twenty pictures in one scrolling row (a box of 154 px or less) and types at 40 ms or less on a 4x slower CPU", async () => {
 					const page = await openPhone(engine, { lang, theme });
 					try {
 						await attach(page, 20);
 						await expect(page.locator(".omp-attach-strip")).toBeVisible();
 						const box = await boxOf(page.locator(".omp-composer-box"));
-						expect(box.height, "20 pictures").toBeLessThanOrEqual(150);
+						// 150 until the controls row was drawn 44 px (the owner's decision, 25 Nov 2026): the box is 4 px taller.
+						expect(box.height, "20 pictures").toBeLessThanOrEqual(154);
 						await capture(page, "attachments", engine, theme, lang);
 						if (engine.type === chromium) {
 							const cdp = await page.context().newCDPSession(page);

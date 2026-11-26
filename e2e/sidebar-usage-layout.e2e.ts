@@ -1,7 +1,8 @@
 /**
- * SidebarUsage's 0.128.0 regression at the owner's 227px width: three Claude accounts, one blocked in use.
- * Chromium measures the cap, wrapping and clipping that linkedom cannot. Account grouping and folds stay in
- * SidebarUsage.test.tsx. The same made-up reports feed the fake omp's blocked-account parity sheet.
+ * The usage block's 0.128.0 regression (three Claude accounts, one blocked in use), now in a desktop window's status
+ * bar popover (the owner's decision, 25 Nov 2026; a phone or tablet keeps the sidebar footer's). Chromium measures the
+ * cap, wrapping and clipping that linkedom cannot. Account grouping and folds stay in SidebarUsage.test.tsx. The same
+ * made-up reports feed the fake omp's blocked-account parity sheet.
  */
 import { createServer as createNetServer } from "node:net";
 import * as path from "node:path";
@@ -9,7 +10,7 @@ import { chromium, expect, test } from "@playwright/test";
 import { createServer } from "vite";
 
 // One test owns its server and browser, so no fixture state crosses tests or workers.
-test("the narrow sidebar shows all three accounts and resets together above Settings", async () => {
+test("the status bar's usage block shows all three accounts and resets together above the bar", async () => {
 	const probe = createNetServer();
 	const listening = Promise.withResolvers<void>();
 	probe.once("error", listening.reject);
@@ -32,7 +33,8 @@ test("the narrow sidebar shows all three accounts and resets together above Sett
 		const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
 		await page.addInitScript(() => localStorage.setItem("omp.sidebarWidth", "227"));
 		await page.goto(`http://127.0.0.1:${port}/harness.html?theme=dark&lang=ko&usage=blocked&platform=darwin`);
-		const block = page.locator("[data-rail-pin='usage']");
+		await page.locator("[data-status-usage]").click();
+		const block = page.locator("[data-rail-pin='usage'][data-usage-popover]");
 		const scroller = page.locator("[data-sidebar-usage-scroll]");
 		await expect(block.locator("[data-usage-account]")).toHaveCount(3);
 		await expect(block.locator("[data-in-use]")).toHaveCount(1);
@@ -42,16 +44,13 @@ test("the narrow sidebar shows all three accounts and resets together above Sett
 			await page.setViewportSize({ width: 1280, height });
 			const geometry = await block.evaluate(element => {
 				const box = element.getBoundingClientRect();
-				const sidebar = document.querySelector(".omp-session-sidebar")?.getBoundingClientRect();
-				const list = document.querySelector(".omp-sidebar-list")?.getBoundingClientRect();
-				const settings = document.querySelector("[data-destination='settings']")?.getBoundingClientRect();
 				const scroller = element.querySelector("[data-sidebar-usage-scroll]")?.getBoundingClientRect();
+				const bar = document.querySelector("[data-status-bar]")?.getBoundingClientRect();
 				return {
 					height: box.height,
-					width: sidebar?.width,
-					listHeight: list?.height,
-					settingsTop: settings?.top,
+					top: box.top,
 					bottom: box.bottom,
+					barTop: bar?.top ?? innerHeight,
 					minimumFont: Math.min(
 						...[
 							...element.querySelectorAll("[data-account-label], .omp-usage-gauge-text, .omp-usage-gauge-reset"),
@@ -63,12 +62,8 @@ test("the narrow sidebar shows all three accounts and resets together above Sett
 					}).length,
 				};
 			});
-			expect(geometry.width).toBe(227);
-			expect(geometry.height, "the whole usage block takes at most a third").toBeLessThanOrEqual(height / 3);
-			expect(geometry.listHeight, "session rows retain at least a quarter of the sidebar").toBeGreaterThan(
-				height / 4,
-			);
-			expect(geometry.bottom, "all account data stays above Settings").toBeLessThan(geometry.settingsTop ?? 0);
+			expect(geometry.top, "the block stays on screen").toBeGreaterThanOrEqual(0);
+			expect(geometry.bottom, "the block opens above the status bar").toBeLessThanOrEqual(geometry.barTop);
 			expect(geometry.visibleAccounts, "all three accounts are readable without scrolling").toBe(3);
 			expect(geometry.minimumFont, "values and resets retain readable type").toBeGreaterThanOrEqual(12);
 			// Every window's label, percentage and reset remain readable at this width.
@@ -106,6 +101,7 @@ test("the narrow sidebar shows all three accounts and resets together above Sett
 			await page.screenshot({ path: test.info().outputPath(`sidebar-usage-${height}-end.png`) });
 		}
 		await page.goto(`http://127.0.0.1:${port}/harness.html?theme=dark&lang=ko&usage=windows&platform=darwin`);
+		await page.locator("[data-status-usage]").click();
 		await expect(block.getByRole("progressbar")).toHaveCount(14);
 		await expect(block.locator(".omp-usage-gauge-reset")).toHaveCount(14);
 		const wideLast = block.locator("[data-usage-account]").last();

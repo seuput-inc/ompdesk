@@ -188,6 +188,8 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 				const ecc = deps.eccPref && eccEnabled(deps.eccPref()) ? ["-e", join(deps.builtinDir, "ecc")] : [];
 				// The formal-verification skill (resources/omp-builtin/formal): no switch, every spawn, skill only.
 				const formal = ["-e", join(deps.builtinDir, "formal")];
+				// Jakub Krehel's interface skills (resources/omp-builtin/interfaces): no switch, every spawn, skills only.
+				const interfaces = ["-e", join(deps.builtinDir, "interfaces")];
 				const ponytail = ["-e", join(bridgeDir, "ponytail.ts")];
 				const memory = (await deps.aiMemoryExtensionArgs?.(cwd)) ?? [];
 				const hub = memory.length ? ((await deps.mcpHubEnv?.()) ?? {}) : {};
@@ -200,7 +202,16 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 						})
 					: undefined;
 				return {
-					args: [...own, ...(computer?.args ?? []), ...pstack, ...ecc, ...formal, ...ponytail, ...memory],
+					args: [
+						...own,
+						...(computer?.args ?? []),
+						...pstack,
+						...ecc,
+						...formal,
+						...interfaces,
+						...ponytail,
+						...memory,
+					],
 					// A chat (no project) keeps the packs' roots but not their section texts.
 					env: {
 						OMP_GUI_PSTACK: pstack.length && kind === "agent" ? "1" : "0",

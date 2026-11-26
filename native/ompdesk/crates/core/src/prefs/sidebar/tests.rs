@@ -187,3 +187,37 @@ fn a_change_applies_to_what_is_stored_now_and_a_refusal_leaves_it() {
     assert_eq!(stored["pinnedSessions"], json!(["/s/moved"]));
     assert!(stored.get("grouping").is_none());
 }
+
+#[test]
+fn a_project_is_muted_and_unmuted_as_set_never_toggled() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("prefs.json");
+    let file = file.to_str().unwrap();
+    let mute = |muted: bool| {
+        update(
+            file,
+            &json!({ "op": "set-group-muted", "cwd": "/w", "muted": muted }),
+            "window",
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        json!(mute(true))["change"],
+        json!({ "op": "set-group-muted", "cwd": "/w", "muted": true })
+    );
+    // Two pages that both mean "muted" leave it muted: the second moves nothing.
+    assert_eq!(json!(mute(true)), json!({ "change": null, "log": null }));
+    let stored = super::super::get(file, KEY).unwrap().unwrap();
+    assert_eq!(stored["mutedGroups"], json!(["/w"]));
+    mute(false);
+    let stored = super::super::get(file, KEY).unwrap().unwrap();
+    assert_eq!(stored["mutedGroups"], json!([]));
+    assert!(
+        update(
+            file,
+            &json!({ "op": "set-group-muted", "cwd": "", "muted": true }),
+            "window"
+        )
+        .is_err()
+    );
+}

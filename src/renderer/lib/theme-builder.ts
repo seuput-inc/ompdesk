@@ -52,6 +52,8 @@ export interface ThemePalette {
 	attention?: string;
 	/** An unseen finish (the sidebar's ✓); the info color when absent. */
 	unread?: string;
+	/** Work under way (Orca's working yellow: the sidebar's working spinner, the composer's glow); the warning when absent. */
+	working?: string;
 	/** Ink on an error-filled button. */
 	onError: string;
 	/** Inline `code` in prose. */
@@ -134,6 +136,7 @@ export function buildTheme(p: ThemePalette): ThemeDefinition {
 		"--omp-attention": p.attention ?? p.warning,
 		"--omp-attention-dim": withAlpha(p.attention ?? p.warning, 0.12),
 		"--omp-unread": p.unread ?? p.info,
+		"--omp-working": p.working ?? p.warning,
 		"--omp-text": p.text,
 		"--omp-text-secondary": p.textSecondary,
 		"--omp-bg-primary": p.bg,

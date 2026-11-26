@@ -12,10 +12,10 @@ import type { SessionSummary } from "../../../shared/session-summary";
 import { useOpenedChildren } from "../../hooks/use-opened-children";
 import type { SessionRun } from "../../lib/session-run";
 import type { TitleParts } from "../../lib/session-title";
-import { type LiveState, SessionTitle, TimeAgo, WorkingArc } from "../common";
+import { type LiveState, SessionTitle } from "../common";
 import { liveWorkState, workingAgentCount } from "./live-work";
 
-interface SessionLiveProps {
+export interface SessionLiveProps {
 	/** Main reports it running (a turn, or background work keeping it unsettled). */
 	running: boolean;
 	/** Of `running`: the turn ended and only background work keeps it on (main's `settling`). */
@@ -28,7 +28,8 @@ interface SessionLiveProps {
 	agents: number;
 }
 
-function sessionLive({ running, settling, waiting, opened, agents }: SessionLiveProps): LiveState | null {
+/** The working cue's state for a session (the title's light and the row's status lane read it). */
+export function sessionLive({ running, settling, waiting, opened, agents }: SessionLiveProps): LiveState | null {
 	return liveWorkState({
 		streaming: running && !settling,
 		waiting: waiting ? 1 : 0,
@@ -58,28 +59,4 @@ export const SessionLiveTitle = memo(function SessionLiveTitle({
 	...props
 }: SessionLiveProps & { parts: TitleParts; swapScope?: string }): ReactElement {
 	return <SessionTitle live={sessionLive(props)} noTooltip parts={parts} swapScope={swapScope} />;
-});
-
-/**
- * A row's age slot: the time since the session last did something (`SessionInfo.modified`, ticking on the shared
- * clock), or the working arc while the session's work goes on, by the same rule as the title's light (its own turn,
- * stock's background work, its subagents, the sessions its agent opened). Waiting on the person is not working: the
- * caller shows its waiting token there instead. The age stays in the slot, hidden, so the row keeps its width.
- */
-function LiveAge({ state, iso }: { state: LiveState | null; iso: string | null }): ReactElement | null {
-	const working = state === "turn" || state === "background" ? state : null;
-	if (!working) return iso ? <TimeAgo className="text-(--sc-text-subtle)" iso={iso} /> : null;
-	return (
-		<span className="omp-live-age" data-session-working={working}>
-			{iso && <TimeAgo iso={iso} />}
-			<WorkingArc state={working} />
-		</span>
-	);
-}
-
-export const SessionLiveAge = memo(function SessionLiveAge({
-	iso,
-	...props
-}: SessionLiveProps & { iso: string | null }): ReactElement | null {
-	return <LiveAge iso={iso} state={sessionLive(props)} />;
 });

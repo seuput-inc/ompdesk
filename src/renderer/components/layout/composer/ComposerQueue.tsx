@@ -139,9 +139,8 @@ const QueueRow = memo(function QueueRow({
 						icon={<Pencil />}
 						label={notConnected ?? t("composerQueue.editAria", { text: name })}
 						onClick={() => {
-							void beginEdit(item, lane).then(began => {
-								if (began) onEdit();
-							});
+							beginEdit(item, lane);
+							onEdit();
 						}}
 						size="sm"
 					/>
@@ -228,7 +227,8 @@ export function ComposerQueuePill({ onSettled }: { onSettled: () => void }) {
 	const t = useT();
 	const { steering, followUp } = useQueuedMessages();
 	const actions = useQueueActions();
-	const editing = useComposerStore(state => state.editingQueued !== null);
+	// A message an ended edit is still queuing again would show here under the id it is about to lose.
+	const editing = useComposerStore(state => state.editingQueued !== null || state.editsRequeueing > 0);
 	const edited = useQueueStore(state => state.moved?.kind === "edit");
 	const phone = useShellMode() === "phone";
 	const [open, setOpen] = useState(false);

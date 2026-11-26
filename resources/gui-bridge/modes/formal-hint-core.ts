@@ -15,6 +15,14 @@ export const FORMAL_SKILL = "skill://ompdesk-formal-verify";
 /** A long assignment carries its background first; the ask is in what the matcher reads. */
 const MAX_TEXT = 8000;
 
+/**
+ * A `/skill:<name>` turn's prompt is stock's `prompts/skills/user-invocation.md` rendering: the skill's whole body,
+ * then its directory, then the person's own words on one `User:` line. Only those words are the request; a skill's
+ * body is not (the interface pack's `state-machine` is about UI states, not a state-machine bug).
+ */
+const INVOKED_SKILL =
+	/^\[IMPORTANT: User invoked the "[^"\n]+" skill;[^\n]*\]\n[\s\S]*\n\[Skill directory: [^\n]*\]\n[^\n]*(?:\nUser: ([\s\S]*))?$/;
+
 /** One pattern per way to say it; each is a concurrency or never-happens signal on its own. */
 export const FORMAL_PATTERNS: readonly RegExp[] = [
 	// English
@@ -43,8 +51,10 @@ export const FORMAL_PATTERNS: readonly RegExp[] = [
 
 /** Whether this turn's request is the kind that must read the formal-verification skill first. */
 export function isFormalRequest(text: string | undefined): boolean {
-	if (!text) return false;
-	const body = text.length > MAX_TEXT ? text.slice(0, MAX_TEXT) : text;
+	const invoked = text ? INVOKED_SKILL.exec(text) : null;
+	const request = invoked ? invoked[1] : text;
+	if (!request) return false;
+	const body = request.length > MAX_TEXT ? request.slice(0, MAX_TEXT) : request;
 	return FORMAL_PATTERNS.some(pattern => pattern.test(body));
 }
 

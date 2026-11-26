@@ -1,6 +1,6 @@
 /**
- * Tab lifecycle chores that used to ride on the (removed) tab strip. Session
- * tabs are pooled sidecars navigated from the sidebar; nothing here renders.
+ * Tab lifecycle chores beside the title bar's tab strip (`tab-strip/SessionTabStrip.tsx`) and the sidebar, which both
+ * pick and close tabs; nothing here renders.
  *
  * - A ⌘W-armed close (live run) auto-cancels after `confirmCloseMs`.
  * - The untargeted startup tab is an idle landing surface, not a permanent

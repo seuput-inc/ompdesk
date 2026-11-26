@@ -10,7 +10,14 @@ import { SessionKindStore } from "./session-kinds";
 import type { SidecarOptions } from "./sidecar";
 import { localSidecarFactory } from "./sidecar-factory";
 
-const ALWAYS = ["-e", path.join("/builtin", "formal"), "-e", path.join("/bridge", "ponytail.ts")];
+const ALWAYS = [
+	"-e",
+	path.join("/builtin", "formal"),
+	"-e",
+	path.join("/builtin", "interfaces"),
+	"-e",
+	path.join("/bridge", "ponytail.ts"),
+];
 const created = vi.hoisted(() => [] as SidecarOptions[]);
 const sidecars = vi.hoisted(() => [] as Array<{ listeners: Map<string, Array<(arg: unknown) => void>> }>);
 

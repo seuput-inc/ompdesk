@@ -46,6 +46,7 @@ import { basename, formatClock } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { openExternal } from "../../../lib/open-external";
 import { moveInOrder, reorderProjects } from "../../../lib/project-order";
+import { laneState } from "../../../lib/session-lane";
 import {
 	combinedTitle,
 	sessionDisplayLabel,
@@ -58,8 +59,9 @@ import { deviceGroupKey, LOCAL_DEVICE } from "../../../lib/sidebar-memory";
 import { tabSignalPresentation } from "../../../lib/tab-signal";
 import { pickWorkspaceDirectory } from "../../../lib/workspace-dirs";
 import { useAgentReviewStore } from "../../../stores/agent-review";
+import { type BranchRow, branchPrOf, branchPrTone, useBranchPrs, watchBranchPrs } from "../../../stores/branch-prs";
 import { summariesOf, useHostedSessionsStore, useSummaryMap } from "../../../stores/hosted-sessions";
-import { pickRemoteDirectory } from "../../../stores/remote";
+import { pickRemoteDirectory, useTailscaleHint } from "../../../stores/remote";
 import type { SessionStore } from "../../../stores/session";
 import { sessionListFeed } from "../../../stores/session-list";
 import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
@@ -89,7 +91,7 @@ import {
 	TimeAgo,
 } from "../../common";
 import { workingAgentCount } from "../live-work";
-import { SessionLiveAge, SessionLiveTitle } from "../SessionLiveTitle";
+import { SessionLiveTitle, sessionLive } from "../SessionLiveTitle";
 import { childFoldSignal, type FoldSignal, type FoldSummary, foldSummary } from "./fold-summary";
 import { hostSectionSummary, remoteOpenedTab, summaryRowState } from "./host-row-state";
 import { useHostWorkspace } from "./host-workspace";
@@ -97,6 +99,7 @@ import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
 import { deleteProject, isStoredRow } from "./project-delete";
 import { projectMenuItems } from "./project-menu";
 import { logSelection, useRowSelection } from "./row-selection";
+import { SessionStatusLane } from "./SessionStatusLane";
 import { SidebarChats } from "./SidebarChats";
 import { useDeviceHeaderHandle } from "./SidebarDeviceSections";
 import { SidebarFoldButton } from "./SidebarFoldButton";
@@ -107,7 +110,14 @@ import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubag
 import { SortableProject } from "./SortableProject";
 import { sessionMenuItems } from "./session-menu";
 import { canDropOn, canMoveWithin, type SessionList, useSessionReorder } from "./session-reorder";
-import { headWords, resolveRowTarget, SessionRowArtwork, SessionRowEnd, SessionRowLine } from "./session-row-target";
+import {
+	branchPrWords,
+	headWords,
+	resolveRowTarget,
+	SessionRowArtwork,
+	SessionRowEnd,
+	SessionRowLine,
+} from "./session-row-target";
 import { CHILD_TOKEN, hasFamilyChip, openedChildStatus, reviewKey } from "./sidebar-family";
 import { useHeld } from "./sidebar-hold";
 import { useSidebarListMotion } from "./use-sidebar-list-motion";
@@ -317,6 +327,7 @@ export function SidebarDeviceSection({
 	const online = host.state === "online";
 	const webPage = webPwa() !== null;
 	const stateLabel = t(`remote.state.${host.state}`);
+	const tailscaleHint = useTailscaleHint(host.deviceId);
 	// While the link comes up the host's last known rows stand in (never read: an unlinked host is not asked), so the
 	// rows are already in place when it connects and nothing below them moves.
 	const hasLastKnownRows = useStore(sessionListFeed("global", host.deviceId).store, s => s.sessions.length > 0);
@@ -376,7 +387,11 @@ export function SidebarDeviceSection({
 					<span
 						className="shrink-0 rounded-(--sc-radius-sm) bg-(--sc-hover) px-1 text-sc-xs text-(--sc-text-secondary)"
 						data-device-offline
-						title={t("remote.sidebar.offline")}
+						title={
+							tailscaleHint
+								? `${t("remote.sidebar.offline")} ${t("remote.sidebar.tailscaleHint")}`
+								: t("remote.sidebar.offline")
+						}
 					>
 						{stateLabel}
 					</span>
@@ -423,6 +438,13 @@ function DeviceSessions({
 	read: boolean;
 }) {
 	const t = useT();
+	// Each shown row's branch PR, read on the host (stores/branch-prs.ts, as Sidebar.tsx's rows).
+	const branchPrs = useBranchPrs(state => state.prs);
+	const shownBranches: BranchRow[] = [];
+	const selectedBranches: BranchRow[] = [];
+	const prView = `device:${host.deviceId}`;
+	useEffect(() => watchBranchPrs(prView, shownBranches, selectedBranches));
+	useEffect(() => () => watchBranchPrs(prView, [], []), [prView]);
 	// What every row shows of the host's sessions, as the host built it (its windows' tabs, the tabs it runs for any
 	// device): a row reads its run, prompt and subagents from it whether or not a tab here holds the session.
 	const hostSummaries = useSummaryMap(host.deviceId);
@@ -886,9 +908,11 @@ function DeviceSessions({
 				tabFocused: tab !== undefined && tab.id === activeTabId,
 				tabInSplit: tab !== undefined && splitIds?.has(tab.id) === true,
 				splitShown: splitIds !== null,
+				unread: tab?.unreadDone === true,
 				canCloseTab: allTabs.length > 1,
 				chat: session.kind === "chat",
 				pinned: hostPins.includes(session.path),
+				muted: false,
 				archived: hostArchived.has(session.id),
 				agentHidden: false,
 				canMoveUp: canMoveWithin(list, session.path, -1),
@@ -912,6 +936,7 @@ function DeviceSessions({
 								void useTabsStore.getState().splitTab(tab.id, placement);
 							},
 							unsplit: () => void useTabsStore.getState().unsplit(tab.id),
+							markUnread: () => useTabsStore.getState().markUnread(tab.id),
 							closeTab: () => void useTabsStore.getState().closeTab(tab.id),
 						}
 					: {}),
@@ -982,7 +1007,8 @@ function DeviceSessions({
 		const summary =
 			hostSummaries.get(session.path) ??
 			(tab && !tab.sessionPath ? hostSummaries.get(unsavedSessionKey(tab.id)) : undefined);
-		const { signal, waiting, running, settling, reason } = summaryRowState(summary);
+		const rowRun = summaryRowState(summary);
+		const { signal, waiting, running, settling, reason } = rowRun;
 		const working = signal?.running === true || running;
 		// Every pane of the split on screen reads as selected, like the local list (Sidebar.tsx); the focused one adds data-pane-focus.
 		const { current, inSplit: inVisibleSplit, selected: active } = selectionOf(tab?.id);
@@ -1042,20 +1068,37 @@ function DeviceSessions({
 						artwork: null,
 						head: null,
 					});
+		const branchRow: BranchRow | null =
+			target?.root && target.head?.kind === "branch"
+				? { device: host.deviceId, root: target.root, branch: target.head.name }
+				: null;
+		if (branchRow) {
+			shownBranches.push(branchRow);
+			if (current) selectedBranches.unshift(branchRow);
+			else if (tab) selectedBranches.push(branchRow);
+		}
+		const pr = branchPrOf(branchPrs, branchRow);
+		const prWords = pr ? branchPrWords(t, pr) : null;
 		// Its family, as a local row's (Sidebar.tsx): the tab's subagents and the sessions its agent opened. The ones
 		// running light the row as on the host, though no tab here holds it.
 		const opened = openedOf(session);
 		const runningOpened = opened.filter(child => child.status === "running").length;
-		const age = (
-			<SessionLiveAge
-				agents={workingAgentCount(summary?.agents ?? [])}
-				iso={indexed ? session.modified : null}
-				opened={runningOpened}
-				running={running}
-				settling={settling}
-				waiting={waiting}
-			/>
-		);
+		// The leading status lane, by this computer's rows' rule (Sidebar.tsx): the host's summary decides it.
+		const lane = laneState({
+			run: rowRun,
+			attention: rowRun.ask,
+			live: sessionLive({
+				agents: workingAgentCount(summary?.agents ?? []),
+				opened: runningOpened,
+				running,
+				settling,
+				waiting,
+			}),
+			stopped: tab?.lastRun?.stopReason === "aborted",
+			pullRequest: pr?.state === "OPEN",
+			open: tab !== undefined,
+		});
+		const age = indexed ? <TimeAgo className="text-(--sc-text-subtle)" iso={session.modified} /> : null;
 		const list = listOf(session);
 		const pinned = hostPins.includes(session.path);
 		const marker = pinned ? <Pin aria-label={t("sidebar.pinned")} className="size-(--sc-icon-sm)" /> : null;
@@ -1065,7 +1108,12 @@ function DeviceSessions({
 		return (
 			<Fragment key={session.path}>
 				<ListRow
-					leading={<SessionRowArtwork target={target} />}
+					leading={
+						<span className="omp-session-leading">
+							<SessionStatusLane prTone={pr ? branchPrTone(pr) : undefined} state={lane} />
+							<SessionRowArtwork target={target} />
+						</span>
+					}
 					buttonProps={{
 						tabIndex: -1,
 						"data-roving-item": `device-session:${host.deviceId}:${session.path}`,
@@ -1134,6 +1182,7 @@ function DeviceSessions({
 						"data-pane-focus": (current && selectionOf(tab?.id).splitShown) || undefined,
 						"data-pane-shown": (active && !current && selectionOf(tab?.id).splitShown) || undefined,
 						"data-folder-missing": folderMissing || undefined,
+						"data-unseen": lane === "done" || undefined,
 						"data-live": indexed ? undefined : true,
 					}}
 					selected={active}
@@ -1149,12 +1198,14 @@ function DeviceSessions({
 							/>
 							{working && <span className="sr-only">, {t("sidebar.signal.running")}</span>}
 							{openElsewhere && !working && <span className="sr-only">, {t("sidebar.row.open")}</span>}
+							{prWords && <span className="sr-only">, {prWords}</span>}
 						</>
 					}
 					titleText={[
 						title,
 						target ? t("sidebar.row.repositoryTip", { name: target.name }) : null,
 						target?.head ? headWords(t, target.head).tip : null,
+						prWords,
 						openElsewhere && !working ? t("sidebar.row.open") : null,
 						folderMissing ? t("sidebar.folderMissingTip", { folder: session.cwd }) : null,
 						reason ?? null,
@@ -1303,6 +1354,7 @@ function DeviceSessions({
 								canMoveUp: canMoveWithin(projectListOrder, group.cwd, -1),
 								canMoveDown: canMoveWithin(projectListOrder, group.cwd, 1),
 								archivable: archivable.length,
+								muted: false,
 							},
 							actions: {
 								...(editable

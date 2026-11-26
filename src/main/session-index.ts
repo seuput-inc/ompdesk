@@ -372,7 +372,7 @@ export class SessionIndex {
 	}
 
 	/** Search only the caller's subset of stock's listed rows; file text stays in the core. */
-	async searchContent(query: string, candidatePaths: string[]): Promise<SessionContentMatch[]> {
+	async searchContent(query: string, candidatePaths: string[], signal?: AbortSignal): Promise<SessionContentMatch[]> {
 		if (!query.trim() || !candidatePaths.length) return [];
 		if (this.#listedGeneration !== core().generation) {
 			this.#share.stale();
@@ -388,7 +388,7 @@ export class SessionIndex {
 				"sessions.search",
 				{ index: this.#id, query: wireQuery, paths: candidatePaths },
 				// A search reads its batches to completion even on a large tree, not just until the usual RPC deadline.
-				{ generation: this.#listedGeneration, timeoutMs: 0x7fff_ffff },
+				{ generation: this.#listedGeneration, timeoutMs: 0x7fff_ffff, ...(signal ? { signal } : {}) },
 			)
 		).result;
 	}

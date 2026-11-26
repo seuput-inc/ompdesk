@@ -141,17 +141,17 @@ function useAgentSlice(agents: readonly SummaryAgent[]): AgentSlice {
 	return useMemo(() => ({ ...roster, owners, ready, rpc }), [roster, owners, ready, rpc]);
 }
 
-/** Below this sidebar width (px) the summary chip shrinks to its running-count pill (default width is 248). */
+/** Below this sidebar width (px) the summary chip shrinks to its running-count pill (default width is 280). */
 const NARROW_SIDEBAR = 300;
 
 /**
- * A session row has no leading slot: its title starts at the row's 8 px padding (sidebar.css), nested in a project
- * or not. A child's connector runs down 2 px left of that title edge and the child's glyph starts 6 px right of it,
- * so the child's title sits one step in; a sub-subagent is one more 16 px step in, with its own connector under the
- * child's glyph. (Before the leading slot went, the same relations were measured from a title 30 px further right.)
+ * A session row leads with its status lane (16 px and a 6 px gap after the row's 8 px padding, sidebar.css), then its
+ * picture. A child's connector runs down 2 px left of the parent's picture and the child's glyph starts 6 px right of
+ * it, so the child sits one step in; a sub-subagent is one more 16 px step in, with its own connector under the
+ * child's glyph.
  */
-const INDENT = ["pl-3.5", "pl-7.5"] as const;
-const CONNECTOR = ["left-1.5", "left-5.5"] as const;
+const INDENT = ["pl-9", "pl-13"] as const;
+const CONNECTOR = ["left-7", "left-11"] as const;
 
 function Connector({ depth }: { depth: 0 | 1 }) {
 	return (

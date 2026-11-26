@@ -703,7 +703,8 @@ for (const [language, theme] of RUNS) {
 					const pins = page.locator("[data-rail-pin]");
 					notes.push(`rail pins: ${await pins.count()}`);
 					await shoot("pins");
-					await page.locator('[data-rail-pin="usage"]').click();
+					// A desktop window's usage block opens from the status bar's summary.
+					await page.locator("[data-status-usage]").click();
 					await page.waitForTimeout(500);
 					await shoot("usage-page");
 					await page.keyboard.press("Escape");

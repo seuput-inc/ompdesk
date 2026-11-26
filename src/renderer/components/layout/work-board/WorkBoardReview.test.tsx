@@ -357,7 +357,8 @@ describe("work board opened sessions", () => {
 		// Still starting on its host: no file yet, and the host's tab id is no tab here, so nothing could open it.
 		await act(async () => useAgentReviewStore.getState().apply({ tabId: "t1", items: [remote({})] }));
 		expect(row()?.textContent).toContain("Remote child");
-		expect(row()?.tagName).not.toBe("BUTTON");
+		// A tap only opens the row in place, to read its tooltip.
+		expect(row()?.getAttribute("aria-expanded")).toBe("false");
 		await act(async () => row()?.click());
 		expect(openTab).not.toHaveBeenCalled();
 		await act(async () =>

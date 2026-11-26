@@ -55,7 +55,11 @@ async function ghToken(): Promise<string | undefined> {
 	).catch(() => undefined);
 }
 
+/** The last read of the saved token failed (shown in Settings › Updates; the ciphertext stays as it is). */
+let storedUnreadable = false;
+
 function noteStoredTokenFailure(phase: "file" | "key" | "decrypt", reason: string): void {
+	storedUnreadable = true;
 	writeRuntimeLog({
 		source: "app-update",
 		message: "The saved update token could not be read",
@@ -67,7 +71,10 @@ async function storedToken(): Promise<string | undefined> {
 	let encrypted: Buffer | null;
 	try {
 		encrypted = await updateHost().readUpdateTokenCiphertext();
-		if (encrypted === null) return undefined;
+		if (encrypted === null) {
+			storedUnreadable = false;
+			return undefined;
+		}
 	} catch (error) {
 		const code: unknown = typeof error === "object" && error !== null ? Reflect.get(error, "code") : undefined;
 		noteStoredTokenFailure("file", typeof code === "string" ? code : "unknown");
@@ -77,7 +84,9 @@ async function storedToken(): Promise<string | undefined> {
 	try {
 		if (safeStorage.isEncryptionAvailable()) {
 			phase = "decrypt";
-			return safeStorage.decryptString(encrypted);
+			const token = safeStorage.decryptString(encrypted);
+			storedUnreadable = false;
+			return token;
 		}
 		const reason = safeStorageUnavailableReason();
 		if (reason !== KEYCHAIN_WOULD_ASK) {
@@ -129,11 +138,13 @@ export async function checkRepoAccess(token: string | undefined): Promise<Update
 export async function updateAuthInfo(): Promise<UpdateAuthInfo> {
 	const resolved = await resolveUpdateToken();
 	// After the resolve: a token it just dropped is no longer stored, and says why.
+	const file = await updateHost().updateTokenFileStatus();
 	return {
-		...(await updateHost().updateTokenFileStatus()),
+		...file,
 		source: resolved?.source ?? null,
 		// macOS/Windows always have an OS keystore; probing it would prompt (see top).
 		canStore: process.platform !== "linux" || safeStorage.isEncryptionAvailable(),
+		unreadable: file.hasStoredToken && storedUnreadable,
 	};
 }
 
@@ -144,8 +155,10 @@ export async function storeUpdateToken(token: string): Promise<void> {
 		throw codedError("safe_storage_unavailable", "safeStorage encryption is unavailable");
 	}
 	await updateHost().saveUpdateTokenCiphertext(safeStorage.encryptString(token));
+	storedUnreadable = false;
 }
 
 export async function clearUpdateToken(): Promise<void> {
 	await updateHost().clearUpdateTokenFiles();
+	storedUnreadable = false;
 }

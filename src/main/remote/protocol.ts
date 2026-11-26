@@ -160,6 +160,12 @@ export const WireRequest = z.object({
 });
 
 /**
+ * The device gave up on request `id` (its deadline passed): a host that can still stop the read behind it does
+ * (`HostServices.call`'s signal); a write that started runs to its end, and an older host ignores the frame.
+ */
+export const WireCancel = z.object({ t: z.literal("cancel"), id: z.number().int().nonnegative() });
+
+/**
  * The tab that holds a session a `tab.open` was refused for (`session_open_in_tab`): its device, its rtab and the name
  * the host knows that device by, so the device shows that tab, or says where the session is open, instead of an error
  * tab. A host older than the field sends none.

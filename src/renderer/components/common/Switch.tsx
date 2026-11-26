@@ -56,7 +56,7 @@ export function Switch({
 			aria-checked={checked}
 			aria-label={label}
 			className={cx(
-				"group/switch inline-flex h-(--sc-hit-min) shrink-0 items-center rounded-(--sc-radius-full) disabled:cursor-not-allowed disabled:opacity-50",
+				"group/switch inline-flex h-[var(--sc-switch-box,var(--sc-hit-min))] shrink-0 items-center rounded-(--sc-radius-full) disabled:cursor-not-allowed disabled:opacity-50",
 				className,
 			)}
 			disabled={disabled}
