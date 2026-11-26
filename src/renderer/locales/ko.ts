@@ -8447,13 +8447,15 @@ export const ko: Record<string, string> = {
 	"bots.connectors.slack.step1": "1. 이 매니페스트로 Slack 앱 만들기",
 	"bots.connectors.slack.copyManifest": "매니페스트 복사",
 	"bots.connectors.slack.open": "Slack 앱 열기",
-	"bots.connectors.slack.step2": "2. 워크스페이스에 설치하고 토큰 붙여 넣기",
-	"bots.connectors.slack.botToken": "Bot User OAuth Token",
-	"bots.connectors.slack.appToken": "App-Level Token",
-	"bots.connectors.slack.appTokenHint": "Basic Information › App-Level Tokens에서 connections:write 범위로 만드세요.",
-	"bots.connectors.slack.signingSecret": "Signing Secret",
-	"bots.connectors.slack.signingHint": "Basic Information › App Credentials.",
-	"bots.connectors.slack.kept": "이 컴퓨터에 보관 중이에요. 비워 두면 그대로 둬요.",
+	"bots.connectors.chooseFile": "인증 파일 선택…",
+	"bots.connectors.hostImport": "봇을 실행하는 컴퓨터의 OMPdesk에서 인증 파일을 선택하세요.",
+	"bots.connectors.slack.step2": "2. 앱을 설치하고 인증 파일 선택하기",
+	"bots.connectors.slack.workspace": "Slack 앱",
+	"bots.connectors.slack.newApp": "다른 앱 연결…",
+	"bots.connectors.slack.socketFile":
+		"botToken(xoxb-)과 appToken(xapp-, connections:write)이 들어 있는 로컬 JSON 파일을 선택하세요.",
+	"bots.connectors.slack.urlFile":
+		"Slack의 Basic Information에서 확인한 botToken(xoxb-)과 signingSecret이 들어 있는 로컬 JSON 파일을 선택하세요.",
 	"bots.connectors.slack.step3": "3. 물어볼 수 있는 사람",
 	"bots.connectors.slack.hookPath": "요청 URL 경로",
 	"bots.connectors.slack.copyHook": "이 컴퓨터의 주소 복사",
@@ -8461,8 +8463,8 @@ export const ko: Record<string, string> = {
 	"bots.connectors.github.repoHint": "owner/name. 내 gh로 5분마다 읽어요.",
 	"bots.connectors.github.asYou": "내 계정(@{login})으로 답하고, bot:{handle}이 쓰였을 때만 응답해요.",
 	"bots.connectors.linear.account": "Linear 워크스페이스",
-	"bots.connectors.linear.key": "Linear API 키",
-	"bots.connectors.linear.keyHint": "Linear › Settings › Security & access › Personal API keys.",
+	"bots.connectors.linear.keyHint":
+		"Linear › Settings › Security & access에서 만든 개인 API 키가 들어 있는 텍스트 파일을 선택하세요.",
 	"bots.connectors.linear.asYou": "내 계정으로 답하고, bot:{handle}이 쓰였을 때만 응답해요.",
 	"bots.connectors.google.account": "Google 계정",
 	"bots.connectors.google.another": "다른 계정…",
@@ -8470,8 +8472,7 @@ export const ko: Record<string, string> = {
 	"bots.connectors.google.step1Hint":
 		"Google Cloud에서 프로젝트를 만들고 Google Calendar API와 Gmail API를 켠 다음, OAuth 동의 화면에 나를 테스트 사용자로 추가하고, 유형이 데스크톱 앱인 OAuth 클라이언트를 만들어 JSON 파일을 내려받으세요.",
 	"bots.connectors.google.open": "Google Cloud 열기",
-	"bots.connectors.google.clientFile": "클라이언트 파일",
-	"bots.connectors.google.clientFileHint": "내려받은 client_secret_….json의 내용을 붙여 넣으세요.",
+	"bots.connectors.google.clientFileHint": "로그인할 때 내려받은 데스크톱 앱 JSON 파일을 선택하세요.",
 	"bots.connectors.google.step2": "2. 로그인",
 	"bots.connectors.google.signIn": "Google로 로그인",
 	"bots.connectors.google.signInHint":

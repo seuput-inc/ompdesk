@@ -44,6 +44,8 @@ export interface GoogleAccount {
 export interface BotConnectorsState {
 	slack: SlackApp[];
 	google: GoogleAccount[];
+	/** The account that the host just imported. Absent on cancel and on an ordinary list. */
+	importedId?: string;
 }
 
 /** An email routine's account that is a Google sign-in for bots (`google:<email>`): Gmail over IMAP with OAuth. */
@@ -51,17 +53,11 @@ export const GMAIL_ACCOUNT = "google:";
 
 export type BotConnectorsRequest =
 	| { action: "list" }
-	/**
-	 * A new Slack app (no `id`; `botToken` required) or one already kept: each token given replaces the kept one, an
-	 * empty one removes it (the app-level token and the signing secret). The bot token is checked with Slack first.
-	 */
-	| { action: "saveSlack"; id?: string; botToken?: string; appToken?: string; signingSecret?: string }
+	| { action: "importSlack"; mode: "socket" | "url"; id?: string }
+	| { action: "importLinear" }
 	| { action: "removeSlack"; id: string }
-	/**
-	 * Sign in to Google in the browser with the owner's Desktop OAuth client (`clientFile`, the JSON Google Cloud
-	 * downloads), or again with the one an account `id` keeps; answers once the person allowed it or the sign-in ended.
-	 */
-	| { action: "signInGoogle"; clientFile?: string; id?: string }
+	/** Sign in with a desktop client chosen in the host's native picker, or with the saved client. */
+	| { action: "signInGoogle"; id?: string }
 	/** Ends the sign-in under way. */
 	| { action: "cancelGoogle" }
 	| { action: "removeGoogle"; id: string };

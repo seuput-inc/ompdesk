@@ -1,10 +1,9 @@
 /**
  * What a bot's connectors need that is not a routine (contract `src/shared/bot-connectors.ts`): the Slack apps and the
  * Google sign-ins the owner made for bots, in `<userData>/bot-connectors.json` (no secret in it), each token in
- * `<userData>/bot-connectors/<id>-<kind>.bin` encrypted by the OS keystore (`secret-files.ts`). A token goes one way:
- * typed in the setup sheet (or returned by Google's sign-in to the core), sent to main once, handed to the core only for
- * the one connection, read or post that needs it (`routineAsk` `slack`/`google`/`email`, `connectorCredential`, a
- * Slack-signed `/hooks` call), never to a window, an agent or a log.
+ * `<userData>/bot-connectors/<id>-<kind>.bin` encrypted by the OS keystore (`secret-files.ts`). Main reads a file
+ * chosen by the owner in the native shell. The shell's secure storage and the core's private provider requests
+ * handle credential bytes; renderer, paired and agent IPC carry only the action and nonsecret account metadata.
  *
  * Main keeps them because the keystore is main's (native-rust › Ledger: safeStorage stays with the credential
  * consumer); the requests run in the core (`routines/connectors.rs`, `routines/google.rs`).
@@ -12,6 +11,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { constants, promises as fs } from "original-fs";
 import { z } from "zod";
 import {
 	type BotConnectorsRequest,
@@ -35,28 +35,23 @@ const TOKEN = /^[\x21-\x7e]{10,300}$/;
 /** How long Google's sign-in may wait for the person in the browser (the core gives up after ten minutes). */
 const SIGN_IN_TIMEOUT_MS = 11 * 60_000;
 
-const tokenField = z.string().max(400).optional();
+const slackFile = z
+	.object({
+		botToken: z.string().max(400).optional(),
+		appToken: z.string().min(1).max(400).optional(),
+		signingSecret: z.string().min(1).max(400).optional(),
+	})
+	.strict();
+const slackId = z.string().regex(/^slack-[0-9a-f]{16}$/);
+const googleId = z.string().regex(/^google-[0-9a-f]{16}$/);
 const requestSchema = z.discriminatedUnion("action", [
 	z.object({ action: z.literal("list") }).strict(),
-	z
-		.object({
-			action: z.literal("saveSlack"),
-			id: z.string().max(64).optional(),
-			botToken: tokenField,
-			appToken: tokenField,
-			signingSecret: tokenField,
-		})
-		.strict(),
-	z.object({ action: z.literal("removeSlack"), id: z.string().max(64) }).strict(),
-	z
-		.object({
-			action: z.literal("signInGoogle"),
-			clientFile: z.string().max(20_000).optional(),
-			id: z.string().max(64).optional(),
-		})
-		.strict(),
+	z.object({ action: z.literal("importSlack"), mode: z.enum(["socket", "url"]), id: slackId.optional() }).strict(),
+	z.object({ action: z.literal("importLinear") }).strict(),
+	z.object({ action: z.literal("removeSlack"), id: slackId }).strict(),
+	z.object({ action: z.literal("signInGoogle"), id: googleId.optional() }).strict(),
 	z.object({ action: z.literal("cancelGoogle") }).strict(),
-	z.object({ action: z.literal("removeGoogle"), id: z.string().max(64) }).strict(),
+	z.object({ action: z.literal("removeGoogle"), id: googleId }).strict(),
 ]);
 
 /** A window's request, checked before main acts on it (IPC is a trust boundary: the paired phone's page is one). */
@@ -64,6 +59,21 @@ export function parseBotConnectorsRequest(request: unknown): BotConnectorsReques
 	const parsed = requestSchema.safeParse(request);
 	if (!parsed.success) throw new Error("Invalid bot connectors request");
 	return parsed.data;
+}
+
+type Picker = () => Promise<string | null>;
+
+/** Only a local page has a native owner window. Neither a peer nor an agent can open the picker. */
+export function connectorCommand(
+	caller: { browserWindow: unknown; connId?: string | undefined },
+	raw: unknown,
+	accounts: Pick<ConnectorAccounts, "command">,
+	pick: Picker,
+): Promise<BotConnectorsState> {
+	const request = parseBotConnectorsRequest(raw);
+	if (request.action !== "list" && (!caller.browserWindow || caller.connId !== undefined))
+		throw new Error("Manage connector credentials on the computer the bot runs on");
+	return accounts.command(request, pick);
 }
 
 export interface ConnectorAccountsOptions {
@@ -74,6 +84,7 @@ export interface ConnectorAccountsOptions {
 	core: (method: string, params: object, timeoutMs?: number) => Promise<unknown>;
 	/** Opens Google's sign-in page in the person's browser. */
 	openExternal?: (url: string) => Promise<void>;
+	connectLinear?: (apiKey: string) => Promise<string>;
 	/** Told after every change. */
 	onChange?: (state: BotConnectorsState) => void;
 }
@@ -106,7 +117,10 @@ export class ConnectorAccounts {
 			slack: this.#apps.map(app => {
 				const needsReentry = SECRETS.some(kind => this.#secrets.needsReentry(key(app.id, kind)));
 				return {
-					...app,
+					id: app.id,
+					team: app.team,
+					teamId: app.teamId,
+					botUserId: app.botUserId,
 					socketMode: !needsReentry && this.#secrets.has(key(app.id, "app")),
 					signingSecret: !needsReentry && this.#secrets.has(key(app.id, "signing")),
 					needsReentry,
@@ -120,19 +134,46 @@ export class ConnectorAccounts {
 		};
 	}
 
-	async command(request: BotConnectorsRequest): Promise<BotConnectorsState> {
+	async command(request: BotConnectorsRequest, pick?: Picker): Promise<BotConnectorsState> {
+		if (request.action === "importSlack" || request.action === "importLinear" || request.action === "signInGoogle") {
+			try {
+				if (request.action === "signInGoogle" && request.id) return await this.#signInGoogle({ id: request.id });
+				if (!pick) throw new Error();
+				const path = await pick();
+				if (!path) return this.state();
+				const file = await fs.open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+				let text: string;
+				try {
+					const stat = await file.stat();
+					if (!stat.isFile() || !stat.size || stat.size > 20_000) throw new Error();
+					const bytes = Buffer.alloc(stat.size);
+					if ((await file.read(bytes)).bytesRead !== bytes.length) throw new Error();
+					text = bytes.toString("utf8").trim();
+				} finally {
+					await file.close();
+				}
+				if (request.action === "signInGoogle") return await this.#signInGoogle({ clientFile: text });
+				if (request.action === "importLinear") {
+					if (!this.#options.connectLinear) throw new Error();
+					return { ...this.state(), importedId: await this.#options.connectLinear(text) };
+				}
+				const credentials = slackFile.parse(JSON.parse(text));
+				const required = request.mode === "socket" ? "appToken" : "signingSecret";
+				if (!credentials[required] && !(request.id && this.slackTokens(request.id)?.[required])) throw new Error();
+				return await this.#saveSlack({ ...credentials, id: request.id });
+			} catch {
+				// Neither a parser's input excerpt, a local path nor a provider's error body leaves this operation.
+				throw new Error("Could not connect the account. Check the credential file and sign-in, then try again.");
+			}
+		}
 		switch (request.action) {
 			case "list":
 				return this.state();
-			case "saveSlack":
-				return this.#saveSlack(request);
 			case "removeSlack":
 				this.#apps = this.#apps.filter(app => app.id !== request.id);
 				for (const kind of SECRETS) this.#secrets.remove(key(request.id, kind));
 				this.#write();
 				return this.state();
-			case "signInGoogle":
-				return this.#signInGoogle(request);
 			case "cancelGoogle":
 				if (this.#signingIn) await this.#options.core("connectors.googleSignInCancel", { flow: this.#signingIn });
 				return this.state();
@@ -144,9 +185,7 @@ export class ConnectorAccounts {
 		}
 	}
 
-	async #signInGoogle(
-		request: Extract<BotConnectorsRequest, { action: "signInGoogle" }>,
-	): Promise<BotConnectorsState> {
+	async #signInGoogle(request: { id?: string; clientFile?: string }): Promise<BotConnectorsState> {
 		if (this.#signingIn) throw new Error("A Google sign-in is already waiting in the browser");
 		let client: { clientId: string; clientSecret: string };
 		if (request.clientFile !== undefined) client = parseGoogleClientFile(request.clientFile);
@@ -178,7 +217,7 @@ export class ConnectorAccounts {
 				{ id, email, clientId: client.clientId },
 			];
 			this.#write();
-			return this.state();
+			return { ...this.state(), importedId: id };
 		} catch (error) {
 			// The browser never opened, or main gave up first: the core's listener goes too.
 			await this.#options.core("connectors.googleSignInCancel", { flow }).catch(() => undefined);
@@ -226,21 +265,19 @@ export class ConnectorAccounts {
 		};
 	}
 
-	async #saveSlack(request: Extract<BotConnectorsRequest, { action: "saveSlack" }>): Promise<BotConnectorsState> {
+	async #saveSlack(request: z.infer<typeof slackFile> & { id?: string | undefined }): Promise<BotConnectorsState> {
 		const existing = request.id === undefined ? undefined : this.#apps.find(app => app.id === request.id);
 		if (request.id !== undefined && !existing) throw new Error("That Slack app is no longer kept");
-		const token = (value: unknown, prefix: string, what: string): string | null | undefined => {
+		const token = (value: string | undefined, prefix: string, what: string): string | undefined => {
 			if (value === undefined) return undefined;
-			const text = String(value).trim();
-			if (text === "") return null;
-			if (!TOKEN.test(text) || (prefix && !text.startsWith(prefix))) throw new Error(`Enter the ${what}`);
+			const text = value.trim();
+			if (!TOKEN.test(text) || !text.startsWith(prefix)) throw new Error(`Invalid ${what}`);
 			return text;
 		};
 		const bot = token(request.botToken, "xoxb-", "bot token (xoxb-…)");
 		const app = token(request.appToken, "xapp-", "app-level token (xapp-…)");
 		const signing = token(request.signingSecret, "", "signing secret");
 		if (!existing && !bot) throw new Error("Enter the bot token (xoxb-…)");
-		if (existing && bot === null) throw new Error("A Slack app keeps its bot token; remove the app instead");
 		let stored = existing;
 		if (bot) {
 			// Slack says whose workspace and bot user the token is before anything is kept.
@@ -248,6 +285,8 @@ export class ConnectorAccounts {
 				botToken: bot,
 				...(app ? { appToken: app } : {}),
 			})) as { teamId: string; team: string; userId: string };
+			if (existing && (existing.teamId !== checked.teamId || existing.botUserId !== checked.userId))
+				throw new Error("Choose the credential file for this Slack app");
 			const same = this.#apps.find(kept => kept.teamId === checked.teamId && kept.botUserId === checked.userId);
 			stored = {
 				id: existing?.id ?? same?.id ?? `slack-${randomUUID().replace(/-/g, "").slice(0, 16)}`,
@@ -263,13 +302,12 @@ export class ConnectorAccounts {
 			["app", app],
 			["signing", signing],
 		] as const) {
-			if (value === null) this.#secrets.remove(key(id, kind));
-			else if (value !== undefined) this.#secrets.save(key(id, kind), value);
+			if (value !== undefined) this.#secrets.save(key(id, kind), value);
 		}
 		const saved = stored;
 		this.#apps = [...this.#apps.filter(kept => kept.id !== id), saved];
 		this.#write();
-		return this.state();
+		return { ...this.state(), importedId: id };
 	}
 
 	/**

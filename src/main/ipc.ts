@@ -165,7 +165,7 @@ import {
 	readCheckoutClaims,
 	readCheckoutPlace,
 } from "./checkout-peers";
-import { type ConnectorAccounts, parseBotConnectorsRequest } from "./connector-accounts";
+import { type ConnectorAccounts, connectorCommand } from "./connector-accounts";
 import { createControlBackend } from "./control-socket/backend";
 import { controlSocketFailure, startControlSocket } from "./control-socket/index";
 import { defaultWorkspace } from "./default-workspace";
@@ -2620,16 +2620,16 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid bots request");
 		return agentControl.bots(request as BotsCall);
 	});
-	// A bot's page › Connectors: this computer's Slack apps and Google sign-ins for bots; a token goes in and never
-	// comes back out.
+	// One owner action: the host picks, reads and stores. No browser supplies a path or receives the file.
 	ipc.handle(BOT_CONNECTORS_COMMAND, (caller, request: unknown) => {
 		const accounts = deps.connectorAccounts?.();
 		if (!accounts) throw new Error("Bot connectors are not available yet");
-		const parsed = parseBotConnectorsRequest(request);
-		// Google answers the sign-in on this computer's own loopback, in this computer's browser.
-		if (parsed.action === "signInGoogle" && caller.connId !== undefined)
-			throw new Error("Sign in to Google on the computer the bot runs on");
-		return accounts.command(parsed);
+		return connectorCommand(caller, request, accounts, async () => {
+			const win = caller.browserWindow;
+			if (!win) throw new Error("A native window is required");
+			const chosen = await dialog.showOpenDialog(win, { properties: ["openFile"] });
+			return chosen.canceled ? null : (chosen.filePaths[0] ?? null);
+		});
 	});
 	// Settings › Schedules › Email accounts: this computer's own (a password goes in and never comes back out).
 	ipc.handle(MAIL_ACCOUNTS_COMMAND, async (_caller, request: unknown) => {

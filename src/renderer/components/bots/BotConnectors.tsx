@@ -32,6 +32,7 @@ import type { TrackersState } from "../../../shared/trackers";
 import { useT } from "../../lib/i18n";
 import { openExternal } from "../../lib/open-external";
 import { webhookUrl } from "../../lib/schedule-text";
+import { chromePlatform } from "../../lib/window-chrome";
 import { useBotsStore } from "../../stores/bots";
 import { useGithubAuthStore } from "../../stores/github-auth";
 import { toast, toastError } from "../../stores/toast";
@@ -49,7 +50,6 @@ import {
 	SegmentedChoice,
 	Select,
 	SwitchField,
-	TextArea,
 } from "../common";
 import { isBotSchedule, useLocalSchedules } from "./bot-automations";
 
@@ -462,6 +462,28 @@ function useSave(onDone: (schedule: string) => void) {
 	return [saving, run] as const;
 }
 
+function CredentialFileButton({ onImport }: { onImport: () => Promise<void> }) {
+	const t = useT();
+	const [busy, setBusy] = useState(false);
+	if (chromePlatform() === "web") return <Banner variant="neutral">{t("bots.connectors.hostImport")}</Banner>;
+	return (
+		<Button
+			disabled={busy}
+			loading={busy}
+			onClick={() => {
+				setBusy(true);
+				void onImport()
+					.catch((error: unknown) => toastError({ title: t("bots.connectors.saveFailed"), error }))
+					.finally(() => setBusy(false));
+			}}
+			size="sm"
+			variant="secondary"
+		>
+			{t("bots.connectors.chooseFile")}
+		</Button>
+	);
+}
+
 function SlackSetup({
 	bot,
 	connector,
@@ -478,13 +500,11 @@ function SlackSetup({
 	onDone: (schedule: string) => void;
 }) {
 	const t = useT();
-	const kept = connector ? apps.slack.find(app => app.id === connector.account) : undefined;
+	const [account, setAccount] = useState(connector?.account ?? "");
+	const kept = apps.slack.find(app => app.id === account);
 	const [mode, setMode] = useState<"socket" | "url">(
 		kept && !kept.socketMode && kept.signingSecret ? "url" : "socket",
 	);
-	const [botToken, setBotToken] = useState("");
-	const [appToken, setAppToken] = useState("");
-	const [signingSecret, setSigningSecret] = useState("");
 	const [anyone, setAnyone] = useState(connector?.from.includes(ANYONE) ?? false);
 	const [people, setPeople] = useState(connector?.from.filter(person => person !== ANYONE).join(", ") ?? "");
 	const [saving, save] = useSave(onDone);
@@ -493,11 +513,8 @@ function SlackSetup({
 	const ready =
 		Boolean(bot.home) &&
 		from.length > 0 &&
-		(kept ? true : botToken.trim() !== "") &&
-		(mode === "socket"
-			? Boolean(kept?.socketMode) || appToken.trim() !== ""
-			: Boolean(kept?.signingSecret) || signingSecret.trim() !== "");
-	const keptHint = kept ? t("bots.connectors.slack.kept") : undefined;
+		!kept?.needsReentry &&
+		Boolean(mode === "socket" ? kept?.socketMode : kept?.signingSecret);
 	return (
 		<div className="flex flex-col gap-4" data-connector-setup="slack">
 			<SegmentedChoice
@@ -529,38 +546,31 @@ function SlackSetup({
 			</section>
 			<section className="flex flex-col gap-2">
 				<SectionLabel as="h4">{t("bots.connectors.slack.step2")}</SectionLabel>
-				<Input
-					autoComplete="off"
-					hint={keptHint}
-					label={t("bots.connectors.slack.botToken")}
-					mono
-					onChange={event => setBotToken(event.target.value)}
-					placeholder="xoxb-…"
-					type="password"
-					value={botToken}
-				/>
-				{mode === "socket" ? (
-					<Input
-						autoComplete="off"
-						hint={kept?.socketMode ? keptHint : t("bots.connectors.slack.appTokenHint")}
-						label={t("bots.connectors.slack.appToken")}
-						mono
-						onChange={event => setAppToken(event.target.value)}
-						placeholder="xapp-…"
-						type="password"
-						value={appToken}
-					/>
-				) : (
-					<Input
-						autoComplete="off"
-						hint={kept?.signingSecret ? keptHint : t("bots.connectors.slack.signingHint")}
-						label={t("bots.connectors.slack.signingSecret")}
-						mono
-						onChange={event => setSigningSecret(event.target.value)}
-						type="password"
-						value={signingSecret}
+				<p className="text-sc-xs text-(--sc-text-muted)">
+					{t(mode === "socket" ? "bots.connectors.slack.socketFile" : "bots.connectors.slack.urlFile")}
+				</p>
+				{apps.slack.length > 0 && (
+					<Select
+						label={t("bots.connectors.slack.workspace")}
+						onChange={event => setAccount(event.target.value)}
+						options={[
+							...apps.slack.map(app => ({ value: app.id, label: app.team })),
+							{ value: "", label: t("bots.connectors.slack.newApp") },
+						]}
+						value={account}
 					/>
 				)}
+				<CredentialFileButton
+					onImport={async () => {
+						const state = await window.omp.botConnectors.command({
+							action: "importSlack",
+							mode,
+							...(kept ? { id: kept.id } : {}),
+						});
+						onApps(state);
+						if (state.importedId) setAccount(state.importedId);
+					}}
+				/>
 			</section>
 			<section className="flex flex-col gap-2">
 				<SectionLabel as="h4">{t("bots.connectors.slack.step3")}</SectionLabel>
@@ -577,18 +587,8 @@ function SlackSetup({
 				onCancel={onCancel}
 				onSave={() =>
 					save(async () => {
-						const ids = new Set(apps.slack.map(app => app.id));
-						const state = await window.omp.botConnectors.command({
-							action: "saveSlack",
-							...(kept ? { id: kept.id } : {}),
-							...(botToken.trim() ? { botToken: botToken.trim() } : {}),
-							...(mode === "socket" && appToken.trim() ? { appToken: appToken.trim() } : {}),
-							...(mode === "url" && signingSecret.trim() ? { signingSecret: signingSecret.trim() } : {}),
-						});
-						onApps(state);
-						const app = kept ?? state.slack.find(saved => !ids.has(saved.id)) ?? state.slack.at(-1);
-						if (!app) return null;
-						const schedule = await connect(bot, { source: "slack", account: app.id, from }, connector);
+						if (!kept) return null;
+						const schedule = await connect(bot, { source: "slack", account: kept.id, from }, connector);
 						toast({
 							variant: "success",
 							message: t("bots.connectors.saved", { service: t("bots.connectors.service.slack") }),
@@ -693,14 +693,15 @@ function LinearSetup({
 }) {
 	const t = useT();
 	const accounts = (trackers?.accounts ?? []).filter(account => account.provider === "linear");
-	const [account, setAccount] = useState(connector?.account ?? accounts[0]?.id ?? "");
-	const [apiKey, setApiKey] = useState("");
+	const [selected, setAccount] = useState(connector?.account);
+	const account = selected ?? trackers?.selected.linear;
+	const accountId = accounts.find(known => known.id === account)?.id ?? accounts[0]?.id ?? "";
 	const [anyone, setAnyone] = useState(connector?.from.includes(ANYONE) ?? false);
 	const [people, setPeople] = useState(connector?.from.filter(person => person !== ANYONE).join(", ") ?? "me");
 	const [saving, save] = useSave(onDone);
 	const handle = connector?.handle ?? botHandle(bot.name);
 	const from = anyone ? [ANYONE] : peopleOf(people);
-	const ready = Boolean(bot.home) && (account !== "" || apiKey.trim() !== "") && from.length > 0;
+	const ready = Boolean(bot.home) && accountId !== "" && from.length > 0;
 	return (
 		<div className="flex flex-col gap-4" data-connector-setup="linear">
 			{accounts.length > 0 ? (
@@ -708,19 +709,20 @@ function LinearSetup({
 					label={t("bots.connectors.linear.account")}
 					onChange={event => setAccount(event.target.value)}
 					options={accounts.map(known => ({ value: known.id, label: known.label }))}
-					value={account}
+					value={accountId}
 				/>
 			) : (
-				<Input
-					autoComplete="off"
-					hint={t("bots.connectors.linear.keyHint")}
-					label={t("bots.connectors.linear.key")}
-					mono
-					onChange={event => setApiKey(event.target.value)}
-					placeholder="lin_api_…"
-					type="password"
-					value={apiKey}
-				/>
+				<>
+					<p className="text-sc-xs text-(--sc-text-muted)">{t("bots.connectors.linear.keyHint")}</p>
+					<CredentialFileButton
+						onImport={async () => {
+							const state = await window.omp.botConnectors.command({ action: "importLinear" });
+							if (!state.importedId) return;
+							setAccount(state.importedId);
+							onTrackers(await window.omp.trackers.command({ action: "state" }));
+						}}
+					/>
+				</>
 			)}
 			<WhoCanAsk
 				anyone={anyone}
@@ -735,18 +737,11 @@ function LinearSetup({
 				onCancel={onCancel}
 				onSave={() =>
 					save(async () => {
-						let id = account;
-						if (!id) {
-							// The workspace is kept with Agents › GitHub's Linear source: one key for both.
-							const state = await window.omp.trackers.accounts({
-								action: "connect",
-								draft: { provider: "linear", apiKey: apiKey.trim() },
-							});
-							onTrackers(state);
-							id = state.selected.linear ?? "";
-							if (!id || id === "all") return null;
-						}
-						const schedule = await connect(bot, { source: "linear", account: id, handle, from }, connector);
+						const schedule = await connect(
+							bot,
+							{ source: "linear", account: accountId, handle, from },
+							connector,
+						);
 						toast({
 							variant: "success",
 							message: t("bots.connectors.saved", { service: t("bots.connectors.service.linear") }),
@@ -782,7 +777,6 @@ function GoogleSetup({
 }) {
 	const t = useT();
 	const [account, setAccount] = useState(connector?.account ?? apps.google[0]?.email ?? "");
-	const [clientFile, setClientFile] = useState("");
 	const [signingIn, setSigningIn] = useState(false);
 	const [calendar, setCalendar] = useState(connector ? connector.service === "google" : true);
 	const [lead, setLead] = useState(String(connector?.service === "google" ? connector.leadMinutes : 10));
@@ -799,17 +793,12 @@ function GoogleSetup({
 		(!calendar || (minutes >= 0 && minutes <= 1440));
 	const signIn = () => {
 		setSigningIn(true);
-		const known = new Set(apps.google.map(item => item.email));
 		window.omp.botConnectors
-			.command({
-				action: "signInGoogle",
-				...(clientFile.trim() ? { clientFile: clientFile.trim() } : kept ? { id: kept.id } : {}),
-			})
+			.command({ action: "signInGoogle" })
 			.then(state => {
 				setSigningIn(false);
 				onApps(state);
-				setClientFile("");
-				const signed = state.google.find(item => !known.has(item.email));
+				const signed = state.google.find(item => item.id === state.importedId);
 				if (signed) setAccount(signed.email);
 			})
 			.catch((error: unknown) => {
@@ -854,27 +843,23 @@ function GoogleSetup({
 									{t("bots.connectors.google.open")}
 								</Button>
 							</div>
-							<TextArea
-								autoComplete="off"
-								hint={t("bots.connectors.google.clientFileHint")}
-								label={t("bots.connectors.google.clientFile")}
-								mono
-								onChange={event => setClientFile(event.target.value)}
-								placeholder='{"installed":{"client_id":"….apps.googleusercontent.com", …}}'
-								rows={3}
-								spellCheck={false}
-								value={clientFile}
-							/>
+							<p className="text-sc-xs text-(--sc-text-muted)">{t("bots.connectors.google.clientFileHint")}</p>
 						</section>
 					)}
 					<section className="flex flex-col gap-2">
 						<SectionLabel as="h4">{t("bots.connectors.google.step2")}</SectionLabel>
 						<p className="text-sc-xs text-(--sc-text-muted)">
-							{signingIn ? t("bots.connectors.google.waiting") : t("bots.connectors.google.signInHint")}
+							{t(
+								chromePlatform() === "web"
+									? "bots.connectors.hostImport"
+									: signingIn
+										? "bots.connectors.google.waiting"
+										: "bots.connectors.google.signInHint",
+							)}
 						</p>
 						<div className="flex gap-2">
 							<Button
-								disabled={!kept && clientFile.trim() === ""}
+								disabled={chromePlatform() === "web"}
 								loading={signingIn}
 								onClick={signIn}
 								size="sm"

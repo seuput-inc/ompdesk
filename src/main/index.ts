@@ -2287,6 +2287,12 @@ app.whenReady().then(async () => {
 		box: secretBox,
 		core: async (method, params, timeoutMs = 30_000) => (await core().call(method, params, { timeoutMs })).result,
 		openExternal: url => shell.openExternal(url),
+		connectLinear: async apiKey => {
+			const state = await trackerAccounts?.accounts({ action: "connect", draft: { provider: "linear", apiKey } });
+			const id = state?.selected.linear;
+			if (!id || id === "all") throw new Error("Linear did not select the connected workspace");
+			return id;
+		},
 	});
 	// Before the first window exists, so its page load is seen (it also writes the update's start mark, below).
 	const firstWindowReady = firstWindowLoaded();

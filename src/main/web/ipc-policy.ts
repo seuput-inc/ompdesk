@@ -523,7 +523,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[SCHEDULES_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
 	// The owner's Bots page: this computer's bots and their items.
 	[BOTS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
-	// A bot's Slack apps: a token is sent to main only, never read back.
+	// Paired callers can list account metadata. The connector handler requires a native window for mutations.
 	[BOT_CONNECTORS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
 	// Mail accounts for email routines: a password is sent to main only, never read back.
 	[MAIL_ACCOUNTS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },

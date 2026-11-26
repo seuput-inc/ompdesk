@@ -8475,13 +8475,15 @@ export const en: Record<string, string> = {
 	"bots.connectors.slack.step1": "1. Create a Slack app from this manifest",
 	"bots.connectors.slack.copyManifest": "Copy manifest",
 	"bots.connectors.slack.open": "Open Slack apps",
-	"bots.connectors.slack.step2": "2. Install it to your workspace and paste its tokens",
-	"bots.connectors.slack.botToken": "Bot User OAuth Token",
-	"bots.connectors.slack.appToken": "App-Level Token",
-	"bots.connectors.slack.appTokenHint": "Basic Information › App-Level Tokens, with the connections:write scope.",
-	"bots.connectors.slack.signingSecret": "Signing Secret",
-	"bots.connectors.slack.signingHint": "Basic Information › App Credentials.",
-	"bots.connectors.slack.kept": "Kept on this computer; leave empty to keep it.",
+	"bots.connectors.chooseFile": "Choose credential file…",
+	"bots.connectors.hostImport": "Choose the credential file in OMPdesk on the computer running this bot.",
+	"bots.connectors.slack.step2": "2. Install the app and choose its credential file",
+	"bots.connectors.slack.workspace": "Slack app",
+	"bots.connectors.slack.newApp": "Connect another app…",
+	"bots.connectors.slack.socketFile":
+		"Choose a local JSON file with botToken (xoxb-) and appToken (xapp-, connections:write).",
+	"bots.connectors.slack.urlFile":
+		"Choose a local JSON file with botToken (xoxb-) and signingSecret from Slack’s Basic Information page.",
 	"bots.connectors.slack.step3": "3. Who can ask",
 	"bots.connectors.slack.hookPath": "Request URL path",
 	"bots.connectors.slack.copyHook": "Copy this computer's address",
@@ -8489,8 +8491,8 @@ export const en: Record<string, string> = {
 	"bots.connectors.github.repoHint": "owner/name, read with your gh every 5 minutes.",
 	"bots.connectors.github.asYou": "It answers as you (@{login}) and asks only when bot:{handle} is written.",
 	"bots.connectors.linear.account": "Linear workspace",
-	"bots.connectors.linear.key": "Linear API key",
-	"bots.connectors.linear.keyHint": "Linear › Settings › Security & access › Personal API keys.",
+	"bots.connectors.linear.keyHint":
+		"Choose a text file containing your personal API key from Linear › Settings › Security & access.",
 	"bots.connectors.linear.asYou": "It answers as you and asks only when bot:{handle} is written.",
 	"bots.connectors.google.account": "Google account",
 	"bots.connectors.google.another": "Another account…",
@@ -8498,8 +8500,7 @@ export const en: Record<string, string> = {
 	"bots.connectors.google.step1Hint":
 		"In Google Cloud: create a project, turn on the Google Calendar API and the Gmail API, set up the OAuth consent screen with yourself as a test user, then create an OAuth client of type Desktop app and download its JSON file.",
 	"bots.connectors.google.open": "Open Google Cloud",
-	"bots.connectors.google.clientFile": "Client file",
-	"bots.connectors.google.clientFileHint": "Paste the contents of the downloaded client_secret_….json.",
+	"bots.connectors.google.clientFileHint": "When you sign in, choose the Desktop app JSON file you downloaded.",
 	"bots.connectors.google.step2": "2. Sign in",
 	"bots.connectors.google.signIn": "Sign in with Google",
 	"bots.connectors.google.signInHint":
