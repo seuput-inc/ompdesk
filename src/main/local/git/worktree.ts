@@ -93,16 +93,21 @@ export async function stockWorktreeLocation(
 /** The branch a worktree gets when the caller names it (`RpcCommand` `worktree_create.branch`), or undefined when malformed. */
 export type WorktreeBranchSource = {
 	name: string;
-	mode: "new" | "local" | "remote";
+	mode: "new" | "local" | "remote" | "reuse";
 	remote?: string;
-	/** `new` only: the ref the branch starts at (default the folder's HEAD). */
+	/** `new` and `reuse`: the ref a new branch starts at (default the create's base). */
 	from?: string;
 };
 
 export function worktreeBranchSource(value: unknown): WorktreeBranchSource | undefined {
 	if (typeof value !== "object" || value === null) return undefined;
 	const { name, mode, remote, from } = value as Record<string, unknown>;
-	if (typeof name !== "string" || !name || (mode !== "new" && mode !== "local" && mode !== "remote")) return undefined;
+	if (
+		typeof name !== "string" ||
+		!name ||
+		(mode !== "new" && mode !== "local" && mode !== "remote" && mode !== "reuse")
+	)
+		return undefined;
 	if (mode === "remote" && (typeof remote !== "string" || !remote || remote.startsWith("-"))) return undefined;
 	if (from !== undefined && (typeof from !== "string" || !from || from.startsWith("-"))) return undefined;
 	return {

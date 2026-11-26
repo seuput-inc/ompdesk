@@ -515,6 +515,35 @@ async fn a_new_core_is_seeded_with_the_tabs_main_holds() {
 }
 
 #[tokio::test]
+async fn a_seeded_tab_keeps_who_opened_it_for_the_devices_and_the_next_layout() {
+    let mut main = Main::start(opts()).await;
+    main.call(
+        "seed",
+        json!({"tabs": [
+            {"tab": "boss", "win": 1, "device": null, "hosted": false, "kind": "agent", "status": "ready", "full": [1],
+             "views": [], "sessionFile": "/s/boss.jsonl"},
+            {"tab": "kid", "win": 1, "device": null, "hosted": false, "kind": "agent", "status": "ready", "full": [],
+             "views": [], "sessionFile": "/s/kid.jsonl", "openedBy": "boss", "openedBySession": "/s/boss.jsonl"},
+            {"tab": "old", "win": 1, "device": null, "hosted": false, "kind": "agent", "status": "asleep", "full": [],
+             "views": [], "sessionFile": "/s/old.jsonl", "openedBy": null, "openedBySession": "/s/boss.jsonl"},
+        ]}),
+    )
+    .await;
+    assert_eq!(
+        main.call("sessionOpeners", json!({})).await,
+        json!([
+            ["/s/kid.jsonl", "/s/boss.jsonl"],
+            ["/s/old.jsonl", "/s/boss.jsonl"]
+        ])
+    );
+    let tabs = main.call("tabsForWindow", json!({"win": 1})).await;
+    assert_eq!(tabs[1]["openedBy"], "boss");
+    let saved = main.call("tabLayoutForWindow", json!({"win": 1})).await;
+    assert_eq!(saved["tabs"][1]["openedBy"], "/s/boss.jsonl");
+    assert_eq!(saved["tabs"][2]["openedBy"], "/s/boss.jsonl");
+}
+
+#[tokio::test]
 async fn an_agent_s_answer_claims_the_ask_and_no_other_answer_lands_until_it_is_released() {
     let mut main = Main::start(opts()).await;
     main.acquire("a", 1, None, false).await;

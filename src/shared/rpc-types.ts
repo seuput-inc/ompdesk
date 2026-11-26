@@ -563,11 +563,12 @@ export type RpcCommand =
 			baseRef?: string;
 			branchPrefix?: string;
 			/**
-			 * The exact branch the worktree gets instead of `<branchPrefix><name>` (Autopilot's picker): `new` cuts it off
-			 * the folder's HEAD, `local` checks out an existing local branch, `remote` tracks `<remote>/<name>`. Never
-			 * renamed with a suffix; a name that cannot be used fails.
+			 * The exact branch the worktree gets instead of `<branchPrefix><name>` (Autopilot's picker, a Linear issue's
+			 * `branchName`): `new` cuts it at the create's base, `local` checks out an existing local branch, `reuse` takes
+			 * the local branch when it exists and cuts it otherwise (a work item started again), `remote` tracks
+			 * `<remote>/<name>`. Never renamed with a suffix; a name that cannot be used fails.
 			 */
-			branch?: { name: string; mode: "new" | "local" | "remote"; remote?: string; from?: string };
+			branch?: { name: string; mode: "new" | "local" | "remote" | "reuse"; remote?: string; from?: string };
 			/** One per dialog opening: a retried request (an answer lost on the way) gets the same worktree, never a second one. */
 			requestId?: string;
 			/** A preset of the repository's `.ompdesk/sparse`: only its folders are checked out. */

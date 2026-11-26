@@ -1354,7 +1354,8 @@ export class AgentControlRuntime {
 			closedChildren: () => parseClosedChildren(deps.prefs.get(AGENT_CLOSED_CHILDREN_PREF)),
 			botsChanged: state => deps.botsChanged?.(state),
 			setOpener: (tabId, openerTabId) => {
-				// As a session the bot's chat opened: its reports and auto-close go to that chat, across a relaunch too.
+				// As a session the bot's chat opened, or one the call journal names after its opener was lost: its reports
+				// and auto-close go to that tab, across a relaunch too.
 				this.#parents.set(tabId, { callerTabId: openerTabId });
 				deps.pool.setTabOpener(tabId, openerTabId);
 			},

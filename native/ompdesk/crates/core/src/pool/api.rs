@@ -1348,8 +1348,23 @@ impl Ctx {
         let Some(win) = win else {
             return Ok(());
         };
+        self.push_opener(tab);
         self.forward_status(tab).await?;
         self.notify_window_tabs_changed(win).await
+    }
+
+    /// Main keeps who opened a tab for a new core's seed (`SidecarPool.#reseed`), as it keeps its file: told on each
+    /// change, since a lost pool takes it along and the next layout saved would forget it.
+    pub(super) fn push_opener(&self, tab: &str) {
+        let item = self.with(|pool| {
+            pool.entry(tab).map(|entry| {
+                json!({"k": "opener", "tab": tab, "openedBy": entry.opened_by,
+                       "openedBySession": entry.opened_by_session})
+            })
+        });
+        if let Some(item) = item {
+            self.push(&item);
+        }
     }
 
     pub(super) async fn bind_worktree(&self, tab: &str, worktree: Value) -> R<bool> {
@@ -1793,12 +1808,14 @@ impl Ctx {
                 if created {
                     tab_id = Some(fresh.clone());
                 }
+                let mut opened = false;
                 self.with(|pool| {
                     if let Some(entry) = pool.entry_mut(&fresh) {
                         if let Some(opener) =
                             tab["openedBy"].as_str().filter(|opener| !opener.is_empty())
                         {
                             entry.opened_by_session = Some(opener.to_string());
+                            opened = true;
                         }
                         if let (Some(ids), Some(path)) = (tab["formerIds"].as_array(), path) {
                             let ids = ids
@@ -1809,6 +1826,9 @@ impl Ctx {
                         }
                     }
                 });
+                if opened {
+                    self.push_opener(&fresh);
+                }
             }
             let Some(tab_id) = tab_id else {
                 continue;
@@ -1911,6 +1931,9 @@ impl Ctx {
                     tab["status"].as_str().unwrap_or("asleep").to_string(),
                 );
                 entry.device = tab["device"].as_str().map(str::to_string);
+                // Who opened it, as main kept it from the `opener` items: the devices' list and the next layout nest it.
+                entry.opened_by = tab["openedBy"].as_str().map(str::to_string);
+                entry.opened_by_session = tab["openedBySession"].as_str().map(str::to_string);
                 // The file the tab held: it owns it again (F-OWN), as at its acquire. Tabs come in acquisition order.
                 if let Some(file) = tab["sessionFile"].as_str().filter(|file| !file.is_empty()) {
                     entry.session_file = Some(file.to_string());

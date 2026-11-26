@@ -190,7 +190,8 @@ async function runStep(id: string, step: NewTaskStepId): Promise<void> {
 					baseCwd: request.baseCwd,
 					baseRef: request.baseRef,
 					...(request.branchPrefix ? { branchPrefix: request.branchPrefix } : {}),
-					...(request.branch ? { branch: { name: request.branch, mode: "new" as const } } : {}),
+					// Started again on the same work item, its branch is still there: the worktree takes it back.
+					...(request.branch ? { branch: { name: request.branch, mode: "reuse" as const } } : {}),
 					...(request.sparse ? { sparse: request.sparse } : {}),
 					requestId: id,
 					prepare: false,
