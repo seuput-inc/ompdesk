@@ -126,10 +126,39 @@ async fn devices(call: Call) -> Result<Reply, Fault> {
     {
         devices.extend(booted_simulators(&String::from_utf8_lossy(&listed)));
     }
-    if let Ok(listed) = run("adb", &["devices", "-l"], &params.path, TEXT_MAX).await {
-        devices.extend(adb_devices(&String::from_utf8_lossy(&listed)));
-    }
+    devices.extend(android_devices(&params.path, ADB_SERVER).await);
     Reply::json(&json!({ "devices": devices }))
+}
+
+/// adb's server port. `adb` with no server running forks one that outlives its caller (and OMPdesk), so adb runs here
+/// only while a server someone else started answers.
+const ADB_SERVER: u16 = 5037;
+
+async fn adb_server_up(port: u16) -> bool {
+    let connect = tokio::net::TcpStream::connect(("127.0.0.1", port));
+    matches!(
+        tokio::time::timeout(Duration::from_millis(300), connect).await,
+        Ok(Ok(_))
+    )
+}
+
+/// The Android devices of the running adb server on `port`; none, and no adb run, when no server answers.
+async fn android_devices(path: &str, port: u16) -> Vec<Value> {
+    if !adb_server_up(port).await {
+        return Vec::new();
+    }
+    match run("adb", &["devices", "-l"], path, TEXT_MAX).await {
+        Ok(listed) => adb_devices(&String::from_utf8_lossy(&listed)),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// One `adb` command, only while its server runs (see `ADB_SERVER`).
+async fn run_adb(args: &[&str], path: &str, max: usize) -> Result<Vec<u8>, Fault> {
+    if !adb_server_up(ADB_SERVER).await {
+        return Err(failed("The Android debug bridge is not running"));
+    }
+    run("adb", args, path, max).await
 }
 
 /// `simctl list devices booted -j`: each booted device by its UDID and name.
@@ -201,8 +230,7 @@ async fn screen(call: Call) -> Result<Reply, Fault> {
             .await?
         }
         "android" => {
-            run(
-                "adb",
+            run_adb(
                 &["-s", id, "exec-out", "screencap", "-p"],
                 &params.path,
                 SCREEN_MAX,
@@ -230,8 +258,7 @@ async fn tap(call: Call) -> Result<Reply, Fault> {
     let params: TapParams = call.params()?;
     let id = device_id(&params.id)?;
     let (x, y) = (params.x.to_string(), params.y.to_string());
-    run(
-        "adb",
+    run_adb(
         &["-s", id, "shell", "input", "tap", &x, &y],
         &params.path,
         TEXT_MAX,
@@ -257,8 +284,7 @@ async fn key(call: Call) -> Result<Reply, Fault> {
         "apps" => "KEYCODE_APP_SWITCH",
         _ => return Err(failed("Unknown key")),
     };
-    run(
-        "adb",
+    run_adb(
         &["-s", id, "shell", "input", "keyevent", code],
         &params.path,
         TEXT_MAX,
@@ -270,6 +296,37 @@ async fn key(call: Call) -> Result<Reply, Fault> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// With no adb server answering, the listing runs no adb at all (it would fork a server that outlives OMPdesk):
+    /// the `adb` on this PATH would record any run.
+    #[tokio::test]
+    async fn no_adb_runs_while_no_adb_server_answers() {
+        let closed = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let dir =
+            std::env::temp_dir().join(format!("ompdesk-emulator-{}-{port}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("ran");
+        let adb = dir.join(if cfg!(windows) { "adb.exe" } else { "adb" });
+        std::fs::write(&adb, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&adb, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(
+            android_devices(dir.to_str().unwrap(), port)
+                .await
+                .is_empty()
+        );
+        assert!(!marker.exists());
+        let server = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        assert!(adb_server_up(server.local_addr().unwrap().port()).await);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn lists_only_booted_simulators_and_ready_android_devices() {
