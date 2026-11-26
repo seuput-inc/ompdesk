@@ -127,7 +127,6 @@ import { type PanelTab, useUiStore } from "../../../stores/ui";
 import { startInstall, useInstallOffered } from "../../../web/install-ui";
 import { openBotDialog } from "../../bots/bot-launch";
 import { type BotChatFacts, botFacts, botMatches } from "../../bots/bot-view";
-import { RemoteBotChats } from "../../bots/RemoteBotChats";
 import {
 	anchorFromEvent,
 	Badge,
@@ -216,6 +215,10 @@ interface WorkspaceGroup extends RowGroup {
 const SidebarCloneDialog = lazy(() => import("./SidebarCloneDialog"));
 /** A project header's Move to group, Rename group and Appearance dialogs, on first use. */
 const ProjectDialog = lazy(() => import("./ProjectDialogs"));
+/** A paired host's bot's chats under its row (the host's session list), once a row of one unfolds. */
+const RemoteBotChats = lazy(() =>
+	import("../../bots/RemoteBotChats").then(module => ({ default: module.RemoteBotChats })),
+);
 
 /** A delete the row or context menu queued, awaiting the confirmation dialog. */
 type PendingDelete =
@@ -2590,7 +2593,9 @@ export function Sidebar() {
 						bot,
 						facts: botFacts(bot, chats, needing),
 						chats: bot.device ? (
-							<RemoteBotChats bot={bot} />
+							<Suspense fallback={null}>
+								<RemoteBotChats bot={bot} />
+							</Suspense>
 						) : (
 							shown.map(session => renderSessionRow(session, true))
 						),
