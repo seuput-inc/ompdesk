@@ -1,12 +1,27 @@
 import { ChevronUp, ListFilter } from "lucide-react";
-import { lazy, Suspense, useRef, useState } from "react";
+import { Suspense, useRef, useState } from "react";
+import { lazyChunk, loadChunk } from "../../lib/chunk-load";
 import { cx, formatShortClock } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { revealAndFocus } from "../../lib/reveal-focus";
 import { IconButton, Popover } from "../common";
 import type { ConversationAnchor } from "./chat-stream-utils";
+import type PromptListPanelComponent from "./PromptListPanel";
 
-const PromptListPanel = lazy(() => import("./PromptListPanel"));
+const loadPromptList = () => import("./PromptListPanel");
+const LazyPromptList = lazyChunk(loadPromptList);
+/** The list once its chunk loaded (AppShell's idle preload, or a pointer on the button): drawn directly, never suspended. */
+let loadedPromptList: typeof PromptListPanelComponent | undefined;
+
+/** Loads the rail's list before its first open (AppShell). */
+export function preloadPromptList(): Promise<void> {
+	return loadChunk(loadPromptList).then(
+		module => {
+			loadedPromptList = module.default;
+		},
+		() => {},
+	);
+}
 
 interface ConversationNavigatorProps {
 	activeIndex: number;
@@ -188,6 +203,7 @@ function PromptList({ activeIndex, anchors, onNavigate }: ConversationNavigatorP
 	const t = useT();
 	const [open, setOpen] = useState(false);
 	const triggerRef = useRef<HTMLButtonElement>(null);
+	const PromptListPanel = loadedPromptList ?? LazyPromptList;
 	return (
 		<div className="omp-conversation-nav-list">
 			<IconButton
