@@ -27,6 +27,7 @@ import {
 	FolderInput,
 	FolderSearch,
 	Link2,
+	type LucideIcon,
 	MailCheck,
 	Network,
 	PanelRightClose,
@@ -334,4 +335,76 @@ export function sessionMenuItems({
 	return [view, edit, other, diagnostics, remove]
 		.filter(group => group.length > 0)
 		.flatMap(group => group.map((item, index) => (index === 0 ? { ...item, separatorBefore: true } : item)));
+}
+
+/** What a menu over several picked rows can do with them all; an absent action leaves its item out. */
+export interface PickedMenuInput {
+	count: number;
+	/** The picked rows no tab holds: only those archive (a held session cannot, as on its own menu). */
+	archivable: number;
+	/** Every picked row is archived: the item restores them. */
+	archived: boolean;
+	actions: { toggleArchive?: () => void; remove?: () => void };
+	t: Translate;
+}
+
+/**
+ * The menu of a picked row while several are picked (Orca's batch menu, workspace-batch-action-labels.ts:21):
+ * Archive or Restore them, then Delete them, last and in the danger colour.
+ */
+export function pickedMenuItems({ count, archivable, archived, actions, t }: PickedMenuInput): ContextMenuItem[] {
+	const items: ContextMenuItem[] = [];
+	if (actions.toggleArchive)
+		items.push(
+			archived
+				? {
+						id: "picked-restore",
+						label: t("sidebar.menu.restoreCount", { count }),
+						icon: ArchiveRestore,
+						onSelect: actions.toggleArchive,
+					}
+				: {
+						id: "picked-archive",
+						label: t("sidebar.menu.archiveCount", { count: archivable }),
+						icon: Archive,
+						disabled: archivable === 0,
+						disabledReason: t("sidebar.archiveOpenTab"),
+						onSelect: actions.toggleArchive,
+					},
+		);
+	if (actions.remove)
+		items.push({
+			id: "picked-delete",
+			separatorBefore: true,
+			label: t("sidebar.menu.deleteCount", { count }),
+			icon: Trash2,
+			danger: true,
+			onSelect: actions.remove,
+		});
+	return items;
+}
+
+/** One action a phone swipe uncovers (`SwipeActions`' shape). */
+export interface SwipeItem {
+	id: string;
+	label: string;
+	icon: LucideIcon;
+	tone?: "accent";
+	onSelect: () => void;
+}
+
+/**
+ * What a phone swipe uncovers on a row, taken from the row's own menu (Orca MobileAgentListRows.tsx:209): Mark as
+ * unread behind a swipe right, Archive or Restore behind a swipe left, each only when the row's menu offers it enabled.
+ */
+export function sessionSwipeItems(items: readonly ContextMenuItem[]): { leading?: SwipeItem; trailing: SwipeItem[] } {
+	const take = (...ids: string[]): SwipeItem | undefined => {
+		const item = items.find(entry => ids.includes(entry.id) && !entry.disabled);
+		if (!item?.icon) return undefined;
+		const { onSelect } = item;
+		return { id: item.id, label: item.label, icon: item.icon, onSelect: () => onSelect() };
+	};
+	const leading = take("session-mark-unread");
+	const archive = take("session-archive", "session-restore");
+	return { ...(leading ? { leading: { ...leading, tone: "accent" } } : {}), trailing: archive ? [archive] : [] };
 }

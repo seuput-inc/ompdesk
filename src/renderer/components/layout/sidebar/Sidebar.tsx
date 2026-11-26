@@ -15,7 +15,6 @@ import {
 	GitFork,
 	Info,
 	Keyboard,
-	MailCheck,
 	MessageSquareWarning,
 	MoreHorizontal,
 	PanelLeft,
@@ -181,7 +180,7 @@ import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubag
 import { SidebarUpdateCard } from "./SidebarUpdateCard";
 import { SidebarUsage, useOfferedFooterPins } from "./SidebarUsage";
 import { SortableProject } from "./SortableProject";
-import { sessionMenuItems } from "./session-menu";
+import { pickedMenuItems, sessionMenuItems, sessionSwipeItems } from "./session-menu";
 import { canMoveWithin, type SessionList, useSessionReorder } from "./session-reorder";
 import {
 	branchPrWords,
@@ -1849,6 +1848,142 @@ export function Sidebar() {
 					],
 		);
 
+	/** A session row's menu: the one builder (session-menu.ts) given what this computer's list knows and can do. */
+	const rowMenuItems = (session: SidebarSession, anchor: ContextMenuAnchor): ContextMenuItem[] => {
+		const targetTab = tabForSession(session);
+		const { split } = useTabsStore.getState();
+		const list = sessionListOf(session);
+		// Every action closes the menu first.
+		const then = (run: () => void) => () => {
+			setSessionMenu(null);
+			run();
+		};
+		return sessionMenuItems({
+			facts: {
+				stored: session.liveTabId === undefined,
+				hasTab: targetTab !== undefined,
+				busy: isSessionBusy(session),
+				tabFocused: targetTab !== undefined && targetTab.id === activeTabId,
+				tabInSplit: targetTab !== undefined && split !== null && splitTabIds(split).includes(targetTab.id),
+				splitShown: split !== null,
+				unread: targetTab?.unreadDone === true,
+				canCloseTab: tabs.length > 1,
+				chat: session.kind === "chat",
+				pinned: pinnedSessions.includes(session.path),
+				muted: mutedSessions.includes(session.path),
+				archived: archivedIds.has(session.id),
+				agentHidden: agentHidden.includes(session.path),
+				canMoveUp: canMoveWithin(list, session.path, -1),
+				canMoveDown: canMoveWithin(list, session.path, 1),
+			},
+			actions: {
+				openSplit: then(() => void openSessionInSplit(session)),
+				openWindow: then(() => void openSessionInNewWindow(session)),
+				...(targetTab
+					? {
+							splitTab: placement =>
+								then(() => {
+									useUiStore.getState().closeDestination();
+									void useTabsStore.getState().splitTab(targetTab.id, placement);
+								})(),
+							unsplit: then(() => void useTabsStore.getState().unsplit(targetTab.id)),
+							markUnread: then(() => useTabsStore.getState().markUnread(targetTab.id)),
+							closeTab: then(() => performTabClose(targetTab)),
+						}
+					: {}),
+				rename: then(() => startRename(session)),
+				togglePin: then(() => {
+					const pinned = !pinnedSessions.includes(session.path);
+					useSidebarPrefs.getState().toggleSessionPin(session.path);
+					const failed = () => toast({ variant: "warning", message: t("sidebar.pinSyncFailed") });
+					void tabRpc.setSessionPinned(session.id, pinned).then(response => {
+						if (!response.success) failed();
+					}, failed);
+				}),
+				toggleMute: then(() => void useSidebarPrefs.getState().toggleSessionMuted(session.path)),
+				...(list
+					? {
+							moveUp: then(() => void moveSession(session, -1)),
+							moveDown: then(() => void moveSession(session, 1)),
+						}
+					: {}),
+				moveToProject: () => {
+					setMoveMenu({ anchor, session });
+					setSessionMenu(null);
+				},
+				// A bot's own chat is not handed to a bot; a session on a paired host has no opener here (R91).
+				...(botsShown && !botFolders.has(session.cwd) && session.device === undefined
+					? {
+							handToBot: then(() =>
+								openBotDialog({
+									kind: "hand",
+									tabId: targetTab?.id ?? "",
+									title: sessionDisplayTitle(session, ""),
+								}),
+							),
+						}
+					: {}),
+				toggleArchive: then(() => setArchived([session], !archivedIds.has(session.id))),
+				...(session.device === undefined
+					? {
+							toggleAgentHidden: then(() => void useSidebarPrefs.getState().toggleAgentHidden(session.path)),
+							links: then(() => setLinksFor(session.path)),
+							...(session.liveTabId === undefined
+								? {
+										setEmoji: then(() =>
+											openProjectDialog({
+												kind: "emoji",
+												path: session.path,
+												name: sessionDisplayTitle(session, t("sidebar.untitled")),
+											}),
+										),
+										setParent: then(() =>
+											openProjectDialog({
+												kind: "parent",
+												path: session.path,
+												name: sessionDisplayTitle(session, t("sidebar.untitled")),
+												candidates: codeSessions
+													.filter(
+														other =>
+															other.cwd === session.cwd &&
+															other.path !== session.path &&
+															other.liveTabId === undefined &&
+															rows.rootOf.get(other.path) !== session.path,
+													)
+													.map(other => ({
+														path: other.path,
+														title: sessionDisplayTitle(other, t("sidebar.untitled")),
+													})),
+											}),
+										),
+									}
+								: {}),
+							...(rows.rootOf.has(session.path)
+								? {
+										removeParent: then(
+											() => void useSidebarPrefs.getState().setEntry("sessionParents", session.path, ""),
+										),
+									}
+								: {}),
+						}
+					: {}),
+				copyTitle: then(() => void copyText(sessionDisplayLabel(session, t("sidebar.untitled")))),
+				reveal: then(() => void revealSession(session)),
+				saveBundle: anonymized =>
+					then(() => {
+						if (targetTab)
+							void saveDiagnosticBundle(
+								{ tabId: targetTab.id, title: sessionDisplayTitle(session, "") },
+								anonymized,
+							);
+					})(),
+				remove: then(() => setPendingDelete({ kind: "session", session })),
+			},
+			t,
+			altHint: !touchInput,
+		});
+	};
+
 	/** `archived`: a row of the Archived section. */
 	const renderSessionRow = (session: SidebarSession, nested = false, variant?: "archived") => {
 		const key = `session:${session.path}`;
@@ -2006,33 +2141,8 @@ export function Sidebar() {
 			.join("\n");
 		// The age slot: the waiting token (a mark that stays), else the time since it last did something.
 		const age = waiting || !indexed ? null : <TimeAgo className="text-(--sc-text-subtle)" iso={session.modified} />;
-		// On a touch screen a swipe uncovers the row's everyday actions (Orca's swipe rows, MobileAgentListRows.tsx:209):
-		// left archives or restores a stored session, right marks an open tab out of view unread again.
-		const archived = archivedIds.has(session.id);
-		const swipe = touchInput
-			? {
-					trailing: indexed
-						? [
-								{
-									id: "archive",
-									label: t(archived ? "sidebar.menu.restore" : "sidebar.menu.archive"),
-									icon: archived ? ArchiveRestore : Archive,
-									onSelect: () => setArchived([session], !archived),
-								},
-							]
-						: [],
-					leading:
-						tab && !active && !tab.unreadDone
-							? {
-									id: "unread",
-									label: t("sidebar.menu.markUnread"),
-									icon: MailCheck,
-									tone: "accent" as const,
-									onSelect: () => useTabsStore.getState().markUnread(tab.id),
-								}
-							: undefined,
-				}
-			: {};
+		// On a touch screen a swipe uncovers the row's everyday actions, taken from its own menu (session-menu.ts).
+		const swipe = touchInput ? sessionSwipeItems(rowMenuItems(session, { x: 0, y: 0 })) : {};
 		return (
 			<Fragment key={session.path}>
 				<SwipeActions {...swipe}>
@@ -2826,196 +2936,48 @@ export function Sidebar() {
 			{/* Session row menu: the one builder every device's rows use (session-menu.ts). */}
 			{sessionMenu &&
 				(() => {
-					const { session } = sessionMenu;
-					// A right click on one of several picked rows acts on them all (Orca's batch menu,
-					// workspace-batch-action-labels.ts:21).
+					const { session, anchor } = sessionMenu;
+					// A right click on one of several picked rows acts on them all (Orca's batch menu).
 					const pickedRows =
 						picked.has(session.path) && picked.size > 1
 							? [...allSessions, ...archivedRows].filter(row => picked.has(row.path))
 							: [];
 					if (pickedRows.length > 1) {
-						const restore = pickedRows.every(row => archivedIds.has(row.id));
-						const close = () => {
-							setSessionMenu(null);
-							setPicked(NO_PICKS);
-						};
+						const archived = pickedRows.every(row => archivedIds.has(row.id));
+						const archivable = archived ? pickedRows : pickedRows.filter(row => !tabForSession(row));
 						return (
 							<ContextMenu
 								ariaLabel={t("sidebar.pickedMenu", { count: pickedRows.length })}
-								x={sessionMenu.anchor.x}
-								y={sessionMenu.anchor.y}
+								x={anchor.x}
+								y={anchor.y}
 								onClose={() => setSessionMenu(null)}
-								items={[
-									{
-										id: "picked-archive",
-										label: t(restore ? "sidebar.menu.restoreCount" : "sidebar.menu.archiveCount", {
-											count: pickedRows.length,
-										}),
-										icon: restore ? ArchiveRestore : Archive,
-										onSelect: () => {
-											close();
-											setArchived(pickedRows, !restore);
+								items={pickedMenuItems({
+									count: pickedRows.length,
+									archivable: archivable.length,
+									archived,
+									actions: {
+										toggleArchive: () => {
+											setSessionMenu(null);
+											setPicked(NO_PICKS);
+											setArchived(archivable, !archived);
 										},
-									},
-									{
-										id: "picked-delete",
-										separatorBefore: true,
-										label: t("sidebar.menu.deleteCount", { count: pickedRows.length }),
-										icon: Trash2,
-										danger: true,
-										onSelect: () => {
+										remove: () => {
 											setSessionMenu(null);
 											setPendingDelete({ kind: "picked", sessions: pickedRows });
 										},
 									},
-								]}
+									t,
+								})}
 							/>
 						);
 					}
-					const targetTab = tabForSession(session);
-					const { split } = useTabsStore.getState();
-					const list = sessionListOf(session);
-					// Every action closes the menu first.
-					const then = (run: () => void) => () => {
-						setSessionMenu(null);
-						run();
-					};
-					const items = sessionMenuItems({
-						facts: {
-							stored: session.liveTabId === undefined,
-							hasTab: targetTab !== undefined,
-							busy: isSessionBusy(session),
-							tabFocused: targetTab !== undefined && targetTab.id === activeTabId,
-							tabInSplit: targetTab !== undefined && split !== null && splitTabIds(split).includes(targetTab.id),
-							splitShown: split !== null,
-							unread: targetTab?.unreadDone === true,
-							canCloseTab: tabs.length > 1,
-							chat: session.kind === "chat",
-							pinned: pinnedSessions.includes(session.path),
-							muted: mutedSessions.includes(session.path),
-							archived: archivedIds.has(session.id),
-							agentHidden: agentHidden.includes(session.path),
-							canMoveUp: canMoveWithin(list, session.path, -1),
-							canMoveDown: canMoveWithin(list, session.path, 1),
-						},
-						actions: {
-							openSplit: then(() => void openSessionInSplit(session)),
-							openWindow: then(() => void openSessionInNewWindow(session)),
-							...(targetTab
-								? {
-										splitTab: placement =>
-											then(() => {
-												useUiStore.getState().closeDestination();
-												void useTabsStore.getState().splitTab(targetTab.id, placement);
-											})(),
-										unsplit: then(() => void useTabsStore.getState().unsplit(targetTab.id)),
-										markUnread: then(() => useTabsStore.getState().markUnread(targetTab.id)),
-										closeTab: then(() => performTabClose(targetTab)),
-									}
-								: {}),
-							rename: then(() => startRename(session)),
-							togglePin: then(() => {
-								const pinned = !pinnedSessions.includes(session.path);
-								useSidebarPrefs.getState().toggleSessionPin(session.path);
-								const failed = () => toast({ variant: "warning", message: t("sidebar.pinSyncFailed") });
-								void tabRpc.setSessionPinned(session.id, pinned).then(response => {
-									if (!response.success) failed();
-								}, failed);
-							}),
-							toggleMute: then(() => void useSidebarPrefs.getState().toggleSessionMuted(session.path)),
-							...(list
-								? {
-										moveUp: then(() => void moveSession(session, -1)),
-										moveDown: then(() => void moveSession(session, 1)),
-									}
-								: {}),
-							moveToProject: () => {
-								setMoveMenu(sessionMenu);
-								setSessionMenu(null);
-							},
-							// A bot's own chat is not handed to a bot; a session on a paired host has no opener here (R91).
-							...(botsShown && !botFolders.has(session.cwd) && session.device === undefined
-								? {
-										handToBot: then(() =>
-											openBotDialog({
-												kind: "hand",
-												tabId: targetTab?.id ?? "",
-												title: sessionDisplayTitle(session, ""),
-											}),
-										),
-									}
-								: {}),
-							toggleArchive: then(() => setArchived([session], !archivedIds.has(session.id))),
-							...(session.device === undefined
-								? {
-										toggleAgentHidden: then(
-											() => void useSidebarPrefs.getState().toggleAgentHidden(session.path),
-										),
-										links: then(() => setLinksFor(session.path)),
-										...(session.liveTabId === undefined
-											? {
-													setEmoji: then(() =>
-														openProjectDialog({
-															kind: "emoji",
-															path: session.path,
-															name: sessionDisplayTitle(session, t("sidebar.untitled")),
-														}),
-													),
-													setParent: then(() =>
-														openProjectDialog({
-															kind: "parent",
-															path: session.path,
-															name: sessionDisplayTitle(session, t("sidebar.untitled")),
-															candidates: codeSessions
-																.filter(
-																	other =>
-																		other.cwd === session.cwd &&
-																		other.path !== session.path &&
-																		other.liveTabId === undefined &&
-																		rows.rootOf.get(other.path) !== session.path,
-																)
-																.map(other => ({
-																	path: other.path,
-																	title: sessionDisplayTitle(other, t("sidebar.untitled")),
-																})),
-														}),
-													),
-												}
-											: {}),
-										...(rows.rootOf.has(session.path)
-											? {
-													removeParent: then(
-														() =>
-															void useSidebarPrefs
-																.getState()
-																.setEntry("sessionParents", session.path, ""),
-													),
-												}
-											: {}),
-									}
-								: {}),
-							copyTitle: then(() => void copyText(sessionDisplayLabel(session, t("sidebar.untitled")))),
-							reveal: then(() => void revealSession(session)),
-							saveBundle: anonymized =>
-								then(() => {
-									if (targetTab)
-										void saveDiagnosticBundle(
-											{ tabId: targetTab.id, title: sessionDisplayTitle(session, "") },
-											anonymized,
-										);
-								})(),
-							remove: then(() => setPendingDelete({ kind: "session", session })),
-						},
-						t,
-						altHint: !touchInput,
-					});
 					return (
 						<ContextMenu
 							ariaLabel={sessionDisplayLabel(session, t("sidebar.untitled"))}
-							x={sessionMenu.anchor.x}
-							y={sessionMenu.anchor.y}
+							x={anchor.x}
+							y={anchor.y}
 							onClose={() => setSessionMenu(null)}
-							items={items}
+							items={rowMenuItems(session, anchor)}
 						/>
 					);
 				})()}
