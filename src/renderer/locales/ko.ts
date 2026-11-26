@@ -8070,6 +8070,7 @@ export const ko: Record<string, string> = {
 	"hostUi.revealPath.inFiles": "파일에서 보기",
 	"hostUi.revealPath.onComputer": "컴퓨터에서 위치 보기",
 	"hostUi.link.onComputer": "컴퓨터에서 열기",
+	"hostUi.link.inPreview": "Preview에서 열기",
 	"hostUi.save.title": "{name} 저장",
 	"hostUi.save.description": "어디에 저장할까요?",
 	"hostUi.save.onPhone": "폰에 저장",

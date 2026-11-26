@@ -8096,6 +8096,7 @@ export const en: Record<string, string> = {
 	"hostUi.revealPath.inFiles": "Show in Files",
 	"hostUi.revealPath.onComputer": "Show on computer",
 	"hostUi.link.onComputer": "Open on computer",
+	"hostUi.link.inPreview": "Open in Preview",
 	"hostUi.save.title": "Save {name}",
 	"hostUi.save.description": "Where should the file go?",
 	"hostUi.save.onPhone": "Save to phone",
