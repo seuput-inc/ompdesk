@@ -1,83 +1,170 @@
 /**
- * Create or edit one scheduled run (Settings › Schedules): name, prompt,
- * project folder, repeat (an interval or a time of day on chosen weekdays),
- * model, --yolo, and whether it starts on. A one-time or event-triggered schedule (made by an agent) keeps its
- * trigger: the dialog shows it in words and saving sends it back unchanged. Validation is the shared
- * `scheduleDraftProblem`, the same check main applies before saving.
+ * Create or edit one scheduled run (Settings › Schedules): name, prompt, project folder, when it runs (an interval, a
+ * time of day on chosen weekdays, a cron line, or a webhook call with its "Only when" filters), model, thinking, a
+ * fresh worktree per run, --yolo, and whether it starts on. A one-time or other event-triggered schedule (made by an
+ * agent) keeps its trigger: the dialog shows it in words and saving sends it back unchanged. A new webhook routine
+ * saves an empty key (the core makes it); an edit sends its key back, and the core keeps its signature and old key.
+ * Validation is the shared `scheduleDraftProblem`, the same check main applies before saving.
  */
 import { FolderOpen } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import {
 	SCHEDULE_MAX_INTERVAL,
+	SCHEDULE_THINKING_LEVELS,
 	type Schedule,
 	type ScheduleDraft,
+	type ScheduleEvent,
 	type ScheduleFrequency,
+	type ScheduleThinking,
 	scheduleDraftProblem,
 } from "../../../shared/schedules";
 import { useT } from "../../lib/i18n";
 import { frequencySummary, weekdayNames } from "../../lib/schedule-text";
 import { pickWorkspaceDirectory } from "../../lib/workspace-dirs";
-import { Button, FieldLabel, Input, Modal, PathText, SegmentedChoice, Select, SwitchField, TextArea } from "../common";
+import { Button, Checkbox, FieldLabel, Input, Modal, PathText, Select, SwitchField, TextArea } from "../common";
 import { ModelValueSelect } from "./ModelValueSelect";
+import { opTakesValues, WebhookFilterFields, type WebhookFilters } from "./schedules/WebhookFilterFields";
 
 type IntervalUnit = "minutes" | "hours";
+type TriggerKind = "interval" | "daily" | "cron" | "webhook";
+
+/** What a template or an edited schedule brings into the form. */
+export type ScheduleSeed = Pick<ScheduleDraft, "name" | "prompt" | "frequency"> & Partial<ScheduleDraft>;
 
 interface Form {
 	name: string;
 	prompt: string;
 	cwd: string;
-	kind: "interval" | "daily";
+	kind: TriggerKind;
 	/** A one-time or event trigger the form cannot edit: saved back as it was. */
 	fixed: ScheduleFrequency | null;
 	every: string;
 	unit: IntervalUnit;
 	time: string;
 	days: number[];
+	cron: string;
+	/** The webhook's key: empty for a new one (the core makes it), kept on an edit. */
+	key: string;
+	filters: WebhookFilters;
 	model: string;
+	thinking: ScheduleThinking | "";
+	worktree: boolean;
 	autoApprove: boolean;
 	enabled: boolean;
+	/** A wake-up schedule: model, thinking and worktree mean nothing to it. */
+	wake: boolean;
 }
 
-function formFor(schedule: Schedule | null, cwd: string): Form {
-	const frequency = schedule?.frequency;
+function formFor(seed: ScheduleSeed | null, cwd: string): Form {
+	const frequency = seed?.frequency;
 	const minutes = frequency?.kind === "interval" ? frequency.minutes : 60;
 	const hours = minutes % 60 === 0;
+	const webhook = frequency?.kind === "event" && frequency.event.source === "webhook" ? frequency.event : null;
 	return {
-		name: schedule?.name ?? "",
-		prompt: schedule?.prompt ?? "",
-		cwd: schedule?.cwd ?? cwd,
-		kind: frequency?.kind === "interval" ? "interval" : "daily",
-		fixed: frequency?.kind === "once" || frequency?.kind === "event" ? frequency : null,
+		name: seed?.name ?? "",
+		prompt: seed?.prompt ?? "",
+		cwd: seed?.cwd ?? cwd,
+		kind: webhook
+			? "webhook"
+			: frequency?.kind === "interval" || frequency?.kind === "cron"
+				? frequency.kind
+				: "daily",
+		// A deadline wait on a webhook is an agent's one-time trigger: kept as it is.
+		fixed:
+			frequency?.kind === "once" || (frequency?.kind === "event" && (!webhook || frequency.by)) ? frequency : null,
 		every: String(hours ? minutes / 60 : minutes),
 		unit: hours ? "hours" : "minutes",
 		time: frequency?.kind === "daily" ? frequency.time : "09:00",
 		days: frequency?.kind === "daily" ? frequency.days : [],
-		model: schedule?.model ?? "",
-		autoApprove: schedule?.autoApprove ?? false,
-		enabled: schedule?.enabled ?? true,
+		cron: frequency?.kind === "cron" ? frequency.expr : "0 9 * * 1-5",
+		key: webhook?.key ?? "",
+		filters: {
+			where: (webhook?.where ?? []).map(test => ({
+				path: test.path,
+				op: test.op,
+				values: (test.values ?? []).join(", "),
+			})),
+			contains: webhook?.contains ?? "",
+			pick: (webhook?.pick ?? []).join(", "),
+		},
+		model: seed?.model ?? "",
+		thinking: seed?.thinking ?? "",
+		worktree: seed?.worktree ?? false,
+		autoApprove: seed?.autoApprove ?? false,
+		enabled: seed?.enabled ?? true,
+		wake: Boolean(seed?.wakeSession),
 	};
 }
 
-function draftOf(form: Form): ScheduleDraft {
+function commaList(text: string): string[] {
+	return text
+		.split(",")
+		.map(item => item.trim())
+		.filter(Boolean);
+}
+
+function webhookEvent(form: Form): ScheduleEvent {
+	const where = form.filters.where
+		.filter(row => row.path.trim())
+		.map(row => ({
+			path: row.path.trim(),
+			op: row.op,
+			...(opTakesValues(row.op) ? { values: commaList(row.values) } : {}),
+		}));
+	const contains = form.filters.contains.trim();
+	const pick = commaList(form.filters.pick);
+	return {
+		source: "webhook",
+		key: form.key,
+		...(where.length > 0 ? { where } : {}),
+		...(contains ? { contains } : {}),
+		...(pick.length > 0 ? { pick } : {}),
+	};
+}
+
+function frequencyOf(form: Form): ScheduleFrequency {
+	if (form.fixed) return form.fixed;
 	const every = Number(form.every);
+	switch (form.kind) {
+		case "interval":
+			return { kind: "interval", minutes: form.unit === "hours" ? every * 60 : every };
+		case "daily":
+			return { kind: "daily", time: form.time, days: form.days.toSorted() };
+		case "cron":
+			return { kind: "cron", expr: form.cron.trim() };
+		case "webhook":
+			return { kind: "event", event: webhookEvent(form) };
+	}
+}
+
+function draftOf(form: Form): ScheduleDraft {
 	return {
 		name: form.name.trim(),
 		prompt: form.prompt,
 		cwd: form.cwd,
-		frequency:
-			form.fixed ??
-			(form.kind === "interval"
-				? { kind: "interval", minutes: form.unit === "hours" ? every * 60 : every }
-				: { kind: "daily", time: form.time, days: form.days.toSorted() }),
+		frequency: frequencyOf(form),
 		model: form.model.trim() || null,
 		autoApprove: form.autoApprove,
 		enabled: form.enabled,
+		...(form.wake ? {} : { thinking: form.thinking || null, worktree: form.worktree }),
 	};
+}
+
+/** The draft as the core checks it: a new webhook's empty key is the core's to fill, so it stands in for one here. */
+function problemOf(draft: ScheduleDraft) {
+	const { frequency } = draft;
+	if (frequency.kind === "event" && frequency.event.source === "webhook" && frequency.event.key === "")
+		return scheduleDraftProblem({
+			...draft,
+			frequency: { ...frequency, event: { ...frequency.event, key: "0".repeat(16) } },
+		});
+	return scheduleDraftProblem(draft);
 }
 
 export function ScheduleDialog({
 	open,
 	schedule,
+	template = null,
 	defaultCwd,
 	device,
 	onClose,
@@ -86,6 +173,8 @@ export function ScheduleDialog({
 	open: boolean;
 	/** The schedule to edit; null creates one. */
 	schedule: Schedule | null;
+	/** What a new schedule starts from (a template); ignored while editing. */
+	template?: ScheduleSeed | null;
 	defaultCwd: string;
 	/** The paired host the schedule runs on (its folders); absent = this computer. */
 	device?: string;
@@ -95,21 +184,22 @@ export function ScheduleDialog({
 }) {
 	const t = useT();
 	const formId = useId();
-	const [form, setForm] = useState<Form>(() => formFor(schedule, defaultCwd));
+	const seed = schedule ?? template;
+	const [form, setForm] = useState<Form>(() => formFor(seed, defaultCwd));
 	const [saving, setSaving] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [touched, setTouched] = useState(false);
-	// Each opening starts from the schedule it edits (or a blank one).
+	// Each opening starts from the schedule it edits (or a template, or a blank one).
 	useEffect(() => {
 		if (!open) return;
-		setForm(formFor(schedule, defaultCwd));
+		setForm(formFor(seed, defaultCwd));
 		setError(null);
 		setTouched(false);
-	}, [open, schedule, defaultCwd]);
+	}, [open, seed, defaultCwd]);
 
 	const set = <K extends keyof Form>(key: K, value: Form[K]) => setForm(current => ({ ...current, [key]: value }));
 	const draft = draftOf(form);
-	const problem = scheduleDraftProblem(draft);
+	const problem = problemOf(draft);
 	const days = weekdayNames();
 
 	const submit = async () => {
@@ -209,18 +299,42 @@ export function ScheduleDialog({
 						</div>
 					) : (
 						<div className="flex flex-col gap-2">
-							<SegmentedChoice
+							<Select
 								aria-label={t("schedules.field.repeat")}
-								fit="content"
-								onChange={kind => set("kind", kind)}
-								optionAttr="data-schedule-repeat"
+								data-schedule-repeat
+								onChange={event => set("kind", event.target.value as TriggerKind)}
 								options={[
 									{ value: "daily", label: t("schedules.repeat.daily") },
 									{ value: "interval", label: t("schedules.repeat.interval") },
+									{ value: "cron", label: t("schedules.repeat.cron") },
+									{ value: "webhook", label: t("schedules.repeat.webhook") },
 								]}
 								value={form.kind}
 							/>
-							{form.kind === "interval" ? (
+							{form.kind === "webhook" ? (
+								<>
+									{!form.key && (
+										<p className="text-sc-xs text-(--sc-text-muted)">{t("schedules.field.webhookHint")}</p>
+									)}
+									<WebhookFilterFields
+										error={touched && problem === "event" ? t("schedules.problem.webhook") : undefined}
+										filters={form.filters}
+										idPrefix={formId}
+										onChange={filters => set("filters", filters)}
+									/>
+								</>
+							) : form.kind === "cron" ? (
+								<Input
+									data-schedule-cron
+									error={touched && problem === "cron" ? t("schedules.problem.cron") : undefined}
+									hint={t("schedules.field.cronHint")}
+									label={t("schedules.field.cron")}
+									mono
+									onChange={event => set("cron", event.target.value)}
+									placeholder="0 9 * * 1-5"
+									value={form.cron}
+								/>
+							) : form.kind === "interval" ? (
 								<div className="flex items-end gap-2">
 									<Input
 										className="w-24"
@@ -296,6 +410,30 @@ export function ScheduleDialog({
 						value={form.model}
 					/>
 				</div>
+				{!form.wake && (
+					<>
+						<Select
+							label={t("schedules.field.thinking")}
+							onChange={event => set("thinking", event.target.value as ScheduleThinking | "")}
+							options={[
+								{ value: "", label: t("schedules.field.thinkingDefault") },
+								...SCHEDULE_THINKING_LEVELS.map(level => ({
+									value: level,
+									label: t(`input.thinking.name.${level}`),
+								})),
+							]}
+							value={form.thinking}
+						/>
+						<label className="flex items-center gap-2 text-sc-md text-(--sc-text)">
+							<Checkbox
+								checked={form.worktree}
+								data-schedule-worktree
+								onChange={event => set("worktree", event.target.checked)}
+							/>
+							{t("schedules.field.worktree")}
+						</label>
+					</>
+				)}
 				<SwitchField
 					checked={form.autoApprove}
 					description={t("schedules.field.autoApproveDesc")}

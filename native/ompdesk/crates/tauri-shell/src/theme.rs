@@ -55,8 +55,8 @@ fn hex(colour: &str) -> Option<tauri::window::Color> {
     ))
 }
 
-/// Whether the app shows in its dark scheme now (the source the page set, else the OS's).
-pub fn is_dark() -> bool {
+/// Whether a new app window opens dark: the scheme its page will paint in.
+pub fn new_window_dark() -> bool {
     let source = STATE.with(|state| state.borrow().source);
     effective_theme(&system::theme(), source)["dark"]
         .as_bool()
@@ -67,7 +67,7 @@ pub fn is_dark() -> bool {
 pub fn background_hex() -> Option<String> {
     let colours: Value = serde_json::from_str(WINDOW_BACKGROUND).ok()?;
     Some(
-        colours[if is_dark() { "dark" } else { "light" }]
+        colours[if new_window_dark() { "dark" } else { "light" }]
             .as_str()?
             .to_owned(),
     )

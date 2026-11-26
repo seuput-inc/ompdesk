@@ -5327,6 +5327,67 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				write({ type: "message_end", message: entry });
 			}
 			endTurn([user, note, answer]);
+		} else if (message === "fixture schedule card") {
+			// An agent's `ompdesk_schedule` create of a webhook routine, answered with the core's webhook line (parity
+			// `reply-schedule-card`: the transcript's schedule card shows the path, never the key).
+			const id = `schedule-card-${Date.now()}`;
+			const name = "ompdesk_schedule";
+			const args = {
+				action: "create",
+				name: "Deploy hook",
+				prompt: "Deploy what the call names",
+				on: { source: "webhook" },
+			};
+			const call: AgentMessage = {
+				role: "assistant",
+				content: [{ type: "toolCall", id, name, arguments: args }],
+				timestamp: Date.now(),
+				provider: model.provider,
+				model: model.id,
+				stopReason: "toolUse",
+			};
+			appendMessage(call);
+			write({ type: "message_start", message: call });
+			write({ type: "message_end", message: call });
+			write({ type: "tool_execution_start", toolCallId: id, toolName: name, args });
+			setTimeout(() => {
+				const content = [
+					{
+						type: "text" as const,
+						text: 'Scheduled “[agent] Deploy hook” on a webhook call in this folder on this computer; id parity-hook; waits for its event. Webhook: POST /hooks/parity-hook on that computer\'s OMPdesk web server (on while Mobile web is on: http://127.0.0.1:<its port> there, or its Mobile web link from the tailnet) with the header "Authorization: Bearer parity-key-0123456789abcdef"; the request body is passed to the run.',
+					},
+				];
+				const result: AgentMessage = {
+					role: "toolResult",
+					toolCallId: id,
+					toolName: name,
+					content,
+					details: {},
+					isError: false,
+					timestamp: Date.now(),
+				};
+				write({
+					type: "tool_execution_end",
+					toolCallId: id,
+					toolName: name,
+					result: { content, details: {} },
+					isError: false,
+				});
+				appendMessage(result);
+				write({ type: "message_end", message: result });
+				const answer: AgentMessage = {
+					role: "assistant",
+					content: [{ type: "text", text: "Webhook routine saved." }],
+					timestamp: Date.now(),
+					provider: model.provider,
+					model: model.id,
+					stopReason: "stop",
+				};
+				appendMessage(answer);
+				write({ type: "message_start", message: answer });
+				write({ type: "message_end", message: answer });
+				endTurn([user, call, result, answer]);
+			}, 250);
 		} else if (message === "fixture agent-desktop") {
 			// agent-desktop's MCP tools as stock hands them to the transcript: `mcp__agent_desktop_desktop_<command>`
 			// calls whose text block is the JSON envelope (again as `details.structuredContent`, image bytes left out).

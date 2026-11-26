@@ -32,8 +32,10 @@
 //! The clock is the system's, read at every check. A test's service is opened `manual`: then the core keeps no timer,
 //! every request says what time it is and `schedules.tick` is the check.
 
+mod cron;
 mod draft;
 mod engine;
+mod hooks;
 mod launch;
 mod marks;
 pub(crate) mod rules;
@@ -41,13 +43,14 @@ pub(crate) mod rules;
 mod tests;
 pub(crate) mod triggers;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::{oneshot, watch};
@@ -58,7 +61,7 @@ use crate::disk::saves::write_kept;
 use crate::disk::tree::fault as node_fault;
 use crate::run::Runner;
 use crate::server::{Call, Events, Fault, Registry, Reply};
-use engine::{Commanded, Engine, Limits, Out};
+use engine::{Commanded, Engine, HookCall, Limits, Out};
 
 /// How long a schedule's precheck may run before it counts as a no.
 const PRECHECK_TIMEOUT_MS: u64 = 60_000;
@@ -373,6 +376,20 @@ impl Service {
                     let _ = fs::remove_file(self.log_file(&run));
                 }
             }
+            // Written before the run that reads it starts (outs are carried out in order), beside the run logs; a
+            // body that cannot be written leaves the run its quoted fields.
+            Out::HookBody { file, body } => {
+                let written =
+                    fs::create_dir_all(&self.log_dir).and_then(|()| fs::write(&file, body));
+                if let Err(error) = written {
+                    eprintln!("ompdesk-core: couldn't save a webhook call's body: {error}");
+                }
+            }
+            Out::RemoveFiles { files } => {
+                for file in files {
+                    let _ = fs::remove_file(file);
+                }
+            }
         }
     }
 
@@ -506,11 +523,17 @@ struct CreateParams {
     origin: Option<String>,
 }
 
+/// A webhook call as the edge read it: the bearer key it sent, its headers (lowercase names, credentials included:
+/// the engine leaves those out of what a run is told) and its body, base64.
 #[derive(Deserialize)]
 struct WebhookParams {
     id: String,
-    bearer: String,
-    detail: String,
+    #[serde(default)]
+    bearer: Option<String>,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+    #[serde(default)]
+    body: String,
 }
 
 #[derive(Deserialize)]
@@ -538,6 +561,11 @@ struct EndedParams {
     /// What a fresh run's model replies used, when its omp's extension counted it.
     #[serde(default)]
     usage: Option<Value>,
+    /// The session file a fresh run's omp saved, and the worktree it ran in, when main knows them.
+    #[serde(default)]
+    session: Option<String>,
+    #[serde(default)]
+    worktree: Option<String>,
 }
 
 /// A request's service and moment, and its own params.
@@ -550,7 +578,7 @@ fn asked<T: serde::de::DeserializeOwned>(call: &Call) -> Result<(Arc<Service>, i
 
 fn open(call: &Call) -> Result<Reply, Fault> {
     let params: OpenParams = call.params()?;
-    let engine = Engine::new(
+    let mut engine = Engine::new(
         params.limits,
         params.minute_ms,
         params.charges,
@@ -559,6 +587,7 @@ fn open(call: &Call) -> Result<Reply, Fault> {
         Box::new(uuid),
         Box::new(webhook_key),
     );
+    engine.set_hook_dir(PathBuf::from(&params.log_dir));
     let file = PathBuf::from(&params.file);
     let service = Arc::new(Service {
         name: params.service.clone(),
@@ -568,7 +597,8 @@ fn open(call: &Call) -> Result<Reply, Fault> {
         log_dir: PathBuf::from(&params.log_dir),
         manual: params.manual,
         shell: params.shell,
-        journal: Journal::open(file.clone(), None, "schedules"),
+        // It holds the webhook keys and signing secrets: this user's alone.
+        journal: Journal::open(file.clone(), Some(0o600), "schedules"),
         waits: Mutex::default(),
         clock: Mutex::default(),
         closed: watch::channel(false).0,
@@ -708,10 +738,15 @@ pub fn register(registry: &mut Registry) {
     registry.add("schedules.webhook", |call| {
         Box::pin(async move {
             let (service, now, params): (_, _, WebhookParams) = asked(&call)?;
-            Reply::json(
-                &service
-                    .with(|engine| engine.webhook(&params.id, &params.bearer, &params.detail, now)),
-            )
+            let body = base64::engine::general_purpose::STANDARD
+                .decode(params.body.as_bytes())
+                .map_err(|_| Fault::new("invalid_params", "A webhook body is base64"))?;
+            let hook = HookCall {
+                bearer: params.bearer,
+                headers: params.headers,
+                body,
+            };
+            Reply::json(&service.with(|engine| engine.webhook(&params.id, &hook, now)))
         })
     });
     registry.add("schedules.prune", |call| {
@@ -753,6 +788,7 @@ pub fn register(registry: &mut Registry) {
                 if let Some(usage) = params.usage {
                     engine.usage(&params.run, usage);
                 }
+                engine.run_facts(&params.run, params.session, params.worktree);
                 engine.ended(&params.run, params.code, params.error, now)
             });
             Reply::json(&())

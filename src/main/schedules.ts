@@ -20,7 +20,8 @@
  */
 
 import { readFile, rm } from "node:fs/promises";
-import { RUN_USAGE_ENV } from "../../resources/gui-bridge/credit-spend-core";
+import path from "node:path";
+import { RUN_SESSION_FIELD, RUN_USAGE_ENV } from "../../resources/gui-bridge/credit-spend-core";
 import { AGENT_SCHEDULE_PREFIX } from "../shared/agent-control";
 import { codedError } from "../shared/ipc-error-codes";
 import {
@@ -58,8 +59,17 @@ const REOPEN_MS = 30_000;
 /** One started run: `stop()` ends it, `done` settles once it ended (an omp: exited, its log flushed). */
 export interface RunProcess {
 	stop(): void;
-	/** `usage`: what a fresh run's model replies used, as its omp counted it (stock's session tally). */
-	done: Promise<{ code: number | null; error?: string; usage?: ScheduleRunUsage }>;
+	/**
+	 * `usage`: what a fresh run's model replies used, as its omp counted it (stock's session tally); `session`: the
+	 * session file that omp saved; `worktree`: the worktree it ran in.
+	 */
+	done: Promise<{
+		code: number | null;
+		error?: string;
+		usage?: ScheduleRunUsage;
+		session?: string;
+		worktree?: string;
+	}>;
 }
 
 export type RunLauncher = (schedule: Schedule, files: { log: string; prompt: string }) => Promise<RunProcess>;
@@ -106,8 +116,20 @@ export interface ScheduleServiceOptions {
 	shell?: () => Promise<CoreRunner>;
 }
 
-/** What a webhook call came to (`ScheduleService.webhook`): started or kept for after the running one, or why not. */
-export type WebhookOutcome = "fired" | "unknown" | "denied" | "off";
+/**
+ * What a webhook call came to (`ScheduleService.webhook`): started or kept for after the running one, passed over by
+ * its filters or already taken (both answered 202), or why not.
+ */
+export type WebhookOutcome = "fired" | "ignored" | "duplicate" | "unknown" | "denied" | "off";
+
+/** A webhook call as the core's edge read it: the bearer key it sent (null: a sender's signature instead), its
+ * headers (lowercase names, credentials left out) and its body, base64. */
+export interface WebhookCallIn {
+	id: string;
+	bearer: string | null;
+	headers: Record<string, string>;
+	body: string;
+}
 
 /** `schedules.start`: the core asks main to start a run. */
 interface StartAsk {
@@ -373,13 +395,13 @@ export class ScheduleService {
 	}
 
 	/**
-	 * `POST /hooks/<id>` with `Authorization: Bearer <key>` (src/main/web/server.ts): fires the routine whose webhook
-	 * key it is. The core compares the key in constant time; any other id, source or key is `unknown`/`denied` alike
-	 * to the caller's eyes only by status, never by timing of the key.
+	 * `POST /hooks/<id>` (the core's edge, relayed by src/main/web/server.ts): fires the routine whose webhook it is,
+	 * when the call carries its key or, once the routine has a signing secret, its sender's signature. The core checks
+	 * both in constant time and keeps the routine's recent calls.
 	 */
-	async webhook(id: string, bearer: string, detail: string): Promise<WebhookOutcome> {
+	async webhook(call: WebhookCallIn): Promise<WebhookOutcome> {
 		if (this.#disposed) return "off";
-		return this.#send<WebhookOutcome>("schedules.webhook", { id, bearer, detail });
+		return this.#send<WebhookOutcome>("schedules.webhook", { ...call });
 	}
 
 	/**
@@ -483,9 +505,10 @@ export class ScheduleService {
 }
 
 /**
- * The production launcher: `omp -p [--model m] [--yolo]` under the supervisor, started by the core
+ * The production launcher: `omp -p [--model m] [--thinking t] [--yolo]` under the supervisor, started by the core
  * (`schedules.launch`), the prompt file as its stdin, stdout and stderr appended to the run's log. This side resolves
- * what the run needs at its start: the omp, the environment, the extensions of its folder.
+ * what the run needs at its start: the omp, the environment, the extensions of its folder, and for a `worktree`
+ * schedule the worktree it runs in.
  */
 export function ompRunLauncher(options: {
 	omp: () => Promise<OmpResolution>;
@@ -496,18 +519,23 @@ export function ompRunLauncher(options: {
 	extensionEnv?: (cwd: string) => Promise<Record<string, string>>;
 	/** The Credit use switch for this run (omp-launch.ts `creditSpendRun`): a run has no bridge to apply it. */
 	creditSpend?: () => { args: string[]; env: Record<string, string> };
+	/** A new worktree of `schedule.cwd` for one run, seeded and set up as a worktree tab's; its folder. */
+	worktree?: (schedule: Schedule) => Promise<string>;
 }): RunLauncher {
 	return async (schedule, files) => {
 		const resolution = await options.omp();
 		if (!resolution.ok) throw new Error(resolution.error);
 		const { bin } = resolution.runtime;
-		const extensions = (await options.extensionArgs?.(schedule.cwd)) ?? [];
+		// A worktree that cannot be made fails the run before it launches: it may be sent again.
+		const worktree = schedule.worktree && options.worktree ? await options.worktree(schedule) : undefined;
+		const cwd = worktree ?? schedule.cwd;
+		const extensions = (await options.extensionArgs?.(cwd)) ?? [];
 		const creditSpend = options.creditSpend?.();
 		// The run extension that carries the Credit use switch also writes stock's usage tally here as the run ends.
 		const usageFile = creditSpend ? `${files.log}.usage.json` : undefined;
 		const env: NodeJS.ProcessEnv = {
 			...(await options.env()),
-			...(extensions.length ? await options.extensionEnv?.(schedule.cwd) : {}),
+			...(extensions.length ? await options.extensionEnv?.(cwd) : {}),
 			...creditSpend?.env,
 			...(usageFile ? { [RUN_USAGE_ENV]: usageFile } : {}),
 		};
@@ -516,6 +544,7 @@ export function ompRunLauncher(options: {
 			...extensions,
 			...(creditSpend?.args ?? []),
 			...(schedule.model ? ["--model", schedule.model] : []),
+			...(schedule.thinking ? ["--thinking", schedule.thinking] : []),
 			...(schedule.autoApprove ? ["--yolo"] : []),
 		];
 		const ompEnv: Record<string, string> = {};
@@ -543,8 +572,14 @@ export function ompRunLauncher(options: {
 		];
 		const done = ended.promise.then(async ({ code, error }) => {
 			for (const off of unsubscribe) off();
-			const usage = usageFile ? await readRunUsage(usageFile) : undefined;
-			return { code, ...(error === undefined ? {} : { error }), ...(usage ? { usage } : {}) };
+			const { usage, session } = usageFile ? await readRunTally(usageFile) : {};
+			return {
+				code,
+				...(error === undefined ? {} : { error }),
+				...(usage ? { usage } : {}),
+				...(session ? { session } : {}),
+				...(worktree ? { worktree } : {}),
+			};
 		});
 		const started = host.call("schedules.launch", {
 			run,
@@ -553,10 +588,10 @@ export function ompRunLauncher(options: {
 			args: spawnArgs(bin, args),
 			shell: needsShell(bin),
 			env: ompEnv,
-			cwd: schedule.cwd,
+			cwd,
 			log: files.log,
 			prompt: files.prompt,
-			header: `$ omp ${args.join(" ")}\n# ${schedule.cwd}\n\n`,
+			header: `$ omp ${args.join(" ")}\n# ${cwd}\n\n`,
 		});
 		const home = host.generation;
 		try {
@@ -574,24 +609,31 @@ export function ompRunLauncher(options: {
 	};
 }
 
-/** The tally a run's extension wrote (stock's `UsageStatistics`), kept to the fields a run row shows; the file goes. */
-async function readRunUsage(file: string): Promise<ScheduleRunUsage | undefined> {
+/**
+ * What a run's extension wrote as the run ended (stock's `UsageStatistics`, and the session file its omp saved), kept
+ * to the fields a run row shows; the file goes.
+ */
+async function readRunTally(file: string): Promise<{ usage?: ScheduleRunUsage; session?: string }> {
 	try {
 		const told = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
 		const count = (name: string) => {
 			const value = told[name];
 			return typeof value === "number" && Number.isFinite(value) ? value : 0;
 		};
+		const session = told[RUN_SESSION_FIELD];
 		return {
-			input: count("input"),
-			output: count("output"),
-			cacheRead: count("cacheRead"),
-			cacheWrite: count("cacheWrite"),
-			cost: count("cost"),
+			usage: {
+				input: count("input"),
+				output: count("output"),
+				cacheRead: count("cacheRead"),
+				cacheWrite: count("cacheWrite"),
+				cost: count("cost"),
+			},
+			...(typeof session === "string" && path.isAbsolute(session) ? { session } : {}),
 		};
 	} catch {
 		// No file: the run never reached a model, or its omp lacks the extension.
-		return undefined;
+		return {};
 	} finally {
 		await rm(file, { force: true }).catch(() => undefined);
 	}

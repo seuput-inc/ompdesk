@@ -5,7 +5,9 @@
 //! tells the person once (`src/main/disk-full.ts`, `core-saves.ts`). The TypeScript twin is `writeFileAtomicDeferred`
 //! in `src/main/atomic-file.ts`, which waits the same 5 s doubling to a minute.
 //!
-//! One lock covers every write and every bookkeeping step, so a retry never lands older content over a newer save.
+//! Each file's writes and retries take that file's turn, so a retry never lands older content over a newer save. The
+//! bookkeeping lock is never held across a write: `waiting_content` runs on the hub thread (every prefs read), so one
+//! store's save on a busy disk must not stall the hub past main's 2 s answer deadline.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -53,6 +55,8 @@ impl State {
 
 pub(crate) struct Saves {
     state: Mutex<State>,
+    /// One turn per file: its write and its retries run one at a time.
+    turns: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
     writer: Box<Writer>,
     delays: Vec<u64>,
 }
@@ -64,6 +68,7 @@ impl Saves {
                 kept: HashMap::new(),
                 events: None,
             }),
+            turns: Mutex::new(HashMap::new()),
             writer,
             delays,
         }
@@ -73,6 +78,14 @@ impl Saves {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn turn(&self, file: &Path) -> Arc<Mutex<()>> {
+        let mut turns = self
+            .turns
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        Arc::clone(turns.entry(file.to_path_buf()).or_default())
     }
 
     fn delay(&self, tries: usize) -> Duration {
@@ -99,8 +112,10 @@ impl Saves {
         mode: Option<u32>,
         dir_mode: u32,
     ) -> Result<bool, Fault> {
-        let mut state = self.lock();
+        let turn = self.turn(file);
+        let _turn = turn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let result = (self.writer)(file, bytes, mode, dir_mode);
+        let mut state = self.lock();
         if matches!(&result, Err(fault) if disk_full(fault)) {
             let kept = Kept {
                 bytes: bytes.to_vec(),
@@ -146,17 +161,30 @@ impl Saves {
     }
 
     pub(crate) fn retry_once(&self, file: &Path) -> bool {
-        let mut state = self.lock();
-        let Some(kept) = state.kept.get(file) else {
+        let turn = self.turn(file);
+        let held = turn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Only a write of this file changes what it keeps, and that write waits for this turn.
+        let Some((bytes, mode, dir_mode)) = self
+            .lock()
+            .kept
+            .get(file)
+            .map(|kept| (kept.bytes.clone(), kept.mode, kept.dir_mode))
+        else {
             return true;
         };
-        let result = (self.writer)(file, &kept.bytes, kept.mode, kept.dir_mode);
+        let result = (self.writer)(file, &bytes, mode, dir_mode);
         if matches!(&result, Err(fault) if disk_full(fault)) {
             return false;
         }
-        let kept = state.kept.remove(file).expect("held under this lock");
+        let mut state = self.lock();
+        let kept = state
+            .kept
+            .remove(file)
+            .expect("kept under this file's turn");
         state.tell("store.saved", file);
         drop(state);
+        // `saved_after_retry` takes the visuals catalog's lock, whose holder may be waiting for this file's turn.
+        drop(held);
         match result {
             Ok(true) => crate::visuals::saved_after_retry(file, &kept.bytes, self),
             Err(fault) => eprintln!(
@@ -169,12 +197,16 @@ impl Saves {
         true
     }
 
-    /// Deletes `file` and forgets what waited to be written to it, under the one lock, so no retry brings back a
-    /// file its store removed (a closed terminal's history).
+    /// Deletes `file` and forgets what waited to be written to it, in the file's turn, so no retry brings back a file
+    /// its store removed (a closed terminal's history).
     fn remove(&self, file: &Path) -> std::io::Result<()> {
-        let mut state = self.lock();
-        if state.kept.remove(file).is_some() {
-            state.tell("store.saved", file);
+        let turn = self.turn(file);
+        let _turn = turn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        {
+            let mut state = self.lock();
+            if state.kept.remove(file).is_some() {
+                state.tell("store.saved", file);
+            }
         }
         match std::fs::remove_file(file) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -413,6 +445,52 @@ mod tests {
         full.store(false, Ordering::SeqCst);
         std::thread::sleep(Duration::from_millis(100));
         assert!(!file.exists(), "the kept content came back");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_save_held_up_by_the_disk_never_holds_up_another_file_or_the_waiting_check() {
+        use std::sync::mpsc;
+        let dir = temp("slow");
+        let slow = dir.join("journal.json");
+        let quick = dir.join("prefs.json");
+        let (entered, writing) = mpsc::channel::<()>();
+        let (release, held) = mpsc::channel::<()>();
+        let held = Mutex::new(held);
+        let slow_name = slow.clone();
+        let saves = Saves::manual(Box::new(move |file, bytes, mode, dir_mode| {
+            if file == slow_name {
+                let _ = entered.send(());
+                let _ = held.lock().unwrap().recv();
+            }
+            write_atomic_if(file, bytes, mode, dir_mode, &|| true)
+        }));
+        let writer = {
+            let saves = Arc::clone(&saves);
+            let slow = slow.clone();
+            std::thread::spawn(move || saves.write(&slow, b"slow", None, 0o700))
+        };
+        writing.recv().unwrap();
+
+        let (done, finished) = mpsc::channel();
+        {
+            let saves = Arc::clone(&saves);
+            let quick = quick.clone();
+            std::thread::spawn(move || {
+                let waiting = saves.waiting_for_space(&quick);
+                let saved = saves.write(&quick, b"{}", None, 0o700).is_ok();
+                let _ = done.send((waiting, saved));
+            });
+        }
+        let answered = finished.recv_timeout(Duration::from_secs(5));
+        release.send(()).unwrap();
+        assert!(writer.join().unwrap().unwrap());
+        assert_eq!(
+            answered,
+            Ok((false, true)),
+            "the other file waited for the slow save"
+        );
+        assert_eq!(fs::read_to_string(&slow).unwrap(), "slow");
         let _ = fs::remove_dir_all(&dir);
     }
 }

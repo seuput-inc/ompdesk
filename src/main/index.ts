@@ -74,7 +74,7 @@ import type { OmpUpdateState } from "../shared/omp-update";
 import { VISUAL_SCHEME } from "../shared/preview";
 import { PSTACK_PREF } from "../shared/pstack";
 import { REPLY_LANGUAGE_PREF } from "../shared/reply-language";
-import { SCHEDULES_STATE } from "../shared/schedules";
+import { SCHEDULES_STATE } from "../shared/schedule-channels";
 import type { SetupState } from "../shared/setup";
 import { isMutedFolder, readSidebarPrefs, SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import {
@@ -129,7 +129,7 @@ import { getMainLanguage, mainT } from "./i18n";
 import { startupCwd } from "./initial-cwd";
 import { type IpcDeps, registerIpcHandlers } from "./ipc";
 import { shellRunner } from "./local/git/exec";
-import { stockWorktreeLocation, tablessWorktreeBridge } from "./local/git/worktree";
+import { createWorktree, stockWorktreeLocation, tablessWorktreeBridge } from "./local/git/worktree";
 import { renameStoredSession } from "./local/session-files";
 import { LocalEngines, localEngineSettings } from "./local-engines";
 import { LogWatcher } from "./log-watcher";
@@ -2074,6 +2074,18 @@ app.whenReady().then(async () => {
 		extensionArgs: cwd => aiMemoryService?.extensionArgs(cwd) ?? Promise.resolve([]),
 		extensionEnv: () => mcpHub?.ompEnv() ?? Promise.resolve({}),
 		creditSpend: () => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))),
+		// A `worktree` schedule's run gets a new worktree each time, as a worktree tab's (seed and setup included);
+		// disk care removes it once its branch landed.
+		worktree: async schedule => {
+			const slug = schedule.name
+				.replace(/^\[agent\]\s*/, "")
+				.toLowerCase()
+				.replace(/[^a-z0-9]+/g, "-");
+			const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 12);
+			const name = `routine-${slug.replace(/^-+|-+$/g, "").slice(0, 24) || "run"}-${stamp}`;
+			const made = await createWorktree(schedule.cwd, { name, baseCwd: schedule.cwd }, tablessWorktreeBridge);
+			return made.path;
+		},
 	});
 	// The Bots page of every window follows the core's bots state (BOTS_STATE).
 	onBotsState(state => {
@@ -2086,7 +2098,9 @@ app.whenReady().then(async () => {
 		logDir: join(app.getPath("userData"), "schedule-runs"),
 		launch: launchScheduledRun,
 		onState: state => {
-			for (const win of BrowserWindow.getAllWindows()) {
+			// A paired phone's page shows this computer's Settings › Schedules too: without the push a run it started read
+			// "Running" until a reload (parity schedule-runs, run 45730681219).
+			for (const win of [...BrowserWindow.getAllWindows(), ...(webHost?.windows.all() ?? [])]) {
 				if (!win.isDestroyed()) win.webContents.send(SCHEDULES_STATE, state);
 			}
 			// Devices showing this computer's schedules (Settings › Schedules on a tab here) follow.

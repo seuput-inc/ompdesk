@@ -43,7 +43,7 @@ import {
 	PREVIEW_VISUAL,
 	PREVIEW_VISUALS,
 } from "../../shared/preview";
-import { SCHEDULES_COMMAND, SCHEDULES_LOG, SCHEDULES_STATE } from "../../shared/schedules";
+import { SCHEDULES_COMMAND, SCHEDULES_LOG, SCHEDULES_STATE } from "../../shared/schedule-channels";
 import { SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "../../shared/sidebar-projects";
 import {
 	SSH_TOOLS_AGENT,
@@ -111,7 +111,8 @@ export type ChannelPolicy =
 	| { dir: RequestDirection; permission: "pairing-admin"; mode: "boundary" }
 	/** The core's router answers it for a page itself (main registers no handler). */
 	| { dir: RequestDirection; permission: WebPermission; mode: "core" }
-	| { dir: "push"; mode: "pass" }
+	/** `permission`: the core's router pushes it only to a device holding that grant. */
+	| { dir: "push"; mode: "pass"; permission?: WebPermission }
 	| { dir: "push"; mode: "transform" | "client"; web: string };
 
 const C = IPC_COMMANDS;
@@ -606,7 +607,8 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	},
 	[PREVIEW_STATE]: { dir: "push", mode: "transform", web: "The streamed page's state for this device" },
 	[PREVIEW_VISUAL]: { dir: "push", mode: "pass" },
-	[SCHEDULES_STATE]: { dir: "push", mode: "pass" },
+	// A webhook routine's key rides in the state: only a device that may run schedules gets it.
+	[SCHEDULES_STATE]: { dir: "push", mode: "pass", permission: "extensions-admin" },
 	[BOTS_STATE]: { dir: "push", mode: "pass" },
 	[SSH_TOOLS_STATE]: { dir: "push", mode: "pass" },
 	[SSH_TOOLS_PROMPT]: { dir: "push", mode: "pass" },

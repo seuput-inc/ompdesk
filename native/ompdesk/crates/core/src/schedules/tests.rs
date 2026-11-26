@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use super::captured;
-use super::engine::{Commanded, Engine, Limits, Out};
+use super::engine::{Commanded, Engine, HookCall, Limits, Out};
 use super::rules::Fixed;
 use crate::server::Fault;
 
@@ -37,12 +37,15 @@ fn as_fenced(launch: &Value) -> Value {
 /// hand-written tests below.
 const CORE_RUN_FIELDS: [&str; 4] = ["notStarted", "repeats", "resentAs", "usage"];
 
-/// A state or a journal (`pretty`) as the TypeScript would have had it: without `CORE_RUN_FIELDS`.
+/// A state or a journal (`pretty`) as the TypeScript would have had it: without `CORE_RUN_FIELDS`, and without the
+/// webhook routines' recent calls (`calls`), which the core added too.
 fn ts_view(text: &str, pretty: bool) -> String {
     let Ok(mut value) = serde_json::from_str::<Value>(text) else {
         return text.to_owned();
     };
-    let mut stripped = false;
+    let mut stripped = value
+        .as_object_mut()
+        .is_some_and(|value| value.shift_remove("calls").is_some());
     if let Some(runs) = value.get_mut("runs").and_then(Value::as_array_mut) {
         for run in runs.iter_mut().filter_map(Value::as_object_mut) {
             for field in CORE_RUN_FIELDS {
@@ -186,7 +189,9 @@ impl Play {
                     Out::Changed { .. }
                     | Out::WakeLog { .. }
                     | Out::RemovePrompt { .. }
-                    | Out::RemoveLogs { .. } => {}
+                    | Out::RemoveLogs { .. }
+                    | Out::HookBody { .. }
+                    | Out::RemoveFiles { .. } => {}
                 }
             }
         }
@@ -331,7 +336,13 @@ impl Play {
                 let bearer = step["bearer"].as_str().unwrap();
                 let bearer = bearer.replace("$key", KEY).replace("+x", "x");
                 let detail = step["detail"].as_str().unwrap();
-                result = Some(self.engine.webhook(&id, &bearer, detail, now).into());
+                let call = HookCall {
+                    bearer: Some(bearer),
+                    headers: Default::default(),
+                    body: detail.as_bytes().to_vec(),
+                };
+                // The capture's detail is what main once made of the body; the core's own is pinned below.
+                result = Some(self.engine.webhook_told(&id, &call, detail, now).into());
             }
             "triggerFailed" => {
                 let reason = step["reason"].as_str().unwrap();
@@ -1055,4 +1066,194 @@ fn a_dark_wake_is_told_by_the_missing_graphics_capability() {
     assert!(super::is_dark_wake(dark));
     // An output without the line is read as awake: a run is never held on a guess.
     assert!(!super::is_dark_wake("pmset: unknown\n"));
+}
+
+/// A webhook routine whose key is `OLD_KEY` (a draft may name its key; the fake key maker answers `KEY`).
+const OLD_KEY: &str = "oldoldoldoldoldoldold";
+
+fn hook_routine(play: &mut Play, event: Value) -> String {
+    let mut event = event;
+    event["source"] = "webhook".into();
+    event["key"] = OLD_KEY.into();
+    let id = play
+        .engine
+        .create(
+            &draft(serde_json::json!({"kind": "event", "event": event})),
+            None,
+            play.now,
+        )
+        .unwrap();
+    play.settle();
+    id
+}
+
+fn call(bearer: Option<&str>, headers: &[(&str, &str)], body: &str) -> HookCall {
+    HookCall {
+        bearer: bearer.map(str::to_owned),
+        headers: headers
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect(),
+        body: body.as_bytes().to_vec(),
+    }
+}
+
+impl Play {
+    fn hook(&mut self, id: &str, call: &HookCall) -> &'static str {
+        let outcome = self.engine.webhook(id, call, self.now);
+        self.settle();
+        outcome
+    }
+
+    fn calls(&self, id: &str) -> Vec<Value> {
+        self.engine.state()["calls"][id]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+#[test]
+fn a_signed_routine_takes_only_its_senders_signature_and_never_shows_the_secret() {
+    let mut play = Play::new(0);
+    let id = hook_routine(&mut play, serde_json::json!({}));
+    let request = serde_json::json!({"action": "setSecret", "id": id, "sender": "github", "secret": " s3cret "});
+    assert!(play.run(request).is_ok());
+    let event = &play.engine.state()["schedules"][0]["frequency"]["event"];
+    assert_eq!(event["signedBy"], "github");
+    assert!(event.get("secret").is_none(), "{event}");
+    // The key alone no longer starts it.
+    let body = r#"{"action":"opened"}"#;
+    assert_eq!(play.hook(&id, &call(Some(OLD_KEY), &[], body)), "denied");
+    assert_eq!(play.calls(&id)[0]["verdict"], "refused");
+    assert_eq!(play.calls(&id)[0]["reason"], "no signature");
+    let mac = crate::hex(&super::hooks::hmac_sha256(b"s3cret", &[body.as_bytes()]));
+    let signature = format!("sha256={mac}");
+    let signed = call(None, &[("x-hub-signature-256", signature.as_str())], body);
+    assert_eq!(play.hook(&id, &signed), "fired");
+    assert_eq!(play.launches.len(), 1);
+    assert!(
+        play.launches[0].1.contains("Webhook call signed by GitHub"),
+        "{}",
+        play.launches[0].1
+    );
+    let started = &play.calls(&id)[0];
+    assert_eq!(started["verdict"], "started");
+    assert_eq!(started["run"], play.launches[0].0.as_str());
+    // A save from Settings sends the routine back without its secret, and keeps it.
+    let mut again = play.engine.state()["schedules"][0].clone();
+    again["name"] = "Renamed".into();
+    assert!(
+        play.run(serde_json::json!({"action": "save", "id": id, "draft": again}))
+            .is_ok()
+    );
+    assert_eq!(
+        play.engine.state()["schedules"][0]["frequency"]["event"]["signedBy"],
+        "github"
+    );
+    play.end_last(Some(0), None);
+    play.engine.close(play.now);
+    play.settle();
+    assert!(
+        play.journals
+            .last()
+            .unwrap()
+            .contains("\"secret\": \"s3cret\"")
+    );
+    // Removing the signature brings the key back.
+    let mut play = Play::new(0);
+    let id = hook_routine(&mut play, serde_json::json!({}));
+    let set = serde_json::json!({"action": "setSecret", "id": id, "sender": "standard", "secret": "whsec_***"});
+    assert!(play.run(set).is_err(), "a whsec_ secret must decode");
+}
+
+#[test]
+fn a_rotated_key_keeps_the_old_one_a_day_or_stops_it_now() {
+    let mut play = Play::new(0);
+    let id = hook_routine(&mut play, serde_json::json!({}));
+    let rotate = serde_json::json!({"action": "rotateKey", "id": id, "keepOld": true});
+    assert!(play.run(rotate).is_ok());
+    let event = &play.engine.state()["schedules"][0]["frequency"]["event"];
+    assert_eq!(event["key"], KEY);
+    assert_eq!(event["previousKey"]["key"], OLD_KEY);
+    assert_eq!(event["previousKey"]["until"], rules_iso(24 * 60 * 60_000));
+    assert_eq!(play.hook(&id, &call(Some(OLD_KEY), &[], "a")), "fired");
+    play.end_last(Some(0), None);
+    assert_eq!(play.hook(&id, &call(Some(KEY), &[], "b")), "fired");
+    play.end_last(Some(0), None);
+    play.now = 24 * 60 * 60_000 + 1;
+    assert_eq!(play.hook(&id, &call(Some(OLD_KEY), &[], "c")), "denied");
+    // Stopped now: the old key is refused at once and what it let in for the next run goes.
+    let mut play = Play::new(0);
+    let id = hook_routine(&mut play, serde_json::json!({}));
+    assert_eq!(play.hook(&id, &call(Some(OLD_KEY), &[], "first")), "fired");
+    assert_eq!(play.hook(&id, &call(Some(OLD_KEY), &[], "waits")), "fired");
+    assert_eq!(play.calls(&id)[0]["verdict"], "queued");
+    let rotate = serde_json::json!({"action": "rotateKey", "id": id, "keepOld": false});
+    assert!(play.run(rotate).is_ok());
+    assert_eq!(play.hook(&id, &call(Some(OLD_KEY), &[], "late")), "denied");
+    play.end_last(Some(0), None);
+    assert_eq!(
+        play.launches.len(),
+        1,
+        "the waiting call was dropped with its key"
+    );
+}
+
+#[test]
+fn only_when_filters_a_retry_and_folded_refusals() {
+    let mut play = Play::new(0);
+    let id = hook_routine(
+        &mut play,
+        serde_json::json!({"where": [{"path": "body.action", "op": "=", "values": ["opened"]}], "pick": ["body.title"]}),
+    );
+    let delivery = [("x-github-delivery", "d-1")];
+    let closed = call(Some(OLD_KEY), &delivery, r#"{"action":"closed"}"#);
+    assert_eq!(play.hook(&id, &closed), "ignored");
+    let opened = call(
+        Some(OLD_KEY),
+        &delivery,
+        r#"{"action":"opened","title":"Fix it"}"#,
+    );
+    assert_eq!(play.hook(&id, &opened), "fired");
+    assert!(play.launches[0].1.contains("body.title: Fix it"));
+    play.end_last(Some(0), None);
+    // GitHub's redelivery of the same delivery starts nothing.
+    assert_eq!(play.hook(&id, &opened), "duplicate");
+    assert_eq!(play.launches.len(), 1);
+    // Wrong keys within a minute count on one row.
+    for _ in 0..3 {
+        assert_eq!(play.hook(&id, &call(Some("nope"), &[], "x")), "denied");
+    }
+    let calls = play.calls(&id);
+    assert_eq!(calls[0]["verdict"], "refused");
+    assert_eq!(calls[0]["count"], 3);
+    assert_eq!(
+        calls
+            .iter()
+            .map(|call| call["verdict"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["refused", "duplicate", "started", "ignored"]
+    );
+}
+
+#[test]
+fn a_test_call_goes_through_the_routines_filters_marked_sample() {
+    let mut play = Play::new(0);
+    let id = hook_routine(&mut play, serde_json::json!({}));
+    assert!(
+        play.run(serde_json::json!({"action": "sampleCall", "id": id}))
+            .is_ok()
+    );
+    assert_eq!(play.launches.len(), 1);
+    assert!(
+        play.launches[0]
+            .1
+            .contains("Sample webhook call from Settings")
+    );
+    assert_eq!(play.calls(&id)[0]["sample"], true);
+    let off = serde_json::json!({"action": "setEnabled", "id": id, "enabled": false});
+    assert!(play.run(off).is_ok());
+    assert_eq!(play.hook(&id, &call(Some(OLD_KEY), &[], "x")), "off");
+    assert_eq!(play.calls(&id)[0]["verdict"], "off");
 }

@@ -133,7 +133,8 @@ import type {
 	RpcSessionState,
 	SidecarStatus,
 } from "../shared/rpc-types";
-import { SCHEDULES_COMMAND, SCHEDULES_LOG, type Schedule, type SchedulesRequest } from "../shared/schedules";
+import { SCHEDULES_COMMAND, SCHEDULES_LOG } from "../shared/schedule-channels";
+import type { Schedule, SchedulesRequest } from "../shared/schedules";
 import { hostedSummaries, type SummariesChanged } from "../shared/session-summary";
 import { SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
 import { SIDEBAR_PROJECTS_COMMAND } from "../shared/sidebar-projects";

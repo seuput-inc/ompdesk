@@ -1,7 +1,9 @@
 /**
  * Settings › Schedules: the list main keeps (src/main/schedules.ts) with its
- * master switch, per-schedule switch, Run now / Stop, edit and delete, the
- * editor dialog, and recent runs with their logs.
+ * master switch, per-schedule switch, Run now / Stop, edit and delete, search and
+ * folder groups, templates, the editor dialog (cron, webhook filters, thinking,
+ * worktree), a webhook routine's panel and recent calls, recent runs with their
+ * logs, and the All runs table.
  */
 
 import { parseHTML } from "linkedom";
@@ -14,6 +16,9 @@ import { useSessionStore } from "../../stores/session";
 import { setFocusedSessionRuntime } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
 import { SchedulesSection } from "./SchedulesSection";
+
+const openPeer = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../layout/work-board/open-peer", () => ({ openPeer }));
 
 const { document, window, Event, HTMLElement, Element, Node } = parseHTML("<html><body></body></html>");
 Object.assign(globalThis as Record<string, unknown>, {
@@ -179,13 +184,16 @@ describe("SchedulesSection", () => {
 					model: null,
 					autoApprove: false,
 					enabled: true,
+					thinking: null,
+					worktree: false,
 				},
 			},
 			undefined,
 		);
 		const row = document.body.querySelector('[data-schedule="new"]');
 		expect(row?.textContent).toContain("Nightly tidy");
-		expect(row?.textContent).toContain("at 09:00 · app");
+		expect(row?.textContent).toContain("at 09:00");
+		expect(document.body.querySelector('[data-schedule-group="/work/app"] h3')?.textContent).toContain("app");
 	});
 
 	it("runs, stops, pauses, toggles and deletes from the list", async () => {
@@ -208,7 +216,7 @@ describe("SchedulesSection", () => {
 		};
 		await mount();
 		const row = document.body.querySelector('[data-schedule="s1"]');
-		expect(row?.textContent).toContain("Every day at 09:30 · app");
+		expect(row?.textContent).toContain("Every day at 09:30");
 		expect(row?.textContent).toContain("Running");
 
 		await click(row?.querySelector('[aria-label="Stop Nightly tidy"]') ?? null);
@@ -445,7 +453,7 @@ describe("SchedulesSection", () => {
 		await mount();
 
 		expect(document.body.querySelector('[data-schedule="g1"]')?.textContent).toContain(
-			"GitHub pull requests and issues in octo/app · app",
+			"GitHub pull requests and issues in octo/app",
 		);
 		expect(document.body.querySelector('[data-schedule="f1"]')?.textContent).toContain("When files change under src");
 		expect(document.body.querySelector('[data-schedule="o1"]')?.textContent).toContain("Once at");
@@ -530,4 +538,284 @@ describe("SchedulesSection", () => {
 		expect(document.body.querySelector("[data-mail-account]")).toBeNull();
 		expect(mailCommand).not.toHaveBeenCalled();
 	});
+
+	it("finds schedules by name, prompt or folder and groups them by folder", async () => {
+		state = {
+			...emptyState(),
+			schedules: [
+				SCHEDULE,
+				{ ...SCHEDULE, id: "s2", name: "Site check", prompt: "Look at the landing page", cwd: "/work/site" },
+				{ ...SCHEDULE, id: "s3", name: "Bump deps", prompt: "Update dependencies", cwd: "/work/app" },
+			],
+		};
+		await mount();
+		const groups = [...document.body.querySelectorAll("[data-schedule-group]")];
+		expect(groups.map(group => group.getAttribute("data-schedule-group"))).toEqual(["/work/app", "/work/site"]);
+		expect(groups[0]?.querySelectorAll("[data-schedule]")).toHaveLength(2);
+		expect(groups[1]?.querySelector("h3 [title]")?.getAttribute("title")).toBe("/work/site");
+
+		await search("landing");
+		expect(
+			[...document.body.querySelectorAll("[data-schedule]")].map(row => row.getAttribute("data-schedule")),
+		).toEqual(["s2"]);
+		await search("/work/app");
+		expect(document.body.querySelectorAll("[data-schedule]")).toHaveLength(2);
+		await search("nothing like it");
+		expect(document.body.textContent).toContain("No schedules match.");
+	});
+
+	it("starts a new schedule from a template", async () => {
+		useSessionStore.setState({ cwd: "/work/app" });
+		await mount();
+		await click(document.body.querySelector('[data-schedule-template="prs"]'));
+		const name = [...document.body.querySelectorAll("input")].find(input => input.value === "PR watch");
+		expect(name).toBeDefined();
+		expect((document.body.querySelector("textarea") as HTMLTextAreaElement | null)?.value).toContain(
+			"Check open pull requests",
+		);
+		await submitForm();
+		expect(command).toHaveBeenCalledWith(
+			{
+				action: "save",
+				draft: expect.objectContaining({ name: "PR watch", frequency: { kind: "interval", minutes: 30 } }),
+			},
+			undefined,
+		);
+	});
+
+	it("saves a cron schedule, says when its line is malformed, and sets thinking and a worktree", async () => {
+		useSessionStore.setState({ cwd: "/work/app" });
+		await mount();
+		await click(document.body.querySelector("[data-schedule-new]"));
+		await type("Name", "Weekday tidy");
+		await type("Prompt", "Tidy the README");
+		await change(document.body.querySelector("[data-schedule-repeat]"), "cron");
+		await type("Cron expression", "every morning");
+		await submitForm();
+		expect(document.body.textContent).toContain("Enter five fields, like 0 9 * * 1-5.");
+		expect(command).not.toHaveBeenCalledWith(expect.objectContaining({ action: "save" }), undefined);
+
+		await type("Cron expression", "30 8 * * 1-5");
+		await type("Thinking", "high");
+		const worktree = document.body.querySelector("[data-schedule-worktree]");
+		await act(async () => reactProps(worktree as object).onChange({ target: { checked: true } }));
+		await submitForm();
+		expect(command).toHaveBeenCalledWith(
+			{
+				action: "save",
+				draft: expect.objectContaining({
+					frequency: { kind: "cron", expr: "30 8 * * 1-5" },
+					thinking: "high",
+					worktree: true,
+				}),
+			},
+			undefined,
+		);
+	});
+
+	it("saves a new webhook routine with an empty key and its Only when filters", async () => {
+		useSessionStore.setState({ cwd: "/work/app" });
+		await mount();
+		await click(document.body.querySelector("[data-schedule-new]"));
+		await type("Name", "Deploy hook");
+		await type("Prompt", "Deploy what the call names");
+		await change(document.body.querySelector("[data-schedule-repeat]"), "webhook");
+		await click(button("Add a condition"));
+		const row = document.body.querySelector('[data-schedule-where="0"]');
+		await change(row?.querySelector('[aria-label="Path"]') ?? null, "body.action");
+		await change(row?.querySelector('[aria-label="Values"]') ?? null, "opened, reopened");
+		await click(button("Add a condition"));
+		const second = document.body.querySelector('[data-schedule-where="1"]');
+		await change(second?.querySelector('[aria-label="Path"]') ?? null, "headers.x-github-event");
+		await change(second?.querySelector('[aria-label="Test"]') ?? null, "exists");
+		await type("Body contains", "main");
+		await type("Quote these fields", "body.ref, body.sender.login");
+		await submitForm();
+		expect(command).toHaveBeenCalledWith(
+			{
+				action: "save",
+				draft: expect.objectContaining({
+					frequency: {
+						kind: "event",
+						event: {
+							source: "webhook",
+							key: "",
+							where: [
+								{ path: "body.action", op: "=", values: ["opened", "reopened"] },
+								{ path: "headers.x-github-event", op: "exists" },
+							],
+							contains: "main",
+							pick: ["body.ref", "body.sender.login"],
+						},
+					},
+				}),
+			},
+			undefined,
+		);
+	});
+
+	it("opens a webhook routine's URL, key, signature, actions and recent calls", async () => {
+		const until = new Date(Date.now() + 3_600_000).toISOString();
+		state = {
+			...emptyState(),
+			schedules: [
+				{
+					...HOOK,
+					frequency: {
+						kind: "event",
+						event: { ...HOOK_EVENT, signedBy: "github", previousKey: { key: "old-key-0123456789", until } },
+					},
+				},
+			],
+			runs: [{ ...RUN, id: "r9", scheduleId: "w1", trigger: "event" }],
+			calls: {
+				w1: [
+					{ id: "c3", at: new Date().toISOString(), verdict: "started", run: "r9", sample: true },
+					{ id: "c2", at: new Date().toISOString(), verdict: "refused", reason: "bad signature", count: 3 },
+					{ id: "c1", at: new Date().toISOString(), verdict: "ignored" },
+				],
+			},
+		};
+		await mount();
+		expect(document.body.querySelector("[data-schedule-group]")?.textContent).toContain("signed by GitHub");
+		await click(document.body.querySelector('[data-schedule="w1"] [data-schedule-webhook-toggle]'));
+		const panel = document.body.querySelector('[data-webhook-panel="w1"]');
+		expect(panel?.querySelector("[data-webhook-url]")?.textContent).toBe("http://127.0.0.1:47831/hooks/w1");
+		expect(panel?.textContent).not.toContain(HOOK_EVENT.key);
+		await click(button("Reveal key"));
+		expect(panel?.querySelector("[data-webhook-key]")?.textContent).toBe(HOOK_EVENT.key);
+		expect(panel?.querySelector("[data-webhook-old-key]")?.textContent).toContain("Old key works until");
+		expect(panel?.querySelector("[data-webhook-signed]")?.textContent).toContain("Signed by GitHub");
+
+		const calls = [...(panel?.querySelectorAll("[data-webhook-call]") ?? [])].map(row => row.textContent);
+		expect(calls[0]).toContain("Started");
+		expect(calls[0]).toContain("View run");
+		expect(calls[0]).toContain("sample");
+		expect(calls[1]).toContain("Refused ×3");
+		expect(calls[1]).toContain("bad signature");
+		expect(calls[2]).toContain("Ignored");
+		expect(calls[2]).toContain("didn't match Only when");
+
+		await click(button("Send test call"));
+		expect(command).toHaveBeenCalledWith({ action: "sampleCall", id: "w1" }, undefined);
+
+		await click(button("Rotate key…"));
+		const drop = [...document.body.querySelectorAll('[role="dialog"] input[type="radio"]')].find(
+			input => input.getAttribute("value") === "drop",
+		);
+		await act(async () => reactProps(drop as object).onChange({ target: { checked: true } }));
+		await click(document.body.querySelector("[data-webhook-rotate-confirm]"));
+		expect(command).toHaveBeenCalledWith({ action: "rotateKey", id: "w1", keepOld: false }, undefined);
+
+		await click(button("Remove signature"));
+		const confirm = [...document.body.querySelectorAll('[role="dialog"] button')].find(
+			item => (item.textContent ?? "").trim() === "Remove signature",
+		);
+		await click(confirm ?? null);
+		expect(command).toHaveBeenCalledWith({ action: "setSecret", id: "w1", sender: null }, undefined);
+
+		// A started call's run opens in All runs with its log.
+		await click(button("View run"));
+		expect(document.body.querySelector('[data-schedule-table-run="r9"]')).not.toBeNull();
+		expect(readLog).toHaveBeenCalledWith("r9", undefined);
+	});
+
+	it("makes a signing secret it shows only as a Copy button", async () => {
+		state = { ...emptyState(), schedules: [HOOK] };
+		await mount();
+		await click(document.body.querySelector('[data-schedule="w1"] [data-schedule-webhook-toggle]'));
+		await click(button("Signing secret…"));
+		// GitHub takes a secret it is given: OMPdesk makes it.
+		await change(document.body.querySelector('[role="dialog"] select'), "github");
+		await act(async () =>
+			reactProps(document.body.querySelector("[data-webhook-secret-form]") as object).onSubmit({
+				preventDefault() {},
+			}),
+		);
+		await act(async () => {
+			await Promise.resolve();
+		});
+		const sent = command.mock.calls.find(([request]) => request.action === "setSecret")?.[0];
+		expect(sent).toMatchObject({ action: "setSecret", id: "w1", sender: "github" });
+		const secret = sent?.action === "setSecret" ? (sent.secret ?? "") : "";
+		expect(secret).toMatch(/^[0-9a-f]{32}$/);
+		expect(document.body.querySelector("[data-webhook-secret-copy]")).not.toBeNull();
+		expect(document.body.textContent).toContain("From now on, calls must carry its signature.");
+		expect(document.body.textContent).not.toContain(secret);
+	});
+
+	it("lists every run in All runs with its log, session and Run again", async () => {
+		state = {
+			...emptyState(),
+			schedules: [SCHEDULE],
+			runs: [
+				{
+					...RUN,
+					session: "/sessions/run.jsonl",
+					worktree: "/work/.wt/gui-tidy-1234567",
+					usage: { input: 10_000, output: 2_000, cacheRead: 300, cacheWrite: 0, cost: 0.0123 },
+				},
+				{ ...RUN, id: "r2", scheduleId: "gone" },
+			],
+		};
+		await mount();
+		const tab = [...document.body.querySelectorAll('[role="tab"]')].find(item =>
+			(item.textContent ?? "").includes("All runs"),
+		);
+		await click(tab ?? null);
+		const row = document.body.querySelector('[data-schedule-table-run="r1"]');
+		expect(row?.textContent).toContain("Nightly tidy");
+		expect(row?.textContent).toContain("Succeeded");
+		expect(row?.textContent).toContain("12.3k tokens · $0.01");
+		expect(row?.querySelector("[data-schedule-run-worktree]")?.textContent).toContain("gui-tidy-1234567");
+		expect(document.body.querySelector('[data-schedule-table-run="r2"]')?.textContent).toContain("Deleted schedule");
+		expect(document.body.querySelector('[data-schedule-table-run="r2"] [data-schedule-open-session]')).toBeNull();
+
+		await click(row?.querySelector("[data-schedule-open-session]") ?? null);
+		expect(openPeer).toHaveBeenCalledWith({ kind: "path", sessionPath: "/sessions/run.jsonl" });
+		await click(row?.querySelector('[aria-label="Run Nightly tidy again"]') ?? null);
+		expect(command).toHaveBeenCalledWith({ action: "runNow", id: "s1" }, undefined);
+		await click(row?.querySelector('[aria-label="View log"]') ?? null);
+		expect(readLog).toHaveBeenCalledWith("r1", undefined);
+		expect(document.body.querySelector("[data-schedule-log]")?.textContent).toContain("All tidy.");
+	});
 });
+
+const HOOK_EVENT = { source: "webhook" as const, key: "hook-key-abcdefghijklmnop" };
+const HOOK: Schedule = {
+	...SCHEDULE,
+	id: "w1",
+	name: "Deploy hook",
+	frequency: { kind: "event", event: HOOK_EVENT },
+};
+const RUN = {
+	id: "r1",
+	scheduleId: "s1",
+	trigger: "schedule" as const,
+	startedAt: "2026-10-15T09:30:00.000Z",
+	endedAt: "2026-10-15T09:31:00.000Z",
+	status: "succeeded" as const,
+	exitCode: 0,
+	error: null,
+};
+
+async function search(text: string): Promise<void> {
+	const field = document.body.querySelector("[data-schedule-search]");
+	await act(async () =>
+		reactProps(field as object).onChange({ target: { value: text }, currentTarget: { value: text } }),
+	);
+}
+
+async function change(control: object | null, value: string): Promise<void> {
+	if (!control) throw new Error("change: control missing");
+	await act(async () => reactProps(control).onChange({ target: { value }, currentTarget: { value } }));
+}
+
+async function submitForm(): Promise<void> {
+	await act(async () =>
+		reactProps(document.body.querySelector("[data-schedule-form]") as object).onSubmit({ preventDefault() {} }),
+	);
+	await act(async () => {
+		await Promise.resolve();
+	});
+}

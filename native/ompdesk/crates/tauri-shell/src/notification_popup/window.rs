@@ -344,7 +344,7 @@ fn view(stack: &Stack) -> Value {
     } else {
         "bottom"
     });
-    view["dark"] = json!(theme::is_dark());
+    view["dark"] = json!(theme::new_window_dark());
     view["background"] = json!(theme::background_hex());
     view["reducedMotion"] = json!(system::reduced_motion());
     view["lang"] = json!(if lang == Lang::Ko { "ko" } else { "en" });

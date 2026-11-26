@@ -185,11 +185,38 @@ pub fn describe_frequency(frequency: &ScheduleFrequency) -> String {
             )
         }
         ScheduleFrequency::Once { at } => format!("once at {at}"),
+        ScheduleFrequency::Cron { expr } => format!("on cron \"{expr}\""),
         ScheduleFrequency::Event { event, by } => with_deadline(
-            match event {
-                ScheduleEvent::Webhook { .. } => "on a webhook call".to_owned(),
-                ScheduleEvent::Github { repo, events } => {
-                    format!("on GitHub {} in {repo}", events.join("/"))
+            match &**event {
+                ScheduleEvent::Webhook { signed_by, .. } => match signed_by {
+                    Some(sender) => format!("on a webhook call signed by {sender}"),
+                    None => "on a webhook call".to_owned(),
+                },
+                ScheduleEvent::Github {
+                    repo,
+                    events,
+                    from,
+                    contains,
+                    label,
+                } => {
+                    let filters: Vec<String> = [
+                        from.as_ref()
+                            .filter(|from| !from.is_empty())
+                            .map(|from| format!("from {}", from.join(", "))),
+                        label.as_ref().map(|label| format!("labeled {label}")),
+                        contains
+                            .as_ref()
+                            .map(|text| format!("containing \"{text}\"")),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                    let filters = if filters.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {}", filters.join(", "))
+                    };
+                    format!("on GitHub {} in {repo}{filters}", events.join("/"))
                 }
                 ScheduleEvent::Files { path } => format!("when files change under {path}"),
                 ScheduleEvent::Git { repo, branch } => {

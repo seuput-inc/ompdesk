@@ -540,7 +540,7 @@ async fn schedule_says_so_without_a_service_and_needs_one_start() {
     .await;
     assert_eq!(
         text,
-        "Invalid arguments for ompdesk_schedule: create needs prompt; create needs exactly one of every_minutes, daily_at, at, in_minutes or on"
+        "Invalid arguments for ompdesk_schedule: create needs prompt; create needs exactly one of every_minutes, daily_at, cron, at, in_minutes or on"
     );
     let (text, _) = run(
         &control,

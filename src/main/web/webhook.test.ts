@@ -3,6 +3,7 @@
  * itself (a script on this computer, the key its only credential) and through serve's secret prefix (the existing
  * walls: an allowed Tailscale login). Only Electron is faked; the launcher records what each run was told.
  */
+import { createHmac } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { tmpdir } from "node:os";
@@ -137,24 +138,47 @@ const throughServe = (id: string, headers: Record<string, string> = bearer(), bo
 	});
 
 describe("POST /hooks/<id> on the loopback address", () => {
-	it("answers 202 and starts the routine with the first 400 characters of the body, one line", async () => {
+	it("answers 202, saves the whole body for the run and tells it where, with the body's start on one line", async () => {
 		const id = await routine();
 		const body = `{"a": 1,\n  "b": "${"x".repeat(600)}"}`;
 		const reply = await direct(id, { ...bearer(), "content-type": "application/json" }, body);
 		expect(reply.status).toBe(202);
 		await expect.poll(() => prompts.length).toBe(1);
 		const told = firedDetail(prompts[0] ?? "") ?? "";
-		expect(told.startsWith('Webhook call: {"a": 1, "b": "xxx')).toBe(true);
-		expect(told).toHaveLength("Webhook call: ".length + 400);
+		const file = /full body in (\S+\.webhook)/.exec(told)?.[1] ?? "";
+		expect(readFileSync(file, "utf8")).toBe(body);
+		expect(told).toContain(' · {"a": 1, "b": "xxx');
+		expect(told).not.toContain("x".repeat(201));
 	});
 
 	it("tells a call with no body so, and keeps a call made while the run goes for one more run", async () => {
 		const id = await routine();
 		expect((await direct(id)).status).toBe(202);
 		await expect.poll(() => prompts.length).toBe(1);
-		expect(prompts[0]).toContain("Webhook call with no body");
+		expect(prompts[0]).toContain("no body");
 		expect((await direct(id, bearer(), "again")).status).toBe(202);
 		expect(prompts).toHaveLength(1);
+	});
+
+	it("takes a GitHub-signed call without a key once the routine has its secret, and refuses the key alone", async () => {
+		const id = await routine();
+		await service?.command({ action: "setSecret", id, sender: "github", secret: "s3cret" });
+		const body = '{"action":"opened"}';
+		expect((await direct(id, bearer(), body)).status).toBe(401);
+		const signature = `sha256=${createHmac("sha256", "s3cret").update(body).digest("hex")}`;
+		expect((await direct(id, { "x-hub-signature-256": `sha256=${"0".repeat(64)}` }, body)).status).toBe(401);
+		expect((await direct(id, { "x-hub-signature-256": signature, "x-github-delivery": "d1" }, body)).status).toBe(
+			202,
+		);
+		await expect.poll(() => prompts.length).toBe(1);
+		expect(prompts[0]).toContain("Webhook call signed by GitHub");
+		// GitHub's redelivery is taken and starts nothing.
+		expect((await direct(id, { "x-hub-signature-256": signature, "x-github-delivery": "d1" }, body)).status).toBe(
+			202,
+		);
+		const state = await service?.command({ action: "get" });
+		expect(JSON.stringify(state)).not.toContain("s3cret");
+		expect(state?.calls?.[id]?.map(call => call.verdict)).toEqual(["duplicate", "started", "refused", "refused"]);
 	});
 
 	it("answers 401 for a wrong or missing key and never starts the routine", async () => {
@@ -218,7 +242,7 @@ describe("POST /hooks/<id> through serve", () => {
 		expect(prompts).toEqual([]);
 		expect((await throughServe(id, bearer(), "from the tailnet")).status).toBe(202);
 		await expect.poll(() => prompts.length).toBe(1);
-		expect(prompts[0]).toContain("Webhook call: from the tailnet");
+		expect(prompts[0]).toContain(" · from the tailnet");
 	});
 
 	it("refuses a login that is not allowed, a tagged node, a wrong Origin and a cross-site request before the key is looked at", async () => {

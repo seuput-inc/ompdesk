@@ -140,8 +140,18 @@ import type { LocalEngineDetectState } from "../../shared/local-engines";
 import type { ModelSetupStatus } from "../../shared/model-setup";
 import { OMP_UPDATE_FAILURE_REASONS, type OmpUpdateState } from "../../shared/omp-update";
 import { BLOCKING_UI_METHODS, type ExtensionUIRequest } from "../../shared/rpc-types";
-import type { ScheduleCreated, SchedulesRequest, SchedulesState } from "../../shared/schedules";
-import { ScheduleFrequencySchema, ScheduleRunSchema } from "../../shared/schedules-schema";
+import {
+	type ScheduleCreated,
+	type SchedulesRequest,
+	type SchedulesState,
+	WEBHOOK_SENDERS,
+} from "../../shared/schedules";
+import {
+	ScheduleFrequencySchema,
+	ScheduleRunSchema,
+	ScheduleThinkingSchema,
+	WebhookCallSchema,
+} from "../../shared/schedules-schema";
 import type { SidebarLayoutChange, SidebarProjectsRequest, SidebarProjectsState } from "../../shared/sidebar-projects";
 import { SIGN_IN_PAGE_MAX_CHARS } from "../sign-in-callback";
 
@@ -845,6 +855,8 @@ const ScheduleDraftSchema = z.object({
 	model: z.string().max(200).nullable(),
 	autoApprove: z.boolean(),
 	enabled: z.boolean(),
+	thinking: ScheduleThinkingSchema.nullable().optional(),
+	worktree: z.boolean().optional(),
 });
 
 const ScheduleId = z.string().min(1).max(200);
@@ -859,6 +871,14 @@ export const SchedulesCommandParams: z.ZodType<{ request: SchedulesRequest }> = 
 		z.object({ action: z.literal("setPaused"), paused: z.boolean() }),
 		z.object({ action: z.literal("runNow"), id: ScheduleId }),
 		z.object({ action: z.literal("stop"), runId: ScheduleId }),
+		z.object({ action: z.literal("rotateKey"), id: ScheduleId, keepOld: z.boolean() }),
+		z.object({
+			action: z.literal("setSecret"),
+			id: ScheduleId,
+			sender: z.enum(WEBHOOK_SENDERS).nullable(),
+			secret: z.string().min(1).max(500).optional(),
+		}),
+		z.object({ action: z.literal("sampleCall"), id: ScheduleId }),
 	]),
 });
 
@@ -875,6 +895,7 @@ export const SchedulesStateSchema: z.ZodType<SchedulesState> = z.object({
 	),
 	runs: z.array(ScheduleRunSchema),
 	nextRuns: z.record(z.string(), z.string().nullable()),
+	calls: z.record(z.string(), z.array(WebhookCallSchema)).optional(),
 });
 
 /** `host.schedules.create` reply: the id this save made and the state after it. */

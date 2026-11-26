@@ -5,11 +5,12 @@
  *   nothing changes it while the run lasts. credit-spend.ts installs the check before the run's first request
  *   (`before_agent_start`).
  * - A scheduled run's usage: with `OMP_GUI_RUN_USAGE` set (src/main/schedules.ts `ompRunLauncher`), the run's end
- *   writes stock's own tally (`SessionManager.getUsageStatistics`, subagents and judge calls included) to that file.
+ *   writes stock's own tally (`SessionManager.getUsageStatistics`, subagents and judge calls included) to that file,
+ *   with the session file it saved (`getSessionFile`, `RUN_SESSION_FIELD`) for the run row's Open session.
  */
 import { writeFileSync } from "node:fs";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { RUN_USAGE_ENV } from "./credit-spend-core";
+import { RUN_SESSION_FIELD, RUN_USAGE_ENV } from "./credit-spend-core";
 
 export default async function creditSpendRun(pi: ExtensionAPI): Promise<void> {
 	const usageFile = process.env[RUN_USAGE_ENV];
@@ -17,7 +18,11 @@ export default async function creditSpendRun(pi: ExtensionAPI): Promise<void> {
 		pi.on("agent_end", (event, ctx) => {
 			if (event.willContinue) return;
 			try {
-				writeFileSync(usageFile, JSON.stringify(ctx.sessionManager.getUsageStatistics()));
+				const tally = {
+					...ctx.sessionManager.getUsageStatistics(),
+					[RUN_SESSION_FIELD]: ctx.sessionManager.getSessionFile(),
+				};
+				writeFileSync(usageFile, JSON.stringify(tally));
 			} catch (err) {
 				pi.logger.error("ompdesk: run usage not recorded", { error: String(err) });
 			}

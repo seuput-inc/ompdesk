@@ -1,0 +1,25 @@
+{
+	"sidebarWidth": { "min": 220, "max": 500, "default": 280 },
+	"composerBoxPx": { "desktop": 92, "phone": 84 },
+	"topbarPx": 36,
+	"composerGapPx": 8,
+	"composerBottomPx": 12,
+	"composerRadiusPx": 14,
+	"columnReadingPx": 736,
+	"columnPadPx": { "min": 16, "share": 0.03, "max": 40 },
+	"scrollbarPx": 9,
+	"markPx": 48,
+	"micaSidebarShare": 0.62,
+	"mark": {
+		"width": 448,
+		"stroke": 76,
+		"legGap": 112,
+		"height": 392,
+		"leftLeg": 230,
+		"foot": 76,
+		"footGap": 14,
+		"barRadius": 38,
+		"endRadius": 38,
+		"cutRadius": 8
+	}
+}

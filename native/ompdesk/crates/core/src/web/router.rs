@@ -1049,7 +1049,8 @@ impl Host {
     }
 
     /// A push main made to the device's window (`ws-router.ts` `#deliver`'s rules until 25 Nov 2026): a push channel
-    /// that is neither the page's own (`client`) nor the desktop's, workspace state only with the `workspace` grant.
+    /// that is neither the page's own (`client`) nor the desktop's, workspace state only with the `workspace` grant,
+    /// and a push whose policy names a permission (a webhook's key in `SCHEDULES_STATE`) only with that grant.
     fn deliver_push(&self, params: DeliverParams, bin: Option<Vec<u8>>) {
         let DeliverParams {
             device,
@@ -1059,19 +1060,29 @@ impl Host {
             ..
         } = params;
         let channels = &self.config.channels;
-        let pushable = self
+        let Some(policy) = self
             .config
             .policy
             .get(&ch)
-            .is_some_and(|p| p.dir == Dir::Push && p.mode.as_deref() != Some("client"));
-        if !pushable || channels.desktop_only.contains(&ch) {
+            .filter(|p| p.dir == Dir::Push && p.mode.as_deref() != Some("client"))
+        else {
+            return;
+        };
+        if channels.desktop_only.contains(&ch) {
             return;
         }
-        if channels.workspace_only.contains(&ch)
-            && !self
-                .grants
+        let granted = |grant: &str| {
+            self.grants
                 .grants(&device)
-                .is_some_and(|grants| grants.iter().any(|g| g == "workspace"))
+                .is_some_and(|grants| grants.iter().any(|g| g == grant))
+        };
+        if channels.workspace_only.contains(&ch) && !granted("workspace") {
+            return;
+        }
+        if policy
+            .permission
+            .as_deref()
+            .is_some_and(|grant| !granted(grant))
         {
             return;
         }

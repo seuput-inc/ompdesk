@@ -737,7 +737,7 @@ async fn schedule_action_checks_refuse_before_any_host_effect() {
         ),
         (
             json!({"action":"update","days":[2],"every_minutes":1,"in_minutes":2}),
-            "days goes with daily_at; update needs id; update takes at most one of every_minutes, daily_at, at, in_minutes or on",
+            "days goes with daily_at; update needs id; update takes at most one of every_minutes, daily_at, cron, at, in_minutes or on",
         ),
         (json!({"action":"cancel"}), "cancel needs id"),
     ] {

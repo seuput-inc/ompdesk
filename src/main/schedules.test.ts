@@ -481,11 +481,17 @@ describe("a session's own wake-up (wakeSession)", () => {
 describe("routines: event triggers, once, run history", () => {
 	const SESSION = "/sessions/self.jsonl";
 	const event = (): ScheduleDraft["frequency"] => ({ kind: "event", event: { source: "webhook", key: "" } });
-	const fire = (service: ObservedSchedules, id: string, detail: string) => {
+	/** A webhook call whose body is `body` (`key` the bearer: the routine's own by default). */
+	const call = (id: string, key: string, body: string) =>
+		({ id, bearer: key, headers: {}, body: Buffer.from(body).toString("base64") }) as const;
+	const fire = (service: ObservedSchedules, id: string, body: string) => {
 		const frequency = service.latest.schedules.find(schedule => schedule.id === id)?.frequency;
 		const key = frequency?.kind === "event" && frequency.event.source === "webhook" ? frequency.event.key : "";
-		return service.webhook(id, key, detail);
+		return service.webhook(call(id, key, body));
 	};
+	/** What a run is told of a call with that body: where its whole body is saved, then the body's start. */
+	const told = (body: string) =>
+		`Webhook call · full body in \\S+\\.webhook · ${body.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`;
 
 	/** A woken turn per wake, ended by the test (`end(i, result)`); `woke(n)` settles once n wakes came. */
 	function routineHarness(dir: string) {
@@ -547,17 +553,19 @@ describe("routines: event triggers, once, run history", () => {
 		expect(await fire(service, id, "src/a.ts changed")).toBe("fired");
 		await woke(1);
 		expect(turns[0]?.prompt.startsWith("Review the change\n\nWhat fired this run:\n")).toBe(true);
-		expect(firedDetail(turns[0]?.prompt ?? "")).toBe("src/a.ts changed");
+		expect(firedDetail(turns[0]?.prompt ?? "")).toMatch(new RegExp(`^${told("src/a.ts changed")}$`));
 		expect(service.latest.runs[0]).toMatchObject({
 			trigger: "event",
 			status: "running",
-			detail: "src/a.ts changed",
+			detail: expect.stringMatching(new RegExp(`^${told("src/a.ts changed")}$`)),
 		});
 		expect(await fire(service, id, "src/b.ts changed")).toBe("fired");
 		expect(await fire(service, id, "src/c.ts changed")).toBe("fired");
 		turns[0]?.end({ code: 0 });
 		await woke(2);
-		expect(firedDetail(turns[1]?.prompt ?? "")).toBe("src/b.ts changed\nsrc/c.ts changed");
+		expect(firedDetail(turns[1]?.prompt ?? "")).toMatch(
+			new RegExp(`^${told("src/b.ts changed")}\\n${told("src/c.ts changed")}$`),
+		);
 		turns[1]?.end({ code: null, error: "The turn ended with an error" });
 		await ended(service, 2);
 		expect(service.latest.runs.map(run => [run.status, run.error])).toEqual([
@@ -627,17 +635,17 @@ describe("routines: event triggers, once, run history", () => {
 		expect(key.length).toBeGreaterThanOrEqual(32);
 		await service.command({ action: "save", id, draft: draft(dir, { frequency: event(), prompt: "New" }) });
 		expect(service.latest.schedules[0]?.frequency).toEqual({ kind: "event", event: { source: "webhook", key } });
-		expect(await service.webhook(id, "wrong", "body")).toBe("denied");
-		expect(await service.webhook(id, `${key}x`, "body")).toBe("denied");
-		expect(await service.webhook("nope", key, "body")).toBe("unknown");
+		expect(await service.webhook(call(id, "wrong", "body"))).toBe("denied");
+		expect(await service.webhook(call(id, `${key}x`, "body"))).toBe("denied");
+		expect(await service.webhook(call("nope", key, "body"))).toBe("unknown");
 		expect(service.latest.runs).toEqual([]);
-		expect(await service.webhook(id, key, 'Webhook call: {"ok":true}')).toBe("fired");
+		expect(await service.webhook(call(id, key, '{"ok":true}'))).toBe("fired");
 		await woke(1);
-		expect(turns[0]?.prompt).toContain('Webhook call: {"ok":true}');
+		expect(turns[0]?.prompt).toMatch(new RegExp(told('{"ok":true}')));
 		turns[0]?.end({ code: 0 });
 		await ended(service, 1);
 		await service.command({ action: "setEnabled", id, enabled: false });
-		expect(await service.webhook(id, key, "x")).toBe("off");
+		expect(await service.webhook(call(id, key, "x"))).toBe("off");
 		await service.dispose();
 	});
 
@@ -763,7 +771,9 @@ describe("routines: event triggers, once, run history", () => {
 		}
 		const runs = service.latest.runs;
 		expect(runs.filter(run => run.scheduleId === busy)).toHaveLength(SCHEDULE_RUNS_PER_SCHEDULE);
-		expect(runs.filter(run => run.scheduleId === busy)[0]?.detail).toBe(`event ${SCHEDULE_RUNS_PER_SCHEDULE + 4}`);
+		expect(runs.filter(run => run.scheduleId === busy)[0]?.detail).toMatch(
+			new RegExp(`^${told(`event ${SCHEDULE_RUNS_PER_SCHEDULE + 4}`)}$`),
+		);
 		expect(runs.filter(run => run.scheduleId === quiet)).toHaveLength(1);
 		await service.dispose();
 	});

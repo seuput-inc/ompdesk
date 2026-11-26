@@ -631,7 +631,12 @@ if (dir) {
 														answeredSession("Parity stress", [
 															[STRESS_PROMPT, "Here is the unbroken link"],
 														])
-													: limitSession();
+													: session === "schedule"
+														? // An agent's ompdesk_schedule create of a webhook routine (`reply-schedule-card`).
+															answeredSession("Parity schedule", [
+																["fixture schedule card", "Webhook routine saved."],
+															])
+														: limitSession();
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {

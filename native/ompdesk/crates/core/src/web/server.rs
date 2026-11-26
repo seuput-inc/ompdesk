@@ -25,8 +25,8 @@ use super::assets::{self, Assets, CompressedCache};
 use super::auth::{self, Check, Kind, OneTimeTokens, Policy, Why};
 use super::body::Out;
 use super::deps::{
-    Blobs, Clock, Connection, Desktop, HookOutcome, Hooks, Outbox, Outgoing, PairingDetails,
-    PairingOutcome, Peer, Router, Uploads, Whois,
+    Blobs, Clock, Connection, Desktop, HookOutcome, HookRequest, Hooks, Outbox, Outgoing,
+    PairingDetails, PairingOutcome, Peer, Router, Uploads, Whois,
 };
 use super::devices::{
     AuthResult, Blocks, DEFAULT_GRANTS, Device, Devices, NewDevice, PUSH_CATEGORIES, PushSettings,
@@ -48,7 +48,15 @@ const PEER_CACHE_MS: i64 = 60_000;
 const PEER_CACHE_MAX: usize = 256;
 const HOOK_PREFIX: &str = "/hooks/";
 const HOOK_BODY_MAX_BYTES: usize = 64 * 1024;
-const HOOK_DETAIL_CHARS: usize = 400;
+/// The headers a sender signs a webhook call with (`schedules/hooks.rs`): such a call may come without a bearer key.
+const HOOK_SIGNATURE_HEADERS: [&str; 6] = [
+    "webhook-signature",
+    "x-hub-signature-256",
+    "sentry-hook-signature",
+    "linear-signature",
+    "x-pagerduty-signature",
+    "stripe-signature",
+];
 const BLOB_URL_PREFIX: &str = "/blob/";
 const MAX_CONNECTIONS_PER_DEVICE: usize = 4;
 /// How much of an unread request body is read out before the answer goes.
@@ -723,9 +731,9 @@ impl Edge {
         self.hook(&call, request, pathname).await
     }
 
-    /// The webhook call itself, however it arrived. 202 fired, 404 no such routine, 401 a wrong or missing key, 409 the
-    /// routine is off, 413 a body over 64 KiB. A call with no bearer, or for an id that cannot be one, costs nothing:
-    /// its body is not read.
+    /// The webhook call itself, however it arrived. 202 fired (or taken and passed over), 404 no such routine, 401 a
+    /// wrong or missing key or signature, 409 the routine is off, 413 a body over 64 KiB. A call with neither a bearer
+    /// key nor a sender's signature header, or for an id that cannot be one, costs nothing: its body is not read.
     async fn hook(
         &self,
         call: &Call,
@@ -764,8 +772,13 @@ impl Edge {
             auth::single(&call.headers, "authorization")
                 .as_deref()
                 .unwrap_or(""),
-        )
-        .ok_or_else(unauthorized)?;
+        );
+        let signed = HOOK_SIGNATURE_HEADERS
+            .iter()
+            .any(|name| call.headers.contains_key(*name));
+        if bearer.is_none() && !signed {
+            return Err(unauthorized());
+        }
         // `Number(header) > limit`: an empty or unreadable length is not over it.
         if auth::single(&call.headers, "content-length")
             .and_then(|v| v.trim_matches(auth::js_space).parse::<f64>().ok())
@@ -773,14 +786,39 @@ impl Edge {
         {
             return Err(too_big());
         }
-        let bytes = read_body(take(request).into_body(), HOOK_BODY_MAX_BYTES)
+        let body = read_body(take(request).into_body(), HOOK_BODY_MAX_BYTES)
             .await
             .map_err(|()| too_big())?;
-        let detail = hook_detail(&bytes);
         let Some(service) = &self.inner.deps.hooks else {
             return Err(fail(503, "unavailable"));
         };
-        match service.webhook(id, &bearer, &detail).await {
+        // Every header but credentials, a repeated one joined as `fetch` joins it: the routine's filters may read them.
+        let headers = call
+            .headers
+            .keys()
+            .filter(|name| {
+                !matches!(
+                    name.as_str(),
+                    "authorization" | "cookie" | "proxy-authorization"
+                )
+            })
+            .map(|name| {
+                let values: Vec<String> = call
+                    .headers
+                    .get_all(name)
+                    .iter()
+                    .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned())
+                    .collect();
+                (name.as_str().to_owned(), values.join(", "))
+            })
+            .collect();
+        let request = HookRequest {
+            id: id.to_owned(),
+            bearer,
+            headers,
+            body: body.to_vec(),
+        };
+        match service.webhook(request).await {
             HookOutcome::Fired => Ok(send_json(202, &serde_json::json!({ "ok": true }), &[])),
             HookOutcome::Unknown => Err(fail(404, "unknown_hook")),
             HookOutcome::Denied => Err(unauthorized()),
@@ -1510,38 +1548,6 @@ fn parse_bearer(value: &str) -> Option<String> {
     let count = token.chars().count();
     (1..=256).contains(&count).then_some(())?;
     (!token.chars().any(auth::js_space)).then(|| token.to_owned())
-}
-
-/// The text of a webhook call's body as the routine's run is told it: one line, the first 400 characters.
-fn hook_detail(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
-    let mut collapsed = String::with_capacity(text.len());
-    let mut in_space = false;
-    for c in text.chars() {
-        if auth::js_space(c) {
-            if !in_space {
-                collapsed.push(' ');
-            }
-            in_space = true;
-        } else {
-            collapsed.push(c);
-            in_space = false;
-        }
-    }
-    let text = collapsed.trim_matches(auth::js_space);
-    if text.is_empty() {
-        return "Webhook call with no body".to_owned();
-    }
-    let mut units = 0;
-    let head: String = text
-        .chars()
-        .take_while(|c| {
-            units += c.len_utf16();
-            units <= HOOK_DETAIL_CHARS * 2
-        })
-        .take(HOOK_DETAIL_CHARS)
-        .collect();
-    format!("Webhook call: {head}")
 }
 
 struct PushUpdate {

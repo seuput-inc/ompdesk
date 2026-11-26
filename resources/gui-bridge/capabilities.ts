@@ -1125,7 +1125,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	 * directory (`getAgentDir`); a refusal carries stock's retry hint. `credit_spend_commit_check` asks the same checks
 	 * about the models stock's `omp commit` would pick (`resolvePrimaryModel`, `resolveSmolModel`, `resolveApiKeyOnce`).
 	 * credit-spend-run.ts, the same switch's extension for `omp -p` runs, writes a scheduled run's usage from stock's
-	 * tally (`sessionManager.getUsageStatistics`).
+	 * tally (`sessionManager.getUsageStatistics`) and the session file it saved (`sessionManager.getSessionFile`).
 	 */
 	creditSpend: {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()"],
@@ -1139,6 +1139,7 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"modelRegistry.authStorage.credentials.list()",
 			"modelRegistry.authStorage.oauth.accounts()",
 			"sessionManager.getUsageStatistics()",
+			"sessionManager.getSessionFile()",
 		],
 		modules: {
 			"@oh-my-pi/pi-ai/utils/retry-after": ["appendRetryAfterHint()"],

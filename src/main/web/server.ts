@@ -8,7 +8,7 @@
  */
 import { WEB_BUILD_META } from "../../shared/web-protocol";
 import { CORE_EXITED, type CoreProcess, core } from "../core/process";
-import type { WebhookOutcome } from "../schedules";
+import type { WebhookCallIn, WebhookOutcome } from "../schedules";
 import type { TailnetPeer } from "../tailscale/whois";
 import type { PairingConfirmations } from "./pairing";
 import { loadVapid } from "./vapid-store";
@@ -57,7 +57,7 @@ export interface WebServerDeps {
 	/** A device authentication failed three times within a minute; told once. */
 	onUnpairedAuth?: (info: { address: string }) => void;
 	/** The schedule service that answers `POST /hooks/<id>`; null or absent while there is none (503). */
-	hooks?: () => { webhook(id: string, bearer: string, detail: string): Promise<WebhookOutcome> } | null;
+	hooks?: () => { webhook(call: WebhookCallIn): Promise<WebhookOutcome> } | null;
 	/** Where an edge that had to start again after its core ended is noted. */
 	log?: (message: string) => void;
 }
@@ -81,8 +81,10 @@ interface EdgeAsk {
 	ip?: string;
 	address?: string;
 	id?: string;
-	bearer?: string;
-	detail?: string;
+	/** A webhook call: its bearer key (null when it carries a sender's signature), headers and body (base64). */
+	bearer?: string | null;
+	headers?: Record<string, string>;
+	body?: string;
 }
 
 const servers = new Map<number, WebServer>();
@@ -215,7 +217,12 @@ export class WebServer {
 			case "hook": {
 				const service = this.#deps.hooks?.();
 				if (!service) return "unavailable";
-				return service.webhook(ask.id ?? "", ask.bearer ?? "", ask.detail ?? "");
+				return service.webhook({
+					id: ask.id ?? "",
+					bearer: ask.bearer ?? null,
+					headers: ask.headers ?? {},
+					body: ask.body ?? "",
+				});
 			}
 		}
 	}

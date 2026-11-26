@@ -97,7 +97,8 @@ export type ParitySession =
 	| "turns"
 	| "long"
 	| "cut"
-	| "stress";
+	| "stress"
+	| "schedule";
 
 /** The fake omp's voice script (`voiceScript`, e2e/fixture/rpc-ui.ts); e2e/parity.e2e.ts names the file. */
 async function scriptVoice(script: Record<string, unknown>): Promise<void> {
@@ -698,6 +699,91 @@ async function openSettingsMailReentry(page: Page, look: Look): Promise<void> {
 	}
 }
 
+/** Settings › Schedules through the sidebar's Settings entry and the section's nav entry, as a person opens it. */
+async function openSettingsSchedules(page: Page, look: Look): Promise<void> {
+	await openDrawer(page, look);
+	await page.locator('[data-destination="settings"]').first().click();
+	const nav = page.locator('[data-settings-section="schedules"]');
+	await nav.waitFor({ state: "visible", timeout: 15_000 });
+	await nav.click();
+	await page
+		.locator("[data-settings-page] [data-schedule-new]")
+		.first()
+		.waitFor({ state: "visible", timeout: 30_000 });
+}
+
+/** The row of the schedule named `name` in the shown Settings › Schedules (the host's, in every view). */
+function scheduleRow(page: Page, name: string): Locator {
+	return page.locator("[data-settings-page] [data-schedule]").filter({ hasText: name }).first();
+}
+
+/**
+ * The schedule `name` on the shown session's computer, made through New schedule when it is not there yet: in the
+ * shown session's folder (the dialog's default), the trigger picked in its When select (`kind`), the prompt the fake
+ * omp's print mode answers at once.
+ */
+async function ensureSchedule(page: Page, name: string, kind: "interval" | "webhook"): Promise<Locator> {
+	const row = scheduleRow(page, name);
+	if ((await row.count()) > 0) return row;
+	await page.locator("[data-settings-page] [data-schedule-new]").first().click();
+	const dialog = page.getByRole("dialog");
+	await dialog.locator("[data-schedule-form]").waitFor({ state: "visible", timeout: 15_000 });
+	await dialog.locator("[data-schedule-form] input").first().fill(name);
+	await dialog.locator("textarea").fill("fixture hello");
+	await dialog.locator("[data-schedule-repeat]").selectOption(kind);
+	await dialog.locator("button[type=submit]").click();
+	await dialog.waitFor({ state: "hidden", timeout: 15_000 });
+	await row.waitFor({ state: "visible", timeout: 15_000 });
+	return row;
+}
+
+/** Deletes the schedule `name` through its row's ⋯ › Delete (and its runs with it), so the next surface finds none. */
+async function deleteSchedule(page: Page, name: string): Promise<void> {
+	const schedulesTab = page.locator("[data-settings-page] [data-schedules-view] [role='tab']").first();
+	if ((await schedulesTab.count()) > 0) await schedulesTab.click();
+	const row = scheduleRow(page, name);
+	if ((await row.count()) === 0) return;
+	await row.locator("button[aria-haspopup='menu']").click();
+	await page.locator("[role='menuitem']").last().click();
+	const words = `^(${en["schedules.delete"]}|${ko["schedules.delete"]})$`;
+	await page
+		.getByRole("dialog")
+		.getByRole("button", { name: new RegExp(words) })
+		.click();
+	await row.waitFor({ state: "detached", timeout: 15_000 });
+}
+
+/**
+ * Settings › Schedules with a webhook routine open: its URL and key rows, its actions and Recent calls, where a Send
+ * test call left one call when there was none yet.
+ */
+async function openSettingsSchedulesWebhook(page: Page, look: Look): Promise<void> {
+	await openSettingsSchedules(page, look);
+	const row = await ensureSchedule(page, "Parity webhook", "webhook");
+	const toggle = row.locator("[data-schedule-webhook-toggle]");
+	if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+	const panel = row.locator("[data-webhook-panel]");
+	await panel.waitFor({ state: "visible", timeout: 15_000 });
+	if ((await panel.locator("[data-webhook-call]").count()) === 0) await panel.locator("[data-webhook-sample]").click();
+	await panel.locator("[data-webhook-call]").first().waitFor({ state: "visible", timeout: 30_000 });
+	await panel.scrollIntoViewIfNeeded();
+}
+
+/** Settings › Schedules › All runs, holding a finished run of a schedule run once through its Run now. */
+async function openScheduleRuns(page: Page, look: Look): Promise<void> {
+	await openSettingsSchedules(page, look);
+	const row = await ensureSchedule(page, "Parity run", "interval");
+	const runs = page.locator("[data-settings-page] [data-schedule-run-row]").filter({ hasText: "Parity run" });
+	if ((await runs.count()) === 0) await row.locator("[data-schedule-run]").click();
+	await page.locator("[data-settings-page] [data-schedules-view] [role='tab']").last().click();
+	await page
+		.locator("[data-settings-page] [data-schedule-runs-table] [data-schedule-table-run]")
+		.filter({ hasText: "Parity run" })
+		.filter({ hasText: "Succeeded" })
+		.first()
+		.waitFor({ state: "visible", timeout: 60_000 });
+}
+
 /** Settings › Updates & about with the token row saying why the saved token was removed. */
 async function openSettingsUpdatesDropped(page: Page, look: Look): Promise<void> {
 	await openSettingsUpdates(page, look);
@@ -1234,6 +1320,39 @@ export const SURFACES: readonly Surface[] = [
 		// The audits' harness page has no such run; the parity sheet asks the fake omp for it.
 		when: () => false,
 		parity: { session: "reply", inView: '[data-tool-agent-desktop="tree"]' },
+	},
+	{
+		id: "reply-schedule-card",
+		area: "A",
+		title: "An agent's ompdesk_schedule create of a webhook routine: the saved line and the webhook card with Copy URL",
+		open: async page => {
+			await showTurn(page, "fixture schedule card");
+			await page.getByText("Webhook routine saved.", { exact: true }).last().waitFor({ timeout: 15_000 });
+			const card = page.locator(".omp-execution-group").last();
+			const head = card.locator(".omp-execution-group-header").first();
+			if ((await head.count()) > 0 && (await head.getAttribute("aria-expanded")) !== "true") await head.click();
+			const step = card
+				.locator(".omp-tool-card")
+				.filter({ hasText: "Deploy hook" })
+				.first()
+				.locator("button[aria-expanded]")
+				.first();
+			if ((await step.getAttribute("aria-expanded")) !== "true") await step.click();
+			const webhook = card.locator("[data-tool-schedule-webhook]").first();
+			await webhook.waitFor({ state: "visible", timeout: 15_000 });
+			await page
+				.locator(".omp-transcript-scroll")
+				.first()
+				.evaluate(scroller =>
+					scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, bubbles: true, cancelable: true })),
+				);
+			await webhook.evaluate(element => element.scrollIntoView({ block: "center" }));
+		},
+		ready: "[data-tool-schedule-webhook]",
+		settle: 900,
+		// The audits' harness page has no such turn; the parity sheet asks the fake omp for it.
+		when: () => false,
+		parity: { session: "schedule", inView: "[data-tool-schedule-webhook]" },
 	},
 	{
 		id: "reply-usage",
@@ -1903,6 +2022,27 @@ export const SURFACES: readonly Surface[] = [
 				await closeOverlay(page);
 			},
 		},
+	},
+	{
+		id: "settings-schedules",
+		area: "B",
+		title: "Settings › Schedules with a webhook routine open: URL and masked key, its actions and Recent calls",
+		open: openSettingsSchedulesWebhook,
+		ready: "[data-settings-page] [data-webhook-panel] [data-webhook-call]",
+		settle: 600,
+		// Parity only: the audits' harness page runs no schedules service.
+		when: () => false,
+		parity: { session: "work", after: page => deleteSchedule(page, "Parity webhook") },
+	},
+	{
+		id: "schedule-runs",
+		area: "B",
+		title: "Settings › Schedules › All runs: one table of every run with its trigger, status, start, length and use",
+		open: openScheduleRuns,
+		ready: "[data-settings-page] [data-schedule-runs-table] [data-schedule-table-run]",
+		settle: 600,
+		when: () => false,
+		parity: { session: "work", after: page => deleteSchedule(page, "Parity run") },
 	},
 	{
 		id: "settings-updates-token-dropped",

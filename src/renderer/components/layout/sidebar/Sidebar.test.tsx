@@ -1044,7 +1044,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		]);
 		await mount(<Sidebar />);
 		expect(container.querySelector("[data-reveal]")).toBeNull();
-		// The title bar's tab strip picks the other session: its row is outlined, the one left is not.
+		// The tab overview or a tab shortcut picks the other session: its row is outlined, the one left is not.
 		await act(async () => useTabsStore.setState({ activeTabId: "t2" }));
 		expect(rowFor("Next run").hasAttribute("data-reveal")).toBe(true);
 		expect(rowFor("Audit session").hasAttribute("data-reveal")).toBe(false);

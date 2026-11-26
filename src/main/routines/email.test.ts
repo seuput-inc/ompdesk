@@ -120,14 +120,26 @@ describe("the email trigger", () => {
 		expect(fired).toHaveLength(2);
 	});
 
-	it("fires only mail matching its filters: a plus-address, a sender, words in the subject", async () => {
-		const { imap, fired, polls, polled } = await rig({ to: "owner+ci@", from: "ann@", subject: "deploy" });
+	it("fires only mail matching its filters: a plus-address, a DMARC-passed sender, words in the subject", async () => {
+		const { imap, fired, polls, polled } = await rig({ to: "owner+ci@", from: "ann@example.com", subject: "deploy" });
 		await polls(2);
+		// The fake server is 127.0.0.1: only an Authentication-Results under that id is the receiver's.
+		const passed = "Authentication-Results: 127.0.0.1; spf=pass; dmarc=pass (p=none) header.from=example.com";
 		imap.mail.push(
-			mail(1, ["From: ann@example.com", "To: owner@example.com", "Subject: deploy please"]),
-			mail(2, ["From: carl@example.com", "To: owner+ci@example.com", "Subject: deploy please"]),
-			mail(3, ["From: ann@example.com", "To: owner+ci@example.com", "Subject: lunch"]),
-			mail(4, ["From: Ann <ANN@example.com>", "Cc: Owner+Ci@example.com", "Subject: Deploy v2 please"]),
+			mail(1, ["From: ann@example.com", "To: owner@example.com", "Subject: deploy please", passed]),
+			mail(2, ["From: carl@example.com", "To: owner+ci@example.com", "Subject: deploy please", passed]),
+			mail(3, ["From: ann@example.com", "To: owner+ci@example.com", "Subject: lunch", passed]),
+			mail(4, ["From: Ann <ANN@example.com>", "Cc: Owner+Ci@example.com", "Subject: Deploy v2 please", passed]),
+			// A forged From: the receiving server's own (topmost) result says DMARC failed; the pass below it is the
+			// sender's own writing.
+			mail(5, [
+				"Authentication-Results: 127.0.0.1; dmarc=fail (p=reject) header.from=example.com",
+				"Authentication-Results: forged.example; dmarc=pass",
+				"From: ann@example.com",
+				"To: owner+ci@example.com",
+				"Subject: deploy now",
+			]),
+			mail(6, ["From: ann@example.com", "To: owner+ci@example.com", "Subject: deploy again"]),
 		);
 		await polls(polled() + 2);
 		expect(fired).toEqual([expect.stringContaining('"Deploy v2 please"')]);
