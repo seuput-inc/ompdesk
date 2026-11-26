@@ -509,11 +509,8 @@ export function runRpcUi(): void {
 	let todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }> = [];
 	const noDrift: TodoDriftState = { changedAt: null, stale: null, received: [], receivedCount: 0 };
 	let todoDrift = noDrift;
-	/** Where stock `/move` took the session (main's `move_session`, a bot's rename): get_state and the bridge report it. */
-	let movedTo: string | undefined;
 	// Stock `get_state`: cwd, plan mode and the pause gate come from the bridge's `composer.state`.
 	const state = () => ({
-		...(movedTo ? { cwd: movedTo } : {}),
 		model,
 		thinkingLevel: thinking.level,
 		isStreaming,
@@ -2729,7 +2726,7 @@ export function runRpcUi(): void {
 			cost: Number(process.env.OMP_GUI_TEST_SESSION_COST ?? 0),
 			sampledAt: Date.now(),
 		}),
-		"workspace.directories": () => ({ directories: movedTo ? [{ path: movedTo, primary: true }] : [] }),
+		"workspace.directories": () => ({ directories: [] }),
 		"git.worktree_location": params => ({
 			root: process.env.OMP_WORKTREE_DIR ?? nodePath.join(process.env.PI_CODING_AGENT_DIR ?? "", "wt"),
 			hash: Bun.hash(nodePath.resolve(String(params.primaryRoot)))
@@ -6488,7 +6485,6 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 						"modes",
 						"hotkeys",
 						"retry",
-						"move",
 					]
 						.map(name => ({ name, source: "builtin", textModeExecutable: false, description: name }))
 						.concat(
@@ -7506,17 +7502,6 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				if (!flow?.abort()) endTurn([]);
 				break;
 			case "prompt":
-				if (text("message").startsWith("/move ")) {
-					// Stock `/move <folder>`: the session and the process go on in that folder (its header names it); the
-					// stand-in keeps its journal's path, which stock would refile under the new folder.
-					const target = text("message").slice("/move ".length).trim();
-					process.chdir(target);
-					movedTo = target;
-					if (resumed) resumed.cwd = target;
-					persistSession();
-					ok({ agentInvoked: false });
-					break;
-				}
 				if (text("message") === "/retry" && autopilot.retry(data => ok(data))) break;
 				if (text("message") === "/retry") {
 					// Stock `/retry` (main's `retry` handler sends it): the failed turn runs again, here answering, or

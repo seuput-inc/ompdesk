@@ -135,8 +135,6 @@ export const CARD_TIMEOUT_MS = 10 * 60_000;
 const WORKTREE_PREFIX = "omp/agent/";
 /** A receiver's bridge answers which messages its journal holds within this (a socket request, no omp command queue). */
 const SENT_MARKS_TIMEOUT_MS = 8_000;
-/** A bot chat's omp moving its session to the bot's new folder (stock `/move`, `local/workspace.ts`). */
-const MOVE_TIMEOUT_MS = 60_000;
 /** After a new session's first prompt was answered, long enough for its turn to reach the relaunch marker. */
 const OPENING_SETTLE_MS = 3_000;
 /** An open that never sent its first prompt (it failed, or its omp never came up) stops holding a restart after this. */
@@ -162,6 +160,14 @@ function tombstones(): Tombstones {
 		if (id && byId[id] === undefined) byId[id] = entry.at;
 	}
 	return { byPath, byId };
+}
+
+/** This computer's tabs whose folder is `folder` (a bot's chats there). */
+function tabsIn(pool: Pick<SidecarPool, "controlTabs">, folder: string) {
+	return pool
+		.controlTabs()
+		.flatMap(({ tabs }) => tabs)
+		.filter(row => !row.device && row.cwd === folder);
 }
 
 /** What a session does now, by its summary (the one rows read); unknown before its omp is up. */
@@ -1322,40 +1328,28 @@ export class AgentControlRuntime {
 				await deps.deleteSession(info.sessionPath, info.device);
 			},
 			deleteStored: session => deps.deleteSession(session.path, session.device),
+			releaseFolder: async folder => {
+				const sidecars = tabsIn(deps.pool, folder).flatMap(row => deps.pool.sidecarOf(row.tabId) ?? []);
+				for (const sidecar of sidecars) if (sidecar.processAlive) sidecar.sleep?.();
+				await Promise.all(sidecars.map(sidecar => sidecar.whenExited?.()));
+			},
 			relocateBot: async (from, to, sessions) => {
 				const moveStored = deps.moveSession;
 				if (!moveStored) throw new Error("Sessions cannot be moved on this computer.");
+				const rows = tabsIn(deps.pool, from);
 				const moved: Record<string, string> = {};
 				let stored: SessionInfo[] | null = null;
-				for (const sessionPath of sessions) {
-					const owner = deps.pool.sessionOwner(sessionPath);
-					const sidecar = owner ? deps.pool.sidecarOf(owner.tabId) : null;
-					if (owner && sidecar?.processAlive) {
-						// Its own omp moves it (stock `/move`) and runs on in `to`; a turn under way refuses until it ends.
-						const response = await this.#hostCommand(
-							owner.tabId,
-							{ type: "move_session", path: to },
-							MOVE_TIMEOUT_MS,
-						);
-						if (!response.success)
-							throw new Error(`A chat in ${from} did not move: ${response.error ?? "refused"}`);
-						const state = await this.#hostCommand(owner.tabId, { type: "get_state" });
-						const file = state.success
-							? (state.data as { sessionFile?: string } | undefined)?.sessionFile
-							: undefined;
-						if (file) moved[sessionPath] = file;
-						continue;
-					}
-					if (
-						await access(sessionPath).then(
-							() => true,
-							() => false,
-						)
-					) {
+				for (const sessionPath of new Set([...sessions, ...rows.flatMap(row => row.sessionPath ?? [])])) {
+					const exists = await access(sessionPath).then(
+						() => true,
+						() => false,
+					);
+					if (exists) {
+						// Stock moves it (and refuses while an omp still writes it); a chat holding it starts again on it in `to`.
 						const file = await moveStored(sessionPath, to);
 						moved[sessionPath] = file;
-						// A chat whose omp is not running starts on the moved file, in `to`.
-						if (owner) sidecar?.restart(to, file);
+						const owner = deps.pool.sessionOwner(sessionPath);
+						if (owner) deps.pool.sidecarOf(owner.tabId)?.restart(to, file);
 						continue;
 					}
 					// Moved before a crash cut the move off: it is the session of that name in `to` now.
@@ -1364,11 +1358,7 @@ export class AgentControlRuntime {
 					if (found) moved[sessionPath] = found.path;
 				}
 				// A new chat there nobody wrote to yet holds no session: it starts again in `to`.
-				for (const { tabs } of deps.pool.controlTabs()) {
-					for (const row of tabs) {
-						if (!row.device && !row.sessionPath && row.cwd === from) deps.pool.sidecarOf(row.tabId)?.restart(to);
-					}
-				}
+				for (const row of rows) if (!row.sessionPath) deps.pool.sidecarOf(row.tabId)?.restart(to);
 				return moved;
 			},
 			branchFacts: (worktree, device) =>

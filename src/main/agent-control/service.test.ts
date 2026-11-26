@@ -244,6 +244,7 @@ class FakeHost implements AgentControlHost {
 	deleteStored = async (row: StoredSession) => {
 		this.deletedStored.push({ path: row.path, device: row.device });
 	};
+	releaseFolder = async (_folder: string): Promise<void> => {};
 	relocateBot = async (_from: string, _to: string, _sessions: string[]): Promise<Record<string, string>> => ({});
 	facts = new Map<string, BranchFacts>();
 	mergeResult: MergeOutcome = { merged: true, sha: "abc1234", summary: "2 files changed" };

@@ -6,12 +6,13 @@
 //! or a folder the owner named stays. A rename to the same name is how a bot renamed before rename records asks for
 //! the move: it records the rename and moves the folder when it may, and does nothing once the folder matches.
 //!
-//! The move is one directory rename between a durable intent and its finish. The intent (`BotRecord.moving`) is saved
+//! The move is one directory rename between a durable intent and its finish. The omp of its chats stop first
+//! (`bots.release`: Windows refuses to rename a folder a process runs in). The intent (`BotRecord.moving`) is saved
 //! before the rename; right after it the registry names the new folder, so anything that resolves the bot through the
 //! registry (a wake, a send, its files) reaches the new folder and nothing recreates the old one. The finish moves the
-//! bot's chats' sessions along (main moves each, an open chat through its own omp), points its routines at the new
-//! folder and sessions, and clears the intent. Every step of the finish is safe to run again: a crash anywhere leaves
-//! a bot the next start settles (`settle_moves`) and the next bot pass finishes (`finish_moves`).
+//! bot's chats' sessions along and starts its open chats again on them in the new folder, points its routines at the
+//! new folder and sessions, and clears the intent. Every step of the finish is safe to run again: a crash anywhere
+//! leaves a bot the next start settles (`settle_moves`) and the next bot pass finishes (`finish_moves`).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -251,7 +252,9 @@ impl AgentControl {
                 bot.folder
             ));
         }
-        if let Err(error) = self.begin_move(&bot, &target) {
+        // Its chats' omp stop first: Windows refuses to rename a folder a process runs in.
+        let released = self.host.release_folder(&bot.folder).await;
+        if let Err(error) = released.and_then(|()| self.begin_move(&bot, &target)) {
             self.mem().folder_unmoved.insert(key);
             eprintln!("[bots] {}: {}", bot.name, error.message());
             return Ok(format!(
@@ -298,8 +301,8 @@ impl AgentControl {
         Ok(())
     }
 
-    /// Finishes `id`'s move once its folder is at the target: main moves its chats' sessions (an open, idle chat
-    /// through its own omp), its routines follow the folder and the sessions, and the intent and the rename record go.
+    /// Finishes `id`'s move once its folder is at the target: main moves its chats' sessions (an open chat starts again
+    /// on its moved file), its routines follow the folder and the sessions, and the intent and the rename record go.
     /// Runs again safely.
     pub(crate) async fn finish_move(&self, id: &str) -> R<()> {
         let bot = self.bot_named(id)?;

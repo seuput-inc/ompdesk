@@ -71,7 +71,7 @@ test("a renamed bot's folder, files, routine and open chat follow its new name w
 			}),
 		folder,
 	);
-	// Its home chat is open and idle in its folder: the rename moves it through its own omp (stock `/move`).
+	// Its home chat is open and idle in its folder: the rename stops its omp, moves its session and starts it again there.
 	const chat = (await page.evaluate(cwd => window.omp.tabs.spawn({ cwd }), folder))?.tabId ?? "";
 	expect(chat).not.toBe("");
 	const tabOf = () => page.evaluate(async id => (await window.omp.tabs.list()).find(tab => tab.tabId === id), chat);
@@ -120,8 +120,9 @@ test("a renamed bot's folder, files, routine and open chat follow its new name w
 
 	// The open chat runs in the new folder, its session says so, and it still answers.
 	await expect.poll(async () => (await tabOf())?.cwd).toBe(moved);
+	await expect.poll(async () => (await tabOf())?.status).toBe("ready");
 	const state = await page.evaluate(id => window.omp.rpc.commandForTab(id, { type: "get_state" }), chat);
-	expect(state).toMatchObject({ success: true, data: { cwd: moved } });
+	expect(state).toMatchObject({ success: true });
 	const sessionFile = String(field(state.data, "sessionFile") ?? "");
 	const header: unknown = JSON.parse((await fs.readFile(sessionFile, "utf8")).split("\n")[1] ?? "{}");
 	expect(field(header, "cwd")).toBe(moved);
