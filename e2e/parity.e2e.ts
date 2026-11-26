@@ -1004,22 +1004,28 @@ if (dir) {
 					sleepingFile = file;
 				}
 				// Its tab's omp may still write the file as it exits: set the time again until B's list reads it old. A
-				// turn of the work session makes main read the sessions again.
+				// turn of the work session makes main read the sessions again. The row is found by its title: the tab's
+				// path and the index's may spell the folder differently on Windows.
 				const asleepSince = new Date(Date.now() - 2 * 60 * 60_000);
 				await fs.utimes(sleepingFile, asleepSince, asleepSince);
 				await b.evaluate(id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "hello" }), start);
 				await untilAnswered(b, start, { after: "hello" });
+				let seen = "";
 				await expect
 					.poll(
 						async () => {
 							await fs.utimes(sleepingFile, asleepSince, asleepSince);
 							const rows = await b.evaluate(() => window.omp.sessions.list("global"));
-							const modified = rows.find(row => row.path === sleepingFile)?.modified ?? "";
-							return Date.parse(modified) < Date.now() - 60 * 60_000;
+							const row = rows.find(item => item.title === "Parity sleeping");
+							seen = row ? `${row.path} modified ${row.modified}` : `no row among ${rows.length}`;
+							return row !== undefined && Date.parse(row.modified) < Date.now() - 60 * 60_000;
 						},
-						{ timeout: 60_000, intervals: [1_000] },
+						{ timeout: 60_000, intervals: [1_000], message: `"Parity sleeping" reads old (${sleepingFile})` },
 					)
-					.toBe(true);
+					.toBe(true)
+					.catch(error => {
+						throw new Error(`${error instanceof Error ? error.message : error}\nlast read: ${seen}`);
+					});
 			};
 
 			const records: SurfaceRecord[] = [];
