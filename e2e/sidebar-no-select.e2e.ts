@@ -105,7 +105,10 @@ test("a drag across the sidebar's rows selects no text, and a rename field still
 
 	// An inline rename opens with its title selected.
 	await rows.filter({ hasText: "Bravo plan" }).first().click({ button: "right" });
-	await page.getByRole("menuitem", { name: "Rename", exact: true }).first().click();
+	await page
+		.getByRole("menuitem", { name: /^Rename/ })
+		.first()
+		.click();
 	const field = page.locator(".omp-sidebar-session-rename input").first();
 	await expect(field).toBeFocused();
 	const range = await field.evaluate(input => {
