@@ -25,7 +25,7 @@ import { cx, resultBodyText, resultDetails } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { MarkdownRenderer } from "../../../lib/markdown";
 import { useTabRpc } from "../../../lib/tab-rpc";
-import { botOfFolder, ensureBots, useBotsStore } from "../../../stores/bots";
+import { botNamed, botOfFolder, ensureBots, useBotsStore } from "../../../stores/bots";
 import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useTabsStore } from "../../../stores/tabs";
 import { toastError } from "../../../stores/toast";
@@ -46,11 +46,17 @@ const firstLine = (value: string): string =>
 		.find(line => line.trim())
 		?.trim() ?? "";
 
+/** The computer the chat's tab runs on (absent = this computer): its bots are the ones a transcript names. */
+function useTabDevice(): string | undefined {
+	const tabId = useRuntimeTabId();
+	return useTabsStore(s => s.tabs.find(tab => tab.id === tabId)?.device);
+}
+
 /** The bot whose folder this chat runs in, on the computer the tab runs on. */
 function useChatBot(): Bot | undefined {
 	const tabId = useRuntimeTabId();
 	const cwd = useTabsStore(s => s.tabs.find(tab => tab.id === tabId)?.cwd);
-	const device = useTabsStore(s => s.tabs.find(tab => tab.id === tabId)?.device);
+	const device = useTabDevice();
 	useEffect(() => ensureBots(), []);
 	return useBotsStore(s => botOfFolder(s.state.bots, cwd, device));
 }
@@ -106,7 +112,9 @@ function Row({
 function ItemChip({ bot, number, title, status }: { bot?: Bot; number: number; title: string; status?: ItemStatus }) {
 	const t = useT();
 	const item = useBotsStore(s =>
-		bot ? s.state.items.find(entry => entry.bot === bot.id && entry.number === number) : undefined,
+		bot
+			? s.state.items.find(entry => entry.device === bot.device && entry.bot === bot.id && entry.number === number)
+			: undefined,
 	);
 	const shown = item?.status ?? status;
 	const name = item?.title ?? title;
@@ -268,15 +276,18 @@ function OfferCard({ args }: { args: Record<string, unknown> }) {
 	const t = useT();
 	const name = text(args.name);
 	const purpose = text(args.text);
-	const made = useBotsStore(s =>
-		s.state.bots.find(bot => !bot.device && bot.name.toLowerCase() === name.toLowerCase()),
-	);
+	const device = useTabDevice();
+	const made = useBotsStore(s => botNamed(s.state.bots, name, device));
 	useEffect(() => ensureBots(), []);
 	return (
 		<div className="group/bot-card py-1" data-bot-card="botOffers" data-bot-offer={made ? "created" : "open"}>
 			<Card padding="row" surface="elevated">
 				<div className="flex min-w-0 items-start gap-2.5">
-					<BotAvatar bot={made ?? { name: name || "?" }} className="mt-0.5" size={32} />
+					<BotAvatar
+						bot={made ?? { id: text(args.botId) || (device && `${device}:${name}`), name: name || "?" }}
+						className="mt-0.5"
+						size={32}
+					/>
 					<div className="flex min-w-0 flex-1 flex-col gap-0.5">
 						<div className="flex min-w-0 items-center gap-1.5">
 							<span className="text-sc-xs text-(--sc-text-muted)">{t("chat.botCards.offer.heading")}</span>
@@ -329,11 +340,8 @@ function RequestCard({
 }) {
 	const t = useT();
 	const target = botTarget(toolName, args);
-	const bot = useBotsStore(s =>
-		target && !target.device
-			? s.state.bots.find(entry => !entry.device && entry.name.toLowerCase() === target.name.toLowerCase())
-			: undefined,
-	);
+	const device = useTabDevice();
+	const bot = useBotsStore(s => (target && !target.device ? botNamed(s.state.bots, target.name, device) : undefined));
 	const [open, setOpen] = useState(false);
 	if (!target) return null;
 	const report = toolName.endsWith("_report");
@@ -360,13 +368,19 @@ function RequestCard({
 			kind="botRequests"
 		>
 			<span className={cx("shrink-0", failed && "text-(--sc-danger)")}>{heading}</span>
+			<BotAvatar
+				bot={
+					bot ?? {
+						id: text(resultDetails(result)?.botId) || `${target.device ?? device ?? ""}:${target.name}`,
+						name: target.name,
+					}
+				}
+				size={16}
+			/>
 			{bot ? (
-				<>
-					<BotAvatar bot={bot} size={16} />
-					<LinkButton className="shrink-0 font-medium" onClick={() => openBotPage(bot.id)} tone="inherit">
-						{bot.name}
-					</LinkButton>
-				</>
+				<LinkButton className="shrink-0 font-medium" onClick={() => openBotPage(bot.id)} tone="inherit">
+					{bot.name}
+				</LinkButton>
 			) : (
 				<span className="shrink-0 font-medium">{target.name}</span>
 			)}

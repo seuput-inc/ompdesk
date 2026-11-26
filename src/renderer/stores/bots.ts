@@ -108,6 +108,12 @@ export function botOfFolder(bots: readonly Bot[], cwd: string | undefined | null
 	return cwd ? bots.find(bot => bot.folder === cwd && bot.device === device) : undefined;
 }
 
+/** The bot named `name` (any case) on `device` (absent = this computer): a transcript's bot is its host's. */
+export function botNamed(bots: readonly Bot[], name: string, device?: string): Bot | undefined {
+	const wanted = name.toLowerCase();
+	return bots.find(bot => bot.device === device && bot.name.toLowerCase() === wanted);
+}
+
 /** The bot `session` (a session file on `device`, absent = this computer) is a chat of. */
 export function botOfSession(
 	bots: readonly Bot[],

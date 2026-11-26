@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { Bot } from "../../../../shared/bots";
+import { botNamed } from "../../../stores/bots";
 import { parseItemMail } from "./BotCards";
 import { botCardOf, botTarget } from "./bot-card-kind";
 
@@ -47,5 +49,32 @@ describe("botCardOf", () => {
 			device: "studio",
 		});
 		expect(botTarget("ompdesk_report", { to: "bot:Ada" })).toEqual({ name: "Ada" });
+	});
+
+	describe("botNamed", () => {
+		const bot = (id: string, device?: string): Bot => ({
+			id,
+			name: "Parity bot",
+			folder: `/b/${id}`,
+			home: `/s/${id}.jsonl`,
+			sessions: [],
+			paused: false,
+			model: null,
+			autoApprove: false,
+			reach: [],
+			staleDays: 7,
+			lookAround: null,
+			tidy: null,
+			quiet: [],
+			createdAt: "2026-11-01T00:00:00.000Z",
+			...(device ? { device } : {}),
+		});
+
+		it("resolves a paired host's transcript to the host's bot, never a same-named one of this computer", () => {
+			const bots = [bot("mine"), bot("theirs", "pc-b")];
+			expect(botNamed(bots, "parity BOT", "pc-b")?.id).toBe("theirs");
+			expect(botNamed(bots, "Parity bot")?.id).toBe("mine");
+			expect(botNamed(bots, "Parity bot", "pc-c")).toBeUndefined();
+		});
 	});
 });
