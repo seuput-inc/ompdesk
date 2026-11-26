@@ -2639,7 +2639,7 @@ export const en: Record<string, string> = {
 
 	// Session picker dialog
 	"sessionPicker.searchLabel": "Search sessions",
-	"sessionPicker.placeholder": "Search sessions…",
+	"sessionPicker.placeholder": "Search sessions… (repo:, path:)",
 	"sessionPicker.loading": "Loading sessions…",
 	"sessionPicker.empty": "No sessions found.",
 	"sessionPicker.noMatch": 'No sessions match "{query}".',

@@ -18,7 +18,13 @@ import { useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
 import { listboxTarget } from "../../lib/listbox-nav";
 import { useProjectNames } from "../../lib/project-origin";
-import { mergeContentMatches, rankSessions, type SessionSortMode } from "../../lib/session-search";
+import {
+	matchesSessionOperators,
+	mergeContentMatches,
+	rankSessions,
+	type SessionSortMode,
+	splitSessionQuery,
+} from "../../lib/session-search";
 import { sessionDisplayParts, sessionHasContent } from "../../lib/session-title";
 import { useSessionStore } from "../../stores/session";
 import { sessionListFeed } from "../../stores/session-list";
@@ -136,9 +142,11 @@ export function SessionPickerDialog() {
 	};
 
 	// Debounced full-transcript content search (main-process grep over the
-	// session files). Best-effort: failures simply yield no content matches.
+	// session files) for the query's free text; `repo:`/`path:` narrow its hits
+	// below. Best-effort: failures simply yield no content matches.
+	const contentQuery = splitSessionQuery(query).text.trim();
 	useEffect(() => {
-		const q = query.trim();
+		const q = contentQuery;
 		if (q.length < CONTENT_SEARCH_MIN_QUERY) {
 			setContentHits(new Map());
 			setContentPending(false);
@@ -159,21 +167,31 @@ export function SessionPickerDialog() {
 				});
 		}, CONTENT_SEARCH_DEBOUNCE_MS);
 		return () => clearTimeout(timer);
-	}, [query, scope]);
+	}, [contentQuery, scope]);
 
+	const projectNameOf = useProjectNames(
+		useMemo(() => (open ? sessions.map(session => session.cwd) : []), [open, sessions]),
+	);
 	const { filtered, contentOnly } = useMemo(() => {
-		const ranked = rankSessions(sessions, query, sortMode);
-		const merged = mergeContentMatches(ranked, sessions, contentHits);
+		// `repo:` reads the project as the row names it and its main checkout's folder.
+		const repoOf = ({ cwd }: Pick<SessionInfo, "cwd">) => {
+			const project = projectNameOf(cwd);
+			return `${project.name} ${project.root}`;
+		};
+		const split = splitSessionQuery(query);
+		const ranked = rankSessions(sessions, query, sortMode, repoOf);
+		const merged = mergeContentMatches(
+			ranked,
+			sessions.filter(session => matchesSessionOperators(session, split, repoOf)),
+			contentHits,
+		);
 		const metaPaths = new Set(ranked.map(session => session.path));
 		const only = new Set<string>();
 		for (const session of merged) {
 			if (!metaPaths.has(session.path)) only.add(session.path);
 		}
 		return { filtered: merged, contentOnly: only };
-	}, [sessions, query, sortMode, contentHits]);
-	const projectNameOf = useProjectNames(
-		useMemo(() => (open ? sessions.map(session => session.cwd) : []), [open, sessions]),
-	);
+	}, [sessions, query, sortMode, contentHits, projectNameOf]);
 
 	// Clamp the highlight when the visible list shrinks (search, reload).
 	useEffect(() => {

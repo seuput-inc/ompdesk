@@ -2629,7 +2629,7 @@ export const ko: Record<string, string> = {
 
 	// Session picker dialog
 	"sessionPicker.searchLabel": "세션 검색",
-	"sessionPicker.placeholder": "세션 검색…",
+	"sessionPicker.placeholder": "세션 검색… (repo:, path:)",
 	"sessionPicker.loading": "세션 불러오는 중…",
 	"sessionPicker.empty": "세션이 없어요.",
 	"sessionPicker.noMatch": '"{query}"에 맞는 세션이 없어요.',
