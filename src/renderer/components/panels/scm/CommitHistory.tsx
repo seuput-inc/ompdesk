@@ -487,7 +487,7 @@ export function CommitHistory({ sourceSelector }: { sourceSelector?: ReactNode }
 								value={query}
 							/>
 						</div>
-						<div className="w-32 shrink-0">
+						<div className="w-36 shrink-0">
 							<Select
 								aria-label={t("scm.history.branchFilter")}
 								controlSize="sm"

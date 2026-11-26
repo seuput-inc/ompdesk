@@ -1709,12 +1709,19 @@ export const SURFACES: readonly Surface[] = [
 		title: "Files viewer with Blame on: the commit that last changed each run of lines",
 		open: async (page, look) => {
 			await openPanelView(page, look, "files");
-			await page.getByLabel(say(look, "filesPanel.search"), { exact: true }).first().fill("Sidebar.tsx");
-			await page
-				.getByRole("treeitem", { name: /Sidebar\.tsx/ })
-				.first()
-				.click();
-			await page.locator("[data-blame-toggle]:visible").first().click();
+			// `panel-files-viewer` ran before in the same session, so the panel may still hold Sidebar.tsx open.
+			const search = page.getByLabel(say(look, "filesPanel.search"), { exact: true }).first();
+			const viewer = page.locator("[data-file-viewer-head]:visible").first();
+			await search.or(viewer).first().waitFor();
+			if (!(await viewer.isVisible())) {
+				await search.fill("Sidebar.tsx");
+				await page
+					.getByRole("treeitem", { name: /Sidebar\.tsx/ })
+					.first()
+					.click();
+			}
+			if (!(await page.locator("[data-code-view] [data-blame-line]").first().isVisible()))
+				await page.locator("[data-blame-toggle]:visible").first().click();
 		},
 		ready: "[data-code-view] [data-blame-line]",
 		parity: { session: "work", after: closePanelView },
