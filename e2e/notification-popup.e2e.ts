@@ -106,7 +106,6 @@ test("a finished background run shows as a popup card, and clicking it opens tha
 	await expect(card.locator(".title")).toHaveText("Release notes run");
 	await expect(card.locator(".body")).toHaveText("Background run finished");
 	await expect(card.getByRole("button", { name: "Close" })).toHaveCount(1);
-	await popup.screenshot({ path: test.info().outputPath("popup.png") });
 
 	expect(await routes()).toEqual(["hidden"]);
 	const records = await readRecords(path.join(desktop, "tauri-shell.jsonl"));
