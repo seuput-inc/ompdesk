@@ -27,8 +27,11 @@ pub const REFUSED_RETRY_WINDOW_MS: u64 = 60_000;
 const STALE_STEP_MS: u64 = 1_000;
 /// How long a wake's check waits for any frame before the link is dropped (`WAKE_CHECK_MS`, wire.ts).
 pub const WAKE_CHECK_MS: u64 = 3_000;
-/// Backoff retries past this one (30 s apart by then) are not logged: an absent host would fill the log.
 const LOGGED_BACKOFF_ATTEMPTS: u32 = 6;
+/// After the host's gate refused this device (`not_allowed`, `blocked`), it is asked again by a probe this long
+/// after, doubling to [`GATE_PROBE_MAX_MS`]: a host that keeps refusing costs one probe per 15 min.
+pub const GATE_PROBE_MIN_MS: u64 = 60_000;
+pub const GATE_PROBE_MAX_MS: u64 = 15 * 60_000;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LinkState {
@@ -113,6 +116,8 @@ struct Inner {
     stale: Option<clock::Timer>,
     retry: Option<clock::Timer>,
     backoff: u64,
+    /// The next gate probe's wait after a refusal by the host's gate.
+    gate_probe: u64,
     online_at: Option<u64>,
     outage: Option<Outage>,
 }
@@ -174,6 +179,7 @@ impl Client {
                 stale: None,
                 retry: None,
                 backoff: RECONNECT_MIN_MS,
+                gate_probe: GATE_PROBE_MIN_MS,
                 online_at: None,
                 outage: None,
             }),
@@ -457,11 +463,13 @@ impl Client {
                 json!({"deviceId": self.device_id, "name": name, "reason": failure.code, "wasOnlineMs": 0}),
             );
         }
-        self.set_state(&mut inner, LinkState::Offline);
-        // The host's gate refused this device by a person's choice: a timer would only be refused again, so only
-        // `connect` or a wake signal (focus, unlock, online, the node returning) tries again (Orca P100).
+        // The host's gate refused this device by a person's choice (Orca P100): no timer of link attempts, which would
+        // only be refused again. A probe on a slow backoff asks the gate instead, and the person's change there (B
+        // allows A) connects once a probe is let in; `connect` and the wake signals still try at once. A fix of
+        // dea3edb5f, which waited for a wake alone, so allowing A on B never reached A (remote-devices.e2e.ts:303).
         if matches!(failure.code.as_str(), "not_allowed" | "blocked") {
-            clear(&mut inner.retry);
+            self.schedule_gate_probe(&mut inner);
+            self.set_state(&mut inner, LinkState::Offline);
             return;
         }
         let within = clock::now_ms().saturating_sub(since) < REFUSED_RETRY_WINDOW_MS;
@@ -518,6 +526,7 @@ impl Client {
         inner.link = Some(id);
         inner.error = None;
         inner.backoff = RECONNECT_MIN_MS;
+        inner.gate_probe = GATE_PROBE_MIN_MS;
         let mut addresses = strings(inner.host.get("addresses"));
         addresses.retain(|other| other != address);
         addresses.insert(0, address.to_owned());
@@ -578,6 +587,67 @@ impl Client {
             inner.retry = None;
             client.spawn_attempt(&mut inner, "backoff", delay);
         }));
+    }
+
+    /// After a refusal by the host's gate: a probe (not a link attempt) on [`GATE_PROBE_MIN_MS`] doubling to
+    /// [`GATE_PROBE_MAX_MS`]. The probe answers the gate's verdict; once it lets this device in, a link attempt runs.
+    fn schedule_gate_probe(&self, inner: &mut Inner) {
+        clear(&mut inner.retry);
+        if !inner.running {
+            return;
+        }
+        let delay = inner.gate_probe;
+        inner.gate_probe = (delay * 2).min(GATE_PROBE_MAX_MS);
+        let client = self.this();
+        inner.retry = Some(clock::after(Duration::from_millis(delay), move || {
+            client.inner().retry = None;
+            tokio::spawn(client.probe_gate());
+        }));
+    }
+
+    async fn probe_gate(self: Arc<Client>) {
+        let host = {
+            let inner = self.inner();
+            if !inner.running || inner.link.is_some() || inner.attempting {
+                return;
+            }
+            self.pinned(&inner)
+        };
+        let addresses = self.addresses.resolve(host).await;
+        let (_, probe) = dial::probe_any(&addresses, Some(&self.identity.device_id)).await;
+        let mut inner = self.inner();
+        // A wake or `connect` that came meanwhile runs (or armed) its own attempt.
+        if !inner.running || inner.link.is_some() || inner.attempting || inner.retry.is_some() {
+            return;
+        }
+        match probe {
+            handshake::Probe::Ok { device_id, .. } if device_id == self.device_id => {
+                self.retry_now(&mut inner, "gate");
+            }
+            other => {
+                let answer = match other {
+                    handshake::Probe::Refused(code) => code,
+                    handshake::Probe::Ok { .. } => "another_device".to_owned(),
+                };
+                let next = inner.gate_probe;
+                self.schedule_gate_probe(&mut inner);
+                // One line per probe the gate still refuses: at most one each 15 min once the backoff is full.
+                self.log(
+                    "gate-probe",
+                    json!({"deviceId": self.device_id, "answer": answer, "nextMs": next}),
+                );
+            }
+        }
+    }
+
+    /// The host's gate refused this device's last attempt and no attempt runs: a tailnet scan whose probe the gate
+    /// now lets in wakes it at once (`Devices::scan_once`), sooner than the next gate probe.
+    pub fn gate_refused(&self) -> bool {
+        let inner = self.inner();
+        inner.running
+            && inner.link.is_none()
+            && !inner.attempting
+            && matches!(inner.error.as_deref(), Some("not_allowed" | "blocked"))
     }
 
     /// End address step `step` once it has run `STALE_STEP_MS`, unless it ended first.

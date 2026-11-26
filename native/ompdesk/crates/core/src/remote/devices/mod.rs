@@ -746,6 +746,23 @@ impl Devices {
         }
         while workers.join_next().await.is_some() {}
         let computers: Vec<Map<String, Value>> = locked(&results).drain(..).flatten().collect();
+        // A host whose gate refused this device and whose probe now lets it in (its person allowed or unblocked it):
+        // its link attempts at once, the fast path while a view watches the tailnet (the client's own gate probe is
+        // the slow one). The probe answers the refusal for as long as the gate refuses, so this wakes once.
+        let admitted: Vec<Arc<Client>> = {
+            let inner = self.inner();
+            computers
+                .iter()
+                .filter(|row| row.get("state").and_then(Value::as_str) == Some("available"))
+                .filter_map(|row| row.get("deviceId").and_then(Value::as_str))
+                .filter_map(|device| inner.clients.get(device).cloned())
+                .collect()
+        };
+        for client in admitted {
+            if client.gate_refused() {
+                client.wake("tailnet");
+            }
+        }
         self.inner().computers = computers;
         self.mark_computers();
     }

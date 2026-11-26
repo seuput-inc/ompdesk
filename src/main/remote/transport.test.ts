@@ -789,6 +789,41 @@ describe("authenticated link", () => {
 		expect(attempts().at(-1)?.details).toMatchObject({ trigger: "focus" });
 	});
 
+	it("a refusal a person chose is asked again by a probe on a slow backoff, and connects once the gate lets it in", async () => {
+		const { lines, log: record } = linkLog();
+		const refusedProbe = Promise.withResolvers<Record<string, unknown>>();
+		const log: typeof record = (message, details) => {
+			record(message, details);
+			if (message === "gate-probe") refusedProbe.resolve(details);
+		};
+		const rig = await startHost();
+		const { a, hosts, paired } = await connectedClient(rig);
+		await fakeLinkClock();
+		const remote = client(a, paired, hosts, log);
+		remote.connect();
+		await untilState(remote, "online");
+		rig.gate.next = () => ({ ok: false, code: "blocked" });
+		await rig.host.revoke(a.identity.deviceId);
+		await untilState(remote, "offline");
+		await advanceCoreTimers(1_000);
+		await until(remote, () => remote.state === "offline" && remote.error === "blocked", 5_000);
+		const attempts = () => lines.filter(line => line.message === "attempt");
+		const seen = attempts().length;
+
+		// The first gate probe, a minute on, is still refused: no link attempt, and the next waits two minutes.
+		await advanceCoreTimers(60_000);
+		expect(await refusedProbe.promise).toMatchObject({ answer: "blocked", nextMs: 120_000 });
+		expect(attempts()).toHaveLength(seen);
+
+		// The person lets this device in: the next probe hears it and the link comes up by itself.
+		rig.gate.next = () => visitor();
+		await advanceCoreTimers(60_000);
+		expect(attempts()).toHaveLength(seen);
+		await advanceCoreTimers(60_000);
+		await untilState(remote, "online");
+		expect(attempts().at(-1)?.details).toMatchObject({ trigger: "gate" });
+	});
+
 	it("closes the connection on a tampered ciphertext frame", async () => {
 		const rig = await startHost();
 		const { a, paired } = await connectedClient(rig);
