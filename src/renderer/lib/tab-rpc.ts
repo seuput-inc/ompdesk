@@ -18,3 +18,11 @@ export function focusedTabRpc(): TabRpc {
 	const runtime = focusedSessionRuntime();
 	return runtime ? createTabRpc(runtime.command) : window.omp.rpc;
 }
+
+/**
+ * The tab's client for one repository inside its folder (`repo`, relative), when the folder holds several checkouts:
+ * every command carries `repo`, and main runs the Changes panel's git there (local/git.ts `NESTED_COMMANDS`).
+ */
+export function repoRpc(rpc: TabRpc, repo: string): TabRpc {
+	return createTabRpc((command, timeoutMs) => rpc.command(Object.assign({}, command, { repo }), timeoutMs));
+}

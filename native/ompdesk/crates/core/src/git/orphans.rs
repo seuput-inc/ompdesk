@@ -396,7 +396,8 @@ pub async fn remove(
                 branch,
                 base_cwd: primary.to_owned(),
             };
-            branches::remove_safe(git, &worktree, keep_branch).await
+            // Its callers archive the worktree's ignored data first (`archiveBeforeRemove`).
+            branches::remove_safe(git, &worktree, keep_branch, false).await
         }
     }
 }

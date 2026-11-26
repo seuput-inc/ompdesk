@@ -12,12 +12,16 @@
 //! stderr, node's error text, `spawn <bin> ENOENT`, `-c timed out after 60000ms`); a refusal the TypeScript coded
 //! carries that code.
 
+mod blame;
 pub mod branches;
 mod checkout;
 mod checkout_peers;
+mod compare;
+mod conflicts;
 mod fingerprints;
 pub(crate) mod freshness;
 pub(crate) mod left_behind;
+mod nested;
 pub(crate) mod origin;
 mod orphans;
 pub(crate) mod parse;
@@ -59,6 +63,23 @@ struct DiffParams {
     git: Option<Runner>,
     cwd: String,
     path: Value,
+    /// The merge-base of the Changes panel's base range; none diffs against HEAD.
+    against: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SetBaseParams {
+    git: Runner,
+    root: String,
+    base: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PictureParams {
+    git: Runner,
+    root: String,
+    rev: String,
+    path: Value,
 }
 
 /// A request on the checkout root main resolved.
@@ -94,7 +115,26 @@ struct RemoteParams {
     git: Runner,
     root: String,
     action: scm::RemoteAction,
+    /// A Pull's join of a diverged branch: rebase, merge, or none for the person's config.
+    rebase: Option<bool>,
     slow_ms: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RebaseParams {
+    git: Runner,
+    root: String,
+    base: String,
+    slow_ms: u64,
+}
+
+#[derive(Deserialize)]
+struct ResolveParams {
+    git: Runner,
+    root: String,
+    path: Value,
+    side: conflicts::Side,
 }
 
 #[derive(Deserialize)]
@@ -137,6 +177,16 @@ struct LogParams {
     limit: Option<f64>,
     skip: Option<f64>,
     query: Option<String>,
+    /// `--all` or one ref; none for HEAD.
+    branch: Option<String>,
+}
+
+/// A file of the Files viewer, relative to `cwd` (the tab's folder).
+#[derive(Deserialize)]
+struct BlameParams {
+    git: Runner,
+    cwd: String,
+    path: Value,
 }
 
 #[derive(Deserialize)]
@@ -511,11 +561,53 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("git.diff", |call| {
         Box::pin(async move {
-            let DiffParams { git, cwd, path } = call.params()?;
+            let DiffParams {
+                git,
+                cwd,
+                path,
+                against,
+            } = call.params()?;
             let path = parse::relative_path(&path)?;
             let git = git
                 .ok_or_else(|| Fault::new("git_missing", "git is not installed or not on PATH"))?;
-            Reply::json(&read::diff(&Git::new(git, call.scope), &cwd, path).await?)
+            let git = Git::new(git, call.scope);
+            Reply::json(&read::diff(&git, &cwd, path, against.as_deref()).await?)
+        })
+    });
+    registry.add("git.compare", |call| {
+        Box::pin(async move {
+            let At { git, cwd } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&compare::compare(&git, &cwd).await?)
+        })
+    });
+    registry.add("git.nestedRepos", |call| {
+        Box::pin(async move {
+            let At { git, cwd } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&nested::nested(&git, &cwd).await?)
+        })
+    });
+    registry.add("git.setBase", |call| {
+        Box::pin(async move {
+            let SetBaseParams { git, root, base } = call.params()?;
+            let git = Git::new(git, call.scope);
+            compare::set_base(&git, &root, base.as_deref()).await?;
+            Reply::json(&())
+        })
+    });
+    registry.add("git.picture", |call| {
+        Box::pin(async move {
+            let PictureParams {
+                git,
+                root,
+                rev,
+                path,
+            } = call.params()?;
+            let path = parse::relative_path(&path)?;
+            let git = Git::new(git, call.scope);
+            let (answer, bytes) = compare::picture(&git, &root, &rev, path).await?;
+            Ok(Reply::json(&answer)?.with_bin(bytes))
         })
     });
     registry.add("git.stage", |call| {
@@ -579,10 +671,37 @@ pub fn register(registry: &mut Registry) {
                 git,
                 root,
                 action,
+                rebase,
                 slow_ms,
             } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&scm::remote(&git, &root, action, slow_ms).await?)
+            Reply::json(&scm::remote(&git, &root, action, rebase, slow_ms).await?)
+        })
+    });
+    registry.add("git.rebaseOnto", |call| {
+        Box::pin(async move {
+            let RebaseParams {
+                git,
+                root,
+                base,
+                slow_ms,
+            } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&scm::rebase_onto(&git, &root, &base, slow_ms).await?)
+        })
+    });
+    registry.add("git.resolveConflict", |call| {
+        Box::pin(async move {
+            let ResolveParams {
+                git,
+                root,
+                path,
+                side,
+            } = call.params()?;
+            let path = parse::relative_path(&path)?;
+            let git = Git::new(git, call.scope);
+            conflicts::resolve(&git, &root, path, side).await?;
+            Reply::json(&())
         })
     });
     registry.add("git.stash", |call| {
@@ -648,9 +767,18 @@ pub fn register(registry: &mut Registry) {
                 limit,
                 skip,
                 query,
+                branch,
             } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&scm::log(&git, &root, limit, skip, query.as_deref()).await?)
+            let (query, branch) = (query.as_deref(), branch.as_deref());
+            Reply::json(&scm::log(&git, &root, limit, skip, query, branch).await?)
+        })
+    });
+    registry.add("git.blame", |call| {
+        Box::pin(async move {
+            let BlameParams { git, cwd, path } = call.params()?;
+            let path = parse::relative_path(&path)?;
+            Reply::json(&blame::blame(&Git::new(git, call.scope), &cwd, path).await?)
         })
     });
     registry.add("git.commitDetail", |call| {
@@ -882,7 +1010,7 @@ pub fn register(registry: &mut Registry) {
                 keep_branch,
             } = call.params()?;
             let git = Git::new(git, call.scope);
-            Reply::json(&branches::remove_safe(&git, &worktree, keep_branch).await?)
+            Reply::json(&branches::remove_safe(&git, &worktree, keep_branch, true).await?)
         })
     });
     registry.add("git.discardCheck", |call| {

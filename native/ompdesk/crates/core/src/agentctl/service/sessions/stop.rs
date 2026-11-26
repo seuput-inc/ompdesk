@@ -486,9 +486,10 @@ impl AgentControl {
         }
     }
 
-    /// Why `drop_worktree` kept a worktree and its branch: what is unlanded.
+    /// Why `drop_worktree` kept a worktree and its branch: what is unlanded, else what a removal would delete.
     async fn kept_worktree(&self, worktree: &WorktreeRef, device: Option<&str>) -> String {
         let facts = self.host.branch_facts(worktree, device).await.ok();
+        let read = facts.is_some();
         let mut unlanded: Vec<String> = Vec::new();
         if let Some(facts) = facts {
             if !facts.merged {
@@ -510,15 +511,15 @@ impl AgentControl {
                 ));
             }
         }
+        let reason = match (read, unlanded.is_empty()) {
+            (false, _) => String::new(),
+            (true, true) => ": files git ignores that no other copy has, or submodule checkouts, would go with it"
+                .to_owned(),
+            (true, false) => format!(": {}", unlanded.join(", ")),
+        };
         format!(
-            "Kept its worktree {} and branch {}{}. Land it with git there, or remove it yourself if the work is not wanted.",
-            worktree.path,
-            worktree.branch,
-            if unlanded.is_empty() {
-                String::new()
-            } else {
-                format!(": {}", unlanded.join(", "))
-            }
+            "Kept its worktree {} and branch {}{reason}. Land it with git there, or remove it yourself if the work is not wanted.",
+            worktree.path, worktree.branch,
         )
     }
 

@@ -37,7 +37,15 @@ import {
 	type PreviewStreamPoll,
 	type PreviewStreamPollRequest,
 } from "../../shared/preview";
-import type { RpcCommand, RpcContextReportResult, SettingsSchemaResult, UsageReport } from "../../shared/rpc-types";
+import type {
+	RpcCommand,
+	RpcContextReportResult,
+	RpcGitBlame,
+	RpcGitBranch,
+	RpcGitLog,
+	SettingsSchemaResult,
+	UsageReport,
+} from "../../shared/rpc-types";
 import { SCHEDULES_COMMAND, SCHEDULES_LOG } from "../../shared/schedules";
 import { readSidebarPrefs, SIDEBAR_PREFS_KEY, type SidebarChange, sidebarPatch } from "../../shared/sidebar-prefs";
 import { SIDEBAR_PROJECTS_COMMAND, type SidebarProjectsRequest } from "../../shared/sidebar-projects";
@@ -104,6 +112,71 @@ import { diskCareState, orphanWorktrees, savedWorktreeRestore, savedWorktrees } 
 import { createHarnessSummaries, type HarnessSummaries } from "./summaries";
 
 type Listener = (data: unknown) => void;
+
+/** The Commits view's history: a side branch merged back, and another branch still open beside it. */
+function harnessLog(): RpcGitLog {
+	const now = Math.floor(Date.now() / 1000);
+	const commit = (id: string, subject: string, parents: string[], hours: number, refs: string[] = []) => ({
+		sha: id.repeat(40),
+		shortSha: id.repeat(7),
+		author: "Ada Lovelace",
+		date: now - hours * 3600,
+		subject,
+		refs,
+		tags: [],
+		parents: parents.map(parent => parent.repeat(40)),
+	});
+	return {
+		commits: [
+			commit("a", "Sidebar: keep the gap at 4", ["b"], 1, ["omp/agent/sidebar-flake"]),
+			commit("c", "Try a denser row", ["d"], 2, ["origin/row-density"]),
+			commit("b", "Merge branch 'flake-fix'", ["d", "e"], 3, ["main"]),
+			commit("e", "Retry the flaky sidebar test once", ["d"], 5),
+			commit("d", "Changes panel: commit graph", ["f"], 30),
+			commit("f", "Initial commit", [], 70),
+		],
+		more: false,
+		commitUrl: null,
+	};
+}
+
+const harnessBranch = (name: string, remote: boolean, current: boolean): RpcGitBranch => ({
+	name,
+	remote,
+	current,
+	upstream: null,
+	worktree: null,
+	sha: "",
+	date: 0,
+});
+const HARNESS_BRANCHES = [
+	harnessBranch("omp/agent/sidebar-flake", false, true),
+	harnessBranch("main", false, false),
+	harnessBranch("origin/row-density", true, false),
+];
+
+/** Blame of any opened file: three commits and the working tree's own lines, in runs. */
+function harnessBlame(): RpcGitBlame {
+	const now = Date.now();
+	const commit = (id: string, summary: string, days: number) => ({
+		sha: id.repeat(40),
+		shortSha: id.repeat(7),
+		author: "Ada Lovelace",
+		date: now - days * 86_400_000,
+		summary,
+		uncommitted: false,
+	});
+	return {
+		commits: [
+			commit("f", "Initial commit", 70),
+			commit("d", "Sidebar rows", 12),
+			commit("a", "Keep the gap at 4", 1),
+			{ ...commit("0", "", 0), author: "Not Committed Yet", uncommitted: true },
+		],
+		lines: Array.from({ length: 600 }, (_, line) => (line < 8 ? 0 : line % 40 < 3 ? 3 : line % 17 < 6 ? 2 : 1)),
+		truncated: false,
+	};
+}
 
 /**
  * `?firstrun=1`: a computer with no credential, so the first-run provider step shows. The rows are stock's
@@ -482,6 +555,22 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 					files: GIT_CHANGES.files,
 					truncated: false,
 				});
+			case "get_git_compare":
+				// The harness branch against `origin/main`: its changed files, two commits ahead, one behind, no conflict.
+				return respond(command, {
+					...GIT_CHANGES,
+					base: "0000000000000000000000000000000000000001",
+					baseRef: "origin/main",
+					source: "default",
+					headOid: "0000000000000000000000000000000000000002",
+					ahead: 2,
+					behind: 1,
+					conflicts: [],
+				});
+			case "get_git_image":
+				return respond(command, { before: null });
+			case "get_nested_repos":
+				return respond(command, { repos: [], truncated: false });
 			case "agent_control_family_edits":
 				return respond(command, familyEdits());
 			case "get_checkout_peers":
@@ -490,6 +579,12 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				const { path } = command;
 				return respond(command, { path, diff: GIT_DIFFS[path] ?? "", kind: "text", truncated: false });
 			}
+			case "git_log":
+				return respond(command, harnessLog());
+			case "git_branches":
+				return respond(command, HARNESS_BRANCHES);
+			case "get_git_blame":
+				return respond(command, harnessBlame());
 			case "get_session_stats":
 				return respond(command, SESSION_STATS);
 			case "get_advisor_stats":

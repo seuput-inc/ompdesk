@@ -109,7 +109,7 @@ describe("RepositoryChanges at scale", () => {
 		await flush();
 		await flush();
 
-		expect(getGitDiff).toHaveBeenCalledWith("src/f0.ts");
+		expect(getGitDiff).toHaveBeenCalledWith("src/f0.ts", undefined);
 		const diff = document.querySelector(".omp-pane-diff");
 		expect(diff?.getAttribute("style")).toContain("--omp-gutter-digits:4");
 		const lines = document.querySelectorAll(".omp-pane-diff [data-index]");

@@ -568,23 +568,23 @@ fn conflicted(output: &str) -> Vec<String> {
     files
 }
 
+/// `merge-tree` of `theirs` into `ours` (anything `cwd`'s repository resolves; `label` names `theirs` when it
+/// resolves to nothing).
 async fn predict_with(
     git: &Git,
-    worktree: &WorktreeRef,
+    cwd: &str,
+    ours: &str,
+    theirs: &str,
+    label: &str,
     scratch: &Scratch,
 ) -> Result<Prediction, Fault> {
-    let theirs = format!("refs/heads/{}", worktree.branch);
     let (ours, theirs, stores) = tokio::try_join!(
-        resolve(git, &worktree.base_cwd, "HEAD"),
-        resolve(git, &worktree.base_cwd, &theirs),
-        object_stores(git, &worktree.base_cwd),
+        resolve(git, cwd, ours),
+        resolve(git, cwd, theirs),
+        object_stores(git, cwd),
     )?;
     let (Some(ours), Some(theirs)) = (&ours, &theirs) else {
-        let missing = if ours.is_some() {
-            worktree.branch.as_str()
-        } else {
-            "HEAD"
-        };
+        let missing = if ours.is_some() { label } else { "HEAD" };
         return Ok(Prediction::Unknown {
             reason: format!("{missing} names no commit"),
         });
@@ -598,7 +598,7 @@ async fn predict_with(
         ours,
         theirs,
     ];
-    let result = merge_tree(git, &worktree.base_cwd, &args, scratch, &stores).await?;
+    let result = merge_tree(git, cwd, &args, scratch, &stores).await?;
     Ok(match result.code {
         0 => Prediction::Clean,
         1 => Prediction::Conflict {
@@ -617,17 +617,29 @@ async fn predict_with(
     })
 }
 
-/// Whether merging the branch into the parent checkout's HEAD would conflict, asked of `git merge-tree --write-tree`
-/// (idea: Orca) with its trees in a scratch store: the repo's own object store, index and refs stay as they were. A
-/// failure is `unknown` with its message; only a cancel fails the call.
-pub async fn predict(git: &Git, worktree: &WorktreeRef) -> Result<Prediction, Fault> {
+/// Whether merging `theirs` into `ours` would conflict, asked of `git merge-tree --write-tree` (idea: Orca) with its
+/// trees in a scratch store: the repo's own object store, index and refs stay as they were. A failure is `unknown`
+/// with its message; only a cancel fails the call.
+pub async fn predict_between(
+    git: &Git,
+    cwd: &str,
+    ours: &str,
+    theirs: &str,
+    label: &str,
+) -> Result<Prediction, Fault> {
     let scratch = Scratch::new().await?;
-    match predict_with(git, worktree, &scratch).await {
+    match predict_with(git, cwd, ours, theirs, label, &scratch).await {
         Err(fault) if !is_cancel(&fault) => Ok(Prediction::Unknown {
             reason: fault.message,
         }),
         outcome => outcome,
     }
+}
+
+/// Whether merging the branch into the parent checkout's HEAD would conflict (`predict_between`).
+pub async fn predict(git: &Git, worktree: &WorktreeRef) -> Result<Prediction, Fault> {
+    let theirs = format!("refs/heads/{}", worktree.branch);
+    predict_between(git, &worktree.base_cwd, "HEAD", &theirs, &worktree.branch).await
 }
 
 /// What a merge needs before its hooks run: the parent's branch, or the refusal `merge_problem` gives (a
@@ -1177,16 +1189,27 @@ async fn remote_copy(git: &Git, cwd: &str, branch: &str) -> Result<Option<Remote
 /// uncommitted or untracked file whose work has landed in the parent's HEAD or upstream goes. `judge_landing` is the
 /// one judge of landed; the branch goes with `update-ref -d` against the tip it judged, never `branch -d`. Its copy on
 /// `origin` goes too once it landed in `origin/<base>` (`drop_landed_remote`), also when `keep_branch` keeps the local
-/// one.
+/// one. `unsaved_stays`: a worktree holding files git ignores that no other copy has, or a submodule checkout, stays
+/// (`worktree::removal_risk`); off for a caller that archived its ignored data first (disk care, the orphan list).
 pub async fn remove_safe(
     git: &Git,
     worktree: &WorktreeRef,
     keep_branch: bool,
+    unsaved_stays: bool,
 ) -> Result<Option<SafeRemoval>, Fault> {
     let (facts, tip) = judge_landing(git, worktree).await?;
     let Some(tip) = tip.filter(|_| facts.landed && facts.clean) else {
         return Ok(None);
     };
+    if unsaved_stays {
+        let primary = read::primary_root(git, &worktree.base_cwd).await?;
+        if super::worktree::removal_risk(git, &worktree.path, &primary)
+            .await?
+            .is_some()
+        {
+            return Ok(None);
+        }
+    }
     let Some(primary) = remove_linked(git, &worktree.base_cwd, &worktree.path).await? else {
         return Ok(None);
     };

@@ -4,6 +4,8 @@
  * (background tabs stay untouched — no forced switch), then:
  * - clean → [Delete & close] / [Keep & close] / [Cancel]
  * - dirty → counts + [Force delete (discard changes)] / [Keep & close] / [Cancel]
+ * - clean by status, but the core refuses the delete (ignored files no other copy holds, submodule checkouts that
+ *   status can hide) → the dirty choices with the core's words
  * The remove RPC also rides the tab's sidecar; the tab closes right after,
  * so the sidecar's cwd-inside-removed-dir never matters.
  */
@@ -27,11 +29,13 @@ export function WorktreeCloseDialog() {
 
 	const [query, setQuery] = useState<QueryState>({ phase: "loading" });
 	const [busy, setBusy] = useState(false);
+	const [refusal, setRefusal] = useState<string | null>(null);
 
 	useEffect(() => {
 		if (!prompt) return;
 		setQuery({ phase: "loading" });
 		setBusy(false);
+		setRefusal(null);
 		if (tab?.status !== "ready") {
 			setQuery({ phase: "error" });
 			return;
@@ -55,7 +59,8 @@ export function WorktreeCloseDialog() {
 	const worktree = tab.worktree;
 	const sidecarReady = tab.status === "ready";
 	const status = query.phase === "ready" ? query.status : null;
-	const dirty = status !== null && (status.staged > 0 || status.unstaged > 0 || status.untracked > 0);
+	const dirty =
+		refusal !== null || (status !== null && (status.staged > 0 || status.unstaged > 0 || status.untracked > 0));
 
 	const finish = () => {
 		closePrompt();
@@ -74,6 +79,10 @@ export function WorktreeCloseDialog() {
 				force,
 			});
 			if (!response.success) {
+				if (!force && response.code === "worktree_dirty") {
+					setRefusal(response.error);
+					return;
+				}
 				toastError({ title: t("worktreeClose.removeFailed"), error: response });
 				return;
 			}
@@ -124,6 +133,11 @@ export function WorktreeCloseDialog() {
 						<p className="text-sc-md leading-relaxed text-(--sc-text-secondary)">
 							{sidecarReady ? t("worktreeClose.statusUnknown") : t("worktreeClose.notConnected")}
 						</p>
+					) : refusal !== null ? (
+						<div className="flex flex-col gap-2">
+							<p className="text-sc-md leading-relaxed text-(--sc-warning)">{t("worktreeClose.atRiskBody")}</p>
+							<p className="font-mono text-sc-sm break-words text-(--sc-text-muted) select-text">{refusal}</p>
+						</div>
 					) : dirty && status ? (
 						<p className="text-sc-md leading-relaxed text-(--sc-warning)">
 							{t("worktreeClose.dirtyBody", {

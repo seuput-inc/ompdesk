@@ -20,11 +20,13 @@
 
 import * as path from "node:path";
 import type {
+	RpcGitBlame,
 	RpcGitBranch,
 	RpcGitCommitDetail,
 	RpcGitDiff,
 	RpcGitLog,
 	RpcGitMutationResult,
+	RpcGitRebased,
 	RpcGitRemoteResult,
 } from "../../../shared/rpc-types";
 import { CoreError } from "../../core/process";
@@ -50,7 +52,8 @@ const MESSAGE_TIMEOUT_MS = 180_000;
 export const SCM_COMMAND_BUDGETS_MS = {
 	git_commit: COMMIT_TIMEOUT_MS + 60_000,
 	git_commit_message: MESSAGE_TIMEOUT_MS + 60_000,
-	git_remote: REMOTE_TIMEOUT_MS + 60_000,
+	// Sync runs fetch, pull and push one after another, each with the network's timeout.
+	git_remote: 3 * REMOTE_TIMEOUT_MS + 60_000,
 	git_branch: COMMIT_TIMEOUT_MS + 60_000,
 	git_history_action: COMMIT_TIMEOUT_MS + 60_000,
 	git_operation: COMMIT_TIMEOUT_MS + 60_000,
@@ -196,6 +199,14 @@ export async function undoCommit(cwd: string): Promise<void> {
 	});
 }
 
+/** Pins the repository's base for the Changes panel's range to `base` (a ref naming a commit); null unpins it. */
+export async function setBase(cwd: string, base: string | null): Promise<void> {
+	if (base !== null) checkRef(base);
+	await mutate(cwd, async root => {
+		await scmGit("git.setBase", { root, base }, 2);
+	});
+}
+
 /** The message stock `omp commit --dry-run` prints after "Generated commit message:". */
 export function parseGeneratedMessage(stdout: string): string | null {
 	const marker = "Generated commit message:";
@@ -230,8 +241,24 @@ export async function commitMessage(cwd: string, omp: OmpRuntime): Promise<{ mes
 	return warning ? { message, warning } : { message };
 }
 
-export async function remote(cwd: string, action: "push" | "pull" | "fetch"): Promise<RpcGitRemoteResult> {
-	return mutate(cwd, root => scmGit("git.remote", { root, action, slowMs: REMOTE_TIMEOUT_MS }, 3, REMOTE_TIMEOUT_MS));
+/**
+ * Sync: fetch, then a force-with-lease push of a branch rewritten after it was pushed, else pull and push when ahead.
+ * `rebase`: how a Pull joins a diverged branch (the person's answer to it); none leaves it to git's config.
+ */
+export async function remote(
+	cwd: string,
+	action: "push" | "pull" | "fetch" | "sync",
+	rebase?: boolean,
+): Promise<RpcGitRemoteResult> {
+	const sync = action === "sync";
+	return mutate(cwd, root =>
+		scmGit(
+			"git.remote",
+			{ root, action, rebase: action === "pull" ? (rebase ?? null) : null, slowMs: REMOTE_TIMEOUT_MS },
+			sync ? 6 : 3,
+			(sync ? 3 : 1) * REMOTE_TIMEOUT_MS,
+		),
+	);
 }
 
 export async function stash(cwd: string, action: "push" | "pop", message?: string): Promise<RpcGitMutationResult> {
@@ -245,10 +272,25 @@ export async function stash(cwd: string, action: "push" | "pop", message?: strin
 	);
 }
 
-export async function operation(cwd: string, action: "continue" | "abort"): Promise<RpcGitMutationResult> {
+export async function operation(cwd: string, action: "continue" | "skip" | "abort"): Promise<RpcGitMutationResult> {
 	return mutate(cwd, root =>
 		scmGit("git.operation", { root, action, slowMs: COMMIT_TIMEOUT_MS }, 3, COMMIT_TIMEOUT_MS),
 	);
+}
+
+/** `git rebase --autostash <base>`: the Changes panel's "Rebase onto base". */
+export async function rebaseOnto(cwd: string, base: string): Promise<RpcGitRebased> {
+	checkRef(base);
+	return mutate(cwd, root =>
+		scmGit("git.rebaseOnto", { root, base, slowMs: COMMIT_TIMEOUT_MS }, 3, COMMIT_TIMEOUT_MS),
+	);
+}
+
+/** Settles one conflicted file of a stopped operation (keep HEAD's side, the incoming side, or both) and stages it. */
+export async function resolveConflict(cwd: string, filePath: string, side: "ours" | "theirs" | "both"): Promise<void> {
+	await mutate(cwd, async root => {
+		await scmGit("git.resolveConflict", { root, path: filePath, side }, 6);
+	});
 }
 
 export async function branches(cwd: string): Promise<RpcGitBranch[]> {
@@ -279,9 +321,19 @@ export async function branch(
 	});
 }
 
-export async function log(cwd: string, input: { limit?: number; skip?: number; query?: string }): Promise<RpcGitLog> {
+/** `branch`: `--all` for every ref's history, one ref the core checks, or none for HEAD's. */
+export async function log(
+	cwd: string,
+	input: { limit?: number; skip?: number; query?: string; branch?: string },
+): Promise<RpcGitLog> {
 	const root = await requireRoot(cwd);
-	return scmGit("git.log", { root, limit: input.limit, skip: input.skip, query: input.query?.trim() || null }, 4);
+	const query = input.query?.trim() || null;
+	return scmGit("git.log", { root, limit: input.limit, skip: input.skip, query, branch: input.branch || null }, 5);
+}
+
+/** Who last changed each line of a Files viewer file (FR87): `filePath` relative to the tab's folder, or inside it. */
+export async function blame(cwd: string, filePath: string): Promise<RpcGitBlame> {
+	return scmGit("git.blame", { cwd, path: path.isAbsolute(filePath) ? path.relative(cwd, filePath) : filePath }, 1);
 }
 
 export async function commitDetail(cwd: string, sha: string): Promise<RpcGitCommitDetail> {

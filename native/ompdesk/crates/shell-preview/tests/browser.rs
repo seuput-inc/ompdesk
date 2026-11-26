@@ -572,7 +572,11 @@ async fn scenario(browser: &Browser, fixture: &Fixture, scratch: &Path) -> Resul
             if size == Some((780, 1400)) {
                 break Ok::<_, String>(ack);
             }
-            if !size.is_some_and(|(width, height)| width == 780 || height == 1400) {
+            // A frame still at the previous 240x160 surface (captured before the resize reached Viz) is dropped by the
+            // host the same way (`pictures_window`), so it is a transition frame too.
+            if size != Some((240, 160))
+                && !size.is_some_and(|(width, height)| width == 780 || height == 1400)
+            {
                 break Err("not a transition frame".to_string());
             }
             page.ack_frame(ack)

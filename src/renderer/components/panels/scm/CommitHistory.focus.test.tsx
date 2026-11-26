@@ -43,6 +43,7 @@ const command = vi.fn(async (cmd: RpcCommand): Promise<RpcResponse> => {
 		return ok("git_log", { commits: [commit(FULL, "Add resume e2e")], more: false, commitUrl: null });
 	if (cmd.type === "git_commit_detail")
 		return ok("git_commit_detail", { ...commit(FULL, "Add resume e2e"), body: "", files: [] });
+	if (cmd.type === "git_branches") return ok("git_branches", []);
 	return ok(cmd.type, {});
 });
 Object.assign(window as unknown as Record<string, unknown>, {

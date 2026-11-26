@@ -251,8 +251,9 @@ export const tablessWorktreeBridge: Pick<BridgeClient, "request"> = {
 };
 
 /**
- * Dirty worktrees are refused unless `force`; the message carries the counts for the close dialog.
- * Only checkouts under the worktree root qualify: `--force` must never reach the user's own clone.
+ * Dirty worktrees are refused unless `force`; the message carries the counts for the close dialog. So is one whose
+ * removal would delete what status does not show: ignored files no other copy holds, submodule checkouts (the core's
+ * `removal_risk`). Only checkouts under the worktree root qualify: `--force` must never reach the user's own clone.
  */
 export async function removeWorktree(
 	input: { path: string; force?: boolean },

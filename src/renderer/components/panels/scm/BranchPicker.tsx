@@ -1,23 +1,25 @@
 /**
  * Branch chip and picker for the Changes panel: the current branch (or a
  * detached HEAD), a filter, local then remote branches newest first, and per
- * branch merge into the current one, rename and delete. Creating takes the
- * filter text; Enter in the filter creates only when no branch it matches can be
- * switched to, else it goes to that branch. A branch another worktree holds says
- * where and cannot be switched to.
+ * branch merge into the current one, rename, delete and copy its name. Creating
+ * takes the filter text; Enter in the filter creates only when no branch it
+ * matches can be switched to, else it goes to that branch. A branch another
+ * worktree holds says where, cannot be switched to, and opens that worktree's
+ * session instead (Orca BranchPicker's "checked out in path → open workspace").
  */
-import { GitBranch, GitMerge, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
-import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Copy, FolderOpen, GitBranch, GitMerge, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
+import { type KeyboardEvent as ReactKeyboardEvent, useMemo, useRef, useState } from "react";
 import type { RpcGitBranch } from "../../../../shared/rpc-types";
-import { errorDetail } from "../../../lib/error-detail";
 import { useFocusedScope } from "../../../lib/focused-scope";
 import { useT } from "../../../lib/i18n";
 import { isImeKeyEvent } from "../../../lib/ime";
-import { lastRead, rememberRead } from "../../../lib/last-read";
 import type { TabRpc } from "../../../lib/tab-rpc";
+import { useTabsStore } from "../../../stores/tabs";
+import { toast, toastError } from "../../../stores/toast";
 import {
 	Button,
 	ConfirmDialog,
+	type ContextMenuItem,
 	EmptyState,
 	InlineNotice,
 	ListRow,
@@ -28,7 +30,16 @@ import {
 	SkeletonRows,
 } from "../../common";
 import type { NameRequest } from "./NameDialog";
+import { useBranchList } from "./use-branch-list";
 import type { ScmRunner } from "./use-scm-action";
+
+/** Shows the session working in `folder` on this computer or the tab's device, or opens one there. */
+export async function openWorktreeSession(folder: string, device: string | undefined): Promise<void> {
+	const tabs = useTabsStore.getState();
+	const open = tabs.tabs.find(tab => tab.cwd === folder && (tab.device ?? undefined) === device);
+	if (open) await tabs.switchTab(open.id);
+	else await tabs.openTab({ cwd: folder, kind: "agent", ...(device ? { device } : {}) });
+}
 
 export function BranchPicker({
 	rpc,
@@ -47,34 +58,17 @@ export function BranchPicker({
 	const anchorRef = useRef<HTMLButtonElement>(null);
 	const [open, setOpen] = useState(false);
 	const [query, setQuery] = useState("");
-	const { device, cwd } = useFocusedScope();
-	const branchesKey = `scm:branches:${cwd}`;
-	// The branches seen last time are there when the popover opens; the read below replaces them in place.
-	const [list, setList] = useState<RpcGitBranch[] | null>(() => lastRead<RpcGitBranch[]>(device, branchesKey) ?? null);
-	const [error, setError] = useState<string | null>(null);
+	const { device } = useFocusedScope();
+	const { list, error } = useBranchList(rpc, open);
 	const [deleting, setDeleting] = useState<{ name: string; force: boolean } | null>(null);
 
-	useEffect(() => {
-		if (!open) return;
-		let active = true;
-		setList(lastRead<RpcGitBranch[]>(device, branchesKey) ?? null);
-		setError(null);
-		void rpc
-			.command({ type: "git_branches" })
-			.then(response => {
-				if (!active) return;
-				if (!response.success) throw new Error(response.error ?? t("rpc.failed"));
-				const data = response.data as RpcGitBranch[];
-				setList(data);
-				rememberRead(device, branchesKey, data);
-			})
-			.catch(cause => {
-				if (active) setError(errorDetail(cause));
-			});
-		return () => {
-			active = false;
-		};
-	}, [open, rpc, t, device, branchesKey]);
+	const copyName = (name: string) => {
+		close();
+		navigator.clipboard.writeText(name).then(
+			() => toast({ variant: "success", message: t("scm.branch.copied", { name }) }),
+			error => toastError({ title: t("scm.branch.copyFailed"), error }),
+		);
+	};
 
 	const needle = query.trim().toLocaleLowerCase();
 	const shown = useMemo(
@@ -115,6 +109,69 @@ export function BranchPicker({
 
 	const row = (item: RpcGitBranch) => {
 		const held = item.worktree !== null;
+		const items: ContextMenuItem[] = [];
+		if (held && item.worktree)
+			items.push({
+				id: "open",
+				label: t("scm.branch.openWorktree"),
+				icon: FolderOpen,
+				onSelect: () => {
+					close();
+					openWorktreeSession(item.worktree ?? "", device).catch(error =>
+						toastError({ title: t("scm.branch.openWorktreeFailed"), error }),
+					);
+				},
+			});
+		if (!item.remote && !item.current)
+			items.push(
+				{
+					id: "merge",
+					label: t("scm.branch.merge", { name: item.name, into: branch ?? "HEAD" }),
+					icon: GitMerge,
+					disabled: !branch,
+					onSelect: () =>
+						act(
+							"merge",
+							{ type: "git_branch", action: "merge", name: item.name },
+							t("scm.branch.mergeFailed"),
+							t("scm.branch.merged", { name: item.name }),
+						),
+				},
+				{
+					id: "rename",
+					label: t("scm.branch.rename"),
+					icon: Pencil,
+					onSelect: () => {
+						close();
+						requestName({
+							title: t("scm.branch.renameTitle", { name: item.name }),
+							label: t("scm.branch.nameLabel"),
+							submitLabel: t("scm.branch.rename"),
+							initial: item.name,
+							onSubmit: newName =>
+								void runner.run(
+									"rename",
+									{ type: "git_branch", action: "rename", name: item.name, newName },
+									{ failure: t("scm.branch.renameFailed") },
+								),
+						});
+					},
+				},
+			);
+		items.push({ id: "copy", label: t("scm.branch.copyName"), icon: Copy, onSelect: () => copyName(item.name) });
+		if (!item.remote && !item.current)
+			items.push({
+				id: "delete",
+				label: t("scm.branch.delete"),
+				icon: Trash2,
+				danger: true,
+				disabled: held,
+				separatorBefore: true,
+				onSelect: () => {
+					close();
+					setDeleting({ name: item.name, force: false });
+				},
+			});
 		return (
 			<div className="flex items-center gap-1" key={`${item.remote ? "r" : "l"}:${item.name}`}>
 				<ListRow
@@ -132,61 +189,13 @@ export function BranchPicker({
 					title={item.name}
 					titleText={item.name}
 				/>
-				{!item.remote && !item.current && (
-					<MenuButton
-						align="end"
-						icon={<MoreHorizontal />}
-						items={[
-							{
-								id: "merge",
-								label: t("scm.branch.merge", { name: item.name, into: branch ?? "HEAD" }),
-								icon: GitMerge,
-								disabled: !branch,
-								onSelect: () =>
-									act(
-										"merge",
-										{ type: "git_branch", action: "merge", name: item.name },
-										t("scm.branch.mergeFailed"),
-										t("scm.branch.merged", { name: item.name }),
-									),
-							},
-							{
-								id: "rename",
-								label: t("scm.branch.rename"),
-								icon: Pencil,
-								onSelect: () => {
-									close();
-									requestName({
-										title: t("scm.branch.renameTitle", { name: item.name }),
-										label: t("scm.branch.nameLabel"),
-										submitLabel: t("scm.branch.rename"),
-										initial: item.name,
-										onSubmit: newName =>
-											void runner.run(
-												"rename",
-												{ type: "git_branch", action: "rename", name: item.name, newName },
-												{ failure: t("scm.branch.renameFailed") },
-											),
-									});
-								},
-							},
-							{
-								id: "delete",
-								label: t("scm.branch.delete"),
-								icon: Trash2,
-								danger: true,
-								disabled: held,
-								separatorBefore: true,
-								onSelect: () => {
-									close();
-									setDeleting({ name: item.name, force: false });
-								},
-							},
-						]}
-						label={t("scm.branch.actions", { name: item.name })}
-						size="sm"
-					/>
-				)}
+				<MenuButton
+					align="end"
+					icon={<MoreHorizontal />}
+					items={items}
+					label={t("scm.branch.actions", { name: item.name })}
+					size="sm"
+				/>
 			</div>
 		);
 	};

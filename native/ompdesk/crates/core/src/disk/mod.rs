@@ -11,6 +11,7 @@
 mod cache;
 mod cache_policy;
 mod facts;
+pub(crate) mod local_files;
 mod regenerable;
 mod run_state;
 mod saved;

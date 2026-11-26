@@ -128,7 +128,7 @@ pub(super) fn viewer(bytes: &[u8], path: &str) -> &'static str {
     }
 }
 
-pub(super) fn image(bytes: &[u8]) -> Option<&'static str> {
+pub(crate) fn image(bytes: &[u8]) -> Option<&'static str> {
     let head = &bytes[..bytes.len().min(HEAD_BYTES)];
     if let Some(mime) = magic(head) {
         return mime.starts_with("image/").then_some(mime);

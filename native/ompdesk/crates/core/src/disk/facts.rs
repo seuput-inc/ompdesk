@@ -56,6 +56,17 @@ pub struct Files {
     fingerprint: String,
 }
 
+impl Files {
+    /// The ignored entries the project makes again, as `saved::private_files` leaves them out.
+    pub(super) fn regenerable_ignored(&self) -> Vec<String> {
+        self.ignored
+            .iter()
+            .filter(|entry| entry.regenerable.is_some())
+            .map(|entry| entry.path.clone())
+            .collect()
+    }
+}
+
 /// `git status --porcelain=v1 -z` split by kind. A rename or copy prints its old path as one more NUL field.
 fn parse_status(output: &str) -> (Vec<String>, Vec<String>, Vec<String>) {
     let (mut ignored, mut untracked, mut changed) = (Vec::new(), Vec::new(), Vec::new());

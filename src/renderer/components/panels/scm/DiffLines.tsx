@@ -31,6 +31,9 @@ import { NoteCard, NoteEditor } from "../notes/ReviewNotes";
  * Rows of a long list inside `scroller`, mounted only near its viewport. A
  * checkout's 1,000 changed files or a diff's thousands of lines, all mounted,
  * made one 65–180 ms frame when the list or the diff opened.
+ *
+ * `inFlow`: the list is one of several in the scroller (the Changes panel's all-files view), so its start is read from
+ * the layout and kept while what is above it grows. `scrollTo`: each new `serial` brings row `index` to the top.
  */
 export function VirtualRows<T>({
 	items,
@@ -38,6 +41,8 @@ export function VirtualRows<T>({
 	estimate,
 	itemKey,
 	children,
+	inFlow,
+	scrollTo,
 }: {
 	items: readonly T[];
 	/** The scrolling ancestor; state, so the rows mount once it is attached. */
@@ -45,12 +50,28 @@ export function VirtualRows<T>({
 	estimate: number;
 	itemKey: (item: T, index: number) => string | number;
 	children: (item: T, index: number) => ReactNode;
+	inFlow?: boolean;
+	scrollTo?: { index: number; serial: number };
 }) {
+	const anchor = useRef<HTMLDivElement>(null);
+	const [margin, setMargin] = useState(0);
+	useEffect(() => {
+		if (!inFlow || !scroller) return;
+		const measure = () => {
+			const top = anchor.current?.getBoundingClientRect().top;
+			if (top !== undefined) setMargin(top - scroller.getBoundingClientRect().top + scroller.scrollTop);
+		};
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(scroller.firstElementChild ?? scroller);
+		return () => observer.disconnect();
+	}, [inFlow, scroller]);
 	const virtualizer = useVirtualizer({
 		count: items.length,
 		getScrollElement: () => scroller,
 		estimateSize: () => estimate,
 		getItemKey: index => itemKey(items[index] as T, index),
+		scrollMargin: margin,
 		// The overscan (12 rows, 240+ px) also covers what precedes the rows in the
 		// scroller (a search field or the sticky header, under 60 px), so no scroll
 		// margin is read from layout.
@@ -63,8 +84,12 @@ export function VirtualRows<T>({
 				? entry.borderBoxSize[0]?.blockSize || estimate
 				: (instance.measurementsCache[instance.indexFromElement(element)]?.size ?? estimate),
 	});
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a new serial is the request; the index rides with it.
+	useEffect(() => {
+		if (scrollTo) virtualizer.scrollToIndex(scrollTo.index, { align: "start" });
+	}, [scrollTo?.serial]);
 	return (
-		<div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
+		<div ref={anchor} style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
 			{virtualizer.getVirtualItems().map(item => (
 				<div
 					data-index={item.index}
@@ -75,7 +100,7 @@ export function VirtualRows<T>({
 						top: 0,
 						left: 0,
 						width: "100%",
-						transform: `translateY(${item.start}px)`,
+						transform: `translateY(${item.start - margin}px)`,
 					}}
 				>
 					{children(items[item.index] as T, item.index)}
@@ -149,6 +174,8 @@ export function DiffLines({
 	path,
 	scroller,
 	notes,
+	inFlow,
+	jump,
 }: {
 	lines: readonly DiffLine[];
 	/** File path the language comes from. */
@@ -156,6 +183,10 @@ export function DiffLines({
 	scroller: HTMLElement | null;
 	/** The session (`notesOwner`) whose review notes the new side takes. */
 	notes?: { owner: string };
+	/** One of several diffs in `scroller` (`VirtualRows`' `inFlow`). */
+	inFlow?: boolean;
+	/** Each new `serial` scrolls diff line `line` (an index into `lines`) to the top: previous/next change. */
+	jump?: { line: number; serial: number };
 }) {
 	const t = useT();
 	const language = languageFromPath(path);
@@ -264,7 +295,19 @@ export function DiffLines({
 								: "draft"
 				}
 				items={rows}
+				inFlow={inFlow}
 				scroller={scroller}
+				scrollTo={
+					jump
+						? {
+								index: Math.max(
+									0,
+									rows.findIndex(row => row.kind === "line" && row.index === jump.line),
+								),
+								serial: jump.serial,
+							}
+						: undefined
+				}
 			>
 				{row => {
 					if (row.kind === "file") {

@@ -1,9 +1,11 @@
 /**
  * Commit history of the session checkout (the Changes panel's "Commits"
- * source): a searchable, paged log with branch and tag marks; a commit opens
- * its message, files and per-file diff, and its menu checks it out, branches
- * or tags from it, cherry-picks, reverts, resets, copies the id or opens it on
- * the hosted remote.
+ * source): a searchable, paged log with branch and tag marks, filtered to the
+ * current branch, every branch or one branch, with graph lanes beside the rows
+ * (graph-lanes.ts) while no search narrows it; a commit opens its message,
+ * files and per-file diff, and its menu checks it out, branches or tags from
+ * it, cherry-picks, reverts, resets, copies the id or opens it on the hosted
+ * remote.
  */
 import {
 	ArrowDown,
@@ -44,18 +46,25 @@ import {
 	ListRow,
 	MenuButton,
 	SearchField,
+	Select,
 	Skeleton,
 } from "../../common";
 import { ChangeCounts, ChangeStatus, type ChangeStatusName, PanelToolbar } from "../PanelChrome";
-import { parseRepositoryDiff } from "../RepositoryChanges";
 import { FileIcon } from "../viewers/FileViewer";
 import { DiffLines, DiffSkeleton, VirtualRows } from "./DiffLines";
+import { type GraphRow, graphLanes } from "./graph-lanes";
 import { NameDialog, type NameRequest } from "./NameDialog";
+import { parseRepositoryDiff } from "./repository-diff";
+import { useBranchList } from "./use-branch-list";
 import { useScmAction } from "./use-scm-action";
 
 const PAGE = 100;
 /** The history's first visit: two-line commit rows (`estimate`), bars of varied width. */
 const COMMIT_SKELETON_WIDTHS = [74, 58, 68, 46, 62, 54] as const;
+/** One graph lane's width; lanes past `MAX_LANES` are cut off at the column's edge. */
+const LANE_PX = 10;
+const MAX_LANES = 8;
+const laneX = (column: number) => column * LANE_PX + LANE_PX / 2;
 
 const COMMIT_STATUS: Record<string, ChangeStatusName> = {
 	A: "added",
@@ -91,11 +100,56 @@ function RefMarks({ commit }: { commit: RpcGitCommit }) {
 	);
 }
 
+/**
+ * A row's slice of the graph, as tall as the row: lines into the dot from the top, lanes passing by, lines from the
+ * dot to its parents at the bottom (Orca `git-history-graph-svg.tsx:56-244`, straight segments, no ref colours).
+ */
+function GraphCell({ row, columns }: { row: GraphRow | undefined; columns: number }) {
+	if (!row) return null;
+	const dot = laneX(row.lane);
+	return (
+		<div
+			className="relative shrink-0 self-stretch text-(--sc-text-muted)"
+			data-graph-lanes
+			style={{ width: columns * LANE_PX }}
+		>
+			<svg
+				aria-hidden="true"
+				className="absolute inset-0 size-full overflow-hidden"
+				fill="none"
+				stroke="currentColor"
+				strokeLinecap="round"
+				strokeWidth={1.5}
+			>
+				{row.into.map(from => (
+					<line key={`i${from}`} x1={laneX(from)} x2={dot} y1="0" y2="50%" />
+				))}
+				{row.through.map(([from, to]) => (
+					<line key={`t${from}`} x1={laneX(from)} x2={laneX(to)} y1="0" y2="100%" />
+				))}
+				{row.out.map(to => (
+					<line key={`o${to}`} x1={dot} x2={laneX(to)} y1="50%" y2="100%" />
+				))}
+				<circle
+					className="text-(--sc-text-secondary)"
+					cx={dot}
+					cy="50%"
+					fill={row.merge ? "var(--sc-surface-1)" : "currentColor"}
+					r={row.merge ? 4 : 3.5}
+				/>
+			</svg>
+		</div>
+	);
+}
+
 export function CommitHistory({ sourceSelector }: { sourceSelector?: ReactNode }) {
 	const t = useT();
 	const rpc = useTabRpc();
 	const [query, setQuery] = useState("");
 	const [applied, setApplied] = useState("");
+	/** "" is the current branch's history (HEAD), "--all" every branch's, else one branch's. */
+	const [branch, setBranch] = useState("");
+	const { list: branches } = useBranchList(rpc, true);
 	const [refresh, setRefresh] = useState(0);
 	const { device, cwd } = useFocusedScope();
 	// What this checkout's history showed last time paints at the first frame and is read again in place.
@@ -134,13 +188,13 @@ export function CommitHistory({ sourceSelector }: { sourceSelector?: ReactNode }
 		setLoading(true);
 		setError(null);
 		void rpc
-			.command({ type: "git_log", limit: PAGE, query: applied || undefined })
+			.command({ type: "git_log", limit: PAGE, query: applied || undefined, branch: branch || undefined })
 			.then(response => {
 				if (!active) return;
 				if (!response.success) throw new Error(response.error ?? t("rpc.failed"));
 				const data = response.data as RpcGitLog;
 				setLog(data);
-				if (applied === "") rememberRead(device, `scm:log:${cwd}`, data);
+				if (applied === "" && branch === "") rememberRead(device, `scm:log:${cwd}`, data);
 			})
 			.catch(cause => {
 				if (active) setError(errorDetail(cause));
@@ -151,7 +205,7 @@ export function CommitHistory({ sourceSelector }: { sourceSelector?: ReactNode }
 		return () => {
 			active = false;
 		};
-	}, [rpc, applied, refresh, t, device, cwd]);
+	}, [rpc, applied, branch, refresh, t, device, cwd]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: refresh reloads the open commit too.
 	useEffect(() => {
@@ -202,7 +256,13 @@ export function CommitHistory({ sourceSelector }: { sourceSelector?: ReactNode }
 	const loadMore = async () => {
 		if (!log) return;
 		const response = await rpc
-			.command({ type: "git_log", limit: PAGE, skip: log.commits.length, query: applied || undefined })
+			.command({
+				type: "git_log",
+				limit: PAGE,
+				skip: log.commits.length,
+				query: applied || undefined,
+				branch: branch || undefined,
+			})
 			.catch(cause => ({ success: false as const, error: errorDetail(cause) }));
 		if (!response.success) {
 			setError(response.error ?? t("rpc.failed"));
@@ -213,13 +273,16 @@ export function CommitHistory({ sourceSelector }: { sourceSelector?: ReactNode }
 	};
 
 	const lines = useMemo(() => parseRepositoryDiff(diff?.diff ?? ""), [diff]);
+	// A search leaves gaps in the history, so only an unsearched log draws its lanes.
+	const lanes = useMemo(() => (log && !applied ? graphLanes(log.commits) : null), [log, applied]);
+	const columns = Math.min(MAX_LANES, lanes?.reduce((most, row) => Math.max(most, row.width), 1) ?? 1);
 
 	const commitMenu = (commit: RpcGitCommit): ContextMenuItem[] => {
 		const action = (key: string, command: Parameters<typeof runner.run>[1], failure: string, success?: string) =>
 			void runner.run(key, command, { failure, success });
-		// The commit right after this one on the shown line (only an unfiltered log shows it).
+		// The commit right after this one on the shown line (only the current branch's unsearched log shows it).
 		const index = log?.commits.findIndex(entry => entry.sha === commit.sha) ?? -1;
-		const after = !applied && index > 0 ? log?.commits[index - 1] : undefined;
+		const after = !applied && !branch && index > 0 ? log?.commits[index - 1] : undefined;
 		const hasChild = after?.parents.length === 1 && after.parents[0] === commit.sha;
 		const items: ContextMenuItem[] = [
 			{
@@ -414,14 +477,30 @@ export function CommitHistory({ sourceSelector }: { sourceSelector?: ReactNode }
 			)}
 			{!selected ? (
 				<div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3" ref={setListScroller}>
-					<div className="sticky top-0 z-(--sc-z-sticky) bg-(--sc-surface-1) pt-2 pb-1 [[data-sheet-panel]_&]:bg-(--sc-elevated)">
-						<SearchField
-							controlSize="sm"
-							label={t("scm.history.search")}
-							onValueChange={setQuery}
-							placeholder={t("scm.history.search")}
-							value={query}
-						/>
+					<div className="sticky top-0 z-(--sc-z-sticky) flex items-center gap-1.5 bg-(--sc-surface-1) pt-2 pb-1 [[data-sheet-panel]_&]:bg-(--sc-elevated)">
+						<div className="min-w-0 flex-1">
+							<SearchField
+								controlSize="sm"
+								label={t("scm.history.search")}
+								onValueChange={setQuery}
+								placeholder={t("scm.history.search")}
+								value={query}
+							/>
+						</div>
+						<div className="w-36 shrink-0">
+							<Select
+								aria-label={t("scm.history.branchFilter")}
+								controlSize="sm"
+								data-history-branch
+								onChange={event => setBranch(event.target.value)}
+								options={[
+									{ value: "", label: t("scm.history.branchCurrent") },
+									{ value: "--all", label: t("scm.history.branchAll") },
+									...(branches ?? []).map(entry => ({ value: entry.name, label: entry.name })),
+								]}
+								value={branch}
+							/>
+						</div>
 					</div>
 					{loading && !log ? (
 						<div aria-label={t("common.loading")} className="flex flex-col" role="status">
@@ -447,8 +526,9 @@ export function CommitHistory({ sourceSelector }: { sourceSelector?: ReactNode }
 									items={log.commits}
 									scroller={listScroller}
 								>
-									{commit => (
+									{(commit, index) => (
 										<div className="flex items-center gap-1">
+											{lanes && <GraphCell columns={columns} row={lanes[index]} />}
 											<ListRow
 												className="min-w-0 flex-1"
 												meta={<RefMarks commit={commit} />}

@@ -50,3 +50,42 @@ describe("CodeView show all lines", () => {
 		expect(focused?.getAttribute("tabindex")).toBe("-1");
 	});
 });
+
+describe("CodeView blame", () => {
+	const render = async (blame: Parameters<typeof CodeView>[0]["blame"]) => {
+		const host = document.createElement("div");
+		document.body.append(host);
+		root = createRoot(host);
+		await act(async () =>
+			root?.render(
+				<I18nProvider>
+					<CodeView blame={blame} code={"a\nb\nc\nd"} language="plaintext" wrap={false} />
+				</I18nProvider>,
+			),
+		);
+	};
+	const commit = (sha: string, uncommitted = false) => ({
+		sha: sha.repeat(40),
+		shortSha: sha.repeat(7),
+		author: "Ada",
+		date: Date.now(),
+		summary: `Commit ${sha}`,
+		uncommitted,
+	});
+
+	it("names each run's commit once, on the run's first line", async () => {
+		await render({ commits: [commit("1"), commit("0", true)], lines: [0, 0, 1, 0], truncated: false });
+		const marks = Array.from(document.querySelectorAll("[data-blame-line]"));
+		expect(marks.map(mark => mark.closest("[data-line]")?.getAttribute("data-line"))).toEqual(["1", "3", "4"]);
+		expect(marks[0]?.textContent).toContain("1111111 Ada");
+		expect(marks[0]?.getAttribute("title")).toBe("Commit 1");
+		expect(marks[1]?.textContent).toBe("Not committed yet");
+	});
+
+	it("says once that a file has no blame, and shows its lines", async () => {
+		await render("failed");
+		expect(document.querySelectorAll("[data-blame-unavailable]")).toHaveLength(1);
+		expect(document.querySelectorAll("[data-blame-line]")).toHaveLength(0);
+		expect(document.querySelectorAll("[data-line]")).toHaveLength(4);
+	});
+});

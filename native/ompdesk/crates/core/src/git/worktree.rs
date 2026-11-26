@@ -474,6 +474,55 @@ async fn removable_path(root: &str, path: &str) -> Option<String> {
     super::orphans::inside(root?.to_str()?, &path).then_some(path)
 }
 
+/// git's output kept for a checkout's index listing.
+const INDEX_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+/// What removing the checkout at `path` loses that its status does not show, in one clause; none when nothing.
+/// Submodule checkouts: `worktree remove --force` deletes them with every commit only they hold, while the person's
+/// `submodule.<name>.ignore` can hide their edits from status (Orca `worktree-removal-preflight.ts:295-361`).
+/// Ignored files no other copy holds (`disk::local_files`), which git deletes forced or not.
+pub(crate) async fn removal_risk(
+    git: &Git,
+    path: &str,
+    primary: &str,
+) -> Result<Option<String>, Fault> {
+    if holds_submodules(git, path).await? {
+        return Ok(Some(
+            "it holds submodule checkouts, which go with it along with any commit only they have"
+                .into(),
+        ));
+    }
+    let files = crate::disk::local_files::unsaved(git, path, primary).await?;
+    Ok((!files.safe()).then(|| files.describe()))
+}
+
+/// git's own test before it refuses an unforced removal: a submodule repository under the checkout's git dir, or a
+/// gitlink checked out with its own `.git`. An index git cannot list whole counts as holding one.
+async fn holds_submodules(git: &Git, path: &str) -> Result<bool, Fault> {
+    let admin = git.text(path, &["rev-parse", "--absolute-git-dir"]).await?;
+    let modules = PathBuf::from(js_trim(&admin)).join("modules");
+    let index = git
+        .capped(path, &["ls-files", "--stage", "-z"], INDEX_MAX_BYTES)
+        .await?;
+    if index.code != 0 || index.truncated {
+        return Ok(true);
+    }
+    let listed = index.text();
+    let gitlinks: Vec<PathBuf> = listed
+        .split_terminator('\0')
+        .filter_map(|entry| entry.strip_prefix("160000 "))
+        .filter_map(|rest| rest.split_once('\t'))
+        .map(|(_, file)| Path::new(path).join(file).join(".git"))
+        .collect();
+    blocking(move || {
+        std::fs::symlink_metadata(&modules).is_ok()
+            || gitlinks
+                .iter()
+                .any(|dot_git| std::fs::symlink_metadata(dot_git).is_ok())
+    })
+    .await
+}
+
 /// The checked target and its repository lock: a linked checkout under `root`, clean unless forced.
 pub async fn removal(git: &Git, path: &str, root: &str, force: bool) -> Result<Removal, Fault> {
     let target = removable_path(root, path).await.ok_or_else(|| {
@@ -525,6 +574,12 @@ pub async fn removal(git: &Git, path: &str, root: &str, force: bool) -> Result<R
                 format!(
                     "Worktree has uncommitted changes: {staged} staged, {unstaged} unstaged, {untracked} untracked."
                 ),
+            ));
+        }
+        if let Some(risk) = removal_risk(git, path, &primary).await? {
+            return Err(refuse(
+                "worktree_dirty",
+                format!("Removing this worktree would lose work: {risk}."),
             ));
         }
     }
