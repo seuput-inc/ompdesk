@@ -119,8 +119,9 @@ mod tests {
     fn a_right_arrow_the_page_left_unhandled_never_reaches_the_window_view() {
         // SAFETY: the responders here belong to no window or event loop; this test thread is their only user.
         let mtm = unsafe { MainThreadMarker::new_unchecked() };
-        let window_view: Retained<WindowView> =
-            unsafe { msg_send![WindowView::alloc(mtm).set_ivars(Seen::default()), init] };
+        let window_view = WindowView::alloc(mtm).set_ivars(Seen::default());
+        // SAFETY: NSResponder's `init` on an instance whose ivars are set.
+        let window_view: Retained<WindowView> = unsafe { msg_send![super(window_view), init] };
         // A plain responder stands in for the WKWebView: its unhandled keyDown goes to its next responder, as
         // WebKit's re-sent key does.
         let web_view = NSResponder::new(mtm);
