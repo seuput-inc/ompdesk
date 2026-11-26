@@ -104,6 +104,7 @@ export { type SortDirection, SortHeader, type SortHeaderProps } from "./SortHead
 export { Spinner, type SpinnerProps, type SpinnerSize } from "./Spinner";
 export { StatusDot, type StatusDotProps, type StatusTone } from "./StatusDot";
 export { SwapText } from "./SwapText";
+export { type SwipeAction, SwipeActions, type SwipeActionsProps } from "./SwipeActions";
 export {
 	Switch,
 	SwitchField,

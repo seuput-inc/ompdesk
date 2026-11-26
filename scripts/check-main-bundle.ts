@@ -461,7 +461,14 @@ const AXE_MARKER = "_thisWillBeDeletedDoNotUse";
 // bot page, the templates and their words load later (OnDemandDialogs, `BotsPage` lazy, `bot-launch` imports the
 // templates on a template's create): 3,814 bytes measured over main (branch run 45779653731 on 9878bdec4), added to the
 // budget.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_236_742;
+// Organizing the sidebar (27 Nov 2026, orca-projects): the phone's first screen draws the session list, so what its
+// rows and stores carry is on it: project groups and their section header, project and session glyphs (colour,
+// emoji), the keyed sidebar entries (`setEntry`, `renameProjectGroup`), picking several rows and their menu
+// (`pickedMenuItems`), the row swipe (`SwipeActions`, `sessionSwipeItems`), the open row's account read
+// (`lib/tab-accounts.ts`), the sidebar requests store, the MRU close and the reopened tab's place; the dialogs (move,
+// rename, appearance, emoji, parent, clone, locate folder) load on use: 2,316 bytes over main's measure (2,234,781 in
+// CI run 45784490025 on 9878bdec4, whose budget was 2,232,465), added to the budget.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_239_058;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

@@ -29,9 +29,12 @@ import {
 } from "lucide-react";
 import {
 	Fragment,
+	lazy,
 	type KeyboardEvent as ReactKeyboardEvent,
+	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
 	type PointerEvent as ReactPointerEvent,
+	Suspense,
 	useCallback,
 	useEffect,
 	useMemo,
@@ -86,7 +89,7 @@ import {
 	sessionTitleParts,
 	type TitleParts,
 } from "../../../lib/session-title";
-import { isRememberedSession, LOCAL_DEVICE } from "../../../lib/sidebar-memory";
+import { deviceGroupKey, isRememberedSession, LOCAL_DEVICE } from "../../../lib/sidebar-memory";
 import {
 	clampSidebarWidth,
 	LANE_MIN_SIDEBAR_WIDTH,
@@ -94,6 +97,7 @@ import {
 	writeSidebarWidth,
 } from "../../../lib/sidebar-width";
 import { snapshotNs, snapshots } from "../../../lib/snapshot-cache";
+import { askTabAccount, useTabAccounts } from "../../../lib/tab-accounts";
 import { performTabClose } from "../../../lib/tab-close";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { isTabFailed } from "../../../lib/tab-signal";
@@ -113,7 +117,8 @@ import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
 import { ensureSessionTargetsOnFocus, requestSessionTargets, useSessionTargets } from "../../../stores/session-targets";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { RAIL_PIN_LABEL_KEYS, useSidebarPrefs } from "../../../stores/sidebar-prefs";
-import { useProjectList } from "../../../stores/sidebar-projects";
+import { useProjectList, useSidebarProjects } from "../../../stores/sidebar-projects";
+import { openProjectDialog, useSidebarRequest } from "../../../stores/sidebar-request";
 import { toggleSidebarSubagents, useSidebarSubagentsStore } from "../../../stores/sidebar-subagents";
 import { type SessionTab, tabAutoTitle, useTabsStore } from "../../../stores/tabs";
 import { toast, toastError } from "../../../stores/toast";
@@ -140,6 +145,7 @@ import {
 	MenuButton,
 	SearchField,
 	SkeletonRows,
+	SwipeActions,
 	TimeAgo,
 } from "../../common";
 import { StarterGuide } from "../../onboarding/StarterGuide";
@@ -151,6 +157,7 @@ import { childFoldSignal, type FoldSignal, foldSummary, sessionFoldSignal } from
 import { remoteOpenedTab, summaryRowState } from "./host-row-state";
 import { NewTaskRows } from "./NewTaskRows";
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
+import { ProjectGlyph } from "./ProjectGlyph";
 import { deleteProject, isStoredRow } from "./project-delete";
 import { projectMenuItems } from "./project-menu";
 import { RAIL_PIN_ICONS } from "./rail-pin-icons";
@@ -165,13 +172,15 @@ import { SidebarFolderMissingMark } from "./SidebarFolderMissingMark";
 import { SidebarFoldSummary } from "./SidebarFoldSummary";
 import { SidebarNav } from "./SidebarNav";
 import { PinMenu, type PinMenuState, pinMenuHandlers, SidebarPinsSheet } from "./SidebarPinsSheet";
+import { isProjectSectionFold, projectSectionFold, SidebarProjectSection } from "./SidebarProjectSection";
+import { SidebarRemovedProjects } from "./SidebarRemovedProjects";
 import { SidebarRenameField } from "./SidebarRenameField";
 import { SessionLinksDialog, sessionLinksWords } from "./SidebarSessionLinks";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
 import { SidebarUpdateCard } from "./SidebarUpdateCard";
 import { SidebarUsage, useOfferedFooterPins } from "./SidebarUsage";
 import { SortableProject } from "./SortableProject";
-import { sessionMenuItems } from "./session-menu";
+import { pickedMenuItems, sessionMenuItems, sessionSwipeItems } from "./session-menu";
 import { canMoveWithin, type SessionList, useSessionReorder } from "./session-reorder";
 import {
 	branchPrWords,
@@ -201,11 +210,19 @@ interface WorkspaceGroup extends RowGroup {
 	tooltip: string;
 }
 
+/** The palette's Clone repository… (it pulls in the GitHub center's dialog, so not on the first screen). */
+const SidebarCloneDialog = lazy(() => import("./SidebarCloneDialog"));
+/** A project header's Move to group, Rename group and Appearance dialogs, on first use. */
+const ProjectDialog = lazy(() => import("./ProjectDialogs"));
+
 /** A delete the row or context menu queued, awaiting the confirmation dialog. */
 type PendingDelete =
 	| { kind: "session"; session: SidebarSession }
 	| { kind: "group"; group: WorkspaceGroup }
-	| { kind: "archived"; sessions: SidebarSession[] };
+	| { kind: "archived"; sessions: SidebarSession[] }
+	| { kind: "picked"; sessions: SidebarSession[] };
+
+const NO_PICKS: ReadonlySet<string> = new Set();
 
 /** Floor for the docked column: the sidebar never folds on its own, so this is what a narrow window keeps. */
 
@@ -485,6 +502,9 @@ export function Sidebar() {
 	const [renameDraft, setRenameDraft] = useState("");
 	const [groupMenu, setGroupMenu] = useState<{ anchor: ContextMenuAnchor; group: WorkspaceGroup } | null>(null);
 	const [sessionMenu, setSessionMenu] = useState<{ anchor: ContextMenuAnchor; session: SidebarSession } | null>(null);
+	// The rows ⌘/Shift-click picked (stored sessions of this computer), whose menu acts on them all.
+	const [picked, setPicked] = useState<ReadonlySet<string>>(NO_PICKS);
+	const pickAnchor = useRef<string | null>(null);
 	/** The session whose links dialog is open. */
 	const [linksFor, setLinksFor] = useState<string | null>(null);
 	// A session row's actions are one ⋯ on every input, so the title keeps its width: at rest under touch (no hover
@@ -567,6 +587,11 @@ export function Sidebar() {
 	const agentHidden = useSidebarPrefs(s => s.agentHidden);
 	const groupAliases = useSidebarPrefs(s => s.groupAliases);
 	const archivedSessions = useSidebarPrefs(s => s.archivedSessions);
+	const projectGroups = useSidebarPrefs(s => s.projectGroups);
+	const projectColors = useSidebarPrefs(s => s.projectColors);
+	const projectEmoji = useSidebarPrefs(s => s.projectEmoji);
+	const sessionEmoji = useSidebarPrefs(s => s.sessionEmoji);
+	const sessionParents = useSidebarPrefs(s => s.sessionParents);
 	// The projects this computer lists apart from its sessions: an empty one keeps its group (src/main/sidebar-projects.ts).
 	const projectList = useProjectList();
 	const {
@@ -748,6 +773,7 @@ export function Sidebar() {
 		return heldByWindows.filter(file => !own.has(file));
 	}, [heldByWindows, rowTabs]);
 	const archivedIds = useMemo(() => new Set(archivedSessions), [archivedSessions]);
+	const tabAccounts = useTabAccounts(s => s.accounts);
 	// Session folders main found missing on disk: git's origin only marks a gone OMPdesk worktree.
 	const goneFolders = useMemo(() => new Set(projectList.gone ?? []), [projectList.gone]);
 	const rowFacts = useMemo<SidebarFacts>(
@@ -810,6 +836,8 @@ export function Sidebar() {
 				pinnedGroups,
 				groupOrder,
 				sessionOrder: list => sessionOrder[list],
+				projectGroup: cwd => projectGroups[cwd],
+				sessionParents,
 			},
 			query: filter,
 			nameOf: key => groupAliases[key] ?? projectName(key).name,
@@ -834,6 +862,8 @@ export function Sidebar() {
 			sessionOrder,
 			filter,
 			groupAliases,
+			projectGroups,
+			sessionParents,
 		],
 	);
 	// A session an agent here opened on a paired device is that opener's child too: its tab, or a stand-in for one
@@ -843,8 +873,18 @@ export function Sidebar() {
 	// While the pointer is on the list its rows keep their places (`sidebar-hold.ts`); the person's own changes apply.
 	const pointing = usePointingAt(listRef);
 	const ownOrder = useMemo(
-		() => JSON.stringify([pinnedSessions, pinnedGroups, groupOrder, sessionOrder, archivedSessions, filter]),
-		[pinnedSessions, pinnedGroups, groupOrder, sessionOrder, archivedSessions, filter],
+		() =>
+			JSON.stringify([
+				pinnedSessions,
+				pinnedGroups,
+				groupOrder,
+				sessionOrder,
+				archivedSessions,
+				filter,
+				projectGroups,
+				sessionParents,
+			]),
+		[pinnedSessions, pinnedGroups, groupOrder, sessionOrder, archivedSessions, filter, projectGroups, sessionParents],
 	);
 	const rows = useHeld(family.rows, holdRows, ownOrder, pointing);
 	const rowsHeldBack = rows === family.rows ? 0 : rowsWaiting(rows, family.rows);
@@ -907,6 +947,21 @@ export function Sidebar() {
 	const toggleGroup = (group: Pick<WorkspaceGroup, "cwd" | "members">) => {
 		useSidebarFolds.getState().setGroupFolded(group.cwd, !isCollapsed(group));
 	};
+	// Fold every project of this device's list or open them all (Orca's `ProjectsCollapseAllButton`,
+	// worktree-list/controls/ProjectsCollapseAllButton.tsx:11-38) from This device's header; a filter shows every
+	// match, so it has none.
+	const allFolded = groups.length > 0 && groups.every(isCollapsed);
+	const localFoldAll =
+		query || groups.length === 0
+			? undefined
+			: {
+					allFolded,
+					onToggle: () =>
+						useSidebarFolds.getState().setGroupsFolded(
+							groups.map(group => group.cwd),
+							!allFolded,
+						),
+				};
 	// The folds and the open families as they were left: the mirror painted the first frame, the saved pref is read
 	// again here and wins when it differs.
 	useEffect(() => {
@@ -921,7 +976,7 @@ export function Sidebar() {
 		if (!listLive || !tabsListed) return;
 		const folders = new Set(allGroups.map(group => group.cwd));
 		for (const session of sessions) if (!projectName(session.cwd).gone) folders.add(session.cwd);
-		useSidebarFolds.getState().pruneGroups(key => folders.has(key));
+		useSidebarFolds.getState().pruneGroups(key => folders.has(key) || isProjectSectionFold(key));
 		// A session an open tab holds stays known even before the index lists its file.
 		const known = new Set([
 			...sessions.map(session => session.path),
@@ -1256,18 +1311,24 @@ export function Sidebar() {
 		}
 	};
 
-	const confirmDeleteArchived = async (rows: readonly SidebarSession[]) => {
+	/** Delete several sessions one after another (the archived list, the picked rows); a running one stays. */
+	const confirmDeleteRows = async (rows: readonly SidebarSession[]) => {
 		setDeleting(true);
 		const deleted: string[] = [];
+		const running = rows.filter(isSessionBusy);
 		try {
 			for (const session of rows) {
+				if (running.includes(session)) continue;
 				// eslint-disable-next-line no-await-in-loop -- sequential, keep FS load bounded
-				await useTabsStore.getState().closeDeletedSession(session.path, undefined);
+				if (!(await useTabsStore.getState().closeDeletedSession(session.path, tabForSession(session)?.id)))
+					continue;
 				// eslint-disable-next-line no-await-in-loop -- sequential, keep FS load bounded
 				await deleteSession(session.path);
 				deleted.push(session.id);
 			}
 			setPendingDelete(null);
+			setPicked(NO_PICKS);
+			if (running.length > 0) toast({ variant: "warning", message: t("sidebar.menu.taskRunning") });
 		} catch (error) {
 			toastError({ title: t("sidebar.deleteFailed"), error });
 		} finally {
@@ -1275,6 +1336,39 @@ export function Sidebar() {
 			if (deleted.length > 0) void useSidebarPrefs.getState().setSessionsArchived(deleted, false);
 			setDeleting(false);
 		}
+	};
+
+	/**
+	 * ⌘/Ctrl-click adds a stored row of this computer to the picked rows or drops it, Shift-click picks the run from
+	 * the last pick (else the current session); a plain click forgets them and opens the row. Orca
+	 * worktree-list/navigation/use-selection.ts:66. Answers whether the click only picked.
+	 */
+	const pickRow = (session: SidebarSession, event: ReactMouseEvent): boolean => {
+		const toggle = event.metaKey || event.ctrlKey;
+		const pickable = session.liveTabId === undefined && session.device === undefined;
+		if (!pickable || !(toggle || event.shiftKey)) {
+			if (picked.size > 0) setPicked(NO_PICKS);
+			pickAnchor.current = pickable ? session.path : null;
+			return false;
+		}
+		const paths = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-pickable]") ?? [])].map(
+			row => row.dataset.sessionPath ?? "",
+		);
+		const anchor = pickAnchor.current ?? activeSessionKey;
+		const from = anchor ? paths.indexOf(anchor) : -1;
+		const to = paths.indexOf(session.path);
+		if (event.shiftKey && from !== -1 && to !== -1) {
+			const run = paths.slice(Math.min(from, to), Math.max(from, to) + 1);
+			setPicked(new Set([...(toggle ? picked : []), ...run]));
+			return true;
+		}
+		// The first ⌘-click keeps the row in view picked too, as Orca's selection starts from it.
+		const shown = activeSessionKey !== undefined && paths.includes(activeSessionKey) ? [activeSessionKey] : [];
+		const next = new Set(picked.size === 0 ? shown : picked);
+		if (!next.delete(session.path)) next.add(session.path);
+		pickAnchor.current = session.path;
+		setPicked(next);
+		return true;
 	};
 
 	/** Context-menu position for a keyboard-opened menu: under the focused element. */
@@ -1292,6 +1386,11 @@ export function Sidebar() {
 	// remembered (else current, else first) item the list's single tab stop.
 	const activeSessionKey = allSessions.find(isCurrentSession)?.path;
 	const onListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+		if (event.key === "Escape" && picked.size > 0) {
+			event.preventDefault();
+			setPicked(NO_PICKS);
+			return;
+		}
 		if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
 		const items = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-roving-item]") ?? [])];
 		const index = items.indexOf(document.activeElement as HTMLElement);
@@ -1326,6 +1425,69 @@ export function Sidebar() {
 		row.setAttribute("data-reveal", "");
 		row.addEventListener("animationend", () => row.removeAttribute("data-reveal"), { once: true });
 	}, [activeSessionKey]);
+	// Reveal current (Orca's `ScrollToCurrentWorkspaceToolbarButton`, worktree-list/navigation/
+	// ScrollToCurrentWorkspaceToolbarButton.tsx:30-71, a palette command here): opens what hides the focused session's
+	// row (a filter, its device section, its project or Chats, Archived) and brings the row into view with the reveal
+	// outline.
+	const revealCurrentRow = () => {
+		const tabs = useTabsStore.getState();
+		const tab = tabs.tabs.find(candidate => candidate.id === tabs.activeTabId);
+		if (!tab) return;
+		const folds = useSidebarFolds.getState();
+		const device = tab.device ?? LOCAL_DEVICE;
+		setFilter("");
+		if (folds.devices[device]) folds.setDeviceFolded(device, false);
+		if (tab.kind === "chat") {
+			if (folds.chats[device]) folds.setChatsFolded(device, false);
+		} else if (tab.device) {
+			const project = useSidebarProjects.getState().lists[tab.device]?.worktrees?.[tab.cwd] ?? tab.cwd;
+			if (folds.deviceGroups[deviceGroupKey(tab.device, project)])
+				folds.setDeviceGroupFolded(tab.device, project, false);
+		} else {
+			const group = allGroups.find(candidate => candidate.members.includes(tab.cwd));
+			if (group && isCollapsed(group)) folds.setGroupFolded(group.cwd, false);
+			const current = allSessions.find(isCurrentSession);
+			if (current && archivedIds.has(current.id)) setArchivedOpen(true);
+		}
+		setRevealAsked(asked => asked + 1);
+	};
+	// The row a reveal asked for, once the unfolding it made is drawn.
+	const [revealAsked, setRevealAsked] = useState(0);
+	useEffect(() => {
+		if (revealAsked === 0) return;
+		const row = listRef.current
+			?.querySelector<HTMLElement>("[data-current]")
+			?.closest<HTMLElement>(".omp-sidebar-session-row");
+		if (!row) return;
+		row.scrollIntoView?.({ block: "center" });
+		row.setAttribute("data-reveal", "");
+		row.addEventListener("animationend", () => row.removeAttribute("data-reveal"), { once: true });
+	}, [revealAsked]);
+	const foldEveryProject = (folded: boolean) => {
+		const folds = useSidebarFolds.getState();
+		folds.setGroupsFolded(
+			groups.map(group => group.cwd),
+			folded,
+		);
+		const lists = useSidebarProjects.getState().lists;
+		for (const host of sectionHosts)
+			folds.setGroupsFolded(
+				(lists[host.deviceId]?.projects ?? []).map(project => project.path),
+				folded,
+				host.deviceId,
+			);
+	};
+	const sidebarRequest = useSidebarRequest(s => s.request);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a request is taken once, with the list as drawn now.
+	useEffect(() => {
+		if (!sidebarRequest) return;
+		useSidebarRequest.setState({ request: null });
+		if (sidebarRequest === "reveal-current") revealCurrentRow();
+		else if (sidebarRequest === "clone") setCloning(true);
+		else foldEveryProject(sidebarRequest === "fold-projects");
+	}, [sidebarRequest]);
+	const [cloning, setCloning] = useState(false);
+	const projectDialog = useSidebarRequest(s => s.dialog);
 	// After render, exactly one roving item is tabbable: the remembered one,
 	// else the current session, else the first row. Its row's ⋯ (or a section header's own action, such as the Chats
 	// section's New chat) is the next tab stop (focus-within reveals it), so Tab then Enter opens or runs it.
@@ -1686,6 +1848,142 @@ export function Sidebar() {
 					],
 		);
 
+	/** A session row's menu: the one builder (session-menu.ts) given what this computer's list knows and can do. */
+	const rowMenuItems = (session: SidebarSession, anchor: ContextMenuAnchor): ContextMenuItem[] => {
+		const targetTab = tabForSession(session);
+		const { split } = useTabsStore.getState();
+		const list = sessionListOf(session);
+		// Every action closes the menu first.
+		const then = (run: () => void) => () => {
+			setSessionMenu(null);
+			run();
+		};
+		return sessionMenuItems({
+			facts: {
+				stored: session.liveTabId === undefined,
+				hasTab: targetTab !== undefined,
+				busy: isSessionBusy(session),
+				tabFocused: targetTab !== undefined && targetTab.id === activeTabId,
+				tabInSplit: targetTab !== undefined && split !== null && splitTabIds(split).includes(targetTab.id),
+				splitShown: split !== null,
+				unread: targetTab?.unreadDone === true,
+				canCloseTab: tabs.length > 1,
+				chat: session.kind === "chat",
+				pinned: pinnedSessions.includes(session.path),
+				muted: mutedSessions.includes(session.path),
+				archived: archivedIds.has(session.id),
+				agentHidden: agentHidden.includes(session.path),
+				canMoveUp: canMoveWithin(list, session.path, -1),
+				canMoveDown: canMoveWithin(list, session.path, 1),
+			},
+			actions: {
+				openSplit: then(() => void openSessionInSplit(session)),
+				openWindow: then(() => void openSessionInNewWindow(session)),
+				...(targetTab
+					? {
+							splitTab: placement =>
+								then(() => {
+									useUiStore.getState().closeDestination();
+									void useTabsStore.getState().splitTab(targetTab.id, placement);
+								})(),
+							unsplit: then(() => void useTabsStore.getState().unsplit(targetTab.id)),
+							markUnread: then(() => useTabsStore.getState().markUnread(targetTab.id)),
+							closeTab: then(() => performTabClose(targetTab)),
+						}
+					: {}),
+				rename: then(() => startRename(session)),
+				togglePin: then(() => {
+					const pinned = !pinnedSessions.includes(session.path);
+					useSidebarPrefs.getState().toggleSessionPin(session.path);
+					const failed = () => toast({ variant: "warning", message: t("sidebar.pinSyncFailed") });
+					void tabRpc.setSessionPinned(session.id, pinned).then(response => {
+						if (!response.success) failed();
+					}, failed);
+				}),
+				toggleMute: then(() => void useSidebarPrefs.getState().toggleSessionMuted(session.path)),
+				...(list
+					? {
+							moveUp: then(() => void moveSession(session, -1)),
+							moveDown: then(() => void moveSession(session, 1)),
+						}
+					: {}),
+				moveToProject: () => {
+					setMoveMenu({ anchor, session });
+					setSessionMenu(null);
+				},
+				// A bot's own chat is not handed to a bot; a session on a paired host has no opener here (R91).
+				...(botsShown && !botFolders.has(session.cwd) && session.device === undefined
+					? {
+							handToBot: then(() =>
+								openBotDialog({
+									kind: "hand",
+									tabId: targetTab?.id ?? "",
+									title: sessionDisplayTitle(session, ""),
+								}),
+							),
+						}
+					: {}),
+				toggleArchive: then(() => setArchived([session], !archivedIds.has(session.id))),
+				...(session.device === undefined
+					? {
+							toggleAgentHidden: then(() => void useSidebarPrefs.getState().toggleAgentHidden(session.path)),
+							links: then(() => setLinksFor(session.path)),
+							...(session.liveTabId === undefined
+								? {
+										setEmoji: then(() =>
+											openProjectDialog({
+												kind: "emoji",
+												path: session.path,
+												name: sessionDisplayTitle(session, t("sidebar.untitled")),
+											}),
+										),
+										setParent: then(() =>
+											openProjectDialog({
+												kind: "parent",
+												path: session.path,
+												name: sessionDisplayTitle(session, t("sidebar.untitled")),
+												candidates: codeSessions
+													.filter(
+														other =>
+															other.cwd === session.cwd &&
+															other.path !== session.path &&
+															other.liveTabId === undefined &&
+															rows.rootOf.get(other.path) !== session.path,
+													)
+													.map(other => ({
+														path: other.path,
+														title: sessionDisplayTitle(other, t("sidebar.untitled")),
+													})),
+											}),
+										),
+									}
+								: {}),
+							...(rows.rootOf.has(session.path)
+								? {
+										removeParent: then(
+											() => void useSidebarPrefs.getState().setEntry("sessionParents", session.path, ""),
+										),
+									}
+								: {}),
+						}
+					: {}),
+				copyTitle: then(() => void copyText(sessionDisplayLabel(session, t("sidebar.untitled")))),
+				reveal: then(() => void revealSession(session)),
+				saveBundle: anonymized =>
+					then(() => {
+						if (targetTab)
+							void saveDiagnosticBundle(
+								{ tabId: targetTab.id, title: sessionDisplayTitle(session, "") },
+								anonymized,
+							);
+					})(),
+				remove: then(() => setPendingDelete({ kind: "session", session })),
+			},
+			t,
+			altHint: !touchInput,
+		});
+	};
+
 	/** `archived`: a row of the Archived section. */
 	const renderSessionRow = (session: SidebarSession, nested = false, variant?: "archived") => {
 		const key = `session:${session.path}`;
@@ -1824,13 +2122,14 @@ export function Sidebar() {
 				</span>
 			</Badge>
 		) : null;
-		// The age slot: the waiting token (a mark that stays), else the time since it last did something.
-		const age = waiting || !indexed ? null : <TimeAgo className="text-(--sc-text-subtle)" iso={session.modified} />;
 		const rowTip = [
 			title,
 			worktree?.label,
 			fork?.tooltip,
 			statusLabel,
+			tab && tabAccounts[tab.id]?.length
+				? t("sidebar.row.accountTip", { account: tabAccounts[tab.id]?.join(", ") ?? "" })
+				: null,
 			target ? t("sidebar.row.repositoryTip", { name: target.name }) : null,
 			target?.head ? headWords(t, target.head).tip : null,
 			prWords,
@@ -1840,152 +2139,169 @@ export function Sidebar() {
 		]
 			.filter(Boolean)
 			.join("\n");
+		// The age slot: the waiting token (a mark that stays), else the time since it last did something.
+		const age = waiting || !indexed ? null : <TimeAgo className="text-(--sc-text-subtle)" iso={session.modified} />;
+		// On a touch screen a swipe uncovers the row's everyday actions, taken from its own menu (session-menu.ts).
+		const swipe = touchInput ? sessionSwipeItems(rowMenuItems(session, { x: 0, y: 0 })) : {};
 		return (
 			<Fragment key={session.path}>
-				<ListRow
-					leading={
-						<span className="omp-session-leading">
-							<SessionStatusLane
-								fresh={doneBefore.current.get(session.path) === false}
-								prTone={pr ? branchPrTone(pr) : undefined}
-								state={lane}
-							/>
-							<SessionRowArtwork target={target} />
-						</span>
-					}
-					buttonProps={{
-						tabIndex,
-						"data-roving-item": key,
-						onFocus: () => setFocusKey(key),
-						// The last exchange joins the native tooltip on hover only (lib/last-exchange.ts, its own chunk), since
-						// reading it for every row on each render would parse every transcript snapshot; React leaves the
-						// attribute until the row's text changes.
-						onPointerEnter: event => {
-							const row = event.currentTarget;
-							void import("../../../lib/last-exchange").then(
-								({ rowTipWithExchange }) => {
-									const tip = rowTipWithExchange(t, rowTip, {
-										tabId: tab?.id,
-										sessionPath: session.path,
-										stamp: session.modified,
-									});
-									if (tip) row.title = tip;
-								},
-								() => undefined,
-							);
-						},
-						onKeyDown: event => {
-							if (opensMenu(event)) {
-								event.preventDefault();
-								setSessionMenu({ anchor: anchorBelow(event.currentTarget), session });
-							} else if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
-								// Alt+↑/↓ moves the row in its list, as a project header and a device section do.
-								if (moveSession(session, event.key === "ArrowUp" ? -1 : 1)) event.preventDefault();
-							} else if (event.key === "F2" && indexed) {
-								event.preventDefault();
-								startRename(session);
-							} else if (event.key === "Delete" && deletable) {
-								event.preventDefault();
-								setPendingDelete({ kind: "session", session });
-							} else if (
-								(event.key === "ArrowRight" || event.key === "ArrowLeft") &&
-								(summary?.agents.length ?? 0) + opened.length > 0
-							) {
-								const open = event.key === "ArrowRight";
-								const subagents = useSidebarSubagentsStore.getState();
-								if (open === subagents.expanded.has(session.path)) return;
-								event.preventDefault();
-								subagents.setExpanded(session.path, open);
-							}
-						},
-					}}
-					className={cx("omp-sidebar-session-row", runChild && "omp-sidebar-session-run-child")}
-					secondary={
-						<SessionRowLine
-							// The mark takes the age's place: the time is in the tooltip.
-							age={folderMissing ? null : age}
-							head={target?.head ?? null}
-							marks={
-								<>
-									{folderMissing && <SidebarFolderMissingMark />}
-									{marker}
-									{folderMissing ? null : waitingBadge}
-								</>
-							}
-							worktree={worktree?.kind}
-						/>
-					}
-					secondaryEnd={
-						<SessionRowEnd>
-							{hasFamilyChip(summary?.agents ?? [], opened, hiddenFamilies.has(session.path)) && (
-								<SidebarSubagentsToggle
-									agents={summary?.agents}
-									opened={opened}
-									sessionKey={session.path}
-									tabId={openTabId ?? null}
+				<SwipeActions {...swipe}>
+					<ListRow
+						leading={
+							<span className="omp-session-leading">
+								<SessionStatusLane
+									fresh={doneBefore.current.get(session.path) === false}
+									prTone={pr ? branchPrTone(pr) : undefined}
+									state={lane}
 								/>
-							)}
-							{indexed && (
-								<IconButton
-									data-sidebar-row-menu
-									icon={<MoreHorizontal />}
-									label={t("sidebar.sessionMenu")}
-									onClick={event => setSessionMenu({ anchor: anchorBelow(event.currentTarget), session })}
-									size="sm"
-									tabIndex={-1}
-								/>
-							)}
-						</SessionRowEnd>
-					}
-					onClick={() => {
-						// Clicking the session already in view folds/unfolds its family rows.
-						if (active && (summary?.agents.length ?? 0) + opened.length > 0) toggleSidebarSubagents(session.path);
-						openSession(session);
-					}}
-					rowProps={{
-						...reorder.rowDrag(
-							session.path,
-							variant === undefined ? sessionListOf(session) : null,
-							openTabId ? { id: openTabId, shown: isCurrent } : undefined,
-						),
-						onContextMenu: event => setSessionMenu({ anchor: anchorFromEvent(event), session }),
-						"data-active": active,
-						"data-current": isCurrent || undefined,
-						"data-pane-focus": (isCurrent && selectionOf(openTabId).splitShown) || undefined,
-						"data-pane-shown": (active && !isCurrent && selectionOf(openTabId).splitShown) || undefined,
-						"data-live": indexed ? undefined : true,
-						"data-switch-pending": switchPendingTo === session.id || undefined,
-						"data-session-kind": session.kind ?? "agent",
-						"data-signal": signal,
-						// An unseen finish also bolds the title (Orca's unread card).
-						"data-unseen": lane === "done" || undefined,
-						"data-session-path": session.path,
-						"data-folder-missing": folderMissing || undefined,
-						"data-session-run-child": runChild || undefined,
-						"data-flip-key": `session:${session.path}`,
-					}}
-					selected={active}
-					title={
-						<>
-							<SessionLiveTitle
-								agents={workingAgents}
-								opened={runningOpened}
-								parts={titleParts}
-								running={signal === "running"}
-								settling={settling}
-								swapScope={session.path}
-								waiting={signal === "waiting"}
+								<SessionRowArtwork target={target} />
+							</span>
+						}
+						buttonProps={{
+							tabIndex,
+							"data-roving-item": key,
+							onFocus: () => setFocusKey(key),
+							// The last exchange joins the native tooltip on hover only (lib/last-exchange.ts, its own chunk), since
+							// reading it for every row on each render would parse every transcript snapshot; React leaves the
+							// attribute until the row's text changes.
+							onPointerEnter: event => {
+								const row = event.currentTarget;
+								void import("../../../lib/last-exchange").then(
+									({ rowTipWithExchange }) => {
+										const tip = rowTipWithExchange(t, rowTip, {
+											tabId: tab?.id,
+											sessionPath: session.path,
+											stamp: session.modified,
+										});
+										if (tip) row.title = tip;
+									},
+									() => undefined,
+								);
+							},
+							onKeyDown: event => {
+								if (opensMenu(event)) {
+									event.preventDefault();
+									setSessionMenu({ anchor: anchorBelow(event.currentTarget), session });
+								} else if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+									// Alt+↑/↓ moves the row in its list, as a project header and a device section do.
+									if (moveSession(session, event.key === "ArrowUp" ? -1 : 1)) event.preventDefault();
+								} else if (event.key === "F2" && indexed) {
+									event.preventDefault();
+									startRename(session);
+								} else if (event.key === "Delete" && deletable) {
+									event.preventDefault();
+									setPendingDelete({ kind: "session", session });
+								} else if (
+									(event.key === "ArrowRight" || event.key === "ArrowLeft") &&
+									(summary?.agents.length ?? 0) + opened.length > 0
+								) {
+									const open = event.key === "ArrowRight";
+									const subagents = useSidebarSubagentsStore.getState();
+									if (open === subagents.expanded.has(session.path)) return;
+									event.preventDefault();
+									subagents.setExpanded(session.path, open);
+								}
+							},
+						}}
+						className={cx("omp-sidebar-session-row", runChild && "omp-sidebar-session-run-child")}
+						secondary={
+							<SessionRowLine
+								// The mark takes the age's place: the time is in the tooltip.
+								age={folderMissing ? null : age}
+								head={target?.head ?? null}
+								marks={
+									<>
+										{folderMissing && <SidebarFolderMissingMark />}
+										{marker}
+										{folderMissing ? null : waitingBadge}
+									</>
+								}
+								worktree={worktree?.kind}
 							/>
-							{fork?.parentTitle && <ForkParent name={fork.parentTitle} />}
-							{fork && <span className="sr-only">, {fork.label}</span>}
-							{worktree?.label && <span className="sr-only">, {worktree.label}</span>}
-							{statusLabel && <span className="sr-only">, {statusLabel}</span>}
-							{prWords && <span className="sr-only">, {prWords}</span>}
-							{linkWords && <span className="sr-only">, {linkWords}</span>}
-						</>
-					}
-					titleText={rowTip}
-				/>
+						}
+						secondaryEnd={
+							<SessionRowEnd>
+								{hasFamilyChip(summary?.agents ?? [], opened, hiddenFamilies.has(session.path)) && (
+									<SidebarSubagentsToggle
+										agents={summary?.agents}
+										opened={opened}
+										sessionKey={session.path}
+										tabId={openTabId ?? null}
+									/>
+								)}
+								{indexed && (
+									<IconButton
+										data-sidebar-row-menu
+										icon={<MoreHorizontal />}
+										label={t("sidebar.sessionMenu")}
+										onClick={event => setSessionMenu({ anchor: anchorBelow(event.currentTarget), session })}
+										size="sm"
+										tabIndex={-1}
+									/>
+								)}
+							</SessionRowEnd>
+						}
+						onClick={event => {
+							if (pickRow(session, event)) return;
+							// Clicking the session already in view folds/unfolds its family rows.
+							if (active && (summary?.agents.length ?? 0) + opened.length > 0)
+								toggleSidebarSubagents(session.path);
+							openSession(session);
+						}}
+						rowProps={{
+							...reorder.rowDrag(
+								session.path,
+								variant === undefined ? sessionListOf(session) : null,
+								openTabId ? { id: openTabId, shown: isCurrent } : undefined,
+							),
+							onContextMenu: event => setSessionMenu({ anchor: anchorFromEvent(event), session }),
+							"data-pickable": (indexed && session.device === undefined) || undefined,
+							"data-picked": picked.has(session.path) || undefined,
+							"data-active": active,
+							"data-current": isCurrent || undefined,
+							"data-pane-focus": (isCurrent && selectionOf(openTabId).splitShown) || undefined,
+							"data-pane-shown": (active && !isCurrent && selectionOf(openTabId).splitShown) || undefined,
+							"data-live": indexed ? undefined : true,
+							"data-switch-pending": switchPendingTo === session.id || undefined,
+							"data-session-kind": session.kind ?? "agent",
+							"data-signal": signal,
+							// An unseen finish also bolds the title (Orca's unread card).
+							"data-unseen": lane === "done" || undefined,
+							"data-session-path": session.path,
+							// The tooltip names the account the open session runs on, read as the pointer arrives.
+							onMouseEnter: tab ? () => askTabAccount(tab.id) : undefined,
+							"data-folder-missing": folderMissing || undefined,
+							"data-session-run-child": runChild || undefined,
+							"data-flip-key": `session:${session.path}`,
+						}}
+						selected={active}
+						title={
+							<>
+								{sessionEmoji[session.path] && (
+									<span aria-hidden className="mr-1 shrink-0" data-session-emoji>
+										{sessionEmoji[session.path]}
+									</span>
+								)}
+								<SessionLiveTitle
+									agents={workingAgents}
+									opened={runningOpened}
+									parts={titleParts}
+									running={signal === "running"}
+									settling={settling}
+									swapScope={session.path}
+									waiting={signal === "waiting"}
+								/>
+								{fork?.parentTitle && <ForkParent name={fork.parentTitle} />}
+								{fork && <span className="sr-only">, {fork.label}</span>}
+								{worktree?.label && <span className="sr-only">, {worktree.label}</span>}
+								{statusLabel && <span className="sr-only">, {statusLabel}</span>}
+								{prWords && <span className="sr-only">, {prWords}</span>}
+								{linkWords && <span className="sr-only">, {linkWords}</span>}
+							</>
+						}
+						titleText={rowTip}
+					/>
+				</SwipeActions>
 				{(openTabId || opened.length > 0 || (summary?.agents.length ?? 0) > 0) && (
 					<SidebarSubagents
 						agents={summary?.agents}
@@ -1998,13 +2314,12 @@ export function Sidebar() {
 		);
 	};
 
-	const renderGroup = (group: WorkspaceGroup) => {
+	const renderProject = (group: WorkspaceGroup) => {
 		const key = `group:${group.cwd}`;
 		const groupCollapsed = isCollapsed(group);
 		const isCurrentProject = group.cwd === cwd && activeTabKind !== "chat" && !activeTabRemote;
 		const tabIndex = -1;
 		const pinned = pinnedGroups.includes(group.cwd);
-		const FolderIcon = groupCollapsed ? Folder : FolderOpen;
 		// Sessions an agent opened that no opener row holds: only the ones that need a look or a tab holds are listed, so
 		// a group made only of those, with nothing to show, is not drawn. A project of the list is, empty or not.
 		const loose = looseOf(group);
@@ -2079,10 +2394,11 @@ export function Sidebar() {
 									title={group.missing ? `${group.tooltip}\n${t("sidebar.project.missing")}` : group.tooltip}
 									folded={groupCollapsed}
 									icon={
-										<FolderIcon
-											aria-hidden
-											className="size-(--sc-icon-sm) shrink-0"
+										<ProjectGlyph
+											color={projectColors[group.cwd]}
 											data-sidebar-workspace-icon
+											emoji={projectEmoji[group.cwd]}
+											open={!groupCollapsed}
 										/>
 									}
 								>
@@ -2146,6 +2462,24 @@ export function Sidebar() {
 					</>
 				)}
 			</SortableProject>
+		);
+	};
+	// A project group's first project heads it with the group's header; a folded group draws its header alone (a filter
+	// shows every match).
+	const renderGroup = (group: WorkspaceGroup, index: number) => {
+		const section =
+			group.section && groups[index - 1]?.section !== group.section ? (
+				<SidebarProjectSection
+					count={groups.filter(other => other.section === group.section).length}
+					name={group.section}
+				/>
+			) : null;
+		const hidden = group.section && !query && groupFolds[projectSectionFold(undefined, group.section)] === true;
+		return (
+			<Fragment key={group.cwd}>
+				{section}
+				{!hidden && renderProject(group)}
+			</Fragment>
 		);
 	};
 
@@ -2322,6 +2656,7 @@ export function Sidebar() {
 						)}
 					</section>
 				)}
+				<SidebarRemovedProjects query={query} />
 			</Collapse>
 		</>
 	);
@@ -2446,6 +2781,7 @@ export function Sidebar() {
 										>
 											{sectionHosts.length > 0 && (
 												<SidebarLocalHeader
+													foldAll={localFoldAll}
 													onAddProject={() => void openProjectFolder()}
 													summary={localFoldSummary}
 												/>
@@ -2504,6 +2840,16 @@ export function Sidebar() {
 					tabIndex={0}
 				/>
 			</aside>
+			{cloning && (
+				<Suspense fallback={null}>
+					<SidebarCloneDialog onClose={() => setCloning(false)} />
+				</Suspense>
+			)}
+			{projectDialog && (
+				<Suspense fallback={null}>
+					<ProjectDialog onClose={() => openProjectDialog(null)} request={projectDialog} />
+				</Suspense>
+			)}
 			{/* Project menu: the one builder every computer's project headers use (project-menu.ts). */}
 			{groupMenu &&
 				(() => {
@@ -2561,6 +2907,24 @@ export function Sidebar() {
 									togglePin: then(() => useSidebarPrefs.getState().toggleGroupPin(group.cwd)),
 									toggleMute: then(() => useSidebarPrefs.getState().toggleGroupMuted(group.cwd)),
 									archiveAll: then(() => setArchived(archivable, true)),
+									moveToGroup: then(() =>
+										openProjectDialog({ kind: "move", cwd: group.cwd, name: group.name }),
+									),
+									appearance: then(() =>
+										openProjectDialog({ kind: "look", cwd: group.cwd, name: group.name }),
+									),
+									...(group.missing
+										? {
+												locate: then(
+													() =>
+														void import("../../../lib/relocate-folder")
+															.then(module => module.relocateFolder({ from: group.cwd, sessions }))
+															.catch((error: unknown) =>
+																toastError({ title: t("sidebar.project.addFailed"), error }),
+															),
+												),
+											}
+										: {}),
 									remove: then(() => setPendingDelete({ kind: "group", group })),
 								},
 								t,
@@ -2572,111 +2936,48 @@ export function Sidebar() {
 			{/* Session row menu: the one builder every device's rows use (session-menu.ts). */}
 			{sessionMenu &&
 				(() => {
-					const { session } = sessionMenu;
-					const targetTab = tabForSession(session);
-					const { split } = useTabsStore.getState();
-					const list = sessionListOf(session);
-					// Every action closes the menu first.
-					const then = (run: () => void) => () => {
-						setSessionMenu(null);
-						run();
-					};
-					const items = sessionMenuItems({
-						facts: {
-							stored: session.liveTabId === undefined,
-							hasTab: targetTab !== undefined,
-							busy: isSessionBusy(session),
-							tabFocused: targetTab !== undefined && targetTab.id === activeTabId,
-							tabInSplit: targetTab !== undefined && split !== null && splitTabIds(split).includes(targetTab.id),
-							splitShown: split !== null,
-							unread: targetTab?.unreadDone === true,
-							canCloseTab: tabs.length > 1,
-							chat: session.kind === "chat",
-							pinned: pinnedSessions.includes(session.path),
-							muted: mutedSessions.includes(session.path),
-							archived: archivedIds.has(session.id),
-							agentHidden: agentHidden.includes(session.path),
-							canMoveUp: canMoveWithin(list, session.path, -1),
-							canMoveDown: canMoveWithin(list, session.path, 1),
-						},
-						actions: {
-							openSplit: then(() => void openSessionInSplit(session)),
-							openWindow: then(() => void openSessionInNewWindow(session)),
-							...(targetTab
-								? {
-										splitTab: placement =>
-											then(() => {
-												useUiStore.getState().closeDestination();
-												void useTabsStore.getState().splitTab(targetTab.id, placement);
-											})(),
-										unsplit: then(() => void useTabsStore.getState().unsplit(targetTab.id)),
-										markUnread: then(() => useTabsStore.getState().markUnread(targetTab.id)),
-										closeTab: then(() => performTabClose(targetTab)),
-									}
-								: {}),
-							rename: then(() => startRename(session)),
-							togglePin: then(() => {
-								const pinned = !pinnedSessions.includes(session.path);
-								useSidebarPrefs.getState().toggleSessionPin(session.path);
-								const failed = () => toast({ variant: "warning", message: t("sidebar.pinSyncFailed") });
-								void tabRpc.setSessionPinned(session.id, pinned).then(response => {
-									if (!response.success) failed();
-								}, failed);
-							}),
-							toggleMute: then(() => void useSidebarPrefs.getState().toggleSessionMuted(session.path)),
-							...(list
-								? {
-										moveUp: then(() => void moveSession(session, -1)),
-										moveDown: then(() => void moveSession(session, 1)),
-									}
-								: {}),
-							moveToProject: () => {
-								setMoveMenu(sessionMenu);
-								setSessionMenu(null);
-							},
-							// A bot's own chat is not handed to a bot; a session on a paired host has no opener here (R91).
-							...(botsShown && !botFolders.has(session.cwd) && session.device === undefined
-								? {
-										handToBot: then(() =>
-											openBotDialog({
-												kind: "hand",
-												tabId: targetTab?.id ?? "",
-												title: sessionDisplayTitle(session, ""),
-											}),
-										),
-									}
-								: {}),
-							toggleArchive: then(() => setArchived([session], !archivedIds.has(session.id))),
-							...(session.device === undefined
-								? {
-										toggleAgentHidden: then(
-											() => void useSidebarPrefs.getState().toggleAgentHidden(session.path),
-										),
-										links: then(() => setLinksFor(session.path)),
-									}
-								: {}),
-							copyTitle: then(() => void copyText(sessionDisplayLabel(session, t("sidebar.untitled")))),
-							reveal: then(() => void revealSession(session)),
-							saveBundle: anonymized =>
-								then(() => {
-									if (targetTab)
-										void saveDiagnosticBundle(
-											{ tabId: targetTab.id, title: sessionDisplayTitle(session, "") },
-											anonymized,
-										);
-								})(),
-							remove: then(() => setPendingDelete({ kind: "session", session })),
-						},
-						t,
-						altHint: !touchInput,
-					});
+					const { session, anchor } = sessionMenu;
+					// A right click on one of several picked rows acts on them all (Orca's batch menu).
+					const pickedRows =
+						picked.has(session.path) && picked.size > 1
+							? [...allSessions, ...archivedRows].filter(row => picked.has(row.path))
+							: [];
+					if (pickedRows.length > 1) {
+						const archived = pickedRows.every(row => archivedIds.has(row.id));
+						const archivable = archived ? pickedRows : pickedRows.filter(row => !tabForSession(row));
+						return (
+							<ContextMenu
+								ariaLabel={t("sidebar.pickedMenu", { count: pickedRows.length })}
+								x={anchor.x}
+								y={anchor.y}
+								onClose={() => setSessionMenu(null)}
+								items={pickedMenuItems({
+									count: pickedRows.length,
+									archivable: archivable.length,
+									archived,
+									actions: {
+										toggleArchive: () => {
+											setSessionMenu(null);
+											setPicked(NO_PICKS);
+											setArchived(archivable, !archived);
+										},
+										remove: () => {
+											setSessionMenu(null);
+											setPendingDelete({ kind: "picked", sessions: pickedRows });
+										},
+									},
+									t,
+								})}
+							/>
+						);
+					}
 					return (
 						<ContextMenu
 							ariaLabel={sessionDisplayLabel(session, t("sidebar.untitled"))}
-							x={sessionMenu.anchor.x}
-							y={sessionMenu.anchor.y}
+							x={anchor.x}
+							y={anchor.y}
 							onClose={() => setSessionMenu(null)}
-							items={items}
+							items={rowMenuItems(session, anchor)}
 						/>
 					);
 				})()}
@@ -2742,20 +3043,33 @@ export function Sidebar() {
 			{linksFor && <SessionLinksDialog onClose={() => setLinksFor(null)} sessionPath={linksFor} />}
 			<ConfirmDialog
 				open={pendingDelete !== null && pendingDelete.kind !== "group"}
-				title={pendingDelete?.kind === "archived" ? t("sidebar.deleteArchivedConfirm") : t("sidebar.deleteConfirm")}
+				title={
+					pendingDelete?.kind === "archived"
+						? t("sidebar.deleteArchivedConfirm")
+						: pendingDelete?.kind === "picked"
+							? t("sidebar.deletePickedConfirm", { count: pendingDelete.sessions.length })
+							: t("sidebar.deleteConfirm")
+				}
 				message={
 					pendingDelete?.kind === "archived"
 						? t("sidebar.deleteArchivedMessage", { count: pendingDelete.sessions.length })
-						: pendingDelete?.kind === "session"
-							? t("sidebar.deleteMessage", {
-									name: sessionDisplayTitle(pendingDelete.session, t("sidebar.untitled")),
-								})
-							: ""
+						: pendingDelete?.kind === "picked"
+							? t("sidebar.deletePickedMessage", { count: pendingDelete.sessions.length })
+							: pendingDelete?.kind === "session"
+								? t("sidebar.deleteMessage", {
+										name: sessionDisplayTitle(pendingDelete.session, t("sidebar.untitled")),
+									})
+								: ""
 				}
-				warning={pendingDelete?.kind === "archived" ? t("sidebar.deleteGroupWarning") : undefined}
+				warning={
+					pendingDelete?.kind === "archived" || pendingDelete?.kind === "picked"
+						? t("sidebar.deleteGroupWarning")
+						: undefined
+				}
 				busy={deleting}
 				onConfirm={() => {
-					if (pendingDelete?.kind === "archived") void confirmDeleteArchived(pendingDelete.sessions);
+					if (pendingDelete?.kind === "archived" || pendingDelete?.kind === "picked")
+						void confirmDeleteRows(pendingDelete.sessions);
 					else if (pendingDelete?.kind === "session") void confirmDeleteSession(pendingDelete.session);
 				}}
 				onCancel={() => setPendingDelete(null)}

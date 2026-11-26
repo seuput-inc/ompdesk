@@ -38,6 +38,7 @@ import type {
 import { readSplitNode, type SplitLayout, type SplitPlacement, splitTabIds } from "../../shared/split-layout";
 import { attachTabSession, hydrateSession, hydrateTabSession, refreshSessionState } from "../hooks/use-rpc-events";
 import { translate } from "../lib/i18n";
+import { useTabHistoryStore } from "../lib/tab-history";
 import { acceptsActiveTabEvents } from "../lib/tab-routing";
 import { readUnreadMarks, UNREAD_MARKS_KEY } from "../lib/unread-marks";
 import { routeCommands } from "../test-support/route-commands";
@@ -129,6 +130,7 @@ interface MockOmp {
 			(tabId: string, ids: string[], split?: SplitLayout, remembered?: SplitLayout[]) => Promise<boolean>
 		>;
 		answerAgentClose: Mock<(answer: AgentCloseAnswer) => Promise<void>>;
+		reorder: Mock<(ids: string[]) => Promise<boolean>>;
 	};
 	events: {
 		onTabStatus: Mock<(callback: (payload: IpcTabStatusPayload) => void) => () => void>;
@@ -156,6 +158,7 @@ function installMockOmp(): { omp: MockOmp; emitTabStatus: TabStatusHandler } {
 			setActive: vi.fn(async () => true),
 			setView: vi.fn(async () => true),
 			answerAgentClose: vi.fn(async () => {}),
+			reorder: vi.fn(async () => true),
 		},
 		events: {
 			onTabStatus: vi.fn((callback: TabStatusHandler) => {
@@ -1061,6 +1064,18 @@ describe("tabs store close", () => {
 		expect(useTabsStore.getState().activeTabId).toBe("t1");
 	});
 
+	it("closing the active tab goes back to the tab focused before it, not to a neighbour", async () => {
+		seedTabs("t0");
+		useTabHistoryStore.setState({ mru: ["t0", "gone", "t2", "t1"] });
+		try {
+			await useTabsStore.getState().closeTab("t0");
+			expect(useTabsStore.getState().activeTabId).toBe("t2");
+			expect(omp.tabs.setActive).toHaveBeenCalledWith("t2");
+		} finally {
+			useTabHistoryStore.setState({ mru: [] });
+		}
+	});
+
 	it("closing a background tab leaves the active tab attached", async () => {
 		seedTabs("t0");
 
@@ -1137,6 +1152,9 @@ describe("tabs store close", () => {
 			kind: "agent",
 			device: "host-b",
 		});
+		// Each comes back where it stood: beta was the second tab, gamma the second after beta closed.
+		expect(useTabsStore.getState().tabs.map(tab => tab.id)).toEqual(["t0", "t8", "t9"]);
+		expect(omp.tabs.reorder).toHaveBeenLastCalledWith(["t0", "t8", "t9"]);
 	});
 
 	it("forgets an unsaved session on close and says so when nothing is left to reopen", async () => {
