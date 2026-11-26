@@ -105,7 +105,7 @@ impl Record {
         let mut old: Vec<(f64, String)> = self
             .transfers
             .iter()
-            .filter(|(_, transfer)| settled(*transfer))
+            .filter(|(_, transfer)| settled(transfer))
             .map(|(id, transfer)| (transfer.at, id.clone()))
             .collect();
         if old.len() > MAX_SETTLED {
