@@ -5,12 +5,15 @@ import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { RUN_TEMP_ENV } from "../../../../scripts/run-temp";
+import { blockingStep } from "../../../../scripts/vitest-block-watch";
 import { withoutGitSelectors } from "../../../shared/git-env";
 import type { LifecycleWorktree } from "./session-worktree";
 
 export function gitSync(cwd: string, ...args: string[]): string {
 	// Never the repository a leaked GIT_DIR names (src/shared/git-env.ts): only the one `cwd` is in.
-	return execFileSync("git", args, { cwd, encoding: "utf8", env: withoutGitSelectors(process.env) }).trim();
+	return blockingStep(`git ${args.join(" ")} (in ${cwd})`, () =>
+		execFileSync("git", args, { cwd, encoding: "utf8", env: withoutGitSelectors(process.env) }).trim(),
+	);
 }
 
 /**

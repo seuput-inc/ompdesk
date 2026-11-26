@@ -709,6 +709,99 @@ pub fn stdio_not_inherited() {
     }
 }
 
+/// Closes every inheritable handle to a file object (a pipe, a file on disk) of this process but its stdin, stdout and
+/// stderr, and returns how many; run first thing, before this process opens anything of its own. libuv starts a process
+/// with every inheritable handle of its parent, and on Windows a spawn's pipe ends are inheritable until its
+/// CreateProcess returned, with no lock between threads: main's worker that spawns `ompdesk-core --own` beside a spawn
+/// on main's own thread handed `--own` that other child's pipe ends, and `--own` lives as long as main, so that child's
+/// output never ended and main's `execFileSync` of it never returned (win-platform, 26 Nov 2026). A redirect to a file
+/// leaks the same way and keeps the file from being deleted. Each handle is judged from the snapshot alone (its inherit
+/// attribute, and its object type against the type of this process's own stdio, a file object), never by asking the
+/// handle: `GetFileType` on a leaked synchronous pipe end waits while another process's `ReadFile` on it is pending.
+/// With no stdio to learn the type from, nothing is closed.
+#[cfg(windows)]
+pub fn close_inherited_handles() -> std::io::Result<usize> {
+    use std::ffi::c_void;
+    type Handle = *mut c_void;
+    const PROCESS_HANDLE_INFORMATION: u32 = 51;
+    const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004_u32 as i32;
+    const STD_INPUT_HANDLE: u32 = -10_i32 as u32;
+    const STD_OUTPUT_HANDLE: u32 = -11_i32 as u32;
+    const STD_ERROR_HANDLE: u32 = -12_i32 as u32;
+    const OBJ_INHERIT: usize = 0x2;
+    // The entry layout read below is the 64-bit one.
+    const _: () = assert!(size_of::<usize>() == 8);
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn NtQueryInformationProcess(
+            process: Handle,
+            class: u32,
+            info: *mut c_void,
+            size: u32,
+            returned: *mut u32,
+        ) -> i32;
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> Handle;
+        fn GetStdHandle(which: u32) -> Handle;
+        fn CloseHandle(handle: Handle) -> i32;
+    }
+    // `PROCESS_HANDLE_SNAPSHOT_INFORMATION`: the count, a reserved word, then five words per entry
+    // (`PROCESS_HANDLE_TABLE_ENTRY_INFO`: the handle, two counts, `GrantedAccess` | `ObjectTypeIndex` << 32,
+    // `HandleAttributes` | `Reserved` << 32).
+    let mut words = 512;
+    let snapshot = loop {
+        let mut buffer = vec![0usize; words];
+        let mut needed = 0;
+        // SAFETY: the buffer is writable for the size passed; `GetCurrentProcess` is a pseudo-handle.
+        let status = unsafe {
+            NtQueryInformationProcess(
+                GetCurrentProcess(),
+                PROCESS_HANDLE_INFORMATION,
+                buffer.as_mut_ptr().cast(),
+                u32::try_from(words * size_of::<usize>()).unwrap_or(u32::MAX),
+                &mut needed,
+            )
+        };
+        if status == STATUS_INFO_LENGTH_MISMATCH {
+            words = (needed as usize)
+                .div_ceil(size_of::<usize>())
+                .max(words * 2);
+            continue;
+        }
+        if status < 0 {
+            return Err(std::io::Error::other(format!(
+                "NtQueryInformationProcess(ProcessHandleInformation) failed: {status:#x}"
+            )));
+        }
+        break buffer;
+    };
+    // SAFETY: `GetStdHandle` takes one of the three constants and only reads this process's table.
+    let stdio = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
+        .map(|which| unsafe { GetStdHandle(which) });
+    let (entries, _) = snapshot[2..].as_chunks::<5>();
+    let entries = &entries[..snapshot[0].min(entries.len())];
+    let Some(file_type) = entries
+        .iter()
+        .find(|entry| stdio.contains(&(entry[0] as Handle)))
+        .map(|entry| entry[3] >> 32)
+    else {
+        return Ok(0);
+    };
+    let mut closed = 0;
+    for entry in entries {
+        let handle = entry[0] as Handle;
+        let leaked =
+            !stdio.contains(&handle) && entry[4] & OBJ_INHERIT != 0 && entry[3] >> 32 == file_type;
+        // SAFETY: an inherited handle nothing in this process opened or uses yet.
+        if leaked && unsafe { CloseHandle(handle) } != 0 {
+            closed += 1;
+        }
+    }
+    Ok(closed)
+}
+
 /// Whether any instance of the named pipe `name` is still open, connected or not. `WaitNamedPipeW` connects nothing:
 /// it fails `ERROR_FILE_NOT_FOUND` at once when no instance exists, and only waits (1 ms here) while all are busy.
 #[cfg(windows)]

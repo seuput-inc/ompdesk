@@ -1,5 +1,7 @@
 // A write under the real ~/.omp, ~/.pi, ~/.config/omp or OMPdesk's userData fails the test.
 import "./scripts/vitest-real-home-guard";
+import { beforeEach, expect } from "vitest";
+import { watchBlockedThread, watchedTest } from "./scripts/vitest-block-watch";
 import { exitWhenParentGone } from "./scripts/vitest-orphan-guard";
 import { SESSION_OWNED_ENV } from "./src/main/omp-launch";
 import { loadLocale } from "./src/renderer/lib/i18n";
@@ -22,6 +24,14 @@ process.env.OMP_DAEMON_IDLE_GRACE_MS = "0";
 
 // A worker whose run was killed ends itself instead of running on as an orphan (scripts/vitest-orphan-guard.ts).
 exitWhenParentGone();
+
+// A test thread a synchronous call never gives back names its test and step and ends, instead of holding the run until
+// the CI job's limit (scripts/vitest-block-watch.ts).
+watchBlockedThread();
+beforeEach(() => {
+	const { testPath, currentTestName } = expect.getState();
+	watchedTest(`${testPath ?? "?"} > ${currentTestName ?? "?"}`);
+});
 
 if (typeof navigator !== "undefined") {
 	Object.defineProperty(navigator, "language", { configurable: true, get: () => "en-US" });
