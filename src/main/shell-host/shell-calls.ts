@@ -87,7 +87,7 @@ export async function systemIdleSeconds(): Promise<number> {
  * or no keyboard or mouse input for 3 minutes); undefined until it said, which never silences a phone.
  */
 export function desktopAway(): boolean | undefined {
-	// A test launch says it (e2e/harness.ts: "0", present): a runner nobody touches reads away.
+	// A test launch says it (e2e/fixture/shell-launch.ts: "0", present): a runner nobody touches reads away.
 	const forced = process.env.OMP_GUI_TEST_DESKTOP_AWAY;
 	if (forced === "0" || forced === "1") return forced === "1";
 	return shim().powerMonitor.desktopAway();

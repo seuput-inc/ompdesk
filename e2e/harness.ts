@@ -138,9 +138,6 @@ export async function appLaunchOptions(
 		PI_PROFILE: "",
 		// The app ends with this worker, even one that dies running no exit handler (src/main/test-launcher-exit.ts).
 		OMP_GUI_TEST_LAUNCHER_PID: String(process.pid),
-		// The person is at the computer (shell-calls.ts `desktopAway`): a runner has no input and reads away, which
-		// would show the banners a focused window keeps quiet and silence nothing a spec expects.
-		OMP_GUI_TEST_DESKTOP_AWAY: "0",
 		...("OMP_GUI_OMP" in extra ? {} : { OMP_GUI_OMP: await fixtureOmp(options.profile) }),
 		// Machine setup's managed tools dir is `%LOCALAPPDATA%\ompdesk\tools` on Windows (`managedToolsDir`), one
 		// folder for every app on the PC. A launch that downloads through the test installer has its own, or a
