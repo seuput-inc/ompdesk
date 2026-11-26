@@ -280,26 +280,44 @@ pub fn plan(options: &Value) -> Plan {
     }
 }
 
+#[cfg(windows)]
+impl Plan {
+    /// The `win.op` that first shows the window this plan is for (none for one kept in the tray).
+    pub fn first_show(&self) -> Option<&'static str> {
+        first_show(self.presence, headless())
+    }
+}
+
 /// The window `plan` was for exists. It shows at its page's first paint, or after [`SHOW_BEFORE_PAINT`] if that comes
-/// later.
-pub fn opened(win: u64, wc: u64, plan: Plan) {
-    records().insert(
-        wc,
-        Record {
-            win,
-            slot: plan.slot,
-            mica: plan.mica,
-            presence: plan.presence,
-            opened_at: Instant::now(),
-            shown: false,
-            painted: false,
-            url: None,
-            last_reload: None,
-            hang: None,
-            last_hang_restart: None,
-            crash_offered: false,
-        },
-    );
+/// later. A window that already showed while it was being built (`boot_paint.rs`, a cold WebView2 start) counts as
+/// shown, and its first show is returned for the caller to do again through Tauri, whose own state has not seen it.
+pub fn opened(win: u64, wc: u64, plan: Plan, shown_while_built: bool) -> Option<&'static str> {
+    let mut record = Record {
+        win,
+        slot: plan.slot,
+        mica: plan.mica,
+        presence: plan.presence,
+        opened_at: Instant::now(),
+        shown: false,
+        painted: false,
+        url: None,
+        last_reload: None,
+        hang: None,
+        last_hang_restart: None,
+        crash_offered: false,
+    };
+    let early = shown_while_built
+        .then(|| record.show(headless()))
+        .flatten()
+        .map(|(_, op)| op);
+    records().insert(wc, record);
+    if let Some(op) = early {
+        log::log(
+            "window.shown_before_paint",
+            json!({"wcId": wc, "winId": win, "op": op, "ms": 0, "whileBuilt": true}),
+        );
+        return Some(op);
+    }
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(SHOW_BEFORE_PAINT).await;
         let shows = with(wc, |record| record.show_before_paint(headless())).flatten();
@@ -311,6 +329,7 @@ pub fn opened(win: u64, wc: u64, plan: Plan) {
             show_window(win, op);
         }
     });
+    None
 }
 
 /// The window closed: its slot is free and its pending restart lapses.

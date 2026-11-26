@@ -5,6 +5,8 @@ mod app_window;
 mod assets;
 #[cfg(feature = "test-automation")]
 mod automation;
+#[cfg(windows)]
+mod boot_paint;
 mod core_pages;
 mod diagnostic_bundle_name;
 mod entry;
@@ -814,7 +816,8 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         builder = builder.position(x, y);
     }
     // Painted in the page's own background until the page paints: the window may show before it (app_window.rs
-    // `SHOW_BEFORE_PAINT`). A Mica window draws its backdrop instead.
+    // `SHOW_BEFORE_PAINT`; on Windows already while it is built, boot_paint.rs). A Mica window draws its backdrop
+    // instead.
     if !plan.mica
         && let Some(colour) = theme::window_background()
     {
@@ -854,7 +857,20 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             return Err(failed(error));
         }
     };
-    let window = match builder.build() {
+    #[cfg(windows)]
+    let boot = boot_paint::arm(
+        wc,
+        &runtime().user_data,
+        theme::new_window_dark(),
+        plan.mica,
+        boot_paint::EarlyShow::for_first_show(plan.first_show(), plan.maximize),
+    );
+    let built = builder.build();
+    #[cfg(windows)]
+    let shown_while_built = boot.is_some_and(boot_paint::Armed::finish);
+    #[cfg(not(windows))]
+    let shown_while_built = false;
+    let window = match built {
         Ok(window) => window,
         Err(error) => {
             runtime().registry.lock().expect("registry").remove(wc);
@@ -944,7 +960,11 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         _ => {}
     });
     let maximize = plan.maximize;
-    app_window::opened(win, wc, plan);
+    // A window that showed while it was built gets its first show again through Tauri, before any other op, so
+    // Tauri's visibility agrees and a later style change does not hide it.
+    if let Some(op) = app_window::opened(win, wc, plan, shown_while_built) {
+        win_op(&json!({"winId": win, "op": op, "args": {}}))?;
+    }
     if maximize {
         win_op(&json!({"winId": win, "op": "maximize", "args": {}}))?;
     }

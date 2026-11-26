@@ -55,15 +55,19 @@ fn hex(colour: &str) -> Option<tauri::window::Color> {
     ))
 }
 
+/// Whether a new app window opens dark: the scheme its page will paint in.
+pub fn new_window_dark() -> bool {
+    let source = STATE.with(|state| state.borrow().source);
+    effective_theme(&system::theme(), source)["dark"]
+        .as_bool()
+        .unwrap_or(false)
+}
+
 /// What a new app window is painted in until its page paints: the page's own background in the scheme it will open in,
 /// so a window shown before a slow first paint is the app's colour, never white or black.
 pub fn window_background() -> Option<tauri::window::Color> {
-    let source = STATE.with(|state| state.borrow().source);
-    let dark = effective_theme(&system::theme(), source)["dark"]
-        .as_bool()
-        .unwrap_or(false);
     let colours: Value = serde_json::from_str(WINDOW_BACKGROUND).ok()?;
-    hex(colours[if dark { "dark" } else { "light" }].as_str()?)
+    hex(colours[if new_window_dark() { "dark" } else { "light" }].as_str()?)
 }
 
 pub fn init() {
