@@ -9,7 +9,8 @@ import { useEffect, useState } from "react";
 import { useT } from "../../lib/i18n";
 import { type SurfaceTourId, useStarterGuideStore } from "../../stores/starter-guide";
 import { Button } from "../common";
-import { measureTarget, Spotlight } from "./Spotlight";
+import { Spotlight } from "./Spotlight";
+import { measureTarget } from "./spotlight-target";
 import { SURFACE_TOUR_STEPS } from "./surface-tours";
 
 export function SurfaceTour() {

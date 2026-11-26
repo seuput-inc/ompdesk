@@ -15,7 +15,6 @@ import { AppShell } from "./components/layout/AppShell";
 import { DesktopSlotIndicator } from "./components/layout/DesktopSlotIndicator";
 import { FirstRunGate } from "./components/onboarding/FirstRunGate";
 import { SetupTakeoverHost } from "./components/onboarding/SetupTakeover";
-import { StarterTour } from "./components/onboarding/StarterTour";
 import { RemoteFolderPickerHost } from "./components/remote/RemoteFolderPicker";
 import { SshPromptDialog } from "./components/settings/SshPromptDialog";
 import { useExtensionUi } from "./hooks/use-extension-ui";
@@ -117,7 +116,10 @@ const MacosRequirementNotice = lazyChunk(() =>
 const LaunchIncidentNotice = lazyChunk(() =>
 	import("./components/dialogs/LaunchIncidentNotice").then(m => ({ default: m.LaunchIncidentNotice })),
 );
-// Loaded when a first-visit tour starts.
+// Loaded when a getting-started step's tour or a surface's first-visit tour starts.
+const StarterTour = lazyChunk(() =>
+	import("./components/onboarding/StarterTour").then(m => ({ default: m.StarterTour })),
+);
 const SurfaceTour = lazyChunk(() =>
 	import("./components/onboarding/SurfaceTour").then(m => ({ default: m.SurfaceTour })),
 );
@@ -273,6 +275,7 @@ export function App() {
 	const capabilitiesOpen = useUiStore(s => s.capabilitiesOpen);
 	const [capabilitiesMounted, setCapabilitiesMounted] = useState(false);
 	if (capabilitiesOpen && !capabilitiesMounted) setCapabilitiesMounted(true);
+	const starterTouring = useStarterGuideStore(s => s.tour !== null);
 	const surfaceTouring = useStarterGuideStore(s => s.surfaceTour !== null);
 	// The quick terminal loads xterm: only on its first open, then stays mounted so its terminals keep their screens.
 	const quickTerminalOpen = useUiStore(s => s.quickTerminalOpen);
@@ -1010,7 +1013,11 @@ export function App() {
 						<PetOverlay />
 					</Suspense>
 				)}
-				<StarterTour />
+				{starterTouring && (
+					<Suspense fallback={null}>
+						<StarterTour />
+					</Suspense>
+				)}
 				{surfaceTouring && (
 					<Suspense fallback={null}>
 						<SurfaceTour />

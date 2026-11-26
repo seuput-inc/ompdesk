@@ -11,7 +11,7 @@ import { useEffect } from "react";
 import { useMachineSetupStore } from "../../stores/machine-setup";
 import { type SurfaceTourId, useStarterGuideStore } from "../../stores/starter-guide";
 import { useFirstRunActive } from "./FirstRunSlot";
-import { measureTarget } from "./Spotlight";
+import { measureTarget } from "./spotlight-target";
 
 export interface SurfaceTourStep {
 	id: string;

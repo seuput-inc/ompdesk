@@ -8,37 +8,12 @@
 
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { type Box, measureTarget } from "./spotlight-target";
 
-/** Room around the control inside the hole, and between the hole and the card. */
-const PAD = 6;
+/** Room between the hole and the card. */
 const GAP = 12;
 const CARD_WIDTH = 300;
 const EDGE = 8;
-
-interface Box {
-	left: number;
-	top: number;
-	width: number;
-	height: number;
-}
-
-/** The first of `targets` on screen, padded; null when none is. */
-export function measureTarget(targets: readonly string[]): Box | null {
-	for (const selector of targets) {
-		const node = document.querySelector(selector);
-		if (!node) continue;
-		const rect = node.getBoundingClientRect();
-		if (rect.width > 0 && rect.height > 0) {
-			return {
-				left: rect.left - PAD,
-				top: rect.top - PAD,
-				width: rect.width + PAD * 2,
-				height: rect.height + PAD * 2,
-			};
-		}
-	}
-	return null;
-}
 
 /**
  * The card goes right of a control in the left third (the sidebar), else
