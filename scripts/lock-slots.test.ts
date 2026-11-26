@@ -9,6 +9,7 @@ import {
 	acquireHeavy,
 	acquireHold as acquireOptionalHold,
 	acquireSlot,
+	availableHeavyBinary,
 	DEFAULT_SLOTS,
 	HEAVY_HELD_ENV,
 	heavyPoolSize,
@@ -406,6 +407,30 @@ describe("the computer's heavy slots (the real ompdesk, a temp pool)", () => {
 			expect(lease.heavyPid).toBeUndefined();
 			expect(await heavyPoolSize(locks.env)).toBe(1);
 			expect(await inspectHeavy(locks)).toEqual([]);
+		} finally {
+			configureNativeBin({ packaged: false, resourcesPath: path.join(import.meta.dirname, "..", "resources") });
+		}
+	});
+
+	it("takes an ompdesk on PATH when none is staged, never building one", async () => {
+		const empty = path.join(dir, "no-resources");
+		const bin = path.join(dir, "path-bin");
+		fs.mkdirSync(bin, { recursive: true });
+		const onPath = path.join(bin, path.basename(nativeBinPath("ompdesk")));
+		fs.copyFileSync(nativeBinPath("ompdesk"), onPath);
+		configureNativeBin({ packaged: false, resourcesPath: empty });
+		try {
+			const locks = locksFor();
+			delete locks.env.GITHUB_ACTIONS;
+			locks.env.PATH = bin;
+			delete locks.env.Path;
+			// No installed app either: only PATH can answer before a build would.
+			locks.env.LOCALAPPDATA = path.join(dir, "no-local-app-data");
+			expect(await availableHeavyBinary(locks.env)).toBe(onPath);
+			// A build would stage into this checkout and run the configured (empty) path, which cannot hold a slot.
+			const lease = await acquireHold(locks, "vitest", who("fresh-worktree"));
+			leases.push(lease);
+			expect(lease.heavyPid).toBeGreaterThan(0);
 		} finally {
 			configureNativeBin({ packaged: false, resourcesPath: path.join(import.meta.dirname, "..", "resources") });
 		}
