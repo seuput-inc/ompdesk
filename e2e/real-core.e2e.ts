@@ -376,13 +376,12 @@ test("system omp persists settings and sessions and serves every stats route", a
 		);
 		const font = freshSettings.locator("#setting-gui-fontSize select");
 		const chosenFont = await font.inputValue();
-		for (const value of [chosenFont === "16" ? "17" : "16", chosenFont]) {
-			await font.selectOption(value);
-			// applyFontSize scales by --phone-type-scale, which only a phone sets (1 here).
-			await expect
-				.poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue("--gui-font-size")))
-				.toBe(`calc(${value}px * var(--phone-type-scale, 1))`);
-		}
+		const initialSize = await page.locator("body").evaluate(body => getComputedStyle(body).fontSize);
+		const otherSize = initialSize === "16px" ? "17" : "16";
+		await font.selectOption(otherSize);
+		await expect(page.locator("body")).toHaveCSS("font-size", `${otherSize}px`);
+		await font.selectOption(chosenFont);
+		await expect(page.locator("body")).toHaveCSS("font-size", initialSize);
 		await page.keyboard.press("Escape");
 		await app.evaluate(() => Reflect.get(globalThis, "releaseAuditPrefs")());
 		await page.evaluate(async () => {
@@ -394,9 +393,7 @@ test("system omp persists settings and sessions and serves every stats route", a
 		expect(
 			await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--omp-bg-primary")),
 		).toBe(chosenBackground);
-		expect(await page.evaluate(() => document.documentElement.style.getPropertyValue("--gui-font-size"))).toBe(
-			`calc(${chosenFont}px * var(--phone-type-scale, 1))`,
-		);
+		await expect(page.locator("body")).toHaveCSS("font-size", initialSize);
 		expect(errors).toEqual([]);
 	} finally {
 		await fs.writeFile("test-results/main-process.log", mainOutput.join(""));

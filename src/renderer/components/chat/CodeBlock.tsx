@@ -190,8 +190,10 @@ export function CodeBlock({
 	const across = useScrollOverflow(preRef, layout);
 	const scrollStop = (on: boolean) =>
 		on ? { "aria-label": t("codeblock.scroll"), role: "group", tabIndex: 0 } : undefined;
+	const codeType = "text-[length:var(--omp-chat-code-size,var(--sc-font-sm))] leading-(--sc-leading-normal)";
 	const preClass = cx(
-		"px-3 py-3 font-mono text-sc-sm leading-(--sc-leading-normal)",
+		"px-3 py-3 font-mono",
+		codeType,
 		wrap ? "whitespace-pre-wrap [overflow-wrap:anywhere]" : "overflow-x-auto",
 	);
 
@@ -246,7 +248,7 @@ export function CodeBlock({
 							lineCount={lineCount}
 							lineNumbers={lineNumbers}
 							startLine={startLine}
-							className="px-2.5 py-3 text-sc-sm leading-(--sc-leading-normal)"
+							className={cx("px-2.5 py-3", codeType)}
 						/>
 						<pre className={cx("min-w-0 flex-1", preClass)} ref={preRef} {...scrollStop(across.x)}>
 							{codeElement}

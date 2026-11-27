@@ -3827,7 +3827,7 @@ describe("Sidebar device sections", () => {
 		async paired => {
 			const device = paired ? "dev-studio" : undefined;
 			const opener = session("/s/second.jsonl", "/bots/ada", { device });
-			const home = session("/s/home.jsonl", opener.cwd, { device });
+			const home = session("/s/home.jsonl", "/repo", { device });
 			const worker = session("/s/worker.jsonl", "/repo", { device, title: "Review build" });
 			const manual = session("/s/manual.jsonl", worker.cwd, { device, title: worker.title });
 			const bot: Bot = {
@@ -3863,10 +3863,35 @@ describe("Sidebar device sections", () => {
 				createdAt: worker.created,
 			};
 			const omp = installMockOmp([]);
+			omp.rpc.commandForTab.mockImplementation(async (id, request) => {
+				const type = request && typeof request === "object" && "type" in request ? request.type : undefined;
+				const data =
+					type === "get_state"
+						? { sessionId: id, isStreaming: false, todoPhases: [] }
+						: type === "get_transcript_page"
+							? { messages: [], total: 0 }
+							: undefined;
+				return { type: "response", command: type, success: data !== undefined, data };
+			});
 			omp.sessions.list.mockImplementation(async (_scope, host) =>
 				host === device ? [home, opener, worker, manual] : [session(worker.path, "/different-host")],
 			);
 			seedStores();
+			useTabsStore.setState(({ tabs }) => ({
+				tabs: [
+					...tabs,
+					...[home, manual].map(row => ({
+						id: row.id,
+						cwd: row.cwd,
+						sessionPath: row.path,
+						sessionId: row.id,
+						device,
+						status: "ready" as const,
+						kind: "agent" as const,
+						unreadDone: false,
+					})),
+				],
+			}));
 			useSessionStore.setState({ isStreaming: true });
 			if (device) {
 				pairHost("online");
@@ -3895,10 +3920,22 @@ describe("Sidebar device sections", () => {
 			expect(project(manual)).not.toBeNull();
 			expect(project(worker)).toBeNull();
 			if (paired) expect(container.querySelector(`[data-session-path="${worker.path}"]`)).not.toBeNull();
+			const selected = () => [...container.querySelectorAll('[aria-current="true"]')];
+			const botButton = container.querySelector('[data-bot-row="ada"]');
+			await fire(botButton, "onClick");
+			expect(selected()).toEqual([botButton]);
+			expect(project(home)).toBeNull();
+			await fire(project(manual)?.querySelector("button") ?? null, "onClick");
+			expect(selected()).toEqual([project(manual)?.querySelector("button")]);
 			await fire(nested()?.querySelector("button") ?? null, "onClick");
 			expect(omp.tabs.spawn).toHaveBeenCalledWith(
 				expect.objectContaining({ cwd: worker.cwd, sessionPath: worker.path, ...(device ? { device } : {}) }),
 			);
+			expect(selected()).toEqual([nested()?.querySelector("button")]);
+			await fire(container.querySelector('[data-bot-fold="ada"]'), "onClick");
+			expect(selected()).toEqual([botButton]);
+			await fire(container.querySelector('[data-bot-fold="ada"]'), "onClick");
+			expect(selected()).toEqual([nested()?.querySelector("button")]);
 			const filter = container.querySelector("[data-sidebar-filter]");
 			if (!filter) throw new Error("Missing sidebar filter");
 			const search = async (value: string) =>
@@ -3911,6 +3948,7 @@ describe("Sidebar device sections", () => {
 			await search(paired ? "Review build" : "Project alias");
 			expect(nested()).toBeNull();
 			expect(project(worker)).not.toBeNull();
+			expect(selected()).toEqual([project(worker)?.querySelector("button")]);
 			await search(bot.name);
 			expect(nested()?.textContent).toContain("Review build");
 			expect(project(worker)).toBeNull();

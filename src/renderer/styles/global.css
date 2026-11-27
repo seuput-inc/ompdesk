@@ -872,7 +872,7 @@ html[data-platform="darwin"] .omp-sidebar-search {
 /* Orca's card (the owner's decision, 25 Nov 2026): the current session a 9 % wash inside a hairline, a hovered row 4 %.
    The hairline is an inset outline, not a shadow: a row paints only inside its box (`content-visibility`), and the
    drop line and a split pane's ring are its box-shadow. */
-.omp-sidebar-session-row[data-active="true"] {
+:is(.omp-sidebar-session-row, .omp-sidebar-bot-row)[data-active="true"] {
 	background-color: var(--sc-sidebar-row-selected);
 	outline: 1px solid color-mix(in srgb, var(--sc-text) 10%, transparent);
 	outline-offset: -1px;
@@ -900,7 +900,7 @@ html[data-platform="darwin"] .omp-sidebar-search {
 
 /* A session made current from outside the list outlines its row once as the list brings it into view (Orca's reveal
    highlight): an accent outline that fades back to the row's own. */
-.omp-sidebar-session-row[data-reveal] {
+:is(.omp-sidebar-session-row, .omp-sidebar-bot-row)[data-reveal] {
 	animation: omp-row-reveal calc(var(--sc-duration-slow) * 3) var(--sc-ease-exit);
 }
 
@@ -931,7 +931,7 @@ html[data-platform="darwin"] .omp-sidebar-search {
 /* On the selected row's wash the quiet text (an age, a mark) and a waiting title's attention colour fell under 4.5:1 (light
    4.17 and 4.22, solarized-light lower): they read at secondary there, the attention colour a fifth toward the text
    color. Pinned by the "over sidebar selection" pairs of lib/theme-contrast.ts. */
-.omp-sidebar-session-row[data-active="true"] {
+:is(.omp-sidebar-session-row, .omp-sidebar-bot-row)[data-active="true"] {
 	--sc-text-subtle: var(--sc-text-secondary);
 	--sc-text-muted: var(--sc-text-secondary);
 }

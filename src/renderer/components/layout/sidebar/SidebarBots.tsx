@@ -10,8 +10,8 @@
  * - "+" (Orca's :247-297): New bot, Browse templates, Import from another app, New group. Share by link is Orca
  *   Cloud's, so it is not here. The bot groups follow the bots, each a row of its members' faces opening its room.
  * - Options (`BotSidebarOptionsMenu.tsx:16-90`): Sort by Manual, Agent activity, Recent or Name; Hide paused bots.
- * - A row (`BotRow.tsx:51-287`, looks C18, S7, S8, S9): the bot's face with its exception mark, its name and age, its
- *   second line (`botFacts`), the working mark or its fold strip at the end; dimmed while paused. A click opens its
+ * - A row: face and exception mark on the left, name and paired host above age and activity; dimmed while paused.
+ *   The fold is a separate control at the end of the activity line. A click on the bot opens its
  *   home chat; its menu renames it in place, opens its page or settings, pauses it, copies its folder, moves it in the
  *   person's order (Alt+↑/↓ too) and deletes it. Hovering it shows its details (`BotHoverCard`).
  * - The sidebar's search finds bots by name and purpose, and a bot whose chats match (FK-B09).
@@ -81,7 +81,7 @@ export interface SidebarBotEntry {
 	/** Its chats' rows as the list draws them. */
 	chats: ReactNode;
 	chatCount: number;
-	/** The shown session is one of its chats. */
+	/** The bot row represents the shown chat instead of a visible session row. */
 	current: boolean;
 }
 
@@ -387,32 +387,34 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 									}
 								},
 							}}
+							className="omp-sidebar-bot-row"
 							leading={<BotAvatar bot={bot} mark={botMark(bot, fact)} size={28} working={fact.working} />}
-							meta={
-								fact.working ? (
-									<WorkingArc state="turn" />
-								) : (
-									<TimeAgo className="text-(--sc-text-subtle)" iso={fact.latest} />
-								)
-							}
 							onClick={() => openBotHome(bot)}
-							secondary={<BotLineText bot={bot} line={fact.line} />}
+							rowProps={{ "data-active": entry.current, "data-current": entry.current || undefined }}
+							secondary={
+								<span className="flex min-w-0 items-center gap-1 leading-[1.333333]">
+									<TimeAgo className="shrink-0 text-(--sc-text-subtle) tabular-nums" iso={fact.latest} />
+									{fact.working && <WorkingArc state="turn" />}
+									<BotLineText bot={bot} line={fact.line} />
+								</span>
+							}
 							selected={entry.current}
+							size="sm"
 							title={
 								bot.device ? (
-									<span className="flex min-w-0 items-baseline gap-1.5">
+									<span className="flex min-w-0 items-baseline gap-1">
 										<span className={cx("truncate", fact.unread && "font-semibold")}>{bot.name}</span>
-										<BotOwner device={bot.device} />
+										<BotOwner className="shrink-[99]" device={bot.device} />
 									</span>
 								) : (
 									<span className={cx(fact.unread && "font-semibold")}>{bot.name}</span>
 								)
 							}
-							trailing={
+							secondaryEnd={
 								entry.chatCount > 0 ? (
 									<IconButton
 										aria-expanded={open}
-										className="omp-sidebar-bot-fold"
+										className="omp-sidebar-bot-fold relative z-(--sc-z-raised)"
 										data-bot-fold={bot.id}
 										icon={<ChevronDown className={cx("transition-transform", !open && "-rotate-90")} />}
 										label={
@@ -421,7 +423,7 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 												: t("bots.row.unfold", { name: bot.name })
 										}
 										onClick={() => view.setOpen(bot.id, !open)}
-										size="sm"
+										size="inline"
 										tabIndex={-1}
 									/>
 								) : undefined

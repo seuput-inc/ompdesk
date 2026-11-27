@@ -83,7 +83,7 @@ import { type SessionTab, tabChipLabel, useTabsStore } from "../../../stores/tab
 import { toast, toastError } from "../../../stores/toast";
 import { useUiStore } from "../../../stores/ui";
 import { webPwa } from "../../../web/pwa";
-import { botMatches, remoteBotTree, withoutBotWorkers } from "../../bots/bot-view";
+import { botChatFolders, botMatches, remoteBotTree, withoutBotWorkers } from "../../bots/bot-view";
 import {
 	anchorFromEvent,
 	Button,
@@ -111,7 +111,7 @@ import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
 import { ProjectGlyph } from "./ProjectGlyph";
 import { deleteProject, isStoredRow } from "./project-delete";
 import { projectMenuItems } from "./project-menu";
-import { logSelection, useRowSelection } from "./row-selection";
+import { logSelection, type RowSelectionOf } from "./row-selection";
 import { SessionStatusLane } from "./SessionStatusLane";
 import { SidebarChats } from "./SidebarChats";
 import { useDeviceHeaderHandle } from "./SidebarDeviceSections";
@@ -356,12 +356,14 @@ export function SidebarLocalHeader({
 export function SidebarDeviceSection({
 	host,
 	query,
+	selectionOf,
 	childForTab,
 	pending = false,
 	onNewChat,
 }: {
 	host: HostView;
 	query: string;
+	selectionOf: RowSelectionOf;
 	/** The family row of a session here a tab of this computer holds (its live state is the tab's). */
 	childForTab: (tab: SessionTab) => FamilyOpened;
 	/** A host the last host-list read named, drawn before this launch's first read: still, as it will look. */
@@ -473,6 +475,7 @@ export function SidebarDeviceSection({
 						onOpen={openRemote}
 						query={query}
 						read={online && !pending}
+						selectionOf={selectionOf}
 					/>
 				) : (
 					<>
@@ -496,6 +499,7 @@ export function SidebarDeviceSection({
 function DeviceSessions({
 	host,
 	query,
+	selectionOf,
 	childForTab,
 	onNewChat,
 	onOpen,
@@ -503,6 +507,7 @@ function DeviceSessions({
 }: {
 	host: HostView;
 	query: string;
+	selectionOf: RowSelectionOf;
 	childForTab: (tab: SessionTab) => FamilyOpened;
 	onNewChat: () => void;
 	onOpen: (args: RemoteOpenArgs) => Promise<string | null>;
@@ -547,7 +552,6 @@ function DeviceSessions({
 	const [renameDraft, setRenameDraft] = useState("");
 	const allTabs = useTabsStore(state => state.tabs);
 	const activeTabId = useTabsStore(state => state.activeTabId);
-	const selectionOf = useRowSelection();
 	const split = useTabsStore(state => state.split);
 	const splitIds = useMemo(() => (split ? new Set(splitTabIds(split)) : null), [split]);
 	const deviceGroupFolds = useSidebarFolds(s => s.deviceGroups);
@@ -590,6 +594,16 @@ function DeviceSessions({
 	const liveSince = useRef(new Map<string, string>());
 	const allBots = useBotsStore(s => s.state.bots);
 	const hostBots = useMemo(() => allBots.filter(bot => bot.device === host.deviceId), [allBots, host.deviceId]);
+	const botsAvailable = useBotsAvailable();
+	const botsNavHidden = useSidebarFolds(s => s.navHidden.bots === true);
+	const hidePausedBots = useBotsView(s => s.hidePaused);
+	const visibleBots = useMemo(
+		() =>
+			botsAvailable && !botsNavHidden
+				? hostBots.filter(bot => (!hidePausedBots || !bot.paused || query) && botMatches(bot, query))
+				: [],
+		[botsAvailable, botsNavHidden, hostBots, hidePausedBots, query],
+	);
 	const tree = useMemo(() => {
 		const gone = new Set(projectList.gone ?? []);
 		const since = liveSince.current;
@@ -614,6 +628,7 @@ function DeviceSessions({
 					sessions.flatMap(session => (typeof session.openedBySession === "string" ? [session.path] : [])),
 				),
 				botWorkers: new Set(hostBots.flatMap(bot => bot.workerLinks?.map(worker => worker.session) ?? [])),
+				botChatFolders: botChatFolders(visibleBots),
 				projects: projectList.projects,
 				removed: projectList.removed,
 				folder: cwd => {
@@ -666,6 +681,7 @@ function DeviceSessions({
 	}, [
 		sessions,
 		hostBots,
+		visibleBots,
 		deviceTabs,
 		remoteTabs,
 		hostSummaries,
@@ -708,16 +724,11 @@ function DeviceSessions({
 	} = rows;
 	// The host's bots' folders are no projects here, as this computer's own are not: their chats list under the bot in
 	// the Bots section (orca-bots-remote). With the Bots section hidden they stay projects, as on the host.
-	const botsAvailable = useBotsAvailable();
-	const botsNavHidden = useSidebarFolds(s => s.navHidden.bots === true);
-	const botsShown = botsAvailable && !botsNavHidden;
-	const hidePausedBots = useBotsView(s => s.hidePaused);
 	const groups = useMemo(() => {
-		if (!botsShown) return folderGroups;
+		if (!visibleBots.length) return folderGroups;
 		const nested = new Set<string>();
 		const folders = new Set<string>();
-		for (const bot of hostBots) {
-			if ((hidePausedBots && bot.paused && !query) || !botMatches(bot, query)) continue;
+		for (const bot of visibleBots) {
 			folders.add(bot.folder);
 			if (!bot.workerLinks?.length) continue;
 			for (const workers of remoteBotTree(bot, sessions, projectList).children.values())
@@ -727,7 +738,7 @@ function DeviceSessions({
 			folderGroups.filter(group => !folders.has(group.cwd)),
 			nested,
 		);
-	}, [botsShown, folderGroups, hostBots, hidePausedBots, query, sessions, projectList]);
+	}, [visibleBots, folderGroups, sessions, projectList]);
 	// The host's tabs on paired devices its sessions opened, by the row they nest under.
 	const remoteChildrenOf = useMemo(() => {
 		const byRoot = new Map<string, SessionTab[]>();
@@ -1383,8 +1394,8 @@ function DeviceSessions({
 						onContextMenu: event =>
 							setRowMenu({ ...anchorFromEvent(event), items: menuFor(session), label: title }),
 						"data-active": active,
-						"data-current": current || undefined,
-						"data-pane-focus": (current && selectionOf(tab?.id).splitShown) || undefined,
+						"data-current": (current && active) || undefined,
+						"data-pane-focus": (active && current && selectionOf(tab?.id).splitShown) || undefined,
 						"data-pane-shown": (active && !current && selectionOf(tab?.id).splitShown) || undefined,
 						"data-folder-missing": folderMissing || undefined,
 						"data-unseen": lane === "done" || undefined,

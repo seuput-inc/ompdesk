@@ -256,7 +256,7 @@ interface UiStore {
 	 * the ModelRestoreDialog offering to open it with the current model. */
 	modelRestorePrompt: { session: SessionInfo; missingModel: string } | null;
 	theme: ThemeMode;
-	fontSize: number;
+	fontSize: number | undefined;
 	/** Application-wide display preferences, independent of a task's terminal configuration. */
 	compactDensity: boolean;
 	colorBlindMode: boolean;
@@ -414,7 +414,7 @@ interface UiStore {
 	/** Close UI whose data or actions belong to the outgoing tab. */
 	closeSessionOverlays: () => void;
 	setTheme: (theme: ThemeMode) => void;
-	setFontSize: (size: number) => void;
+	setFontSize: (size: number | undefined) => void;
 	setNotifications: (enabled: boolean) => void;
 	setThinkingExpanded: (enabled: boolean) => void;
 	setTranscriptDetail: (detail: TranscriptDetail) => void;
@@ -506,7 +506,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 	insightsStatsScope: "session",
 	settingsTab: DEFAULT_SETTINGS_TAB,
 	theme: readPrepaintThemeMode(),
-	fontSize: 15,
+	fontSize: undefined,
 	compactDensity: false,
 	colorBlindMode: false,
 	followAgentTheme: false,

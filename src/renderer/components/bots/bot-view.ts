@@ -150,6 +150,16 @@ export function botMatches(bot: Bot, query: string): boolean {
 	return !wanted || fold(bot.name).includes(wanted) || fold(bot.specialty ?? "").includes(wanted);
 }
 
+/** The bot record, not the cwd an older journal remembers, owns its saved chats. */
+export function botChatFolders(bots: readonly Bot[]): Map<string, string> {
+	const folders = new Map<string, string>();
+	for (const bot of bots) {
+		if (bot.home) folders.set(bot.home, bot.folder);
+		for (const file of bot.sessions) folders.set(file, bot.folder);
+	}
+	return folders;
+}
+
 /** Only join saved files on one host. An older worker without a proven opener stays in its project. */
 export function botWorkerChildren<T extends SessionInfo>(
 	bot: Bot,
@@ -197,7 +207,7 @@ export function remoteBotTree(bot: Bot, sessions: readonly SessionInfo[], projec
 			.map(row => [row.path, row]),
 	);
 	const chats = [...available.values()]
-		.filter(row => row.cwd === bot.folder)
+		.filter(row => row.cwd === bot.folder || row.path === bot.home || bot.sessions.includes(row.path))
 		.toSorted(
 			(a, b) =>
 				Number(b.path === bot.home) - Number(a.path === bot.home) ||

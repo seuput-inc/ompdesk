@@ -99,7 +99,7 @@ import { useTabRpc } from "../../../lib/tab-rpc";
 import { isTabFailed } from "../../../lib/tab-signal";
 import { pickWorkspaceDirectory } from "../../../lib/workspace-dirs";
 import { ensureAgentReviewSubscription, useAgentReviewStore } from "../../../stores/agent-review";
-import { ensureBots, useBotsStore } from "../../../stores/bots";
+import { botOfFolder, botOfSession, ensureBots, useBotsStore } from "../../../stores/bots";
 import { useBotsView } from "../../../stores/bots-view";
 import { type BranchRow, branchPrOf, branchPrTone, useBranchPrs, watchBranchPrs } from "../../../stores/branch-prs";
 import { ensureClosedChildren, useClosedChildrenStore } from "../../../stores/closed-children";
@@ -123,7 +123,15 @@ import { toast, toastError } from "../../../stores/toast";
 import { type PanelTab, useUiStore } from "../../../stores/ui";
 import { startInstall, useInstallOffered } from "../../../web/install-ui";
 import { openBotDialog } from "../../bots/bot-launch";
-import { type BotChatFacts, botFacts, botMatches, botWorkerChildren, withoutBotWorkers } from "../../bots/bot-view";
+import {
+	type BotChatFacts,
+	botChatFolders,
+	botFacts,
+	botMatches,
+	botWorkerChildren,
+	remoteBotTree,
+	withoutBotWorkers,
+} from "../../bots/bot-view";
 import {
 	anchorFromEvent,
 	Badge,
@@ -441,6 +449,8 @@ export function Sidebar() {
 	const botsShown = botsAvailable && !botsNavHidden;
 	const bots = useBotsStore(state => state.state.bots);
 	const hidePausedBots = useBotsView(state => state.hidePaused);
+	const openBots = useBotsView(state => state.open);
+	const botsFolded = useBotsView(state => state.folded);
 	const botItems = useBotsStore(state => state.state.items);
 	useEffect(() => {
 		if (botsShown) ensureBots();
@@ -550,7 +560,7 @@ export function Sidebar() {
 	const tabs = useTabsStore(s => s.tabs);
 	const activeTabId = useTabsStore(s => s.activeTabId);
 	const activeTab = tabs.find(tab => tab.id === activeTabId);
-	const selectionOf = useRowSelection();
+	const sessionShown = useUiStore(state => state.destination === "session");
 	const activeTabKind = activeTab?.kind;
 	// Remote tabs (a paired host's sessions) live in their device sections; this list is this device's.
 	const localTabs = useMemo(() => tabs.filter(tab => tab.device === undefined), [tabs]);
@@ -791,6 +801,10 @@ export function Sidebar() {
 	// Session folders main found missing on disk: git's origin only marks a gone OMPdesk worktree.
 	const goneFolders = useMemo(() => new Set(projectList.gone ?? []), [projectList.gone]);
 	const localBots = useMemo(() => bots.filter(bot => !bot.device), [bots]);
+	const sidebarBots = useMemo(
+		() => (botsShown ? localBots.filter(bot => !bot.paused || !hidePausedBots || query) : []),
+		[botsShown, localBots, hidePausedBots, query],
+	);
 	const workerOpeners = useMemo(() => {
 		const openers = new Map<string, string | undefined>();
 		for (const bot of localBots)
@@ -811,6 +825,7 @@ export function Sidebar() {
 			usedThere: new Set([...hostedByKey.keys(), ...summaryByPath.keys(), ...heldByOtherWindows]),
 			closed: new Set(closedChildren.filter(row => !row.device).map(row => row.path)),
 			botWorkers: new Set(workerOpeners.keys()),
+			botChatFolders: botChatFolders(sidebarBots),
 			projects: projectList.projects,
 			removed: projectList.removed,
 			folder: at => {
@@ -884,6 +899,7 @@ export function Sidebar() {
 			sessions,
 			recordedOpeners,
 			workerOpeners,
+			sidebarBots,
 			rowTabs,
 			hostedByKey,
 			summaryByPath,
@@ -960,13 +976,7 @@ export function Sidebar() {
 	);
 	const allGroups = useMemo(() => rows.allGroups.map(named), [rows, named]);
 	// A bot's folder on this computer is no project: its chats list under the bot in the Bots section.
-	const botFolders = useMemo(
-		() =>
-			new Set(
-				botsShown ? localBots.filter(bot => !bot.paused || !hidePausedBots || query).map(bot => bot.folder) : [],
-			),
-		[botsShown, localBots, hidePausedBots, query],
-	);
+	const botFolders = useMemo(() => new Set(sidebarBots.map(bot => bot.folder)), [sidebarBots]);
 	const botTree = useMemo(() => {
 		const children = new Map<string, SidebarSession[]>();
 		const nested = new Set<string>();
@@ -1488,6 +1498,67 @@ export function Sidebar() {
 	// Roving focus: items render with tabIndex -1; the effect below makes the
 	// remembered (else current, else first) item the list's single tab stop.
 	const activeSessionKey = allSessions.find(isCurrentSession)?.path;
+	const focused = sessionShown && botsShown && (!botsFolded || query) ? activeTab : undefined;
+	const file = focused?.sessionPath ?? (focused && !focused.device ? activeSessionKey : undefined);
+	const chatBot = focused
+		? (botOfSession(bots, file, focused.device) ?? botOfFolder(bots, focused.cwd, focused.device))
+		: undefined;
+	const owner =
+		chatBot ??
+		(focused && file
+			? bots.find(
+					bot =>
+						bot.device === focused.device &&
+						(bot.device ? bot.workerLinks : bot.workers)?.some(worker => worker.session === file),
+				)
+			: undefined);
+	const home =
+		owner !== undefined &&
+		((file !== undefined && owner.home === file) || (!owner.home && !focused?.sessionPath && chatBot === owner));
+	const remoteDevice = !home && owner?.device && botMatches(owner, query) ? owner.device : undefined;
+	const readRemote =
+		remoteDevice !== undefined && hosts.some(host => host.deviceId === remoteDevice && host.state === "online");
+	const { sessions: remoteSessions } = useSessionList("global", remoteDevice, { read: readRemote });
+	const remoteProjects = useProjectList(remoteDevice, readRemote);
+	const currentBot = useMemo(() => {
+		if (!owner || (!query && hidePausedBots && owner.paused)) return;
+		const byName = botMatches(owner, query);
+		if (owner.device && !byName) return;
+		const tree = remoteDevice ? remoteBotTree(owner, remoteSessions, remoteProjects) : botTree;
+		const chats =
+			"chats" in tree
+				? tree.chats
+				: (byName ? rows.allGroups : rows.groups).find(group => group.cwd === owner.folder)?.sessions;
+		if (!byName && !chats?.length) return;
+		if (home) return owner;
+		const nested = chats?.some(
+			chat => chat.path === file || tree.children.get(chat.path)?.some(row => row.path === file),
+		);
+		if (nested) return !query && !openBots.includes(owner.id) ? owner : undefined;
+		// An unlisted chat still has its bot. A worker without a listed opener stays in its project.
+		return chatBot;
+	}, [
+		owner,
+		query,
+		hidePausedBots,
+		remoteDevice,
+		remoteSessions,
+		remoteProjects,
+		botTree,
+		rows,
+		home,
+		file,
+		openBots,
+		chatBot,
+	]);
+	const selectionOf = useRowSelection(activeTabId, sessionShown, currentBot !== undefined);
+	const activeRovingKey = currentBot
+		? currentBot.device
+			? `bot:${currentBot.device}:${currentBot.id}`
+			: `bot:${currentBot.id}`
+		: owner?.device && file
+			? `device-session:${owner.device}:${file}`
+			: activeSessionKey && `session:${activeSessionKey}`;
 	const onListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
 		if (event.key === "Escape" && picked.size > 0) {
 			event.preventDefault();
@@ -1511,23 +1582,23 @@ export function Sidebar() {
 	// A session made current from outside the list (a title bar tab, the palette, a shortcut) brings its row into view
 	// and outlines it once (Orca's reveal highlight). A pick in the list itself moves nothing: it is told by a press or
 	// key in the list just before, since a click does not focus a button in WebKit (macOS's window).
-	const revealed = useRef(activeSessionKey);
+	const revealed = useRef(activeRovingKey);
 	const pickedInList = useRef(Number.NEGATIVE_INFINITY);
 	useEffect(() => {
-		if (revealed.current === activeSessionKey) return;
-		revealed.current = activeSessionKey;
+		if (revealed.current === activeRovingKey) return;
+		revealed.current = activeRovingKey;
 		const list = listRef.current;
 		const picked = performance.now() - pickedInList.current < 5_000;
 		pickedInList.current = Number.NEGATIVE_INFINITY;
-		if (!list || !activeSessionKey || picked || list.contains(document.activeElement)) return;
+		if (!list || !sessionShown || !activeRovingKey || picked || list.contains(document.activeElement)) return;
 		const row = [...list.querySelectorAll<HTMLElement>("[data-roving-item]")]
-			.find(item => item.dataset.rovingItem === `session:${activeSessionKey}`)
-			?.closest<HTMLElement>(".omp-sidebar-session-row");
+			.find(item => item.dataset.rovingItem === activeRovingKey)
+			?.closest<HTMLElement>(".omp-list-row");
 		if (!row) return;
 		row.scrollIntoView?.({ block: "nearest" });
 		row.setAttribute("data-reveal", "");
 		row.addEventListener("animationend", () => row.removeAttribute("data-reveal"), { once: true });
-	}, [activeSessionKey]);
+	}, [activeRovingKey, sessionShown]);
 	// Reveal current (Orca's `ScrollToCurrentWorkspaceToolbarButton`, worktree-list/navigation/
 	// ScrollToCurrentWorkspaceToolbarButton.tsx:30-71, a palette command here): opens what hides the focused session's
 	// row (a filter, its device section, its project or Chats, Archived) and brings the row into view with the reveal
@@ -1558,9 +1629,7 @@ export function Sidebar() {
 	const [revealAsked, setRevealAsked] = useState(0);
 	useEffect(() => {
 		if (revealAsked === 0) return;
-		const row = listRef.current
-			?.querySelector<HTMLElement>("[data-current]")
-			?.closest<HTMLElement>(".omp-sidebar-session-row");
+		const row = listRef.current?.querySelector<HTMLElement>("[data-current]")?.closest<HTMLElement>(".omp-list-row");
 		if (!row) return;
 		row.scrollIntoView?.({ block: "center" });
 		row.setAttribute("data-reveal", "");
@@ -1599,7 +1668,7 @@ export function Sidebar() {
 		if (items.length === 0) return;
 		const preferred =
 			items.find(item => item.dataset.rovingItem === focusKey) ??
-			items.find(item => item.dataset.rovingItem === `session:${activeSessionKey}`) ??
+			items.find(item => item.dataset.rovingItem === activeRovingKey) ??
 			items[0];
 		for (const item of items) {
 			item.tabIndex = item === preferred ? 0 : -1;
@@ -2408,8 +2477,8 @@ export function Sidebar() {
 							"data-pickable": (indexed && session.device === undefined) || undefined,
 							"data-picked": picked.has(session.path) || undefined,
 							"data-active": active,
-							"data-current": isCurrent || undefined,
-							"data-pane-focus": (isCurrent && selectionOf(openTabId).splitShown) || undefined,
+							"data-current": (active && isCurrent) || undefined,
+							"data-pane-focus": (active && isCurrent && selectionOf(openTabId).splitShown) || undefined,
 							"data-pane-shown": (active && !isCurrent && selectionOf(openTabId).splitShown) || undefined,
 							"data-live": indexed ? undefined : true,
 							"data-switch-pending": switchPendingTo === session.id || undefined,
@@ -2663,10 +2732,8 @@ export function Sidebar() {
 				const byName = !query || botMatches(bot, query);
 				const shown = byName ? all : chatsOf(rows.groups);
 				if (!byName && (bot.device || shown.length === 0)) return [];
-				let current = false;
 				const chats: BotChatFacts[] = all.map(session => {
 					const state = sessionRowState(session);
-					if (state.isCurrent) current = true;
 					return {
 						path: session.path,
 						title: sessionDisplayTitle(session, ""),
@@ -2688,7 +2755,7 @@ export function Sidebar() {
 						facts: botFacts(bot, chats, needing),
 						chats: bot.device ? (
 							<Suspense fallback={null}>
-								<RemoteBotChats bot={bot} />
+								<RemoteBotChats bot={bot} selectionOf={selectionOf} />
 							</Suspense>
 						) : (
 							shown.map(session => (
@@ -2702,8 +2769,8 @@ export function Sidebar() {
 								</Fragment>
 							))
 						),
-						chatCount: bot.device ? bot.sessions.length : shown.length,
-						current,
+						chatCount: bot.device ? bot.sessions.length || Number(!!bot.home) : shown.length,
+						current: currentBot === bot,
 					},
 				];
 			})
@@ -2983,6 +3050,7 @@ export function Sidebar() {
 									node: (
 										<SidebarDeviceSection
 											host={host}
+											selectionOf={selectionOf}
 											childForTab={remoteFamilyChildFor}
 											onNewChat={startChat}
 											pending={host.pending === true}
