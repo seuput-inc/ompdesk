@@ -47,12 +47,13 @@ import {
 	type Item,
 	itemsNeedingYou,
 } from "../../../shared/bots";
-import { openInboxRow, useQuestionInbox } from "../../hooks/use-question-inbox";
+import { useQuestionInbox } from "../../hooks/use-question-inbox";
 import { handToTab } from "../../lib/composer-handoff";
 import { formatClock } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { openExternal } from "../../lib/open-external";
 import type { QuestionRow } from "../../lib/question-inbox";
+import { openInboxRow } from "../../lib/question-inbox-view";
 import { useBotsStore } from "../../stores/bots";
 import { useRuntimeTabId } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";

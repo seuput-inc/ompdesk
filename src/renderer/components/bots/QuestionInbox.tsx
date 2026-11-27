@@ -1,11 +1,12 @@
 import { Inbox, TriangleAlert } from "lucide-react";
 import { useRef, useState } from "react";
 import { ITEM_TEXT_MAX } from "../../../shared/bots";
-import { openInboxRow, useQuestionInbox } from "../../hooks/use-question-inbox";
+import { useQuestionInbox } from "../../hooks/use-question-inbox";
 import { formatClock, formatSpan } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { useMinuteTick } from "../../lib/now-tick";
-import { groupQuestions, type QuestionRow } from "../../lib/question-inbox";
+import type { QuestionRow } from "../../lib/question-inbox";
+import { groupQuestions, openInboxRow } from "../../lib/question-inbox-view";
 import { toastError } from "../../stores/toast";
 import { Button, Card, EmptyState, PageLayout } from "../common";
 import {

@@ -140,30 +140,3 @@ export function questionRows(
 			a.key.localeCompare(b.key),
 	);
 }
-
-/** The builder orders projects, askers, then oldest known ask. This projection preserves that order. */
-export function groupQuestions(rows: readonly QuestionRow[]) {
-	const projects = new Map<
-		string,
-		{ project: string; askers: Map<string, { key: string; asker: string; rows: QuestionRow[] }> }
-	>();
-	for (const row of rows) {
-		const session = "session" in row ? row.session : undefined;
-		const folder = session?.cwd ?? row.bot?.folder ?? "";
-		const projectKey = JSON.stringify([row.device, folder]);
-		let project = projects.get(projectKey);
-		if (!project) {
-			project = { project: row.project, askers: new Map() };
-			projects.set(projectKey, project);
-		}
-		const botId = row.bot?.id ?? (row.source === "item" ? row.item.bot : undefined);
-		const key = JSON.stringify([row.device, botId ? "bot" : "session", botId ?? session?.sessionPath]);
-		let group = project.askers.get(key);
-		if (!group) {
-			group = { key, asker: row.asker, rows: [] };
-			project.askers.set(key, group);
-		}
-		group.rows.push(row);
-	}
-	return Array.from(projects, ([key, { project, askers }]) => ({ key, project, askers: [...askers.values()] }));
-}

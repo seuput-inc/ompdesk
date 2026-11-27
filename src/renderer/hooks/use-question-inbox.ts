@@ -1,18 +1,13 @@
 import { useEffect, useMemo } from "react";
-import { isUnsavedSession, unsavedSessionKey } from "../../shared/session-summary";
+import { unsavedSessionKey } from "../../shared/session-summary";
 import { useSchedulesOf } from "../components/bots/bot-automations";
-import { openBotPage } from "../components/bots/bot-page";
-import { translate, useT } from "../lib/i18n";
+import { useT } from "../lib/i18n";
 import { useMinuteTick } from "../lib/now-tick";
 import { type QuestionRow, questionRows } from "../lib/question-inbox";
 import { ensureBots, useBotsStore } from "../stores/bots";
-import type { ExtensionUiStore } from "../stores/extension-ui";
 import { summariesOf, useHostedSessionsStore } from "../stores/hosted-sessions";
 import { usePairedHosts } from "../stores/remote";
-import { sessionRuntimeStore } from "../stores/session-runtime-context";
 import { useTabsStore } from "../stores/tabs";
-import { toast } from "../stores/toast";
-import { useUiStore } from "../stores/ui";
 
 export function useQuestionInbox(): QuestionRow[] {
 	const t = useT();
@@ -63,33 +58,4 @@ export function useSessionQuestions(tabId: string | null): QuestionRow[] {
 					}),
 		[rows, tab],
 	);
-}
-
-export async function openInboxRow(row: QuestionRow): Promise<void> {
-	if (row.source === "item" || row.source === "access") {
-		if (row.source === "access") openBotPage(row.bot.id, "activity");
-		else {
-			// Keep the item page and its draft/answer code out of the first-screen badge.
-			const { openItem } = await import("../components/bots/items/item-store");
-			openItem(row.item.bot, row.item.id);
-			openBotPage(row.item.bot, "items");
-		}
-		return;
-	}
-	const { session, device } = row;
-	const tabs = useTabsStore.getState();
-	const tab = tabs.tabs.find(
-		entry => entry.device === device && (entry.sessionPath ?? unsavedSessionKey(entry.id)) === session.sessionPath,
-	);
-	if (!tab && isUnsavedSession(session)) {
-		toast({ variant: "warning", message: translate("inbox.unsaved") });
-		return;
-	}
-	useUiStore.getState().closeDestination();
-	const tabId =
-		tab?.id ??
-		(await tabs.openTab({ sessionPath: session.sessionPath, cwd: session.cwd, kind: session.kind, device }));
-	if (tab) await tabs.switchTab(tab.id);
-	if (row.requestId && tabId)
-		sessionRuntimeStore<ExtensionUiStore>(tabId, "extensionUi")?.setState({ selectedRequestId: row.requestId });
 }

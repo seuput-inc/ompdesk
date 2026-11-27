@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { Bot, Item } from "../../shared/bots";
 import type { Schedule } from "../../shared/schedules";
 import type { SessionSummary } from "../../shared/session-summary";
-import { groupQuestions, questionRows } from "./question-inbox";
+import { questionRows } from "./question-inbox";
+import { groupQuestions } from "./question-inbox-view";
 
 const t = (key: string) => key;
 const bot: Bot = {

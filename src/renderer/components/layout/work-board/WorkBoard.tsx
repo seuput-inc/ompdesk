@@ -21,7 +21,7 @@ import type { RpcGoalState, SubagentSnapshot, TodoTask } from "../../../../share
 import { useBackgroundJobs } from "../../../hooks/use-background-jobs";
 import { useOpenedChildren } from "../../../hooks/use-opened-children";
 import { usePresence } from "../../../hooks/use-presence";
-import { openInboxRow, useSessionQuestions } from "../../../hooks/use-question-inbox";
+import { useSessionQuestions } from "../../../hooks/use-question-inbox";
 import { useSessionSpend } from "../../../hooks/use-session-spend";
 import { useShellMode } from "../../../hooks/use-shell-mode";
 import { attentionClause } from "../../../lib/attention";
@@ -43,6 +43,7 @@ import { useSessionStore } from "../../../stores/session";
 import { sessionRuntimeStore, useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useSubagentsStore } from "../../../stores/subagents";
 import { useTabsStore } from "../../../stores/tabs";
+import { toastError } from "../../../stores/toast";
 import { selectTodoCardVisible, useTodoStore } from "../../../stores/todo";
 import { type ToolEntry, useToolsStore } from "../../../stores/tools";
 import { useUiStore } from "../../../stores/ui";
@@ -441,7 +442,10 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 			label,
 			kind: questionAttentionKind(row) === "approval" ? "approval" : "ask",
 			open: () => {
-				if (!sessionAsk) return void openInboxRow(row);
+				if (!sessionAsk)
+					return void import("../../../lib/question-inbox-view")
+						.then(view => view.openInboxRow(row))
+						.catch(error => toastError({ title: row.title, error }));
 				const store = sessionRuntimeStore<ExtensionUiStore>(tabId, "extensionUi");
 				if (row.requestId && store && store.getState().selectedRequestId !== row.requestId) {
 					store.setState({ selectedRequestId: row.requestId });
