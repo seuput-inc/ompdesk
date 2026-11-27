@@ -104,22 +104,33 @@ test("project and bot conversations keep their own inspector on reopen and on re
 			await expect(item).toHaveAttribute("aria-checked", String(checked));
 			await item.click();
 		};
+		await fs.mkdir(path.join(profile.project, "nested"));
 		for (const [name, contents] of [
 			["ordinary.txt", "visible"],
 			[".dot.txt", "dot"],
 			[".gitignore", "ignored.txt\n.hidden-ignored.txt\n"],
 			["ignored.txt", "ignored"],
 			[".hidden-ignored.txt", "both"],
+			["nested/.gitignore", "/private.txt\n!ignored.txt\n"],
+			["nested/private.txt", "ignored here only"],
+			["nested/ignored.txt", "included by the nested rule"],
 		]) {
 			await fs.writeFile(path.join(profile.project, name), contents);
 		}
 		await panel.getByRole("button", { name: "Refresh file tree" }).click();
 		await expect(row(".dot.txt")).toBeVisible();
 		await expect(row("ignored.txt")).toHaveCount(0);
+		const nested = panel.locator('[data-tree-id="dir:nested"]');
+		await nested.press("ArrowRight");
+		await expect(row("nested/ignored.txt")).toBeVisible();
+		await expect(row("nested/private.txt")).toHaveCount(0);
 		await filter("Show dotfiles", true);
 		await expect(row(".dot.txt")).toHaveCount(0);
 		await filter("Show Git ignored files", false);
 		await expect(row("ignored.txt")).toBeVisible();
+		await nested.press("ArrowRight");
+		await expect(row("nested/private.txt")).toBeVisible();
+		await expect(row("nested/.gitignore")).toHaveCount(0);
 		await expect(row(".hidden-ignored.txt")).toHaveCount(0);
 		await filter("Show dotfiles", false);
 		await expect(row(".hidden-ignored.txt")).toBeVisible();
