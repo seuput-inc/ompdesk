@@ -14,7 +14,7 @@
  *   tables     scripts/check-captured-tables.ts on the pushed commit, when it touched `ompdesk_app`'s Rust tables or
  *              their captured TypeScript copy (a second; otherwise only CI's `cargo test` finds a mismatch)
  *
- * Only the checks the change needs run: a push of docs, workflows or other native Rust runs fix-tests alone.
+ *   clippy     changed Rust workspace crates, including tests; Windows-only cfg paths still need Windows CI.
  *
  * The checks read exactly the pushed commit. In a working tree that holds those files unchanged (a worktree of one's
  * own, after the commit) they run in place, on the warm typecheck cache `bun run check:types` keeps and the `out/`
@@ -37,6 +37,7 @@ import { fileURLToPath } from "node:url";
 import { processAlive } from "../src/main/process-alive";
 import { withoutGitSelectors } from "../src/shared/git-env";
 import { inputHash, rebuildReason } from "./build-cache";
+import { cargoEnv, cargoPath } from "./cargo";
 import { biomeFiles, changedScope } from "./changed-scope";
 import { CAPTURED_TABLE_INPUT } from "./check-captured-tables";
 
@@ -120,13 +121,14 @@ export function planGate(files: readonly string[]): Plan {
 
 /** What the checks read: the top-level files, these folders and the JSON the code imports from `native/`. */
 const COPIED_DIRS = ["src", "e2e", "scripts", "resources"];
-const INPUT_PATHS = [...COPIED_DIRS, ":(glob)native/**/*.json", ":(glob)*"];
+const WORKSPACE = "native/ompdesk";
+const INPUT_PATHS = [...COPIED_DIRS, WORKSPACE, ":(glob)native/**/*.json", ":(glob)*"];
 /** What a move of the copy leaves alone. */
 const KEPT_IN_COPY = ["node_modules", ".gate-sha", ".gate.tsbuildinfo"];
 
 /** Whether the copy holds `file` (repository-relative, forward slashes). */
 export function isCopied(file: string): boolean {
-	if (file.startsWith("native/")) return file.endsWith(".json");
+	if (file.startsWith("native/")) return file.startsWith(`${WORKSPACE}/`) || file.endsWith(".json");
 	return !file.includes("/") || COPIED_DIRS.some(dir => file.startsWith(`${dir}/`));
 }
 
@@ -236,8 +238,9 @@ function copiedPaths(cwd: string, sha: string): string[] {
 		if (COPIED_DIRS.includes(name) || meta.split(" ")[1] === "blob") paths.push(name);
 	}
 	for (const file of gitText(cwd, ["ls-tree", "-r", "--name-only", sha, "--", "native"]).split("\n")) {
-		if (file && isCopied(file)) paths.push(file);
+		if (file && !file.startsWith(`${WORKSPACE}/`) && isCopied(file)) paths.push(file);
 	}
+	if (gitText(cwd, ["ls-tree", "-d", "--name-only", sha, "--", WORKSPACE])) paths.push(WORKSPACE);
 	return paths;
 }
 
@@ -248,7 +251,8 @@ function copiedPaths(cwd: string, sha: string): string[] {
 export function syncTree(cwd: string, tree: string, sha: string): void {
 	fs.mkdirSync(tree, { recursive: true });
 	const marker = path.join(tree, ".gate-sha");
-	const held = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8").trim() : "";
+	const stamp = fs.existsSync(marker) ? fs.readFileSync(marker, "utf8").trim() : "";
+	const held = stamp.startsWith("workspace:") ? stamp.slice("workspace:".length) : "";
 	if (held === sha) return;
 	fs.rmSync(marker, { force: true });
 	if (held && hasCommit(cwd, held)) {
@@ -267,7 +271,7 @@ export function syncTree(cwd: string, tree: string, sha: string): void {
 		}
 		extract(cwd, tree, sha, copiedPaths(cwd, sha));
 	}
-	fs.writeFileSync(marker, `${sha}\n`);
+	fs.writeFileSync(marker, `workspace:${sha}\n`);
 }
 
 /** Run `work` while holding the directory `lock`: wait for a live holder, take over a dead one's. */
@@ -302,11 +306,11 @@ interface StepResult {
 	output: string;
 }
 
-function runStep(label: string, command: string[], cwd: string): Promise<StepResult> {
+function runStep(label: string, command: string[], cwd: string, env = process.env): Promise<StepResult> {
 	const started = performance.now();
 	const { promise, resolve } = Promise.withResolvers<StepResult>();
 	const [file = "", ...args] = command;
-	const child = spawn(file, args, { cwd, env: withoutGitSelectors(process.env), stdio: ["ignore", "pipe", "pipe"] });
+	const child = spawn(file, args, { cwd, env: withoutGitSelectors(env), stdio: ["ignore", "pipe", "pipe"] });
 	let output = "";
 	const collect = (chunk: Buffer) => {
 		output += chunk;
@@ -330,7 +334,7 @@ const say = (line: string) => console.log(`[pre-push] ${line}`);
 export function worktreeHolds(root: string, sha: string): boolean {
 	try {
 		git(root, ["diff", "--quiet", sha, "--", ...INPUT_PATHS]);
-		return gitText(root, ["ls-files", "--others", "--exclude-standard", "--", ...COPIED_DIRS]) === "";
+		return gitText(root, ["ls-files", "--others", "--exclude-standard", "--", ...COPIED_DIRS, WORKSPACE]) === "";
 	} catch {
 		return false;
 	}
@@ -391,6 +395,53 @@ async function copyChecks(root: string, tree: string, sha: string, plan: Plan): 
 	return Promise.all(staticChecks(plan, tree, link, tscCommand(link, ".gate.tsbuildinfo")));
 }
 
+async function checkRust(root: string, dir: string, changed: string[]): Promise<StepResult[]> {
+	const workspace = path.join(dir, WORKSPACE);
+	const cargo = cargoPath(workspace);
+	if (!cargo) throw new Error("cargo is not installed");
+	const env = cargoEnv(cargo);
+	env.CARGO_TARGET_DIR = path.resolve(root, WORKSPACE, env.CARGO_TARGET_DIR ?? "target");
+	let packages: { manifest_path: string; name: string }[];
+	const started = performance.now();
+	try {
+		({ packages } = JSON.parse(
+			execFileSync(cargo, ["metadata", "--no-deps", "--locked", "--format-version", "1"], {
+				cwd: workspace,
+				env,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"],
+			}),
+		));
+	} catch (error) {
+		return [{ label: "cargo metadata", code: 1, ms: performance.now() - started, output: String(error) }];
+	}
+	const canonical = fs.realpathSync(dir);
+	const selected = packages.filter(pkg => {
+		const prefix = `${path.relative(canonical, path.dirname(pkg.manifest_path)).split(path.sep).join("/")}/`;
+		return changed.some(file => file.startsWith(prefix));
+	});
+	if (!selected.length) return [];
+	const names = selected.map(pkg => pkg.name);
+	const command = [
+		cargo,
+		"clippy",
+		"--locked",
+		...names.flatMap(name => ["-p", name]),
+		"--all-targets",
+		"--",
+		"-D",
+		"warnings",
+	];
+	return [
+		await runStep(
+			`clippy (${names.join(", ")})`,
+			[process.execPath, path.join(root, "scripts/build-lock.ts"), "--kind", "other", "--", ...command],
+			workspace,
+			env,
+		),
+	];
+}
+
 type Verdict = "passed" | "SKIPPED" | "FAILED";
 
 async function gate(root: string, gitDir: string, ref: PushRef): Promise<Verdict> {
@@ -427,8 +478,22 @@ async function gate(root: string, gitDir: string, ref: PushRef): Promise<Verdict
 		);
 	const gateDir = path.join(gitDir, "ompdesk-gate");
 	fs.mkdirSync(gateDir, { recursive: true });
+	// Include deleted modules: removing one can introduce a warning in a crate that otherwise did not change.
+	const rust = gitText(root, [
+		"diff",
+		"--no-renames",
+		"--name-only",
+		base,
+		ref.localSha,
+		"--",
+		`:(glob)${WORKSPACE}/crates/**/*.rs`,
+	])
+		.split("\n")
+		.filter(Boolean);
 	const inPlace =
-		plan.biome.length > 0 || plan.surfaces || plan.types || plan.budget ? worktreeHolds(root, ref.localSha) : false;
+		plan.biome.length > 0 || plan.surfaces || plan.types || plan.budget || rust.length
+			? worktreeHolds(root, ref.localSha)
+			: false;
 	if (plan.biome.length > 0 || plan.surfaces || plan.types) {
 		const modules = path.join(root, "node_modules");
 		const wait = () => say("another push of this checkout is running its gate; waiting for it");
@@ -455,6 +520,26 @@ async function gate(root: string, gitDir: string, ref: PushRef): Promise<Verdict
 			}
 		} catch (error) {
 			skipped.push(`static checks: ${(error as Error).message}`);
+		}
+	}
+	if (rust.length) {
+		try {
+			if (inPlace) results.push(...(await checkRust(root, root, rust)));
+			else {
+				const tree = path.join(gateDir, "tree");
+				results.push(
+					...(await withMutex(
+						path.join(gateDir, "lock"),
+						() => {
+							syncTree(root, tree, ref.localSha);
+							return checkRust(root, tree, rust);
+						},
+						() => say("waiting for the pushed-tree copy"),
+					)),
+				);
+			}
+		} catch (error) {
+			skipped.push(`clippy: ${(error as Error).message}`);
 		}
 	}
 	if (plan.budget) {

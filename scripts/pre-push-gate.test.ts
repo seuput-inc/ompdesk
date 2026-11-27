@@ -43,7 +43,7 @@ describe("parsePushRefs", () => {
 });
 
 describe("planGate", () => {
-	it("runs nothing but the fix-commit rule for docs, native Rust and workflows", () => {
+	it("needs no TypeScript or captured-table checks for docs, native Rust and workflows", () => {
 		const plan = planGate([
 			"README.md",
 			"docs/a.md",
@@ -212,9 +212,10 @@ describe("the gate's copy of a pushed commit", () => {
 		}
 	});
 
-	it("holds the folders the checks read, the top-level files and native's JSON, never native code or docs", () => {
+	it("copies Rust workspace sources and imported JSON, not unrelated native code or docs", () => {
 		write("src/a.ts", "export const a = 1;\n");
 		write("native/x.rs", "fn main() {}\n");
+		write("native/ompdesk/crates/core/src/lib.rs", "pub const PUSHED: bool = true;\n");
 		write("native/crates/core/table.json", "{}\n");
 		write("docs/d.md", "d\n");
 		write("package.json", "{}\n");
@@ -222,6 +223,11 @@ describe("the gate's copy of a pushed commit", () => {
 		syncTree(repo, tree, sha);
 		expect(fs.readFileSync(path.join(tree, "src/a.ts"), "utf8")).toBe("export const a = 1;\n");
 		expect(fs.existsSync(path.join(tree, "package.json"))).toBe(true);
+		fs.writeFileSync(path.join(repo, "native/ompdesk/crates/core/src/lib.rs"), "bad edit\n");
+		expect(worktreeHolds(repo, sha)).toBe(false);
+		expect(fs.readFileSync(path.join(tree, "native/ompdesk/crates/core/src/lib.rs"), "utf8")).toBe(
+			"pub const PUSHED: bool = true;\n",
+		);
 		expect(fs.existsSync(path.join(tree, "native/crates/core/table.json"))).toBe(true);
 		expect(fs.existsSync(path.join(tree, "native/x.rs"))).toBe(false);
 		expect(fs.existsSync(path.join(tree, "docs"))).toBe(false);
