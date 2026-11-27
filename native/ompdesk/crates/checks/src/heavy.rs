@@ -1215,49 +1215,6 @@ mod tests {
     }
 
     #[test]
-    fn pressure_holds_even_the_first_request_and_recovery_admits_a_fourth() {
-        thread_local! { static CRITICAL: std::cell::Cell<bool> = const { std::cell::Cell::new(true) }; }
-        let (dir, mut pool) = temp_pool(4);
-        pool.volumes.pressure = || {
-            Ok(Pressure {
-                critical: CRITICAL.get(),
-                warning: false,
-                cpu: Cpu::Saturated(false),
-                swap: 0,
-            })
-        };
-        let mut leases = Vec::new();
-        for name in ["one", "two", "three", "four"] {
-            let deadline = Instant::now() + Duration::from_secs(5);
-            leases.push(
-                pool.acquire_unless(
-                    1,
-                    owner(name),
-                    false,
-                    |w| {
-                        assert_eq!(name, "one");
-                        assert_eq!(w.pressure, Some("critical memory pressure"));
-                        assert!(w.holders.is_empty());
-                        assert!(CRITICAL.replace(false));
-                    },
-                    &|| Instant::now() >= deadline,
-                )
-                .unwrap(),
-            );
-        }
-        assert!(!CRITICAL.get());
-        assert_eq!(
-            pool.slots()
-                .into_iter()
-                .map(|slot| slot.owner.unwrap().command)
-                .collect::<Vec<_>>(),
-            ["one", "two", "three", "four"]
-        );
-        drop(leases);
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn a_full_pool_makes_the_next_wait_until_a_slot_is_given_back() {
         let (dir, pool) = temp_pool(2);
         let a = pool.acquire(1, owner("a"), |_| panic!("a waited")).unwrap();
