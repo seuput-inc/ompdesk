@@ -1,9 +1,8 @@
 /**
  * Making a bot and starting it (Orca's `NewBotDialog.tsx:182-217` create and `BotFirstScreen.tsx:100-214` steps): the
- * core seeds its soul and skills, then a template or import sends its first message to the home chat.
- * A plain bot's first message is the owner's (the core sends nothing: R88), so its composer just takes focus.
+ * core seeds the bot's folder and delivers the first message to its home chat (`bot_first_run.rs`).
  *
- * What happened is kept per bot (`useBotLaunch`) for the bot page's first screen until its first chat answers.
+ * Opening the home chat is kept per bot (`useBotLaunch`) for the bot page's first screen until its first chat answers.
  * Also the dialogs' store: which bot dialog is open (New bot, Templates, Import, Hand to a bot).
  */
 import { create } from "zustand";
@@ -13,10 +12,11 @@ import { loadChunk } from "../../lib/chunk-load";
 import { translate } from "../../lib/i18n";
 import { useBotsStore } from "../../stores/bots";
 import type { ComposerStore } from "../../stores/composer";
+import { useRemoteStore } from "../../stores/remote";
 import { sessionRuntimeStore } from "../../stores/session-runtime-context";
 import { ensureTabRuntime } from "../../stores/tab-runtime";
 import { useTabsStore } from "../../stores/tabs";
-import { toastError } from "../../stores/toast";
+import { toast, toastError } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";
 import type { BotTemplate } from "./bot-templates";
 
@@ -64,24 +64,17 @@ export const openBotDialog = (dialog: BotDialog): void => useBotDialogs.getState
 
 export type LaunchStep = "pending" | "running" | "done" | "failed" | "skipped";
 
-/** The new bot's first screen: made, its omp started in its home chat, its first message sent. */
+/** The new bot's first screen: its home chat's tab opening (its first message is the core's, read from the bot). */
 export interface BotLaunch {
 	tabId: string | null;
 	start: LaunchStep;
-	first: LaunchStep;
 	error?: string;
-	/** What to send again on Try again. */
-	kickoff: string | null;
 }
 
 export const useBotLaunch = create<{ launches: Record<string, BotLaunch> }>()(() => ({ launches: {} }));
 
-const NEW_LAUNCH: BotLaunch = { tabId: null, start: "pending", first: "pending", kickoff: null };
-
-function noteLaunch(id: string, change: Partial<BotLaunch>): void {
-	useBotLaunch.setState(state => ({
-		launches: { ...state.launches, [id]: { ...(state.launches[id] ?? NEW_LAUNCH), ...change } },
-	}));
+function noteLaunch(id: string, launch: BotLaunch): void {
+	useBotLaunch.setState(state => ({ launches: { ...state.launches, [id]: launch } }));
 }
 
 /** The first turn of a bot brought over from another app (Orca's `bot-import.ts:62-77`: a prompt, no parser). */
@@ -122,14 +115,17 @@ function whenBot(id: string, ready: (bot: Bot) => boolean): Promise<Bot | null> 
 	return promise;
 }
 
-/** Sends `text` as the owner's first message in the bot's home chat tab; the step reads what became of it. */
-export async function sendKickoff(botId: string, tabId: string, text: string): Promise<void> {
-	noteLaunch(botId, { first: "running", error: undefined });
-	const response = await ensureTabRuntime(tabId)
-		.command({ type: "prompt", message: text })
-		.catch((error: unknown) => ({ success: false as const, error: String(error) }));
-	if (response.success) noteLaunch(botId, { first: "done" });
-	else noteLaunch(botId, { first: "failed", error: response.error ?? translate("input.sendFailed") });
+/** The owner's Try again on a first message that got no word: the core sends it again when that still holds. */
+export function retryKickoff(botId: string): Promise<void> {
+	return useBotsStore
+		.getState()
+		.command({ action: "kickoff", id: botId, asked: true })
+		.then(
+			() => undefined,
+			(error: unknown) => {
+				toastError({ title: translate("bots.first.retryFailed"), error });
+			},
+		);
 }
 
 /** Saves a template's routines, off, waking the bot's home chat (so they run as the bot, in its chat). */
@@ -153,7 +149,7 @@ async function saveRoutines(bot: Bot, template: BotTemplate): Promise<void> {
 }
 
 /**
- * Makes the bot and opens its home chat; sends a template's or an import's first message and
+ * Makes the bot with its optional first message and opens its home chat;
  * saves a template's routines (off) once the home chat exists; hands a session over once it does. Rejects with the
  * core's reason when the bot could not be made (the dialog shows it); anything after that is the first screen's.
  */
@@ -163,6 +159,12 @@ export async function createBot(draft: NewBotDraft): Promise<Bot> {
 	const template = draft.template;
 	// The templates' souls and skills load with a template's create only: Sidebar.tsx imports this module statically.
 	const words = template ? await loadChunk(() => import("./bot-templates")) : null;
+	const kickoff =
+		template && words
+			? words.templateKickoff(template.template)
+			: draft.importFrom
+				? importKickoff(draft.importFrom)
+				: null;
 	const state = await store.command({
 		action: "create",
 		name,
@@ -174,16 +176,11 @@ export async function createBot(draft: NewBotDraft): Promise<Bot> {
 			: draft.purpose?.trim()
 				? { purpose: draft.purpose.trim() }
 				: {}),
+		...(kickoff ? { kickoff } : {}),
 	});
 	const bot = state.bots.find(known => known.name === name);
 	if (!bot) throw new Error(translate("bots.new.failed"));
-	const kickoff =
-		template && words
-			? words.templateKickoff(template.template)
-			: draft.importFrom
-				? importKickoff(draft.importFrom)
-				: null;
-	noteLaunch(bot.id, { start: "running", first: kickoff ? "pending" : "skipped", kickoff });
+	noteLaunch(bot.id, { tabId: null, start: "running" });
 	if (draft.model !== undefined)
 		await store
 			.command({ action: "update", id: bot.id, model: draft.model })
@@ -191,11 +188,10 @@ export async function createBot(draft: NewBotDraft): Promise<Bot> {
 	useUiStore.getState().closeDestination();
 	const tabId = await useTabsStore.getState().openTab({ cwd: bot.folder, kind: "agent" });
 	if (!tabId) {
-		noteLaunch(bot.id, { start: "failed", error: translate("bots.launch.notStarted") });
+		noteLaunch(bot.id, { tabId: null, start: "failed", error: translate("bots.launch.notStarted") });
 		return bot;
 	}
 	noteLaunch(bot.id, { tabId, start: "done" });
-	if (kickoff) await sendKickoff(bot.id, tabId, kickoff);
 	if (template) void saveRoutines(bot, template.template).catch(() => {});
 	const handOver = draft.handOver;
 	if (handOver)
@@ -215,16 +211,34 @@ export function openBotHome(bot: Bot): void {
 	void openBotChat(bot, bot.home).catch(() => {});
 }
 
-/** Opens one of the bot's chats, or a new one in its folder (`session` null); `draft` waits in its composer. */
+/**
+ * Opens one of the bot's chats, or a new one in its folder (`session` null); `draft` waits in its composer. A paired
+ * host's bot chats on that host, as a tab of it (the way its sessions open); while the host is offline nothing opens and
+ * a notice says so: the chat lives there.
+ */
 export async function openBotChat(bot: Bot, session: string | null, draft?: string): Promise<void> {
+	if (bot.device) {
+		const host = useRemoteStore.getState().state?.hosts.find(known => known.deviceId === bot.device);
+		if (host?.state !== "online") {
+			const kept = useBotsStore.getState().state.remote?.find(copy => copy.device === bot.device)?.name;
+			toast({
+				variant: "warning",
+				message: translate("bots.remote.offlineChat", { device: host?.name ?? kept ?? "" }),
+			});
+			return;
+		}
+	}
 	useUiStore.getState().closeDestination();
 	const tabs = useTabsStore.getState();
-	const held = session ? tabs.tabs.find(tab => tab.sessionPath === session && !tab.device) : undefined;
+	const held = session ? tabs.tabs.find(tab => tab.sessionPath === session && tab.device === bot.device) : undefined;
 	let tabId: string | null = held?.id ?? null;
+	const where = bot.device ? { device: bot.device } : {};
 	if (held) await tabs.switchTab(held.id);
 	else
 		tabId = await tabs.openTab(
-			session ? { cwd: bot.folder, sessionPath: session, kind: "agent" } : { cwd: bot.folder, kind: "agent" },
+			session
+				? { cwd: bot.folder, sessionPath: session, kind: "agent", ...where }
+				: { cwd: bot.folder, kind: "agent", ...where },
 		);
 	if (tabId && draft) {
 		ensureTabRuntime(tabId);

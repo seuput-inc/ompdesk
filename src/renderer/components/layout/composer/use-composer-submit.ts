@@ -8,19 +8,13 @@ import { useCallback, useEffect, useRef } from "react";
 import type { AgentMessage, AvailableCommand } from "../../../../shared/rpc-types";
 import { refreshNextPromptAfterBash } from "../../../hooks/use-next-prompt";
 import { hydrateTabSession } from "../../../hooks/use-rpc-events";
-import { endAutoPlan, runAutoMode } from "../../../lib/auto-mode-client";
-import {
-	isGuiOnlyBuiltinCommand,
-	planComposerSubmit,
-	SUBMIT_CANCELLED,
-	settleComposerResponse,
-} from "../../../lib/composer-submit";
+import { isGuiOnlyBuiltinCommand, planComposerSubmit, settleComposerResponse } from "../../../lib/composer-submit";
 import { expandEmoticons } from "../../../lib/emoji";
 import { errorDetail } from "../../../lib/error-detail";
 import { rememberHistoryImages } from "../../../lib/history-images";
 import { useT } from "../../../lib/i18n";
 import { parseComposerMode } from "../../../lib/input-modes";
-import { abortActiveTurn, clearSessionContext } from "../../../lib/messages";
+import { clearSessionContext } from "../../../lib/messages";
 import { holdMessage, sendsHeld } from "../../../lib/outbox-delivery";
 import { danglingPasteFragment, dropReferencedPastes, expandPasteMarkers } from "../../../lib/paste-blobs";
 import { IMAGE_ONLY_CHIP } from "../../../lib/queue-chip";
@@ -30,14 +24,12 @@ import { useTabRpc } from "../../../lib/tab-rpc";
 import { type ComposerImage, type ComposerStore, useComposerStore } from "../../../stores/composer";
 import { useInputHistoryStore } from "../../../stores/input-history";
 import { type MessagesStore, useMessagesStore } from "../../../stores/messages";
-import { type PlanApprovalStore, usePlanApprovalStore } from "../../../stores/plan-approval";
 import { type QueueStore, useQueueStore } from "../../../stores/queue";
 import { type SessionStore, useSessionStore } from "../../../stores/session";
 import { sessionRuntimeStore, useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { restoreTabComposer, useTabsStore } from "../../../stores/tabs";
 import { toast, toastError } from "../../../stores/toast";
 import { webRuntime } from "../../../web/runtime";
-import { useAutoModePrefetch } from "./use-auto-mode-prefetch";
 
 export function useComposerSubmit({
 	text,
@@ -73,12 +65,10 @@ export function useComposerSubmit({
 	const contextTabId = useRuntimeTabId();
 	const activeTabId = useTabsStore(state => state.activeTabId);
 	const runtimeTabId = contextTabId ?? activeTabId;
-	// The send's own expansion (below), so a question asked while typing is the one the send asks.
 	const expandProse = useCallback(
 		(draft: string) => (emojiAutocomplete ? expandEmoticons(expandPasteMarkers(draft)) : expandPasteMarkers(draft)),
 		[emojiAutocomplete],
 	);
-	useAutoModePrefetch({ text, isStreaming, status, tabId: runtimeTabId, rpc, expand: expandProse });
 	const heldSend = useRef<{ message: string; overrideText?: string } | null>(null);
 	const send = useCallback(
 		// `overrideText` sends a freshly computed value (voice dictation submit
@@ -362,12 +352,6 @@ export function useComposerSubmit({
 			// while streaming), session-replacing commands are blocked while
 			// busy, and local-only resolutions rehydrate the transcript.
 			const payload = images.map(image => image.content);
-			// A plain prompt from an idle composer waits for the automatic mode choice (about a second on
-			// the real judge) before it leaves. Until then Stop and Esc withdraw it (lib/messages.ts
-			// abortActiveTurn): nothing reaches omp, a mode the choice already picked ends, the draft returns.
-			const withdraw = new AbortController();
-			let left = false;
-			const session = originSession ?? useSessionStore;
 			const submit = planComposerSubmit({
 				message: expandedMessage,
 				typed: message,
@@ -376,31 +360,6 @@ export function useComposerSubmit({
 				commands,
 				hostDecides,
 				rpc,
-				signal: withdraw.signal,
-				beforePrompt: async () => {
-					if (withdraw.signal.aborted) return;
-					const choice = await runAutoMode({
-						message: expandedMessage,
-						isStreaming,
-						session,
-						rpc,
-						planPending:
-							(
-								sessionRuntimeStore<PlanApprovalStore>(originTabId, "planApproval") ?? usePlanApprovalStore
-							).getState().pending !== null,
-						// Stop and Esc return at once; a decision the host makes after that is ended when it lands.
-						signal: withdraw.signal,
-						onDeciding: deciding => originComposer.getState().setDecidingMode(deciding),
-						onLateDecision: late => {
-							if (late.mode === "goal") void abortActiveTurn(rpc, originTabId, "auto-mode");
-							void rpc.autoModeEnd(late.mode === "goal" ? "goal" : "plan").catch(() => {});
-						},
-					});
-					if (!withdraw.signal.aborted) left = true;
-					else if (choice?.mode === "plan") await endAutoPlan(session, rpc);
-					// Stock's `goal create` already started the goal's own turn: stopping it ends the goal too.
-					else if (choice?.mode === "goal") await abortActiveTurn(rpc, originTabId, "auto-mode");
-				},
 			});
 			if (submit.kind === "blocked") return;
 			if (submit.kind === "handled") {
@@ -467,14 +426,6 @@ export function useComposerSubmit({
 					.getState()
 					.expectImages(expandedMessage || IMAGE_ONLY_CHIP, payload);
 			}
-			const cancelSubmit = optimisticMessage
-				? () => {
-						if (left || withdraw.signal.aborted) return false;
-						withdraw.abort();
-						return true;
-					}
-				: null;
-			if (cancelSubmit) originComposer.getState().setCancelSubmit(cancelSubmit);
 			let accepted = false;
 			// Let React commit the cleared draft before contextBridge serializes the
 			// request payload. On large sessions/attachments that synchronous bridge
@@ -492,7 +443,6 @@ export function useComposerSubmit({
 						if (!response.success) {
 							if (optimisticMessage) originMessages.getState().removeLiveMessage(optimisticMessage);
 							restoreDraft(message, previousImages);
-							if (response.code === SUBMIT_CANCELLED) return;
 							if (response.code === "rpc_delivery_unknown") markUncertain();
 							showSendError(t("input.sendFailed"), response);
 							return;
@@ -515,8 +465,6 @@ export function useComposerSubmit({
 					})
 					.finally(() => {
 						stopWatching?.();
-						if (cancelSubmit && originComposer.getState().cancelSubmit === cancelSubmit)
-							originComposer.getState().setCancelSubmit(null);
 						if (originStillActive()) setSending(false);
 					});
 			}, 0);

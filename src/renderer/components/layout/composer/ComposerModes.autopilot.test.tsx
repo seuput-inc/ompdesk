@@ -109,7 +109,7 @@ afterEach(async () => {
 	document.body.innerHTML = "";
 	useSessionStore.getState().reset();
 	useAutopilotStore.getState().reset();
-	useUiStore.setState({ modesOpen: false, modesTab: "plan", panelVisible: false, panelTab: "diff" });
+	useUiStore.setState({ modesOpen: false, modesTab: null, panelVisible: false, panelTab: "diff" });
 });
 
 function trigger(): TestElement {
@@ -278,7 +278,7 @@ describe("Autopilot start sheet", () => {
 		);
 	});
 
-	it("holds Start back only outside a git repository: Plan mode or a Goal in this tab does not touch the run's own new tab", async () => {
+	it("holds Start back only outside a git repository: a Goal in this tab does not touch the run's own new tab", async () => {
 		installMockOmp();
 		gitStatus.isRepo = false;
 		await mount(<ComposerModes />);
@@ -289,7 +289,6 @@ describe("Autopilot start sheet", () => {
 
 		gitStatus.isRepo = true;
 		useSessionStore.setState({
-			planModeEnabled: true,
 			goal: { objective: "ship it" },
 			goalState: { status: "active" },
 		});

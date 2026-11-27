@@ -242,6 +242,7 @@ pub(crate) struct Tracking {
     pub stopped: bool,
     /// Stock's auto-retry waiting for its next attempt: `errorMessage`, and the serial of its `auto_retry_start`.
     pub retry: Option<Retry>,
+    pub(super) retry_blocked: bool,
     /// The session's goal is active (stock's last `goal_updated`): between its turns a relaunch must resume it, since
     /// stock pauses an active goal when the session loads.
     pub goal_active: bool,
@@ -361,6 +362,12 @@ impl Tracking {
                 self.observed = ObservedTurn::Unfinished;
                 self.stopped = false;
                 self.retry = None;
+                if self.run.saga.is_none() {
+                    self.retry_blocked = false;
+                }
+            }
+            Some("message_end") if event["message"]["retryBlocked"] == true => {
+                self.retry_blocked = true;
             }
             Some("auto_retry_start") => {
                 *serial += 1;
@@ -372,7 +379,16 @@ impl Tracking {
             Some("agent_end")
                 if ended && event.get("isTerminal").and_then(Value::as_bool) != Some(false) =>
             {
-                self.finish(run_outcome(event.get("messages")), host(), serial);
+                let mut outcome = run_outcome(event.get("messages"));
+                if self.retry_blocked && outcome["stopReason"] == "error" {
+                    outcome["retryBlocked"] = Value::Bool(true);
+                }
+                self.retry_blocked = false;
+                self.finish(outcome, host(), serial);
+            }
+            Some("agent_end") if self.run.saga.is_some() => {
+                self.retry_blocked |= last_assistant(event.get("messages"))
+                    .is_some_and(|last| last["retryBlocked"] == true);
             }
             Some("agent_end") if remote && ended => self.observed = ObservedTurn::Unfinished,
             Some("goal_updated") => {
@@ -383,10 +399,14 @@ impl Tracking {
                 if ended {
                     let mut outcome = Map::new();
                     outcome.insert("stopReason".into(), Value::from("error"));
+                    if self.retry_blocked {
+                        outcome.insert("retryBlocked".into(), Value::Bool(true));
+                    }
                     if let Some(error) = event.get("finalError") {
                         outcome.insert("errorMessage".into(), error.clone());
                     }
                     self.finish(Value::Object(outcome), host(), serial);
+                    self.retry_blocked = false;
                 }
             }
             _ => {}
@@ -411,16 +431,27 @@ fn js_join_text(value: Option<&Value>) -> String {
     }
 }
 
-/// A finished run's outcome, read from agent_end's own messages (the last assistant reply).
-fn run_outcome(messages: Option<&Value>) -> Value {
-    let last = messages.and_then(Value::as_array).and_then(|messages| {
+fn last_assistant(messages: Option<&Value>) -> Option<&Value> {
+    messages.and_then(Value::as_array).and_then(|messages| {
         messages
             .iter()
             .rfind(|m| m["role"].as_str() == Some("assistant"))
-    });
+    })
+}
+
+/// A finished run's outcome, read from agent_end's own messages (the last assistant reply).
+fn run_outcome(messages: Option<&Value>) -> Value {
+    let last = last_assistant(messages);
     let stop_reason = last
         .and_then(|last| last["stopReason"].as_str())
         .unwrap_or("stop");
+    if last.is_some_and(|last| last["retryBlocked"] == true) {
+        let mut outcome = json!({"stopReason": stop_reason, "retryBlocked": true});
+        if let Some(error) = last.and_then(|last| last.get("errorMessage")) {
+            outcome["errorMessage"] = error.clone();
+        }
+        return outcome;
+    }
     if let Some(error) = last
         .and_then(|last| last["errorMessage"].as_str())
         .filter(|error| !error.is_empty())

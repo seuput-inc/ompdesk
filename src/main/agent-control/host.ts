@@ -39,7 +39,7 @@ import {
 	parseClosedChildren,
 	sidebarViewOf,
 } from "../../shared/agent-control";
-import type { BotsAnswer, BotsCall, BotsState } from "../../shared/bots";
+import type { BotsAnswer, BotsCall, BotsState, SharedBots, SharedBotsDelta } from "../../shared/bots";
 import type { SessionStatus } from "../../shared/control-protocol";
 import type {
 	AutoCloseTurn,
@@ -68,6 +68,7 @@ import {
 import type { Schedule } from "../../shared/schedules";
 import type { SessionSummary, VersionedSummaries } from "../../shared/session-summary";
 import type { FamilyEdits } from "../../shared/turn-edits";
+import type { HostBotsRoomPost, HostBotsUpdate } from "../bots";
 import { CoreError, core } from "../core/process";
 import { deletedSessions } from "../deleted-sessions";
 import { discardOpenedWorktree } from "../disk/saved-worktrees";
@@ -138,6 +139,8 @@ const SENT_MARKS_TIMEOUT_MS = 8_000;
 const OPENING_SETTLE_MS = 3_000;
 /** An open that never sent its first prompt (it failed, or its omp never came up) stops holding a restart after this. */
 const OPENING_MAX_MS = 5 * 60_000;
+/** A change to a paired host's bot: an item answer reaches the bot's chat there (opened when closed) before it answers. */
+const BOTS_COMMAND_TIMEOUT_MS = 60_000;
 
 async function localPathIs(path: string, kind: "file" | "directory"): Promise<boolean> {
 	try {
@@ -175,6 +178,7 @@ export interface AgentControlHostDeps {
 		| "controlTabs"
 		| "observeTabs"
 		| "routeSideChannel"
+		| "isRequestOpen"
 		| "sidecarOf"
 		| "startTab"
 		| "setTabTask"
@@ -183,6 +187,8 @@ export interface AgentControlHostDeps {
 		| "windowsShowingTab"
 		| "sessionOwner"
 		| "whenTabExited"
+		| "routeAsk"
+		| "delegatedPrompt"
 	>;
 	/** This computer's session index (stored sessions the control tools list, search and read). */
 	sessions?: {
@@ -234,6 +240,10 @@ export interface AgentControlHostDeps {
 	botsRoot?: string | null;
 	/** The core's bots state changed: main keeps it and tells every window. */
 	botsChanged?: (state: BotsState) => void;
+	/** This computer's bots changed as its paired devices see them: every connected device is told. */
+	botsShared?: (change: SharedBotsDelta) => void;
+	/** One of this computer's bots posted in a paired device's group: false when that device is not connected. */
+	botsRoomPostTo?: (device: string, post: unknown) => boolean;
 	/** Where the bytes of the attachments an outbox entry still owes are kept, by content; absent: in memory only. */
 	attachmentsDir?: string | null;
 	/** This computer's upload folder (`web/uploads.ts`): where a file sent to a session on this computer lands. */
@@ -347,7 +357,6 @@ export interface OutsideCaller {
 export interface ControlTabSnapshot extends Pick<ControlTab, "tabId" | "title" | "status" | "busy" | "hidden"> {
 	resuming: boolean;
 	hasAsk: boolean;
-	hasPlan: boolean;
 }
 
 export class AgentControlRuntime {
@@ -417,6 +426,26 @@ export class AgentControlRuntime {
 		return this.control.botHome(name, device, deviceName);
 	}
 
+	/** This computer's bots and items as its paired devices get them (`host.bots.list`). */
+	botsShare(): Promise<SharedBots> {
+		return this.control.botsShare();
+	}
+
+	/** A paired device's change to one of this computer's bots (`host.bots.command`): this computer's copy after it. */
+	botsFrom(request: unknown, device: string, deviceName: string): Promise<unknown> {
+		return this.control.botsFrom(request, device, deviceName);
+	}
+
+	/** What this computer heard of a paired host's bots (its link's copy, a change, the link itself). */
+	botsRemote(update: HostBotsUpdate): Promise<{ applied: boolean }> {
+		return this.control.botsRemote(update);
+	}
+
+	/** A paired host's bot posted in one of this computer's groups (`host.bots.roomPost`). */
+	botsRoomPost(post: HostBotsRoomPost): Promise<unknown> {
+		return this.control.botsRoomPost(post);
+	}
+
 	/** The tab Autopilot (or anyone) opened this one for, if the control tools opened it. */
 	parentOf(tabId: string): { callerTabId: string; tag?: string } | undefined {
 		return this.#parents.get(tabId);
@@ -441,6 +470,10 @@ export class AgentControlRuntime {
 
 	/** One pool activity, to the core's runtime with the opener, the card rule and the released session main knows. */
 	#activity(activity: TabActivity): void {
+		if (activity.type === "askHeld") {
+			this.#routeHeld(activity);
+			return;
+		}
 		const { pool } = this.#deps;
 		const parent = this.#openerOf(activity.tabId);
 		// A child's question card, and its close, tell its opener (local and paired-device children alike), and so does
@@ -484,6 +517,25 @@ export class AgentControlRuntime {
 			this.#parents.delete(activity.tabId);
 			this.#userPrompted.delete(activity.tabId);
 		}
+	}
+
+	/**
+	 * A question of a run another session's message started waits off the windows until the core says whose it is
+	 * (`agentRuntime.routeAsk`): the bot whose chat sent that message holds it, or the owner gets it as any other ask (the
+	 * pool announces it again as an `ask`, so its opener hears of it as before).
+	 */
+	#routeHeld({ tabId, requestId, origin }: Extract<TabActivity, { type: "askHeld" }>): void {
+		const decide = (chat?: string) => {
+			try {
+				this.#deps.pool.routeAsk(tabId, requestId, chat);
+			} catch {
+				// The pool went with the core at quit: no window is left to show it.
+			}
+		};
+		void this.control.runtime.routeAsk({ tabId, requestId, origin }).then(
+			answer => decide(answer.chat ?? undefined),
+			() => decide(),
+		);
 	}
 
 	/**
@@ -703,7 +755,6 @@ export class AgentControlRuntime {
 				hidden: tab.hidden,
 				resuming: tab.resuming === true,
 				hasAsk: tab.asks.length > 0,
-				hasPlan: tab.plan !== undefined,
 			});
 		}
 		return tabs;
@@ -802,7 +853,7 @@ export class AgentControlRuntime {
 	}
 
 	#controlTab(row: ControlTabInfo, asks: ControlAsk[], hidden: Set<string>): ControlTab {
-		const { facts, plan, formerIds, hasDraft, owner, ...info } = row;
+		const { facts, formerIds, hasDraft, owner, ...info } = row;
 		const autoClosable = this.#autoClosable(info);
 		// A paired web page's tab: what its page last said about unsaved Files edits in it (never assumed clean).
 		const webEdits =
@@ -830,7 +881,6 @@ export class AgentControlRuntime {
 			...(info.resuming ? { resuming: true } : {}),
 			...(info.cutOff ? { cutOff: info.cutOff } : {}),
 			asks,
-			...(plan ? { plan } : {}),
 			hidden: !info.device && typeof info.sessionPath === "string" && hidden.has(info.sessionPath),
 			...(info.worktree ? { worktree: info.worktree } : {}),
 			...(info.sessionPath ? { sessionPath: info.sessionPath } : {}),
@@ -1266,7 +1316,23 @@ export class AgentControlRuntime {
 						success: false,
 						error: "That session is gone.",
 					} as RpcResponse);
+				const delegated = command.type === "prompt" || command.type === "set_goal" ? command.message : undefined;
+				if (delegated) deps.pool.delegatedPrompt(tabId, delegated);
 				const sent = deps.dispatch(win, sidecar, tabId, command, timeoutMs);
+				if (delegated) {
+					const revoke = () => deps.pool.delegatedPrompt(tabId, delegated, true);
+					void sent.then(response => {
+						if (
+							!response.success ||
+							(command.type === "set_goal" &&
+								response.data &&
+								typeof response.data === "object" &&
+								"promptSkipped" in response.data &&
+								response.data.promptSkipped === true)
+						)
+							revoke();
+					}, revoke);
+				}
 				const opening = this.#opening.get(tabId);
 				if (opening && (command.type === "prompt" || command.type === "set_goal"))
 					void sent.then(
@@ -1301,9 +1367,12 @@ export class AgentControlRuntime {
 			},
 			confirm: (callerTabId, title, message) => this.#confirm(callerTabId, title, message),
 			answer: async (tabId, requestId, response: ExtensionUIResponse) => {
+				if (!deps.pool.isRequestOpen(tabId, requestId)) throw new Error("That question is not open any more.");
 				if (!(await deps.pool.routeSideChannel(requestId, response, tabId)))
 					throw new Error("That question is not open any more.");
 			},
+			escalateAsk: async (tabId, requestId, chatTabId) =>
+				deps.pool.routeAsk(tabId, requestId, chatTabId ?? undefined, chatTabId !== null),
 			markAnswered: async (tabId, byTitle) => {
 				await this.#hostCommand(tabId, {
 					type: "agent_control_note",
@@ -1357,6 +1426,14 @@ export class AgentControlRuntime {
 			recordClosed: child => this.#recordClosed(child),
 			closedChildren: () => parseClosedChildren(deps.prefs.get(AGENT_CLOSED_CHILDREN_PREF)),
 			botsChanged: state => deps.botsChanged?.(state),
+			botsShared: change => deps.botsShared?.(change),
+			botsRoomPostTo: (device, post) => deps.botsRoomPostTo?.(device, post) ?? false,
+			botsCommand: (device, request) => {
+				const remote = deps.remote;
+				if (!remote) throw new Error("No paired computers here.");
+				// An answer to an item question reaches the bot's chat on the host before the host answers.
+				return remote.request<unknown>(device, "host.bots.command", { request }, BOTS_COMMAND_TIMEOUT_MS);
+			},
 			setOpener: (tabId, openerTabId) => {
 				// As a session the bot's chat opened, or one the call journal names after its opener was lost: its reports
 				// and auto-close go to that tab, across a relaunch too.

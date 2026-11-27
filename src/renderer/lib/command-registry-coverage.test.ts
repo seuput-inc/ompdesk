@@ -20,7 +20,6 @@ const ctx: CommandRegistryContext = {
 	fastModeEnabled: false,
 	autoCompaction: false,
 	autoRetry: false,
-	planModeEnabled: false,
 	prewalkArmed: false,
 	availableCommands: [],
 	openModelPicker: () => {},
@@ -50,7 +49,6 @@ const ctx: CommandRegistryContext = {
 		setAutoRetry: async () => ok(),
 		compact: async () => ok(),
 		newSession: async () => {},
-		setPlanMode: async () => ok(),
 		setPrewalk: async () => ok(),
 		cycleModel: async () => {},
 		cycleThinkingLevel: async () => {},
@@ -104,7 +102,6 @@ const SHORTCUT_ROWS: Record<KeymapActionId, string | null> = {
 	retry: "retry",
 	"pr.center": "prs",
 	dequeue: "dequeue",
-	"plan.toggle": "plan",
 	"tools.expand": "expand-tools",
 	"thinking.toggle": "toggle-thinking-blocks",
 	"thinking.cycle": "thinking cycle",
@@ -248,7 +245,7 @@ describe("built-in ECC prompt commands", () => {
 			file.replace(/\.md$/, ""),
 		);
 		const gui = buildCommandMenu(ctx).flatMap(item => [item.name, ...(item.aliases ?? [])]);
-		expect(gui).toContain("plan");
+		expect(gui).toContain("model");
 		expect(ecc.filter(name => gui.includes(name))).toEqual([]);
 	});
 });

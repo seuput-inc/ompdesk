@@ -32,11 +32,14 @@ const botCommand = z.object({
 			name: z.string().min(1).max(80),
 			paused: z.boolean(),
 			folder: z.string().min(1).max(4096),
+			firstRun: z.boolean().default(false),
 		}),
 		items: z.array(botItem).max(1000),
 		needsYou: z.array(botItem).max(1000),
 		live: z.array(z.string().max(500)).max(100),
 	}),
+	/** The newest kickoff's mail id, for the first run's facts (`BotChatFacts`). */
+	kickoff: z.string().min(1).max(100).optional(),
 });
 const sentCommand = z.object({ marks: z.array(z.string().min(1).max(200)).min(1).max(100) });
 const judgeCommand = z.object({ system: z.string().min(1).max(20_000), user: z.string().min(1).max(200_000) });
@@ -80,11 +83,14 @@ export const handlers: Record<string, LocalHandler> = {
 		await ctx.bridge.request("agent_control.note", { text });
 		return {};
 	},
-	/** A bot chat's context (the core's bot pass): its bridge journals it when it changed (`modes/bots.ts`). */
+	/**
+	 * A bot chat's context (the core's bot pass): its bridge journals it when it changed and answers what the branch
+	 * says for the first run (`modes/bots.ts`).
+	 */
 	agent_control_bot: async (command, ctx) => {
-		const { context } = botCommand.parse(command);
+		const { context, kickoff } = botCommand.parse(command);
 		const payload: BotContext = context;
-		return ctx.bridge.request(BOT_METHOD, payload);
+		return ctx.bridge.request(BOT_METHOD, kickoff ? { ...payload, kickoff } : payload);
 	},
 	/** The session was opened by another session's agent: its bridge journals it and adds the worker contract. */
 	agent_control_worker: async (command, ctx) => {

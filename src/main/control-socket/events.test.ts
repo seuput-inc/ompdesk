@@ -134,7 +134,7 @@ describe("control events", () => {
 		expect(await heardBefore(connected, 1)).toEqual([]);
 	});
 
-	it("projects only visible pool facts and gives a pending plan precedence over a stopped session", async () => {
+	it("projects only visible pool facts and gives a pending ask precedence over a stopped session", async () => {
 		const tab: ControlTabSnapshot = {
 			tabId: "t1",
 			title: "Worker",
@@ -142,7 +142,6 @@ describe("control events", () => {
 			busy: true,
 			resuming: true,
 			hasAsk: false,
-			hasPlan: false,
 			hidden: true,
 		};
 		backend.snapshots = () => [{ ...tab }];
@@ -150,7 +149,7 @@ describe("control events", () => {
 		backend.fire({ type: "ask", tabId: "t1", requestId: "private", text: "private question" });
 		tab.hidden = false;
 		backend.fire({ type: "step", tabId: "t1" });
-		tab.hasPlan = true;
+		tab.hasAsk = true;
 		backend.fire({ type: "step", tabId: "t1" });
 		expect((await heardBefore(connected, 1)).map(frame => "event" in frame && frame.event)).toEqual([
 			{ type: "session_state", session: "t1", title: "Worker", state: "stopped", previous: null },

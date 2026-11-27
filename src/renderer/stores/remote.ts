@@ -119,6 +119,21 @@ export function useHostLinkLost(deviceId: string | undefined): boolean {
 	return since !== undefined && Date.now() - since >= LINK_NOTICE_GRACE_MS;
 }
 
+/** The hosts whose link has stayed down past the grace (`useHostLinkLost` for a whole list). */
+export function useLostHosts(): ReadonlySet<string> {
+	const downSince = useRemoteStore(store => store.downSince);
+	const now = Date.now();
+	const pending = Object.values(downSince)
+		.map(since => since + LINK_NOTICE_GRACE_MS)
+		.filter(at => at > now);
+	useWakeAt(pending.length > 0 ? Math.min(...pending) : undefined);
+	return new Set(
+		Object.entries(downSince)
+			.filter(([, since]) => now - since >= LINK_NOTICE_GRACE_MS)
+			.map(([device]) => device),
+	);
+}
+
 /** The host's offline line adds "Check that Tailscale is on" (`tailscaleHint`); re-renders when it turns due. */
 export function useTailscaleHint(deviceId: string | undefined): boolean {
 	const since = useRemoteStore(store => (deviceId === undefined ? undefined : store.downSince[deviceId]));

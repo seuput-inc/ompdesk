@@ -1,6 +1,6 @@
 import type { StoreApi } from "zustand/vanilla";
 import { CREDIT_SPEND_OFF_WORDING } from "../../shared/credit-spend";
-import { isBillingCap } from "../../shared/quota-reset";
+import { anthropicSpendRefusal, isBillingCap } from "../../shared/quota-reset";
 import type {
 	AgentMessage,
 	ImageContent,
@@ -21,7 +21,6 @@ import { focusedRuntimeTabId, sessionRuntimeStore, withSessionRuntime } from "..
 import { ensureTabRuntime } from "../stores/tab-runtime";
 import { useTabsStore } from "../stores/tabs";
 import { toast, toastError } from "../stores/toast";
-import { endAutoGoal } from "./auto-mode-client";
 import { withCompactionRun } from "./compaction-action";
 import { translate } from "./i18n";
 import { promptDisplayText } from "./prompt-text";
@@ -116,6 +115,8 @@ export type TurnErrorKind =
 	| "modelUnavailable"
 	| "rateLimit"
 	| "billing"
+	| "lowCredit"
+	| "spendLimit"
 	| "overloaded"
 	| "compaction"
 	| "unknown";
@@ -146,6 +147,8 @@ const TURN_ERROR_ACTIONS: Record<TurnErrorKind, readonly TurnErrorAction[]> = {
 	modelUnavailable: ["changeModel", "openProviders"],
 	rateLimit: ["retry", "changeModel"],
 	billing: ["openProviders", "changeModel"],
+	lowCredit: ["openProviders", "changeModel"],
+	spendLimit: ["openProviders", "changeModel"],
 	overloaded: ["retry", "changeModel"],
 	compaction: ["changeModel", "retry"],
 	unknown: ["retry", "changeModel"],
@@ -226,8 +229,9 @@ export function describeTurnError(errorMessage: string | undefined, stopReason?:
 	let kind: TurnErrorKind = stopReason === "aborted" ? "aborted" : "unknown";
 	if (kind === "unknown" && detail) {
 		kind = TURN_ERROR_PATTERNS.find(([, patterns]) => patterns.some(pattern => pattern.test(detail)))?.[0] ?? kind;
-		// An account out of money ("insufficient_quota", 402, a credit wall) reads like a limit but no wait lifts it.
-		if ((kind === "rateLimit" || kind === "unknown") && isBillingCap(detail)) kind = "billing";
+		if (kind === "rateLimit" || kind === "unknown") {
+			kind = anthropicSpendRefusal(detail) ?? (isBillingCap(detail) ? "billing" : kind);
+		}
 	}
 	return {
 		kind,
@@ -450,8 +454,7 @@ function releaseStoppingWhenTurnEnds(composer: ComposerStore, session: StoreApi<
  * held apart for a tray that shows it, else merged into the draft). Any live retry
  * UI retires synchronously first. A manual /compact or handoff is cancelled
  * through `abort_maintenance` instead: stock's serial queue would hold a plain
- * abort until it finished on its own. A goal the automatic choice started ends
- * with the stopped turn (lib/auto-mode-client.ts). One Stop is in flight per turn
+ * abort until it finished on its own. One Stop is in flight per turn
  * (`composer.stopping`, until the turn ends): a double click or a double Esc sends one command.
  *
  * What became of the Stop is said, never left to a click that did nothing (Orca's separate stop target and outcome,
@@ -460,8 +463,7 @@ function releaseStoppingWhenTurnEnds(composer: ComposerStore, session: StoreApi<
  * running either way and Stop works again at once.
  */
 export async function abortActiveTurn(
-	rpc: Pick<TabRpc, "abortAndRestoreQueue" | "abortRetry" | "abortMaintenance"> &
-		Partial<Pick<TabRpc, "autoModeEnd">> = window.omp.rpc,
+	rpc: Pick<TabRpc, "abortAndRestoreQueue" | "abortRetry" | "abortMaintenance"> = window.omp.rpc,
 	tabId?: string | null,
 	/** The control the user stopped with; main logs it (src/main/turn-stop-log.ts). */
 	surface?: StopSurface,
@@ -471,9 +473,6 @@ export async function abortActiveTurn(
 		(tabId ? sessionRuntimeStore<ComposerStore>(tabId, "composer")?.getState() : undefined) ??
 		useComposerStore.getState();
 	const session = sessionRuntimeStore<SessionStore>(tabId ?? focusedRuntimeTabId(), "session") ?? useSessionStore;
-	// A prompt still waiting on the automatic mode choice has not reached omp: it is withdrawn (its
-	// draft comes back, use-composer-submit.ts) and nothing runs that could be stopped.
-	if (composer.cancelSubmit?.()) return { type: "response", command: "abort", success: true };
 	const maintenance = session.getState().compactionInfo;
 	if (maintenance?.reason === "manual") {
 		session.setState({ compactionInfo: { ...maintenance, cancelling: true } });
@@ -506,8 +505,6 @@ export async function abortActiveTurn(
 			return response;
 		}
 		if (isRestoreResult(response.data)) restoreAbortedQueue(composer, response.data);
-		// A goal the automatic choice started for one request ends when the user stops it.
-		if (rpc.autoModeEnd) await endAutoGoal(session, { autoModeEnd: rpc.autoModeEnd });
 		releaseStoppingWhenTurnEnds(composer, session);
 		return response;
 	} catch (error) {

@@ -722,6 +722,7 @@ describe("SidecarManager", () => {
 			"\tconst command = JSON.parse(line);",
 			// A step the agent took before this answer, as a run streams between commands.
 			'\tif (command.type === "abort") out({ type: "tool_execution_start", toolCallId: "c1", toolName: "wait", args: {} });',
+			'\tif (command.type === "abort") out({ type: "extension_ui_request", id: "question", method: "form", html: "<form></form>" });',
 			'\tout({ type: "response", id: command.id, command: command.type, success: true, data: { sessionId: "s1" } });',
 			// One it took right after: still batched when main answers the next command itself.
 			'\tif (command.type === "abort") out({ type: "tool_execution_end", toolCallId: "c1", toolName: "wait", result: {}, isError: false });',
@@ -735,6 +736,7 @@ describe("SidecarManager", () => {
 		sidecar.on("events", (events: Array<{ type: string }>) => {
 			for (const event of events) order.push(event.type);
 		});
+		sidecar.on("extensionUi", () => order.push("form"));
 		try {
 			const ready = waitForReady(sidecar);
 			sidecar.start();
@@ -750,7 +752,13 @@ describe("SidecarManager", () => {
 			// A response main answers from a bridge snapshot.
 			await client.command({ type: "get_transcript" });
 			order.push("transcript response");
-			expect(order).toEqual(["tool_execution_start", "abort response", "tool_execution_end", "transcript response"]);
+			expect(order).toEqual([
+				"tool_execution_start",
+				"form",
+				"abort response",
+				"tool_execution_end",
+				"transcript response",
+			]);
 		} finally {
 			sidecar.dispose();
 			await fs.rm(tempDir, RM_TEMP);

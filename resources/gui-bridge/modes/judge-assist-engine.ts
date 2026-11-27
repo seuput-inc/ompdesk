@@ -1,6 +1,6 @@
 /**
  * Judge-model assists, the engine (contracts and the measured numbers: judge-assist-contracts.ts; questions and
- * thresholds: judge-assist-core.ts). Every judgment goes through stock's own machinery, the way auto mode asks:
+ * thresholds: judge-assist-core.ts). Every judgment goes through stock's own machinery:
  * `resolveJudge` over the `judge` role chain, `sharedJudgmentCache()`, the session ledger (`journalJudgmentUsage`) and
  * telemetry. It runs only while the switch is on and stock's `hasNativeJudge` says that chain resolves first to a
  * native decision model; the check runs on every call, because a login, a key or a role change moves the chain.

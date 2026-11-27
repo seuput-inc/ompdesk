@@ -1036,7 +1036,7 @@ fn session_state(tab: &ControlTab) -> &'static str {
     if tab.busy || tab.resuming {
         return "working";
     }
-    if !tab.asks.is_empty() || tab.plan.is_some() {
+    if !tab.asks.is_empty() {
         return "waiting";
     }
     match tab.status {

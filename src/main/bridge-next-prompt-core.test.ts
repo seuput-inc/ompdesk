@@ -558,7 +558,6 @@ describe("app state", () => {
 			lastTurn: "aborted",
 			failure: { tool: "bash", command: "bun test src/a.test.ts", exitCode: 1 },
 			changedFiles: ["a.ts", "b.ts", "c.ts", "d.ts", "e.ts", "f.ts", "g.ts"],
-			plan: { title: "Ship the login page" },
 			todos: { done: 2, total: 5, inProgress: "write form", next: "wire api" },
 			answered: { question: "Which database?", answer: "Postgres" },
 			running: [
@@ -575,7 +574,6 @@ describe("app state", () => {
 			"last-turn: stopped by the user",
 			"last-failure: bash `bun test src/a.test.ts` exit 1",
 			"files-changed: 7 (a.ts, b.ts, c.ts, d.ts, e.ts, +2 more)",
-			"plan: open — Ship the login page",
 			"todos: 2 of 5 done; in progress: write form; next: wire api",
 			"question-answered this turn: Which database? → Postgres",
 			"running-now: subagent WorkBoard (Wide-window work board); command `bun run gate`",
@@ -685,9 +683,8 @@ describe("facts from the session", () => {
 		expect(extractFacts(later).userBash).toBeUndefined();
 	});
 
-	it("adds plan, todos and goal from the session and ignores a finished todo list", () => {
+	it("adds todos and goal from the session and ignores a finished todo list", () => {
 		const open = extractFacts([{ role: "user", content: "x" }], {
-			plan: { enabled: true, title: "The plan" },
 			todoPhases: [
 				{
 					tasks: [
@@ -700,16 +697,13 @@ describe("facts from the session", () => {
 			goal: { objective: "Ship it", status: "active" },
 			compacted: true,
 		});
-		expect(open.plan).toEqual({ title: "The plan" });
 		expect(open.todos).toEqual({ done: 1, total: 3, inProgress: "two", next: "three" });
 		expect(open.goal).toEqual({ objective: "Ship it", status: "active" });
 		expect(open.compacted).toBe(true);
 		const done = extractFacts([], {
 			todoPhases: [{ tasks: [{ content: "one", status: "completed" }] }],
-			plan: { enabled: false },
 		});
 		expect(done.todos).toBeUndefined();
-		expect(done.plan).toBeUndefined();
 	});
 
 	it("recognises test commands", () => {
@@ -1248,12 +1242,22 @@ describe("inline scheduler", () => {
 });
 
 describe("suggestion gate and scheduler", () => {
-	const gate = { enabled: true, idle: true, draftEmpty: true, main: true, hasReply: true, key: "k2", lastKey: "k1" };
+	const gate = {
+		enabled: true,
+		shown: true,
+		idle: true,
+		draftEmpty: true,
+		main: true,
+		hasReply: true,
+		key: "k2",
+		lastKey: "k1",
+	};
 
-	it("generates only for an idle main session with an empty composer, a reply and a moved state", () => {
+	it("generates only for a shown, idle main session with an empty composer, a reply and a moved state", () => {
 		expect(gateSuggestion(gate)).toEqual({ ok: true });
 		expect(gateSuggestion({ ...gate, enabled: false })).toEqual({ ok: false, reason: "disabled" });
 		expect(gateSuggestion({ ...gate, main: false })).toEqual({ ok: false, reason: "subagent" });
+		expect(gateSuggestion({ ...gate, shown: false, force: true })).toEqual({ ok: false, reason: "hidden" });
 		expect(gateSuggestion({ ...gate, idle: false })).toEqual({ ok: false, reason: "busy" });
 		expect(gateSuggestion({ ...gate, draftEmpty: false })).toEqual({ ok: false, reason: "typing" });
 		expect(gateSuggestion({ ...gate, hasReply: false })).toEqual({ ok: false, reason: "no_reply" });

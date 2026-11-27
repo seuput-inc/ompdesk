@@ -210,11 +210,11 @@ describe("row availability", () => {
 	});
 
 	for (const kind of ["agent", "chat"] as const) {
-		it(`keeps plan mode and the session tree executable in an ${kind} tab`, async () => {
+		it(`keeps the session tree executable in an ${kind} tab`, async () => {
 			sidecarCommands = [DEPLOY];
 			seedTab(kind);
 			await mount();
-			for (const label of [translate("cmd.plan"), translate("cmd.tree")]) {
+			for (const label of [translate("cmd.tree")]) {
 				const row = rowByLabel(label);
 				expect(row.getAttribute("disabled"), label).toBeNull();
 				expect(row.getAttribute("aria-disabled"), label).toBe("false");
@@ -243,7 +243,7 @@ describe("panel keyboard handling", () => {
 		await click(rowByLabel(translate("cmd.security")));
 		await pressEscape();
 		expect(useUiStore.getState().commandPaletteOpen).toBe(true);
-		expect(rows().some(row => row.textContent?.includes(translate("cmd.plan")))).toBe(true);
+		expect(rows().some(row => row.textContent?.includes(translate("cmd.tree")))).toBe(true);
 		await pressEscape();
 		expect(useUiStore.getState().commandPaletteOpen).toBe(false);
 	});
@@ -311,14 +311,14 @@ describe("row execution", () => {
 		expect(rpc.prompt).not.toHaveBeenCalled();
 		expect(useUiStore.getState().commandPaletteOpen).toBe(true);
 		// The top level is replaced by the submenu's own rows.
-		expect(rows().some(row => row.textContent?.includes(translate("cmd.plan")))).toBe(false);
+		expect(rows().some(row => row.textContent?.includes(translate("cmd.tree")))).toBe(false);
 		// The chip naming the submenu steps back to the root list.
 		const back = palette().querySelector(
 			`button[aria-label="${translate("palette.hintBack")}: ${translate("cmd.security")}"]`,
 		);
 		if (!back) throw new Error("missing the submenu's back chip");
 		await click(back);
-		expect(rows().some(row => row.textContent?.includes(translate("cmd.plan")))).toBe(true);
+		expect(rows().some(row => row.textContent?.includes(translate("cmd.tree")))).toBe(true);
 	});
 });
 

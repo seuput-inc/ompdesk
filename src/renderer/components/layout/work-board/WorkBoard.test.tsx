@@ -11,7 +11,6 @@ import { ko } from "../../../locales/ko";
 import { useExtensionUiStore } from "../../../stores/extension-ui";
 import { useMessagesStore } from "../../../stores/messages";
 import { useModelStore } from "../../../stores/model";
-import { usePlanApprovalStore } from "../../../stores/plan-approval";
 import { useProjectOrigins } from "../../../stores/project-origins";
 import { useSessionStore } from "../../../stores/session";
 import { useSubagentsStore } from "../../../stores/subagents";
@@ -175,7 +174,6 @@ afterEach(async () => {
 	useWorkBoardStore.getState().reset();
 	useSubagentsStore.getState().reset();
 	useExtensionUiStore.getState().clearAll();
-	usePlanApprovalStore.getState().clearProposal();
 	useTodoStore.getState().reset();
 	useToolsStore.getState().reset();
 	useSessionStore.getState().reset();
@@ -291,7 +289,9 @@ describe("WorkBoard header", () => {
 		useExtensionUiStore
 			.getState()
 			.pushRequest({ type: "extension_ui_request", id: "c1", method: "confirm", title: "Go?", message: "" });
-		usePlanApprovalStore.getState().showProposal({ planFilePath: "/w/PLAN.md", planContent: "# Plan", options: [] });
+		useExtensionUiStore
+			.getState()
+			.pushRequest({ type: "extension_ui_request", id: "c2", method: "confirm", title: "Continue?", message: "" });
 		useToolsStore.setState({
 			finishedTools: new Map([
 				[
@@ -311,9 +311,7 @@ describe("WorkBoard header", () => {
 			expect(pane.querySelector('[data-board-section="current"] [data-board-session="check"]')).not.toBeNull(),
 		);
 		const needs = section("needs");
-		// Two asks (a question, a plan up for review): one figure, in the head and the strip's label (the section right
-		// under the docked head does not say it again); what runs is its own figure. The failed check is a Current work
-		// row and counts for nothing here.
+		// The docked section does not repeat the head's count. A failed check is Current work, not an ask.
 		expect(needs?.querySelector(".omp-work-board-count")).toBeNull();
 		expect(needs?.querySelectorAll("li")).toHaveLength(2);
 		expect(pane.querySelector("[data-board-status]")?.textContent).toBe("2 need you");
@@ -717,7 +715,7 @@ describe("WorkBoard sections", () => {
 		expect(section("needs")).toBeNull();
 		expect(pane.querySelector(".omp-work-board-pulse")?.getAttribute("data-state")).toBe("idle");
 		expect(pane.querySelector("[data-board-status]")?.textContent).not.toContain("Check failed");
-		// Todos alone: "Todos", not "Plan" (the plan-mode card's word, which Needs you's "plan ready for review" says).
+		// Todos alone: "Todos".
 		expect(section("plan")?.querySelector(".omp-work-board-title")?.textContent).toContain("Todos");
 		useSessionStore.setState({ goal: { objective: "Ship it" }, goalState: { status: "active" } });
 		goal = { enabled: true, status: "active", objective: "Ship it" };
@@ -806,21 +804,19 @@ describe("WorkBoard sections", () => {
 		useExtensionUiStore
 			.getState()
 			.pushRequest({ type: "extension_ui_request", id: "n1", method: "notify", message: "fyi" });
-		usePlanApprovalStore.getState().showProposal({ planFilePath: "/w/PLAN.md", planContent: "# Plan", options: [] });
 		await mount();
 		const sections = [...pane.querySelectorAll("[data-board-section]")].map(el =>
 			el.getAttribute("data-board-section"),
 		);
 		expect(sections[0]).toBe("needs");
-		expect(section("needs")?.querySelector(".omp-work-board-fold")?.textContent).toBe("Needs you");
+		expect(section("needs")?.querySelector(".omp-work-board-count")?.textContent).toBe("1");
 		expect(section("needs")?.querySelector("kbd")?.textContent).toBe("⌥B");
 		// A tool approval says approval, as the head's clause does, never question.
 		expect(pane.querySelector('[data-board-waiting="ap1"]')?.textContent).toMatch(/^Approval.*Allow bash\?/);
-		expect(pane.querySelector('[data-board-waiting="plan"]')?.textContent).toMatch(/^Review.*Plan ready for review/);
 		expect(pane.querySelector('[data-board-waiting="n1"]')).toBeNull();
 		const live = pane.querySelector('[aria-live="polite"]');
 		expect(live?.getAttribute("role")).toBe("status");
-		expect(live?.textContent).toBe("2 need you");
+		expect(live?.textContent).toBe(translate("attention.approval"));
 		expect(live?.closest("[data-board-section]")?.getAttribute("data-board-section")).toBe("needs");
 		// Nothing else on the board is a live region.
 		expect(pane.querySelectorAll("[aria-live]")).toHaveLength(1);

@@ -65,8 +65,6 @@ import type {
 	IpcFsReadImagePayload,
 	IpcFsReadImageResult,
 	IpcFsReadPayload,
-	IpcFsReadPlanPayload,
-	IpcFsReadPlanResult,
 	IpcFsReadResult,
 	IpcFsSaveCopyPayload,
 	IpcFsSaveCopyResult,
@@ -158,7 +156,7 @@ import type { AnswerStep } from "./agent-control/target-answer";
 import { quitApproved, requestQuit } from "./app-quit";
 import { Autopilot, type AutopilotCommand, type AutopilotNotice } from "./autopilot";
 import { routeHostAutopilotNotice } from "./autopilot-notice-route";
-import { setBotsState } from "./bots";
+import { type HostBots, setBotsState } from "./bots";
 import {
 	CHECKOUT_PEERS_SWEEP_MS,
 	type CheckoutMember,
@@ -177,6 +175,7 @@ import { getMainLanguage, mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
 import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
+import { removedModeRefusal } from "./local/modes";
 import { noteTypedPrompt } from "./local/prompt-origin";
 import { answerSessionLinks, onSessionLinksChanged, SessionLinksParams } from "./local/session-links";
 import type { LogWatcher } from "./log-watcher";
@@ -258,7 +257,6 @@ import {
 	FS_BINARY_LOCAL_MAX_BYTES,
 	listWorkspace,
 	mutateWorkspace,
-	readPlanFile,
 	readWorkspaceBinary,
 	readWorkspaceFile,
 	readWorkspaceImage,
@@ -370,10 +368,8 @@ export interface IpcDeps {
 	sessionWake: { current: ((schedule: Schedule, runId: string) => Promise<RunProcess>) | null };
 	/** Set once the control tools exist: a quiet note (no turn) into a session file on this computer (`ScheduleService`'s `note`). */
 	sessionNote: { current: ((session: string, text: string) => Promise<void>) | null };
-	/** Set once the control tools exist: one of this computer's bots by name for a paired device's agent (`host.bots.home`). */
-	botHome: {
-		current: ((name: string, deviceId: string, deviceName: string) => Promise<{ path: string; name: string }>) | null;
-	};
+	/** Set once the control tools exist: this computer's bots for its paired devices (`host.bots.*`) and theirs for it. */
+	hostBots: { current: HostBots | null };
 	/** Set once the control tools exist: tells a tab's opener what main saw happen to the tab (`AgentControlRuntime.reportFor`). */
 	tabReport: { current: ((tabId: string, report: { kind: "blocked"; text: string; id: string }) => void) | null };
 	/** Set once the control tools exist: an agent is opening a session that has not taken its first message (`AgentControlRuntime.opening`). */
@@ -906,7 +902,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 
 	/** Composer modes with no stock event: the other windows that show the tab re-read them (`noteModeChanged`). */
 	const MODE_TOGGLE_COMMANDS: Record<string, true> = {
-		set_plan_mode: true,
 		set_prewalk: true,
 		set_agents_paused: true,
 		set_goal: true,
@@ -933,9 +928,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		const hostName = deps.promptOrigins?.hostName() ?? os.hostname();
 		return { ...page, messages: localizePromptOrigins(page.messages, ownId, hostName) };
 	};
-
-	/** The plan approvals an agent's attachment step sends for the plan it claimed (`TargetAnswer`). */
-	const ownPlanApprovals = new WeakSet<object>();
 
 	const dispatchRpcCommand = async (
 		win: ClientWindow,
@@ -969,6 +961,17 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				command: slotCommand,
 				success: true,
 				data: desktopSlot.state(),
+			};
+		}
+		const refusal = removedModeRefusal(payload.command);
+		if (refusal) {
+			return {
+				id: payload.command.id,
+				type: "response",
+				command: payload.command.type,
+				success: false,
+				error: refusal,
+				code: "mode_removed",
 			};
 		}
 		// A tab whose omp is still starting (its place in the start queue, its first answer, a stalled start begun again)
@@ -1062,32 +1065,15 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				};
 			}
 		}
-		// A plan an agent's approval holds (`SidecarPool.claimPlan`) takes no other approve or reject.
-		if (cmd.type === "plan_approval" && issuerTabId) {
-			try {
-				sidecarPool.guardPlan(issuerTabId, ownPlanApprovals.has(payload));
-			} catch (err) {
-				return {
-					id: _id,
-					type: "response",
-					command: cmd.type,
-					success: false,
-					error: err instanceof Error ? err.message : String(err),
-					code: "being_answered",
-				};
-			}
-		}
 		// An answer with attachments is one step where the answered session runs (`target-answer.ts`): this main for its
 		// own tabs; a paired host's tab goes on to that host's main below.
 		if (cmd.type === "agent_control_answer" && !sidecar.device) {
 			if (!issuerTabId)
 				return { id: _id, type: "response", command: cmd.type, success: false, error: "No tab", code: "no_tab" };
 			try {
-				await sidecarPool.targetAnswer.run(issuerTabId, cmd as AnswerStep, (command, own) => {
-					const inner = { ...payload, command };
-					if (own) ownPlanApprovals.add(inner);
-					return dispatchRpcCommand(win, sidecar, issuerTabId, inner, channel);
-				});
+				await sidecarPool.targetAnswer.run(issuerTabId, cmd as AnswerStep, command =>
+					dispatchRpcCommand(win, sidecar, issuerTabId, { ...payload, command }, channel),
+				);
 				return { id: _id, type: "response", command: cmd.type, success: true, data: null };
 			} catch (err) {
 				return {
@@ -1567,6 +1553,10 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		itemsFile: path.join(app.getPath("userData"), "items.json"),
 		botsRoot: path.join(os.homedir(), BOTS_FOLDER),
 		botsChanged: setBotsState,
+		// What paired devices list of this computer's bots changed: each connected one hears the change.
+		botsShared: change => remoteDevices.hostBotsChanged(change),
+		// One of this computer's bots answered a paired device's group: handed to that device's link.
+		botsRoomPostTo: (device, post) => remoteDevices.hostBotsRoomPost(device, post),
 		sendOutboxFile: path.join(app.getPath("userData"), "send-outbox.json"),
 		attachmentsDir: path.join(app.getPath("userData"), "agent-attachments"),
 		uploads: deps.uploads,
@@ -1649,7 +1639,14 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	deps.tabReport.current = (tabId, report) => agentControl.reportFor(tabId, report);
 	deps.agentOpening.current = () => agentControl.opening();
 	deps.sessionNote.current = (session, text) => agentControl.noteSession(session, text);
-	deps.botHome.current = (name, deviceId, deviceName) => agentControl.botHome(name, deviceId, deviceName);
+	deps.hostBots.current = {
+		home: (name, deviceId, deviceName) => agentControl.botHome(name, deviceId, deviceName),
+		share: () => agentControl.botsShare(),
+		from: (request, deviceId, deviceName) => agentControl.botsFrom(request, deviceId, deviceName),
+		remote: update => agentControl.botsRemote(update),
+		roomPost: post => agentControl.botsRoomPost(post),
+	};
+	remoteDevices.botsReady();
 	// The control socket (src/main/control-socket): anything on this computer drives the same service as the tools.
 	void startControlSocket({
 		userData: app.getPath("userData"),
@@ -2644,8 +2641,10 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return machineFor(caller, device).schedules(request as SchedulesRequest);
 	});
 	// The Bots page: this computer's bots and their items (the owner's own; agents use ompdesk_bot and ompdesk_item).
-	ipc.handle(BOTS_COMMAND, (_caller, request: unknown) => {
+	ipc.handle(BOTS_COMMAND, (caller, request: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid bots request");
+		if ("action" in request && request.action === "allowLegacyPeers" && !caller.browserWindow)
+			throw new Error("Set up legacy bot access on the owning computer.");
 		return agentControl.bots(request as BotsCall);
 	});
 	// Settings › Schedules › Email accounts: this computer's own (a password goes in and never comes back out).
@@ -3003,24 +3002,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		},
 	);
 	ipc.on(IPC_COMMANDS.FS_MEDIA_RELEASE, (caller, url: unknown) => deps.mediaStreams.release(url, caller.sender.id));
-
-	ipc.handle(
-		IPC_COMMANDS.FS_READ_PLAN,
-		async (caller, payload: IpcFsReadPlanPayload): Promise<IpcFsReadPlanResult> => {
-			const target = targetFor(deps, caller, payload?.tabId);
-			const request = { fsPath: payload?.fsPath, localRoot: payload?.localRoot ?? null };
-			if (target?.device) {
-				return remoteFs({ ...target, device: target.device }, "fs.readPlan", request, (error, code) => ({
-					ok: false,
-					path: null,
-					content: null,
-					error,
-					...(code ? { code } : {}),
-				}));
-			}
-			return readPlanFile(cwdFor(deps, caller, payload?.tabId), sessionIndex.sessionsDir, request);
-		},
-	);
 
 	ipc.handle(IPC_COMMANDS.SIDECAR_STATUS_GET, caller => {
 		const sidecar = sidecarFor(deps, caller);

@@ -25,8 +25,9 @@ export function useBotFacts(bots: readonly Bot[]): ReadonlyMap<string, BotFacts>
 		const now = Date.now();
 		return new Map(
 			bots.map(bot => {
+				// A paired host's bot chats there: its sessions are that host's, never this computer's list.
 				const chats = sessions
-					.filter(session => session.cwd === bot.folder)
+					.filter(session => !bot.device && session.cwd === bot.folder)
 					.map((session): BotChatFacts => {
 						const tab = tabs.find(entry => entry.sessionPath === session.path && !entry.device);
 						const run = sessionRun(

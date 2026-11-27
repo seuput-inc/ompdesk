@@ -15,7 +15,6 @@ import {
 	IPC_COMMANDS,
 	IPC_EVENTS,
 	type IpcFsReadImageResult,
-	type IpcFsReadPlanResult,
 	type IpcSessionsArtworkPayload,
 	type IpcSessionsListPayload,
 	type IpcSessionsTargetsPayload,
@@ -108,7 +107,7 @@ import {
 	WEB_BLOCKS,
 	WEB_DEVICES,
 } from "./fixture-settings";
-import { PLAN_FILE_PATH, PLAN_MARKDOWN, SESSION_TREE } from "./fixture-sheets";
+import { SESSION_TREE } from "./fixture-sheets";
 import { statsAnswer } from "./fixture-stats";
 import { artworkFixture, targetsFixture } from "./fixture-targets";
 import { blockedAccountUsage, manyWindowUsage, usageFigureReports } from "./fixture-usage";
@@ -532,9 +531,6 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				return respond(command, BOARD_BUSY ? boardReview() : { items: [] });
 			case "get_session_tree":
 				return respond(command, SESSION_TREE);
-			case "get_plan_mode":
-				// The Plan sheet reads the document; `enabled` stays false so no composer, Run chip or dock shows plan mode.
-				return respond(command, { enabled: false, planFilePath: PLAN_FILE_PATH });
 			// `get_usage` also feeds the sidebar usage meter, the composer's account limit and the turn-error notice,
 			// so its reports stay behind `?board=busy`.
 			case "get_usage":
@@ -822,8 +818,6 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				return { accounts: [], selected: { linear: null, jira: null } };
 			case IPC_COMMANDS.STATS_FETCH:
 				return statsAnswer((payload as IpcStatsFetchPayload).path);
-			case IPC_COMMANDS.FS_READ_PLAN:
-				return { ok: true, path: PLAN_FILE_PATH, content: PLAN_MARKDOWN } satisfies IpcFsReadPlanResult;
 			case IPC_COMMANDS.FS_READ: {
 				const path = (payload as { path: string }).path;
 				const content = FILE_CONTENTS[path];

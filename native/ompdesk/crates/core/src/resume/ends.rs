@@ -156,6 +156,7 @@ mod tests {
             id,
             stop_reason: "error".into(),
             error_message: None,
+            retry_blocked: false,
         }
     }
 

@@ -1,9 +1,9 @@
 /**
  * The composer's ONE Run chip: a single trigger and a single popover for everything that tunes how the session
- * runs — Mode (Plan, Goal, Autopilot, the automatic choice), Thinking, Tool approval, Delegation, then Fast mode,
+ * runs — Mode (Goal, Autopilot), Thinking, Tool approval, Delegation, then Fast mode,
  * Advanced and Model roles. It replaces the three triggers (Mode, Run settings, Delegation) the toolbar used to carry.
  *
- * The chip says the state without opening: its text is the active modes ("Plan · Goal"), else the Run settings
+ * The chip says the state without opening: its text is the active modes ("Goal"), else the Run settings
  * title; trailing glyphs show the tool-approval shield and fast/slow. Thinking and Delegation draw nothing on it (the
  * popover holds both and the accessible name spells them); it paints accent while a mode is on (`data-active`, plain
  * CSS in components.css: never a class tied against the Button's own variant classes); its accessible name spells the
@@ -47,11 +47,10 @@ export function RunChip() {
 	const speed = useSpeedState();
 	const triggerRef = useRef<HTMLButtonElement>(null);
 	const [open, setOpen] = useState(false);
-	const [tab, setTab] = useState<ComposerModeId>("plan");
+	const [tab, setTab] = useState<ComposerModeId | null>(null);
 	// Opened from the chip, the section shows the tab's first mode and keeps following it until the person picks a
 	// tab: on a run's new tab the Autopilot state can arrive after the sheet opened (until then the tab shows no mode,
-	// or the run's underlying Goal), and a section left on Plan or Goal had none of the run's controls (open the
-	// screen, End).
+	// or the run's underlying Goal), and a section left on Goal had none of the run's controls (open the screen, End).
 	const [followsModes, setFollowsModes] = useState(false);
 	const [confirmFullAccess, setConfirmFullAccess] = useState(false);
 	const delegation = useDelegation(open);
@@ -69,14 +68,11 @@ export function RunChip() {
 	};
 
 	const first = modes.shown[0];
-	// Plan has no form to open on: the section follows the first mode that has one.
-	const firstForm = modes.shown.find(mode => mode !== "plan");
 	useEffect(() => {
-		if (open && followsModes && firstForm) setTab(firstForm);
-	}, [open, followsModes, firstForm]);
+		if (open && followsModes && first) setTab(first);
+	}, [open, followsModes, first]);
 	const body = useRef<HTMLDivElement>(null);
-	// The popover focuses its first control, Plan's switch, which a stray Enter flips and whose (i) tooltip covers the
-	// mode tabs: it starts on the Mode section's tab stop (the selected tab) instead.
+	// The popover starts on the Mode section's tab stop (the selected tab), not on its first control.
 	useEffect(() => {
 		if (!open) return;
 		body.current?.querySelector<HTMLElement>('[data-composer-modes-section] [role="tab"][tabindex="0"]')?.focus();
@@ -95,7 +91,6 @@ export function RunChip() {
 		.filter(Boolean)
 		.join(", ");
 	const chords = t("input.runChip.chords", {
-		plan: formatShortcut(actionKbd("plan.toggle", keymapOverrides)),
 		thinking: formatShortcut(actionKbd("thinking.cycle", keymapOverrides)),
 	});
 
@@ -128,7 +123,7 @@ export function RunChip() {
 							close();
 							return;
 						}
-						setTab(firstForm ?? "plan");
+						setTab(first ?? null);
 						setFollowsModes(true);
 						setOpen(true);
 					}}

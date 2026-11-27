@@ -97,8 +97,11 @@ export interface CoreProcessOptions {
 /** The event `on` hears, with no data, when a running core ended (crash, kill, `stop`). */
 export const CORE_EXITED = "core.exited";
 
-/** A step of a core's loss, as `CoreProcess.report` names it. */
-export type CoreLossStep = "abandoned" | "ended" | "rest";
+/**
+ * A step of a core's loss, as `CoreProcess.report` names it; and the calls short of one: `gave-up` (main gave up one
+ * hub call, the core kept), `late-answer` (that call's answer came after, and was dropped).
+ */
+export type CoreLossStep = "abandoned" | "ended" | "rest" | "gave-up" | "late-answer";
 
 interface Frame {
 	id?: number;
@@ -366,15 +369,17 @@ export class CoreProcess {
 	readonly #binary: () => string;
 	readonly #log: (line: string) => void;
 	readonly #timeoutMs: number;
-	/** Cores abandoned for a missed hub deadline, with when: an `ended` long after says the computer itself stalled. */
+	/** Cores abandoned for a lost hub, with when: an `ended` long after says the computer itself stalled. */
 	readonly #abandoned = new WeakMap<Running, number>();
 	/** Cores that answered a request: one that ends without is a failed start. */
 	readonly #answeredBy = new WeakSet<Running>();
 	/**
 	 * Each step of a core's loss, for gui-runtime.jsonl (`index.ts` sets it; source `core-loss`): `abandoned` (main
 	 * ended a core that stopped answering, and why), `ended` (a core that was not stopped by the quit ended: its exit,
-	 * whether it had answered, the last lines it wrote to stderr), `rest` (it is not started again for a while). The
-	 * console only gets these where nothing keeps main's output (a packaged app).
+	 * whether it had answered, the last lines it wrote to stderr), `rest` (it is not started again for a while); and
+	 * `gave-up` (main gave up one hub call and kept the core; why, and what the core last sent) and `late-answer` (that
+	 * call's answer came after, and was dropped). The console only gets these where nothing keeps main's output (a
+	 * packaged app).
 	 */
 	report: ((step: CoreLossStep, details: Record<string, string | number | boolean>) => void) | null = null;
 	/**
@@ -441,7 +446,8 @@ export class CoreProcess {
 	}
 
 	/**
-	 * The running core stopped answering (a hub call passed its deadline): it is killed with what it started, as a core
+	 * The running core is dead to main's hub (it sent nothing past the liveness window, or its hub thread sat in one
+	 * job past it, `hub.ts`): it is killed with what it started, as a core
 	 * that died is, so every lane and hub instance is opened again on the next one.
 	 */
 	abandon(reason: string): void {
@@ -757,6 +763,15 @@ export function core(): CoreProcess {
  */
 export function isCoreShutdown(error: unknown): boolean {
 	return error instanceof CoreError && error.code === "core_unavailable" && instance?.shuttingDown === true;
+}
+
+/**
+ * Whether `error` is a hub call main gave up (`hub_unknown`, `core/hub.ts`): the core lives and may still carry the call
+ * out. A caller on a timer or a listener drops it and waits for its next turn; one that does not is handled as one `hub`
+ * line by main's last-resort handlers (main-failures.ts), never by ending main.
+ */
+export function isHubGivenUp(error: unknown): boolean {
+	return error instanceof CoreError && error.code === "hub_unknown";
 }
 
 /**

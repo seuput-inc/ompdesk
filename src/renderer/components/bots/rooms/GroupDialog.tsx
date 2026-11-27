@@ -9,6 +9,7 @@ import { useT } from "../../../lib/i18n";
 import { useBotsStore } from "../../../stores/bots";
 import { Button, Checkbox, Input, Modal } from "../../common";
 import { BotAvatar } from "../BotAvatar";
+import { BotOwner } from "../BotOwner";
 import { openRoomPage } from "../bot-page";
 
 export function GroupDialog({ room, onClose }: { room?: Room; onClose: () => void }) {
@@ -95,7 +96,10 @@ export function GroupDialog({ room, onClose }: { room?: Room; onClose: () => voi
 							/>
 							<BotAvatar bot={bot} size={28} />
 							<span className="flex min-w-0 flex-col">
-								<span className="text-sc-sm text-(--sc-text)">{bot.name}</span>
+								<span className="flex min-w-0 items-baseline gap-1.5 text-sc-sm text-(--sc-text)">
+									<span className="truncate">{bot.name}</span>
+									<BotOwner device={bot.device} />
+								</span>
 								<span className="truncate text-sc-xs text-(--sc-text-muted)">
 									{!bot.home ? t("bots.groups.noHome") : (bot.specialty ?? "")}
 								</span>

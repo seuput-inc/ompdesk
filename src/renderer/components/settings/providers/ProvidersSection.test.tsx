@@ -307,6 +307,22 @@ describe("ProvidersSection", () => {
 		expect(document.querySelector("[data-local-engine-detect]")).toBeNull();
 	});
 
+	it("shows the organization balance as unknown for an API key and opens Console Billing only on click", async () => {
+		const id = "anthropic-api-key";
+		useSessionStore.setState({ status: "ready" });
+		listProviders.mockResolvedValue({
+			providers: [config(id, { api: "anthropic-messages", baseUrl: "https://api.anthropic.com" })],
+			options: fixtureProviderOptions,
+		});
+		getProviders.mockResolvedValue(providersResponse(snapshot([row(id)])));
+		await mount(<ProvidersSection />);
+		expect(text()).toContain(translate("providers.apiBalanceUnknown"));
+		expect(openExternal).not.toHaveBeenCalled();
+		await act(async () => button(translate("providers.consoleBilling"))?.click());
+		expect(openExternal).toHaveBeenCalledWith("https://platform.claude.com/settings/billing");
+		expect(upsertProvider).not.toHaveBeenCalled();
+	});
+
 	it("lists an endpoint OMPdesk wrote to models.yml by itself without the person reloading, and drops it when it goes", async () => {
 		useSessionStore.setState({ status: "ready" });
 		focusTab(undefined);
@@ -1449,30 +1465,53 @@ describe("ProviderAccounts", () => {
 		expect(login).toHaveBeenCalledExactlyOnceWith("anthropic");
 	});
 
-	it("saves the official key under a separate provider only on Save", async () => {
+	it.each(["model-from-old-catalog", "replacement-from-new-catalog"])(
+		"connects using the runtime catalog: %s",
+		async model => {
+			listProviders.mockResolvedValue({
+				providers: [],
+				options: { ...fixtureProviderOptions, anthropicModels: [{ id: model }] },
+			});
+			await mountWithAccounts();
+			await act(async () => button(translate("providers.accounts.addTo", { provider: "Anthropic" }))?.click());
+			await act(async () => button(translate("providers.featured.apiKey"))?.click());
+			await typeInto(document.querySelector('input[type="password"]'), "dummy-component-test-key");
+			expect(upsertProvider).not.toHaveBeenCalled();
+			const save = document.querySelector<HTMLButtonElement>('[data-claude-key] button[type="submit"]');
+			expect(save?.disabled).toBe(false);
+			await act(async () => {
+				if (save?.type === "submit") {
+					save.closest("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+				} else {
+					save?.click();
+				}
+			});
+			expect(upsertProvider).toHaveBeenCalledTimes(1);
+			expect(upsertProvider.mock.calls[0]?.[0]).toMatchObject({
+				id: "anthropic-api-key",
+				baseUrl: "https://api.anthropic.com",
+				api: "anthropic-messages",
+				apiKey: "dummy-component-test-key",
+				models: [{ id: model }],
+			});
+			expect(login).not.toHaveBeenCalled();
+			expect(openExternal).not.toHaveBeenCalled();
+		},
+	);
+
+	it("keeps the key unsaved when the installed catalog cannot supply Anthropic models", async () => {
+		listProviders.mockResolvedValue({ providers: [], options: { ...fixtureProviderOptions, anthropicModels: [] } });
 		await mountWithAccounts();
 		await act(async () => button(translate("providers.accounts.addTo", { provider: "Anthropic" }))?.click());
 		await act(async () => button(translate("providers.featured.apiKey"))?.click());
-		await typeInto(document.querySelector('input[type="password"]'), "dummy-component-test-key");
+		await typeInto(document.querySelector('input[type="password"]'), "dummy");
+		await act(async () =>
+			document
+				.querySelector("[data-claude-key]")
+				?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+		);
+		expect(text()).toContain(translate("providers.claude.noCatalog"));
 		expect(upsertProvider).not.toHaveBeenCalled();
-		const save = button(translate("providerCfg.form.save"));
-		expect(save?.disabled).toBe(false);
-		await act(async () => {
-			if (save?.type === "submit") {
-				save.closest("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-			} else {
-				save?.click();
-			}
-		});
-		expect(upsertProvider).toHaveBeenCalledTimes(1);
-		expect(upsertProvider.mock.calls[0]?.[0]).toMatchObject({
-			id: "anthropic-api-key",
-			baseUrl: "https://api.anthropic.com",
-			api: "anthropic-messages",
-			apiKey: "dummy-component-test-key",
-		});
-		expect(login).not.toHaveBeenCalled();
-		expect(openExternal).not.toHaveBeenCalled();
 	});
 
 	it("says how old each account's quota is and when each window resets", async () => {

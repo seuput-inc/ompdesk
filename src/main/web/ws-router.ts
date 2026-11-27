@@ -28,6 +28,7 @@ import {
 	type WebPermission,
 } from "../../shared/web-protocol";
 import { CORE_EXITED, type CoreProcess, core } from "../core/process";
+import { removedModeRefusal } from "../local/modes";
 import type { PeerQuota } from "../remote/peer-quota";
 import { commandUsesModel } from "../remote/quota-commands";
 import type { BlobStore } from "./blobs";
@@ -542,6 +543,12 @@ export class WsRouter {
 		const own = Object.hasOwn(webChannels, channel) ? webChannels[channel] : undefined;
 		if (own) return own.handler({ deviceId, device, win }, args);
 
+		// A command of a removed mode is refused before it is counted against the device's quota (local/modes.ts).
+		if (channel === IPC_COMMANDS.RPC_COMMAND || channel === IPC_COMMANDS.RPC_COMMAND_FOR_TAB) {
+			const { command } = rpcPayload(request);
+			const refusal = isCommandWithType(command) ? removedModeRefusal(command) : undefined;
+			if (refusal) return { type: "response", success: false, error: refusal, code: "mode_removed" };
+		}
 		const caller = windows.callerFor(deviceId, event.connId);
 		const refund = dir === "invoke" ? this.#meter(deviceId, channel, args, win) : null;
 		try {

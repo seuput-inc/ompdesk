@@ -6,15 +6,24 @@
 import type { Bot } from "../../../shared/bots";
 import { useBotsAvailable } from "../../lib/bots-source";
 import { useT } from "../../lib/i18n";
-import { useBotsStore } from "../../stores/bots";
+import { botOfFolder, useBotsStore } from "../../stores/bots";
 import { Button } from "../common";
 import { BotAvatar } from "./BotAvatar";
 import { openBotPage } from "./bot-page";
 
-export function BotHomeBanner({ cwd, sessionPath }: { cwd: string | null | undefined; sessionPath?: string }) {
+export function BotHomeBanner({
+	cwd,
+	device,
+	sessionPath,
+}: {
+	cwd: string | null | undefined;
+	/** The paired host the tab runs on; absent = this computer. */
+	device?: string;
+	sessionPath?: string;
+}) {
 	const t = useT();
 	const available = useBotsAvailable();
-	const bot: Bot | undefined = useBotsStore(s => (cwd ? s.state.bots.find(known => known.folder === cwd) : undefined));
+	const bot: Bot | undefined = useBotsStore(s => botOfFolder(s.state.bots, cwd, device));
 	if (!available || !bot) return null;
 	const home = sessionPath !== undefined && sessionPath === bot.home;
 	return (

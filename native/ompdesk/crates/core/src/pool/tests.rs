@@ -599,114 +599,6 @@ async fn an_agent_s_answer_claims_the_ask_and_no_other_answer_lands_until_it_is_
 }
 
 #[tokio::test]
-async fn a_plan_is_claimed_by_its_file_and_generation_and_a_revision_that_reuses_the_file_is_another_plan()
- {
-    let mut main = Main::start(opts()).await;
-    main.acquire("a", 1, None, false).await;
-    let proposal = |title: &str| {
-        json!({"tab": "a", "event": "events",
-               "payload": [{"type": "plan_proposal", "planFilePath": "local://PLAN.md", "title": title}]})
-    };
-    main.call("feed", proposal("Plan")).await;
-    let read = main.call("pendingPlan", json!({"tab": "a"})).await;
-    let generation = read["generation"].as_u64().unwrap();
-    // The revision reuses the plan file between the agent's read and its claim.
-    main.call("feed", proposal("Plan, revised")).await;
-    assert_ne!(
-        main.call("pendingPlan", json!({"tab": "a"})).await["generation"],
-        read["generation"]
-    );
-    assert_eq!(
-        main.call(
-            "claimPlan",
-            json!({"tab": "a", "file": "local://PLAN.md", "generation": generation})
-        )
-        .await,
-        Value::Null
-    );
-    let now = main.call("pendingPlan", json!({"tab": "a"})).await["generation"]
-        .as_u64()
-        .unwrap();
-    let claim = main
-        .call(
-            "claimPlan",
-            json!({"tab": "a", "file": "local://PLAN.md", "generation": now}),
-        )
-        .await;
-    assert!(claim.as_u64().is_some());
-    assert_eq!(
-        main.try_call("guardPlan", json!({"tab": "a"})).await["error"]["code"],
-        "being_answered"
-    );
-    assert_eq!(
-        main.try_call("guardPlan", json!({"tab": "a", "own": true}))
-            .await["ok"],
-        true
-    );
-    assert_eq!(
-        main.call("planStillClaimed", json!({"tab": "a", "claim": claim}))
-            .await,
-        true
-    );
-    // A new proposal while the note goes in: the claimed plan is not the pending one any more.
-    main.call("feed", proposal("Plan, revised again")).await;
-    assert_eq!(
-        main.call("planStillClaimed", json!({"tab": "a", "claim": claim}))
-            .await,
-        false
-    );
-    main.call("releasePlan", json!({"tab": "a", "claim": claim}))
-        .await;
-    assert_eq!(
-        main.try_call("guardPlan", json!({"tab": "a"})).await["ok"],
-        true
-    );
-}
-
-#[tokio::test]
-async fn a_tab_a_paired_host_runs_keeps_the_host_s_plan_generation_and_a_local_tab_is_numbered_here()
- {
-    let mut main = Main::start(opts()).await;
-    main.acquire("local", 1, None, false).await;
-    main.call(
-        "acquire",
-        json!({"cwd": "/work", "win": 1, "tab": "remote", "kind": "agent", "device": "dev-1"}),
-    )
-    .await;
-    let proposal = |tab: &str, generation: Option<u64>| {
-        let mut event =
-            json!({"type": "plan_proposal", "planFilePath": "local://PLAN.md", "title": "Plan"});
-        if let Some(generation) = generation {
-            event["generation"] = json!(generation);
-        }
-        json!({"tab": tab, "event": "events", "payload": [event]})
-    };
-    // This computer has numbered other plans already, so its counter is not the host's.
-    for _ in 0..3 {
-        main.call("feed", proposal("local", None)).await;
-    }
-    assert_eq!(
-        main.call("pendingPlan", json!({"tab": "local"})).await["generation"],
-        3
-    );
-    main.call("feed", proposal("remote", Some(42))).await;
-    assert_eq!(
-        main.call("pendingPlan", json!({"tab": "remote"})).await["generation"],
-        42
-    );
-    // The host's number is what a claim names; this computer's counter is not consulted for it.
-    assert!(
-        main.call(
-            "claimPlan",
-            json!({"tab": "remote", "file": "local://PLAN.md", "generation": 42})
-        )
-        .await
-        .as_u64()
-        .is_some()
-    );
-}
-
-#[tokio::test]
 async fn a_shell_line_typed_in_the_start_tab_makes_it_a_tab_of_its_own() {
     let mut main = Main::start(opts()).await;
     main.call(
@@ -751,10 +643,6 @@ async fn the_control_snapshot_reads_every_window_s_tabs_and_their_facts_in_one_c
             assert_eq!(
                 control["facts"],
                 main.call("tabFacts", json!({"tab": tab})).await
-            );
-            assert_eq!(
-                control["plan"],
-                main.call("pendingPlan", json!({"tab": tab})).await
             );
             assert_eq!(
                 control["formerIds"],
@@ -879,4 +767,193 @@ async fn a_tab_seen_after_its_last_run_ended_is_named_and_one_that_ran_again_sin
     .await;
     call_at(&mut main, 3, "feed", run("b", end)).await;
     assert_eq!(main.call("seenSinceRun", json!({})).await, json!(["a"]));
+}
+
+/// What main heard of tab activity, by type, in order.
+fn activities(main: &Main, kind: &str) -> Vec<Value> {
+    main.asked
+        .iter()
+        .filter(|(q, item)| q == "announce" && item["activity"]["type"] == kind)
+        .map(|(_, item)| item["activity"].clone())
+        .collect()
+}
+
+/// A run started by a message of the session saved as `chat`, carrying request `m-1`.
+fn bot_run() -> Value {
+    let text = crate::agentctl::service::wrap::wrap_agent_message(
+        "Fill in the form.\n\n[ompdesk request m-1]",
+        "Ada",
+        Some("chat"),
+    );
+    json!([{"type": "agent_start"}, {"type": "message_end", "message": {"role": "user", "text": text}}])
+}
+
+fn ask_feed(tab: &str, request: &Value) -> Value {
+    json!({"tab": tab, "event": "extensionUi",
+           "payload": {"request": request, "kinds": {"blocking": true, "signIn": false, "approval": false}}})
+}
+
+#[tokio::test]
+async fn a_bot_s_question_waits_off_the_owner_s_windows_and_shows_in_its_chat_once_escalated() {
+    let mut main = Main::start(opts()).await;
+    main.acquire("work", 1, None, false).await;
+    main.acquire("chat", 2, None, false).await;
+    main.call(
+        "delegatedPrompt",
+        json!({"tab": "work", "text": bot_run()[1]["message"]["text"]}),
+    )
+    .await;
+    main.call(
+        "feed",
+        json!({"tab": "work", "event": "events", "payload": bot_run()}),
+    )
+    .await;
+    let request = json!({"type": "extension_ui_request", "id": "r1", "method": "form", "html": "<form></form>"});
+    main.call("feed", ask_feed("work", &request)).await;
+    // No window shows it, and only the held announcement goes out: nobody is told of an ask yet.
+    assert!(main.sends("EXTENSION_UI").is_empty());
+    assert!(activities(&main, "ask").is_empty());
+    let held = activities(&main, "askHeld");
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0]["origin"], json!({"session": "chat", "mark": "m-1"}));
+    assert_eq!(
+        main.call("openRequests", json!({"win": 1})).await,
+        json!([])
+    );
+    // The bot holds it: still nobody's card.
+    assert_eq!(
+        main.call(
+            "routeAsk",
+            json!({"tab": "work", "id": "r1", "chat": "/s/1_chat.jsonl"})
+        )
+        .await,
+        true
+    );
+    assert!(main.sends("EXTENSION_UI").is_empty());
+    assert!(activities(&main, "ask").is_empty());
+    // Passed on: it shows in the bot chat's window, under that chat, and nowhere else.
+    assert_eq!(
+        main.call(
+            "routeAsk",
+            json!({"tab": "work", "id": "r1", "chat": "chat", "escalate": true})
+        )
+        .await,
+        true
+    );
+    let shown = main.sends("EXTENSION_UI");
+    let mut shown_request = request.clone();
+    shown_request["id"] = json!("ompdesk-escalated:r1");
+    assert_eq!(
+        shown,
+        vec![(vec![2], json!({"tabId": "chat", "request": shown_request}))]
+    );
+    assert_eq!(
+        main.call("openRequests", json!({"win": 1})).await,
+        json!([])
+    );
+    assert_eq!(
+        main.call("openRequests", json!({"win": 2})).await,
+        json!([{"tabId": "chat", "request": shown_request}])
+    );
+    // The owner answers it there: the answer goes to the tab that asked, once.
+    let answer = json!({"token": 1, "id": shown_request["id"], "tab": "chat", "frame": {"type": "extension_ui_response", "id": shown_request["id"], "data": {}}, "responder": 2, "choice": "sent"});
+    main.call("routeSideChannel", answer.clone()).await;
+    for _ in 0..10 {
+        main.call("size", json!({})).await;
+    }
+    main.call("routeSideChannel", answer).await;
+    let delivered: Vec<&Value> = main
+        .asked
+        .iter()
+        .filter(|(q, _)| q == "sideChannelLater")
+        .map(|(_, item)| item)
+        .collect();
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0]["tab"], "work");
+    assert_eq!(delivered[0]["frame"]["id"], "r1");
+    assert_eq!(activities(&main, "askClosed").len(), 1);
+    assert_eq!(
+        main.call("openRequests", json!({"win": 2})).await,
+        json!([])
+    );
+}
+
+#[tokio::test]
+async fn the_owner_s_own_run_and_a_bot_message_that_only_joined_it_keep_today_s_card() {
+    let mut main = Main::start(opts()).await;
+    main.acquire("work", 1, None, false).await;
+    // The owner's own prompt started the run; a bot's message steered in later changes nothing.
+    let run = bot_run();
+    let steer = &run[1];
+    main.call(
+        "delegatedPrompt",
+        json!({"tab": "work", "text": steer["message"]["text"]}),
+    )
+    .await;
+    main.call(
+        "feed",
+        json!({"tab": "work", "event": "events", "payload": [
+            {"type": "agent_start"},
+            {"type": "message_end", "message": {"role": "user", "text": "Do the thing"}},
+            {"type": "message_end", "message": {"role": "assistant"}},
+            steer,
+        ]}),
+    )
+    .await;
+    let request =
+        json!({"type": "extension_ui_request", "id": "r1", "method": "confirm", "title": "Go?"});
+    main.call("feed", ask_feed("work", &request)).await;
+    assert_eq!(main.sends("EXTENSION_UI")[0].0, vec![1]);
+    assert_eq!(activities(&main, "ask").len(), 1);
+    assert!(activities(&main, "askHeld").is_empty());
+    // A run the bot's message started, whose question the core leaves with the owner: shown then, and announced.
+    // Replaying the wrapped text after that steer was consumed does not authorize a new turn.
+    main.call(
+        "feed",
+        json!({"tab": "work", "event": "events", "payload": run}),
+    )
+    .await;
+    let copied =
+        json!({"type": "extension_ui_request", "id": "copy", "method": "ask", "questions": []});
+    main.call("feed", ask_feed("work", &copied)).await;
+    assert!(activities(&main, "askHeld").is_empty());
+    main.call(
+        "delegatedPrompt",
+        json!({"tab": "work", "text": steer["message"]["text"]}),
+    )
+    .await;
+    main.call(
+        "feed",
+        json!({"tab": "work", "event": "events", "payload": bot_run()}),
+    )
+    .await;
+    let held =
+        json!({"type": "extension_ui_request", "id": "r2", "method": "ask", "questions": []});
+    main.call("feed", ask_feed("work", &held)).await;
+    assert_eq!(main.sends("EXTENSION_UI").len(), 2);
+    assert_eq!(
+        main.call("routeAsk", json!({"tab": "work", "id": "r2"}))
+            .await,
+        true
+    );
+    let sent = main.sends("EXTENSION_UI");
+    assert_eq!(sent.len(), 3);
+    assert_eq!(sent[2].0, vec![1]);
+    assert_eq!(sent[2].1["request"], held);
+    assert_eq!(activities(&main, "ask").len(), 3);
+    // Decided once: a second word changes nothing.
+    assert_eq!(
+        main.call("routeAsk", json!({"tab": "work", "id": "r2"}))
+            .await,
+        false
+    );
+    // A tool approval of a bot's run is never held.
+    let approval = json!({"type": "extension_ui_request", "id": "r3", "method": "select", "title": "Allow tool: bash", "options": ["Approve", "Deny"]});
+    main.call(
+        "feed",
+        json!({"tab": "work", "event": "extensionUi",
+               "payload": {"request": approval, "kinds": {"blocking": true, "signIn": false, "approval": true}}}),
+    )
+    .await;
+    assert_eq!(main.sends("EXTENSION_UI").len(), 4);
 }

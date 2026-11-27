@@ -143,7 +143,6 @@ export interface CommandRegistryContext {
 	fastModeEnabled: boolean;
 	autoCompaction: boolean;
 	autoRetry: boolean;
-	planModeEnabled: boolean;
 	prewalkArmed: boolean;
 	availableCommands: AvailableCommand[];
 	/** The user's remapped chords; rows backed by a shortcut show the chord that fires it. */
@@ -161,14 +160,14 @@ export interface CommandRegistryContext {
 	openBenchmark: () => void;
 	openHandoffDialog: () => void;
 	openThemePicker: () => void;
-	openModes: (tab?: "plan" | "goal" | "autopilot") => void;
+	openModes: (tab?: "goal" | "autopilot") => void;
 	/** Agents page (Live · Definitions · Pull requests). */
 	openAgents: (tab?: AgentsTab) => void;
 	/** Insights page (Stats with a This session / All sessions scope · Usage). */
 	openInsights: (tab?: InsightsTab, scope?: InsightsStatsScope) => void;
 	openImportDialog: () => void;
 	openProviderConfig: () => void;
-	/** Deep-link a center-dock card (todo/plan): expand + flash. */
+	/** Deep-link a center-dock card (todo): expand + flash. */
 	focusDockCard: (id: DockCardId) => void;
 	/** Retry the last failed turn server-side (retry RPC). */
 	retryTurn: () => Promise<unknown>;
@@ -184,7 +183,6 @@ export interface CommandRegistryContext {
 		setAutoRetry: (enabled: boolean) => Promise<RpcResponse>;
 		compact: (instructions?: string) => Promise<RpcResponse>;
 		newSession: () => Promise<unknown>;
-		setPlanMode: (enabled: boolean) => Promise<RpcResponse>;
 		setPrewalk: (enabled: boolean) => Promise<RpcResponse>;
 		cycleModel: () => Promise<unknown>;
 		cycleThinkingLevel: () => Promise<unknown>;
@@ -1344,22 +1342,6 @@ export function buildCommandMenu(ctx: CommandRegistryContext): CommandMenuItem[]
 	// MODES
 	// ═══════════════════════════════════════════════════════════════════
 	add({
-		name: "plan",
-		label: t("cmd.plan"),
-		description: t("cmd.plan.desc"),
-		category: "modes",
-		shortcut: kbd("plan.toggle"),
-		affordance: {
-			kind: "toggle",
-			get: () => ctx.planModeEnabled,
-			set: e =>
-				runSessionCommand(ctx.rpc.setPlanMode(e), "Plan mode", data => {
-					const d = data as { enabled?: boolean } | undefined;
-					useSessionStore.setState({ planModeEnabled: d?.enabled ?? e });
-				}),
-		},
-	});
-	add({
 		name: "goal",
 		label: t("cmd.goal"),
 		description: t("cmd.goal.desc"),
@@ -1526,7 +1508,6 @@ export function buildCommandMenu(ctx: CommandRegistryContext): CommandMenuItem[]
 	// The session views that open as sheets (`jobs` and `tree` are their own commands above and below).
 	for (const [name, view] of [
 		["logs", "logs"],
-		["plan-document", "plan"],
 		["work-tree", "work"],
 	] as const) {
 		add({
@@ -1887,23 +1868,6 @@ export function buildCommandMenu(ctx: CommandRegistryContext): CommandMenuItem[]
 		},
 	});
 	add({
-		name: "plan-review",
-		label: t("cmd.planReview"),
-		description: t("cmd.planReview.desc"),
-		category: "modes",
-		affordance: {
-			kind: "action",
-			run: () => {
-				// The dock card only renders while plan mode is on — point at the toggle otherwise.
-				if (!useSessionStore.getState().planModeEnabled) {
-					toast({ variant: "info", message: translate("planPanel.statusOff") });
-					return;
-				}
-				ctx.focusDockCard("plan");
-			},
-		},
-	});
-	add({
 		name: "guided-goal",
 		label: t("cmd.guidedGoal"),
 		description: t("cmd.guidedGoal.desc"),
@@ -2156,7 +2120,6 @@ type CommandContextSnapshot = Pick<
 	| "fastModeEnabled"
 	| "autoCompaction"
 	| "autoRetry"
-	| "planModeEnabled"
 	| "prewalkArmed"
 	| "availableCommands"
 	| "keymapOverrides"
@@ -2202,7 +2165,6 @@ export function createCommandContext(
 			setAutoRetry: enabled => rpc.setAutoRetry(enabled),
 			compact: instructions => rpc.compact(instructions),
 			newSession: newSessionNow,
-			setPlanMode: enabled => rpc.setPlanMode(enabled),
 			setPrewalk: enabled => rpc.setPrewalk(enabled),
 			cycleModel: () => rpc.cycleModel(),
 			cycleThinkingLevel: () => rpc.cycleThinkingLevel(),
@@ -2227,7 +2189,6 @@ export function buildCurrentCommandMenu(availableCommands: AvailableCommand[]): 
 				fastModeEnabled: model.fastModeEnabled,
 				autoCompaction: settings.autoCompaction,
 				autoRetry: settings.autoRetry,
-				planModeEnabled: session.planModeEnabled,
 				prewalkArmed: session.prewalkArmed,
 				availableCommands,
 			},
@@ -2242,7 +2203,7 @@ export function buildCurrentCommandMenu(availableCommands: AvailableCommand[]): 
 
 /**
  * Stock omp's `get_available_commands` lists only its own builtins, not the
- * modes and windows the GUI serves itself (/plan, /goal, /btw, /tan,
+ * modes and windows the GUI serves itself (/goal, /btw, /tan,
  * /settings, …) nor its terminal-only commands (/collab, /record, …). Append
  * those as GUI-only builtins so slash completion offers them and composer
  * submit runs their affordance (or says where they run) instead of sending

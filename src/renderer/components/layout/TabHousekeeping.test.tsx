@@ -125,7 +125,6 @@ function installMockOmp(): MockOmp {
 					contextUsage: null,
 					messageCount: 0,
 					queuedMessageCount: 0,
-					planModeEnabled: false,
 					todoPhases: [],
 				}),
 			),
@@ -147,7 +146,6 @@ function installMockOmp(): MockOmp {
 							contextUsage: null,
 							messageCount: 0,
 							queuedMessageCount: 0,
-							planModeEnabled: false,
 							todoPhases: [],
 						});
 					case "get_transcript_page":

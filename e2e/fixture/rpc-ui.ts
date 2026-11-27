@@ -22,6 +22,8 @@ import {
 	titleEffective,
 } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import { autopilotRunning } from "../../resources/gui-bridge/modes/autopilot-core";
+import type { BotContext } from "../../resources/gui-bridge/modes/bots-contracts";
+import { chatFacts, parseBotContext } from "../../resources/gui-bridge/modes/bots-core";
 import { parseJudgeAssistEnv } from "../../resources/gui-bridge/modes/judge-assist-contracts";
 import {
 	NEXT_PROMPT_ENTRY,
@@ -184,9 +186,10 @@ export function runRpcUi(): void {
 	 * created with the first entry and reported by get_state, so the GUI's
 	 * session index lists it the way it lists real omp sessions.
 	 */
+	const journalName = (id: string) => `${Date.now()}_${id}.jsonl`;
 	const sessionFile =
 		process.env.OMP_GUI_TEST_SESSION_FILES === "1" && process.env.PI_CODING_AGENT_DIR
-			? nodePath.join(process.env.PI_CODING_AGENT_DIR, "sessions", "fixture", `${sessionId}.jsonl`)
+			? nodePath.join(process.env.PI_CODING_AGENT_DIR, "sessions", "fixture", journalName(sessionId))
 			: undefined;
 	const sessionCreated = new Date().toISOString();
 	let sessionTitle = "";
@@ -465,6 +468,8 @@ export function runRpcUi(): void {
 	if (standIn) Object.assign(model, { provider: "openai-codex", id: "gpt-6.1-sol", name: "GPT-6.1 SOL" });
 	const lanes: Record<"steering" | "followUp", string[]> = { steering: [], followUp: [] };
 	let isStreaming = false;
+	/** The bot context main last handed this chat (gui-bridge modes/bots.ts): a first-run home chat answers as one. */
+	let botContext: BotContext | null = null;
 	/** A `fixture flow` run's compaction is under way (`compact-start` until `compact-end` or the turn's end). */
 	let isCompacting = false;
 	/** The thinking selector and effort; `fixture reply actions` turns stock auto on and classifies the turn high. */
@@ -482,18 +487,6 @@ export function runRpcUi(): void {
 	const RETRY_AFTER_MS = Number(process.env.OMP_GUI_TEST_RETRY_AFTER_MS ?? 319_918_000);
 	/** A reply refused at an account limit as stock journals it: the provider's body, then the wait its header named. */
 	const RATE_LIMIT_ERROR = `429 {"type":"error","error":{"type":"rate_limit_error","message":"This request would exceed your account's rate limit. Please try again later."},"request_id":"req_fixture"} retry-after-ms=${RETRY_AFTER_MS}`;
-	let planModeEnabled = Boolean(process.env.OMP_GUI_TEST_PANEL_PLAN);
-	/** `modes.auto_mode_undo` ran: no further automatic decisions (the bridge's per-session memory). */
-	let autoModeSuppressed = false;
-	/**
-	 * Texts `modes.auto_mode_prefetch` asked about, with when their answer is in (the ask plus the judge's delay): a
-	 * decision of such a text joins it and lands then, or at once once it is in, as stock's cache does.
-	 */
-	const autoModePrefetched = new Map<string, number>();
-	/** Plan mode is on for one request (`set_plan_mode {auto}`): a plain rejection of its plan ends it. */
-	let autoPlan = false;
-	/** When the last turn ended: a session that ran one within the idle window is busy for the automatic choice. */
-	let lastActivityAt: number | undefined;
 	// Stock `--session <file>`: the process boots on that stored session (a tab
 	// opened on a fork, a restored tab), so get_state already names it.
 	if (flags["--session"] && fs.existsSync(flags["--session"])) {
@@ -511,7 +504,7 @@ export function runRpcUi(): void {
 	let todoPhases: Array<{ name: string; tasks: Array<{ content: string; status: string }> }> = [];
 	const noDrift: TodoDriftState = { changedAt: null, stale: null, received: [], receivedCount: 0 };
 	let todoDrift = noDrift;
-	// Stock `get_state`: cwd, plan mode and the pause gate come from the bridge's `composer.state`.
+	// Stock `get_state`: cwd and the pause gate come from the bridge's `composer.state`.
 	const state = () => ({
 		model,
 		thinkingLevel: thinking.level,
@@ -693,21 +686,6 @@ export function runRpcUi(): void {
 	};
 	/** Stock's `RpcSubagentsTracker`: the stream starts off and writes no `subagent_*` frame until the GUI asks. */
 	let subagentSubscription = "off";
-	/** The emitted plan proposal awaiting `plan_approval`, as the bridge's get_plan_mode reports it. */
-	let planProposal: Record<string, unknown> | undefined;
-	/** The bridge's `settlePending`: the proposal stops waiting and every window hears `plan_proposal_resolved`. */
-	const resolvePlan = () => {
-		if (!planProposal) return;
-		const frame = `${JSON.stringify({ event: { type: "plan_proposal_resolved", planFilePath: planProposal.planFilePath } })}\n`;
-		planProposal = undefined;
-		for (const socket of bridgeClients) socket.write(frame);
-	};
-	/** Stock's agent writes the plan before proposing it; the fixture's proposal leaves the same file behind. */
-	const writeProposedPlan = (proposal: Record<string, unknown>) => {
-		if (typeof proposal.planFilePath !== "string" || typeof proposal.planContent !== "string") return;
-		fs.mkdirSync(nodePath.dirname(proposal.planFilePath), { recursive: true });
-		fs.writeFileSync(proposal.planFilePath, proposal.planContent);
-	};
 	/**
 	 * `OMP_GUI_TEST_LOGIN=1`: Anthropic is a signed-out OAuth provider the
 	 * providers screen can sign in to; other suites keep the one fixture provider.
@@ -868,8 +846,6 @@ export function runRpcUi(): void {
 			cancelRecap();
 			// The bridge's next-prompt engine: a new run makes the session's last suggestion stale.
 			nextPromptRunStarted();
-			// A turn that starts while the plan waits replies to it (bridge modes/plan.ts `settlePending`).
-			resolvePlan();
 		}
 		if ("type" in frame && typeof frame.type === "string" && frame.type.startsWith("subagent_")) {
 			if (subagentSubscription === "off") return;
@@ -906,59 +882,6 @@ export function runRpcUi(): void {
 		noteTitleTurn();
 		scheduleRecap();
 		scheduleNextPrompt("turn");
-		lastActivityAt = Date.now();
-	};
-	/**
-	 * The bridge's plan.ts for a plan the automatic choice entered (`OMP_GUI_TEST_AUTO_PLAN_PROPOSES`): the agent
-	 * writes its plan and proposes it, the bridge approves it itself with the context kept (no `plan_proposal` frame,
-	 * so no card), plan mode ends and stock's approved-plan prompt starts the execution turn in this session.
-	 */
-	const autoPlanTurn = (message: string, respond: () => void) => {
-		respond();
-		isStreaming = true;
-		write({ type: "agent_start" });
-		const user: AgentMessage = { role: "user", content: [{ type: "text", text: message }], timestamp: Date.now() };
-		const planned: AgentMessage = {
-			role: "assistant",
-			content: [{ type: "text", text: "Proposed plan: split the settings store, then move every caller." }],
-			timestamp: Date.now(),
-			provider: model.provider,
-			model: model.id,
-			stopReason: "stop",
-		};
-		for (const entry of [user, planned]) {
-			appendMessage(entry);
-			write({ type: "message_start", message: entry });
-			write({ type: "message_end", message: entry });
-		}
-		autoPlan = false;
-		planModeEnabled = false;
-		endTurn([user, planned]);
-		setTimeout(() => {
-			isStreaming = true;
-			write({ type: "agent_start" });
-			const approved: AgentMessage = {
-				role: "developer",
-				content: [{ type: "text", text: "Plan approved." }],
-				attribution: "agent",
-				synthetic: true,
-				timestamp: Date.now(),
-			};
-			const answer: AgentMessage = {
-				role: "assistant",
-				content: [{ type: "text", text: "Local fixture reply" }],
-				timestamp: Date.now(),
-				provider: model.provider,
-				model: model.id,
-				stopReason: "stop",
-			};
-			for (const entry of [approved, answer]) {
-				appendMessage(entry);
-				write({ type: "message_start", message: entry });
-				write({ type: "message_end", message: entry });
-			}
-			endTurn([approved, answer]);
-		}, 0);
 	};
 	/** Stock `abortRetry` during the saga's backoff: "Retry cancelled", then the terminal `agent_end`. False when no saga waits. */
 	const cancelSocketRetry = (): boolean => {
@@ -1077,6 +1000,12 @@ export function runRpcUi(): void {
 	let nextPromptSettings: NextPromptSettings = parseNextPromptEnv(process.env.OMP_GUI_NEXT_PROMPT);
 	/** The user's composer draft is empty (`next_prompt_draft`); a suggestion is only made over an empty one. */
 	let nextPromptDraftEmpty = true;
+	/**
+	 * Main says a window, phone or paired device shows the tab (`next_prompt_shown`): a hidden tab's trigger asks
+	 * nothing (`nextPromptSkipped` remembers it) and showing the tab asks then, as the bridge's gate does.
+	 */
+	let nextPromptShown = true;
+	let nextPromptSkipped: NextPromptTrigger | undefined;
 	let nextPromptFailure: { reason: NextPromptUnavailable; detail: string } | undefined;
 	let nextPromptTimer: NodeJS.Timeout | undefined;
 	const nextPromptRequests = { suggest: 0, inline: 0 };
@@ -1125,6 +1054,7 @@ export function runRpcUi(): void {
 	};
 	const nextPromptRunStarted = () => {
 		nextPromptKept = { candidates: [], at: Date.now() };
+		nextPromptSkipped = undefined;
 	};
 	const pushBridgeEvent = (event: object) => {
 		const frame = `${JSON.stringify({ event })}\n`;
@@ -1300,9 +1230,13 @@ export function runRpcUi(): void {
 		});
 		if (recovered) emitNextPromptConfig();
 	};
-	/** One suggestion after `trigger`, unless a draft is in the way; typing aborts it while pending. */
+	/** One suggestion after `trigger`, unless a draft is in the way or nobody shows the tab; typing aborts it while pending. */
 	const scheduleNextPrompt = (trigger: NextPromptTrigger) => {
 		if (!nextPromptSettings.suggestions || !nextPromptDraftEmpty) return;
+		if (!nextPromptShown) {
+			nextPromptSkipped = trigger;
+			return;
+		}
 		clearTimeout(nextPromptTimer);
 		nextPromptTimer = setTimeout(() => emitNextPrompt(trigger), nextPromptScript.latencyMs ?? 0);
 	};
@@ -1714,7 +1648,7 @@ export function runRpcUi(): void {
 	let delegationMode = process.env.OMP_GUI_DELEGATION ?? "default";
 	/**
 	 * The bridge's `pstack` prompt section for this fake session (modes/pstack-core.ts, the packaged rules): the main
-	 * agent of a Code session gets it, Plan mode and an Autopilot run do not get the full one. `OMP_GUI_TEST_PSTACK=1`
+	 * agent of a Code session gets it, an Autopilot run does not get the full one. `OMP_GUI_TEST_PSTACK=1`
 	 * shows it in the context inspector; without it the fixture's inspector stays as the other suites expect.
 	 */
 	const pstackSectionText = (): string | undefined =>
@@ -1722,7 +1656,6 @@ export function runRpcUi(): void {
 			pstackVariant({
 				enabled: process.env[PSTACK_ENV] === "1",
 				kind: "main",
-				planMode: planModeEnabled,
 				autopilot: autopilotRunning(activeBranch()),
 				solo: delegationMode === "solo",
 			}),
@@ -1902,8 +1835,36 @@ export function runRpcUi(): void {
 				}
 			: {}),
 	};
+	/**
+	 * `fixture:bot-form` (inside a message, an agent's arrives wrapped): the run raises stock's `form` card with this
+	 * HTML, and its answer ends the run with a reply naming the data (`Form answered: {"color":"red"}`). The bridge's
+	 * `project_ask_form` (resources/gui-bridge/ask-form.ts) is stood in for this one form: one radio question.
+	 */
+	const BOT_FORM_HTML =
+		'<form><p>Which color should the badge be?</p><label><input type="radio" name="color" value="red"> Red</label><label><input type="radio" name="color" value="blue"> Blue</label></form>';
+	const BOT_FORM_OPTIONS = ["Red", "Blue"];
+	const botForms = new Set<string>();
+	let botFormSeq = 0;
 	/** A handler returning `undefined` replies itself (deferred, or ahead of the events it pushes). */
 	const bridgeMethods: Record<string, (params: Params, reply: Reply) => unknown> = {
+		project_ask_form: params => {
+			if (!Array.isArray(params.answers))
+				return {
+					questions: [
+						{
+							id: "field-0",
+							question: "Which color should the badge be?",
+							options: BOT_FORM_OPTIONS.map(label => ({ label })),
+							formField: { custom: false, multiline: false, initialText: "", checked: [] },
+						},
+					],
+				};
+			const picked = (params.answers[0] as { selectedOptions?: unknown } | undefined)?.selectedOptions;
+			const label = Array.isArray(picked) ? picked[0] : undefined;
+			if (typeof label !== "string" || !BOT_FORM_OPTIONS.includes(label))
+				return { problem: "Choose a color", index: 0 };
+			return { data: { color: label.toLowerCase() } };
+		},
 		...voiceMethods,
 		// gui-bridge agent-control.ts: stock's extension-UI confirm, answered by the person (extension_ui_response).
 		"agent_control.confirm": (params, reply) => {
@@ -1920,6 +1881,20 @@ export function runRpcUi(): void {
 		},
 		"agent_control.note": () => ({}),
 		"agent_control.worker": () => ({}),
+		// gui-bridge modes/bots.ts `agent_control.bot`: the bot chat's context, and what its branch says for the core's
+		// first run (bots-core.ts `chatFacts`, over the entries viewed in stock's shape as `agent_control.mail` does).
+		"agent_control.bot": params => {
+			const context = parseBotContext(params);
+			const changed = JSON.stringify(context) !== JSON.stringify(botContext);
+			botContext = context;
+			const asStock = entries.map(entry =>
+				entry.type === "message" && (entry.message as AgentMessage).role === "custom"
+					? { ...(entry.message as AgentMessage), type: "custom_message" }
+					: entry,
+			);
+			const kickoff = typeof params.kickoff === "string" ? params.kickoff : undefined;
+			return { changed, ...chatFacts(asStock, kickoff, isStreaming) };
+		},
 		// gui-bridge agent-control.ts `agent_control.attachment`: a file in this omp's folder, or its n-th newest picture.
 		"agent_control.attachment": params => {
 			const wire = (name: string, mimeType: string, bytes: Buffer) => ({
@@ -1992,7 +1967,14 @@ export function runRpcUi(): void {
 				const answer: AgentMessage = {
 					role: "assistant",
 					content: [
-						{ type: "text", text: `Read the ${String(details.kind)} report from ${String(details.from)}.` },
+						{
+							type: "text",
+							// A first-run home chat answers OMPdesk's kickoff as its rules say: a greeting and one question.
+							text:
+								botContext?.bot.firstRun && String(details.id).startsWith("kickoff-")
+									? "Hi! What should I start on?"
+									: `Read the ${String(details.kind)} report from ${String(details.from)}.`,
+						},
 					],
 					timestamp: Date.now(),
 					provider: model.provider,
@@ -2088,7 +2070,6 @@ export function runRpcUi(): void {
 			cwd: process.cwd(),
 			autoRetryEnabled: true,
 			thinkingConfigured: thinking.configured,
-			planModeEnabled,
 			prewalkArmed: false,
 			agentsPaused: false,
 		}),
@@ -2207,7 +2188,7 @@ export function runRpcUi(): void {
 			const row = (job: FixtureJob, depth = 0) => ({ kind: "job" as const, job, depth, cancellable: depth === 0 });
 			const now = Date.now();
 			return [
-				...(process.env.OMP_GUI_TEST_PANEL_PLAN
+				...(process.env.OMP_GUI_TEST_PANEL_JOBS
 					? [
 							row({
 								id: "watch",
@@ -2324,7 +2305,7 @@ export function runRpcUi(): void {
 					status: "completed",
 					startTime: 1000,
 					endTime: 3000,
-					resultPreview: process.env.OMP_GUI_TEST_PANEL_PLAN ? "Build completed successfully." : undefined,
+					resultPreview: process.env.OMP_GUI_TEST_PANEL_JOBS ? "Build completed successfully." : undefined,
 				}),
 			].map(entry =>
 				entry.kind === "job" && cancelledJobs.has(entry.job.id)
@@ -2723,7 +2704,7 @@ export function runRpcUi(): void {
 			const dir = sessionFile
 				? nodePath.dirname(sessionFile)
 				: fs.mkdtempSync(nodePath.join(os.tmpdir(), "omp-fork-"));
-			const sessionPath = nodePath.join(dir, `${forkId}.jsonl`);
+			const sessionPath = nodePath.join(dir, journalName(forkId));
 			// Stock `createBranchedSession` gives the fork the source's title (the fixture's title line, as `persistSession`).
 			const title = sessionTitle
 				? [{ type: "title", v: 1, title: sessionTitle, updatedAt: new Date().toISOString() }]
@@ -2861,6 +2842,14 @@ export function runRpcUi(): void {
 			}
 			return { empty: nextPromptDraftEmpty };
 		},
+		next_prompt_shown: params => {
+			nextPromptShown = params.shown === true;
+			if (nextPromptShown && nextPromptSkipped) {
+				nextPromptSkipped = undefined;
+				scheduleNextPrompt("shown");
+			}
+			return { shown: nextPromptShown };
+		},
 		next_prompt_refresh: params => {
 			scheduleNextPrompt(params.reason === "bash" || params.reason === "switch" ? params.reason : "refresh");
 			return { ok: true };
@@ -2902,100 +2891,6 @@ export function runRpcUi(): void {
 			experience: typeof params.experience === "string" ? params.experience : null,
 		}),
 		account_rotation_set: params => ({ mode: params.mode === "even" ? "even" : "quota" }),
-		"modes.get_plan_mode": () => {
-			let planFilePath: string | undefined;
-			if (process.env.OMP_GUI_TEST_PANEL_PLAN) {
-				planFilePath = nodePath.join(process.cwd(), "panel-fixture-plan.md");
-				fs.copyFileSync(process.env.OMP_GUI_TEST_PANEL_PLAN, planFilePath);
-			}
-			// The bridge points the plan state at the reviewed file once the agent proposes it.
-			planFilePath ??= typeof planProposal?.planFilePath === "string" ? planProposal.planFilePath : undefined;
-			return { enabled: planModeEnabled || Boolean(planFilePath), planFilePath, proposal: planProposal };
-		},
-		"modes.set_plan_mode": params => {
-			planModeEnabled = params.enabled === true;
-			// `auto`: plan mode for one request (the bridge's auto-mode-state); the user's own switch takes it over.
-			autoPlan = planModeEnabled && params.auto === true;
-			if (!planModeEnabled) planProposal = undefined;
-			return { enabled: planModeEnabled };
-		},
-		// Approving keeps the context: plan mode ends and stock's synthetic prompt starts the
-		// execution turn (a `fixture flow` run, driven like any other).
-		"modes.plan_approval": params => {
-			if (!planProposal) throw new Error("No plan is awaiting approval");
-			resolvePlan();
-			if (params.approved !== true) {
-				// Feedback re-plans; a plain rejection leaves the user's plan mode on (an automatic plan never shows a card).
-				if (typeof params.feedback === "string" && params.feedback.trim()) {
-					return { approved: false, dispatched: true };
-				}
-				return { approved: false, dispatched: false, reason: "rejected" };
-			}
-			autoPlan = false;
-			planModeEnabled = false;
-			setTimeout(() => {
-				isStreaming = true;
-				const developer: AgentMessage = {
-					role: "developer",
-					content: [{ type: "text", text: "Execute the approved plan." }],
-					attribution: "agent",
-					synthetic: true,
-					timestamp: Date.now(),
-				};
-				appendMessage(developer);
-				write({ type: "agent_start" });
-				write({ type: "message_end", message: developer });
-				startFlow(developer);
-			}, 0);
-			return { approved: true, dispatched: true };
-		},
-		// gui-bridge modes/auto-mode.ts: the fake "classifier" reads keywords. A big change is plan, a completion
-		// condition is goal, anything else none; an undone decision stops further ones in the session. Like the bridge
-		// it never classifies a busy session: a turn within `OMP_GUI_TEST_AUTO_MODE_IDLE_MS` (default ten minutes, the
-		// bridge's AUTO_MODE_IDLE_MS). `OMP_GUI_TEST_AUTO_MODE_DELAY_MS` holds every answer that long, as the real
-		// judge's ~1 s round trip does.
-		"modes.auto_mode_decide": (params, reply) => {
-			const message = typeof params.message === "string" ? params.message : "";
-			const idleMs = Number(process.env.OMP_GUI_TEST_AUTO_MODE_IDLE_MS ?? 600_000);
-			const decide = () => {
-				if (autoModeSuppressed) return { mode: "none", reason: "suppressed", latencyMs: 0 };
-				if (lastActivityAt !== undefined && Date.now() - lastActivityAt < idleMs) {
-					return { mode: "none", reason: "busy", latencyMs: 0 };
-				}
-				if (/\buntil\b.*\b(pass|green|done)\b/i.test(message)) {
-					return {
-						mode: "goal",
-						objective: message.replace(/\s+/g, " ").trim(),
-						latencyMs: 12,
-						model: "fixture/smol",
-					};
-				}
-				if (/\b(refactor|migrate)\b/i.test(message)) return { mode: "plan", latencyMs: 12, model: "fixture/smol" };
-				return { mode: "none", reason: "classified_none", latencyMs: 12, model: "fixture/smol" };
-			};
-			const delayMs = Number(process.env.OMP_GUI_TEST_AUTO_MODE_DELAY_MS) || 0;
-			const answeredAt = autoModePrefetched.get(message);
-			const waitMs = answeredAt === undefined ? delayMs : answeredAt - Date.now();
-			if (waitMs <= 0) return decide();
-			setTimeout(() => reply(decide()), waitMs);
-			return undefined;
-		},
-		// gui-bridge modes/auto-mode.ts `modes.auto_mode_prefetch`: the question asked while the user types (cached
-		// for the decision at Enter). Changes no mode.
-		"modes.auto_mode_prefetch": params => {
-			const delayMs = Number(process.env.OMP_GUI_TEST_AUTO_MODE_DELAY_MS) || 0;
-			if (typeof params.message === "string" && !autoModePrefetched.has(params.message))
-				autoModePrefetched.set(params.message, Date.now() + delayMs);
-			return { prefetched: true };
-		},
-		"modes.auto_mode_undo": params => {
-			autoModeSuppressed = true;
-			if (params.mode === "plan") {
-				planModeEnabled = false;
-				autoPlan = false;
-			}
-			return { suppressed: true };
-		},
 		get_gui_themes: () => ({ themes: [] }),
 		get_plugins: () => ({ plugins: [] }),
 		get_marketplaces: () => ({ marketplaces: [] }),
@@ -4154,31 +4049,6 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 							result: compaction,
 							aborted: false,
 							willRetry: false,
-						});
-						return undefined;
-					}
-					// The plan proposal: the bridge pushes the frame, then stock's silent abort ends the turn.
-					case "propose": {
-						planModeEnabled = true;
-						planProposal = {
-							planFilePath: `${process.cwd()}/.omp/plans/flow-plan.md`,
-							title: "Flow rollout plan",
-							suggestedFileName: "FLOW_PLAN.md",
-							planContent: "## Steps\n\n1. Split the checks.\n2. Run them in parallel.",
-							options: ["execute", "compact", "keep_context", "save", "refine"],
-						};
-						writeProposedPlan(planProposal);
-						const frame = `${JSON.stringify({ event: { type: "plan_proposal", ...planProposal } })}\n`;
-						for (const socket of bridgeClients) socket.write(frame);
-						finish({
-							role: "assistant",
-							content: [],
-							stopReason: "aborted",
-							errorMessage: "__omp.silent_abort__",
-							errorId: 0x0200_0000,
-							timestamp: Date.now(),
-							provider: model.provider,
-							model: model.id,
 						});
 						return undefined;
 					}
@@ -5940,6 +5810,10 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				title: "Allow tool: bash\nls -la",
 				options: ["Approve", "Approve bash for this session", "Deny"],
 			});
+		} else if (message.includes("fixture:bot-form")) {
+			const id = `bot-form-${++botFormSeq}`;
+			botForms.add(id);
+			write({ type: "extension_ui_request", id, method: "form", html: BOT_FORM_HTML });
 		} else if (message === "fixture ask") {
 			write({
 				type: "extension_ui_request",
@@ -6310,6 +6184,32 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				// Stock auto thinking names the effort it classified for this turn.
 				thinking = { level: "high", configured: "auto" };
 				write({ type: "thinking_level_changed", thinkingLevel: "high", configured: "auto", resolved: "high" });
+			}
+			// A first-run home chat's owner's first task: one small piece of it shown, then SOUL.md written (the rules'
+			// order, bots-core.ts FIRST_RUN_RULES).
+			const bot = botContext?.bot;
+			if (bot?.firstRun) {
+				const work: AgentMessage = {
+					role: "assistant",
+					content: [
+						{
+							type: "text",
+							text: `One small piece of "${message}", done: I read it and listed the first step.\nSaved what I am for and how I work to SOUL.md; tell me to change it.`,
+						},
+					],
+					timestamp: Date.now(),
+					provider: model.provider,
+					model: model.id,
+					stopReason: "stop",
+				};
+				appendMessage(work);
+				write({ type: "message_end", message: work });
+				fs.appendFileSync(
+					nodePath.join(bot.folder, "SOUL.md"),
+					"\n## How I work\nI read what the owner names and report here.\n",
+				);
+				endTurn([user, work]);
+				return;
 			}
 			const answer: AgentMessage = {
 				role: "assistant",
@@ -6787,6 +6687,21 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 					break;
 				}
 				ok();
+				// The `fixture:bot-form` run goes on with what the form's answer said.
+				if (typeof command.id === "string" && botForms.delete(command.id) && command.cancelled !== true) {
+					const answer: AgentMessage = {
+						role: "assistant",
+						content: [{ type: "text", text: `Form answered: ${JSON.stringify(command.data ?? null)}` }],
+						timestamp: Date.now(),
+						provider: model.provider,
+						model: model.id,
+						stopReason: "stop",
+					};
+					appendMessage(answer);
+					write({ type: "message_end", message: answer });
+					endTurn([answer]);
+					break;
+				}
 				endTurn([]);
 				break;
 			}
@@ -7003,20 +6918,14 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 					for (const text of followUps) prompt(text, () => {});
 					break;
 				}
-				// The agent proposes a plan: plan mode turns on, the bridge pushes the
-				// one-shot `plan_proposal` frame and keeps it for get_plan_mode.
-				if (line === "fixture:plan") {
-					planModeEnabled = true;
-					planProposal = {
-						planFilePath: `${process.cwd()}/.omp/plans/fixture-rollout.md`,
-						title: "Fixture rollout plan",
-						suggestedFileName: "FIXTURE_ROLLOUT.md",
-						planContent: "## Steps\n\n1. Ship the background tab coverage.\n2. Watch the release run.",
-						options: ["execute", "compact", "keep_context", "save", "refine"],
-					};
-					writeProposedPlan(planProposal);
-					const frame = `${JSON.stringify({ event: { type: "plan_proposal", ...planProposal } })}\n`;
-					for (const socket of bridgeClients) socket.write(frame);
+				// A goal set or dropped with no turn of its own (stock's `goal_updated`), for a surface that shows it.
+				if (line === "fixture:goal:on" || line === "fixture:goal:off") {
+					boardGoal = line === "fixture:goal:on" ? { objective: "Ship it", status: "active" } : undefined;
+					write({
+						type: "goal_updated",
+						goal: boardGoal ?? null,
+						state: boardGoal ? { enabled: true, goal: boardGoal } : { enabled: false },
+					});
 					ok();
 					break;
 				}
@@ -7697,7 +7606,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				titleSource = undefined;
 				autoBeside = "";
 				const id = `fixture-new-${process.pid}-${++freshCount}`;
-				const file = sessionFile ? nodePath.join(nodePath.dirname(sessionFile), `${id}.jsonl`) : undefined;
+				const file = sessionFile ? nodePath.join(nodePath.dirname(sessionFile), journalName(id)) : undefined;
 				fresh = { id, file, created: new Date().toISOString() };
 				if (file) {
 					fs.mkdirSync(nodePath.dirname(file), { recursive: true });
@@ -7803,10 +7712,6 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 					typedNext = undefined;
 				}
 				if (autopilot.childPrompt(text("message"), ok)) break;
-				if (process.env.OMP_GUI_TEST_AUTO_PLAN_PROPOSES && autoPlan && planModeEnabled) {
-					autoPlanTurn(text("message"), ok);
-					break;
-				}
 				prompt(text("message"), ok, Array.isArray(command.images) ? (command.images as ImageContent[]) : []);
 				break;
 			case "set_session_name": {

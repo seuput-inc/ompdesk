@@ -88,6 +88,7 @@ export function botMentionItems(query: string, labels: { paused: string; bot: st
 	const needle = query.replace(/^"/, "").toLocaleLowerCase();
 	const items: CompletionItem[] = [];
 	for (const bot of useBotsStore.getState().state.bots) {
+		if (bot.device) continue;
 		const at = bot.name.toLocaleLowerCase().indexOf(needle);
 		if (at === -1 && !(needle && bot.specialty?.toLocaleLowerCase().includes(needle))) continue;
 		items.push({

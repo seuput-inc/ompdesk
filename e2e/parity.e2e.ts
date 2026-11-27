@@ -26,7 +26,7 @@ import { type VersionSummaryFeed, versionSummaryFeed } from "./fixture/version-s
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, REMOTE_LOGIN, type RemoteInstance } from "./remote-harness";
 import { crashed, type Look, panelCrash } from "./responsive-audit";
-import { PARITY_WORK_PROMPT, type ParitySession, SURFACES, type Surface } from "./responsive-surfaces";
+import { AWAY_HOST_BOT, PARITY_WORK_PROMPT, type ParitySession, SURFACES, type Surface } from "./responsive-surfaces";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
@@ -223,6 +223,46 @@ async function seedPreviewHistory(userData: string): Promise<void> {
 	await fs.writeFile(path.join(userData, "preview-history.json"), JSON.stringify({ entries }), { mode: 0o600 });
 }
 
+/** A computer away since this one last heard it, whose bot this one still lists (`<userData>/bots-remote.json`). */
+async function seedAwayHostBots(userData: string): Promise<void> {
+	const at = "2026-11-20T09:00:00.000Z";
+	const home = "/Users/someone/.omp/agent/sessions/courier/home.jsonl";
+	const bot = {
+		id: AWAY_HOST_BOT,
+		name: "Courier",
+		picture: "data:image/png;base64,AAAA",
+		folder: "/Users/someone/.omp/bots/courier",
+		home,
+		sessions: [home],
+		paused: false,
+		model: null,
+		autoApprove: false,
+		reach: [],
+		staleDays: 7,
+		lookAround: null,
+		tidy: null,
+		quiet: [],
+		specialty: "Carries notes between computers.",
+		createdAt: at,
+	};
+	const item = {
+		id: "item-away-1",
+		bot: AWAY_HOST_BOT,
+		number: 1,
+		session: home,
+		title: "Pick a day for the move",
+		status: "needs_you",
+		question: { id: 1, text: "Which day?", options: ["Mon", "Tue"] },
+		links: [],
+		createdAt: at,
+		updatedAt: at,
+		events: [],
+		version: 1,
+	};
+	const copy = { device: "pc-c-away", name: "PC-C", version: "bots-away.3", state: { bots: [bot], items: [item] } };
+	await fs.writeFile(path.join(userData, "bots-remote.json"), JSON.stringify([copy]), { mode: 0o600 });
+}
+
 const dir = process.env.OMP_GUI_PARITY;
 const BLOCKED_USAGE = process.env.OMP_GUI_TEST_USAGE_ACCOUNTS === "blocked";
 const language = process.env.OMP_GUI_PARITY_LANGUAGE === "ko" ? "ko" : "en";
@@ -259,6 +299,7 @@ const VIEW_LABEL: Record<View, string> = {
 interface HostSession {
 	path: string;
 	cwd: string;
+	botId?: string;
 }
 
 /** What the run wrote for one surface (`parity.json`). */
@@ -397,12 +438,30 @@ if (dir) {
 				for (const profile of [hostProfile, clientProfile])
 					await fs.writeFile(path.join(profile.desktop, "update-token.dropped"), "keychain-would-ask");
 			}
+			// `bot-pane-offline`: both computers kept the last copy of a third computer's bots (`bots-remote.json`, the
+			// core's `bots_share.rs`), and that computer is away, so every view lists its bot offline.
+			if (surfaces.some(surface => surface.id === "bot-pane-offline"))
+				for (const profile of [hostProfile, clientProfile]) await seedAwayHostBots(profile.desktop);
 			if (previewStart)
 				for (const profile of [hostProfile, clientProfile]) await seedPreviewHistory(profile.desktop);
 			host = await launchRemote(hostProfile);
 			client = await launchRemote(clientProfile);
 			const b = host.page;
 			const a = client.page;
+			if (surfaces.some(surface => surface.id === "bot-pane-offline")) {
+				for (const [page, profile] of [
+					[b, hostProfile],
+					[a, clientProfile],
+				] as const) {
+					const state = await page.evaluate(() => window.omp.bots.command({ action: "get" }));
+					const bot = state.remote?.flatMap(copy => copy.bots).find(bot => bot.id === AWAY_HOST_BOT);
+					expect(bot).toBeDefined();
+					expect(bot).not.toHaveProperty("picture");
+					expect(await fs.readFile(path.join(profile.desktop, "bots-remote.json"), "utf8")).not.toContain(
+						"data:image/",
+					);
+				}
+			}
 			await a.evaluate(() => window.omp.remote.setDeviceName("PC-A"));
 			const deviceId = await connectHost(b, a, "PC-B");
 			await expect
@@ -513,6 +572,29 @@ if (dir) {
 			};
 			/** B's sessions of answered turns, each made the first time a surface shows it, by title. */
 			const answered = new Map<string, HostSession>();
+			const firstRunSession = async (): Promise<HostSession> => {
+				const name = "First-run Scout";
+				const made = answered.get(name);
+				if (made) return made;
+				const cwd = path.join(parent, "first-run-scout");
+				const state = await b.evaluate(
+					([name, folder]) =>
+						window.omp.bots.command({ action: "create", name, folder, purpose: "Checks the README." }),
+					[name, cwd] as const,
+				);
+				const bot = state.bots.find(bot => bot.folder === cwd);
+				if (!bot) throw new Error("B did not create the first-run bot");
+				const tab = await b.evaluate(cwd => window.omp.tabs.spawn({ cwd, kind: "agent" }), cwd);
+				if (!tab?.tabId) throw new Error("B did not open the first-run home chat");
+				await untilAnswered(b, tab.tabId, { text: "Hi! What should I start on?" });
+				const home = (await b.evaluate(() => window.omp.bots.command({ action: "get" }))).bots.find(
+					entry => entry.id === bot.id,
+				);
+				if (!home?.home || !home.firstRun) throw new Error("The greeting is not in the first-run home chat");
+				const session = { cwd, path: home.home, botId: bot.id };
+				answered.set(name, session);
+				return session;
+			};
 			const answeredSession = async (title: string, turns: ReadonlyArray<readonly [string, string]>) => {
 				const made = answered.get(title);
 				if (made) return made;
@@ -724,9 +806,66 @@ if (dir) {
 				answered.set("Parity board", session);
 				return session;
 			};
+			const routedSession = async (which: "routing-bot" | "routing-worker"): Promise<HostSession> => {
+				const existing = answered.get(which);
+				if (existing) return existing;
+				const folder = path.join(parent, "routing-bot");
+				const roster = await b.evaluate(
+					folder => window.omp.bots.command({ action: "create", name: "Badge bot", folder }),
+					folder,
+				);
+				const botId = roster.bots.find(bot => bot.folder === folder)?.id;
+				if (!botId) throw new Error("B did not create the routing bot");
+				const chat = (await b.evaluate(cwd => window.omp.tabs.spawn({ cwd }), folder))?.tabId;
+				if (!chat) throw new Error("No bot chat");
+				const tab = async (id: string) =>
+					(await b.evaluate(() => window.omp.tabs.list())).find(t => t.tabId === id);
+				await expect.poll(async () => (await tab(chat))?.status).toBe("ready");
+				await b.evaluate(id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "Hello" }), chat);
+				await untilAnswered(b, chat);
+				const chatPath = (await tab(chat))?.sessionPath;
+				if (!chatPath) throw new Error("Bot chat has no file");
+				await expect
+					.poll(async () =>
+						(await b.evaluate(() => window.omp.bots.command({ action: "get" }))).bots.some(
+							bot => bot.home === chatPath,
+						),
+					)
+					.toBe(true);
+				const worker = await answeredSession("Parity badge worker", [["hello", "Local fixture reply"]]);
+				const workerId = (await b.evaluate(() => window.omp.tabs.list())).find(
+					t => t.sessionPath === worker.path,
+				)?.tabId;
+				if (!workerId) throw new Error("No badge worker");
+				const call = await controlToolCaller(b, hostProfile.record, chat);
+				const sent = await call("ompdesk_session_send", {
+					session: workerId,
+					message: "Choose the badge color fixture:bot-form",
+				});
+				expect(sent.isError, sent.text).toBe(false);
+				await expect
+					.poll(
+						async () => {
+							const reply = await b.evaluate(
+								id =>
+									window.omp.rpc.commandForTab(id, { type: "get_transcript_page", fromEnd: true, limit: 10 }),
+								chat,
+							);
+							return JSON.stringify(reply.data).includes("Which color should the badge be?");
+						},
+						{ timeout: 30_000 },
+					)
+					.toBe(true);
+				const bot = { path: chatPath, cwd: folder, botId };
+				answered.set("routing-bot", bot);
+				answered.set("routing-worker", worker);
+				return which === "routing-bot" ? bot : worker;
+			};
 			/** B's `session` as it is when a view shows it. */
-			const hostSession = async (session: ParitySession): Promise<HostSession> =>
-				session === "work"
+			const hostSession = async (session: ParitySession): Promise<HostSession> => {
+				if (session === "routing-bot" || session === "routing-worker") return routedSession(session);
+				if (session === "firstRun") return firstRunSession();
+				return session === "work"
 					? work
 					: session === "reply"
 						? replySession()
@@ -762,10 +901,17 @@ if (dir) {
 																: session === "board"
 																	? boardSession()
 																	: limitSession();
+			};
+			const openBotRow = async (page: Page, botId: string, sessionPath: string) => {
+				const toggle = page.locator("[data-sidebar-bots-toggle]:visible").first();
+				if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+				await openRow(page, page.locator(`[data-bot-entry=${cssString(botId)}]`), sessionPath);
+			};
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {
-					const { path: sessionPath } = await hostSession(session);
+					const { path: sessionPath, botId } = await hostSession(session);
+					if (botId) return openBotRow(b, botId, sessionPath);
 					await openRow(
 						b,
 						b.locator(`.omp-sidebar-session-row[data-session-path=${cssString(sessionPath)}]`),
@@ -773,7 +919,8 @@ if (dir) {
 					);
 				},
 				remote: async session => {
-					const { path: sessionPath } = await hostSession(session);
+					const { path: sessionPath, botId } = await hostSession(session);
+					if (botId) return openBotRow(a, botId, sessionPath);
 					const section = a.locator(`[data-sidebar-device="${deviceId}"]`);
 					await openRow(a, section.locator(`[data-device-session=${cssString(sessionPath)}]`), sessionPath);
 				},
@@ -1170,6 +1317,10 @@ if (dir) {
 								timeout: 30_000,
 							})
 							.toBe("not-available");
+				}
+				if (surface.parity.session === "firstRun") {
+					const { botId } = await firstRunSession();
+					if (botId) await b.evaluate(id => window.omp.bots.command({ action: "delete", id }), botId);
 				}
 			}
 			await fs.writeFile(

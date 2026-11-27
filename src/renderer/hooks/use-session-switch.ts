@@ -31,7 +31,6 @@ import { useExtensionUiStore } from "../stores/extension-ui";
 import { useForkHandoffStore } from "../stores/fork-handoff";
 import { useMessagesStore } from "../stores/messages";
 import { useModelStore } from "../stores/model";
-import { usePlanApprovalStore } from "../stores/plan-approval";
 import { useQueueStore } from "../stores/queue";
 import { useSessionStore } from "../stores/session";
 import { useSubagentsStore } from "../stores/subagents";
@@ -57,7 +56,6 @@ export function resetSessionSurface(closeOverlays = true): void {
 	useModelStore.setState({ availableModels, providers, discoveryStates, catalogGeneration });
 	useQueueStore.getState().setFromFrame({ steering: [], followUp: [] });
 	useExtensionUiStore.getState().clearAll();
-	usePlanApprovalStore.getState().clearProposal();
 	if (closeOverlays) {
 		useForkHandoffStore.getState().closeHandoffDialog();
 		useUiStore.getState().closeSessionOverlays();
@@ -76,8 +74,6 @@ export function resetSessionSurface(closeOverlays = true): void {
 		contextUsage: null,
 		messageCount: 0,
 		queuedMessageCount: 0,
-		planModeEnabled: false,
-		autoMode: null,
 		prewalkArmed: false,
 		agentsPaused: false,
 		agentsPausedAt: null,

@@ -49,7 +49,7 @@ export function BotTemplatesDialog({
 	const t = useT();
 	const lang = useCurrentLang();
 	const listId = useId();
-	const bots = useBotsStore(s => s.state.bots);
+	const bots = useBotsStore(s => s.state.bots).filter(bot => !bot.device);
 	const searchRef = useRef<HTMLInputElement>(null);
 	const [query, setQuery] = useState(initialQuery);
 	const [category, setCategory] = useState<BotTemplateCategory | null>(null);

@@ -19,7 +19,9 @@
 mod app;
 mod auto;
 mod bot_files;
+mod bot_first_run;
 mod bots;
+pub(crate) mod bots_share;
 mod items;
 mod review;
 mod rooms;

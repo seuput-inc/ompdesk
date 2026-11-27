@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use tokio::sync::watch;
 
-use crate::agentctl::service::text::{waits, waits_on_person};
+use crate::agentctl::service::text::waits;
 use crate::agentctl::service::types::{ControlTab, TabStatus};
 use crate::server::{Call, Events, Fault, Registry, Reply};
 use link::{Ask, Link, Push};
@@ -100,7 +100,6 @@ struct TabSnapshot {
     hidden: bool,
     resuming: bool,
     has_ask: bool,
-    has_plan: bool,
 }
 
 impl TabSnapshot {
@@ -108,11 +107,7 @@ impl TabSnapshot {
         (!self.hidden).then(|| View {
             session: self.tab_id,
             title: self.title,
-            state: SessionState::of(
-                self.status,
-                self.busy || self.resuming,
-                waits_on_person(self.has_ask, self.has_plan),
-            ),
+            state: SessionState::of(self.status, self.busy || self.resuming, self.has_ask),
         })
     }
 }

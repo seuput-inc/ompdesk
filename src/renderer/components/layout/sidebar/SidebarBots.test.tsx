@@ -7,9 +7,11 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, BotsState } from "../../../../shared/bots";
+import type { RemoteState } from "../../../../shared/ipc-types";
 import { I18nProvider } from "../../../lib/i18n";
-import { useBotsStore } from "../../../stores/bots";
+import { listedBots, useBotsStore } from "../../../stores/bots";
 import { useBotsView } from "../../../stores/bots-view";
+import { useRemoteStore } from "../../../stores/remote";
 import { type BotFacts, botFacts } from "../../bots/bot-view";
 import { type SidebarBotEntry, SidebarBots } from "./SidebarBots";
 
@@ -89,6 +91,7 @@ afterEach(async () => {
 	for (const node of [...document.body.childNodes]) node.remove();
 	useBotsView.getState().reset();
 	useBotsStore.getState().reset();
+	useRemoteStore.getState().reset();
 });
 
 describe("SidebarBots", () => {
@@ -120,5 +123,51 @@ describe("SidebarBots", () => {
 	it("shows one card that makes the first bot while there is none", async () => {
 		await render([]);
 		expect(container.querySelector("[data-sidebar-bots-empty]")?.textContent).toContain("Your AI teammate");
+	});
+
+	it("lists a paired host's bot with its host's name, greyed and refusing changes while the host is offline", async () => {
+		const ada = bot("a", "Ada");
+		const rex = bot("r", "Rex");
+		const asking = {
+			id: "item-r1",
+			bot: "r",
+			number: 1,
+			session: "/h/rex.jsonl",
+			title: "Pick a day",
+			status: "needs_you" as const,
+			links: [],
+			createdAt: "2026-11-01T00:00:00.000Z",
+			updatedAt: "2026-11-01T00:00:00.000Z",
+			events: [],
+			version: 1,
+		};
+		useBotsStore.setState({
+			state: listedBots({
+				bots: [ada],
+				items: [],
+				remote: [{ device: "dev-a", name: "Mini", online: false, bots: [rex], items: [asking] }],
+			}),
+		});
+		useRemoteStore.setState({
+			state: { hosts: [{ deviceId: "dev-a", name: "Mini", state: "offline" }] } as unknown as RemoteState,
+			downSince: { "dev-a": Date.now() - 60_000 },
+		});
+		const listed = useBotsStore.getState().state;
+		expect(listed.bots.map(known => [known.id, known.device])).toEqual([
+			["a", undefined],
+			["r", "dev-a"],
+		]);
+		expect(listed.items[0]?.device).toBe("dev-a");
+		await render([entry(ada, botFacts(ada, [], 0)), entry(listed.bots[1] as Bot, botFacts(rex, [], 1))]);
+		expect(container.querySelector('[data-bot-entry="a"] [data-bot-owner]')).toBeNull();
+		expect(container.querySelector('[data-bot-entry="r"] [data-bot-owner="dev-a"]')?.textContent).toBe(
+			"Mini · offline",
+		);
+		expect(container.querySelector('[data-bot-entry="r"] .opacity-60')).not.toBeNull();
+		// Nothing is written here: a change to the host's item is refused before it leaves, naming the host.
+		await expect(
+			useBotsStore.getState().command({ action: "item", id: "item-r1", answer: { choice: 0 } }),
+		).rejects.toThrow("Mini is offline");
+		expect(command).not.toHaveBeenCalled();
 	});
 });

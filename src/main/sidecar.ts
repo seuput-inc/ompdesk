@@ -189,9 +189,6 @@ const AGENT_EVENT_TYPES: Record<string, true> = {
 	// The built-in prompt suggestions (bridge modes/next-prompt.ts): candidates, and the feature's state/availability.
 	next_prompt_update: true,
 	next_prompt_config: true,
-	plan_proposal: true,
-	// The proposal no longer waits (answered anywhere, or a prompt replied to it): every window drops its card.
-	plan_proposal_resolved: true,
 	// The other live sessions in this session's worktree or repository (modes/checkout-peers.ts): the board's row.
 	checkout_peers: true,
 	queue_update: true,
@@ -761,6 +758,8 @@ export class SidecarManager extends EventEmitter {
 	/** The running omp's bridge; null while none runs. */
 	#bridge: BridgeRelay | null = null;
 	#batcher: EventBatcher | null = null;
+	/** Who shows the tab now (`setShown`): the pool's windows, paired devices, views. */
+	readonly #shownBy = new Set<string>();
 	/**
 	 * The lane sends every `message_update` after the first of its message reduced (`sidecar/stream.rs`); this rebuilds
 	 * them whole, as a paired device rebuilds a host's. The lane sends whole again wherever this may lack the base.
@@ -1296,6 +1295,7 @@ export class SidecarManager extends EventEmitter {
 		this.syncDefaultBrowser();
 		this.syncUserProfile();
 		this.syncNextPrompt();
+		this.#syncShown();
 		this.syncAutoTitle();
 		this.syncJudgeAssist();
 		this.syncAccountRotation();
@@ -1358,7 +1358,12 @@ export class SidecarManager extends EventEmitter {
 		} else if (type === "available_commands_update") {
 			this.emit("commandsUpdate", obj.commands);
 		} else if (Object.hasOwn(FRAME_EVENTS, type)) {
-			if (RUN_SETTLE_FRAMES[type] === true) this.#batcher?.flushNow();
+			// A fast ask must see the user message that started its turn before the pool decides who answers it.
+			if (
+				RUN_SETTLE_FRAMES[type] === true ||
+				(type === "extension_ui_request" && (obj.method === "ask" || obj.method === "form"))
+			)
+				this.#batcher?.flushNow();
 			this.emit(FRAME_EVENTS[type], obj);
 		}
 		this.emit("frame", obj);
@@ -1736,6 +1741,18 @@ export class SidecarManager extends EventEmitter {
 				?.request("next_prompt_set", { suggestions: settings.suggestions, inline: settings.inline })
 				.catch(() => {});
 		}
+	}
+
+	setShown(viewer: string, shown: boolean): void {
+		const before = this.#shownBy.size > 0;
+		if (shown) this.#shownBy.add(viewer);
+		else this.#shownBy.delete(viewer);
+		if (before !== this.#shownBy.size > 0) this.#syncShown();
+	}
+
+	/** Fire-and-forget like syncNextPrompt: an unconnected bridge hears it on connect, an older omp refuses it. */
+	#syncShown(): void {
+		void this.#bridge?.request("next_prompt_shown", { shown: this.#shownBy.size > 0 }).catch(() => {});
 	}
 
 	/**

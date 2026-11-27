@@ -21,7 +21,6 @@ struct Profile {
     add_dirs: Vec<String>,
     tools: Vec<String>,
     no_lsp: bool,
-    plan_yolo: bool,
     profile: Option<String>,
     session_dir: Option<String>,
     config: Option<String>,
@@ -65,7 +64,6 @@ fn parse(raw: Option<&Value>) -> Profile {
         add_dirs: trimmed_list(record, "addDirs"),
         tools: trimmed_list(record, "tools"),
         no_lsp: record.get("noLsp") == Some(&Value::Bool(true)),
-        plan_yolo: record.get("planYolo") == Some(&Value::Bool(true)),
         profile: trimmed_text(record, "profile"),
         session_dir: trimmed_text(record, "sessionDir"),
         config: trimmed_text(record, "config"),
@@ -95,9 +93,6 @@ impl Profile {
         }
         if self.no_lsp {
             out.insert("noLsp".into(), Value::Bool(true));
-        }
-        if self.plan_yolo {
-            out.insert("planYolo".into(), Value::Bool(true));
         }
         let mut text = |key: &str, value: &Option<String>| {
             if let Some(value) = value {
@@ -137,9 +132,6 @@ impl Profile {
         }
         if self.no_lsp {
             flags.push("--no-lsp".into());
-        }
-        if self.plan_yolo {
-            flags.push("--plan-yolo".into());
         }
         let mut pair = |flag: &str, value: &Option<String>| {
             if let Some(value) = value {

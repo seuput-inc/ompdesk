@@ -780,11 +780,6 @@ async fn bridge_health_reads_each_omp_version_of_the_callers_computer() {
 async fn list_names_every_action_and_shows_schemas_once_narrowed() {
     let fake = Fake::new();
     let control = control(&fake);
-    let all = control.list(&Value::Null).await.unwrap();
-    assert!(
-        all.ends_with("(110 actions; narrow with area or query to see argument schemas.)")
-            || all.contains(" actions; narrow with area or query")
-    );
     let narrow = control.list(&json!({"area": "usage"})).await.unwrap();
     assert!(
         narrow.contains("usage.read [read]") && narrow.contains("\"refresh\""),

@@ -40,7 +40,6 @@ export type StopSurface =
 	| "palette"
 	| "agents-page"
 	| "handoff"
-	| "auto-mode"
 	| "retry";
 
 /**
@@ -159,13 +158,6 @@ export type RpcCommand =
 	| { id?: string; type: "set_session_name"; name: string; sessionPath?: string }
 	// The editor's auto button: stock's `/rename` without a title on the live session; gui-bridge modes/auto-title.ts
 	| { id?: string; type: "regenerate_session_title" }
-	// The automatic Plan/Goal choice before a typed prompt, the chip's undo, and the end of the request it was used
-	// for; gui-bridge modes/auto-mode.ts
-	| { id?: string; type: "auto_mode_decide"; message: string }
-	// While the user types: the question `auto_mode_decide` will ask at Enter (its answer is cached)
-	| { id?: string; type: "auto_mode_prefetch"; message: string }
-	| { id?: string; type: "auto_mode_undo"; mode: "plan" | "goal" }
-	| { id?: string; type: "auto_mode_end"; mode: "plan" | "goal" }
 	// Judge-model assists (gui-bridge modes/judge-assist.ts): does a capture of a page the agent opened show an error
 	// or a blank page. `judged: false` when no native judge decided: the caller keeps its code rule. `judge_available`
 	// asks first whether a native judge that takes images would answer at all (no model call), so a caller without
@@ -177,7 +169,7 @@ export type RpcCommand =
 	| { id?: string; type: "agent_control_note"; text: string }
 	| { id?: string; type: "agent_control_worker"; from: string }
 	// A bot chat's context (main/agent-control's core, gui-bridge modes/bots.ts `agent_control.bot`)
-	| { id?: string; type: "agent_control_bot"; context: BotContext }
+	| { id?: string; type: "agent_control_bot"; context: BotContext; kickoff?: string }
 	| { id?: string; type: "agent_control_turn" }
 	| { id?: string; type: "agent_control_judge"; system: string; user: string }
 	| {
@@ -196,7 +188,7 @@ export type RpcCommand =
 	// (main/agent-control/send-outbox.ts): `{instance, journaled}`.
 	| { id?: string; type: "agent_control_sent"; marks: string[] }
 	// An answer that carries attachments, made in one step where the answered session runs
-	// (main/agent-control/target-answer.ts): the note first, then the answer (`askId` + `response`, or `plan`).
+	// (main/agent-control/target-answer.ts): the note first, then the answer.
 	| {
 			id?: string;
 			type: "agent_control_answer";
@@ -206,13 +198,8 @@ export type RpcCommand =
 				details: Record<string, unknown>;
 				delivery: { triggerTurn: boolean; deliverAs?: "aside" };
 			};
-			askId?: string;
-			response?: ExtensionUIResponse;
-			plan?: RpcCommand;
-			/** The plan file of the proposal the answer was about: only that very plan is approved. */
-			planFile?: string;
-			/** Which proposal of the tab the answer was about (`PendingPlan.generation`): a revised plan reuses the file. */
-			planGeneration?: number;
+			askId: string;
+			response: ExtensionUIResponse;
 	  }
 	// One attachment of `ompdesk_session_send` / `ompdesk_report` read where this session's omp runs
 	// (gui-bridge agent-control.ts `agent_control.attachment`): `{path}` a file, `{image}` the n-th newest picture of
@@ -246,8 +233,9 @@ export type RpcCommand =
 	| { id?: string; type: "get_settings"; paths?: string[] }
 	| { id?: string; type: "set_setting"; path: string; value: unknown }
 	| { id?: string; type: "get_providers"; forceRefresh?: boolean }
-	| { id?: string; type: "set_plan_mode"; enabled: boolean }
-	| { id?: string; type: "get_plan_mode" }
+	// Plan mode was removed (src/main/local/modes.ts `removedModeRefusal`): an older client may still send this; only
+	// "off" is answered, since plan mode is never on.
+	| { id?: string; type: "set_plan_mode"; enabled: false }
 	/** `compact`: candidates as indexes into one `candidateModels` list (`model-role-contracts.ts`); the RPC client expands it. */
 	| { id?: string; type: "get_model_roles"; compact?: boolean }
 	| { id?: string; type: "set_model_role"; role: string; modelId: string | null }
@@ -343,16 +331,6 @@ export type RpcCommand =
 	| { id?: string; type: "get_session_ports" }
 	| { id?: string; type: "end_session_port"; pid: number; startedMs: number }
 
-	// Plan approval (structured)
-	| {
-			id?: string;
-			type: "plan_approval";
-			approved: boolean;
-			option?: "execute" | "compact" | "keep_context" | "save";
-			feedback?: string;
-			savePath?: string;
-	  }
-
 	// Modes
 	| { id?: string; type: "get_goal" }
 	| { id?: string; type: "guided_goal"; initial?: string }
@@ -395,6 +373,8 @@ export type RpcCommand =
 			id?: string;
 			type: "set_goal";
 			objective?: string;
+			/** Agent-opened goal: its attributed first prompt, separate from the saved objective. */
+			message?: string;
 			tokenBudget?: number | null;
 			/** OMPdesk's goal time limit in minutes (stock goals only have a token budget); `null` clears it. */
 			timeLimitMinutes?: number | null;
@@ -1923,7 +1903,6 @@ export interface RpcSessionState {
 	systemPrompt?: string[];
 	dumpTools?: ToolDump[];
 	contextUsage?: ContextUsage | null;
-	planModeEnabled: boolean;
 	/** Whether a prewalk model switch is armed and waiting for the first edit/write. */
 	prewalkArmed?: boolean;
 	agentsPaused: boolean;
@@ -2840,15 +2819,6 @@ export interface ModelCatalogUpdateFrame extends AvailableModelsResult {
 }
 
 // ============================================================================
-// Plan Mode
-// ============================================================================
-
-export interface PlanModeState {
-	enabled: boolean;
-	planFilePath?: string;
-}
-
-// ============================================================================
 // Model Roles
 // ============================================================================
 
@@ -3191,18 +3161,6 @@ export type AgentSessionEvent =
 	| { type: "desktop_slot_update"; state: DesktopSlotState }
 	// The other live sessions in this session's worktree or repository, null when it works alone (gui-bridge modes/checkout-peers.ts).
 	| { type: "checkout_peers"; peers: CheckoutPeers | null }
-	| {
-			type: "plan_proposal";
-			planFilePath: string;
-			title?: string;
-			suggestedFileName?: string;
-			planContent: string;
-			options: string[];
-			/** The generation of a tab a paired host runs: that host numbers its plans, and the answer names it. */
-			generation?: number;
-	  }
-	// The proposal stopped waiting (answered in any window or by an agent, or a prompt replied to it).
-	| { type: "plan_proposal_resolved"; planFilePath: string }
 	| NextPromptUpdate
 	| NextPromptConfigFrame
 	// Bridge modes/goal.ts paused the goal at its OMPdesk time limit.

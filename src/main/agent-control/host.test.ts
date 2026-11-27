@@ -188,7 +188,6 @@ function setup(
 							awaitingConnection: false,
 							retrying: false,
 						},
-						plan: null,
 						formerIds: [],
 						hasDraft: false,
 						owner: windowOfTab(tab.tabId),
@@ -199,6 +198,8 @@ function setup(
 				return () => undefined;
 			},
 			routeSideChannel: vi.fn(async () => true),
+			isRequestOpen: (tab, id) =>
+				options.requests?.some(item => item.tabId === tab && item.request.id === id) ?? false,
 			sidecarOf: tabId => (sidecars.get(tabId) ?? { cwd: "/repo" }) as never,
 			startTab: vi.fn(() => null),
 			setTabTask: vi.fn(),
@@ -213,6 +214,8 @@ function setup(
 				return tabId ? { tabId, winId: win.webContents.id } : null;
 			},
 			whenTabExited: async () => {},
+			routeAsk: vi.fn(() => true),
+			delegatedPrompt: vi.fn(),
 		},
 		sessions: options.sessions,
 		remote: options.remote,
@@ -2023,7 +2026,6 @@ describe("a caller outside OMPdesk (the control socket)", () => {
 				hidden: false,
 				resuming: false,
 				hasAsk: true,
-				hasPlan: false,
 			},
 		]);
 	});
@@ -2203,7 +2205,6 @@ describe("the snapshot of main the core reads", () => {
 				tabWindows: () => [win],
 				openRequests: () => [],
 				tabFacts: () => null,
-				pendingPlan: () => null,
 				formerTabIds: () => [],
 				hasDraft: () => false,
 			};

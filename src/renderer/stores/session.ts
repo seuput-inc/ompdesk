@@ -85,9 +85,6 @@ export interface SessionStore {
 	statsPulse: number;
 	messageCount: number;
 	queuedMessageCount: number;
-	planModeEnabled: boolean;
-	/** The mode the app entered by itself for the last prompt (the composer's "Auto: Plan" chip); cleared when that mode ends or is undone. */
-	autoMode: "plan" | "goal" | null;
 	/** Whether a prewalk model switch is armed and waiting for the first edit/write. */
 	prewalkArmed: boolean;
 	agentsPaused: boolean;
@@ -142,8 +139,6 @@ const initialState = {
 	statsPulse: 0,
 	messageCount: 0,
 	queuedMessageCount: 0,
-	planModeEnabled: false,
-	autoMode: null as "plan" | "goal" | null,
 	prewalkArmed: false,
 	agentsPaused: false,
 	agentsPausedAt: null,
@@ -156,15 +151,14 @@ const initialState = {
 
 /**
  * The composer modes a `get_state` snapshot reports that no session event
- * carries: plan mode, the prewalk arm and the agents pause gate change only
+ * carries: the prewalk arm and the agents pause gate change only
  * through a snapshot or the GUI's own command replies, so events that landed
  * while the snapshot was in flight cannot have outdated them.
  */
 export function snapshotModeState(
 	state: RpcSessionState,
-): Pick<SessionStore, "planModeEnabled" | "prewalkArmed" | "agentsPaused" | "agentsPausedAt"> {
+): Pick<SessionStore, "prewalkArmed" | "agentsPaused" | "agentsPausedAt"> {
 	return {
-		planModeEnabled: state.planModeEnabled ?? false,
 		prewalkArmed: state.prewalkArmed ?? false,
 		agentsPaused: state.agentsPaused ?? false,
 		agentsPausedAt: state.agentsPausedAt ?? null,

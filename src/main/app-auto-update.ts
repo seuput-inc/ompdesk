@@ -16,7 +16,7 @@
  * An ask or approval card holds the restart only while someone may answer it (the owner's rule, 12 Nov 2026: a
  * card left open overnight held a downloaded update for 110 minutes): once it has held it for `CARD_HOLD_MS` and
  * nobody gave the computer input for as long, the countdown starts over it, and the relaunch asks the same question
- * again. A plan proposal (lost by a relaunch) and a compaction hold without a cap.
+ * again. A compaction holds without a cap.
  *
  * With it off (or after "나중에"), a good moment is no tab running a turn and no ask open, and either every window
  * unfocused or no user input for `IDLE_MS`. Still not quiet after `MAX_WAIT_MS`: with Continue interrupted work on
@@ -54,13 +54,8 @@ export interface AutoInstallFacts {
 	resumes: boolean;
 	/** Some tab runs a turn (or compacts) or an ask is open. */
 	busy: boolean;
-	/** A card waits on the person: an ask, an approval or a plan proposal (the log names it as the reason). */
+	/** A card waits on the person: an ask or an approval (the log names it as the reason). */
 	asking?: boolean;
-	/**
-	 * A plan proposal waits for approval. It lives only in the omp that made it, so a relaunch loses it: it holds the
-	 * restart without a cap. An ask or approval comes back (the relaunch reruns the cut-off call).
-	 */
-	planWaiting?: boolean;
 	/** Some tab compacts its context: a restart then would cut the compaction, which does not resume. */
 	compacting?: boolean;
 	/**
@@ -260,16 +255,12 @@ export class AutoInstallScheduler {
 
 	/**
 	 * An open card stops holding the restart once it has held it for `CARD_HOLD_MS` with no input on the computer for
-	 * as long; only an ask or approval, which the relaunch asks again, never a plan proposal, and never while a
-	 * compaction runs beside it. Logs `unattended` when it gives way; input since (or a closed card) holds again.
+	 * as long (the relaunch asks it again), never while a compaction runs beside it. Logs `unattended` when it gives
+	 * way; input since (or a closed card) holds again.
 	 */
 	#cardGivesWay(f: AutoInstallFacts, at: number): boolean {
 		const heldMs = at - (this.#cardSince ?? at);
-		const gives =
-			!f.planWaiting &&
-			!f.compacting &&
-			heldMs >= AUTO_INSTALL_CARD_HOLD_MS &&
-			f.idleMs >= AUTO_INSTALL_CARD_HOLD_MS;
+		const gives = !f.compacting && heldMs >= AUTO_INSTALL_CARD_HOLD_MS && f.idleMs >= AUTO_INSTALL_CARD_HOLD_MS;
 		if (gives && !this.#cardGaveWay) this.#opts.log?.("unattended", { heldMs, idleMs: f.idleMs });
 		this.#cardGaveWay = gives;
 		return gives;

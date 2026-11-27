@@ -65,7 +65,7 @@ afterEach(async () => {
 	useSessionStore.getState().reset();
 	useTabsStore.getState().reset();
 	resetTabRoute();
-	useUiStore.setState({ modesOpen: false, modesTab: "plan" });
+	useUiStore.setState({ modesOpen: false, modesTab: null });
 });
 
 describe("GoalDockBar", () => {

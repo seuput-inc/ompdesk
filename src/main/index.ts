@@ -153,7 +153,7 @@ import { MacPermissions } from "./mac-permissions";
 import { LocalMachine } from "./machine-services";
 import { MachineState } from "./machine-state";
 import { MailAccounts } from "./mail-accounts";
-import { installMainFailureLogging } from "./main-failures";
+import { cutOffCallers, installMainFailureLogging } from "./main-failures";
 import { McpHub } from "./mcp-hub";
 import { onMcpChange } from "./mcp-live";
 import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
@@ -895,10 +895,12 @@ app.whenReady().then(async () => {
 	const bridgeDir = app.isPackaged ? join(process.resourcesPath, "gui-bridge") : join(devResourcesDir, "gui-bridge");
 	// Memory's own model calls (the core's `omp -p`, the judge's host) follow the Credit use switch as a tab does.
 	configureModelRuns(() => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))));
-	// A core's loss and why, which otherwise only main's console hears (a packaged app keeps none of it).
+	// A core's loss and why, and each hub call main gave up while the core lived, which otherwise only main's console
+	// hears (a packaged app keeps none of it); the machine's state around each says whether the computer was starved.
 	core().report = (step, details) => {
 		writeRuntimeLog({ source: "core-loss", message: step, details });
 		if (step === "abandoned") machineState.stalled("core-loss");
+		else if (step === "gave-up") machineState.stalled("hub");
 	};
 	// The core keeps this computer's remote identity (its key never leaves it); the device id is read synchronously
 	// from here on, so it is loaded now, beside the rest of the launch, and awaited where the devices are made.
@@ -1015,7 +1017,7 @@ app.whenReady().then(async () => {
 	const webTabNotice: IpcDeps["webTabNotice"] = { current: null };
 	const sessionWake: IpcDeps["sessionWake"] = { current: null };
 	const sessionNote: IpcDeps["sessionNote"] = { current: null };
-	const botHome: IpcDeps["botHome"] = { current: null };
+	const hostBots: IpcDeps["hostBots"] = { current: null };
 	const tabReport: IpcDeps["tabReport"] = { current: null };
 	const agentOpening: IpcDeps["agentOpening"] = { current: null };
 	/** Tabs a lost core took that are still not ready, gathered for one notification (`recovery.stuck*`). */
@@ -1448,11 +1450,8 @@ app.whenReady().then(async () => {
 		hostName: (): string => devices.deviceName(),
 		sessionIndex,
 		agentHidden: () => agentHiddenPaths(prefs.get(AGENT_HIDDEN_PREFS_KEY)),
-		// A device's agent asking one of this computer's bots by name: the control tools answer once they exist.
-		botHome: (name, deviceId, deviceName) => {
-			if (!botHome.current) throw new Error("OMPdesk is still starting");
-			return botHome.current(name, deviceId, deviceName);
-		},
+		// Paired devices list and change this computer's bots: the control tools answer once they exist.
+		bots: () => hostBots.current,
 		sessionMoved: (from, to) => {
 			if (prefs.moveSidebarPin(from, to)) {
 				sidebarPrefsChanged();
@@ -1615,6 +1614,8 @@ app.whenReady().then(async () => {
 		loopback: !app.isPackaged && process.env.OMP_GUI_TEST_REMOTE_LOOPBACK === "1",
 		log: (message, details) => writeRuntimeLog({ source: "remote", message, details }),
 		logLink: (message, details) => writeRuntimeLog({ source: "remote-link", message, details }),
+		// A paired host's bots, listed here from the copy its link carries (the core keeps it).
+		bots: () => hostBots.current,
 	});
 	remoteDevices = devices;
 	// The core's records are mirrored before anything asks for a host's tabs or the device lists.
@@ -1917,6 +1918,7 @@ app.whenReady().then(async () => {
 					? systemPreferences.getAnimationSettings().prefersReducedMotion
 					: null,
 		}),
+		cutOffCallers,
 	};
 	registerDiagnosticsIpc(ipc, diagnostics);
 	registerDiagnosticBundleIpc(ipc, {
@@ -2668,7 +2670,7 @@ app.whenReady().then(async () => {
 		testPush: deviceId => webHost?.testPush(deviceId),
 		sessionWake,
 		sessionNote,
-		botHome,
+		hostBots,
 		tabReport,
 		agentOpening,
 		webPages: () => webHost?.windows.all() ?? [],
@@ -2930,10 +2932,7 @@ app.whenReady().then(async () => {
 		busy: () =>
 			sidecarPool.tabInventory().some(tab => tab.inFlight) ||
 			[...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()].some(fact => fact.running || fact.awaitingUi),
-		asking: () =>
-			sidecarPool.restartHolds().planWaiting ||
-			[...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()].some(fact => fact.awaitingUi),
-		planWaiting: () => sidecarPool.restartHolds().planWaiting,
+		asking: () => [...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()].some(fact => fact.awaitingUi),
 		compacting: () => sidecarPool.restartHolds().compacting || hostServices.compacting(),
 		opening: () => agentOpening.current?.() ?? false,
 		// Running subagents and background jobs: `composer.jobs` of every omp whose run is on (background-work.ts).

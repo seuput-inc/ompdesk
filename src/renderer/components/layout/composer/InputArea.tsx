@@ -128,12 +128,8 @@ export function InputArea() {
 	const setSending = useComposerStore(state => state.setSending);
 	const submissionUncertain = useComposerStore(state => state.submissionUncertain);
 	const setSubmissionUncertain = useComposerStore(state => state.setSubmissionUncertain);
-	/** A prompt waits on the automatic mode choice: Stop and Esc withdraw it (lib/messages.ts abortActiveTurn). */
-	const submitPending = useComposerStore(state => state.cancelSubmit !== null);
 	/** A manual /compact or handoff runs: Esc is its cancel (the status row says so), not the draft's double Esc. */
 	const manualMaintenance = useSessionStore(s => s.compactionInfo?.reason === "manual");
-	/** Something Stop and Esc can end: the run, or a prompt not yet sent. */
-	const stoppable = isStreaming || submitPending;
 	const [historySearchOpen, setHistorySearchOpen] = useState(false);
 	const [skillPickerOpen, setSkillPickerOpen] = useState(false);
 	const isEmptySession = useMessagesStore(s => s.messages.length === 0);
@@ -238,7 +234,6 @@ export function InputArea() {
 
 	const queueEdit = useComposerQueueEdit();
 	const blockedBy = useComposerBlockedBy();
-	const deciding = useComposerStore(state => state.decidingMode);
 	const stopArmed = useComposerStore(state => state.stopArmedAt !== null);
 	/** The suggestion shows as the placeholder only while nothing more urgent owns it. */
 	const shownPrompt = blockedBy === null && queueEdit.editing === null ? placeholderPrompt : undefined;
@@ -329,7 +324,7 @@ export function InputArea() {
 		toggleExpanded,
 		collapse: () => setExpanded(false),
 		toggleHistorySearch: () => setHistorySearchOpen(open => !open),
-		runActive: isStreaming || submitPending || manualMaintenance,
+		runActive: isStreaming || manualMaintenance,
 		touchInput,
 		enterSends,
 		queueEdit: queueEdit.editing ? { cancel: cancelQueueEdit } : null,
@@ -517,7 +512,6 @@ export function InputArea() {
 						/>
 						<ComposerFieldHint
 							argHint={menu ? "" : argHint}
-							deciding={deciding}
 							escHint={keys.escHint}
 							stopArmed={stopArmed}
 							unavailable={status === "ready" && !firstRunActive ? nextPromptView.unavailable : undefined}
@@ -546,7 +540,7 @@ export function InputArea() {
 							routeReady={routeReady}
 							sendDisabled={sendDisabled}
 							hasDraft={hasDraft}
-							stoppable={stoppable}
+							stoppable={isStreaming}
 							touchInput={touchInput}
 						/>
 					</div>

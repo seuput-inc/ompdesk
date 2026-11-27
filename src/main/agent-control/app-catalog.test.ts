@@ -5,7 +5,6 @@
  * shared lists, which the core cannot see.
  */
 import { describe, expect, it } from "vitest";
-import { AUTO_MODE_PREF } from "../../../resources/gui-bridge/modes/auto-mode-contracts";
 import { AUTO_TITLE_EVOLVE_PREF, AUTO_TITLE_PREF } from "../../../resources/gui-bridge/modes/auto-title-contracts";
 import { JUDGE_ASSIST_PREF } from "../../../resources/gui-bridge/modes/judge-assist-contracts";
 import { NEXT_PROMPT_INLINE_PREF, NEXT_PROMPT_PREF } from "../../../resources/gui-bridge/modes/next-prompt-contracts";
@@ -129,7 +128,6 @@ describe("action registry", () => {
 			resumeInterrupted: RESUME_INTERRUPTED_PREF,
 			autoPreviewDevServer: AUTO_PREVIEW_DEV_SERVER_PREF,
 			autoOpenChanges: AUTO_OPEN_CHANGES_PREF,
-			autoMode: AUTO_MODE_PREF,
 			nextPromptSuggestions: NEXT_PROMPT_PREF,
 			nextPromptInline: NEXT_PROMPT_INLINE_PREF,
 			defaultBrowser: DEFAULT_BROWSER_PREF,

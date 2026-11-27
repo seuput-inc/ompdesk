@@ -1060,7 +1060,7 @@ html[data-shell="phone"] .omp-workspace-main {
 	--omp-column-pad: var(--sc-space-3);
 }
 
-/* Dock cards (todos, plan, agents): one touch row each, tight to the composer. The head is
+/* Dock cards (todos, agents): one touch row each, tight to the composer. The head is
    `--sc-row-touch` (36 px) high, the whole row the fold's target (28 px drew a 32 px target with its bounded reach). */
 html[data-shell="phone"] .omp-composer-region.pt-2 {
 	padding-top: var(--sc-space-0-5);
@@ -1879,7 +1879,7 @@ html[data-shell="phone"] .omp-restored-queue [data-restored-note] > span {
 }
 
 /* The side panel's own toolbars, rows and the live work card hold neighbours 4 px apart; so do the session views that
-   open as sheets (`[data-view-sheet]`: jobs, plan, logs, tree, work), which were panel views until 21 Oct 2026. The
+   open as sheets (`[data-view-sheet]`: jobs, logs, tree, work), which were panel views until 21 Oct 2026. The
    panel's sheet is found by its mark (`[data-sheet-kind="panel"]`, Sheet.tsx), never by a `:has(.omp-panel-topbar)`
    on the sheet: a `:has()` left of a descendant joins Blink's one `:has` invalidation set, and `.flex` there restyled
    ~100 elements on every node streaming output inserted (live-session audit, 27 Oct 2026). */
@@ -1928,21 +1928,6 @@ html[data-shell="phone"][data-input="touch"] [data-view-sheet] :is(div, span, fo
 	column-gap: 16px;
 	--hit-gap-x: 16px;
 	--hit-gap-y: 16px;
-}
-
-/* The plan sheet's action row is a labelled switch and the refresh button (a div and a button, so the cluster rules
-   above, which need two buttons, miss it): 10 px apart on touch, 14 on a phone whose icon button draws 24 px behind a
-   1 px border, each reaching half the gap, a 36 px target (the responsive audit read 32×28 and 26×26). */
-html[data-input="touch"] [data-view-sheet] [data-plan-actions] {
-	column-gap: 10px;
-	--hit-gap-x: 10px;
-	--hit-gap-y: 12px;
-}
-
-html[data-shell="phone"][data-input="touch"] [data-view-sheet] [data-plan-actions] {
-	column-gap: 14px;
-	--hit-gap-x: 14px;
-	--hit-gap-y: 14px;
 }
 
 html[data-input="touch"] [data-view-sheet] :is(.omp-work-tree-row, h3) {

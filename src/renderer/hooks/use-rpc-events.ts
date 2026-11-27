@@ -55,7 +55,6 @@ import {
 import { useMessagesStore } from "../stores/messages";
 import { useModelStore } from "../stores/model";
 import { useNextPromptStore } from "../stores/next-prompt";
-import { usePlanApprovalStore } from "../stores/plan-approval";
 import { useQueueStore } from "../stores/queue";
 import { type SessionStore, useSessionStore } from "../stores/session";
 import {
@@ -80,7 +79,7 @@ import { webRuntime } from "../web/runtime";
  * Frames that change nothing a `get_state` or transcript snapshot reports, so
  * they never outdate one in flight. The bridge sends a `token_rate` the moment
  * it connects, right as the boot hydration fetches: counted as churn, it threw
- * away that whole snapshot (model, plan mode, todos) with nothing to re-sync it
+ * away that whole snapshot (model, todos) with nothing to re-sync it
  * until the next turn. `read_group_metadata` likewise: the transcript carries the
  * same metadata for every committed call, and the tools store joins it to a call
  * the transcript does not hold yet across the rebuild.
@@ -434,10 +433,8 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 						case "agent_start": {
 							useSessionStore.setState({ isStreaming: true, awaitingModelSince: Date.now() });
 							useTodoStore.getState().setTurnActive(true);
-							// Server-side mode changes (plan_approval accept exits plan
-							// mode, then dispatches the execution turn) carry no event —
-							// re-sync state-derived stores at turn start so the composer
-							// chip / titlebar reflect the server.
+							// Server-side state no event carries is re-synced at turn start, so the composer chip and
+							// title bar reflect the server.
 							void refreshSessionState(tabId);
 							bumpVersion = true;
 							break;
@@ -861,7 +858,6 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 						useTodoStore.getState().reset();
 						useToolsStore.getState().reset();
 						useExtensionUiStore.getState().clearAll();
-						usePlanApprovalStore.getState().clearProposal();
 					});
 				}
 				withSessionRuntime(statusTabId, () => useSessionStore.getState().clearSidecarError());
@@ -870,7 +866,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 
 			if (payload.status === "ready" && reattaching.delete(statusTabId)) {
 				// The same omp, still running on the host: one merge of what changed meanwhile (state, transcript tail,
-				// queue, subagents, goal, plan), as a web page's resync does; the boot checks below ran when it came up.
+				// queue, subagents, goal), as a web page's resync does; the boot checks below ran when it came up.
 				startHeartbeat();
 				void hydrateTabSession(statusTabId);
 				return;

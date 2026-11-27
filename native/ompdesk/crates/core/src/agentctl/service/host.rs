@@ -625,6 +625,25 @@ impl Host {
         }
     }
 
+    /// `botsCommand {device, request}`: the owner's change to a bot or item of paired host `device`, which that host
+    /// makes (`host.bots.command`); it answers its copy after it (`{version, state, refused?}`), or the file asked for.
+    pub async fn bots_on(&self, device: &str, request: &Value) -> R<Value> {
+        self.ask(
+            "botsCommand",
+            json!({ "device": device, "request": request }),
+        )
+        .await
+    }
+
+    /// `botsRoomPostTo {device, post}`: one of this computer's bots posted in a group of paired device `device`, which
+    /// main hands to that device's connection (`host.bots.roomPost`). False: the device is not connected.
+    pub async fn room_post_to(&self, device: &str, post: &Value) -> R<bool> {
+        let answer: Value = self
+            .ask("botsRoomPostTo", json!({ "device": device, "post": post }))
+            .await?;
+        Ok(answer.get("sent").and_then(Value::as_bool) == Some(true))
+    }
+
     /// `setOpener {tabId, openerTabId}`: `openerTabId` becomes `tabId`'s opener, as a session it opened would have it
     /// (the pool's `setTabOpener`, kept across a relaunch): a session handed to a bot, or one whose lost opener the call
     /// journal names (`Runtime::recover_openers`).
@@ -716,6 +735,21 @@ impl Host {
         self.ask(
             "answer",
             json!({ "tabId": tab_id, "requestId": request_id, "response": response }),
+        )
+        .await
+    }
+
+    /// `escalateAsk(tabId, requestId, chatTabId)`: the card a bot holds shows in the windows of its chat `chatTabId`,
+    /// where the owner answers it for the tab that asked (`route.rs`). False when the card is not open any more.
+    pub async fn escalate_ask(
+        &self,
+        tab_id: &str,
+        request_id: &str,
+        chat_tab_id: Option<&str>,
+    ) -> R<bool> {
+        self.ask(
+            "escalateAsk",
+            json!({ "tabId": tab_id, "requestId": request_id, "chatTabId": chat_tab_id }),
         )
         .await
     }

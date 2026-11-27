@@ -389,8 +389,6 @@ export const IPC_COMMANDS = {
 	FS_MUTATE: "fs:mutate",
 	/** Text search across the project's files (stock pi-natives grep, .gitignore-aware) */
 	FS_SEARCH: "fs:search",
-	/** Read the plan-mode document off the RPC bus (with session-local fallback) */
-	FS_READ_PLAN: "fs:read-plan",
 	/** Read an image file as a data URL for markdown <img> rendering (sniffed mime, size cap) */
 	FS_READ_IMAGE: "fs:read-image",
 	/** Read a file's bytes for the file viewer (sniffed mime, local/remote size caps) */
@@ -1226,6 +1224,7 @@ export type CustomProviderApi =
 export type CustomModelEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface CustomProviderOptions {
+	anthropicModels?: CustomProviderModelInput[];
 	apis: string[];
 	auth: string[];
 	discovery: string[];
@@ -1640,15 +1639,6 @@ export interface IpcOpenPathResult {
 	code?: IpcErrorCode;
 }
 
-export interface IpcFsReadPlanPayload {
-	/** Visible tab whose workspace is an allowed root. */
-	tabId?: string;
-	/** Absolute path of the configured plan file. */
-	fsPath: string;
-	/** Session-local artifacts root for the newest-`*plan.md` fallback (plan under `local://`); null disables the fallback. */
-	localRoot: string | null;
-}
-
 export interface IpcFsReadImagePayload {
 	/** Visible tab whose workspace resolves relative paths. */
 	tabId?: string;
@@ -1774,17 +1764,6 @@ export interface IpcFsMediaStreamPayload {
 export type IpcFsMediaStreamResult =
 	| { ok: true; url: string; mime: string; size: number }
 	| { ok: false; error: string; code?: IpcErrorCode };
-
-export interface IpcFsReadPlanResult {
-	ok: boolean;
-	/** The file actually read (fsPath or the fallback pick); null when no plan file exists. */
-	path: string | null;
-	/** File content ("" for an empty file); null when no plan file exists. */
-	content: string | null;
-	error?: string;
-	/** Stable failure code for the renderer's localized message (shared/ipc-error-codes). */
-	code?: IpcErrorCode;
-}
 
 // ============================================================================
 // Session Index Types
@@ -2036,6 +2015,8 @@ export interface IpcTabRunOutcome {
 	/** The last assistant message's stop reason ("stop", "error", "aborted", …). */
 	stopReason: string;
 	errorMessage?: string;
+	/** The provider may already have started a paid response; automatic recovery must not resend it. */
+	retryBlocked?: boolean;
 	/**
 	 * The start of the last assistant reply's text (at most 4000 characters, sidecar-pool.ts), so
 	 * a background tab's completion banner reads its opening prose like a visible tab's does.
@@ -2979,7 +2960,6 @@ export interface OmpApi {
 		stat(path: string, tabId?: string): Promise<IpcFsStatResult>;
 		mutate(mutation: IpcFsMutation, tabId?: string): Promise<IpcFsMutateResult>;
 		search(request: IpcFsSearchRequest, tabId?: string): Promise<IpcFsSearchResult>;
-		readPlan(payload: IpcFsReadPlanPayload): Promise<IpcFsReadPlanResult>;
 		readImage(path: string, tabId?: string): Promise<IpcFsReadImageResult>;
 		/** File bytes for the viewer: 100 MB cap on this device, 11 MB for a paired host's tab. */
 		readBinary(path: string, maxBytes?: number, tabId?: string): Promise<IpcFsReadBinaryResult>;

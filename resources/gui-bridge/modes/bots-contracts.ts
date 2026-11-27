@@ -25,11 +25,23 @@ export interface BotItemBrief {
 }
 
 export interface BotContext {
-	bot: { id: string; name: string; paused: boolean; folder: string };
+	/** `firstRun`: the home chat of a bot in its first run (the core's `bot_first_run.rs`), which carries its rules. */
+	bot: { id: string; name: string; paused: boolean; folder: string; firstRun: boolean };
 	/** Open, unsnoozed items of this bot. */
 	items: BotItemBrief[];
 	/** Items waiting on the owner's answer. */
 	needsYou: BotItemBrief[];
 	/** Titles of this bot's other chats that are working now. */
 	live: string[];
+}
+
+/**
+ * What `agent_control.bot` answers besides `changed`: what the chat's branch says, read by the core's first run. Asked
+ * with `kickoff` (the newest kickoff's mail id): `none` while the journal does not hold it, `queued` with no answer
+ * after it yet, `silent` answered without a word, `spoke`.
+ */
+export interface BotChatFacts {
+	ownerTurns: number;
+	streaming: boolean;
+	kickoff: "none" | "queued" | "silent" | "spoke";
 }

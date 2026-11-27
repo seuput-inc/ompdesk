@@ -143,56 +143,6 @@ test("+ › Use a skill… takes the keys; a running turn offers no lane chip an
 	}
 });
 
-test("Stop and Esc withdraw a prompt the automatic mode choice still holds back", async () => {
-	test.setTimeout(120_000);
-	const dirs = await profile("withdraw");
-	const { app, page, errors } = await launch(dirs, { OMP_GUI_TEST_AUTO_MODE_DELAY_MS: "2500" });
-	try {
-		const input = composer(page);
-		// Each pass asks a text the composer has not asked about while typing: a withdrawn draft rests in the field and
-		// its typing pause asks the judge ahead of Enter (use-auto-mode-prefetch.ts), so sending it again is decided at
-		// once from the cache and nothing is held back to withdraw.
-		const requests = {
-			Esc: "refactor the parser into separate modules",
-			Stop: "migrate the lexer into separate modules",
-		} as const;
-		for (const how of ["Esc", "Stop"] as const) {
-			const request = requests[how];
-			const asked = (await readRecords(dirs.record)).filter(r => r.type === "modes.auto_mode_decide").length;
-			await input.fill(request);
-			await input.press("Enter");
-			await expect(input).toHaveValue("");
-			await expect(stop(page)).toBeVisible();
-			// Withdraw only once the choice is in flight: on a slow runner Esc could come before the request left, and
-			// a prompt withdrawn that early is never classified at all (nothing for this test to see).
-			await expect
-				.poll(async () => (await readRecords(dirs.record)).filter(r => r.type === "modes.auto_mode_decide").length)
-				.toBe(asked + 1);
-			if (how === "Esc") await input.press("Escape");
-			else await stop(page).click();
-			await expect(input).toHaveValue(request);
-			await expect(stop(page)).toHaveCount(0);
-			expect(await composerFocused(page)).toBe(true);
-			// The decision (Plan) lands after the withdrawal: the plan it entered ends, the prompt never leaves.
-			await expect
-				.poll(
-					async () =>
-						(await readRecords(dirs.record)).filter(r => r.type === "modes.set_plan_mode").map(r => r.enabled),
-					{
-						timeout: 10_000,
-					},
-				)
-				.toEqual(how === "Esc" ? [true, false] : [true, false, true, false]);
-		}
-		expect(await sentOfType(dirs.record, "prompt")).toEqual([]);
-		await expect(page.getByRole("dialog")).toHaveCount(0);
-		expect(errors).toEqual([]);
-	} finally {
-		await exitApp(app);
-		await fs.rm(dirs.root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-	}
-});
-
 test("the unsent draft survives a renderer reload and an app relaunch", async () => {
 	test.setTimeout(150_000);
 	const dirs = await profile("draft");
@@ -480,10 +430,7 @@ test("Esc with a draft only arms the stop; an empty field stops at once; a doubl
 test("Stop with queued messages pauses the queue: separate chips in one row, the draft untouched, nothing sent until Resume", async () => {
 	test.setTimeout(120_000);
 	const dirs = await profile("stop-queue");
-	// A slow automatic mode choice, as the real judge's round trip can be on a loaded machine: the composer takes one
-	// submission at a time, so the messages to queue are typed once the turn runs (`running`), not when Stop shows
-	// (Stop already withdraws the prompt the choice holds back).
-	const { app, page, errors } = await launch(dirs, { OMP_GUI_TEST_AUTO_MODE_DELAY_MS: "1500" });
+	const { app, page, errors } = await launch(dirs);
 	try {
 		const input = composer(page);
 		await input.fill("fixture running");

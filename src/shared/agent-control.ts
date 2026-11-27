@@ -106,7 +106,7 @@ export const AGENT_CONTROL_APP = "agent-control:app";
 export const AGENT_PANEL_TABS = ["terminal", "diff", "preview", "files"] as const;
 
 /** The session views an agent may open as a sheet (mirrors `VIEW_SHEETS` of the renderer's ui store; a test keeps them equal). */
-export const AGENT_VIEW_SHEETS = ["jobs", "plan", "logs", "tree", "work"] as const;
+export const AGENT_VIEW_SHEETS = ["jobs", "logs", "tree", "work"] as const;
 
 /**
  * What one step back restores: a stored preference or a stock setting, as the user's own Settings control writes it.
@@ -340,7 +340,7 @@ export interface AgentReviewItem {
 	report?: { kind: string; text: string; at: number };
 	/** Its last report is a question or a blocker its opener has not answered yet. */
 	waiting?: true;
-	/** What it waits on when `waiting`: its open card's question (a stock `ask`, an approval) or its plan's title. */
+	/** What it waits on when `waiting`: its open card's question (a stock `ask`, an approval). */
 	question?: string;
 	/** The paired device the child runs on (its id), as the computer that built the list sees it; absent = that computer. */
 	device?: string;

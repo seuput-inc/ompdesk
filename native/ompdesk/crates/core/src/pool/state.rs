@@ -70,13 +70,16 @@ pub(super) struct Entry {
     pub session_held: bool,
     pub failure: Option<Value>,
     pub start_wait: Option<StartWait>,
-    pub plan_proposal: Option<(String, String)>,
-    /// Which proposal of the tab it is: bumped for every new one (stock rewrites one plan file for a revision).
-    pub plan_generation: u64,
     pub resuming: bool,
     /// Why the tab's cut-off turn waits for the person's Continue (`off`, `crash-loop`, `failed`).
     pub cut_off: Option<String>,
     pub unsaved_prompt: Option<String>,
+    /// The request the current run serves: the agent's message that started it (`note_run_message`).
+    pub run_origin: Option<RunOrigin>,
+    /// Only prompts admitted by agent control can identify the bot that started a turn.
+    pub delegated_prompts: HashSet<String>,
+    /// Where the run's prompt messages stand: the first one after `agent_start` decides `run_origin`.
+    pub opening: Opening,
     pub scheduled_retry: Option<Value>,
     pub touched: u64,
     pub prompted: u64,
@@ -137,11 +140,12 @@ impl Entry {
             session_held: false,
             failure: None,
             start_wait: None,
-            plan_proposal: None,
-            plan_generation: 0,
             resuming: false,
             cut_off: None,
             unsaved_prompt: None,
+            run_origin: None,
+            delegated_prompts: HashSet::new(),
+            opening: Opening::Closed,
             scheduled_retry: None,
             touched: 0,
             prompted: 0,
@@ -211,6 +215,33 @@ pub(super) struct Held {
     pub kinds: Kinds,
 }
 
+/// The request a tab's run serves: the wrapped message of another session that started it, by that session's saved id
+/// and the dispatch or request id its message carried (`[ompdesk dispatch d3:`, `[ompdesk request m-…]`).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct RunOrigin {
+    pub session: String,
+    pub mark: Option<String>,
+}
+
+/// After `agent_start`, until the run's first answer: `First` while no prompt message came yet, `More` once one did.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(super) enum Opening {
+    #[default]
+    Closed,
+    First,
+    More,
+}
+
+/// Where a question of a run another session started goes (`routeAsk`): off the owner's windows while agentctl
+/// decides (`Deciding`) and while the bot that asked for the work holds it (`Bot`); `Escalated` shows it in the windows
+/// of that bot's chat (its tab id), where the owner answers it.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Routed {
+    Deciding,
+    Bot,
+    Escalated(String),
+}
+
 /// What a closing window runs, in the order they were added (`#whenClosed`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Closer {
@@ -257,15 +288,14 @@ pub(super) struct Pool {
     pub request_owners: OMap<String, u64>,
     /// Questions an agent's answer holds while its attachments go in, by request id → the claim.
     pub claims: HashMap<String, u64>,
-    /// Plans an agent's approval holds, by tab → (the proposal's generation, the claim).
-    pub plan_claims: HashMap<String, (u64, u64)>,
-    /// The last claim and the last plan generation handed out.
+    /// The last claim handed out.
     pub claim_serial: u64,
-    pub plan_serial: u64,
     pub request_bodies: OMap<String, Held>,
     pub sign_in_requests: HashSet<String>,
     pub answering: HashSet<String>,
     pub answered: OMap<String, Answered>,
+    /// Asks of a run another session started, by request id, while they are not the owner's (`Routed`).
+    pub routed: HashMap<String, Routed>,
     pub restoring: HashSet<i64>,
     pub closers: OMap<i64, Vec<Closer>>,
     pub stop_waits: Vec<StopWait>,
@@ -370,7 +400,6 @@ impl Pool {
             && !entry.awaiting_connection
             && entry.scheduled_retry.is_none()
             && entry.tracking.retry.is_none()
-            && entry.plan_proposal.is_none()
             && !self.request_owners.iter().any(|(id, owner)| {
                 *owner == entry.seq
                     && self

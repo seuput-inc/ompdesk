@@ -46,6 +46,11 @@ class FakeSidecar extends EventEmitter {
 	rpcCommands: RpcCommand[] = [];
 	/** The levels the pool asked with `set_subagent_subscription`, kept apart from the commands a test sends. */
 	subagentLevels: string[] = [];
+	/** Every `setShown` the pool made, in order. */
+	shownCalls: Array<[viewer: string, shown: boolean]> = [];
+	setShown(viewer: string, shown: boolean): void {
+		this.shownCalls.push([viewer, shown]);
+	}
 	constructor(public cwd: string) {
 		super();
 	}
@@ -440,7 +445,7 @@ describe("SidecarPool tabs", () => {
 		).toEqual(["agent_start", "running", "agent_end", "ready"]);
 	});
 
-	it("routes a hidden tab's plan proposals to its own runtime, once, and a shown tab's subagent frames on the full channel", () => {
+	it("keeps a hidden tab's event stream home, and sends a shown tab's subagent frames on the full channel", () => {
 		const { pool, sidecars } = fakePool();
 		const fw = fakeWindow(1);
 		pool.acquire("/a", fw.win, "tab-a");
@@ -448,24 +453,24 @@ describe("SidecarPool tabs", () => {
 		const [a, b] = sidecars;
 		fw.sent.length = 0;
 
-		// Hidden B: what its sidebar row reads still arrives, tagged with B's id;
-		// the rest of its event stream stays home.
-		const proposal = { type: "plan_proposal", planFilePath: "/plans/b.md" };
+		const update = {
+			type: "message_update",
+			message: { role: "assistant", timestamp: 5, content: [{ type: "text", text: "a" }] },
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "a" },
+		};
 		const started = { type: "subagent_lifecycle", payload: { id: "sa-1", status: "started" } };
-		b?.emitEvents([{ type: "message_update" }, proposal, { type: "agent_end" }]);
-		expect(fw.sentTo(IPC_EVENTS.EVENTS_BATCH).map(entry => entry.data)).toEqual([
-			{ tabId: "tab-b", payload: [proposal] },
-		]);
+		b?.emitEvents([update, { type: "agent_end" }]);
+		expect(fw.sentTo(IPC_EVENTS.EVENTS_BATCH)).toEqual([]);
 
-		// Shown, B's full channel carries them: no second copy from the light one.
+		// Shown, B's full channel carries them.
 		expect(pool.setActiveTab(fw.win, "tab-b")).toBe(true);
 		fw.sent.length = 0;
 		b?.emit("subagentFrame", started);
-		b?.emitEvents([proposal]);
+		b?.emitEvents([update]);
 		// Batched per frame; an agent-event batch sends the frames that came before it first.
 		expect(fw.sent.map(entry => entry.channel)).toEqual([IPC_EVENTS.SUBAGENT_FRAMES, IPC_EVENTS.EVENTS_BATCH]);
 		expect(fw.sentTo(IPC_EVENTS.EVENTS_BATCH).map(entry => entry.data)).toEqual([
-			{ tabId: "tab-b", payload: [proposal] },
+			{ tabId: "tab-b", payload: [update] },
 		]);
 		expect(fw.sentTo(IPC_EVENTS.SUBAGENT_FRAMES).map(entry => entry.data)).toEqual([
 			{ tabId: "tab-b", payload: [started] },
@@ -478,12 +483,10 @@ describe("SidecarPool tabs", () => {
 		expect(fw.sentTo(IPC_EVENTS.SUBAGENT_FRAMES).map(entry => entry.data)).toEqual([
 			{ tabId: "tab-b", payload: [started] },
 		]);
-		// And A, now hidden, gets the light routing instead.
+		// And A, now hidden, keeps its event stream home too.
 		fw.sent.length = 0;
-		a?.emitEvents([proposal]);
-		expect(fw.sentTo(IPC_EVENTS.EVENTS_BATCH).map(entry => entry.data)).toEqual([
-			{ tabId: "tab-a", payload: [proposal] },
-		]);
+		a?.emitEvents([update]);
+		expect(fw.sentTo(IPC_EVENTS.EVENTS_BATCH)).toEqual([]);
 	});
 
 	it("synthesizes running/ready per tab from the agent event stream", () => {
@@ -1208,7 +1211,7 @@ describe("SidecarPool tabs", () => {
 		expect(pool.releaseTab("child", collected)).toBe(false);
 	});
 
-	it("keeps a child for a late question, plan, compaction or continuation, but not a status notice", () => {
+	it("keeps a child for a late question, compaction or continuation, but not a status notice", () => {
 		const { pool, sidecars } = fakePool();
 		const { win } = fakeWindow(1);
 		pool.acquire("/a", win, "child");
@@ -1221,9 +1224,6 @@ describe("SidecarPool tabs", () => {
 		child.emitExtensionUi("question");
 		expect(pool.releaseTab("child", collected)).toBe(false);
 		child.emitUiRequest({ id: "cancel", method: "cancel", targetId: "question" });
-		child.emitEvents([{ type: "plan_proposal", title: "Plan", planFilePath: "plan.md", options: [] }]);
-		expect(pool.releaseTab("child", collected)).toBe(false);
-		child.emitEvents([{ type: "plan_proposal_resolved", planFilePath: "plan.md" }]);
 		child.emitAgentEvents(["auto_compaction_start"]);
 		expect(pool.releaseTab("child", collected)).toBe(false);
 		child.emitAgentEvents(["auto_compaction_end"]);
@@ -4002,6 +4002,20 @@ describe("SidecarPool multi-viewer", () => {
 		expect(pool.tabLayoutForWindow(phone.win)).toBeNull();
 	});
 
+	it("tells the tab's omp it is shown while any window shows it, a phone's page alone included", () => {
+		const { pool, sidecar, desktop, phone } = shared();
+		expect(sidecar.shownCalls).toEqual([["windows", true]]);
+		// The desktop moves on; the phone still shows the tab.
+		pool.acquire("/b", desktop.win, "tab-b");
+		expect(pool.setActiveTab(desktop.win, "tab-b")).toBe(true);
+		expect(sidecar.shownCalls).toEqual([["windows", true]]);
+		// The phone leaves too: nobody shows it.
+		expect(pool.detachViewer(phone.win, "tab-a")).toBe(true);
+		expect(sidecar.shownCalls.at(-1)).toEqual(["windows", false]);
+		expect(pool.setActiveTab(desktop.win, "tab-a")).toBe(true);
+		expect(sidecar.shownCalls.at(-1)).toEqual(["windows", true]);
+	});
+
 	it("takes the first answer to an ask; the other window's card closes and its late answer is refused", async () => {
 		const { pool, sidecar, desktop, phone } = shared();
 		sidecar.emitExtensionUi("req-1");
@@ -4384,50 +4398,6 @@ describe("SidecarPool tab activity (the observer Web Push listens to)", () => {
 		pool.releaseTab("tab-a");
 		expect(pool.tabFacts("tab-a")).toBeNull();
 		expect(pool.tabFacts("nope")).toBeNull();
-	});
-
-	it("holds a tab's plan proposal from its frame until it resolves or the omp goes away", () => {
-		const { pool, a } = observed();
-		const frame = {
-			type: "plan_proposal",
-			planFilePath: "local://PLAN.md",
-			title: "Plan",
-			planContent: "x",
-			options: [],
-		};
-		a.emitEvents([frame]);
-		expect(pool.pendingPlan("tab-a")).toEqual({ title: "Plan", planFilePath: "local://PLAN.md", generation: 1 });
-		a.emitEvents([{ type: "plan_proposal_resolved", planFilePath: "local://other.md" }]);
-		expect(pool.pendingPlan("tab-a")).not.toBeNull();
-		a.emitEvents([{ type: "plan_proposal_resolved", planFilePath: "local://PLAN.md" }]);
-		expect(pool.pendingPlan("tab-a")).toBeNull();
-		a.emitEvents([frame]);
-		a.emit("status", { status: "restarting" });
-		expect(pool.pendingPlan("tab-a")).toBeNull();
-	});
-
-	it("claims a plan only at the generation the agent read, so a revision that reuses the plan file is refused", () => {
-		const { pool, a } = observed();
-		const frame = {
-			type: "plan_proposal",
-			planFilePath: "local://PLAN.md",
-			title: "Plan",
-			planContent: "x",
-			options: [],
-		};
-		a.emitEvents([frame]);
-		const read = pool.pendingPlan("tab-a");
-		a.emitEvents([{ ...frame, title: "Plan, revised" }]);
-		expect(pool.claimPlan("tab-a", "local://PLAN.md", read?.generation ?? 0)).toBeNull();
-		const now = pool.pendingPlan("tab-a");
-		const claim = pool.claimPlan("tab-a", "local://PLAN.md", now?.generation ?? 0);
-		expect(claim).not.toBeNull();
-		expect(() => pool.guardPlan("tab-a")).toThrow(/answering this plan/);
-		expect(() => pool.guardPlan("tab-a", true)).not.toThrow();
-		a.emitEvents([{ ...frame, title: "Plan, revised again" }]);
-		expect(claim && pool.planStillClaimed("tab-a", claim)).toBe(false);
-		if (claim) pool.releasePlan("tab-a", claim);
-		expect(() => pool.guardPlan("tab-a")).not.toThrow();
 	});
 });
 

@@ -118,18 +118,15 @@ export function redStreak(records: readonly AutopilotCycleRecord[]): number {
 export interface StallFacts {
 	/** The last assistant message ended in an error. */
 	lastTurnErrored: boolean;
-	/** Plan mode is on (stock quietly stops continuing). */
-	planMode: boolean;
 	/** The todo list is non-empty and every item is blocked. */
 	todosAllBlocked: boolean;
 }
 
-/** Why no new turn started after a terminal agent_end: plan mode, a failed turn (the quota/retry path is main's) or a quiet one. */
+/** Why no new turn started after a terminal agent_end: a failed turn (the quota/retry path is main's) or a quiet one. */
 export type StallVerdict = { kind: "error" } | { kind: "nudge"; reason: AutopilotNudgeReason };
 
 /** A quiet run is nudged to its next cycle, never paused. */
 export function classifyStall(facts: StallFacts): StallVerdict {
-	if (facts.planMode) return { kind: "nudge", reason: "plan" };
 	if (facts.lastTurnErrored) return { kind: "error" };
 	return { kind: "nudge", reason: facts.todosAllBlocked ? "blocked" : "no_progress" };
 }

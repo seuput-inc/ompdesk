@@ -98,7 +98,6 @@ function activeGoal(session: AgentSession) {
 }
 
 async function guidedGoal(session: AgentSession, initial: string | undefined): Promise<{ started: true }> {
-	if (session.getPlanModeState()?.enabled) throw new Error("Exit plan mode first.");
 	const { lookup } = await import("../omp/pi-coding-agent/config/registry");
 	if (lookup("goal.enabled")?.get(session.settings) !== true) {
 		throw new Error("Goal mode is disabled. Enable it in settings (goal.enabled).");

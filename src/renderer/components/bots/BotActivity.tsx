@@ -2,8 +2,8 @@
  * A bot's Activity (Orca's `BotActivityPanel.tsx:191-251`): the first screen while a new bot starts, then what needs
  * the person, what it suggests, its automations and its memory's last tidy-up.
  *
- * - First screen (`BotFirstScreen.tsx:100-214`, FK-B45): Create bot, Start omp, First message, each with its state;
- *   a failed first message can be sent again.
+ * - First screen (`BotFirstScreen.tsx:100-214`, FK-B45): Create bot, Start omp, First message (the core's kickoff),
+ *   each with its state; a first message whose turn ended without a word has Try again (`bot-kickoff-retry.ts`).
  * - Needs you (`BotNeedsYouSection.tsx:38-422`, FK-B16): its chats' own prompts (approvals first, then questions,
  *   as their rows read them), then its items set to Needs you; five rows, then Show more. A chat's row opens the
  *   chat, an item's row its item page.
@@ -39,8 +39,8 @@ import {
 	Spinner,
 	StatusDot,
 } from "../common";
-import { type BotAutomation, botAutomations, useLocalSchedules } from "./bot-automations";
-import { type LaunchStep, openBotChat, sendKickoff, useBotLaunch } from "./bot-launch";
+import { type BotAutomation, botAutomations, useSchedulesOf } from "./bot-automations";
+import { type LaunchStep, openBotChat, retryKickoff, useBotLaunch } from "./bot-launch";
 import { openBotPage } from "./bot-page";
 import { openItem } from "./items/item-store";
 
@@ -71,15 +71,24 @@ function StepMark({ step }: { step: LaunchStep }) {
 	return <CircleDashed aria-hidden className="size-4 text-(--sc-text-subtle)" />;
 }
 
-/** While a bot made here starts: its steps, until its first chat exists and its first message went out. */
+/**
+ * While a new bot's first run starts: its steps, until its home chat exists and its first message (the core's kickoff)
+ * went out; and whenever that first message got no word, with Try again.
+ */
 function BotFirstScreen({ bot }: { bot: Bot }) {
 	const t = useT();
-	const launch = useBotLaunch(s => s.launches[bot.id]);
-	if (!launch || (bot.home && launch.first !== "failed" && launch.first !== "running")) return null;
+	const launch = useBotLaunch(s => (bot.device ? undefined : s.launches[bot.id]));
+	const [retrying, setRetrying] = useState(false);
+	const sent = (bot.kickoffs?.length ?? 0) > 0;
+	const silent = bot.kickoffSilent === true;
+	if (!bot.firstRun || (!silent && (!launch || (bot.home && sent)))) return null;
 	const steps: { label: string; step: LaunchStep }[] = [
 		{ label: t("bots.first.create"), step: "done" },
-		{ label: t("bots.first.start"), step: launch.start },
-		...(launch.first === "skipped" ? [] : [{ label: t("bots.first.message"), step: launch.first }]),
+		{ label: t("bots.first.start"), step: launch?.start ?? "done" },
+		{
+			label: t("bots.first.message"),
+			step: silent ? "failed" : sent ? "done" : bot.home ? "running" : "pending",
+		},
 	];
 	return (
 		<section aria-label={t("bots.first.title")} className="flex flex-col gap-2" data-bot-first-screen>
@@ -92,13 +101,17 @@ function BotFirstScreen({ bot }: { bot: Bot }) {
 					</li>
 				))}
 			</ol>
-			{launch.error && <p className="text-sc-xs text-(--sc-danger)">{launch.error}</p>}
-			{launch.first === "failed" && launch.tabId && launch.kickoff && (
+			{launch?.error && <p className="text-sc-xs text-(--sc-danger)">{launch.error}</p>}
+			{silent && <p className="text-sc-xs text-(--sc-text-muted)">{t("bots.first.silent")}</p>}
+			{silent && !bot.device && (
 				<Button
 					className="self-start"
+					data-bot-kickoff-retry
 					icon={<RotateCcw />}
+					loading={retrying}
 					onClick={() => {
-						if (launch.tabId && launch.kickoff) void sendKickoff(bot.id, launch.tabId, launch.kickoff);
+						setRetrying(true);
+						void retryKickoff(bot.id).finally(() => setRetrying(false));
 					}}
 					size="sm"
 					variant="secondary"
@@ -213,7 +226,7 @@ function Suggestions({ bot }: { bot: Bot }) {
 	const lookNow = () => {
 		if (bot.lookAround)
 			void window.omp.schedules
-				.command({ action: "runNow", id: bot.lookAround })
+				.command({ action: "runNow", id: bot.lookAround }, bot.device)
 				.then(() => toast({ variant: "success", message: t("bots.suggestions.looking") }))
 				.catch((error: unknown) => toastError({ title: t("bots.suggestions.lookFailed"), error }));
 		else
@@ -270,7 +283,7 @@ function Suggestions({ bot }: { bot: Bot }) {
 
 function Automations({ bot }: { bot: Bot }) {
 	const t = useT();
-	const schedules = useLocalSchedules();
+	const schedules = useSchedulesOf(bot.device);
 	const [all, setAll] = useState(false);
 	const [deleting, setDeleting] = useState<BotAutomation | null>(null);
 	const rows = botAutomations(bot, schedules);
@@ -279,7 +292,7 @@ function Automations({ bot }: { bot: Bot }) {
 	const shown = [...own, ...(all ? others : others.slice(0, ROWS))];
 	const run = (request: Parameters<typeof window.omp.schedules.command>[0], done?: string) =>
 		void window.omp.schedules
-			.command(request)
+			.command(request, bot.device)
 			.then(() => (done ? toast({ variant: "success", message: done }) : undefined))
 			.catch((error: unknown) => toastError({ title: t("bots.automations.failed"), error }));
 	const label = (row: BotAutomation) =>
@@ -317,12 +330,15 @@ function Automations({ bot }: { bot: Bot }) {
 									onClick={() => run({ action: "runNow", id: row.schedule.id }, t("bots.automations.queued"))}
 									size="sm"
 								/>
-								<IconButton
-									icon={<ExternalLink />}
-									label={t("bots.automations.open")}
-									onClick={() => useUiStore.getState().openSettings("schedules")}
-									size="sm"
-								/>
+								{/* Settings › Schedules is this computer's: a paired host's bot's schedules are listed here only. */}
+								{!bot.device && (
+									<IconButton
+										icon={<ExternalLink />}
+										label={t("bots.automations.open")}
+										onClick={() => useUiStore.getState().openSettings("schedules")}
+										size="sm"
+									/>
+								)}
 								<IconButton
 									icon={<Trash2 />}
 									label={t("bots.automations.delete")}

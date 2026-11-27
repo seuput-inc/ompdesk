@@ -21,7 +21,6 @@ import { useModelWait } from "../../../lib/model-wait";
 import { ensureAgentReviewSubscription, useAgentReviewStore } from "../../../stores/agent-review";
 import { isAutopilotTab, isLiveAutopilot, useAutopilotStore } from "../../../stores/autopilot";
 import { useExtensionUiStore } from "../../../stores/extension-ui";
-import { usePlanApprovalStore } from "../../../stores/plan-approval";
 import { useSessionStore } from "../../../stores/session";
 import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useSubagentsStore } from "../../../stores/subagents";
@@ -180,7 +179,6 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 	const goal = useSessionStore(state => state.goal);
 	const pending = useExtensionUiStore(state => state.pendingRequests);
 	const loginRequestIds = useExtensionUiStore(state => state.loginRequestIds);
-	const planPending = usePlanApprovalStore(state => state.pending !== null);
 	// A run's own words (cycle and area, a pause reason, a quota wait, its end): in an Autopilot tab the strip is where
 	// the run is reached wherever the board cannot dock.
 	const runText = useAutopilotStateText();
@@ -188,7 +186,7 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 	const autopilotState = runText ?? (ended ? t("autopilot.state.ended") : null);
 	const autopilotRunning = useAutopilotStore(state => isLiveAutopilot(state) && state.status.state === "running");
 	const counts = boardCounts({
-		asks: pendingAsks({ pendingRequests: pending, loginRequestIds }, planPending),
+		asks: pendingAsks({ pendingRequests: pending, loginRequestIds }),
 		childrenWaiting: opened.counts.waiting,
 		childrenRunning: opened.counts.running,
 		agents: agents.length,

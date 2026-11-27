@@ -28,6 +28,7 @@ import type { ProviderAccountsResult, ProviderInfo } from "../../../../shared/rp
 import { useUsage } from "../../../hooks/use-usage-reports";
 import { errorDetail } from "../../../lib/error-detail";
 import { useT } from "../../../lib/i18n";
+import { openExternal } from "../../../lib/open-external";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { useModelStore } from "../../../stores/model";
 import { useFocusedTabDevice } from "../../../stores/remote";
@@ -45,10 +46,10 @@ import {
 } from "../../common";
 import { SettingsAdvanced, SettingsSection } from "../SettingsLayout";
 import { AccountPoolsEditor } from "./AccountPoolsEditor";
-import { useProviderConnection } from "./ClaudeConnection";
+import { CLAUDE_API_URL, useProviderConnection } from "./ClaudeConnection";
 import { ProviderGroupItem } from "./ConnectedRow";
 import { CreditSpendRow } from "./CreditSpendRow";
-import { CLAUDE_API_URL, CustomProviderForm } from "./CustomProviderForm";
+import { CustomProviderForm } from "./CustomProviderForm";
 import { LocalEnginesRow } from "./LocalEnginesRow";
 import { ModelOverrides } from "./ModelOverrides";
 import { type AccountRowLayout, accountRowLayout, ProviderAccountRows, useProviderAccounts } from "./ProviderAccounts";
@@ -118,6 +119,7 @@ function ConnectedProviderRows({
 	// signing out would clear a credential the provider never used; editing
 	// the entry is what actually removes it.
 	const canLogout = handlers.onLogout && !config?.hasApiKey;
+	const claudeApi = config?.baseUrl === CLAUDE_API_URL && config.api === "anthropic-messages";
 	const menu: ContextMenuItem[] = [
 		...(provider.loginAvailable
 			? [
@@ -146,10 +148,20 @@ function ConnectedProviderRows({
 	return (
 		<ProviderGroupItem
 			addDisabled={!sidecarReady || login.busy}
-			onAdd={
-				config?.baseUrl === CLAUDE_API_URL && config.api === "anthropic-messages"
-					? () => void login.start("anthropic")
-					: undefined
+			onAdd={claudeApi ? () => void login.start("anthropic") : undefined}
+			after={
+				claudeApi && config.hasApiKey ? (
+					<div className="flex flex-wrap items-center gap-x-2 text-sc-sm text-(--sc-text-muted)">
+						{t("providers.apiBalanceUnknown")}
+						<Button
+							onClick={() => openExternal("https://platform.claude.com/settings/billing")}
+							size="sm"
+							variant="ghost"
+						>
+							{t("providers.consoleBilling")}
+						</Button>
+					</div>
+				) : undefined
 			}
 			badges={provider.disabled && <Badge variant="warning">{t("providers.badge.disabled")}</Badge>}
 			busy={busyProvider === provider.id || (login.state.running && login.state.providerId === provider.id)}
@@ -333,7 +345,7 @@ export function ProvidersSection({
 		},
 		[load, providers, t],
 	);
-	const { login, claudePanel, retryLogin } = useProviderConnection(catalog, onConnected);
+	const { login, claudePanel, retryLogin } = useProviderConnection(onConnected);
 	/**
 	 * The form stands in for the whole section, so closing it lands back at the
 	 * top. This is the endpoint it saved or edited ("" after cancelling an add):
@@ -439,8 +451,6 @@ export function ProvidersSection({
 		}
 	};
 
-	if (claudePanel) return <SettingsSection id="settings-models-accounts">{claudePanel}</SettingsSection>;
-
 	if (providerForm && catalog.options) {
 		return (
 			<SettingsSection id="settings-models-custom">
@@ -479,6 +489,7 @@ export function ProvidersSection({
 
 	return (
 		<>
+			{claudePanel}
 			<SettingsSection
 				actions={
 					<IconButton

@@ -9,8 +9,8 @@
  * command output, session info, extension error, host tool/uri) forward from at most four VISIBLE tabs. One of them is
  * focused for untargeted commands. Every tab (visible or background) additionally pushes the light TAB_STATUS channel,
  * so background tabs report status flips, run outcomes, and session title/id changes, and forwards its extension UI
- * requests (a background ask still needs an answer). A hidden tab also forwards the two frames its sidebar row reads
- * from its own runtime: plan proposals and subagent lifecycle, so the row is current without a visit.
+ * requests (a background ask still needs an answer). A hidden tab also forwards the frames its sidebar row reads from
+ * its own runtime: subagent lifecycle, so the row is current without a visit.
  *
  * Multi-viewer: besides its owner, a tab can be shown by viewer windows (a paired web device's; `attachViewer`). Each
  * window keeps its own view (active, visible, split), the tab's sidecar listeners exist once and fan out to every
@@ -85,7 +85,7 @@ import { TargetAnswer } from "./agent-control/target-answer";
 import type { BackgroundWorkMember } from "./background-work";
 import { canonicalCwd } from "./canonical-cwd";
 import { type Hub, type HubItem, hub } from "./core/hub";
-import { CoreError, isCoreShutdown } from "./core/process";
+import { CoreError, isCoreShutdown, isHubGivenUp } from "./core/process";
 import { deletedSessionsOpen } from "./deleted-sessions";
 import { type ExtensionApplyPlan, extensionApplyDecision } from "./extension-reload";
 import { createMessageUpdateSlimmer } from "./message-update-slim";
@@ -99,7 +99,7 @@ import type { TabHolder } from "./remote/protocol";
 import type { SessionSummaries, SummaryFacts, SummarySource } from "./session-summaries";
 import type { SettleWatch } from "./settle-watch";
 import type { SidecarSessionIdentity, SidecarStartGate } from "./sidecar";
-import type { RunReading } from "./sidecar-run-state";
+import { claudeRetryBlocked, type RunReading } from "./sidecar-run-state";
 import { type SidecarLike, VIEW_ENDED_EVENT } from "./sidecar-types";
 import { nextSnowflake } from "./snowflake";
 import { createSubagentFrameBatcher } from "./subagent-frames";
@@ -130,6 +130,9 @@ function forwardToWindow(win: ClientWindow, channel: string, data: unknown): voi
 export const DRAFT_COMMANDS = ["set_idle_compaction_draft", "set_next_prompt_draft"] as const;
 export type DraftCommand = (typeof DRAFT_COMMANDS)[number];
 
+/** The pool's own `setShown` viewer: the windows (desktop and paired phones' pages) whose full channel the tab has. */
+const POOL_VIEWER = "windows";
+
 /** An extension UI response (`ExtensionUIResponse`) in words, for the logs that keep what was chosen. */
 export function describeAnswer(frame: object): string {
 	if ("cancelled" in frame && frame.cancelled === true) return "dismissed";
@@ -159,6 +162,12 @@ export type TabActivity =
 	| { type: "busy"; tabId: string }
 	| { type: "idle"; tabId: string; outcome: IpcTabRunOutcome | undefined }
 	| { type: "ask"; tabId: string; requestId: string; text: string }
+	/**
+	 * A question of a run another session's message started, held off the windows while agent control decides whose it
+	 * is (`routeAsk`): `origin` is the sender's saved id and the dispatch or request id its message carried. The owner's
+	 * ask, if it becomes one, is announced again as an `ask`.
+	 */
+	| { type: "askHeld"; tabId: string; requestId: string; origin: { session: string; mark: string | null } }
 	/**
 	 * A question or approval closed. `answered` is set when a window, a page or an agent answered it here: the card's
 	 * title and the choice in its words (an option, yes/no, the answers, or "dismissed").
@@ -196,18 +205,9 @@ export interface TabFacts {
 	compacting?: boolean;
 }
 
-/** A plan proposal awaiting approval: its title and plan file. */
-export interface PendingPlan {
-	title: string;
-	planFilePath: string;
-	/** Which proposal of the tab it is: stock rewrites one plan file for a revised proposal, so the path is no identity. */
-	generation: number;
-}
-
 /** One tab of {@link SidecarPool.controlTabs}: its `tabsForWindow` row and the per-tab reads the control tools' snapshot makes. */
 export interface ControlTabInfo extends IpcTabInfo {
 	facts: TabFacts | null;
-	plan: PendingPlan | null;
 	formerIds: readonly string[];
 	hasDraft: boolean;
 	/** The window that owns the tab (`windowOfTab`): the row's own window for a tab a viewer's window lists. */
@@ -348,6 +348,7 @@ function projectEvents(events: AgentSessionEvent[]): ProjectedEvent[] {
 									role: "assistant",
 									stopReason: last.stopReason,
 									errorMessage: last.errorMessage,
+									...(claudeRetryBlocked(last) && { retryBlocked: true }),
 									content:
 										typeof content === "string"
 											? content
@@ -380,11 +381,6 @@ function projectEvents(events: AgentSessionEvent[]): ProjectedEvent[] {
 					finalError: event.finalError,
 				});
 				break;
-			case "plan_proposal":
-			case "plan_proposal_resolved":
-				// Small, and a hidden tab's row is sent them whole.
-				kept.push(event);
-				break;
 			case "goal_updated":
 				// Only whether the goal is active: an idle goal session gets a relaunch marker (resume/facts.rs).
 				kept.push({ type: event.type, goal: { status: goalStatus(event.goal) } });
@@ -395,6 +391,8 @@ function projectEvents(events: AgentSessionEvent[]): ProjectedEvent[] {
 					message: {
 						role: event.message.role,
 						...(event.message.role === "user" ? { text: messageText(event.message) } : {}),
+						...(event.message.role === "assistant" &&
+							claudeRetryBlocked(event.message) && { retryBlocked: true }),
 					},
 				});
 				break;
@@ -968,8 +966,9 @@ export class SidecarPool {
 			try {
 				this.#call("feed", { tab, event, payload: payload ?? null, fromLink: sidecar.statusFromLink === true });
 			} catch (error) {
-				// An omp's last words (its exit) arrive after the quit ended the core: nothing is left to tell.
-				if (!isCoreShutdown(error)) throw error;
+				// An omp's last words (its exit) arrive after the quit ended the core: nothing is left to tell. A feed main
+				// gave up went out in order, and the live core applies it: the listener has nothing after it to finish.
+				if (!isCoreShutdown(error) && !isHubGivenUp(error)) throw error;
 			}
 		};
 		sidecar.on("status", (payload: SidecarStatusPayload, hostTurn?: HostCloseTurn | null) => {
@@ -1131,6 +1130,8 @@ export class SidecarPool {
 				for (const remove of removers) remove();
 			},
 		};
+		// The first window shows the tab: its omp may suggest again (a phone's page is a window here).
+		sidecar.setShown?.(POOL_VIEWER, true);
 	}
 
 	/** Stop forwarding the tab's full channel to window `winId` (`unwireFull`); the last window takes the listeners off. */
@@ -1141,6 +1142,7 @@ export class SidecarPool {
 			const handle = this.#handles.get(tab);
 			if (handle) handle.full = null;
 			full.remove();
+			handle?.sidecar.setShown?.(POOL_VIEWER, false);
 			// Already received while shown: deliver them, as when each was sent alone.
 			full.flush();
 			return;
@@ -1190,11 +1192,6 @@ export class SidecarPool {
 		return this.#call<TabFacts | null>("tabFacts", { tab: tabId });
 	}
 
-	/** The plan proposal `tabId`'s session waits on (approve or reject), if any. */
-	pendingPlan(tabId: string): PendingPlan | null {
-		return this.#call<PendingPlan | null>("pendingPlan", { tab: tabId });
-	}
-
 	/** The person looked at the tab: its entry keeps when, for the seen-since-run clock (`tab_seen`, pool/routes.rs). */
 	tabSeen(tabId: string): void {
 		this.#call("tabSeen", { tab: tabId });
@@ -1207,9 +1204,9 @@ export class SidecarPool {
 
 	/**
 	 * What an automatic update restart must wait for on this computer's tabs (app-auto-update.ts): a tab compacting its
-	 * context (a cut compaction does not resume), and a plan proposal waiting on the person (an approval card).
+	 * context (a cut compaction does not resume).
 	 */
-	restartHolds(): { compacting: boolean; planWaiting: boolean } {
+	restartHolds(): { compacting: boolean } {
 		return this.#call("restartHolds");
 	}
 
@@ -1357,6 +1354,7 @@ export class SidecarPool {
 		const view: HostedTabView = new HostedTabView({
 			sidecar: handle.sidecar,
 			promptOrigin: origin,
+			poolRoutesQuestions: true,
 			labelTranscript: data => {
 				const page = data as { messages?: PromptOriginLabel[] } | undefined;
 				if (!page?.messages?.some(message => message.promptFromId !== undefined)) return data;
@@ -1469,7 +1467,7 @@ export class SidecarPool {
 	}
 
 	/**
-	 * A window toggled a composer mode (plan, prewalk, agents pause, fast/slow): most have no stock event, so the
+	 * A window toggled a composer mode (prewalk, agents pause, goal, fast/slow): most have no stock event, so the
 	 * other windows that show the tab are told with a `config_update {modes: true}` frame and re-read them.
 	 */
 	noteModeChanged(tabId: string, exceptWinId: number): void {
@@ -1515,7 +1513,7 @@ export class SidecarPool {
 	}
 
 	/**
-	 * `tabWindows`, then each window's `tabsForWindow` and `openRequests`, with each tab's `tabFacts`, `pendingPlan`,
+	 * `tabWindows`, then each window's `tabsForWindow` and `openRequests`, with each tab's `tabFacts`,
 	 * `formerTabIds`, `hasDraft` and `windowOfTab`: the control tools' snapshot in one wait of main's thread, which
 	 * rebuilds it on every answer and push to the core, instead of several per tab.
 	 */
@@ -1776,31 +1774,22 @@ export class SidecarPool {
 		return this.#call<boolean>("isRequestOpen", { tab: tabId, id: requestId });
 	}
 
-	/** Throws `being_answered` when an agent's answer holds the question and `claim` is not its own. */
-	guardAsk(requestId: string, claim?: number): void {
-		this.#call("guardAsk", { id: requestId, ...(claim === undefined ? {} : { claim }) });
-	}
-
-	/** Take the plan `tabId` waits on when it is the proposal at `planFilePath` of `generation`; null otherwise or when held. */
-	claimPlan(tabId: string, planFilePath: string, generation: number): number | null {
-		return this.#call<number | null>("claimPlan", { tab: tabId, file: planFilePath, generation });
-	}
-
-	/** Whether the plan `claim` took is still the pending one (a revision is another generation). */
-	planStillClaimed(tabId: string, claim: number): boolean {
-		return this.#call<boolean>("planStillClaimed", { tab: tabId, claim });
-	}
-
-	releasePlan(tabId: string, claim: number): void {
-		this.#call("releasePlan", { tab: tabId, claim });
+	delegatedPrompt(tabId: string, text: string, revoke = false): void {
+		this.#call("delegatedPrompt", { tab: tabId, text, revoke });
 	}
 
 	/**
-	 * Throws `being_answered` for an approve or reject of a plan an agent's approval holds, unless it is the claiming
-	 * step's own (`own`): the window dispatcher and a device viewing the tab both call it.
+	 * Where agent control sent a held question (`askHeld`): no `chat`, to the owner's windows as any other ask; a bot
+	 * chat's id, kept off them for that bot; with `escalate`, shown in that chat's windows, whose answer goes to the
+	 * asking tab. False when it is not open or not held.
 	 */
-	guardPlan(tabId: string, own = false): void {
-		this.#call("guardPlan", { tab: tabId, own });
+	routeAsk(tabId: string, requestId: string, chat?: string, escalate = false): boolean {
+		return this.#call<boolean>("routeAsk", { tab: tabId, id: requestId, ...(chat ? { chat, escalate } : {}) });
+	}
+
+	/** Throws `being_answered` when an agent's answer holds the question and `claim` is not its own. */
+	guardAsk(requestId: string, claim?: number): void {
+		this.#call("guardAsk", { id: requestId, ...(claim === undefined ? {} : { claim }) });
 	}
 
 	/** An answer with attachments is one claimed step in this main (`TargetAnswer`), here for this pool's tabs. */
@@ -1809,9 +1798,6 @@ export class SidecarPool {
 		claim: (tabId, id) => this.claimRequest(tabId, id),
 		release: (id, claim) => this.releaseRequest(id, claim),
 		route: (tabId, id, response, claim) => this.routeSideChannel(id, response, tabId, undefined, claim),
-		claimPlan: (tabId, planFile, generation) => this.claimPlan(tabId, planFile, generation),
-		planStillClaimed: (tabId, claim) => this.planStillClaimed(tabId, claim),
-		releasePlan: (tabId, claim) => this.releasePlan(tabId, claim),
 	});
 
 	/**

@@ -239,11 +239,19 @@ function BotSettingsRoot({
 				<SectionLabel>{t("bots.settings.access")}</SectionLabel>
 				<ListRow
 					leading={<Users aria-hidden className="size-4 text-(--sc-text-muted)" />}
-					meta={bot.reach.length > 0 ? String(bot.reach.length + 1) : t("bots.access.onlyYou")}
-					onClick={() => onPage("access")}
+					meta={
+						bot.allPaired
+							? t("bots.access.allPaired")
+							: bot.reach.length > 0
+								? String(bot.reach.length + 1)
+								: t("bots.access.onlyYou")
+					}
+					onClick={bot.device ? undefined : () => onPage("access")}
 					size="sm"
 					title={t("bots.access.title")}
-					trailing={<ChevronRight aria-hidden className="size-4 text-(--sc-text-subtle)" />}
+					trailing={
+						bot.device ? undefined : <ChevronRight aria-hidden className="size-4 text-(--sc-text-subtle)" />
+					}
 				/>
 				<ListRow
 					description={t("bots.settings.skillsHint")}
@@ -473,20 +481,23 @@ function BotAccessPage({ bot, onBack }: { bot: Bot; onBack: () => void }) {
 	const t = useT();
 	const update = useUpdate(bot);
 	const peers = useRemoteStore(s => s.state?.host.peers ?? []);
-	const names = bot.reach.map(id => peers.find(peer => peer.deviceId === id)?.name ?? id);
+	const allowed = bot.allPaired ? peers.map(peer => peer.deviceId) : bot.reach;
+	const names = allowed.map(id => peers.find(peer => peer.deviceId === id)?.name ?? id);
 	const toggle = (deviceId: string, on: boolean) =>
-		update({ reach: on ? [...bot.reach, deviceId] : bot.reach.filter(known => known !== deviceId) });
+		update({ reach: on ? [...allowed, deviceId] : allowed.filter(known => known !== deviceId) });
 	return (
 		<div className="flex flex-col gap-3 p-4" data-bot-access>
 			<PageHead onBack={onBack} title={t("bots.access.title")} />
 			<Card data-bot-access-summary padding="md">
 				<p className="text-sc-sm text-(--sc-text)">
-					{names.length === 0
-						? t("bots.access.summaryYou", { bot: bot.name })
-						: t("bots.access.summary", { bot: bot.name, devices: names.join(", ") })}
+					{bot.allPaired
+						? t("bots.access.allPaired")
+						: names.length === 0
+							? t("bots.access.summaryYou", { bot: bot.name })
+							: t("bots.access.summary", { bot: bot.name, devices: names.join(", ") })}
 				</p>
 				<p className="mt-1 text-sc-xs text-(--sc-text-muted)">{t("bots.access.what")}</p>
-				{names.length > 0 && (
+				{(bot.allPaired || names.length > 0) && (
 					<Button className="mt-2" onClick={() => update({ reach: [] })} size="sm" variant="ghost">
 						{t("bots.access.onlyMe")}
 					</Button>
@@ -499,7 +510,7 @@ function BotAccessPage({ bot, onBack }: { bot: Bot; onBack: () => void }) {
 				peers.map(peer => (
 					<label className="flex items-center gap-2 text-sc-sm" key={peer.deviceId}>
 						<Checkbox
-							checked={bot.reach.includes(peer.deviceId)}
+							checked={allowed.includes(peer.deviceId)}
 							onChange={event => toggle(peer.deviceId, event.target.checked)}
 						/>
 						<span>{peer.name}</span>

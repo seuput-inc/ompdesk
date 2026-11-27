@@ -61,23 +61,30 @@ export function botAutomations(bot: Bot, state: SchedulesState): BotAutomation[]
 		.map(({ row }) => row);
 }
 
-/** This computer's schedules, read once and followed while a bot surface is shown. */
-export function useLocalSchedules(): SchedulesState {
+/**
+ * The schedules of the computer a bot lives on (`device`, absent = this one), read once and followed while a bot surface
+ * is shown: a paired host's bot runs its automations there, and its changes go there (`host.schedules.*`).
+ */
+export function useSchedulesOf(device: string | undefined): SchedulesState {
 	const [state, setState] = useState<SchedulesState>(EMPTY);
 	useEffect(() => {
 		if (typeof window.omp?.schedules?.command !== "function") return;
 		let live = true;
 		window.omp.schedules
-			.command({ action: "get" })
+			.command({ action: "get" }, device)
 			.then(read => {
 				if (live) setState(read);
 			})
 			.catch(() => {});
-		const stop = window.omp.schedules.onState(next => setState(next));
+		const stop = device
+			? window.omp.schedules.onHostState((host, next) => {
+					if (host === device) setState(next);
+				})
+			: window.omp.schedules.onState(next => setState(next));
 		return () => {
 			live = false;
 			stop();
 		};
-	}, []);
+	}, [device]);
 	return state;
 }

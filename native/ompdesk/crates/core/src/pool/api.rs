@@ -59,26 +59,14 @@ impl Ctx {
         })
     }
 
-    pub(super) fn pending_plan(&self, tab: &str) -> Value {
-        self.with(|pool| {
-            pool.entry(tab).map_or(Value::Null, |entry| {
-                entry.plan_proposal.as_ref().map_or(Value::Null, |(title, path)| {
-                    json!({"title": title, "planFilePath": path, "generation": entry.plan_generation})
-                })
-            })
-        })
-    }
-
     /// What an automatic update restart must wait for on this computer's tabs.
     pub(super) fn restart_holds(&self) -> Value {
         self.with(|pool| {
-            let mut compacting = false;
-            let mut plan_waiting = false;
-            for entry in pool.entries.iter().filter(|entry| !entry.hosted_view) {
-                compacting |= entry.tracking.run.compacting == Some(true);
-                plan_waiting |= entry.plan_proposal.is_some();
-            }
-            json!({"compacting": compacting, "planWaiting": plan_waiting})
+            let compacting = pool
+                .entries
+                .iter()
+                .any(|entry| !entry.hosted_view && entry.tracking.run.compacting == Some(true));
+            json!({"compacting": compacting})
         })
     }
 
@@ -430,6 +418,13 @@ impl Ctx {
 
     /// The asks and approvals this window's tabs still wait on, for a page that loaded after they were raised.
     pub(super) fn open_requests(&self, win: i64) -> Value {
+        self.requests_of(win, true)
+    }
+
+    /// The asks this window's tabs wait on. `shown`: as the window shows them (a question a bot holds is none of its
+    /// own; an escalated one shows under the bot's chat). Otherwise every ask under the tab that raised it, as the
+    /// control tools read them (`control_tabs`).
+    fn requests_of(&self, win: i64, shown: bool) -> Value {
         self.with(|pool| {
             let ids: Vec<String> = pool.request_bodies.keys().cloned().collect();
             let mut open = Vec::new();
@@ -439,6 +434,17 @@ impl Ctx {
                     pool.sign_in_requests.remove(&id);
                     continue;
                 };
+                if shown && let Some(routed) = pool.routed.get(&id) {
+                    // An escalated ask shows in its bot's chat, where the owner answers it.
+                    if let super::state::Routed::Escalated(chat) = routed
+                        && pool.entry(chat).is_some_and(|entry| entry.shown_in(win))
+                        && !pool.answering.contains(&id)
+                        && let Some((frame, _)) = Self::escalated_frame(pool, &id, chat)
+                    {
+                        open.push(frame);
+                    }
+                    continue;
+                }
                 if !pool.by_seq(owner).is_some_and(|entry| entry.shown_in(win)) {
                     continue;
                 }
@@ -489,8 +495,17 @@ impl Ctx {
 
     pub(super) fn replay_failed_question(&self, seq: u64, id: &String) {
         self.with(|pool| {
-            if pool.request_owners.get(id) == Some(&seq)
-                && let Some(frame) = Self::replayed_question(pool, seq, id)
+            if pool.request_owners.get(id) != Some(&seq) {
+                return;
+            }
+            if let Some(super::state::Routed::Escalated(chat)) = pool.routed.get(id) {
+                if let Some((mut frame, wins)) = Self::escalated_frame(pool, id, chat) {
+                    frame["resent"] = Value::Bool(true);
+                    self.send(wins, "EXTENSION_UI", frame);
+                }
+                return;
+            }
+            if let Some(frame) = Self::replayed_question(pool, seq, id)
                 && let Some(entry) = pool.by_seq(seq)
             {
                 self.send(Pool::windows_of(entry), "EXTENSION_UI", frame);
@@ -499,6 +514,10 @@ impl Ctx {
     }
 
     fn replayed_question(pool: &mut Pool, seq: u64, id: &String) -> Option<Value> {
+        // A question a bot holds (or agentctl is placing) is no window's to show again.
+        if pool.routed.contains_key(id) {
+            return None;
+        }
         let mut frame = Self::open_request(pool, seq, id)?;
         if frame.get("signIn").is_some() {
             return None;
@@ -552,6 +571,9 @@ impl Ctx {
                     if let Some(last) = entry.tracking.numbered_outcome() {
                         fact.insert("lastRun".into(), last);
                     }
+                    if entry.tracking.retry_blocked {
+                        fact.insert("retryBlocked".into(), Value::Bool(true));
+                    }
                     if let Some(retry) = &entry.tracking.retry {
                         // One object per `auto_retry_start`: main hands the same object out while this id stands.
                         fact.insert(
@@ -602,7 +624,8 @@ impl Ctx {
         self.with(|pool| {
             let mut asks: Vec<(u64, &'static str)> = Vec::new();
             for (id, owner) in pool.request_owners.iter() {
-                if pool.sign_in_requests.contains(id) {
+                // A question the bot that asked for the work holds is not the owner's to answer.
+                if pool.sign_in_requests.contains(id) || pool.routed.contains_key(id) {
                     continue;
                 }
                 let approval = pool
@@ -679,7 +702,6 @@ impl Ctx {
                 return Value::Null;
             };
             let payload = pool.tab_status(entry, &cwd);
-            let ask = ask.or(entry.plan_proposal.as_ref().map(|_| "approval"));
             let mut facts = Map::new();
             facts.insert("sessionPath".into(), opt(entry.session_file.clone()));
             facts.insert("tabId".into(), Value::from(entry.tab_id.clone()));
@@ -884,7 +906,7 @@ impl Ctx {
 
     /// `controlTabs`: what the control tools' snapshot reads of every window that owns a tab, in one call instead of
     /// several per tab (main's thread waits on each): per window (`tabWindows`'s order) its `tabsForWindow` rows and
-    /// `openRequests`, each row with its tab's `tabFacts`, `pendingPlan`, `formerTabIds`, `hasDraft` and owner window
+    /// `openRequests`, each row with its tab's `tabFacts`, `formerTabIds`, `hasDraft` and owner window
     /// (`windowOfTab`) under `control`.
     pub(super) async fn control_tabs(&self) -> R<Value> {
         let wins: Vec<i64> = serde_json::from_value(self.tab_windows()).unwrap_or_default();
@@ -895,13 +917,13 @@ impl Ctx {
                 let tab = row["tabId"].as_str().unwrap_or_default().to_string();
                 row["control"] = json!({
                     "facts": self.tab_facts(&tab),
-                    "plan": self.pending_plan(&tab),
                     "formerIds": self.former_tab_ids(&tab),
                     "hasDraft": self.has_draft(&tab),
                     "owner": self.window_of_tab(&tab),
                 });
             }
-            windows.push(json!({"win": win, "tabs": tabs, "asks": self.open_requests(win)}));
+            // Every ask under the tab that raised it: a question a bot holds is still that session's to answer.
+            windows.push(json!({"win": win, "tabs": tabs, "asks": self.requests_of(win, false)}));
         }
         Ok(Value::Array(windows))
     }
@@ -951,7 +973,7 @@ impl Ctx {
     }
 
     /// Nothing in the tab is live as the pool sees it (`idle-release.ts`): this computer's own ready tab on a saved
-    /// session, shown in no window, split pane or device, opened by the person, with no turn, compaction, ask, plan,
+    /// session, shown in no window, split pane or device, opened by the person, with no turn, compaction, ask,
     /// draft, retry, continuation, sign-in or pending restart.
     pub(super) async fn quiet(&self, tab: &str) -> R<bool> {
         let facts = self.facts(&[tab.to_string()]).await?;
@@ -975,7 +997,7 @@ impl Ctx {
             if entry.opened_by.is_some() || entry.opened_by_session.is_some() {
                 return false;
             }
-            if entry.awaiting_connection || entry.plan_proposal.is_some() || entry.resuming {
+            if entry.awaiting_connection || entry.resuming {
                 return false;
             }
             if entry.unsaved_prompt.is_some()
@@ -1600,6 +1622,7 @@ impl Ctx {
             pool.session_owners.clear();
             pool.request_owners.clear();
             pool.answered.clear();
+            pool.routed.clear();
             pool.restoring.clear();
         });
         Ok(())
@@ -1659,12 +1682,20 @@ impl Ctx {
                 return Value::Null;
             };
             let mut snapshot = Map::new();
-            let asks: Vec<Value> = pool
+            let mut asks: Vec<Value> = pool
                 .request_owners
                 .iter()
-                .filter(|(_, owner)| **owner == entry.seq)
+                .filter(|(id, owner)| **owner == entry.seq && !pool.routed.contains_key(*id))
                 .filter_map(|(id, _)| pool.request_bodies.get(id).map(|held| held.request.clone()))
                 .collect();
+            for (id, route) in &pool.routed {
+                if matches!(route, super::state::Routed::Escalated(chat) if chat == tab)
+                    && !pool.answering.contains(id)
+                    && let Some((mut frame, _)) = Self::escalated_frame(pool, id, tab)
+                {
+                    asks.push(frame["request"].take());
+                }
+            }
             snapshot.insert("asks".into(), Value::Array(asks));
             if let Some(id) = &entry.session_id {
                 snapshot.insert("sessionId".into(), Value::from(id.clone()));
@@ -1705,6 +1736,39 @@ impl Ctx {
         let id = (frame["type"] == "extension_ui_response")
             .then(|| frame["id"].as_str().map(str::to_string))
             .flatten();
+        if let Some(id) = &id {
+            if let Some(source) = id.strip_prefix(super::routes::ESCALATED_PREFIX) {
+                let target = self.with(|pool| {
+                    if !matches!(pool.routed.get(source), Some(super::state::Routed::Escalated(chat)) if chat == tab)
+                        || !pool.entry(tab).is_some_and(|entry| entry.device_views.contains(&from))
+                    {
+                        return None;
+                    }
+                    let seq = *pool.request_owners.get(&source.to_owned())?;
+                    let worker = pool.by_seq(seq)?.tab_id.clone();
+                    pool.answering.insert(source.to_owned()).then_some((worker, seq))
+                });
+                let Some((worker, seq)) = target else {
+                    return Err(fault("already_answered", "This card is no longer open"));
+                };
+                let mut frame = frame.clone();
+                frame["id"] = json!(source);
+                let sent = self
+                    .ask("sideChannel", json!({"tab": worker, "frame": frame}))
+                    .await;
+                self.with(|pool| pool.answering.remove(source));
+                sent?;
+                return self
+                    .route_answered(seq, source, &frame, None, false, "submitted")
+                    .await;
+            }
+            if self.with(|pool| pool.routed.contains_key(id)) {
+                return Err(fault(
+                    "being_answered",
+                    "This question is held by its routing bot",
+                ));
+            }
+        }
         // A question an agent's answer holds takes no answer from a device viewing the tab either.
         if let Some(id) = &id {
             self.guard_ask(id, None)?;

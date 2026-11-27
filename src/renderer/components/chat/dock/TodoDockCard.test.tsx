@@ -234,7 +234,6 @@ describe("TodoDockCard", () => {
 									isCompacting: false,
 									messageCount: 2,
 									queuedMessageCount: 0,
-									planModeEnabled: false,
 									todoPhases: open,
 									todoDrift: behind,
 								},

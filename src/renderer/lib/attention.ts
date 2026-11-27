@@ -49,16 +49,11 @@ export function sessionWorking(session: {
 	return session.isStreaming || session.isCompacting || session.retryInfo !== null;
 }
 
-/** The session's own prompts: its blocking requests (a sign-in's own left out), then a plan up for review. */
-export function pendingAsks(
-	extensionUi: Pick<ExtensionUiStore, "pendingRequests" | "loginRequestIds">,
-	planPending: boolean,
-): AskKind[] {
-	const asks = extensionUi.pendingRequests
+/** The session's own prompts: its blocking requests (a sign-in's own left out). */
+export function pendingAsks(extensionUi: Pick<ExtensionUiStore, "pendingRequests" | "loginRequestIds">): AskKind[] {
+	return extensionUi.pendingRequests
 		.filter(request => isUserBlockingRequest(extensionUi, request))
 		.map((request): AskKind => (isApprovalRequest(request) ? "approval" : "question"));
-	if (planPending) asks.push("approval");
-	return asks;
 }
 
 /** The locale key of each kind's one wording. */

@@ -40,14 +40,15 @@ export type AutopilotState = (typeof AUTOPILOT_STATES)[number];
 /**
  * Why the run is paused (it can be resumed). Only what the user asked for (Pause, Stop now, a ceiling they set, Continue
  * interrupted work off), a banned destructive git action and the repository vanishing pause a run: a red cycle, a
- * failed check, a rejected push, a failed release, plan mode, blocked todos or a quiet turn never do (the next cycle
- * repairs them; see `AutopilotNudge`).
+ * failed check, a rejected push, a failed release, blocked todos or a quiet turn never do (the next cycle repairs them;
+ * see `AutopilotNudge`).
  */
 export const AUTOPILOT_PAUSE_REASONS = [
 	"user_pause",
 	"user_abort",
 	"ban_violation",
 	"repo_gone",
+	"provider_review",
 	"budget",
 	"time",
 	"cycles",
@@ -530,10 +531,10 @@ export function cycleTotal(status: AutopilotStatus): number {
 export type AutopilotUpdate = AutopilotStatus;
 
 /**
- * Bridge → main frame `autopilot_nudge`: no turn started after a cycle although the goal wants one (plan mode on, every
- * todo blocked, a quiet turn). The run is never paused for it: main leaves plan mode and asks for the next cycle.
+ * Bridge → main frame `autopilot_nudge`: no turn started after a cycle although the goal wants one (every todo
+ * blocked, a quiet turn). The run is never paused for it: main asks for the next cycle.
  */
-export type AutopilotNudgeReason = "plan" | "blocked" | "no_progress";
+export type AutopilotNudgeReason = "blocked" | "no_progress";
 
 /** Bridge → main frame asking for a pause (a ceiling the user set) or an end; main sends stock `set_goal pause`. */
 export interface AutopilotStopRequest {

@@ -345,58 +345,6 @@ test("stop mid-run with agents, then resume with a new run", async () => {
 	}
 });
 
-test("a plan proposal mid-run, approved with its context", async () => {
-	test.setTimeout(180_000);
-	const root = await profileDir("plan");
-	const { app, page, errors } = await launch(root);
-	try {
-		await startFlow(page);
-		const run = driver(page, await activeTab(page));
-		await run.op({ op: "call", id: "r1", name: "read", args: { path: "src/app.ts" } });
-		await run.op({ op: "end", id: "r1", text: "export const app = 1;" });
-		await run.op({ op: "call", id: "w1", name: "write", args: { path: "local://PLAN.md", content: "## Steps" } });
-		await run.op({ op: "end", id: "w1", text: "Wrote local://PLAN.md" });
-		await run.op({ op: "propose" });
-		await expect(page.getByText("Flow rollout plan").first()).toBeVisible({ timeout: 15_000 });
-		await capture(page, "plan-1-proposed");
-		const proposed = {
-			state: await cards(page).first().getAttribute("data-state"),
-			head: await head(page, 0).textContent(),
-			stopped: await page.locator(".omp-turn-stopped").count(),
-		};
-		await page.getByText("Keep context", { exact: true }).click();
-		await expect(page.getByText("Flow rollout plan")).toHaveCount(0, { timeout: 15_000 });
-		await page.waitForTimeout(600);
-		await capture(page, "plan-2-approved");
-		const run2 = driver(page, await activeTab(page));
-		await run2.op({
-			op: "call",
-			id: "b1",
-			name: "bash",
-			args: { command: "bun test", intent: "Running the plan's tests" },
-		});
-		await expect(cards(page)).toHaveCount(2, { timeout: 15_000 });
-		await capture(page, "plan-3-executing");
-		await run2.op({ op: "end", id: "b1", text: "12 pass" });
-		await run2.op({ op: "reply", text: "Plan executed." });
-		await capture(page, "plan-4-finished");
-		await saveProbe(page, "plan");
-		await page.reload();
-		await page.waitForFunction(() => window.omp?.rpc != null);
-		await expect(cards(page)).toHaveCount(2, { timeout: 30_000 });
-		await capture(page, "plan-5-reloaded");
-		const after = {
-			state: await cards(page).first().getAttribute("data-state"),
-			head: await head(page, 0).textContent(),
-			stopped: await page.locator(".omp-turn-stopped").count(),
-		};
-		await fs.writeFile(path.join(OUT, "plan-summary.json"), JSON.stringify({ proposed, after, errors }, null, 1));
-	} finally {
-		await exitApp(app);
-		await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-	}
-});
-
 test("a question asked mid-run", async () => {
 	test.setTimeout(180_000);
 	const root = await profileDir("ask");

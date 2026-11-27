@@ -42,7 +42,6 @@ describe("get_state", () => {
 					cwd: "/moved",
 					autoRetryEnabled: false,
 					thinkingConfigured: "auto",
-					planModeEnabled: true,
 					prewalkArmed: true,
 					agentsPaused: true,
 					agentsPausedAt: 42,
@@ -57,7 +56,6 @@ describe("get_state", () => {
 			autoRetryEnabled: false,
 			thinkingConfigured: "auto",
 			availableThinkingLevels: ["low", "high"],
-			planModeEnabled: true,
 			prewalkArmed: true,
 			agentsPaused: true,
 			agentsPausedAt: 42,
@@ -85,7 +83,6 @@ describe("get_state", () => {
 			cwd: "/spawn",
 			autoRetryEnabled: true,
 			thinkingConfigured: "high",
-			planModeEnabled: false,
 			prewalkArmed: false,
 			agentsPaused: false,
 		});

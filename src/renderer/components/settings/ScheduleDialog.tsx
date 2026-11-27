@@ -207,7 +207,7 @@ export function ScheduleDialog({
 	const days = weekdayNames();
 	// A schedule aimed at a bot (Orca's AutomationBotTargetFields, FK-A16): it wakes the bot's home chat in its folder.
 	const botsAvailable = useBotsAvailable();
-	const bots = useBotsStore(state => state.state.bots).filter(bot => bot.home);
+	const bots = useBotsStore(state => state.state.bots).filter(bot => bot.home && !bot.device);
 	useEffect(() => {
 		if (botsAvailable) ensureBots();
 	}, [botsAvailable]);

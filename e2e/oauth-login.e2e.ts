@@ -127,7 +127,7 @@ async function finishInBrowser(launchUrl: string, query: Record<string, string>)
 for (const first of ["subscription", "key"] as const) {
 	test(`Claude accounts survive relaunch: ${first} first`, async () => {
 		test.setTimeout(120_000);
-		const { app, page, record, root, reopen } = await launch("en", "light", true);
+		const { app, page, record, root, reopen } = await launch("ko", "light", true);
 		let running: ElectronApplication | null = app;
 		const settings = page.locator("[data-settings-page]");
 		const firstRun = page.locator('[data-first-run-step="connect"]');
@@ -162,11 +162,11 @@ for (const first of ["subscription", "key"] as const) {
 						? firstRun.locator('[data-provider-connect="anthropic"]')
 						: settings.locator(`[data-provider-add="${first === "key" ? keyId : "anthropic"}"]`);
 				await enter.click();
-				const subscription = chooser.getByRole("button", { name: tr("en", "providers.featured.subscription") });
-				const key = chooser.getByRole("button", { name: tr("en", "providers.featured.apiKey") });
+				const subscription = chooser.getByRole("button", { name: tr("ko", "providers.featured.subscription") });
+				const key = chooser.getByRole("button", { name: tr("ko", "providers.featured.apiKey") });
 				await expect(subscription).toBeVisible();
 				await expect(key).toBeVisible();
-				await chooser.getByRole("button", { name: "Cancel", exact: true }).click();
+				await chooser.getByRole("button", { name: tr("ko", "common.cancel"), exact: true }).click();
 				await expect(enter).toBeVisible();
 				expect(await loginIds()).toHaveLength(subscriptions);
 				expect(await opened()).toBe(subscriptions);
@@ -180,14 +180,32 @@ for (const first of ["subscription", "key"] as const) {
 					await expect(page.locator("[data-login-progress]")).toHaveCount(0);
 				} else {
 					await key.click();
-					const form = page.getByRole("form").filter({ has: page.getByLabel("API key", { exact: true }) });
-					const input = form.getByLabel("API key", { exact: true });
+					const form = page.getByRole("dialog", { name: tr("ko", "providers.claude.keyTitle") });
+					const input = form.getByLabel(tr("ko", "providerCfg.form.apiKey"), { exact: true });
+					await expect(form.locator("input")).toHaveCount(1);
 					await expect(input).toHaveAttribute("type", "password");
+					await expect(input).toBeFocused();
 					await input.fill(dummy);
+					await page.keyboard.press("Escape");
+					await expect(enter).toBeFocused();
 					expect(await saved(page)).toEqual([]);
-					await form.getByRole("button", { name: tr("en", "providerCfg.form.save"), exact: true }).click();
+					await enter.click();
+					await key.click();
+					await expect(input).toHaveValue("");
+					await input.fill(dummy);
+					await test.info().attach(`ko-${index === 0 ? "onboarding" : "settings"}-claude-key.png`, {
+						body: await page.screenshot(),
+						contentType: "image/png",
+					});
+					if (index === 0) await input.press("Enter");
+					else
+						await form.getByRole("button", { name: tr("ko", "providers.featured.connect"), exact: true }).click();
 					await expect.poll(() => saved(page)).toEqual(expected);
 					await expect(form).toHaveCount(0);
+					if (index === 0) {
+						const model = page.locator('[data-first-run-step="model"]');
+						await model.getByRole("button", { name: tr("ko", "setup.model.use"), exact: true }).click();
+					}
 					expect(await loginIds()).toHaveLength(subscriptions);
 					expect(await opened()).toBe(subscriptions);
 				}

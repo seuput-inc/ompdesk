@@ -3,10 +3,10 @@
  * ./pstack.ts, the static texts in ./pstack-text.ts (generated from the built-in pack), the pack itself is
  * `resources/omp-builtin/pstack/`.
  *
- * Off (no text) for: the switch off or a project-less chat session (main sets `OMP_GUI_PSTACK=0`), every subagent
- * (they get the `pstack-agent` wrapper), and Plan mode (read-only planning). Autopilot sessions get the condensed
- * section instead: its protocol and HARD LIMITS outrank the playbooks. A session without the `task` tool (Solo
- * delegation) gets the variant whose delegation paragraph says to do the work itself.
+ * Off (no text) for: the switch off or a project-less chat session (main sets `OMP_GUI_PSTACK=0`) and every subagent
+ * (they get the `pstack-agent` wrapper). Autopilot sessions get the condensed section instead: its protocol and HARD
+ * LIMITS outrank the playbooks. A session without the `task` tool (Solo delegation) gets the variant whose delegation
+ * paragraph says to do the work itself.
  *
  * No omp imports (not even types): the GUI's vitest loads this file directly.
  */
@@ -22,7 +22,6 @@ export interface PstackGate {
 	enabled: boolean;
 	/** `ctx.agent.kind`: `main` or a subagent. */
 	kind: string;
-	planMode: boolean;
 	/** The branch journals a running or stopping Autopilot run (parent or child). */
 	autopilot: boolean;
 	/** The `task` tool is not available to this session. */
@@ -35,7 +34,6 @@ export type PstackVariant = "full" | "solo" | "autopilot";
 export function pstackVariant(gate: PstackGate): PstackVariant | undefined {
 	if (!gate.enabled || gate.kind !== "main") return undefined;
 	if (gate.autopilot) return "autopilot";
-	if (gate.planMode) return undefined;
 	return gate.solo ? "solo" : "full";
 }
 
@@ -52,7 +50,6 @@ export function pstackText(variant: PstackVariant | undefined): string | undefin
 
 /** The slice of the main session the gate reads. */
 interface PstackSession {
-	getPlanModeState(): { enabled?: boolean } | undefined;
 	getActiveToolNames(): readonly string[];
 }
 
@@ -73,7 +70,6 @@ export function install(pi: PstackHost): void {
 			pstackVariant({
 				enabled: true,
 				kind: ctx.agent.kind,
-				planMode: Boolean(session?.getPlanModeState()?.enabled),
 				autopilot: autopilotRunning(ctx.sessionManager.getBranch()),
 				solo: session ? !session.getActiveToolNames().includes("task") : false,
 			}),

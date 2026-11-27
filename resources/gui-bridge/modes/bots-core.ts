@@ -3,10 +3,11 @@
  * is a bot, and the per-turn note of what changed (after Orca's bot preamble and turn context notes, re-implemented).
  * No omp imports: the GUI's vitest loads it directly.
  */
-import { AGENT_MESSAGE_START } from "../agent-control-contracts";
+import { AGENT_MESSAGE_START, MAIL_CUSTOM_TYPE } from "../agent-control-contracts";
 import {
 	BOT_ENTRY,
 	BOT_NOTE_TYPE,
+	type BotChatFacts,
 	type BotContext,
 	type BotItemBrief,
 	OWNER_REMINDER_EVERY,
@@ -75,7 +76,7 @@ export function parseBotContext(params: unknown): BotContext | null {
 	if (!id || !name || !folder) return null;
 	const live = field(params, "live");
 	return {
-		bot: { id, name, folder, paused: field(bot, "paused") === true },
+		bot: { id, name, folder, paused: field(bot, "paused") === true, firstRun: field(bot, "firstRun") === true },
 		items: briefs(field(params, "items")),
 		needsYou: briefs(field(params, "needsYou")),
 		live: Array.isArray(live) ? live.map(line).filter(Boolean).slice(0, LIST_MAX) : [],
@@ -99,18 +100,28 @@ export function sameBot(kept: BotContext | undefined, next: BotContext): boolean
 }
 
 /**
- * The prompt section: who the bot is and how it works. It reads only the name, the folder and `SOUL.md` (null while
- * the file does not exist: the first-run rules instead), so it stays the same text turn after turn and the prompt
- * cache holds; what changes every turn goes in the note.
+ * Orca's first-run rules (`bot-preamble.ts:94-102`), in the home chat of a bot in its first run: OMPdesk's kickoff
+ * gets a greeting and one question, the owner's first task one small real piece of work shown, then SOUL.md.
+ */
+const FIRST_RUN_RULES = [
+	"First run (until the owner's first message in this chat is handled; then these rules no longer apply):",
+	'- When OMPdesk tells you that you were just created, run no commands and read nothing. Reply with one short sentence: a greeting that ends with your one first question, e.g. "Hi! What should I start on?" in your own words for your job. Don\'t restate your name or what you are for; nothing else: no list of what you can do, no ideas, no choices.',
+	"- When OMPdesk's first message gives you setup steps (bringing over a bot from another app, a template), that is your setup: follow it instead of greeting.",
+	"- When the owner answers, work from what they said. If you can't tell where to look (which project or folder), ask that one question. Otherwise look only at what the answer needs, do one small real piece of the work now, and show the result in a few lines.",
+	'- Then write SOUL.md in your folder from what you know: what you are for in one sentence first (keep what it already says), then "## How I work" with where you look and where you report. Keep any "## Never" section as it is. Tell the owner in one line what you saved and that they can change it by telling you.',
+	"- Don't ask how to check in or what is off-limits, and don't give a tour.",
+].join("\n");
+
+/**
+ * The prompt section: who the bot is and how it works. It reads only the name, the folder, its first run and
+ * `SOUL.md`, so it stays the same text turn after turn and the prompt cache holds; what changes every turn goes in the
+ * note. The first-run rules ride while the core says the first run lasts (`firstRun`), whether or not SOUL.md exists:
+ * a bot made with a purpose has one from the start.
  */
 export function botSection(bot: BotContext["bot"], soul: string | null): string {
 	const who = soul?.trim()
 		? `Who you are, in your own words (${"SOUL.md"} in your folder; change it when the owner changes what you are for):\n${soul.trim().slice(0, SOUL_MAX)}`
-		: [
-				"This is your first run: there is no SOUL.md in your folder yet.",
-				"- Learn from the owner who you should be and what you work on: ask, briefly, and listen.",
-				"- Then write SOUL.md in your folder: your name, what you are for, how you work, what you must never do. Keep it short; it is read before every turn.",
-			].join("\n");
+		: 'There is no SOUL.md in your folder yet: write it once you know what you are for (one sentence first, then "## How I work"). Keep it short; it is read before every turn.';
 	return `<ompdesk-bot>
 You are the bot "${bot.name}", working for the owner from the folder ${bot.folder}. This session is one of your chats.
 - Keep what you work on as items with ompdesk_item: add one for each piece of work, keep its status true (planned, working, waiting, needs_you, done, canceled), close it with a note when done.
@@ -120,7 +131,7 @@ You are the bot "${bot.name}", working for the owner from the folder ${bot.folde
 - Talk with other sessions in a room with ompdesk_room when one is named.
 - Keep each fact you must remember as one list line in MEMORY.md in your folder, edited with your file tools (forget a fact by deleting its line); read MEMORY.md when a turn needs it.
 - When a turn has nothing worth saying to the owner (a routine run, a look around that found nothing), end your answer with a last line NO_REPLY.
-${who}
+${who}${bot.firstRun ? `\n${FIRST_RUN_RULES}` : ""}
 </ompdesk-bot>`;
 }
 
@@ -182,6 +193,25 @@ function ownerTurns(branch: readonly unknown[]): number {
 		}
 	}
 	return count;
+}
+
+/** What the branch says for the core's first run (`BotChatFacts`); `kickoff` names the newest kickoff's mail id. */
+export function chatFacts(branch: readonly unknown[], kickoff: string | undefined, streaming: boolean): BotChatFacts {
+	let state: BotChatFacts["kickoff"] = "none";
+	for (const entry of branch) {
+		if (
+			kickoff &&
+			field(entry, "type") === "custom_message" &&
+			field(entry, "customType") === MAIL_CUSTOM_TYPE &&
+			field(field(entry, "details"), "id") === kickoff
+		)
+			state = "queued";
+		const message = field(entry, "message");
+		// An answer with no words (one that only called tools, or failed) is silent.
+		if (state !== "none" && field(entry, "type") === "message" && field(message, "role") === "assistant")
+			state = state === "spoke" || text(field(message, "content")).trim() ? "spoke" : "silent";
+	}
+	return { ownerTurns: ownerTurns(branch), streaming, kickoff: state };
 }
 
 export const OWNER_REMINDER = "Put any question still waiting for the owner on an item (ompdesk_item set with ask).";

@@ -1,4 +1,4 @@
-//! Workspace files for the Files panel, the file viewer, plan mode and a paired device's tabs (was
+//! Workspace files for the Files panel, the file viewer and a paired device's tabs (was
 //! `src/main/workspace-fs.ts`). Main parses each call's arguments and resolves its paths with node's `path` rules
 //! (`resolveWithin` confinement, `~` expansion), then hands absolute paths here; this side does the disk work and
 //! every rule after it: the walk with its ignore rules, caps and name order, text decoding, the size caps, the
@@ -55,9 +55,6 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("fs.readImage", |call| {
         Box::pin(blocking(move || read::read_image(&call.params()?)))
-    });
-    registry.add("fs.readPlan", |call| {
-        Box::pin(blocking(move || read::read_plan(&call.params()?)))
     });
     registry.add("fs.resolveMedia", |call| {
         Box::pin(blocking(move || read::resolve_media(&call.params()?)))

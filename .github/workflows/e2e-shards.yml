@@ -91,7 +91,7 @@ jobs:
           fi
           test -s "$list"
           bunx playwright test --global-timeout=2100000 --test-list "$list"
-      - if: failure() || cancelled() || inputs.specs == 'e2e/bot-face-upgrade.e2e.ts'
+      - if: failure() || cancelled() || inputs.specs == 'e2e/bot-face-upgrade.e2e.ts' || inputs.specs == 'e2e/oauth-login.e2e.ts'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-windows-shard-${{ matrix.shard }}

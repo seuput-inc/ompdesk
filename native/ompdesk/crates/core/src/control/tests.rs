@@ -30,19 +30,18 @@ pub fn state_of(value: &Value) -> SessionState {
 
 #[test]
 fn resolved_and_watched_states_match_the_control_backend() {
-    for (status, busy, resuming, ask, plan, expected) in [
-        ("ready", false, false, false, false, "idle"),
-        ("asleep", false, false, false, false, "idle"),
-        ("running", false, false, false, false, "idle"),
-        ("ready", true, false, false, false, "working"),
-        ("ready", false, true, false, false, "working"),
-        ("starting", true, false, false, false, "starting"),
-        ("restarting", false, false, false, false, "starting"),
-        ("waiting", false, true, false, false, "starting"),
-        ("error", true, false, false, false, "stopped"),
-        ("exited", false, true, false, false, "stopped"),
-        ("error", true, false, true, false, "blocked"),
-        ("starting", false, true, false, true, "blocked"),
+    for (status, busy, resuming, ask, expected) in [
+        ("ready", false, false, false, "idle"),
+        ("asleep", false, false, false, "idle"),
+        ("running", false, false, false, "idle"),
+        ("ready", true, false, false, "working"),
+        ("ready", false, true, false, "working"),
+        ("starting", true, false, false, "starting"),
+        ("restarting", false, false, false, "starting"),
+        ("waiting", false, true, false, "starting"),
+        ("error", true, false, false, "stopped"),
+        ("exited", false, true, false, "stopped"),
+        ("error", true, false, true, "blocked"),
     ] {
         let answer = json!({"session":"t", "title":"task title", "state":expected});
         let mut raw = json!({
@@ -51,14 +50,11 @@ fn resolved_and_watched_states_match_the_control_backend() {
         if ask {
             raw["asks"] = json!([{"id":"q", "request":{"title":"private question"}}]);
         }
-        if plan {
-            raw["plan"] = json!({"planFilePath":"private path"});
-        }
         let tab: super::ControlTab = serde_json::from_value(raw).unwrap();
         assert_eq!(json!(View::from(tab)), answer);
         let mut facts = json!({
             "tabId":"t", "title":"task title", "status":status, "busy":busy, "resuming":resuming,
-            "hasAsk":ask, "hasPlan":plan, "hidden":false
+            "hasAsk":ask, "hidden":false
         });
         let snapshot = |raw| {
             serde_json::from_value::<TabSnapshot>(raw)

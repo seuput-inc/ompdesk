@@ -20,7 +20,7 @@ import {
 } from "../../resources/gui-bridge/modes/pstack-text";
 import type { JournalEntry, PromptSectionContext } from "../../resources/gui-bridge/prompt-sections";
 
-const ON: PstackGate = { enabled: true, kind: "main", planMode: false, autopilot: false, solo: false };
+const ON: PstackGate = { enabled: true, kind: "main", autopilot: false, solo: false };
 
 describe("pstackVariant", () => {
 	it.each([
@@ -28,8 +28,6 @@ describe("pstackVariant", () => {
 		["a main agent without the task tool (Solo)", { ...ON, solo: true }, "solo"],
 		["Autopilot (the condensed section)", { ...ON, autopilot: true }, "autopilot"],
 		["Autopilot with delegation off", { ...ON, autopilot: true, solo: true }, "autopilot"],
-		["Plan mode", { ...ON, planMode: true }, undefined],
-		["Plan mode without delegation", { ...ON, planMode: true, solo: true }, undefined],
 		["a subagent", { ...ON, kind: "sub" }, undefined],
 		["a subagent of an Autopilot run", { ...ON, kind: "sub", autopilot: true }, undefined],
 		["the switch off", { ...ON, enabled: false }, undefined],
@@ -94,7 +92,6 @@ function context(kind: string, entries: JournalEntry[] = []): PromptSectionConte
 }
 
 interface FakeSession {
-	planMode: boolean;
 	tools: string[];
 }
 
@@ -117,7 +114,6 @@ function fakeHost(session: FakeSession | undefined): {
 						session
 							? {
 									session: {
-										getPlanModeState: () => ({ enabled: session.planMode }),
 										getActiveToolNames: () => session.tools,
 									},
 								}
@@ -143,26 +139,25 @@ describe("install", () => {
 	const tools = ["read", "task", "todo"];
 
 	it("appends the full section to a Code session's main agent, once", () => {
-		const { run } = fakeHost({ planMode: false, tools });
+		const { run } = fakeHost({ tools });
 		expect(run(context("main"))).toEqual(["base", PSTACK_SECTION]);
 	});
 
 	it("gives the Solo variant when the task tool is absent", () => {
-		const { run } = fakeHost({ planMode: false, tools: ["read", "todo"] });
+		const { run } = fakeHost({ tools: ["read", "todo"] });
 		expect(run(context("main"))).toEqual(["base", PSTACK_SECTION_SOLO]);
 	});
 
-	it("leaves Plan mode, a subagent and a switched-off session alone", () => {
-		expect(fakeHost({ planMode: true, tools }).run(context("main"))).toEqual(["base"]);
-		expect(fakeHost({ planMode: false, tools }).run(context("sub"))).toEqual(["base"]);
+	it("leaves a subagent and a switched-off session alone", () => {
+		expect(fakeHost({ tools }).run(context("sub"))).toEqual(["base"]);
 		process.env[PSTACK_ENV] = "0";
-		expect(fakeHost({ planMode: false, tools }).run(context("main"))).toEqual(["base"]);
+		expect(fakeHost({ tools }).run(context("main"))).toEqual(["base"]);
 		delete process.env[PSTACK_ENV];
-		expect(fakeHost({ planMode: false, tools }).run(context("main"))).toEqual(["base"]);
+		expect(fakeHost({ tools }).run(context("main"))).toEqual(["base"]);
 	});
 
 	it("swaps in the condensed section while an Autopilot run is running or stopping, not after it ended", () => {
-		const { run } = fakeHost({ planMode: false, tools });
+		const { run } = fakeHost({ tools });
 		const state = (value: string): JournalEntry => ({
 			type: "custom",
 			customType: AUTOPILOT_STATE_ENTRY,
@@ -174,9 +169,9 @@ describe("install", () => {
 	});
 
 	it("does not duplicate a section a prompt already carries", () => {
-		const { host } = fakeHost({ planMode: false, tools });
+		const { host } = fakeHost({ tools });
 		expect(host).toBeDefined();
-		const { run } = fakeHost({ planMode: false, tools });
+		const { run } = fakeHost({ tools });
 		const once = run(context("main"));
 		expect(once.filter(part => part === PSTACK_SECTION)).toHaveLength(1);
 	});

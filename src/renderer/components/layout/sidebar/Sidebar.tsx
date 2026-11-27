@@ -217,6 +217,10 @@ interface WorkspaceGroup extends RowGroup {
 const SidebarCloneDialog = lazy(() => import("./SidebarCloneDialog"));
 /** A project header's Move to group, Rename group and Appearance dialogs, on first use. */
 const ProjectDialog = lazy(() => import("./ProjectDialogs"));
+/** A paired host's bot's chats under its row (the host's session list), once a row of one unfolds. */
+const RemoteBotChats = lazy(() =>
+	import("../../bots/RemoteBotChats").then(module => ({ default: module.RemoteBotChats })),
+);
 
 /** A delete the row or context menu queued, awaiting the confirmation dialog. */
 type PendingDelete =
@@ -947,8 +951,11 @@ export function Sidebar() {
 		[projectName, groupAliases],
 	);
 	const allGroups = useMemo(() => rows.allGroups.map(named), [rows, named]);
-	// A bot's folder is no project: its chats list under the bot in the Bots section.
-	const botFolders = useMemo(() => new Set(botsShown ? bots.map(bot => bot.folder) : []), [botsShown, bots]);
+	// A bot's folder on this computer is no project: its chats list under the bot in the Bots section.
+	const botFolders = useMemo(
+		() => new Set(botsShown ? bots.filter(bot => !bot.device).map(bot => bot.folder) : []),
+		[botsShown, bots],
+	);
 	const groups = useMemo(
 		() => rows.groups.filter(group => !botFolders.has(group.cwd)).map(named),
 		[rows, named, botFolders],
@@ -2611,13 +2618,16 @@ export function Sidebar() {
 	};
 
 	// The Bots section's rows: each bot with what its chats' rows say (`botFacts`) and those rows; a filter keeps a bot
-	// its name or purpose matches (all its chats) or whose chats match (only those).
+	// its name or purpose matches (all its chats) or whose chats match (only those). A paired host's bot folds its chats
+	// (the host's sessions in its folder, which the host's section leaves out of its projects) under its row.
 	const botEntries: SidebarBotEntry[] = botsShown
 		? bots.flatMap(bot => {
-				const all = rows.allGroups.find(group => group.cwd === bot.folder)?.sessions ?? [];
+				const chatsOf = (groups: typeof rows.groups) =>
+					bot.device ? [] : (groups.find(group => group.cwd === bot.folder)?.sessions ?? []);
+				const all = chatsOf(rows.allGroups);
 				const byName = !query || botMatches(bot, query);
-				const shown = byName ? all : (rows.groups.find(group => group.cwd === bot.folder)?.sessions ?? []);
-				if (!byName && shown.length === 0) return [];
+				const shown = byName ? all : chatsOf(rows.groups);
+				if (!byName && (bot.device || shown.length === 0)) return [];
 				let current = false;
 				const chats: BotChatFacts[] = all.map(session => {
 					const state = sessionRowState(session);
@@ -2641,8 +2651,14 @@ export function Sidebar() {
 					{
 						bot,
 						facts: botFacts(bot, chats, needing),
-						chats: shown.map(session => renderSessionRow(session, true)),
-						chatCount: shown.length,
+						chats: bot.device ? (
+							<Suspense fallback={null}>
+								<RemoteBotChats bot={bot} />
+							</Suspense>
+						) : (
+							shown.map(session => renderSessionRow(session, true))
+						),
+						chatCount: bot.device ? bot.sessions.length : shown.length,
 						current,
 					},
 				];

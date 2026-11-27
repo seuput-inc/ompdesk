@@ -113,7 +113,7 @@ let autoInstallOn = false;
 /** What a click on "Restart & install" asks fresh: the running work the confirm names. */
 const background = { work: NO_BACKGROUND_WORK as BackgroundWork };
 /** The cards the probe reports open on this computer's tabs. */
-const holds = { asking: false, planWaiting: false };
+const holds = { asking: false };
 let updater: Updater;
 let registry: IpcRegistry;
 
@@ -186,7 +186,6 @@ beforeEach(async () => {
 		resumes: () => true,
 		busy: () => false,
 		asking: () => holds.asking,
-		planWaiting: () => holds.planWaiting,
 		compacting: () => false,
 		opening: () => false,
 		backgroundWork: async () => background.work,
@@ -204,7 +203,6 @@ let deliver = true;
 afterEach(() => {
 	autoInstallOn = false;
 	holds.asking = false;
-	holds.planWaiting = false;
 	mocks.idleSeconds = 0;
 	vi.useRealTimers();
 });
@@ -446,18 +444,6 @@ describe("The automatic install and an open card", () => {
 		await updater.appAutoUpdatePrefChanged();
 		expect(schedulerEvents()).toEqual(["waiting:open ask", "unattended", "countdown", "install"]);
 		expect(restarts()).toBe(1);
-	});
-
-	it("keeps waiting for a plan proposal however long nobody is there: the relaunch would lose it", async () => {
-		autoInstallOn = true;
-		holds.asking = true;
-		holds.planWaiting = true;
-		mocks.idleSeconds = 24 * 60 * 60;
-		await updater.appAutoUpdatePrefChanged();
-		vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1000);
-		await updater.appAutoUpdatePrefChanged();
-		expect(schedulerEvents()).toEqual(["waiting:open ask"]);
-		expect(restarts()).toBe(0);
 	});
 });
 

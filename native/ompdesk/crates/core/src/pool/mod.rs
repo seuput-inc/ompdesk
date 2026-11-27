@@ -206,7 +206,6 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
         "immediate" => later(async move { done(ctx.immediate(&p.s("tab")?, &p.s("kind")?).await) }),
         "size" => now(Value::from(ctx.with(|pool| pool.entries.len()))),
         "tabFacts" => now(ctx.tab_facts(&p.s("tab").unwrap_or_default())),
-        "pendingPlan" => now(ctx.pending_plan(&p.s("tab").unwrap_or_default())),
         "tabSeen" => {
             ctx.tab_seen(&p.s("tab").unwrap_or_default());
             now(Value::Null)
@@ -220,6 +219,26 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
             &p.s("tab").unwrap_or_default(),
             &p.s("id").unwrap_or_default(),
         )),
+        "delegatedPrompt" => {
+            ctx.delegated_prompt(
+                &p.s("tab").unwrap_or_default(),
+                p.s("text").unwrap_or_default(),
+                p.0["revoke"].as_bool() == Some(true),
+            );
+            now(Value::Null)
+        }
+        // Where agentctl sent a question of a run another session started (`Ctx::route_ask`).
+        "routeAsk" => later(async move {
+            Ok(Value::from(
+                ctx.route_ask(
+                    &p.s("tab")?,
+                    &p.s("id")?,
+                    p.os("chat"),
+                    p.0["escalate"].as_bool() == Some(true),
+                )
+                .await?,
+            ))
+        }),
         "releaseRequest" => {
             ctx.release_request(
                 &p.s("id").unwrap_or_default(),
@@ -235,34 +254,6 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
                 p.oi("claim").and_then(|c| u64::try_from(c).ok()),
             )
             .map(|()| Value::Null),
-        ),
-        "claimPlan" => now(ctx.claim_plan(
-            &p.s("tab").unwrap_or_default(),
-            &p.s("file").unwrap_or_default(),
-            p.oi("generation")
-                .and_then(|c| u64::try_from(c).ok())
-                .unwrap_or(0),
-        )),
-        "planStillClaimed" => now(Value::from(
-            ctx.plan_still_claimed(
-                &p.s("tab").unwrap_or_default(),
-                p.oi("claim")
-                    .and_then(|c| u64::try_from(c).ok())
-                    .unwrap_or(0),
-            ),
-        )),
-        "releasePlan" => {
-            ctx.release_plan(
-                &p.s("tab").unwrap_or_default(),
-                p.oi("claim")
-                    .and_then(|c| u64::try_from(c).ok())
-                    .unwrap_or(0),
-            );
-            Outcome::done()
-        }
-        "guardPlan" => Outcome::Now(
-            ctx.guard_plan(&p.s("tab").unwrap_or_default(), p.b("own"))
-                .map(|()| Value::Null),
         ),
         "restartHolds" => now(ctx.restart_holds()),
         "runningBridges" => later(async move { ctx.running_bridges().await }),

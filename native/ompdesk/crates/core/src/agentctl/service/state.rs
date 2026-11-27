@@ -85,18 +85,6 @@ impl AgentControl {
                 one_line(&ask_title(&ask.request), 120)
             );
         }
-        if let Some(plan) = &tab.plan {
-            let title = if plan.title.is_empty() {
-                "plan"
-            } else {
-                plan.title.as_str()
-            };
-            return format!(
-                "waiting for plan approval: \"{}\" ({})",
-                one_line(title, 120),
-                plan.plan_file_path
-            );
-        }
         match tab.status {
             TabStatus::Asleep => {
                 return match tab.host_work() {

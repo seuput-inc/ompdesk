@@ -1,4 +1,4 @@
-/** The session tree and the plan document the view sheets (Session tree, Plan) show in the dev harness. */
+/** The session tree the Session tree view sheet shows in the dev harness. */
 import type { SessionTreeEntry, SessionTreeResult } from "../components/panels/session-tree-layout";
 
 const NOW = Date.now();
@@ -28,27 +28,3 @@ const TREE: SessionTreeEntry[] = STEPS.map(([role, text], index) => ({
 }));
 
 export const SESSION_TREE: SessionTreeResult = { tree: TREE, activeLeafId: "e5" };
-
-export const PLAN_FILE_PATH = "/Users/dev/projects/ompdesk/.omp/plans/fix-flaky-sidebar.md";
-
-export const PLAN_MARKDOWN = [
-	"# Fix the flaky sidebar test",
-	"",
-	"## Steps",
-	"",
-	"1. Reproduce the flake with `--repeat 10`",
-	"2. Wait for the row to mount before asserting",
-	"3. Run the suite ten times",
-	"",
-	"## Risks",
-	"",
-	"- The settings page has the same race",
-	"- A fake clock hides real paint timing",
-	"",
-	"| Step | Owner | State |",
-	"| --- | --- | --- |",
-	"| Reproduce | agent | done |",
-	"| Fix | agent | doing |",
-	"| Verify | agent | todo |",
-	"",
-].join("\n");

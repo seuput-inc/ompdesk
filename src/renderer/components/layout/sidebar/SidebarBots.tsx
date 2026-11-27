@@ -50,6 +50,7 @@ import { useUiStore } from "../../../stores/ui";
 import { BotAvatar, type BotMark } from "../../bots/BotAvatar";
 import { BotHoverCard } from "../../bots/BotHoverCard";
 import { BotLineText } from "../../bots/BotLineText";
+import { BotOwner, useOfflineBotHosts } from "../../bots/BotOwner";
 import { openBotDialog, openBotHome } from "../../bots/bot-launch";
 import { openBotPage, openRoomPage } from "../../bots/bot-page";
 import { type BotFacts, foldedFaces, sortBots } from "../../bots/bot-view";
@@ -99,6 +100,8 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 	const total = useBotsStore(s => s.state.bots.length);
 	const allBots = useBotsStore(s => s.state.bots);
 	const rooms = useBotsStore(s => s.state.rooms ?? NO_ROOMS);
+	// A paired host's bot whose host stays offline reads greyed (its owner label says "offline").
+	const lost = useOfflineBotHosts();
 	const [renaming, setRenaming] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
 	const [menu, setMenu] = useState<{ x: number; y: number; bot: Bot } | null>(null);
@@ -349,11 +352,12 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 					/>
 				</div>
 			);
+		const offline = bot.device !== undefined && lost.has(bot.device);
 		return (
 			<div data-bot-entry={bot.id} data-flip-key={key} key={bot.id}>
 				<HoverCard content={<BotHoverCard bot={bot} facts={fact} />}>
 					<div
-						className={cx("omp-sidebar-bot", bot.paused && "opacity-60")}
+						className={cx("omp-sidebar-bot", (bot.paused || offline) && "opacity-60")}
 						data-bot-paused={bot.paused ? "" : undefined}
 						onContextMenu={event => {
 							event.preventDefault();
@@ -394,7 +398,16 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 							onClick={() => openBotHome(bot)}
 							secondary={<BotLineText bot={bot} line={fact.line} />}
 							selected={entry.current}
-							title={<span className={cx(fact.unread && "font-semibold")}>{bot.name}</span>}
+							title={
+								bot.device ? (
+									<span className="flex min-w-0 items-baseline gap-1.5">
+										<span className={cx("truncate", fact.unread && "font-semibold")}>{bot.name}</span>
+										<BotOwner device={bot.device} />
+									</span>
+								) : (
+									<span className={cx(fact.unread && "font-semibold")}>{bot.name}</span>
+								)
+							}
 							trailing={
 								entry.chatCount > 0 ? (
 									<IconButton

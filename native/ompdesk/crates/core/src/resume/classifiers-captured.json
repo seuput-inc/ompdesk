@@ -1223,6 +1223,60 @@
 		"retryAfter": null
 	},
 	{
+		"message": "429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Too many requests per minute\"}} retry-after-ms=2000",
+		"network": false,
+		"transient": false,
+		"limit": true,
+		"billing": false,
+		"host": null,
+		"retryAfter": 2000
+	},
+	{
+		"message": "429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"You have reached your API usage limits: your organization has crossed its monthly API usage threshold.\",\"details\":{\"error_code\":\"enforced_spend_limit_reached\"}}}",
+		"network": false,
+		"transient": false,
+		"limit": false,
+		"billing": true,
+		"host": null,
+		"retryAfter": null
+	},
+	{
+		"message": "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"You have reached your specified API usage limits.\"}}",
+		"network": false,
+		"transient": false,
+		"limit": false,
+		"billing": true,
+		"host": null,
+		"retryAfter": null
+	},
+	{
+		"message": "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"You have reached your specified workspace API usage limits.\"}}",
+		"network": false,
+		"transient": false,
+		"limit": false,
+		"billing": true,
+		"host": null,
+		"retryAfter": null
+	},
+	{
+		"message": "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.\"}}",
+		"network": false,
+		"transient": false,
+		"limit": false,
+		"billing": true,
+		"host": null,
+		"retryAfter": null
+	},
+	{
+		"message": "529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}",
+		"network": false,
+		"transient": true,
+		"limit": false,
+		"billing": false,
+		"host": null,
+		"retryAfter": null
+	},
+	{
 		"message": "The model refused",
 		"network": false,
 		"transient": false,

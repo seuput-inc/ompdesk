@@ -2,7 +2,7 @@
 //!
 //! Owns these TypeScript methods: `#send` (2574), `#untilDraftSent` (2606), `#deliverSend` (2623), `#handSend`
 //! (2649), `#owedDeps` and `redeliverSends` (2765-2798), `#journalMarks` (2800), `#turnStarts` (2809),
-//! `#reportFields` (2824), `#report` (2839), `#answer` (3363), `#answerPlan` (3474), the mail
+//! `#reportFields` (2824), `#report` (2839), `#answer` (3363), the mail
 //! side of `childAsked` (1387) and `personTyped` (3739), and the receipts, in-flight sends and `#cardsTold` /
 //! `#nudged` state in `Mem`. `#mailbox` is `self.mailbox`, the send outbox
 //! `self.send_outbox` (`journal::send_outbox::deliver_owed`, `redeliver_sends`, `OwedDeps`).
@@ -26,7 +26,7 @@ use super::resolve::OpenOptions;
 use super::state::SessionState;
 use super::text::{
     JournalMarks, OTHER_OPTION, card_text, cleanup_caller, is_agent_card, journal_marks, label,
-    named, pick_option, response_data, saved_id_of_path, transcript_page, waits, with_dispatch,
+    named, pick_option, saved_id_of_path, transcript_page, waits, with_dispatch,
 };
 use super::types::{
     AnswerArgs, ControlTab, ReportArgs, RpcResponse, SendArgs, StoredSession, UiRequest,
@@ -162,7 +162,9 @@ impl OwedDeps for Owed<'_> {
         // a goal's objective or the prompt. A step the child refuses keeps it queued and tells the opener once.
         let mut steps: Vec<Value> = entry.before.clone();
         if entry.goal {
-            steps.push(json!({ "type": "set_goal", "objective": entry.body }));
+            steps.push(
+                json!({ "type": "set_goal", "objective": entry.body, "message": entry.message }),
+            );
         }
         for command in &steps {
             let deadline = Deadline::Ms(self.ctl.tuning.prompt_ms);
@@ -1195,7 +1197,7 @@ impl AgentControl {
         })
     }
 
-    /// `ompdesk_session_answer` (`#answer`, `#answerPlan`).
+    /// `ompdesk_session_answer` (`#answer`).
     pub(super) async fn answer(
         &self,
         caller: &ControlTab,
@@ -1203,40 +1205,52 @@ impl AgentControl {
         args: &AnswerArgs,
     ) -> R<String> {
         self.refuse_hidden(target, caller)?;
+        // A card routed to a bot: only that bot answers it, by its request id; nothing else in its place.
+        let routed = self.routed_card(caller, target, args)?;
+        if let (Some(ask), Some(true)) = (&routed, args.escalate) {
+            return self.escalate(caller, target, ask).await;
+        }
         let asks: Vec<_> = target
             .asks
             .iter()
-            .filter(|ask| !is_agent_card(ask))
+            .filter(|ask| !is_agent_card(ask) && !self.routed_away(&target.tab_id, &ask.id))
             .collect();
-        if asks.is_empty()
-            && let Some(plan) = &target.plan
-        {
-            return self.answer_plan(caller, target, plan, args).await;
-        }
-        if asks.is_empty() {
-            return fail(if !target.asks.is_empty() {
-                "That is a confirmation card for the user (OMPdesk asks the person before an agent action); only the user answers it.".to_owned()
-            } else {
-                format!(
-                    "{} is not waiting for an answer ({}). See where it is with ompdesk_session_result; only a session ompdesk_sessions lists as waiting can be answered.",
-                    label(target),
-                    self.state_line(&self.host.state(), target, &SessionState::default())
-                )
-            });
-        }
-        let ask = match &args.request {
-            Some(wanted) => asks.iter().find(|entry| &entry.id == wanted).copied(),
-            None => asks.first().copied(),
-        };
-        let Some(ask) = ask else {
-            return fail(format!(
-                "No pending request \"{}\" there. Pending: {}.",
-                args.request.as_deref().unwrap_or(""),
-                asks.iter()
-                    .map(|entry| entry.id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+        let ask = match &routed {
+            Some(ask) => ask,
+            None => {
+                if asks.is_empty() {
+                    let ours = target.asks.iter().all(is_agent_card);
+                    return fail(if target.asks.is_empty() {
+                        format!(
+                            "{} is not waiting for an answer ({}). See where it is with ompdesk_session_result; only a session ompdesk_sessions lists as waiting can be answered.",
+                            label(target),
+                            self.state_line(&self.host.state(), target, &SessionState::default())
+                        )
+                    } else if ours {
+                        "That is a confirmation card for the user (OMPdesk asks the person before an agent action); only the user answers it.".to_owned()
+                    } else {
+                        format!(
+                            "{} waits only on a card raised for a bot's request: that bot answers it.",
+                            label(target)
+                        )
+                    });
+                }
+                let found = match &args.request {
+                    Some(wanted) => asks.iter().find(|entry| &entry.id == wanted).copied(),
+                    None => asks.first().copied(),
+                };
+                let Some(found) = found else {
+                    return fail(format!(
+                        "No pending request \"{}\" there. Pending: {}.",
+                        args.request.as_deref().unwrap_or(""),
+                        asks.iter()
+                            .map(|entry| entry.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                };
+                found
+            }
         };
         let request = &ask.request;
         let resolved = self
@@ -1426,6 +1440,11 @@ impl AgentControl {
                 response =
                     json!({ "type": "extension_ui_response", "id": ask.id, "answers": answers });
             }
+            // A form only the bot it was routed to answers, through the asking session's own form rules.
+            "form" if routed.is_some() => {
+                response = self.form_response(target, ask, args).await?;
+                summary = "the form".to_owned();
+            }
             other => {
                 return fail(format!(
                     "That request ({other}) is not a question an agent can answer: show it to the user with ompdesk_tab_focus."
@@ -1438,7 +1457,7 @@ impl AgentControl {
         {
             told.remove(&ask.id);
         }
-        let about = if request.method == "ask" {
+        let about = if matches!(request.method.as_str(), "ask" | "form") {
             "its questions".to_owned()
         } else {
             request
@@ -1446,20 +1465,31 @@ impl AgentControl {
                 .clone()
                 .unwrap_or_else(|| "undefined".to_owned())
         };
-        match self
+        // The bot's own answer to a card routed to it: its close is not told back to it.
+        if routed.is_some() {
+            self.routed_answered(&target.tab_id, &ask.id, true);
+        }
+        let delivered = match self
             .companion(caller, target, &about, &ask.id, resolved)
-            .await?
+            .await
         {
-            Some(companion) => {
+            Ok(Some(companion)) => {
                 self.host
                     .answer_with_companion(
                         &target.tab_id,
                         json!({ "askId": ask.id, "response": response }),
                         &companion,
                     )
-                    .await?
+                    .await
             }
-            None => self.host.answer(&target.tab_id, &ask.id, &response).await?,
+            Ok(None) => self.host.answer(&target.tab_id, &ask.id, &response).await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = delivered {
+            if routed.is_some() {
+                self.routed_answered(&target.tab_id, &ask.id, false);
+            }
+            return Err(error);
         }
         let by = if caller.title.is_empty() {
             &caller.tab_id
@@ -1497,125 +1527,6 @@ impl AgentControl {
         })
     }
 
-    /// `#answerPlan`: a plan proposal, through the same `plan_approval` command the plan card sends: approve with an
-    /// option, or reject (with `text`, stock's feedback turn). Approving follows the tool-approval rule; rejecting
-    /// always works.
-    async fn answer_plan(
-        &self,
-        caller: &ControlTab,
-        target: &ControlTab,
-        plan: &super::types::TabPlan,
-        args: &AnswerArgs,
-    ) -> R<String> {
-        let resolved = self
-            .resolve_attachments(caller, args.attachments.as_deref())
-            .await?;
-        let approve = args.approve.or_else(|| {
-            args.choice.as_ref().map(|choice| {
-                let lowered = choice.to_lowercase();
-                !["reject", "deny", "no"]
-                    .iter()
-                    .any(|word| lowered.starts_with(word))
-            })
-        });
-        let Some(approve) = approve else {
-            return fail(
-                "Give approve: true (choice execute, compact or keep_context) or approve: false (text = feedback).",
-            );
-        };
-        let name = format!(
-            "\"{}\"",
-            one_line(
-                if plan.title.is_empty() {
-                    "plan"
-                } else {
-                    &plan.title
-                },
-                100
-            )
-        );
-        let feedback = args.text.as_deref().map(trim).filter(|f| !f.is_empty());
-        let (command, summary) = if approve {
-            let option = match args.choice.as_deref() {
-                None | Some("Approve") => "execute",
-                Some(other) => other,
-            };
-            if !matches!(option, "execute" | "compact" | "keep_context") {
-                return fail(format!(
-                    "Plan option \"{option}\": use execute, compact or keep_context."
-                ));
-            }
-            if !self.host.state().approve_enabled {
-                return fail(
-                    "사용자 승인이 필요해요: approving another session's plan needs the user's permission for agents to approve (Settings › Tools & extensions). Tell the user, or show the session with ompdesk_tab_focus. Rejecting with feedback is allowed.",
-                );
-            }
-            (
-                json!({ "type": "plan_approval", "approved": true, "option": option }),
-                format!("approved plan {name} ({option})"),
-            )
-        } else {
-            let command = match feedback {
-                Some(feedback) => {
-                    json!({ "type": "plan_approval", "approved": false, "feedback": feedback })
-                }
-                None => json!({ "type": "plan_approval", "approved": false }),
-            };
-            let summary = if feedback.is_some() {
-                format!("rejected plan {name} with feedback")
-            } else {
-                format!("rejected plan {name}")
-            };
-            (command, summary)
-        };
-        match self
-            .companion(
-                caller,
-                target,
-                if plan.title.is_empty() {
-                    "plan"
-                } else {
-                    &plan.title
-                },
-                &format!("plan:{}", plan.generation.unwrap_or(0)),
-                resolved,
-            )
-            .await?
-        {
-            Some(companion) => {
-                self.host
-                    .answer_with_companion(
-                        &target.tab_id,
-                        json!({ "plan": command, "planFile": plan.plan_file_path, "planGeneration": plan.generation }),
-                        &companion,
-                    )
-                    .await?
-            }
-            None => {
-                let response = self
-                    .host
-                    .command(&target.tab_id, &command, Deadline::Default)
-                    .await?;
-                response_data(&response, "Answering the plan")?;
-            }
-        }
-        let by = if caller.title.is_empty() {
-            &caller.tab_id
-        } else {
-            &caller.title
-        };
-        let _ = self.host.mark_answered(&target.tab_id, by).await;
-        Ok(format!(
-            "Answered {}: {summary}.{}",
-            label(target),
-            if approve || feedback.is_some() {
-                " It continues now."
-            } else {
-                ""
-            }
-        ))
-    }
-
     /// `childAsked`: a child showed a question card (stock `ask`, a select, confirm or text prompt): its opener hears
     /// of it as one question in its session, as a report the child wrote would arrive, so it can answer with
     /// ompdesk_session_answer or ask the user instead of finding the card by polling. Never OMPdesk's own
@@ -1650,7 +1561,7 @@ impl AgentControl {
         let Some(ask) = child.asks.iter().find(|entry| entry.id == request_id) else {
             return Ok(());
         };
-        if is_agent_card(ask) {
+        if is_agent_card(ask) || self.routed_away(child_tab_id, request_id) {
             return Ok(());
         }
         {

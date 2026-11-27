@@ -204,7 +204,6 @@ export function CommandPalette() {
 	const fastModeEnabled = useModelStore(s => s.fastModeEnabled);
 	const autoCompaction = useSettingsStore(s => s.autoCompaction);
 	const autoRetry = useSettingsStore(s => s.autoRetry);
-	const planModeEnabled = useSessionStore(s => s.planModeEnabled);
 	const prewalkArmed = useSessionStore(s => s.prewalkArmed);
 	const sidecarReady = useSessionStore(s => s.status) === "ready";
 
@@ -301,7 +300,6 @@ export function CommandPalette() {
 						fastModeEnabled,
 						autoCompaction,
 						autoRetry,
-						planModeEnabled,
 						prewalkArmed,
 						availableCommands,
 						keymapOverrides,
@@ -324,7 +322,6 @@ export function CommandPalette() {
 			fastModeEnabled,
 			autoCompaction,
 			autoRetry,
-			planModeEnabled,
 			prewalkArmed,
 			availableCommands,
 			tabRpc,

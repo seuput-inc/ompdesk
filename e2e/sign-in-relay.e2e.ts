@@ -61,7 +61,10 @@ test("a host's browser sign-in comes back through this computer's loopback and c
 		await settings.getByRole("button", { name: "Add a provider" }).click();
 		const panel = settings.locator("[data-login-panel]");
 		await settings.locator('button[data-provider-connect="anthropic"]').click();
-		await settings.getByRole("button", { name: en["providers.featured.subscription"], exact: true }).click();
+		await a
+			.getByRole("dialog")
+			.getByRole("button", { name: en["providers.featured.subscription"], exact: true })
+			.click();
 		await expect(panel.locator("[data-login-progress]")).toHaveText(en["providerList.login.waiting"] ?? "", {
 			timeout: 30_000,
 		});

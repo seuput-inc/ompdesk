@@ -225,7 +225,7 @@ class FakeStore {
 /** A session with a method, a getter, an optional getter that is unset, and a nested manager. */
 function fakeSession() {
 	return {
-		setPlanModeState() {},
+		setGoalBudget() {},
 		get asyncJobManager() {
 			return undefined;
 		},
@@ -250,7 +250,7 @@ function sources(overrides: Partial<ProbeSources> = {}): ProbeSources {
 describe("hasPath", () => {
 	it("requires a function for `()` paths and presence otherwise", () => {
 		const session = fakeSession();
-		expect(hasPath(session, "setPlanModeState()")).toBe(true);
+		expect(hasPath(session, "setGoalBudget()")).toBe(true);
 		expect(hasPath(session, "sessionManager.getCwd()")).toBe(true);
 		expect(hasPath(session, "sessionManager")).toBe(true);
 		// An optional getter returning undefined still exists.
@@ -267,7 +267,7 @@ describe("hasPath", () => {
 
 describe("missingFor", () => {
 	const requirement = {
-		session: ["setPlanModeState()", "navigateTree()", "sessionManager.getLeafId()"],
+		session: ["setGoalBudget()", "navigateTree()", "sessionManager.getLeafId()"],
 		pkg: ["VERSION", "AgentRegistry.global()"],
 		modules: {
 			"mod/btw": ["BtwHistoryStore.open()", "BtwHistoryStore.prototype.retry()", "getBtwTurns()"],
@@ -309,14 +309,11 @@ describe("missingFor", () => {
 	});
 
 	it("reports hidden labels as missing even when present", () => {
-		const hidden = parseHidden(" AgentSession.setPlanModeState , mod/btw#getBtwTurns,,");
-		expect([...hidden]).toEqual(["AgentSession.setPlanModeState", "mod/btw#getBtwTurns"]);
+		const hidden = parseHidden(" AgentSession.setGoalBudget , mod/btw#getBtwTurns,,");
+		expect([...hidden]).toEqual(["AgentSession.setGoalBudget", "mod/btw#getBtwTurns"]);
 		expect(
-			missingFor(
-				{ session: ["setPlanModeState()"], modules: { "mod/btw": ["getBtwTurns()"] } },
-				sources({ hidden }),
-			),
-		).toEqual(["AgentSession.setPlanModeState", "mod/btw#getBtwTurns"]);
+			missingFor({ session: ["setGoalBudget()"], modules: { "mod/btw": ["getBtwTurns()"] } }, sources({ hidden })),
+		).toEqual(["AgentSession.setGoalBudget", "mod/btw#getBtwTurns"]);
 	});
 
 	it("checks the bridge's own ExtensionAPI members (contextHookIdle: the handler table behind pi.on)", () => {
@@ -330,13 +327,13 @@ describe("missingFor", () => {
 describe("deriveUnavailable", () => {
 	it("groups missing internals by feature, in the order asked, omitting satisfied features", () => {
 		const requirements = {
-			planMode: { session: ["setPlanModeState()", "getPlanModeState()"] },
+			goalBudget: { session: ["setGoalBudget()", "getGoalModeState()"] },
 			guidedGoal: { modules: { "mod/btw": ["BtwHistoryStore.open()"] } },
 			workspace: { session: ["sessionManager.addWorkspaceDirectory()"] },
 		};
-		expect(deriveUnavailable(["workspace", "guidedGoal", "planMode"], sources(), requirements)).toEqual([
+		expect(deriveUnavailable(["workspace", "guidedGoal", "goalBudget"], sources(), requirements)).toEqual([
 			{ feature: "workspace", missing: ["AgentSession.sessionManager.addWorkspaceDirectory"] },
-			{ feature: "planMode", missing: ["AgentSession.getPlanModeState"] },
+			{ feature: "goalBudget", missing: ["AgentSession.getGoalModeState"] },
 		]);
 	});
 
@@ -395,7 +392,6 @@ describe("one capability per action", () => {
 	it("turns off only the action that uses a missing internal, never its whole area", () => {
 		expect(turnedOffBy("AgentSession.navigateTree")).toEqual(["switchLeaf"]);
 		expect(turnedOffBy("AgentSession.sessionManager.appendLabelChange")).toEqual(["entryLabel"]);
-		expect(turnedOffBy("AgentSession.compact")).toEqual(["planApproval"]);
 		expect(turnedOffBy("AgentSession.goalRuntime.onBudgetMutated")).toEqual(["goalBudget"]);
 		expect(turnedOffBy(`${AGENT}/mcp/config-writer#setMcpServerEnabled`)).toEqual(["mcpToggle"]);
 		expect(
@@ -498,16 +494,16 @@ describe("mergeAreaFailures", () => {
 describe("UnsupportedOmpError / requireFn", () => {
 	it("names the feature and the missing internal under the unsupported_omp code", () => {
 		const error = new UnsupportedOmpError(
-			[{ feature: "planMode", missing: ["AgentSession.setPlanModeState"] }],
+			[{ feature: "goalBudget", missing: ["AgentSession.setGoalBudget"] }],
 			"19.0.0",
 		);
 		expect(error.code).toBe("unsupported_omp");
-		expect(error.message).toContain(`omp 19.0.0: ${FEATURES.planMode} (missing AgentSession.setPlanModeState)`);
+		expect(error.message).toContain(`omp 19.0.0: ${FEATURES.goalBudget} (missing AgentSession.setGoalBudget)`);
 		expect(error.message).toContain("OMPdesk updates omp by itself");
 	});
 
 	it("throws only when the method is absent", () => {
-		expect(() => requireFn(fakeSession(), "setPlanModeState", "planMode")).not.toThrow();
+		expect(() => requireFn(fakeSession(), "setGoalBudget", "goalBudget")).not.toThrow();
 		expect(() => requireFn(fakeSession(), "navigateTree", "switchLeaf")).toThrow(
 			expect.objectContaining({
 				code: "unsupported_omp",

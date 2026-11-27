@@ -2,8 +2,8 @@
  * Opt-in captures of the side panel and the views it no longer holds (`OMP_GUI_PANEL_COMPRESS_SHOTS=<dir>`, optional
  * `OMP_GUI_PANEL_COMPRESS_LABEL=<prefix>`), on the dev harness (`vite.harness.config.ts`) in a wide desktop window ×
  * light/dark × en/ko: the panel with its header (and, where it still has one, the ⋮ View options list open), then
- * each secondary view where it lives: in the panel before, in its sheet (Background tasks, Plan document, Session
- * tree, Logs, Work tree) or its new home (Memory → Settings › Memory) after. Writes `<label>-<view>-<theme>-<lang>.png`.
+ * each secondary view where it lives: in the panel before, in its sheet (Background tasks, Session tree, Logs, Work
+ * tree) or its new home (Memory → Settings › Memory) after. Writes `<label>-<view>-<theme>-<lang>.png`.
  * Behaviour is covered by `ViewSheetHost.test.tsx`, `PanelContainer` cases and `retired-prefs.test.ts`.
  */
 import * as fs from "node:fs/promises";
@@ -31,7 +31,7 @@ async function freePort(): Promise<number> {
 	return promise;
 }
 
-const VIEWS = ["jobs", "plan", "logs", "queue", "tree", "work", "memory"] as const;
+const VIEWS = ["jobs", "logs", "queue", "tree", "work", "memory"] as const;
 
 /** Calls a ui store method; false when this build has no such method. */
 function ui(page: Page, method: string, ...args: unknown[]): Promise<boolean> {
@@ -92,8 +92,7 @@ if (SHOTS) {
 				await close();
 
 				for (const view of VIEWS) {
-					const sheet =
-						view === "jobs" || view === "plan" || view === "logs" || view === "tree" || view === "work";
+					const sheet = view === "jobs" || view === "logs" || view === "tree" || view === "work";
 					if (sheet && (await ui(page, "openViewSheet", view))) {
 						// After: the view in its sheet.
 					} else if (view === "memory" && LABEL !== "before") {

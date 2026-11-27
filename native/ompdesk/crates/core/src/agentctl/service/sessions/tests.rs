@@ -350,6 +350,25 @@ fn child_commands(asked: &Asked, tab_id: &str) -> Vec<Value> {
 }
 
 #[tokio::test]
+async fn a_removed_mode_refuses_the_whole_batch_before_opening_a_tab() {
+    let (control, asked) = rig(7_323, vec![tab("a", "/s/x_1.jsonl")], json!({}), main_of);
+    let outcome = control
+        .run(
+            "a",
+            "ompdesk_session_open",
+            json!({ "sessions": [{"message": "first"}, {"message": "next", "mode": "plan"}] }),
+            None,
+        )
+        .await;
+    assert_eq!(
+        outcome.text,
+        r#"Plan mode was removed from OMPdesk: open the session with mode "goal" (the message becomes its goal) or with no mode (a plain first message)."#
+    );
+    assert!(names(&asked, "spawn").is_empty());
+    control.host.port().close();
+}
+
+#[tokio::test]
 async fn an_open_cut_off_by_a_quit_gives_its_child_the_setup_and_first_message_once_after_the_relaunch()
  {
     // 19 Nov 2026: a child opened during the update's restart countdown came back "not started", untitled and
@@ -367,7 +386,7 @@ async fn an_open_cut_off_by_a_quit_gives_its_child_the_setup_and_first_message_o
         sent_marks: true,
         ..Caps::default()
     };
-    let brief = json!({ "message": "Title: do it\nbody", "folder": "/w", "mode": "plan" });
+    let brief = json!({ "message": "Title: do it\nbody", "folder": "/w" });
 
     // Quit while the first message is on its way: main never answers it, and the core goes with the app.
     let (before, asked_before) = rig_files(
@@ -400,11 +419,7 @@ async fn an_open_cut_off_by_a_quit_gives_its_child_the_setup_and_first_message_o
         .collect();
     assert_eq!(
         sent_before,
-        vec![
-            json!("agent_control_worker"),
-            json!("set_plan_mode"),
-            json!("prompt")
-        ]
+        vec![json!("agent_control_worker"), json!("prompt")]
     );
     before.host.port().close();
     drop(before);
@@ -442,12 +457,11 @@ async fn an_open_cut_off_by_a_quit_gives_its_child_the_setup_and_first_message_o
         kinds,
         vec![
             json!("agent_control_worker"),
-            json!("set_plan_mode"),
             json!("agent_control_aside"),
             json!("prompt")
         ]
     );
-    let message = commands[3]["message"].as_str().unwrap();
+    let message = commands[2]["message"].as_str().unwrap();
     assert!(message.contains("[ompdesk dispatch d1:"), "{message}");
     assert!(message.contains("Title: do it"), "{message}");
 

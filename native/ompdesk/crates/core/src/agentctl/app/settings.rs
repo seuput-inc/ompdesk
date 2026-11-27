@@ -184,7 +184,6 @@ pub static SETTINGS: LazyLock<Vec<Setting>> = LazyLock::new(|| {
         pref("resumeInterrupted", "resumeInterrupted", "general", "Resume interrupted work", "중단된 작업 이어서 하기", boolean()),
         pref("autoPreviewDevServer", "autoPreviewDevServer", "agent", "Open dev servers in the preview", "개발 서버 미리보기 자동 열기", boolean()),
         pref("autoOpenChanges", "autoOpenChanges", "agent", "Open changes after a turn", "턴이 끝나면 변경 사항 열기", boolean()),
-        pref("autoMode", "autoMode", "agent", "Auto mode", "자동 모드", boolean()),
         pref("nextPromptSuggestions", "nextPromptSuggestions", "agent", "Next prompt suggestions", "다음 메시지 제안", boolean()),
         pref("nextPromptInline", "nextPromptInline", "agent", "Inline completion", "이어서 완성", boolean()),
         pref("defaultBrowser", "defaultBrowser", "agent", "Default browser", "기본 브라우저", options(&["auto", "ego", "builtin"])),
@@ -220,7 +219,6 @@ pub static SETTINGS: LazyLock<Vec<Setting>> = LazyLock::new(|| {
         stock("defaultThinkingLevel", "models", "Thinking level", "사고 수준", options(&["auto", "off", "minimal", "low", "medium", "high", "xhigh", "max"])),
         stock("retry.modelFallback", "models", "Use fallback models", "대체 모델 사용", boolean()),
         stock("retry.maxRetries", "agent", "Max retries", "최대 재시도", json!({"type":"integer","minimum":0,"maximum":20})),
-        stock("plan.enabled", "agent", "Plan mode", "계획 모드", boolean()),
         stock("goal.enabled", "agent", "Goal mode", "목표 모드", boolean()),
         stock("ttsr.enabled", "agent", "Rule injection (TTSR)", "규칙 주입(TTSR)", boolean()),
         stock("advisor.enabled", "agent", "Advisor", "어드바이저", boolean()),
@@ -446,10 +444,6 @@ pub static ROW_NOT_WRITTEN: &[(&str, Decision)] = &[
     ),
     (
         "launch-noLsp",
-        Decision::Never("launch profiles inject prompts, tools and config into every session"),
-    ),
-    (
-        "launch-planYolo",
         Decision::Never("launch profiles inject prompts, tools and config into every session"),
     ),
     (

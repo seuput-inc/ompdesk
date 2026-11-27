@@ -19,7 +19,6 @@ const PROFILE_FLAGS = profileToFlags({
 	addDirs: ["/a"],
 	tools: ["read"],
 	noLsp: true,
-	planYolo: true,
 	profile: "fast",
 	sessionDir: "/s",
 	config: "/c",

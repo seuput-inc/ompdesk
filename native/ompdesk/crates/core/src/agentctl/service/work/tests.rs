@@ -3,6 +3,7 @@
 //! parity suite at cutover) and of the pure cuts (`turnEdits`, `costSplitOf`, the command timeouts) against tables
 //! captured from the TypeScript (`captured.json`).
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
@@ -1720,7 +1721,7 @@ async fn a_session_an_item_opened_is_linked_and_names_its_file_once_it_has_one()
 }
 
 #[tokio::test]
-async fn a_bot_by_name_is_its_home_chat_and_another_computer_reaches_it_only_when_let() {
+async fn a_bot_by_name_is_its_home_chat_and_another_computer_reaches_it_unless_restricted() {
     let root = Scratch::new();
     let (control, _, _) = ada(9_709, &root, Mails::default(), |_, _| None).await;
     let tabs = control.host.state().tabs.clone();
@@ -1733,6 +1734,18 @@ async fn a_bot_by_name_is_its_home_chat_and_another_computer_reaches_it_only_whe
             .tab_id,
         "bot1"
     );
+    assert_eq!(
+        control
+            .bot_home("Ada", Some("dev1"), Some("MacBook"))
+            .unwrap()["path"],
+        "/s/bot.jsonl"
+    );
+    control
+        .bots_command(
+            json!({ "action": "update", "id": control.bot_named("Ada").unwrap().id, "reach": [] }),
+        )
+        .await
+        .unwrap();
     let refused = control
         .bot_home("Ada", Some("dev1"), Some("MacBook"))
         .unwrap_err();
@@ -2143,4 +2156,524 @@ async fn a_room_asks_the_members_its_reply_mode_names_and_a_member_answers_with_
     // A session that is no bot's chat has no rooms.
     let (text, is_error) = run(&control, "ompdesk_room", json!({ "action": "list" })).await;
     assert!(is_error && text.contains("works in a bot's chat"), "{text}");
+}
+
+#[tokio::test]
+async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_once() {
+    // The host: Ada, whose item asks the owner.
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let (host, host_asked, ada_id) = ada(9_790, &root, mails.clone(), |_, _| None).await;
+    let tool = |args: Value| host.run("bot1", "ompdesk_item", args, None);
+    assert!(
+        !tool(json!({ "action": "add", "title": "Pick a day" }))
+            .await
+            .is_error
+    );
+    let out = tool(
+        json!({ "action": "set", "item": "1", "ask": "Which day?", "options": ["Mon", "Tue"] }),
+    )
+    .await;
+    assert!(!out.is_error, "{}", out.text);
+    let item = host.items().find(&ada_id, "1").cloned().unwrap();
+    let question = item.question.as_ref().unwrap().id;
+    let whole = host.bots_share();
+    assert_eq!(whole["state"]["bots"][0]["name"], "Ada");
+    assert_eq!(whole["state"]["items"][0]["status"], "needs_you");
+    assert_eq!(whole["state"].get("rooms"), None);
+    // A round trip to the fake main: every tell before it is recorded.
+    run(&host, "ompdesk_bot", json!({ "action": "list" })).await;
+    let told_before = host_asked.lock().unwrap().len();
+
+    // The host makes a paired device's answer; sent again (a retry over the link), it changes nothing.
+    let request = json!({ "action": "item", "id": item.id, "answer": { "choice": 0, "question": question }, "requestId": "r1" });
+    let answer = host
+        .bots_from(request.clone(), "dev-b", "MacBook")
+        .await
+        .unwrap();
+    assert_eq!(answer["state"]["items"][0]["status"], "working");
+    let again = host
+        .bots_from(request.clone(), "dev-b", "MacBook")
+        .await
+        .unwrap();
+    assert_eq!(again["version"], answer["version"]);
+    let answered = host.items().get(&item.id).cloned().unwrap();
+    assert_eq!(
+        answered
+            .events
+            .iter()
+            .filter(|event| event.kind == "answered")
+            .count(),
+        1
+    );
+    assert_eq!(
+        delivered(&mails, &format!("item-{}-v{}", item.id, answered.version)),
+        1
+    );
+    // Every device heard the change as the rows it touched, on the version it held.
+    run(&host, "ompdesk_bot", json!({ "action": "list" })).await;
+    let shared: Vec<Value> = host_asked.lock().unwrap()[told_before..]
+        .iter()
+        .filter(|(method, _)| method == "botsShared")
+        .map(|(_, args)| args["change"].clone())
+        .collect();
+    assert_eq!(
+        shared.first().map(|change| &change["base"]),
+        Some(&whole["version"])
+    );
+    assert!(
+        shared
+            .iter()
+            .all(|change| change["set"]["bots"] == json!([]))
+    );
+    // A bot is made where it is to live: a device cannot make one here.
+    let refused = host
+        .bots_from(
+            json!({ "action": "create", "name": "Cy" }),
+            "dev-b",
+            "MacBook",
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        refused.message().contains("MacBook cannot create"),
+        "{}",
+        refused.message()
+    );
+    assert!(host.bot_named("Cy").is_err());
+    for request in [
+        json!({"action":"allowLegacyPeers", "ids":[ada_id]}),
+        json!({"action":"update", "id":ada_id, "reach":["dev-b"]}),
+    ] {
+        assert!(host.bots_from(request, "dev-b", "MacBook").await.is_err());
+    }
+
+    // The device: its main carries a change of the host's to it (`botsCommand`) and hands back the host's answer.
+    let carried = answer.clone();
+    let (device, device_asked) = rig(
+        9_791,
+        bot_world("/elsewhere"),
+        Caps::default(),
+        move |method, _| {
+            Ok(if method == "botsCommand" {
+                carried.clone()
+            } else {
+                Value::Null
+            })
+        },
+    );
+    let heard = device.bots_remote(
+        &json!({ "device": "dev-a", "name": "Mini", "online": true, "change": whole }),
+    );
+    assert_eq!(heard["applied"], true);
+    let state = device.bots_state();
+    assert_eq!(state["bots"], json!([]));
+    assert_eq!(state["remote"][0]["device"], "dev-a");
+    assert_eq!(state["remote"][0]["name"], "Mini");
+    assert_eq!(state["remote"][0]["bots"][0]["id"], json!(ada_id));
+    let state = device.bots_command(request.clone()).await.unwrap();
+    assert_eq!(state["remote"][0]["items"][0]["status"], "working");
+    assert!(
+        device_asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(method, args)| method == "botsCommand"
+                && args["device"] == "dev-a"
+                && args["request"]["requestId"] == "r1")
+    );
+    // The host goes offline: the last copy stays, and a change waits for nobody: it is refused at once.
+    device.bots_remote(&json!({ "device": "dev-a", "name": "Mini", "online": false }));
+    let error = device.bots_command(request).await.unwrap_err();
+    assert!(
+        error.message().contains("Mini is offline"),
+        "{}",
+        error.message()
+    );
+    let state = device.bots_state();
+    assert_eq!(state["remote"][0]["online"], false);
+    assert_eq!(state["remote"][0]["items"][0]["status"], "working");
+    // Unpaired, its copy goes.
+    device.bots_remote(&json!({ "device": "dev-a", "forget": true }));
+    assert_eq!(device.bots_state().get("remote"), None);
+}
+
+#[tokio::test]
+async fn a_group_asks_another_computers_bot_on_its_host_and_takes_its_post_once() {
+    // The device: Ada is its own; Rex lives on paired host dev-a, whose copy it keeps.
+    let root = Scratch::new();
+    let (device, asked, ada_id) = ada(9_792, &root, Mails::default(), |method, _| {
+        (method == "botsCommand").then(|| json!({ "asked": true }))
+    })
+    .await;
+    let rex = json!({ "id": "bot-rex", "name": "Rex", "folder": "/h/rex", "home": "/h/rex.jsonl", "sessions": ["/h/rex.jsonl"] });
+    device.bots_remote(&json!({
+        "device": "dev-a",
+        "name": "Mini",
+        "online": true,
+        "change": { "version": "e1.1", "state": { "bots": [rex], "items": [] } },
+    }));
+    // A group needs one of this computer's bots; another computer's join beside them.
+    let alone = device
+        .bots_command(json!({ "action": "roomCreate", "name": "Solo", "bots": ["Rex"] }))
+        .await
+        .unwrap_err();
+    assert!(
+        alone.message().contains("this computer's bots"),
+        "{}",
+        alone.message()
+    );
+    let state = device
+        .bots_command(json!({ "action": "roomCreate", "name": "Team", "bots": [ada_id, "Rex"] }))
+        .await
+        .unwrap();
+    let room = state["rooms"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(state["rooms"][0]["members"], json!([ada_id, "bot-rex"]));
+    device
+        .bots_command(
+            json!({ "action": "roomPost", "id": room, "text": "Which day?", "messageId": "m1" }),
+        )
+        .await
+        .unwrap();
+    // Rex is asked on its host, with the room's words; Ada here.
+    let ask = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(method, args)| method == "botsCommand" && args["request"]["action"] == "roomAsk")
+        .map(|(_, args)| args.clone())
+        .unwrap();
+    assert_eq!(ask["device"], "dev-a");
+    assert_eq!(ask["request"]["id"], "bot-rex");
+    assert_eq!(ask["request"]["room"], json!(room));
+    assert!(
+        ask["request"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Which day?")
+    );
+    let turns = device.rooms().find(&room).unwrap().messages[0]
+        .turns
+        .clone();
+    assert_eq!(
+        turns
+            .iter()
+            .map(|turn| turn.state.as_str())
+            .collect::<Vec<_>>(),
+        ["asked", "asked"]
+    );
+    // Its post comes back from the host, once by its id, and answers its ask.
+    for _ in 0..2 {
+        device
+            .bots_room_post(&json!({ "device": "dev-a", "room": room, "bot": "bot-rex", "text": "Tuesday.", "id": "post-r1" }))
+            .await
+            .unwrap();
+    }
+    let kept = device.rooms().find(&room).cloned().unwrap();
+    let posts: Vec<&str> = kept
+        .messages
+        .iter()
+        .map(|message| message.text.as_str())
+        .collect();
+    assert_eq!(posts, ["Which day?", "Tuesday."]);
+    assert_eq!(kept.messages[1].name, "Rex");
+    assert!(
+        kept.messages[0]
+            .turns
+            .iter()
+            .any(|turn| turn.bot == "bot-rex" && turn.state == "replied")
+    );
+    // Another device's word for Rex is not Rex's.
+    assert!(device
+        .bots_room_post(&json!({ "device": "dev-z", "room": room, "bot": "bot-rex", "text": "No.", "id": "post-z" }))
+        .await
+        .is_err());
+    // Offline, Rex is not asked: its turn says why.
+    device.bots_remote(&json!({ "device": "dev-a", "name": "Mini", "online": false }));
+    device
+        .bots_command(
+            json!({ "action": "roomPost", "id": room, "text": "Still there?", "messageId": "m2" }),
+        )
+        .await
+        .unwrap();
+    let last = device
+        .rooms()
+        .find(&room)
+        .unwrap()
+        .messages
+        .last()
+        .cloned()
+        .unwrap();
+    let rex_turn = last
+        .turns
+        .iter()
+        .find(|turn| turn.bot == "bot-rex")
+        .unwrap();
+    assert_eq!(rex_turn.state, "failed");
+    assert!(
+        rex_turn
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Mini is offline")
+    );
+}
+
+#[tokio::test]
+async fn a_bot_asked_by_a_paired_computers_group_answers_it_there() {
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let (host, asked, ada_id) = ada(9_793, &root, mails.clone(), |method, _| {
+        (method == "botsRoomPostTo").then(|| json!({ "sent": true }))
+    })
+    .await;
+    let ask = json!({ "action": "roomAsk", "id": ada_id, "room": "room-b1", "roomName": "Team", "mailId": "room-room-b1-1-x", "text": "In the group “Team” (room room-b1), Owner: Which day?" });
+    for _ in 0..2 {
+        host.bots_from(ask.clone(), "dev-b", "MacBook")
+            .await
+            .unwrap();
+    }
+    // The question reached Ada's home chat once, as the group's on that computer.
+    assert_eq!(delivered(&mails, "room-room-b1-1-x"), 1);
+    let (text, is_error) = {
+        let out = host
+            .run("bot1", "ompdesk_room", json!({ "action": "list" }), None)
+            .await;
+        (out.text, out.is_error)
+    };
+    assert!(
+        !is_error && text.contains("Team (room room-b1): on MacBook"),
+        "{text}"
+    );
+    let out = host
+        .run(
+            "bot1",
+            "ompdesk_room",
+            json!({ "action": "post", "room": "Team", "text": "Tuesday." }),
+            None,
+        )
+        .await;
+    assert!(
+        !out.is_error && out.text.contains("Posted in Team on MacBook"),
+        "{}",
+        out.text
+    );
+    let sent = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(method, _)| method == "botsRoomPostTo")
+        .map(|(_, args)| args.clone())
+        .unwrap();
+    assert_eq!(sent["device"], "dev-b");
+    assert_eq!(sent["post"]["room"], "room-b1");
+    assert_eq!(sent["post"]["bot"], json!(ada_id));
+    assert_eq!(sent["post"]["text"], "Tuesday.");
+    // A device's group is no group of this computer: reading it says where it is.
+    let out = host
+        .run(
+            "bot1",
+            "ompdesk_room",
+            json!({ "action": "read", "room": "Team" }),
+            None,
+        )
+        .await;
+    assert!(
+        out.is_error && out.text.contains("on MacBook"),
+        "{}",
+        out.text
+    );
+}
+
+/// A fake main whose bot chat's bridge answers `agent_control_bot` with what `facts` holds now.
+fn chat_facts(
+    facts: &Arc<Mutex<Value>>,
+) -> impl Fn(&str, &Value) -> Option<Value> + Send + 'static {
+    let facts = facts.clone();
+    move |method, args| {
+        (method == "command" && args["command"]["type"] == "agent_control_bot")
+            .then(|| json!({ "success": true, "data": facts.lock().unwrap().clone() }))
+    }
+}
+
+fn said(owner_turns: u64, streaming: bool, kickoff: &str) -> Value {
+    json!({ "changed": false, "ownerTurns": owner_turns, "streaming": streaming, "kickoff": kickoff })
+}
+
+/// The bot contexts handed to `bot1`, oldest first, and the kickoff each asked about.
+fn bot_calls(asked: &Asked) -> Vec<(Value, Value)> {
+    asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(method, args)| {
+            method == "command"
+                && args["tabId"] == "bot1"
+                && args["command"]["type"] == "agent_control_bot"
+        })
+        .map(|(_, args)| {
+            (
+                args["command"]["context"].clone(),
+                args["command"]["kickoff"].clone(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_new_bot_speaks_first_once_and_its_first_run_ends_with_the_owners_first_turn() {
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let facts = Arc::new(Mutex::new(said(0, false, "none")));
+    let (control, asked, id) = ada(9_730, &root, mails.clone(), chat_facts(&facts)).await;
+    // Orca bot-new-record.ts:36: every new bot starts in its first run.
+    assert!(control.bot_named("Ada").unwrap().first_run);
+    control.bots_tick().await;
+    let bot = control.bot_named("Ada").unwrap();
+    assert_eq!(bot.kickoffs.len(), 1, "the home chat is sent the kickoff");
+    let kickoff = bot.kickoffs[0].clone();
+    assert!(kickoff.starts_with("kickoff-"), "{kickoff}");
+    assert_eq!(delivered(&mails, &kickoff), 1);
+    let mail = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(method, args)| method == "mail" && args["details"]["id"] == kickoff)
+        .map(|(_, args)| args.clone())
+        .unwrap();
+    assert_eq!(mail["tabId"], "bot1");
+    assert_eq!(mail["details"]["kind"], "question");
+    assert_eq!(mail["delivery"]["triggerTurn"], true);
+    assert!(
+        mail["content"]
+            .as_str()
+            .unwrap()
+            .contains("you were just created")
+    );
+    let calls = bot_calls(&asked);
+    assert_eq!(
+        calls[0].0["bot"]["firstRun"], true,
+        "the home chat carries the first-run rules"
+    );
+    // It answered: asked again (the kickoff was not answered at the first look), it is not sent twice.
+    *facts.lock().unwrap() = said(0, false, "spoke");
+    control.bots_tick().await;
+    control.bots_tick().await;
+    let bot = control.bot_named("Ada").unwrap();
+    assert_eq!(bot.kickoffs, vec![kickoff.clone()]);
+    assert!(bot.first_run && !bot.kickoff_silent);
+    assert_eq!(bot_calls(&asked).last().unwrap().1, json!(kickoff));
+    // The owner's first turn runs: nothing is asked while main says it is at work, and first run lasts.
+    let folder = root.0.join("ada").to_string_lossy().into_owned();
+    let mut world = bot_world(&folder);
+    world["tabs"][1]["busy"] = json!(true);
+    crate::ports::apply_state(control.host.port(), 2, &world.to_string()).unwrap();
+    *facts.lock().unwrap() = said(1, true, "spoke");
+    let before = bot_calls(&asked).len();
+    control.bots_tick().await;
+    assert_eq!(bot_calls(&asked).len(), before);
+    assert!(control.bot_named("Ada").unwrap().first_run);
+    // A turn ended there (main's last run moved): asked again; omp still says a turn runs, so asked at the next pass.
+    world["tabs"][1]["busy"] = json!(false);
+    world["tabs"][1]["lastRun"] = json!({ "id": 1, "stopReason": "stop" });
+    crate::ports::apply_state(control.host.port(), 3, &world.to_string()).unwrap();
+    control.bots_tick().await;
+    assert_eq!(bot_calls(&asked).len(), before + 1);
+    assert!(
+        control.bot_named("Ada").unwrap().first_run,
+        "omp still says a turn runs"
+    );
+    *facts.lock().unwrap() = said(1, false, "spoke");
+    control.bots_tick().await;
+    let bot = control.bot_named("Ada").unwrap();
+    assert!(!bot.first_run, "the owner's first turn ended");
+    assert_eq!(bot.kickoffs.len(), 1);
+    control.bots_tick().await;
+    assert_eq!(
+        bot_calls(&asked).last().unwrap().0["bot"]["firstRun"],
+        false
+    );
+    // Nothing is retried once first run is over.
+    assert!(!control.kickoff_retry(&id, true).await.unwrap());
+}
+
+#[tokio::test]
+async fn a_bot_made_with_a_purpose_still_runs_first_run_and_an_owner_first_gets_no_kickoff() {
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let facts = Arc::new(Mutex::new(said(1, false, "none")));
+    let (control, _asked, _id) = ada(9_731, &root, mails.clone(), chat_facts(&facts)).await;
+    let state = control
+        .bots_command(
+            json!({ "action": "create", "name": "Cy", "purpose": "Keeps the changelog honest." }),
+        )
+        .await
+        .unwrap();
+    let cy = control.bot_named("Cy").unwrap();
+    assert!(Path::new(&cy.folder).join("SOUL.md").is_file());
+    assert!(
+        cy.first_run,
+        "SOUL.md written from the purpose does not end first run"
+    );
+    let listed = state["bots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|bot| bot["name"] == "Cy")
+        .cloned()
+        .unwrap();
+    assert_eq!(listed["firstRun"], true);
+    // Ada's home chat already holds the owner's message: no kickoff, and its turn has ended.
+    control.bots_tick().await;
+    let ada = control.bot_named("Ada").unwrap();
+    assert!(ada.kickoffs.is_empty());
+    assert!(!ada.first_run);
+}
+
+#[tokio::test]
+async fn a_kickoff_that_ended_silent_is_sent_again_once_by_itself_and_on_each_try_again() {
+    let root = Scratch::new();
+    let mails = Mails::default();
+    let facts = Arc::new(Mutex::new(said(0, false, "none")));
+    let (control, _asked, id) = ada(9_732, &root, mails.clone(), chat_facts(&facts)).await;
+    control.bots_tick().await;
+    // The page reopens before the next bot pass has noticed that the turn ended without a word.
+    // The live chat, not the last listed silent flag, decides whether to retry.
+    assert!(!control.bot_named("Ada").unwrap().kickoff_silent);
+    *facts.lock().unwrap() = said(0, false, "silent");
+    assert!(control.kickoff_retry(&id, false).await.unwrap());
+    let bot = control.bot_named("Ada").unwrap();
+    assert_eq!(bot.kickoffs.len(), 2);
+    assert_ne!(bot.kickoffs[0], bot.kickoffs[1]);
+    assert!(!bot.kickoff_silent);
+    assert_eq!(delivered(&mails, &bot.kickoffs[1]), 1);
+    // Opened again: Orca retries by itself only once.
+    assert!(!control.kickoff_retry(&id, false).await.unwrap());
+    // The owner's Try again sends it whenever it ended silent.
+    control.bots_tick().await;
+    assert!(control.bot_named("Ada").unwrap().kickoff_silent);
+    assert!(control.kickoff_retry(&id, true).await.unwrap());
+    assert_eq!(control.bot_named("Ada").unwrap().kickoffs.len(), 3);
+    // Not while it speaks, a turn runs, or once the owner wrote.
+    for facts_now in [
+        said(0, false, "spoke"),
+        said(0, true, "silent"),
+        said(1, false, "silent"),
+        said(0, false, "queued"),
+    ] {
+        *facts.lock().unwrap() = facts_now;
+        assert!(!control.kickoff_retry(&id, true).await.unwrap());
+    }
+    // Two opens at once send one: the attempt is claimed in the record before the mail goes.
+    *facts.lock().unwrap() = said(0, false, "silent");
+    let (one, two) = tokio::join!(
+        control.kickoff_retry(&id, true),
+        control.kickoff_retry(&id, true)
+    );
+    assert_eq!(u8::from(one.unwrap()) + u8::from(two.unwrap()), 1);
+    let bot = control.bot_named("Ada").unwrap();
+    assert_eq!(bot.kickoffs.len(), 4);
+    for kickoff in &bot.kickoffs {
+        assert_eq!(delivered(&mails, kickoff), 1, "{kickoff}");
+    }
 }

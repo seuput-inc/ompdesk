@@ -4,9 +4,10 @@
 
 use serde_json::{Map, Value, json};
 
+use super::routes::note_run_message;
 use super::run::RunState;
 use super::state::{
-    Ctx, Entry, Kinds, LevelKey, Pool, R, StartWait, fault, highest_subagent_level,
+    Ctx, Entry, Kinds, LevelKey, Opening, Pool, R, Routed, StartWait, fault, highest_subagent_level,
 };
 
 impl Ctx {
@@ -121,7 +122,6 @@ impl Ctx {
                             .take()
                             .and_then(|ids| ids.last().cloned()),
                     );
-                    entry.plan_proposal = None;
                     owned = pool
                         .request_owners
                         .iter()
@@ -334,10 +334,22 @@ impl Ctx {
         let Some(seq) = seq else {
             return Ok(());
         };
+        let mut held_for_routing = false;
         if kinds.blocking {
-            self.with(|pool| Ctx::hold_request(pool, seq, request, kinds));
+            // A question of a run another session started waits off the owner's windows while agentctl decides whose
+            // it is (`route_ask`): the bot that asked for the work, or the owner.
+            let origin = self.with(|pool| {
+                Ctx::hold_request(pool, seq, request, kinds);
+                let origin = Ctx::routable_origin(pool, seq, request, kinds);
+                if let (Some(_), Some(id)) = (&origin, request["id"].as_str()) {
+                    pool.routed.insert(id.to_string(), Routed::Deciding);
+                }
+                origin
+            });
+            held_for_routing = origin.is_some();
             self.on_running_change().await?;
-            self.announce_ask(tab, request, kinds).await?;
+            self.announce_ask(tab, request, kinds, origin.as_ref())
+                .await?;
         } else if request["method"] == "cancel" {
             // omp withdrew the request (timeout, abort): no response will follow.
             let target = request["targetId"].as_str().unwrap_or("").to_string();
@@ -352,10 +364,18 @@ impl Ctx {
             if let Some(entry) = pool.by_seq_mut(seq) {
                 Ctx::keep_ui_state(entry, request);
             }
+            let held = held_for_routing;
             let frame = Ctx::ui_frame(pool, seq, request, kinds);
-            let wins = pool.by_seq(seq).map(Pool::windows_of).unwrap_or_default();
+            let wins = if held {
+                Vec::new()
+            } else {
+                pool.by_seq(seq).map(Pool::windows_of).unwrap_or_default()
+            };
             (frame, wins)
         });
+        if !held_for_routing && matches!(request["method"].as_str(), Some("ask" | "form")) {
+            self.send_view_question(tab, request);
+        }
         self.send(wins, "EXTENSION_UI", Value::Object(frame));
         Ok(())
     }
@@ -406,7 +426,7 @@ impl Ctx {
             let resent = self.with(|pool| pool.request_owners.get(&id) == Some(&seq));
             self.with(|pool| Ctx::hold_request(pool, seq, request, kind));
             if !resent {
-                self.announce_ask(tab, request, kind).await?;
+                self.announce_ask(tab, request, kind, None).await?;
             }
             let (mut frame, wins) = self.with(|pool| {
                 let frame = Ctx::ui_frame(pool, seq, request, kind);
@@ -516,12 +536,11 @@ impl Ctx {
             goal_before: bool,
         }
         let list = events.as_array().map(Vec::as_slice).unwrap_or_default();
-        let (seen, run_ended, retry_started, stepped, hidden, win) = self.with(|pool| {
+        let (seen, run_ended, retry_changed, stepped, win) = self.with(|pool| {
             let now = pool.now;
             let mut serial = pool.retry_serial;
-            let mut plan_serial = pool.plan_serial;
             let Some(entry) = pool.entry_mut(tab) else {
-                return (None, false, false, false, Vec::new(), 0);
+                return (None, false, false, false, 0);
             };
             let seen = Seen {
                 was_busy: entry.busy(),
@@ -533,10 +552,10 @@ impl Ctx {
                 goal_before: entry.tracking.goal_active,
             };
             let mut run_ended = false;
-            let mut retry_started = false;
+            let mut retry_changed = false;
             let mut stepped = false;
-            let mut hidden: Vec<Value> = Vec::new();
             let remote = entry.device.is_some();
+            let was_blocked = entry.tracking.retry_blocked;
             for event in list {
                 if entry.tracking.track(event, now, &mut serial, remote) {
                     run_ended = true;
@@ -545,34 +564,12 @@ impl Ctx {
                     Some("agent_start") => {
                         entry.placeholder = false;
                         entry.unstarted = false;
+                        entry.opening = Opening::First;
                     }
                     Some("tool_execution_start" | "tool_execution_end") => stepped = true,
-                    Some("auto_retry_start") => retry_started = true,
-                    Some(kind @ ("plan_proposal" | "plan_proposal_resolved")) => {
-                        let path = event["planFilePath"].as_str().unwrap_or("").to_string();
-                        if kind == "plan_proposal" {
-                            let title = event["title"].as_str().unwrap_or("").to_string();
-                            entry.plan_proposal = Some((title, path));
-                            // A tab a paired host runs keeps the host's own number: it is what that host's answer step
-                            // compares. Only a tab of this computer is numbered here.
-                            entry.plan_generation =
-                                match (entry.device.is_some(), event["generation"].as_u64()) {
-                                    (true, Some(host)) => host,
-                                    _ => {
-                                        plan_serial += 1;
-                                        plan_serial
-                                    }
-                                };
-                        } else if entry
-                            .plan_proposal
-                            .as_ref()
-                            .is_some_and(|(_, current)| *current == path)
-                        {
-                            entry.plan_proposal = None;
-                        }
-                        hidden.push(event.clone());
-                    }
+                    Some("auto_retry_start") => retry_changed = true,
                     Some("message_end") => {
+                        note_run_message(entry, &event["message"]);
                         // Stock writes a new session's file with its first assistant message: until then the prompt
                         // lives nowhere else, and a relaunch sends it again.
                         match event["message"]["role"].as_str() {
@@ -593,10 +590,10 @@ impl Ctx {
                     _ => {}
                 }
             }
+            retry_changed |= was_blocked != entry.tracking.retry_blocked;
             let win = entry.win_id;
             pool.retry_serial = serial;
-            pool.plan_serial = plan_serial;
-            (Some(seen), run_ended, retry_started, stepped, hidden, win)
+            (Some(seen), run_ended, retry_changed, stepped, win)
         });
         let Some(seen) = seen else {
             return Ok(());
@@ -618,7 +615,7 @@ impl Ctx {
         // it never shows (or notifies) as a failure first. A goal turning active or not changes the tab's marker.
         if busy_changed
             || run_ended
-            || retry_started
+            || retry_changed
             || unsaved != seen.unsaved_before
             || goal != seen.goal_before
         {
@@ -649,29 +646,7 @@ impl Ctx {
         if placeholder != seen.was_placeholder {
             self.notify_window_tabs_changed(win).await?;
         }
-        if !hidden.is_empty() {
-            self.forward_to_hidden(
-                tab,
-                "EVENTS_BATCH",
-                json!({"tabId": tab, "payload": hidden}),
-            );
-        }
         Ok(())
-    }
-
-    /// Frames a hidden tab's sidebar row needs go to the windows that show the tab without its full channel.
-    pub(super) fn forward_to_hidden(&self, tab: &str, channel: &str, data: Value) {
-        let wins = self.with(|pool| {
-            pool.entry(tab)
-                .map(|entry| {
-                    Pool::windows_of(entry)
-                        .into_iter()
-                        .filter(|win| !entry.wired_in(*win))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        });
-        self.send(wins, channel, data);
     }
 
     /// A turn ended on a tab that waits for the new omp: one tick later (main's `setImmediate`), so every listener of

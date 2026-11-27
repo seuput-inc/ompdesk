@@ -345,7 +345,7 @@ describe("tooltips with chords", () => {
 		expect(await tooltipOf(button())).toContain(translate("input.send.stopHintDesktop"));
 	});
 
-	it("shows Stop's Esc, the model's ⌥M, and the plan and thinking-cycle chords on the Run chip", async () => {
+	it("shows Stop's Esc, the model's ⌥M, and the Run chip's thinking-cycle chord", async () => {
 		await act(async () => useSessionStore.setState({ isStreaming: true }));
 		await render({ stoppable: true, hasDraft: false, sendDisabled: true });
 		expect(await tooltipOf(container.querySelector("button[data-model-chip]"))).toContain(formatShortcut("⌥M"));
@@ -357,7 +357,6 @@ describe("tooltips with chords", () => {
 		const run = await tooltipOf(container.querySelector("button[data-run-settings-trigger]"));
 		// ⌃T hides thinking BLOCKS (thinking.toggle); the chip names the chords of what it controls.
 		expect(run).not.toContain(formatShortcut("⌃T"));
-		expect(run).toContain(formatShortcut("⌥⇧P"));
 		expect(run).toContain(formatShortcut("⌥⇧T"));
 	});
 });

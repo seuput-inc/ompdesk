@@ -141,7 +141,7 @@ for (const language of ["en", "ko"] as const) {
 			await click(connect.locator('button[data-provider-connect="anthropic"]'));
 			await shot("choose-claude-connection");
 			await click(
-				connect.getByRole("button", {
+				page.getByRole("dialog").getByRole("button", {
 					name: (language === "ko" ? ko : en)["providers.featured.subscription"],
 					exact: true,
 				}),
@@ -231,7 +231,8 @@ for (const language of ["en", "ko"] as const) {
 			await page.waitForTimeout(400);
 			await page.screenshot({ path: path.join(out, `${language}-real-01-connect.png`), animations: "disabled" });
 			await connect.locator('button[data-provider-connect="anthropic"]').click();
-			await connect
+			await page
+				.getByRole("dialog")
 				.getByRole("button", {
 					name: (language === "ko" ? ko : en)["providers.featured.subscription"],
 					exact: true,

@@ -348,6 +348,27 @@ describe("ConnectivityMonitor", () => {
 	});
 });
 
+describe("ConnectivityMonitor when main gives up a call", () => {
+	it("a given-up poll throws nothing out of its timer, and the next poll samples again", () => {
+		const { monitor, state, changes } = harness();
+		expect(monitor.online).toBe(true);
+		state.online = false;
+		const call = vi.spyOn(hub(), "callOnce");
+		call.mockImplementationOnce(() => {
+			throw new CoreError("hub_unknown", "poll: the hub did not answer, so the call was given up");
+		});
+		try {
+			expect(() => monitor.poll()).not.toThrow();
+			expect(call).toHaveBeenCalledTimes(1);
+			monitor.poll();
+			expect(monitor.online).toBe(false);
+			expect(changes).toEqual([false]);
+		} finally {
+			call.mockRestore();
+		}
+	});
+});
+
 describe("ConnectivityMonitor at the quit", () => {
 	it("stopped, sends the core nothing: its sampling, events and timers end, and a probe's waiter hears unreachable", async () => {
 		const { monitor, state, fireTimer, timers } = harness();

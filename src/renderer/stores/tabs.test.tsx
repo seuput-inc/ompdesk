@@ -47,7 +47,6 @@ import { type ExtensionUiStore, useExtensionUiStore } from "./extension-ui";
 import { useForkHandoffStore } from "./fork-handoff";
 import { type MessagesStore, useMessagesStore } from "./messages";
 import { useModelStore } from "./model";
-import { usePlanApprovalStore } from "./plan-approval";
 import { type QueueStore, useQueueStore } from "./queue";
 import { type SessionStore, useSessionStore } from "./session";
 import { sessionRuntime, sessionRuntimeStore, setFocusedSessionRuntime } from "./session-runtime-context";
@@ -63,7 +62,6 @@ import {
 	restoreTabExtensionUiRequests,
 	type SessionTab,
 	settleTabExtensionUiRequests,
-	settleTabPlanApproval,
 	steppingFromTabId,
 	tabChipLabel,
 	tabChipParts,
@@ -106,7 +104,6 @@ function serverState(overrides: Partial<RpcSessionState> = {}): RpcSessionState 
 		contextUsage: null,
 		messageCount: 0,
 		queuedMessageCount: 0,
-		planModeEnabled: false,
 		todoPhases: [],
 		...overrides,
 	} as RpcSessionState;
@@ -203,7 +200,6 @@ function fillLiveStores(tag: string): void {
 		cwd: `/${tag}`,
 		isStreaming: false,
 		status: "ready",
-		planModeEnabled: true,
 		goal: { objective: `goal-${tag}` },
 	});
 	useMessagesStore.setState({ messages: [msg(`hello-${tag}`)] });
@@ -227,12 +223,6 @@ function fillLiveStores(tag: string): void {
 		.setImages([
 			{ content: { type: "image", data: `image-${tag}`, mimeType: "image/png" }, preview: `preview-${tag}` },
 		]);
-	usePlanApprovalStore.getState().showProposal({
-		planFilePath: `/plan-${tag}.md`,
-		planContent: `plan-${tag}`,
-		options: ["execute"],
-	});
-	usePlanApprovalStore.getState().setFeedback(`feedback-${tag}`);
 	useExtensionUiStore.getState().pushRequest({
 		type: "extension_ui_request",
 		id: `ui-${tag}`,
@@ -269,7 +259,6 @@ function resetAll(): void {
 	useSubagentsStore.getState().reset();
 	useModelStore.getState().reset();
 	useToolsStore.getState().reset();
-	usePlanApprovalStore.getState().clearProposal();
 	useExtensionUiStore.getState().clearAll();
 	useUiStore.getState().closeSessionOverlays();
 	useUiStore.getState().closeMissingFolder();
@@ -837,15 +826,12 @@ describe("tabs store switch", () => {
 		expect(useMessagesStore.getState().messages.map(m => messageText(m))).toEqual(["hello-t0"]);
 		expect(useSessionStore.getState().sessionId).toBe("s-t0");
 		expect(useSessionStore.getState().sessionName).toBe("Session t0");
-		expect(useSessionStore.getState().planModeEnabled).toBe(true);
 		expect(useSessionStore.getState().goal?.objective).toBe("goal-t0");
 		expect(useTodoStore.getState().phases.map(phase => phase.name)).toEqual(["phase-t0"]);
 		expect(useQueueStore.getState().steering.map(entry => entry.id)).toEqual(["q-t0"]);
 		expect(useSubagentsStore.getState().subagents.has("a-t0")).toBe(true);
 		expect(useModelStore.getState().model?.id).toBe("m-t0");
 		expect(useModelStore.getState().fastModeEnabled).toBe(true);
-		expect(usePlanApprovalStore.getState().pending?.planContent).toBe("plan-t0");
-		expect(usePlanApprovalStore.getState().feedback).toBe("feedback-t0");
 		expect(useExtensionUiStore.getState().pendingRequests.map(request => request.id)).toEqual([
 			"ui-t0",
 			"ui-t0-late",
@@ -863,27 +849,7 @@ describe("tabs store switch", () => {
 		await useTabsStore.getState().switchTab("t1");
 		expect(useComposerStore.getState().draft).toBe("draft-t1");
 		expect(useComposerStore.getState().images[0]?.content.data).toBe("image-t1");
-		expect(usePlanApprovalStore.getState().pending?.planContent).toBe("plan-t1");
 		expect(useExtensionUiStore.getState().pendingRequests.map(request => request.id)).toEqual(["ui-t1"]);
-	});
-
-	it("settles an approval in its background tab without mutating the visible session", async () => {
-		seedTabs();
-		fillLiveStores("t0");
-		const proposal = usePlanApprovalStore.getState().pending;
-		expect(proposal).not.toBeNull();
-
-		await useTabsStore.getState().switchTab("t1");
-		fillLiveStores("t1");
-		settleTabPlanApproval("t0", "s-t0", proposal!, { clear: true, exitPlanMode: true });
-
-		expect(useSessionStore.getState().sessionId).toBe("s-t1");
-		expect(useSessionStore.getState().planModeEnabled).toBe(true);
-		expect(usePlanApprovalStore.getState().pending?.planContent).toBe("plan-t1");
-
-		await useTabsStore.getState().switchTab("t0");
-		expect(useSessionStore.getState().planModeEnabled).toBe(false);
-		expect(usePlanApprovalStore.getState().pending).toBeNull();
 	});
 
 	it("restores a failed submit to its background tab without touching the visible composer", async () => {
@@ -1694,7 +1660,6 @@ describe("tabs store applyTabStatus", () => {
 		await useTabsStore.getState().switchTab("t0");
 		expect(useComposerStore.getState().draft).toBe("");
 		expect(useMessagesStore.getState().messages).toEqual([]);
-		expect(usePlanApprovalStore.getState().pending).toBeNull();
 	});
 });
 

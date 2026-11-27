@@ -1,6 +1,5 @@
 import { useT } from "../../lib/i18n";
 import { AgentModes } from "./AgentModes";
-import { AutoModeRow } from "./AutoModeRow";
 import { AutoChangesRow, AutoPreviewRow } from "./AutoPanelRows";
 import { AutoTitleRow } from "./AutoTitleRow";
 import { CompactionLimitsSection } from "./CompactionLimitsSection";
@@ -64,7 +63,6 @@ export function AgentSection() {
 			</SettingsSection>
 			<SettingsSection id="settings-agent-automation" scope="app" title={t("settings.agent.automation")}>
 				<JudgeAssistRow />
-				<AutoModeRow />
 				<PstackRow />
 				<EccRow />
 				<DefaultBrowserRow />

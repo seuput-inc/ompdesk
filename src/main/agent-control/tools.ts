@@ -121,8 +121,9 @@ const OPEN_ONE = {
 	},
 	mode: {
 		type: "string",
-		enum: ["plan", "goal"],
-		description: "plan: plan mode first. goal: the message becomes the session's goal (needs message).",
+		enum: ["goal"],
+		description:
+			"goal: the message becomes the session's goal (needs message). Leave it out for a plain first message.",
 	},
 	worktree: {
 		anyOf: [
@@ -378,31 +379,34 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		label: "Answer OMPdesk session question",
 		description:
 			"Answer the question another session is waiting on.\n" +
-			"Answer the question another session is waiting on (shown by ompdesk_sessions as waiting for the user's answer or for plan approval). The answer is marked as given by an agent. A tool approval or a plan approval is approved only if the user allowed agents to (Settings), else the user must; deny and plan feedback always work. attachments (a picture or file) reach that session first, as a note ahead of the answer; if one cannot be sent, nothing is. See skill://ompdesk.",
+			"Answer the question another session is waiting on (shown by ompdesk_sessions as waiting for the user's answer). The answer is marked as given by an agent. A tool approval is approved only if the user allowed agents to (Settings), else the user must; deny always works. A card a session raised for a bot's request comes to that bot's chat: only it answers it (a form too: answers, one entry per field), naming the card's request, or passes a choice only the owner can make on to them with escalate. attachments (a picture or file) reach that session first, as a note ahead of the answer; if one cannot be sent, nothing is. See skill://ompdesk.",
 		parameters: {
 			type: "object",
 			properties: {
 				session: SESSION,
 				attachments: ATTACHMENTS,
-				request: { type: "string", description: "Request id when several wait; default the oldest." },
+				request: {
+					type: "string",
+					description:
+						"Request id when several wait; default the oldest. Required for a card that came to you as a bot (its card names it).",
+				},
 				choice: {
 					type: "string",
 					description:
-						'The option to pick (select questions; a tool approval: Approve, Deny, or stock\'s "Approve <tool> for this session" when offered, which grants later like calls too). A plan approval: execute (default, fresh context), compact or keep_context.',
+						'The option to pick (select questions; a tool approval: Approve, Deny, or stock\'s "Approve <tool> for this session" when offered, which grants later like calls too).',
 				},
 				approve: {
 					type: "boolean",
-					description:
-						"Yes/no for a confirmation, Approve/Deny for a tool approval, approve/reject for a plan (reject with text sends it as feedback).",
+					description: "Yes/no for a confirmation, Approve/Deny for a tool approval.",
 				},
 				text: {
 					type: "string",
 					description:
-						"Typed answer (input and editor prompts), a rejected plan's feedback, or why a denied tool approval was denied (sent to the session after the denial).",
+						"Typed answer (input and editor prompts), or why a denied tool approval was denied (sent to the session after the denial).",
 				},
 				answers: {
 					type: "array",
-					description: "For a multi-question ask: one entry per question.",
+					description: "For a multi-question ask or a form: one entry per question or field.",
 					items: {
 						type: "object",
 						properties: {
@@ -412,6 +416,11 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 						},
 						additionalProperties: false,
 					},
+				},
+				escalate: {
+					type: "boolean",
+					description:
+						"A bot passes a card that came to it on to the owner: it shows in the bot's chat, and the owner's answer goes straight to that session.",
 				},
 			},
 			required: ["session"],
@@ -933,7 +942,11 @@ const openFields = {
 	reopen: sessionArg.optional(),
 	restore: z.boolean().optional(),
 	model: z.string().trim().min(1).max(200).optional(),
-	mode: z.enum(["plan", "goal"]).optional(),
+	mode: z
+		.literal("goal", {
+			error: 'Plan mode was removed from OMPdesk: open the session with mode "goal" (the message becomes its goal) or with no mode (a plain first message).',
+		})
+		.optional(),
 	worktree: worktreeArg.optional(),
 	throwaway: z.boolean().optional(),
 	item: z.string().trim().min(1).max(100).optional(),
@@ -1054,6 +1067,7 @@ export const ARGS = {
 				)
 				.optional(),
 			attachments: attachmentsArg.optional(),
+			escalate: z.boolean().optional(),
 		})
 		.strict(),
 	[T.focus]: z.object({ session: sessionArg, how: placement.optional() }).strict(),

@@ -25,9 +25,6 @@ const STOP_AFTER_SHIP_CANCELLED: &str =
 /// blocked picks another instead of waiting on them again. Idea after OpenRig's reason-tagged wake messages.
 pub fn nudge_message(reason: &str) -> &'static str {
     match reason {
-        "plan" => {
-            "Autopilot: plan mode stopped the run and is off now; nobody approves plans here. Call `autopilot begin` and continue with the next cycle."
-        }
         "blocked" => {
             "Autopilot: every todo item is blocked, so the run stopped. If a cycle is open, end it with each blocker as a follow-up; then call `autopilot begin` and pick an item that is not blocked."
         }
@@ -706,7 +703,7 @@ impl Coordinator {
         status.is_some_and(|status| text(&status, "state") == Some("running"))
     }
 
-    /// The run went quiet (plan mode, every todo blocked, no turn started, a failed turn nobody retries): leave plan mode and
+    /// The run went quiet (every todo blocked, no turn started, a failed turn nobody retries):
     /// ask for the next cycle. Never a pause; at most one ask per nudge window. An ask inside that window is asked again once
     /// it passes, never dropped: a failed turn reports its failure once, so nothing else would wake the run. The run is
     /// checked right before the ask, since it runs from the cycle-end queue and the user may pause or stop meanwhile.
@@ -751,14 +748,6 @@ impl Coordinator {
             self.tuning.nudge_ms
         };
         run.lock().next_nudge_at = now + window as i64;
-        if reason == "plan" {
-            let _ = self
-                .stock(&run.tab, json!({"type": "set_plan_mode", "enabled": false}))
-                .await;
-            if !self.quiet_and_running(run).await {
-                return Ok(());
-            }
-        }
         let asked = self
             .stock_response(
                 &run.tab,
@@ -2065,9 +2054,9 @@ mod tests {
     }
 
     #[test]
-    fn the_nudges_are_the_four_messages_the_typescript_sent() {
+    fn the_nudges_are_the_messages_the_typescript_sent() {
         let constants = &captured()["constants"]["nudge"];
-        for reason in ["no_progress", "plan", "blocked", "error"] {
+        for reason in ["no_progress", "blocked", "error"] {
             assert_eq!(json!(nudge_message(reason)), constants[reason], "{reason}");
         }
         assert_eq!(

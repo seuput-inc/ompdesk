@@ -6,7 +6,7 @@
  * Nothing changes while memory is fine: no tab is released then, so no session ever waits for its omp to start again.
  * Short means what the OS says now: pressure warn or critical, or less than `RESERVE_FRACTION` of RAM available.
  *
- * Only a quiet tab goes: the pool says nothing in it is live (hidden in every window and device, idle, no ask, plan,
+ * Only a quiet tab goes: the pool says nothing in it is live (hidden in every window and device, idle, no ask,
  * draft, retry or continuation, not opened by an agent), and its omp has started no process. A child process is live
  * state a restart would lose: the eval worker holds the session's eval state, a background job or a daemon runs, an
  * MCP server is connected. A console host (conhost.exe, which Windows starts beside a console program) is not work.

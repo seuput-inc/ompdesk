@@ -101,6 +101,9 @@ export interface Surface {
 
 export type ParitySession =
 	| "work"
+	| "firstRun"
+	| "routing-bot"
+	| "routing-worker"
 	| "reply"
 	| "steer"
 	| "advisor"
@@ -1091,7 +1094,7 @@ export const SETTINGS_SECTIONS = [
 
 /** The side panel's views (`PANEL_TABS`); the other session views open as sheets (`VIEW_SHEETS`, stores/ui.ts). */
 const PANELS = ["terminal", "diff", "preview", "files"] as const;
-const VIEW_SHEETS = ["jobs", "plan", "logs", "tree", "work"] as const;
+const VIEW_SHEETS = ["jobs", "logs", "tree", "work"] as const;
 
 const DIALOG_FLAGS: ReadonlyArray<{ id: string; action: string; args?: unknown[]; title: string }> = [
 	{ id: "dialog-rename", action: "openRenameDialog", title: "Rename session" },
@@ -1295,6 +1298,8 @@ async function expectTurnRail(page: Page, want: { first: number | { atMost: numb
 
 /** The parity work session's one prompt (parity.e2e.ts); `transcript-find` looks for it. */
 export const PARITY_WORK_PROMPT = "Show this session the same way everywhere";
+/** The bot of an away computer both parity computers kept a copy of (`bot-pane-offline`, parity.e2e.ts `seedAwayHostBots`). */
+export const AWAY_HOST_BOT = "bot-away-courier";
 
 export const SURFACES: readonly Surface[] = [
 	// ── Area A: sidebar, transcript, composer, panels ─────────────────────────────────────────
@@ -1947,16 +1952,15 @@ export const SURFACES: readonly Surface[] = [
 		settle: 600,
 	},
 	{
-		id: "composer-mode-plan",
-		area: "A",
-		title: "Mode popover › Plan",
-		open: page => ui(page, "openModes", "plan"),
-	},
-	{
 		id: "composer-mode-goal",
 		area: "A",
 		title: "Mode popover › Goal",
-		open: page => ui(page, "openModes", "goal"),
+		open: async page => {
+			await page.locator("[data-run-settings-trigger]").first().click();
+			await page.locator('[data-tab-id="goal"]').click();
+		},
+		ready: '[data-tab-id="goal"][aria-selected="true"]',
+		parity: { session: "work", after: closeOverlay },
 	},
 	{
 		id: "model-picker",
@@ -2319,23 +2323,29 @@ export const SURFACES: readonly Surface[] = [
 		when: () => false,
 		parity: { session: "work", after: closeOverlay },
 	},
-	{
-		id: "settings-claude-connection",
-		area: "B",
-		title: "Settings › Models & accounts, choosing a Claude subscription or an official API key",
-		open: async (page, look) => {
-			await openSettingsModels(page, look);
-			await page.locator('[data-settings-page] [data-provider-add="anthropic"]').click();
-			await page.getByRole("button", { name: say(look, "providers.featured.apiKey"), exact: true }).waitFor();
-		},
-		ready: "[data-claude-connect]",
-		when: () => false,
-		parity: {
-			session: "work",
-			after: closeOverlay,
-			available: () => process.env.OMP_GUI_TEST_LOGIN === "1" && process.env.OMP_GUI_TEST_MODELS === "1",
-		},
-	},
+	...(["connection", "key"] as const).map(
+		(step): Surface => ({
+			id: `settings-claude-${step}`,
+			area: "B",
+			title: step === "key" ? "Claude API key entry" : "Choose a Claude subscription or an official API key",
+			open: async (page, look) => {
+				await openSettingsModels(page, look);
+				await page.locator('[data-settings-page] [data-provider-add="anthropic"]').click();
+				const key = page
+					.getByRole("dialog")
+					.getByRole("button", { name: say(look, "providers.featured.apiKey"), exact: true });
+				if (step === "key") await key.click();
+				else await key.waitFor();
+			},
+			ready: step === "key" ? '[data-claude-key] input[type="password"]' : "[data-claude-connect]",
+			when: () => false,
+			parity: {
+				session: "work",
+				after: closeOverlay,
+				available: () => process.env.OMP_GUI_TEST_LOGIN === "1" && process.env.OMP_GUI_TEST_MODELS === "1",
+			},
+		}),
+	),
 	{
 		id: "settings-reset-tickets",
 		area: "B",
@@ -2569,6 +2579,32 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work" },
 	},
 	{
+		id: "bot-pane-offline",
+		area: "B",
+		title: "A paired computer's bot while that computer is away: greyed in the list with its owner offline, its page's notice",
+		// parity.e2e.ts seeds both computers' last copy of PC-C's bots (`seedAwayHostBots`); PC-C never comes back.
+		open: async (page, look) => {
+			await openDrawer(page, look);
+			await page.locator("[data-sidebar-bots-open]:visible").first().click();
+			await page.locator(`[data-bots-page-row="${AWAY_HOST_BOT}"]:visible`).first().click();
+			await page.locator('[data-bot-pane-tabs] [data-tab-id="items"]:visible').first().click();
+		},
+		ready: `[data-bot-pane="${AWAY_HOST_BOT}"] [data-bot-offline-banner]`,
+		settle: 600,
+		when: () => false,
+		parity: { session: "work", after: closeParityItems },
+	},
+	{
+		id: "bot-first-run-chat",
+		area: "B",
+		title: "The new bot's home chat before its owner has typed: a greeting and one question",
+		open: async page => {
+			await page.getByText("Hi! What should I start on?", { exact: true }).first().waitFor();
+		},
+		when: () => false,
+		parity: { session: "firstRun", inView: '.markdown-body :text-is("Hi! What should I start on?")' },
+	},
+	{
 		id: "bot-items",
 		area: "B",
 		title: "A bot's Items tab: the filter, its items in groups (Working, Planned) with their rows",
@@ -2610,6 +2646,31 @@ export const SURFACES: readonly Surface[] = [
 		settle: 600,
 		when: () => false,
 		parity: { session: "work" },
+	},
+	{
+		id: "bot-routed-ask",
+		area: "A",
+		title: "The bot receives the badge question from its worker",
+		open: async page => {
+			await page
+				.locator("[data-agent-mail='question']")
+				.filter({ hasText: "Which color should the badge be?" })
+				.waitFor();
+		},
+		ready: "[data-agent-mail='question']",
+		when: () => false,
+		parity: { session: "routing-bot" },
+	},
+	{
+		id: "bot-owner-dock-empty",
+		area: "A",
+		title: "The worker waits for its bot without asking the owner",
+		open: async page => {
+			await page.getByText("Choose the badge color fixture:bot-form", { exact: false }).last().waitFor();
+			if (await page.locator("[data-prompt-card]").count()) throw new Error("The routed form reached the owner");
+		},
+		when: () => false,
+		parity: { session: "routing-worker" },
 	},
 	{
 		id: "bot-cards",
@@ -3012,6 +3073,8 @@ export const SURFACES: readonly Surface[] = [
 		area: "A",
 		title: "Run settings (mode, thinking, approval, delegation): a popover, a bottom sheet on a phone",
 		open: page => page.locator("[data-run-settings-trigger]").first().click(),
+		ready: '[data-tab-id="goal"]',
+		parity: { session: "work", after: closeOverlay },
 	},
 	{
 		id: "composer-context-usage",
@@ -3270,24 +3333,6 @@ export const SURFACES: readonly Surface[] = [
 				message: "src/renderer/components/layout/sidebar/Sidebar.tsx already exists.",
 			});
 		},
-	},
-	{
-		id: "dialog-plan-approval",
-		area: "B",
-		title: "Plan approval dialog",
-		open: page =>
-			page.evaluate(() => {
-				const store = window.__stores?.planApproval?.getState() as
-					| { showProposal(proposal: unknown): void }
-					| undefined;
-				store?.showProposal({
-					planFilePath: "/Users/dev/projects/ompdesk/.omp/plans/fix-flaky-sidebar.md",
-					title: "Fix the flaky sidebar test",
-					planContent: `# Plan\n\n1. Reproduce the flake with \`--repeat 10\`\n2. Wait for the row to mount before asserting\n3. Run the suite ten times\n\n| Step | Owner |\n| --- | --- |\n| Reproduce | agent |\n| Fix | agent |\n\n\`\`\`ts\nawait waitFor(() => expect(rowFor("Session /work/alpha/mine")).toBeTruthy());\n\`\`\``,
-					options: ["execute", "compact", "keep_context", "save"],
-				});
-			}),
-		settle: 700,
 	},
 	{
 		id: "dialog-schedule-new",

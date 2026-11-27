@@ -235,13 +235,9 @@ pub fn todo_progress(phases: &[super::types::TodoPhase]) -> Option<String> {
     ))
 }
 
-/// The session waits on someone: an open ask or approval, or a plan proposal awaiting approval.
+/// The session waits on someone: an open ask or approval.
 pub fn waits(tab: &ControlTab) -> bool {
-    waits_on_person(!tab.asks.is_empty(), tab.plan.is_some())
-}
-
-pub(crate) fn waits_on_person(has_ask: bool, has_plan: bool) -> bool {
-    has_ask || has_plan
+    !tab.asks.is_empty()
 }
 
 /// A saved session's name: its title, else the task an agent opened it for, else its first message.

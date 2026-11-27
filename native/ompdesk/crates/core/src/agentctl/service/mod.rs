@@ -24,6 +24,7 @@ pub mod js;
 pub mod messages;
 pub mod pace;
 pub mod resolve;
+pub mod route;
 pub mod schedules;
 pub mod sessions;
 pub mod state;
@@ -152,6 +153,8 @@ pub struct Mem {
     pub inflight: HashMap<String, Shared<String>>,
     /// The question cards of each child its opener was already told of (`#cardsTold`).
     pub cards_told: HashMap<String, HashSet<String>>,
+    /// The question cards of each tab routed to the bot whose request its run served (`route.rs`), by request id.
+    pub routes: HashMap<String, HashMap<String, route::Route>>,
     /// Each session's last read cost and split (`#lastSpend`).
     pub last_spend: HashMap<String, Spend>,
     /// Closed children's last turns (`familyEdits`), by device, session file and close (`#closedTurns`).
@@ -164,6 +167,9 @@ pub struct Mem {
     pub bot_sent: HashMap<String, String>,
     /// Bot chats whose bridge has no `agent_control.bot` (an older omp or bridge): logged once each.
     pub bot_unsupported: HashSet<String>,
+    /// First-run home chats (`bot_first_run.rs`) by the last finished turn they were asked after (`lastRun.id`); one
+    /// absent is asked again at the next bot pass.
+    pub bot_first_asked: HashMap<String, Option<u64>>,
     /// A bot pass runs; another asked meanwhile runs once more when it ends.
     pub bot_ticking: bool,
     pub bot_tick_again: bool,
@@ -203,6 +209,9 @@ pub struct Inner {
     items: Mutex<Items>,
     /// The bot groups and their rooms (`rooms.json` beside `items.json`); never held with `bots` or `items`.
     rooms: Mutex<Rooms>,
+    /// What this computer shares of its bots with paired devices, and its hosts' bots as last heard (`bots_share`);
+    /// never held with `bots`, `items` or `rooms`.
+    across: Mutex<work::bots_share::Across>,
     /// Where a new bot's folder goes (`~/.omp/bots`); None: a bot needs its folder named.
     pub(crate) bots_root: Option<PathBuf>,
     /// The send outbox, or None where main keeps none (a queued message then lives only in its omp).
@@ -264,6 +273,11 @@ impl Inner {
     /// The bot groups and their rooms.
     pub fn rooms(&self) -> MutexGuard<'_, Rooms> {
         lock(&self.rooms)
+    }
+
+    /// The bots shared with paired devices and the paired hosts' copies.
+    pub(crate) fn across(&self) -> MutexGuard<'_, work::bots_share::Across> {
+        lock(&self.across)
     }
 
     /// `Date.now()`.
@@ -359,6 +373,12 @@ impl AgentControl {
                     .items
                     .as_ref()
                     .map(|items| items.with_file_name("rooms.json")),
+            )),
+            across: Mutex::new(work::bots_share::Across::started(
+                files
+                    .items
+                    .as_ref()
+                    .map(|items| items.with_file_name("bots-remote.json")),
             )),
             bots_root: files.bots_root.clone(),
             clock,
@@ -475,6 +495,7 @@ impl AgentControl {
             mem.reviewed.remove(tab_id);
             mem.conflicts.remove(tab_id);
             mem.cards_told.remove(tab_id);
+            mem.routes.remove(tab_id);
             mem.last_spend.remove(tab_id);
             mem.watched.remove(tab_id);
             mem.mailed_in
@@ -1333,6 +1354,24 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
             args.get("device").and_then(Value::as_str),
             args.get("deviceName").and_then(Value::as_str),
         )),
+        // A paired device's change to one of this computer's bots (`host.bots.command`): this computer's copy after it.
+        "botsFrom" => reply(
+            control
+                .bots_from(
+                    args.get("request").cloned().unwrap_or(Value::Null),
+                    args.get("device").and_then(Value::as_str).unwrap_or(""),
+                    args.get("deviceName")
+                        .and_then(Value::as_str)
+                        .unwrap_or("A paired computer"),
+                )
+                .await,
+        ),
+        // This computer's bots as its paired devices get them (`host.bots.list`).
+        "botsShare" => Reply::json(&control.bots_share()),
+        // What main heard of a paired host's bots: a copy, a change of it, its link, or that it is no longer paired.
+        "botsRemote" => Reply::json(&control.bots_remote(&args)),
+        // A paired host's bot posted in one of this computer's groups (`host.bots.roomPost`).
+        "botsRoomPost" => reply(control.bots_room_post(&args).await),
         "autoClose" => reply(
             control
                 .auto_close(&text_arg(&args, "callerTabId", method)?)

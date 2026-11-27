@@ -501,7 +501,6 @@ export interface AppFacts {
 	failure?: { tool: string; command?: string; exitCode?: number; message?: string };
 	/** Files changed this turn, in order, deduplicated. */
 	changedFiles?: string[];
-	plan?: { title?: string };
 	todos?: { done: number; total: number; inProgress?: string; next?: string };
 	/** A question the agent asked this turn and the user's answer (the turn went on after it). */
 	answered?: { question?: string; answer: string };
@@ -558,7 +557,6 @@ export function buildAppState(facts: AppFacts): string {
 			`files-changed: ${facts.changedFiles.length} (${shown.join(", ")}${more > 0 ? `, +${more} more` : ""})`,
 		);
 	}
-	if (facts.plan) lines.push(`plan: open${facts.plan.title ? ` — ${clip(facts.plan.title)}` : ""}`);
 	if (facts.todos && facts.todos.total > 0 && facts.todos.done < facts.todos.total) {
 		const { done, total, inProgress, next } = facts.todos;
 		const detail = [
@@ -647,7 +645,6 @@ export function isTestCommand(command: string): boolean {
 
 /** What the session tells beyond its messages (stock accessors the bridge reads). */
 export interface SessionExtras {
-	plan?: { enabled: boolean; title?: string };
 	/** Todo phases as stock keeps them. */
 	todoPhases?: ReadonlyArray<{ tasks: ReadonlyArray<{ content: string; status: string }> }>;
 	goal?: { objective: string; status?: string; enabled?: boolean };
@@ -772,7 +769,6 @@ export function extractFacts(messages: readonly unknown[], extras: SessionExtras
 	if (changed.size > 0) facts.changedFiles = [...changed];
 	if (lastTest) facts.tests = lastTest;
 	if (userBash) facts.userBash = userBash;
-	if (extras.plan?.enabled) facts.plan = { ...(extras.plan.title ? { title: extras.plan.title } : {}) };
 	if (extras.todoPhases) {
 		const tasks = extras.todoPhases.flatMap(phase => phase.tasks);
 		const open = tasks.filter(task => task.status !== "completed" && task.status !== "abandoned");
@@ -1154,6 +1150,8 @@ export class InlineScheduler {
 
 export interface SuggestionGate {
 	enabled: boolean;
+	/** A window, phone or paired device shows the session's tab (main's `next_prompt_shown`). */
+	shown: boolean;
 	/** The session is idle: no run, no compaction, nothing queued. */
 	idle: boolean;
 	draftEmpty: boolean;
@@ -1168,16 +1166,17 @@ export interface SuggestionGate {
 	force?: boolean;
 }
 
-export type SuggestionSkip = "disabled" | "busy" | "typing" | "subagent" | "no_reply" | "unchanged";
+export type SuggestionSkip = "disabled" | "hidden" | "busy" | "typing" | "subagent" | "no_reply" | "unchanged";
 
 /**
  * Should a suggestion be generated now? Every request costs money, so the answer is no unless the feature
- * is on, the session is idle, the composer empty, there is a reply to follow up, and the state moved since
- * the last suggestion.
+ * is on, someone can see the tab, the session is idle, the composer empty, there is a reply to follow up, and the
+ * state moved since the last suggestion. A hidden tab's moment stays unsuggested, so showing it asks then.
  */
 export function gateSuggestion(gate: SuggestionGate): { ok: true } | { ok: false; reason: SuggestionSkip } {
 	if (!gate.enabled) return { ok: false, reason: "disabled" };
 	if (!gate.main) return { ok: false, reason: "subagent" };
+	if (!gate.shown) return { ok: false, reason: "hidden" };
 	if (!gate.idle) return { ok: false, reason: "busy" };
 	if (!gate.draftEmpty) return { ok: false, reason: "typing" };
 	if (!gate.hasReply) return { ok: false, reason: "no_reply" };

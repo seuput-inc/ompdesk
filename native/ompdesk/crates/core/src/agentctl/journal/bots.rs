@@ -5,6 +5,7 @@
 //! What the record does not hold is read when the state is listed: `specialty` from the folder's `SOUL.md`
 //! (`specialty`), the open items and the Needs-you count from `items.rs`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,10 @@ pub struct BotRecord {
     pub auto_approve: bool,
     /// Paired devices (by id) whose agents may message it.
     pub reach: Vec<String>,
+    /// New bots accept messages from authenticated peers until the owner sets a reach list.
+    /// Older journals have no marker: preserve their list, including an explicit empty list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub all_paired: Option<bool>,
     /// None = never stale.
     pub stale_days: Option<f64>,
     /// Its Look around schedule's id.
@@ -45,6 +50,15 @@ pub struct BotRecord {
     /// The newest item event the owner had seen when they last opened its Items tab (`itemsOpened`): a row changed
     /// by anyone else since reads as new.
     pub items_seen: u64,
+    /// Its first run lasts (set at create, `service/work/bot_first_run.rs`): its home chat is sent the kickoff and
+    /// carries the first-run rules until the owner's first turn there ends; never ended by `SOUL.md`.
+    pub first_run: bool,
+    /// The first message OMPdesk sends its home chat when it is not the plain one: a template's or an import's.
+    pub kickoff: Option<String>,
+    /// The mail ids (send fingerprints) of the kickoffs sent to its home chat, oldest first.
+    pub kickoffs: Vec<String>,
+    /// The newest kickoff's turn ended without a word: its page offers Try again.
+    pub kickoff_silent: bool,
 }
 
 impl BotRecord {
@@ -147,6 +161,31 @@ impl Bots {
             .filter(|bot| bot.paused)
             .flat_map(|bot| bot.home.iter().chain(bot.sessions.iter()).cloned())
             .collect()
+    }
+
+    /// A stale selection must not replace an explicit reach decision made after the dialog opened.
+    pub fn allow_legacy_peers(&mut self, ids: &HashSet<&str>) -> bool {
+        if ids.is_empty()
+            || self
+                .bots
+                .iter()
+                .filter(|bot| {
+                    ids.contains(bot.id.as_str())
+                        && bot.all_paired.is_none()
+                        && bot.reach.is_empty()
+                })
+                .count()
+                != ids.len()
+        {
+            return false;
+        }
+        for bot in &mut self.bots {
+            if ids.contains(bot.id.as_str()) {
+                bot.all_paired = Some(true);
+            }
+        }
+        self.save();
+        true
     }
 
     fn save(&self) {

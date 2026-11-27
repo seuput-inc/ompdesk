@@ -16,7 +16,8 @@ const NEW = "new";
 export function HandToBotDialog({ tabId, title, onClose }: { tabId: string; title: string; onClose: () => void }) {
 	const t = useT();
 	const formId = useId();
-	const bots = useBotsStore(s => s.state.bots);
+	// This computer's bots only: handing a session to another computer's bot (R91) waits for cross-device handoff.
+	const bots = useBotsStore(s => s.state.bots).filter(bot => !bot.device);
 	const command = useBotsStore(s => s.command);
 	const ready = bots.filter(bot => !bot.paused && bot.home);
 	const [picked, setPicked] = useState<string>(ready[0]?.id ?? NEW);
