@@ -14,24 +14,30 @@ import { useHostView } from "../../stores/remote";
 import { useProjectList } from "../../stores/sidebar-projects";
 import { useTabsStore } from "../../stores/tabs";
 import { ListRow, TimeAgo } from "../common";
+import type { RowSelectionOf } from "../layout/sidebar/row-selection";
 import { openBotChat } from "./bot-launch";
 import { remoteBotTree } from "./bot-view";
 
-export function RemoteBotChats({ bot }: { bot: Bot }) {
+export function RemoteBotChats({ bot, selectionOf }: { bot: Bot; selectionOf: RowSelectionOf }) {
 	const t = useT();
 	const online = useHostView(bot.device)?.state === "online";
 	const { sessions } = useSessionList("global", bot.device, { read: online });
-	const activeTab = useTabsStore(s => s.tabs.find(tab => tab.id === s.activeTabId));
+	const tabs = useTabsStore(s => s.tabs);
 	const { chats, children } = remoteBotTree(bot, sessions, useProjectList(bot.device, online));
 	const render = (session: SessionInfo) => {
 		const home = session.path === bot.home;
+		const tab = tabs.find(tab => tab.device === bot.device && tab.sessionPath === session.path);
+		const { selected: active, current } = selectionOf(tab?.id);
 		return (
 			<ListRow
 				key={session.path}
+				buttonProps={{ "data-roving-item": `device-session:${bot.device}:${session.path}`, tabIndex: -1 }}
+				className="omp-sidebar-session-row"
 				leading={home ? <House aria-hidden className="size-4 text-(--sc-accent)" /> : undefined}
 				meta={<TimeAgo className="text-(--sc-text-subtle)" iso={session.modified} />}
 				onClick={() => void openBotChat(bot, session.path, undefined, session.cwd).catch(() => {})}
-				selected={activeTab?.device === bot.device && activeTab?.sessionPath === session.path}
+				rowProps={{ "data-active": active, "data-current": (active && current) || undefined }}
+				selected={active}
 				size="sm"
 				title={home ? t("bots.chats.home") : sessionDisplayTitle(session, "") || t("bots.chats.untitled")}
 			/>

@@ -111,6 +111,10 @@ describe("SidebarBots", () => {
 			"Reviews pull requests.",
 		);
 		expect(container.querySelector('[data-bot-entry="a"] [data-bot-line]')?.textContent).toBe("Paused");
+		const row = container.querySelector('[data-bot-row="z"]');
+		const detail = document.getElementById(row?.getAttribute("aria-describedby") ?? "");
+		expect(detail?.querySelector("time")?.textContent).toBeTruthy();
+		expect(detail?.textContent).toContain("Reviews pull requests.");
 		expect(container.querySelector('[data-bot-entry="a"] [data-bot-paused]')).not.toBeNull();
 		expect(container.querySelector("[data-test-chat]")).toBeNull();
 		await click(container.querySelector('[data-bot-fold="z"]'));

@@ -160,19 +160,18 @@ export function AppearanceSection() {
 						<Select
 							id={fontSizeId}
 							onChange={event => {
-								const next = Number(event.target.value);
+								const next = event.target.value === "default" ? undefined : Number(event.target.value);
 								void saveGuiPreference("fontSize", next, () => useUiStore.getState().setFontSize(next));
 							}}
-							value={String(fontSize)}
+							value={fontSize ?? "default"}
 						>
-							{!FONT_SIZES.some(size => size === fontSize) && (
+							<option value="default">{t("settings.gui.fontSizeDefault", { size: 13 })}</option>
+							{fontSize !== undefined && !FONT_SIZES.some(size => size === fontSize) && (
 								<option value={String(fontSize)}>{t("settings.gui.fontSizeOption", { size: fontSize })}</option>
 							)}
 							{FONT_SIZES.map(size => (
 								<option key={size} value={String(size)}>
-									{size === 15
-										? t("settings.gui.fontSizeDefault", { size })
-										: t("settings.gui.fontSizeOption", { size })}
+									{t("settings.gui.fontSizeOption", { size })}
 								</option>
 							))}
 						</Select>

@@ -47,6 +47,31 @@ html[data-input="touch"] :is(.omp-session-sidebar, .omp-sidebar-session-rename) 
 	line-height: var(--sc-leading-tight);
 }
 
+.omp-session-sidebar .omp-sidebar-bot-row {
+	gap: var(--sc-space-1-5);
+	padding: calc(var(--sc-space-1) * 1.25);
+}
+
+.omp-sidebar-bot-row [data-bot-row] {
+	line-height: calc(20 / 13);
+}
+
+/* A finger gets the full end of the row, not a hit box extending into its neighbour. */
+html[data-input="touch"] .omp-sidebar-bot-row:has(.omp-sidebar-bot-fold) {
+	padding-inline-end: var(--sc-row-action);
+	min-height: var(--sc-touch-target);
+}
+
+html[data-input="touch"] .omp-sidebar-bot-fold {
+	position: absolute;
+	inset-block: 0;
+	inset-inline-end: 0;
+	width: var(--sc-row-action);
+	height: 100%;
+	--hit-gap-x: 0px;
+	--hit-gap-y: 0px;
+}
+
 /* A project, Chats or archive header (`.omp-sidebar-head`): 24 px for a mouse at the slim density, its two buttons
    square to it; under a finger 32 px (mobile.css raises a project header to `--sc-row-touch`). */
 .omp-session-sidebar .omp-sidebar-head {

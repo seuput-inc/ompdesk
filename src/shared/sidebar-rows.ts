@@ -94,6 +94,8 @@ export interface SidebarFacts {
 	closed: ReadonlySet<string>;
 	/** A bot worker has a normal project row unless its bot tree takes it. */
 	botWorkers?: ReadonlySet<string>;
+	/** A saved chat belongs to its visible bot even when its journal names an earlier working folder. */
+	botChatFolders?: ReadonlyMap<string, string>;
 	projects: readonly SidebarProject[];
 	removed: readonly string[];
 	folder: (cwd: string) => FolderFacts;
@@ -420,7 +422,9 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 		});
 	}
 	const sessions = live.length === 0 ? listed : [...listed, ...live];
-	const code = sessions.filter(session => !isChatSession(session, facts.workspace));
+	const isChat = (session: RowSession) =>
+		!facts.botChatFolders?.has(session.path) && isChatSession(session, facts.workspace);
+	const code = sessions.filter(session => !isChat(session));
 
 	const runs = new Map<string, string>();
 	const runRows = new Set<string>();
@@ -454,6 +458,7 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 		new Map(Object.entries(facts.order.sessionParents ?? {})),
 	);
 	for (const path of runParent.keys()) rootOf.delete(path);
+	for (const path of facts.botChatFolders?.keys() ?? []) rootOf.delete(path);
 
 	// git spells a main checkout its own way (macOS /var → /private/var), the sessions keep the folder as typed: a
 	// project key that IS a session's folder under another spelling is that folder.
@@ -467,6 +472,8 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 	// The group a session is a row of: an Autopilot child goes where its run goes; a linked worktree's session is a row
 	// of its project.
 	const groupOf = (session: RowSession): string => {
+		const botFolder = facts.botChatFolders?.get(session.path);
+		if (botFolder !== undefined) return botFolder;
 		const project = facts.folder(runParent.get(session.path) ?? session.cwd).project;
 		return project === undefined ? session.cwd : keyOf(project);
 	};
@@ -477,6 +484,7 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 		// a tab the person uses holds it, whatever a record says of the checkout its work went to.
 		if (
 			rootOf.has(session.path) ||
+			facts.botChatFolders?.has(session.path) ||
 			facts.botWorkers?.has(session.path) ||
 			runParent.has(session.path) ||
 			finished(session)
@@ -671,7 +679,7 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 			})
 		: allGroups;
 	const chats = inListOrder(
-		sessions.filter(session => isChatSession(session, facts.workspace) && matches(session)),
+		sessions.filter(session => isChat(session) && matches(session)),
 		CHATS_ORDER_KEY,
 	);
 	const archived = facts.sessions

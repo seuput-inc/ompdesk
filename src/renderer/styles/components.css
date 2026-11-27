@@ -377,7 +377,7 @@
 }
 .markdown-body code {
 	font-family: var(--sc-font-mono);
-	font-size: 0.85em;
+	font-size: var(--omp-chat-code-size, 0.85em);
 	background: var(--sc-surface-2);
 	border: 0;
 	border-radius: var(--sc-radius-xs);
@@ -1098,6 +1098,12 @@
 	--omp-actions-reserve: calc(var(--sc-control-sm) + var(--sc-space-0-5));
 }
 
+/* A saved size keeps both the original UI scale and its transcript proportions. */
+:root:not([data-custom-font-size]) .omp-transcript-editorial :is(.omp-user-text, .omp-assistant-turn) {
+	--omp-chat-font-size: 13px;
+	--omp-chat-code-size: 12px;
+}
+
 /* The person's own prompt: Orca's bubble, a faint text-colored wash over the page with a hairline of the same kind
    (4 % and 7 % of the text in a light theme, 7 % and 6 % in a dark one, where a page that dark needs the stronger wash
    to show an edge at all). Washes of the text color, never a surface step, so every theme draws it the same way. */
@@ -1176,7 +1182,7 @@
 }
 
 .omp-transcript-editorial .omp-user-bubble .markdown-body {
-	font-size: inherit;
+	font-size: var(--omp-chat-font-size, inherit);
 	line-height: var(--sc-leading-normal);
 	color: var(--sc-text);
 }
@@ -3138,7 +3144,7 @@ button.omp-children-at-work-row:hover {
    88 % of the text over the page; lib/theme-contrast.ts "chat body" holds it to the floor). */
 .omp-transcript-editorial .omp-assistant-turn .markdown-body,
 .omp-transcript-editorial .omp-assistant-turn .omp-streaming-tail {
-	font-size: var(--sc-font-lg);
+	font-size: var(--omp-chat-font-size, var(--sc-font-lg));
 	line-height: var(--sc-leading-normal);
 	color: var(--sc-chat-text);
 }
