@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, type Locator, test } from "@playwright/test";
 import { exitApp, fixtureOmp, launchApp, pressShortcutUntilVisible, variants } from "./harness";
+import { selectInspectorView } from "./select-inspector-view";
 
 for (const theme of variants(["light", "dark"] as const)) {
 	test(`all panel views, modes and responsive chrome in ${theme}`, async () => {
@@ -60,7 +61,7 @@ for (const theme of variants(["light", "dark"] as const)) {
 				await expect(page.getByRole("dialog", { name: title })).toHaveCount(0);
 			};
 			await expect(aside.getByRole("searchbox", { name: "Search files" })).toBeVisible();
-			for (const label of ["Terminal", "Changes", "Preview", "Files"])
+			for (const label of ["Explorer", "Agents", "Source Control", "Checks"])
 				await expect(aside.getByRole("button", { name: label, exact: true })).toBeVisible();
 			await aside.screenshot({ animations: "disabled", path: test.info().outputPath(`header-${theme}.png`) });
 			await expect(aside.getByRole("button", { name: "View options", exact: true })).toHaveCount(0);
@@ -81,14 +82,20 @@ for (const theme of variants(["light", "dark"] as const)) {
 				await page.mouse.move(0, 0);
 				await panel.screenshot({ animations: "disabled", path: test.info().outputPath(`${name}-${theme}.png`) });
 			};
-			const selectView = async (panel: Locator, label: string) => {
-				await panel.locator(".omp-panel-topbar").getByRole("button", { name: label, exact: true }).click();
-				await expect(panel.locator(".omp-panel-topbar")).toContainText(label);
+			const selectView = async (panel: Locator, label: "Terminal" | "Changes" | "Preview" | "Files") => {
+				const desktop = (await panel.getAttribute("data-docked")) !== null;
+				const title =
+					desktop && label === "Changes" ? "Source Control" : desktop && label === "Files" ? "Explorer" : label;
+				await selectInspectorView(
+					page,
+					({ Terminal: "terminal", Changes: "diff", Preview: "preview", Files: "files" } as const)[label],
+				);
+				await expect(panel.locator("[data-panel-title]")).toHaveText(title);
 			};
 			await aside.getByRole("separator", { name: "Resize side panel" }).focus();
 			await page.keyboard.press("Home");
-			await expect(aside).toHaveCSS("width", "360px");
-			for (const label of ["Terminal", "Changes", "Preview", "Files"]) {
+			await expect(aside).toHaveCSS("width", "220px");
+			for (const label of ["Terminal", "Changes", "Preview", "Files"] as const) {
 				await selectView(aside, label);
 				await capture(aside, `${label.toLowerCase()}-min`);
 				if (label === "Changes") {
@@ -173,7 +180,7 @@ for (const theme of variants(["light", "dark"] as const)) {
 			const sheet = page.getByRole("dialog", { name: "Side panel", exact: true });
 			await pressShortcutUntilVisible(page, "ControlOrMeta+j", sheet);
 			await expect(sheet).toBeVisible();
-			for (const label of ["Terminal", "Changes", "Preview", "Files"]) {
+			for (const label of ["Terminal", "Changes", "Preview", "Files"] as const) {
 				await selectView(sheet, label);
 				await capture(sheet, `${label.toLowerCase()}-sheet`);
 			}

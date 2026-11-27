@@ -9,12 +9,10 @@ import { create } from "zustand";
 import type { Bot, BotImportSource } from "../../../shared/bots";
 import type { ScheduleDraft } from "../../../shared/schedules";
 import { loadChunk } from "../../lib/chunk-load";
+import { handToTab } from "../../lib/composer-handoff";
 import { translate } from "../../lib/i18n";
 import { useBotsStore } from "../../stores/bots";
-import type { ComposerStore } from "../../stores/composer";
 import { useRemoteStore } from "../../stores/remote";
-import { sessionRuntimeStore } from "../../stores/session-runtime-context";
-import { ensureTabRuntime } from "../../stores/tab-runtime";
 import { useTabsStore } from "../../stores/tabs";
 import { toast, toastError } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";
@@ -240,8 +238,5 @@ export async function openBotChat(bot: Bot, session: string | null, draft?: stri
 				? { cwd: bot.folder, sessionPath: session, kind: "agent", ...where }
 				: { cwd: bot.folder, kind: "agent", ...where },
 		);
-	if (tabId && draft) {
-		ensureTabRuntime(tabId);
-		sessionRuntimeStore<ComposerStore>(tabId, "composer")?.getState().setDraft(draft);
-	}
+	if (tabId && draft) handToTab(tabId, { text: draft, mode: "append" });
 }

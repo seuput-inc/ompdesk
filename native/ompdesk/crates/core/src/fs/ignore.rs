@@ -134,19 +134,7 @@ impl Ignore {
         }
     }
 
-    /// The defaults and the lines of `<root>/.gitignore` when it is readable.
-    pub fn load(root: &Path) -> Ignore {
-        let content = std::fs::read(root.join(".gitignore"))
-            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-            .unwrap_or_default();
-        let lines = content
-            .split('\n')
-            .map(|line| line.strip_suffix('\r').unwrap_or(line));
-        Ignore::new(DEFAULTS.iter().copied().chain(lines))
-    }
-
-    /// Whether `rel` (root-relative, `/`-separated) is ignored: the last rule that matches decides.
-    pub fn is_ignored(&mut self, rel: &str, is_dir: bool) -> bool {
+    fn decision(&mut self, rel: &str, is_dir: bool) -> Option<bool> {
         self.units.clear();
         self.units.extend(rel.encode_utf16());
         for index in (0..self.rules.len()).rev() {
@@ -155,10 +143,10 @@ impl Ignore {
                 continue;
             }
             if self.matches(index) {
-                return !self.rules[index].negated;
+                return Some(!self.rules[index].negated);
             }
         }
-        false
+        None
     }
 
     fn matches(&mut self, rule: usize) -> bool {
@@ -194,6 +182,61 @@ impl Ignore {
             return true;
         }
         (0..units.len()).any(|at| units[at] == SLASH && search.from(0, at + 1))
+    }
+}
+
+struct Scope {
+    parent: usize,
+    offset: usize,
+    rules: Ignore,
+}
+
+/// A queued directory inherits its parent's scope, not the previous directory visited by the walk.
+pub struct Scopes(Vec<Scope>);
+
+impl Scopes {
+    pub fn new() -> Self {
+        Self(vec![Scope {
+            parent: 0,
+            offset: 0,
+            rules: Ignore::new(DEFAULTS.iter().copied()),
+        }])
+    }
+
+    pub fn enter(&mut self, parent: usize, dir: &Path, rel: &str) -> usize {
+        let path = dir.join(".gitignore");
+        if !std::fs::symlink_metadata(&path)
+            .is_ok_and(|meta| meta.is_file() && !super::disk::linked(&meta))
+        {
+            return parent;
+        }
+        let Ok(bytes) = std::fs::read(path) else {
+            return parent;
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        let rules = Ignore::new(text.lines());
+        if rules.rules.is_empty() {
+            return parent;
+        }
+        self.0.push(Scope {
+            parent,
+            offset: rel.len() + usize::from(!rel.is_empty()),
+            rules,
+        });
+        self.0.len() - 1
+    }
+
+    pub fn ignored(&mut self, mut id: usize, rel: &str, is_dir: bool) -> bool {
+        loop {
+            let scope = &mut self.0[id];
+            if let Some(ignored) = scope.rules.decision(&rel[scope.offset..], is_dir) {
+                return ignored;
+            }
+            if id == 0 {
+                return false;
+            }
+            id = scope.parent;
+        }
     }
 }
 
@@ -351,7 +394,7 @@ mod tests {
         let mut wrong = Vec::new();
         for &(patterns, rel, is_dir, ignored) in CAPTURED {
             let mut rules = Ignore::new(patterns.iter().copied());
-            if rules.is_ignored(rel, is_dir) != ignored {
+            if rules.decision(rel, is_dir).unwrap_or(false) != ignored {
                 wrong.push((patterns, rel, is_dir, ignored));
             }
         }
@@ -369,6 +412,6 @@ mod tests {
         let pattern = "*a*a*a*a*a*a*a*a*a*a*a*a*b";
         let path = "a".repeat(400);
         let mut rules = Ignore::new([pattern]);
-        assert!(!rules.is_ignored(&path, false));
+        assert_eq!(rules.decision(&path, false), None);
     }
 }

@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::disk::{self, Kind};
 use super::error::{Codes, IO};
-use super::ignore::Ignore;
+use super::ignore::Scopes;
 use super::order::{NameOrder, js_trim};
 use crate::server::{Fault, Reply};
 
@@ -34,6 +34,10 @@ pub struct ListParams {
     prefix: String,
     max_depth: Option<Value>,
     max_entries: Option<Value>,
+    #[serde(default)]
+    hide_dotfiles: bool,
+    #[serde(default)]
+    show_ignored: bool,
     caps: FileCaps,
     locale: String,
 }
@@ -94,7 +98,6 @@ struct Listing<'a> {
 
 /// The workspace tree under `dir`: gitignore-aware, depth- and file-capped.
 pub fn list(params: &ListParams) -> Result<Reply, Fault> {
-    let mut ignore = Ignore::load(std::path::Path::new(&params.root));
     let max_depth = super::clamp_int(
         params.max_depth.as_ref(),
         1.0,
@@ -115,10 +118,11 @@ pub fn list(params: &ListParams) -> Result<Reply, Fault> {
     let mut walk = Walk {
         nodes: Vec::new(),
         max_files,
+        hide_dotfiles: params.hide_dotfiles,
         file_count: 0,
         truncated: false,
     };
-    let top = walk.run(&params.dir, &params.prefix, max_depth, &mut ignore, &order);
+    let top = walk.run(params, max_depth, &order);
     Reply::json(&Listing {
         entries: Tree {
             nodes: &walk.nodes,
@@ -131,6 +135,7 @@ pub fn list(params: &ListParams) -> Result<Reply, Fault> {
 struct Walk {
     nodes: Vec<Node>,
     max_files: usize,
+    hide_dotfiles: bool,
     file_count: usize,
     truncated: bool,
 }
@@ -140,25 +145,44 @@ struct Pending {
     abs: PathBuf,
     rel: String,
     parent: Option<usize>,
+    scope: usize,
 }
 
 impl Walk {
     /// Breadth-first: folders first, then files, each in name order. Level by level, so when the file cap stops the
     /// walk it is the deepest files that are missing, never every file of a folder that merely sorts late; every
     /// folder seen is in the tree, with the children the walk got to.
-    fn run(
-        &mut self,
-        dir: &str,
-        prefix: &str,
-        max_depth: usize,
-        ignore: &mut Ignore,
-        order: &NameOrder,
-    ) -> Vec<usize> {
+    fn run(&mut self, params: &ListParams, max_depth: usize, order: &NameOrder) -> Vec<usize> {
         let mut top = Vec::new();
+        let mut scopes = Scopes::new();
+        let mut scope = 0;
+        let mut dir = PathBuf::from(&params.root);
+        let mut prefix = String::with_capacity(params.prefix.len());
+        for part in params.prefix.split('/').filter(|part| !part.is_empty()) {
+            if std::path::Path::new(part).file_name() != Some(part.as_ref()) {
+                return top;
+            }
+            if !params.show_ignored {
+                scope = scopes.enter(scope, &dir, &prefix);
+            }
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(part);
+            dir.push(part);
+            if (self.hide_dotfiles && part.starts_with('.'))
+                || scopes.ignored(scope, &prefix, true)
+                || !std::fs::symlink_metadata(&dir)
+                    .is_ok_and(|meta| meta.is_dir() && !disk::linked(&meta))
+            {
+                return top;
+            }
+        }
         let mut level = vec![Pending {
-            abs: PathBuf::from(dir),
-            rel: prefix.to_owned(),
+            abs: dir,
+            rel: prefix,
             parent: None,
+            scope,
         }];
         let mut depth = 0;
         while !level.is_empty() && !self.truncated {
@@ -172,9 +196,21 @@ impl Walk {
                     continue;
                 };
                 entries.retain(|entry| entry.kind != Kind::Link);
+                let scope = if !params.show_ignored
+                    && entries
+                        .iter()
+                        .any(|e| e.kind == Kind::File && e.name == ".gitignore")
+                {
+                    scopes.enter(folder.scope, &folder.abs, &folder.rel)
+                } else {
+                    folder.scope
+                };
                 entries.sort_by(|a, b| order.compare(&a.name, &b.name));
                 let mut files = Vec::new();
                 for entry in entries {
+                    if self.hide_dotfiles && entry.name.starts_with('.') {
+                        continue;
+                    }
                     let is_dir = match entry.kind {
                         Kind::Dir => true,
                         Kind::File => false,
@@ -185,7 +221,7 @@ impl Walk {
                     } else {
                         format!("{}/{}", folder.rel, entry.name)
                     };
-                    if ignore.is_ignored(&rel, is_dir) {
+                    if scopes.ignored(scope, &rel, is_dir) {
                         continue;
                     }
                     if is_dir {
@@ -196,6 +232,7 @@ impl Walk {
                                 abs: folder.abs.join(&entry.raw),
                                 rel,
                                 parent: Some(id),
+                                scope,
                             });
                         }
                     } else if self.file_count >= self.max_files {
@@ -341,4 +378,87 @@ pub fn list_dirs(params: &ListDirsParams) -> Result<Reply, Fault> {
     let truncated = names.len() > LIST_DIRS_MAX_ENTRIES;
     names.truncate(LIST_DIRS_MAX_ENTRIES);
     Reply::json(&DirNames { names, truncated })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn root_walk_and_direct_subtree_use_the_same_scoped_ignores() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        for dir in ["left", "right", "excluded"] {
+            fs::create_dir(root.join(dir)).unwrap();
+            for file in ["pass.log", "local", ".note"] {
+                fs::write(root.join(dir).join(file), "").unwrap();
+            }
+        }
+        fs::write(root.join(".gitignore"), "*.log\nexcluded/\n").unwrap();
+        fs::write(root.join("left/.gitignore"), "!/pass.log\n/local\n").unwrap();
+        fs::write(root.join("excluded/.gitignore"), "!pass.log\n").unwrap();
+
+        let entries = |prefix: &str, hide_dotfiles, show_ignored| {
+            let reply = list(&ListParams {
+                root: root.to_str().unwrap().into(),
+                dir: root.join(prefix).to_str().unwrap().into(),
+                prefix: prefix.into(),
+                max_depth: None,
+                max_entries: None,
+                hide_dotfiles,
+                show_ignored,
+                caps: FileCaps {
+                    default: 50.0,
+                    max: 50.0,
+                },
+                locale: "en-US".into(),
+            })
+            .unwrap();
+            serde_json::from_str::<Value>(reply.result.get()).unwrap()["entries"].clone()
+        };
+        let tree = entries("", true, false);
+        let left = entries("left", true, false);
+        assert_eq!(tree[0]["children"], left);
+        let names = |rows: &Value| -> Vec<String> {
+            rows.as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["name"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        assert_eq!(names(&tree), ["left", "right"]);
+        assert_eq!(names(&left), ["pass.log"]);
+        assert_eq!(names(&tree[1]["children"]), ["local"]);
+        assert!(names(&entries("excluded", false, false)).is_empty());
+        assert_eq!(names(&entries("left", true, true)), ["local", "pass.log"]);
+        let visible = names(&entries("left", false, false));
+        assert!(visible.iter().any(|name| name == ".note"));
+        assert!(!visible.iter().any(|name| name == "local"));
+    }
+
+    #[test]
+    fn a_direct_deep_listing_inherits_intermediate_rules_but_not_sibling_rules() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        for dir in ["a/deep", "b/deep"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+            fs::write(root.join(dir).join("hidden"), "").unwrap();
+        }
+        fs::write(root.join("a/.gitignore"), "/deep/hidden\n").unwrap();
+        for (prefix, expected) in [("a/deep", 0), ("b/deep", 1)] {
+            let params = serde_json::from_value(serde_json::json!({
+                "root": root, "dir": root.join(prefix), "prefix": prefix,
+                "caps": {"default": 50, "max": 50}, "locale": "en-US",
+            }))
+            .unwrap();
+            let reply = list(&params).unwrap();
+            let tree: Value = serde_json::from_str(reply.result.get()).unwrap();
+            assert_eq!(
+                tree["entries"].as_array().unwrap().len(),
+                expected,
+                "{prefix}"
+            );
+        }
+    }
 }

@@ -16,7 +16,8 @@ import { exitApp, fixtureOmp, variants } from "./harness";
 
 const LABELS = {
 	en: {
-		files: "Files",
+		files: "Explorer",
+		fileActions: "File actions",
 		newFile: "New file…",
 		newFolder: "New folder…",
 		rename: "Rename…",
@@ -25,7 +26,7 @@ const LABELS = {
 		untracked: "Untracked",
 		gone: "This file was deleted or renamed on disk.",
 		back: "Back to files",
-		contentSearch: "Search in files",
+		names: "Names",
 		query: "Text to find in files",
 		matchCase: "Match case",
 		count: "1 match in 1 file",
@@ -40,7 +41,8 @@ const LABELS = {
 		cancel: "Cancel",
 	},
 	ko: {
-		files: "파일",
+		files: "탐색기",
+		fileActions: "파일 작업",
 		newFile: "새 파일…",
 		newFolder: "새 폴더…",
 		rename: "이름 바꾸기…",
@@ -49,7 +51,7 @@ const LABELS = {
 		untracked: "추적 안 됨",
 		gone: "이 파일이 디스크에서 삭제되었거나 이름이 바뀌었어요.",
 		back: "파일 목록으로",
-		contentSearch: "파일 내용 검색",
+		names: "이름",
 		query: "파일에서 찾을 텍스트",
 		matchCase: "대소문자 구분",
 		count: "파일 1개에서 1건",
@@ -148,7 +150,8 @@ for (const [language, theme] of variants([
 			await capture("files-git");
 
 			// C34: a new file inside the selected folder, named inline.
-			await aside.getByRole("button", { name: label.newFile, exact: true }).click();
+			await aside.getByRole("button", { name: label.fileActions, exact: true }).click();
+			await page.getByRole("menuitem", { name: label.newFile, exact: true }).click();
 			const field = aside.locator("[data-files-name-field]");
 			await field.fill("made.ts");
 			await field.press("Enter");
@@ -228,7 +231,7 @@ for (const [language, theme] of variants([
 			await aside.getByRole("button", { name: /export const one/ }).click();
 			await expect(aside.locator("[data-viewer-kind]")).toBeVisible();
 			await aside.getByRole("button", { name: label.back, exact: true }).click();
-			await aside.getByRole("button", { name: label.contentSearch, exact: true }).click();
+			await aside.getByRole("radio", { name: label.names, exact: true }).click();
 
 			// C18: the open file follows the disk, then says when it is gone.
 			await row("file:notes.md").click();
@@ -273,7 +276,7 @@ for (const [language, theme] of variants([
 			await page.getByRole("dialog").getByRole("button", { name: label.discard, exact: true }).click();
 			await expect(aside.getByRole("searchbox", { name: label.query })).toBeFocused();
 			expect(await fs.readFile(path.join(project, "notes.md"), "utf8")).toBe("# Someone else\n");
-			await aside.getByRole("button", { name: label.contentSearch, exact: true }).click();
+			await aside.getByRole("radio", { name: label.names, exact: true }).click();
 			await row("file:notes.md").click();
 			await expect(aside.locator("[data-file-editor]")).toHaveCount(0);
 			await fs.rm(path.join(project, "notes.md"));

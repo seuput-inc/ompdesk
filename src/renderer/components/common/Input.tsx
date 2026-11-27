@@ -273,8 +273,7 @@ export const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(function 
 	);
 });
 
-export interface SearchFieldProps
-	extends Omit<InputProps, "type" | "leadingIcon" | "trailing" | "label" | "value" | "onChange"> {
+export interface SearchFieldProps extends Omit<InputProps, "type" | "trailing" | "label" | "value" | "onChange"> {
 	/** Accessible name (visually hidden — the search icon and placeholder carry the meaning). */
 	label: string;
 	value: string;
@@ -294,7 +293,7 @@ export interface SearchFieldProps
  * to close the surrounding picker.
  */
 export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(function SearchField(
-	{ label, value, onValueChange, shortcut, onKeyDown, listbox, ...rest },
+	{ label, value, onValueChange, shortcut, onKeyDown, listbox, leadingIcon = <Search />, ...rest },
 	ref,
 ) {
 	const t = useT();
@@ -312,7 +311,7 @@ export const SearchField = forwardRef<HTMLInputElement, SearchFieldProps>(functi
 				: {})}
 			aria-label={label}
 			className="[&::-webkit-search-cancel-button]:appearance-none"
-			leadingIcon={<Search />}
+			leadingIcon={leadingIcon}
 			onChange={event => onValueChange(event.target.value)}
 			onKeyDown={event => {
 				onKeyDown?.(event);

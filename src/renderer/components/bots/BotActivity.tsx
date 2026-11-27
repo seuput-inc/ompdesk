@@ -22,18 +22,23 @@
  */
 import {
 	Check,
+	ChevronRight,
 	CircleAlert,
 	CircleDashed,
 	Clock,
 	ExternalLink,
+	Eye,
 	GitBranch,
+	ListChecks,
+	Moon,
 	Play,
 	Plus,
 	RotateCcw,
+	Settings,
 	Trash2,
 	X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { type WaitingAsker, waitingAskers } from "../../../shared/bot-connectors";
 import {
 	type Bot,
@@ -44,12 +49,14 @@ import {
 	itemsNeedingYou,
 } from "../../../shared/bots";
 import type { AskKind } from "../../lib/attention";
+import { handToTab } from "../../lib/composer-handoff";
 import { formatClock } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { openExternal } from "../../lib/open-external";
 import { sessionRun } from "../../lib/session-run";
 import { useBotsStore } from "../../stores/bots";
 import { tabSummary, useHostedSessionsStore } from "../../stores/hosted-sessions";
+import { useRuntimeTabId } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
 import { toast, toastError } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";
@@ -66,6 +73,9 @@ import {
 	Spinner,
 	StatusDot,
 } from "../common";
+import { BotActionsMenu } from "./BotActionsMenu";
+import { BotAvatar } from "./BotAvatar";
+import { BotLineText } from "./BotLineText";
 import {
 	type BotAutomation,
 	botAutomations,
@@ -77,6 +87,7 @@ import { type LaunchStep, openBotChat, retryKickoff, useBotLaunch } from "./bot-
 import { openBotPage } from "./bot-page";
 import { openItem } from "./items/item-store";
 import { type MemoryLineChange, memoryLineChanges, undoMemoryLine } from "./memory-lines";
+import { useBotFacts } from "./use-bot-facts";
 
 /** The item's own page, under the bot's Items tab. */
 function showItem(bot: Bot, item: Item): void {
@@ -95,6 +106,57 @@ export function BotActivity({ bot }: { bot: Bot }) {
 			{!bot.device && <Workers bot={bot} />}
 			<Automations bot={bot} />
 			<TidyUp bot={bot} />
+		</div>
+	);
+}
+
+export function BotInspectorHome({ bot }: { bot: Bot }) {
+	const t = useT();
+	const items = useBotsStore(s => s.state.items);
+	const open = items.filter(item => item.bot === bot.id && item.device === bot.device && !item.closedAt);
+	const selected = useMemo(() => [bot], [bot]);
+	const facts = useBotFacts(selected).get(bot.id);
+	const mark = bot.paused ? "paused" : facts?.needsYou ? "needsYou" : facts?.failed ? "failed" : null;
+	return (
+		<div className="flex min-w-0 flex-col gap-3.5 overflow-auto py-3 pr-2 pl-3.5" data-inspector-bot={bot.id}>
+			<header className="flex items-center gap-1.5 px-2 py-1">
+				<BotAvatar bot={bot} mark={mark} size={36} working={facts?.working} />
+				<div className="min-w-0 flex-1">
+					<div className="truncate text-sc-md leading-5 font-semibold">{bot.name}</div>
+					<BotLineText
+						bot={bot}
+						className="text-sc-xs leading-4 text-(--sc-text-muted)"
+						line={facts?.line ?? { kind: "idle" }}
+					/>
+				</div>
+				<IconButton
+					icon={<Settings />}
+					label={t("bots.menu.settings")}
+					onClick={() => openBotPage(bot.id, "settings")}
+					size="md"
+				/>
+				<BotActionsMenu bot={bot} />
+			</header>
+			{open.length ? (
+				<ul aria-label={t("bots.pane.items")}>
+					{open.map(item => (
+						<li key={item.id}>
+							<Button onClick={() => showItem(bot, item)} size="sm" variant="ghost">
+								{item.title}
+							</Button>
+						</li>
+					))}
+				</ul>
+			) : (
+				<EmptyState
+					className="mt-3.5 gap-2 px-6 py-12 [&>span]:size-5 [&>span]:bg-transparent [&>span>svg]:size-5"
+					size="sm"
+					description={t("panel.inspector.emptyItems", { name: bot.name })}
+					icon={<ListChecks />}
+					title={t("bots.items.empty.title")}
+				/>
+			)}
+			<Automations bot={bot} inspector />
 		</div>
 	);
 }
@@ -464,7 +526,7 @@ function Workers({ bot }: { bot: Bot }) {
 	);
 }
 
-function Automations({ bot }: { bot: Bot }) {
+function Automations({ bot, inspector = false }: { bot: Bot; inspector?: boolean }) {
 	const t = useT();
 	const schedules = useSchedulesOf(bot.device);
 	const [all, setAll] = useState(false);
@@ -484,103 +546,152 @@ function Automations({ bot }: { bot: Bot }) {
 			: row.own === "tidy"
 				? t("bots.automations.tidy")
 				: row.schedule.name.replace(`${bot.name}: `, "");
+	const tabId = useRuntimeTabId();
+	const startDraft = () => {
+		const text = t("bots.automations.draft");
+		if (inspector && tabId) handToTab(tabId, { text, mode: "append" });
+		else
+			void openBotChat(bot, bot.home, text).catch(error =>
+				toastError({ title: t("bots.automations.failed"), error }),
+			);
+	};
+	const add = <IconButton icon={<Plus />} label={t("bots.automations.new")} onClick={startDraft} size="sm" />;
+	const Section = inspector ? "details" : "section";
 	return (
-		<section aria-label={t("bots.automations.title")} className="flex flex-col gap-1" data-bot-automations>
-			<SectionLabel
-				action={
-					<IconButton
-						icon={<Plus />}
-						label={t("bots.automations.new")}
-						onClick={() => void openBotChat(bot, bot.home, t("bots.automations.draft")).catch(() => {})}
-						size="sm"
-					/>
-				}
-				count={rows.length}
+		<div className={inspector ? "group/automation-header relative" : undefined}>
+			<Section
+				aria-label={t("bots.automations.title")}
+				className={inspector ? "group/automation" : "flex flex-col gap-1"}
+				data-bot-automations
+				open={inspector || undefined}
 			>
-				{t("bots.automations.title")}
-			</SectionLabel>
-			{rows.length === 0 ? (
-				<EmptyState size="row" title={t("bots.automations.none")} />
-			) : (
-				shown.map(row => (
-					<ListRow
-						actionCount={3}
-						actions={
-							<>
-								<IconButton
-									icon={<Play />}
-									label={t("bots.automations.runNow")}
-									onClick={() => run({ action: "runNow", id: row.schedule.id }, t("bots.automations.queued"))}
-									size="sm"
-								/>
-								{/* Settings › Schedules is this computer's: a paired host's bot's schedules are listed here only. */}
-								{!bot.device && (
+				{inspector ? (
+					<summary className="flex min-h-7 cursor-pointer list-none items-center gap-2 rounded-md pr-8 pl-2 text-sc-xs leading-4 font-semibold text-(--sc-text-muted)">
+						<ChevronRight aria-hidden className="size-3.5 group-open/automation:rotate-90" />
+						{t("bots.automations.title")}
+					</summary>
+				) : (
+					<SectionLabel action={add} count={rows.length}>
+						{t("bots.automations.title")}
+					</SectionLabel>
+				)}
+				{inspector &&
+					(["tidy", "lookAround"] as const)
+						.filter(kind => !own.some(row => row.own === kind))
+						.map(kind => (
+							<Button
+								key={kind}
+								className="w-full justify-start gap-2 border-0 px-2 text-sc-sm leading-5 font-normal"
+								icon={kind === "tidy" ? <Moon /> : <Eye />}
+								onClick={() => openBotPage(bot.id, "settings")}
+								size="sm"
+								variant="ghost"
+							>
+								{t(kind === "tidy" ? "bots.automations.tidy" : "bots.automations.lookAround")}
+							</Button>
+						))}
+				{!inspector && rows.length === 0 ? (
+					<EmptyState size="row" title={t("bots.automations.none")} />
+				) : (
+					shown.map(row => (
+						<ListRow
+							actionCount={3}
+							actions={
+								<>
 									<IconButton
-										icon={<ExternalLink />}
-										label={t("bots.automations.open")}
-										onClick={() => useUiStore.getState().openSettings("schedules")}
+										icon={<Play />}
+										label={t("bots.automations.runNow")}
+										onClick={() =>
+											run({ action: "runNow", id: row.schedule.id }, t("bots.automations.queued"))
+										}
 										size="sm"
 									/>
-								)}
-								<IconButton
-									icon={<Trash2 />}
-									label={t("bots.automations.delete")}
-									onClick={() => setDeleting(row)}
-									size="sm"
-								/>
-							</>
-						}
-						actionsOnHover
-						data-bot-automation={row.state}
-						description={
-							row.state === "failed"
-								? (row.last?.error ?? t("bots.automations.lastFailed"))
-								: row.next
-									? t("bots.automations.next", { when: formatClock(row.next) })
-									: undefined
-						}
-						key={row.schedule.id}
-						leading={
-							row.state === "failed" ? (
-								<CircleAlert aria-hidden className="size-4 text-(--sc-danger)" />
-							) : row.state === "running" ? (
-								<Spinner size="sm" />
-							) : (
-								<Clock aria-hidden className="size-4 text-(--sc-text-muted)" />
-							)
-						}
-						meta={
-							<Badge
-								size="xs"
-								variant={row.state === "paused" ? "muted" : row.state === "failed" ? "error" : "default"}
-							>
-								{t(`bots.automations.state.${row.state}`)}
-							</Badge>
-						}
-						onClick={() => run({ action: "setEnabled", id: row.schedule.id, enabled: !row.schedule.enabled })}
+									{/* Settings › Schedules is this computer's: a paired host's bot's schedules are listed here only. */}
+									{!bot.device && (
+										<IconButton
+											icon={<ExternalLink />}
+											label={t("bots.automations.open")}
+											onClick={() => useUiStore.getState().openSettings("schedules")}
+											size="sm"
+										/>
+									)}
+									<IconButton
+										icon={<Trash2 />}
+										label={t("bots.automations.delete")}
+										onClick={() => setDeleting(row)}
+										size="sm"
+									/>
+								</>
+							}
+							actionsOnHover
+							data-bot-automation={row.state}
+							description={
+								row.state === "failed"
+									? (row.last?.error ?? t("bots.automations.lastFailed"))
+									: row.next
+										? t("bots.automations.next", { when: formatClock(row.next) })
+										: undefined
+							}
+							key={row.schedule.id}
+							leading={
+								row.state === "failed" ? (
+									<CircleAlert aria-hidden className="size-4 text-(--sc-danger)" />
+								) : row.state === "running" ? (
+									<Spinner size="sm" />
+								) : (
+									<Clock aria-hidden className="size-4 text-(--sc-text-muted)" />
+								)
+							}
+							meta={
+								<Badge
+									size="xs"
+									variant={row.state === "paused" ? "muted" : row.state === "failed" ? "error" : "default"}
+								>
+									{t(`bots.automations.state.${row.state}`)}
+								</Badge>
+							}
+							onClick={() => run({ action: "setEnabled", id: row.schedule.id, enabled: !row.schedule.enabled })}
+							size="sm"
+							title={label(row)}
+							tooltip={row.schedule.enabled ? t("bots.automations.pause") : t("bots.automations.resume")}
+						/>
+					))
+				)}
+				{inspector && (
+					<Button
+						className="h-auto w-full justify-start py-1 pr-2 pl-8 text-left text-(--sc-text-muted)"
+						onClick={startDraft}
 						size="sm"
-						title={label(row)}
-						tooltip={row.schedule.enabled ? t("bots.automations.pause") : t("bots.automations.resume")}
-					/>
-				))
+						variant="ghost"
+					>
+						<span className="min-w-0 whitespace-normal text-sc-xs leading-4 font-normal">
+							{t("bots.automations.ask", { name: bot.name })}
+						</span>
+					</Button>
+				)}
+				{!all && others.length > ROWS && (
+					<Button className="self-start" onClick={() => setAll(true)} size="sm" variant="ghost">
+						{t("bots.automations.all", { count: rows.length })}
+					</Button>
+				)}
+				<ConfirmDialog
+					confirmLabel={t("bots.automations.delete")}
+					message={t("bots.automations.deleteMessage", { name: deleting ? label(deleting) : "" })}
+					onCancel={() => setDeleting(null)}
+					onConfirm={() => {
+						if (deleting) run({ action: "delete", id: deleting.schedule.id });
+						setDeleting(null);
+					}}
+					open={deleting !== null}
+					title={t("bots.automations.deleteTitle")}
+				/>
+			</Section>
+			{inspector && (
+				<div className="absolute top-0 right-1 opacity-0 group-hover/automation-header:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+					{add}
+				</div>
 			)}
-			{!all && others.length > ROWS && (
-				<Button className="self-start" onClick={() => setAll(true)} size="sm" variant="ghost">
-					{t("bots.automations.all", { count: rows.length })}
-				</Button>
-			)}
-			<ConfirmDialog
-				confirmLabel={t("bots.automations.delete")}
-				message={t("bots.automations.deleteMessage", { name: deleting ? label(deleting) : "" })}
-				onCancel={() => setDeleting(null)}
-				onConfirm={() => {
-					if (deleting) run({ action: "delete", id: deleting.schedule.id });
-					setDeleting(null);
-				}}
-				open={deleting !== null}
-				title={t("bots.automations.deleteTitle")}
-			/>
-		</section>
+		</div>
 	);
 }
 

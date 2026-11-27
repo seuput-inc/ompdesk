@@ -358,6 +358,26 @@ html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-to
 	margin-inline-start: auto;
 }
 
+/* A named view needs only its switcher. Keep its controls below the actual native caption band, not a second title. */
+html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-topbar[data-view-header] {
+	padding-top: var(--sc-caption-band);
+	min-height: calc(var(--sc-caption-band) + var(--sc-topbar-h));
+	padding-bottom: 0;
+}
+
+.omp-panel-topbar[data-view-header] [data-panel-title] {
+	position: absolute;
+	inset: 0 auto auto 0;
+	width: 1px;
+	max-height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+}
+
+html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-topbar[data-view-header] [data-panel-views] {
+	margin-inline-start: 0;
+}
+
 /* The side panel's views (Orca's activity bar marker): the shown view is the full text colour over a 2 px line along
    its bottom, the others muted; no wash. `box-shadow`, never `::after`, which carries a touch control's hit area. */
 [data-panel-views] > button {
@@ -374,6 +394,126 @@ html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-to
 	box-shadow: inset 0 -2px 0 var(--sc-text);
 	border-end-start-radius: 0;
 	border-end-end-radius: 0;
+}
+
+.omp-inspector [data-view-header] {
+	border-bottom: 1px solid var(--sc-divider);
+}
+
+html:not([data-input="touch"]) .omp-inspector [data-panel-views]:not([data-bot-views]) > button {
+	width: var(--sc-topbar-h);
+	height: var(--sc-topbar-h);
+}
+
+.omp-inspector [data-panel-views]:not([data-bot-views]) > button[aria-pressed="true"] {
+	box-shadow: none;
+	background: linear-gradient(var(--sc-text), var(--sc-text)) center bottom / 50% 2px no-repeat;
+}
+
+.omp-inspector [data-panel-views]:not([data-bot-views]) > button > svg {
+	width: var(--sc-icon-md);
+	height: var(--sc-icon-md);
+}
+
+.omp-inspector [data-bot-views] {
+	gap: var(--sc-space-0-5);
+}
+
+.omp-inspector [data-bot-views] > button {
+	padding-inline: var(--sc-space-2);
+	font-size: var(--sc-font-xs);
+	font-weight: var(--sc-weight-medium);
+	line-height: 1.333333;
+}
+
+html:not([data-input="touch"]) .omp-inspector [data-bot-views] > button:not([aria-pressed="true"]) {
+	width: var(--sc-control-sm);
+	padding-inline: 0;
+}
+
+.omp-inspector [data-bot-views] > button[aria-pressed="true"] {
+	border-radius: var(--sc-radius-md);
+	border-width: 0;
+	background: var(--sc-hover);
+	box-shadow: none;
+}
+
+.omp-inspector .omp-explorer > :first-child {
+	min-height: var(--sc-control-md);
+	padding: 0 var(--sc-space-2);
+	font-size: var(--sc-font-xs);
+}
+
+html:not([data-input="touch"]) .omp-inspector {
+	& [data-panel-close] {
+		width: var(--sc-control-md);
+		height: var(--sc-space-6);
+	}
+	& [data-panel-close] > svg,
+	& [data-inspector-bot] header [aria-haspopup="menu"] > svg {
+		width: var(--sc-icon-md);
+		height: var(--sc-icon-md);
+	}
+	& [data-inspector-bot] header [aria-haspopup="menu"] {
+		width: var(--sc-control-md);
+		height: var(--sc-control-md);
+	}
+	& .omp-explorer > :first-child button {
+		width: var(--sc-space-6);
+		height: var(--sc-space-6);
+	}
+	& .omp-explorer > :first-child button > svg {
+		width: var(--sc-space-3);
+		height: var(--sc-space-3);
+	}
+}
+
+.omp-inspector .omp-explorer [data-files-search-mode] {
+	font-size: var(--sc-font-xs);
+	font-weight: var(--sc-weight-medium);
+	line-height: 1.333333;
+}
+
+.omp-inspector .omp-explorer [data-files-search-mode][aria-checked="true"] {
+	background: color-mix(in srgb, var(--sc-text) 13%, var(--sc-surface-3));
+	box-shadow: none;
+}
+
+html:not([data-input="touch"]) .omp-inspector .omp-explorer [data-files-search-mode] {
+	height: var(--sc-space-6);
+}
+
+.omp-inspector .omp-explorer input[type="search"] {
+	height: var(--sc-control-md);
+	background: var(--sc-surface-3);
+	border-color: var(--sc-border-subtle);
+	font-size: var(--sc-font-xs);
+}
+
+.omp-inspector .omp-explorer-empty {
+	padding: var(--sc-space-2);
+}
+
+.omp-inspector .omp-explorer-empty > div > div {
+	font-size: var(--sc-font-2xs);
+	font-weight: 400;
+	color: var(--sc-text-muted);
+}
+
+.omp-inspector [data-inspector-bot] > [data-empty-state] > div {
+	gap: var(--sc-space-2);
+}
+
+.omp-inspector [data-inspector-bot] > [data-empty-state] > div > div {
+	font-size: var(--sc-font-sm);
+	font-weight: 500;
+}
+
+.omp-inspector [data-inspector-bot] > [data-empty-state] p {
+	line-height: 1.333333;
+	text-wrap: wrap;
+	font-size: var(--sc-font-xs);
+	font-weight: 400;
 }
 
 /* Side panel docked left (Settings › General › Window): it takes the
