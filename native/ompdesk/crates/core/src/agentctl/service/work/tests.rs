@@ -4,6 +4,7 @@
 //! captured from the TypeScript (`captured.json`).
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
@@ -21,17 +22,15 @@ type Asked = Arc<Mutex<Vec<(String, Value)>>>;
 
 /// A control over a fake main: `reply` answers every ask; what was asked and told is kept in order.
 fn rig(
-    id: u64,
     state: Value,
     caps: Caps,
     reply: impl Fn(&str, &Value) -> Result<Value, String> + Send + 'static,
 ) -> (AgentControl, Asked) {
-    rig_files(id, state, caps, &Files::default(), reply)
+    rig_files(state, caps, &Files::default(), reply)
 }
 
 /// `rig` over journals in `files`.
 fn rig_files(
-    id: u64,
     state: Value,
     caps: Caps,
     files: &Files,
@@ -41,6 +40,9 @@ fn rig_files(
     let (tx, _task) = crate::wire::spawn_writer(writer);
     let events = crate::server::test_events(&tx);
     std::mem::forget(tx);
+    // Port IDs share one process-wide registry with the fixed IDs used by other test modules.
+    static NEXT_PORT: AtomicU64 = AtomicU64::new(1 << 32);
+    let id = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
     let port =
         Port::<HostState>::open(&events, id, serde_json::from_value(state).unwrap()).unwrap();
     let asked: Asked = Arc::default();
@@ -167,7 +169,6 @@ async fn run(control: &AgentControl, tool: &str, args: Value) -> (String, bool) 
 #[tokio::test]
 async fn compare_gives_each_branch_its_facts_its_answer_and_runs_no_tests() {
     let (control, asked) = rig(
-        201,
         family(),
         Caps::default(),
         main_of(|method, args| match method {
@@ -223,7 +224,7 @@ async fn compare_says_when_no_session_has_a_worktree_and_names_a_judge_that_fail
         "tabs": [tab("main0001", json!({})), tab("plain002", json!({ "title": "Plain" }))],
         "windowOf": { "main0001": "w", "plain002": "w" },
     });
-    let (control, _) = rig(202, state, Caps::default(), main_of(|_, _| None));
+    let (control, _) = rig(state, Caps::default(), main_of(|_, _| None));
     let (text, is_error) = run(&control, "ompdesk_compare", json!({})).await;
     assert!(is_error);
     assert!(text.contains("No worktree sessions to compare"), "{text}");
@@ -252,7 +253,6 @@ async fn compare_names_the_judge_and_ranks_the_sessions_it_knows() {
         "why": "it did the work",
     });
     let (control, asked) = rig(
-        203,
         family(),
         Caps::default(),
         main_of(move |method, args| {
@@ -287,7 +287,6 @@ async fn compare_names_the_judge_and_ranks_the_sessions_it_knows() {
 #[tokio::test]
 async fn merge_asks_first_merges_and_never_pushes() {
     let (control, asked) = rig(
-        204,
         family(),
         Caps::default(),
         main_of(|method, _| {
@@ -323,7 +322,6 @@ async fn merge_declined_conflicting_and_hooked() {
     let result = Arc::new(Mutex::new(json!(null)));
     let outcome = result.clone();
     let (control, asked) = rig(
-        205,
         family(),
         Caps::default(),
         main_of(move |method, args| match method {
@@ -390,7 +388,7 @@ async fn merge_refuses_a_session_without_a_branch_or_still_working() {
         .unwrap()
         .push(tab("plain003", json!({})));
     state["windowOf"]["plain003"] = json!("w");
-    let (control, _) = rig(206, state, Caps::default(), main_of(|_, _| None));
+    let (control, _) = rig(state, Caps::default(), main_of(|_, _| None));
     let (text, _) = run(&control, "ompdesk_merge", json!({ "session": "plain003" })).await;
     assert!(text.contains("has no worktree branch to merge"), "{text}");
     let (text, _) = run(&control, "ompdesk_merge", json!({ "session": "beta0002" })).await;
@@ -411,7 +409,6 @@ async fn schedule_creates_after_a_card_lists_and_changes_only_the_agent_s_own() 
     let saved = Arc::new(Mutex::new(Vec::<Value>::new()));
     let book = saved.clone();
     let (control, asked) = rig(
-        207,
         state,
         Caps::default(),
         main_of(move |method, args| match method {
@@ -522,13 +519,12 @@ async fn schedule_creates_after_a_card_lists_and_changes_only_the_agent_s_own() 
 
 #[tokio::test]
 async fn schedule_says_so_without_a_service_and_needs_one_start() {
-    let (control, _) = rig(208, family(), Caps::default(), main_of(|_, _| None));
+    let (control, _) = rig(family(), Caps::default(), main_of(|_, _| None));
     let (text, _) = run(&control, "ompdesk_schedule", json!({ "action": "list" })).await;
     assert_eq!(text, "Scheduled runs are not available on this computer.");
     let mut state = family();
     state["scheduleDevices"] = json!([""]);
     let (control, _) = rig(
-        209,
         state,
         Caps::default(),
         main_of(|method, _| (method == "schedules.command").then(|| json!({ "schedules": [] }))),
@@ -561,7 +557,6 @@ async fn schedule_asks_for_every_precheck_and_sends_the_answer_where_asked() {
     state["manageEnabled"] = json!(true);
     state["texts"]["schedulePrecheckMessage"] = json!("{caller} prechecks {name} with {command}");
     let (control, asked) = rig(
-        290,
         state,
         Caps::default(),
         main_of(|method, args| match method {
@@ -642,7 +637,6 @@ async fn autopilot_starts_from_the_callers_folder_reads_and_stops_a_run() {
         ..Caps::default()
     };
     let (control, asked) = rig(
-        210,
         state,
         caps,
         main_of(move |method, _| match method {
@@ -746,7 +740,6 @@ async fn autopilot_stop_ends_a_run_after_its_cycle_and_refuses_what_is_no_run() 
         ..Caps::default()
     };
     let (control, asked) = rig(
-        211,
         state,
         caps,
         main_of(|method, args| match method {
@@ -790,7 +783,6 @@ async fn the_review_board_lists_what_waits_and_what_each_session_cost() {
     state["tabs"][2]["busy"] = json!(true);
     state["tabs"][2]["busySince"] = json!(1_700_000_000_000u64);
     let (control, _) = rig(
-        212,
         state,
         Caps::default(),
         main_of(|method, args| match method {
@@ -853,7 +845,6 @@ async fn the_review_board_lists_what_waits_and_what_each_session_cost() {
 #[tokio::test]
 async fn a_merged_clean_child_is_no_review_item_but_a_conflict_one_is() {
     let (control, _) = rig(
-        213,
         family(),
         Caps::default(),
         main_of(|method, args| {
@@ -898,7 +889,6 @@ async fn family_edits_read_each_childs_turn_and_each_closed_childs_file_once() {
     let stored_reads = Arc::new(Mutex::new(0));
     let reads = stored_reads.clone();
     let (control, _) = rig(
-        214,
         state,
         Caps::default(),
         main_of(move |method, args| match method {
@@ -966,7 +956,6 @@ async fn stored_edits_resolve_relative_paths_in_the_owner_not_the_session_index(
         ..Default::default()
     };
     let (control, _) = rig(
-        219,
         family(),
         Caps::default(),
         main_of(|method, args| {
@@ -996,7 +985,6 @@ async fn an_app_action_runs_a_command_on_another_computer_in_one_background_sess
     ));
     state["windowOf"]["util0001"] = json!("w");
     let (control, asked) = rig(
-        215,
         state,
         Caps::default(),
         main_of(|method, args| match method {
@@ -1031,7 +1019,7 @@ async fn an_app_action_runs_a_command_on_another_computer_in_one_background_sess
 
 #[tokio::test]
 async fn an_app_action_without_app_ports_says_so_and_the_catalog_lists_with_them() {
-    let (control, _) = rig(216, family(), Caps::default(), main_of(|_, _| None));
+    let (control, _) = rig(family(), Caps::default(), main_of(|_, _| None));
     let (text, is_error) = run(&control, "ompdesk_app", json!({ "action": "settings.get" })).await;
     assert!(is_error);
     assert_eq!(text, "App actions are not available here.");
@@ -1040,7 +1028,7 @@ async fn an_app_action_without_app_ports_says_so_and_the_catalog_lists_with_them
         app_ports: true,
         ..Caps::default()
     };
-    let (control, _) = rig(217, family(), caps, main_of(|_, _| None));
+    let (control, _) = rig(family(), caps, main_of(|_, _| None));
     let (text, is_error) = run(&control, "ompdesk_app_list", json!({ "area": "settings" })).await;
     assert!(!is_error, "{text}");
     assert!(text.contains("settings.get"), "{text}");
@@ -1260,17 +1248,15 @@ fn moved_to(to: &str, session: &str) -> String {
 
 /// Makes the bot Ada, shows main a world where `bot1` runs in its folder and lets the bot see its chat.
 async fn ada(
-    id: u64,
     root: &Scratch,
     mails: Mails,
     extra: impl Fn(&str, &Value) -> Option<Value> + Send + 'static,
 ) -> (AgentControl, Asked, String) {
-    ada_in(id, root, &bot_files(root), mails, extra).await
+    ada_in(root, &bot_files(root), mails, extra).await
 }
 
 /// `ada` over the journals in `files`.
 async fn ada_in(
-    id: u64,
     root: &Scratch,
     files: &Files,
     mails: Mails,
@@ -1278,7 +1264,6 @@ async fn ada_in(
 ) -> (AgentControl, Asked, String) {
     let folder = root.0.join("ada").to_string_lossy().into_owned();
     let (control, asked) = rig_files(
-        id,
         bot_world(&folder),
         Caps::default(),
         files,
@@ -1310,7 +1295,7 @@ const NOTE: crate::agentctl::rules::mail::MailDelivery =
 #[tokio::test]
 async fn a_bot_is_made_in_its_own_folder_and_its_first_chat_becomes_its_home_once() {
     let root = Scratch::new();
-    let (control, asked, _) = ada(9_701, &root, Mails::default(), |_, _| None).await;
+    let (control, asked, _) = ada(&root, Mails::default(), |_, _| None).await;
     assert!(root.0.join("ada").is_dir());
     let bot = control.bot_named("ada").unwrap();
     assert_eq!(bot.home.as_deref(), Some("/s/bot.jsonl"));
@@ -1374,7 +1359,7 @@ async fn a_bot_is_made_in_its_own_folder_and_its_first_chat_becomes_its_home_onc
 async fn a_paused_bot_holds_its_mail_and_a_resume_hands_each_held_report_over_once() {
     let root = Scratch::new();
     let mails = Mails::default();
-    let (control, _, _) = ada(9_702, &root, mails.clone(), |_, _| None).await;
+    let (control, _, _) = ada(&root, mails.clone(), |_, _| None).await;
     let (text, is_error) = run(
         &control,
         "ompdesk_bot",
@@ -1423,7 +1408,7 @@ async fn a_paused_bot_holds_its_mail_and_a_resume_hands_each_held_report_over_on
 #[tokio::test]
 async fn a_send_to_a_paused_bot_is_refused_and_nothing_changes() {
     let root = Scratch::new();
-    let (control, asked, id) = ada(9_703, &root, Mails::default(), |_, _| None).await;
+    let (control, asked, id) = ada(&root, Mails::default(), |_, _| None).await;
     control
         .bots_command(json!({ "action": "update", "id": id, "paused": true }))
         .await
@@ -1460,7 +1445,6 @@ async fn deleting_a_bot_drops_its_held_mail_with_a_note_to_its_sender_and_remove
     let root = Scratch::new();
     let mails = Mails::default();
     let (control, asked, id) = ada(
-        9_704,
         &root,
         mails.clone(),
         |method, args| {
@@ -1536,7 +1520,7 @@ async fn an_owner_change_is_mailed_once_per_version_and_an_empty_one_or_a_gone_i
 {
     let root = Scratch::new();
     let mails = Mails::default();
-    let (control, _, _) = ada(9_705, &root, mails.clone(), |_, _| None).await;
+    let (control, _, _) = ada(&root, mails.clone(), |_, _| None).await;
     let out = control
         .run(
             "bot1",
@@ -1599,7 +1583,7 @@ async fn an_owner_change_is_mailed_once_per_version_and_an_empty_one_or_a_gone_i
 #[tokio::test]
 async fn a_closed_item_writes_its_journal_line_and_items_work_only_in_a_bot_s_chat() {
     let root = Scratch::new();
-    let (control, _, _) = ada(9_706, &root, Mails::default(), |_, _| None).await;
+    let (control, _, _) = ada(&root, Mails::default(), |_, _| None).await;
     let (text, is_error) = run(&control, "ompdesk_item", json!({ "action": "list" })).await;
     assert!(
         is_error && text.contains("ompdesk_item works in a bot's chat"),
@@ -1648,7 +1632,7 @@ async fn a_closed_item_writes_its_journal_line_and_items_work_only_in_a_bot_s_ch
 #[tokio::test]
 async fn an_item_reads_stale_snoozed_and_limited_from_what_it_links() {
     let root = Scratch::new();
-    let (control, _, bot_id) = ada(9_707, &root, Mails::default(), |_, _| None).await;
+    let (control, _, bot_id) = ada(&root, Mails::default(), |_, _| None).await;
     let bot = control.bot_named("Ada").unwrap();
     let now = control.now();
     let item = crate::agentctl::journal::items::ItemRecord {
@@ -1707,7 +1691,7 @@ async fn an_item_reads_stale_snoozed_and_limited_from_what_it_links() {
 #[tokio::test]
 async fn a_session_an_item_opened_is_linked_and_names_its_file_once_it_has_one() {
     let root = Scratch::new();
-    let (control, _, _) = ada(9_708, &root, Mails::default(), |_, _| None).await;
+    let (control, _, _) = ada(&root, Mails::default(), |_, _| None).await;
     let (text, is_error) = run(
         &control,
         "ompdesk_session_open",
@@ -1755,7 +1739,7 @@ async fn a_session_an_item_opened_is_linked_and_names_its_file_once_it_has_one()
 #[tokio::test]
 async fn a_bot_by_name_is_its_home_chat_and_another_computer_reaches_it_unless_restricted() {
     let root = Scratch::new();
-    let (control, _, _) = ada(9_709, &root, Mails::default(), |_, _| None).await;
+    let (control, _, _) = ada(&root, Mails::default(), |_, _| None).await;
     let tabs = control.host.state().tabs.clone();
     let caller = tabs[0].clone();
     assert_eq!(
@@ -1822,7 +1806,7 @@ fn deleted(asked: &Asked, schedule: &str) -> bool {
 #[tokio::test]
 async fn look_around_is_on_for_a_new_bot_every_four_hours_on_weekdays_and_follows_its_setting() {
     let root = Scratch::new();
-    let (control, asked, id) = ada(9_710, &root, Mails::default(), |method, args| {
+    let (control, asked, id) = ada(&root, Mails::default(), |method, args| {
         (method == "schedules.create").then(|| {
             let mut made = scheduled(
                 "sch-look",
@@ -1895,7 +1879,7 @@ async fn look_around_is_on_for_a_new_bot_every_four_hours_on_weekdays_and_follow
 #[tokio::test]
 async fn a_look_replaces_the_suggestions_list_and_a_dismissed_one_stays_out() {
     let root = Scratch::new();
-    let (control, _, id) = ada(9_716, &root, Mails::default(), |_, _| None).await;
+    let (control, _, id) = ada(&root, Mails::default(), |_, _| None).await;
     let suggest = |list: Value| {
         let control = control.clone();
         async move {
@@ -1973,7 +1957,7 @@ async fn a_look_replaces_the_suggestions_list_and_a_dismissed_one_stays_out() {
 #[tokio::test]
 async fn only_the_owner_picks_the_approval_mode_and_skill_projects_a_bots_chats_start_with() {
     let root = Scratch::new();
-    let (control, _, id) = ada(9_713, &root, Mails::default(), |_, _| None).await;
+    let (control, _, id) = ada(&root, Mails::default(), |_, _| None).await;
     let launch = |control: &AgentControl| control.bots_state()["bots"][0]["launch"].clone();
     assert_eq!(launch(&control), json!([]));
     let outcome = control
@@ -2028,7 +2012,6 @@ async fn a_session_a_bots_chat_opened_is_its_worker_with_its_branch() {
     world["parents"] =
         json!({ "kid1": { "callerTabId": "bot1" }, "work1": { "callerTabId": "main0001" } });
     let (control, asked) = rig_files(
-        9_714,
         world,
         Caps::default(),
         &bot_files(&root),
@@ -2067,7 +2050,7 @@ async fn a_session_a_bots_chat_opened_is_its_worker_with_its_branch() {
 #[tokio::test]
 async fn a_bot_exported_to_a_package_file_comes_back_as_a_new_bot() {
     let root = Scratch::new();
-    let (control, _, id) = ada(9_715, &root, Mails::default(), |_, _| None).await;
+    let (control, _, id) = ada(&root, Mails::default(), |_, _| None).await;
     let folder = root.0.join("ada");
     std::fs::write(
         folder.join("SOUL.md"),
@@ -2155,7 +2138,7 @@ async fn a_bot_exported_to_a_package_file_comes_back_as_a_new_bot() {
 #[tokio::test]
 async fn a_session_handed_to_a_bot_gets_its_home_chat_as_opener_and_the_text_from_it() {
     let root = Scratch::new();
-    let (control, asked, id) = ada(9_711, &root, Mails::default(), |_, _| None).await;
+    let (control, asked, id) = ada(&root, Mails::default(), |_, _| None).await;
     control
         .bots_command(json!({ "action": "handTo", "id": id, "session": "work1", "text": "Finish the release notes" }))
         .await
@@ -2183,7 +2166,7 @@ async fn a_session_handed_to_a_bot_gets_its_home_chat_as_opener_and_the_text_fro
 #[tokio::test]
 async fn the_owners_create_carries_the_purpose_and_a_refused_seed_makes_no_bot() {
     let root = Scratch::new();
-    let (control, _asked, _id) = ada(9_712, &root, Mails::default(), |_, _| None).await;
+    let (control, _asked, _id) = ada(&root, Mails::default(), |_, _| None).await;
     let state = control
         .bots_command(json!({
             "action": "create",
@@ -2236,7 +2219,7 @@ async fn the_owners_create_carries_the_purpose_and_a_refused_seed_makes_no_bot()
 async fn an_answer_names_its_question_and_a_resent_comment_posts_once() {
     let root = Scratch::new();
     let mails = Mails::default();
-    let (control, _, bot_id) = ada(9_720, &root, mails.clone(), |_, _| None).await;
+    let (control, _, bot_id) = ada(&root, mails.clone(), |_, _| None).await;
     let tool = |args: Value| control.run("bot1", "ompdesk_item", args, None);
     assert!(
         !tool(json!({ "action": "add", "title": "Plan the trip" }))
@@ -2327,7 +2310,7 @@ async fn an_answer_names_its_question_and_a_resent_comment_posts_once() {
 async fn a_move_of_several_items_is_one_mail_and_waiting_says_what_it_waits_on() {
     let root = Scratch::new();
     let mails = Mails::default();
-    let (control, asked, bot_id) = ada(9_721, &root, mails.clone(), |_, _| None).await;
+    let (control, asked, bot_id) = ada(&root, mails.clone(), |_, _| None).await;
     for title in ["One", "Two"] {
         control
             .run(
@@ -2405,7 +2388,7 @@ async fn a_move_of_several_items_is_one_mail_and_waiting_says_what_it_waits_on()
 async fn a_room_asks_the_members_its_reply_mode_names_and_a_member_answers_with_ompdesk_room() {
     let root = Scratch::new();
     let mails = Mails::default();
-    let (control, _, ada_id) = ada(9_722, &root, mails.clone(), |_, _| None).await;
+    let (control, _, ada_id) = ada(&root, mails.clone(), |_, _| None).await;
     assert!(
         !run(
             &control,
@@ -2493,7 +2476,7 @@ async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_onc
     // The host: Ada, whose item asks the owner.
     let root = Scratch::new();
     let mails = Mails::default();
-    let (host, host_asked, ada_id) = ada(9_790, &root, mails.clone(), |_, _| None).await;
+    let (host, host_asked, ada_id) = ada(&root, mails.clone(), |_, _| None).await;
     let tool = |args: Value| host.run("bot1", "ompdesk_item", args, None);
     assert!(
         !tool(json!({ "action": "add", "title": "Pick a day" }))
@@ -2583,7 +2566,6 @@ async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_onc
     // The device: its main carries a change of the host's to it (`botsCommand`) and hands back the host's answer.
     let carried = answer.clone();
     let (device, device_asked) = rig(
-        9_791,
         bot_world("/elsewhere"),
         Caps::default(),
         move |method, _| {
@@ -2634,7 +2616,7 @@ async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_onc
 async fn a_group_asks_another_computers_bot_on_its_host_and_takes_its_post_once() {
     // The device: Ada is its own; Rex lives on paired host dev-a, whose copy it keeps.
     let root = Scratch::new();
-    let (device, asked, ada_id) = ada(9_792, &root, Mails::default(), |method, _| {
+    let (device, asked, ada_id) = ada(&root, Mails::default(), |method, _| {
         (method == "botsCommand").then(|| json!({ "asked": true }))
     })
     .await;
@@ -2755,7 +2737,7 @@ async fn a_group_asks_another_computers_bot_on_its_host_and_takes_its_post_once(
 async fn a_bot_asked_by_a_paired_computers_group_answers_it_there() {
     let root = Scratch::new();
     let mails = Mails::default();
-    let (host, asked, ada_id) = ada(9_793, &root, mails.clone(), |method, _| {
+    let (host, asked, ada_id) = ada(&root, mails.clone(), |method, _| {
         (method == "botsRoomPostTo").then(|| json!({ "sent": true }))
     })
     .await;
@@ -2905,12 +2887,11 @@ fn quiet_world() -> Value {
 }
 
 /// A control over `bots` written to the registry first (a start after an update), whose folders exist.
-fn started_with(id: u64, root: &Scratch, bots: Value) -> (AgentControl, Asked) {
+fn started_with(root: &Scratch, bots: Value) -> (AgentControl, Asked) {
     if !root.0.join("bots.json").exists() {
         std::fs::write(root.0.join("bots.json"), bots.to_string()).unwrap();
     }
     rig_files(
-        id,
         quiet_world(),
         Caps::default(),
         &kept_files(root),
@@ -2940,7 +2921,7 @@ async fn a_new_bot_speaks_first_once_and_its_first_run_ends_with_the_owners_firs
     let root = Scratch::new();
     let mails = Mails::default();
     let facts = Arc::new(Mutex::new(said(0, false, "none")));
-    let (control, asked, id) = ada(9_730, &root, mails.clone(), chat_facts(&facts)).await;
+    let (control, asked, id) = ada(&root, mails.clone(), chat_facts(&facts)).await;
     // Orca bot-new-record.ts:36: every new bot starts in its first run.
     assert!(control.bot_named("Ada").unwrap().first_run);
     control.bots_tick().await;
@@ -3017,7 +2998,7 @@ async fn a_bot_made_with_a_purpose_still_runs_first_run_and_an_owner_first_gets_
     let root = Scratch::new();
     let mails = Mails::default();
     let facts = Arc::new(Mutex::new(said(1, false, "none")));
-    let (control, _asked, _id) = ada(9_731, &root, mails.clone(), chat_facts(&facts)).await;
+    let (control, _asked, _id) = ada(&root, mails.clone(), chat_facts(&facts)).await;
     let state = control
         .bots_command(
             json!({ "action": "create", "name": "Cy", "purpose": "Keeps the changelog honest." }),
@@ -3050,7 +3031,7 @@ async fn a_kickoff_that_ended_silent_is_sent_again_once_by_itself_and_on_each_tr
     let root = Scratch::new();
     let mails = Mails::default();
     let facts = Arc::new(Mutex::new(said(0, false, "none")));
-    let (control, _asked, id) = ada(9_732, &root, mails.clone(), chat_facts(&facts)).await;
+    let (control, _asked, id) = ada(&root, mails.clone(), chat_facts(&facts)).await;
     control.bots_tick().await;
     // The page reopens before the next bot pass has noticed that the turn ended without a word.
     // The live chat, not the last listed silent flag, decides whether to retry.
@@ -3107,8 +3088,7 @@ async fn a_rename_moves_the_bots_folder_its_sessions_and_routines_and_tells_its_
             json!({ "kind": "interval", "minutes": 5 }),
         ),
     ]));
-    let (control, asked, id) =
-        ada(9_730, &root, Mails::default(), schedule_book(book.clone())).await;
+    let (control, asked, id) = ada(&root, Mails::default(), schedule_book(book.clone())).await;
     std::fs::write(root.0.join("ada").join("SOUL.md"), "I am Ada.").unwrap();
     control
         .bots_command(json!({ "action": "update", "id": id, "name": "Bea" }))
@@ -3153,7 +3133,7 @@ async fn a_rename_moves_the_bots_folder_its_sessions_and_routines_and_tells_its_
 #[tokio::test]
 async fn a_renamed_bots_folder_waits_for_a_running_turn() {
     let root = Scratch::new();
-    let (control, asked, id) = ada(9_731, &root, Mails::default(), |_, _| None).await;
+    let (control, asked, id) = ada(&root, Mails::default(), |_, _| None).await;
     let folder = root.0.join("ada").to_string_lossy().into_owned();
     let mut busy = bot_world(&folder);
     busy["tabs"][1]["busy"] = json!(true);
@@ -3181,7 +3161,7 @@ async fn a_renamed_bots_folder_waits_for_a_running_turn() {
 #[tokio::test]
 async fn a_move_that_fails_leaves_the_old_folder_whole() {
     let root = Scratch::new();
-    let (control, asked, id) = ada(9_732, &root, Mails::default(), |_, _| None).await;
+    let (control, asked, id) = ada(&root, Mails::default(), |_, _| None).await;
     std::fs::write(root.0.join("ada").join("SOUL.md"), "I am Ada.").unwrap();
     super::bot_move::FAIL_RENAME.with(|fail| fail.set(true));
     let (text, is_error) = run(
@@ -3210,14 +3190,8 @@ async fn a_move_cut_off_by_a_crash_finishes_on_the_next_start() {
     let from = root.0.join("ada").to_string_lossy().into_owned();
     let to = root.0.join("bea").to_string_lossy().into_owned();
     {
-        let (control, _, id) = ada_in(
-            9_733,
-            &root,
-            &kept_files(&root),
-            Mails::default(),
-            |_, _| None,
-        )
-        .await;
+        let (control, _, id) =
+            ada_in(&root, &kept_files(&root), Mails::default(), |_, _| None).await;
         control.bots().change(&id, |record| {
             record.name = "Bea".to_owned();
             record.sessions.push("/s/other.jsonl".to_owned());
@@ -3232,7 +3206,6 @@ async fn a_move_cut_off_by_a_crash_finishes_on_the_next_start() {
     let schedules = schedule_book(book.clone());
     let incomplete = std::sync::atomic::AtomicBool::new(true);
     let (control, asked) = rig_files(
-        9_734,
         bot_world(&from),
         Caps::default(),
         &kept_files(&root),
@@ -3292,8 +3265,8 @@ async fn a_bot_never_renamed_keeps_its_folder_across_starts() {
         { "id": "bot-a", "name": "Ada", "folder": root.0.join("ada-2") },
         { "id": "bot-b", "name": "Bea", "folder": root.0.join("my-desk") },
     ]);
-    for port in [9_735, 9_736] {
-        let (control, asked) = started_with(port, &root, bots.clone());
+    for _ in 0..2 {
+        let (control, asked) = started_with(&root, bots.clone());
         control.bots_tick().await;
         assert_eq!(relocations(&asked), 0);
     }
@@ -3307,7 +3280,6 @@ async fn a_same_name_rename_moves_an_old_names_folder_once() {
     let root = Scratch::new();
     std::fs::create_dir(root.0.join("old-cy")).unwrap();
     let (control, asked) = started_with(
-        9_737,
         &root,
         json!([{ "id": "bot-c", "name": "Cy", "folder": root.0.join("old-cy") }]),
     );
@@ -3342,7 +3314,7 @@ async fn a_folder_outside_the_bots_folder_or_behind_a_link_never_moves() {
         { "id": "bot-f", "name": "Fay", "folder": root.0.join("through").join("proj") },
         { "id": "bot-g", "name": "Gus", "folder": root.0.join("lnk"), "renamedFrom": "Old" },
     ]);
-    let (control, asked) = started_with(9_738, &root, bots);
+    let (control, asked) = started_with(&root, bots);
     control.bots_tick().await;
     for (id, name) in [("bot-d", "Dee2"), ("bot-e", "Eve2"), ("bot-f", "Fay2")] {
         control
@@ -3371,7 +3343,6 @@ async fn a_nested_folder_moves_beside_itself_unless_another_bots_folder_overlaps
         std::fs::create_dir_all(root.0.join(name)).unwrap();
     }
     let (control, asked) = started_with(
-        9_739,
         &root,
         json!([
             { "id": "bot-h", "name": "Old", "folder": root.0.join("team").join("old") },
