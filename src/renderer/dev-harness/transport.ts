@@ -9,6 +9,12 @@
  */
 
 import { fixtureProviderOptions } from "../../../e2e/models-config-fixture";
+import {
+	DRIFT_CALLS,
+	todoDrift,
+	type TodoDriftEvent,
+	todoDriftState,
+} from "../../../resources/gui-bridge/todo-drift-core";
 import { BOTS_COMMAND } from "../../shared/bots";
 import { EMPTY_GITHUB_AUTH_STATE } from "../../shared/github-auth";
 import {
@@ -407,6 +413,25 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 	const unhandled: string[] = [];
 	const calls: Harness["calls"] = [];
 	let activeTabId = "tab-1";
+	const stalePlan = new URLSearchParams(location.search).get("todos") === "drift";
+	const phases = stalePlan
+		? [
+				{
+					name: "검증",
+					tasks: Array.from({ length: 42 }, (_, i) => ({
+						content: i === 36 ? "변경 사항 확인" : `작업 ${i + 1}`,
+						status: i < 36 ? "completed" : i === 36 ? "in_progress" : "pending",
+					})),
+				},
+			]
+		: [];
+	const changedAt = Date.now() - 2 * 3_600_000;
+	const todoEvents: TodoDriftEvent[] = stalePlan
+		? [
+				{ kind: "list", at: changedAt, phases },
+				...Array.from({ length: DRIFT_CALLS }, (_, i) => ({ kind: "call" as const, at: changedAt + i + 1 })),
+			]
+		: [];
 	const launchProfiles = new Map<string, LaunchProfile>();
 	const note = (key: string) => {
 		if (!unhandled.includes(key)) unhandled.push(key);
@@ -444,6 +469,22 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 	});
 
 	const rpc = ({ command, tabId = activeTabId }: RpcPayload) => {
+		if (stalePlan && tabId === "tab-1") {
+			if (command.type === "get_state")
+				return respond(command, {
+					...stateFixture(tabId),
+					todoPhases: phases,
+					todoDrift: todoDriftState(todoDrift(todoEvents)),
+				});
+			if (command.type === "prompt" || command.type === "steer" || command.type === "follow_up") {
+				todoEvents.push({ kind: "instruction", at: Date.now(), text: command.message });
+				emit(IPC_EVENTS.EVENTS_BATCH, {
+					tabId,
+					payload: [{ type: "todo_drift", state: todoDriftState(todoDrift(todoEvents)) }],
+				});
+				return respond(command);
+			}
+		}
 		switch (command.type) {
 			case "get_state":
 				return respond(command, stateFixture(tabId));

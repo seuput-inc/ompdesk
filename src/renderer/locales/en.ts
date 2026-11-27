@@ -4089,8 +4089,6 @@ export const en: Record<string, string> = {
 	"todoPanel.dismissReminder": "Dismiss reminder",
 	"todoPanel.updated": "Updated {ago}",
 	"todoPanel.stale.instruction": "Instructions piling up since the list last changed",
-	"todoPanel.stale.drift": "Not updated while the agent kept working",
-	"todoPanel.stale.driftShort": "List out of date",
 	"todoPanel.received": "Since last list change: {count} instruction{plural}",
 	"todoPanel.receivedShort": "Since list change: {count}",
 	"todoPanel.receivedNote":

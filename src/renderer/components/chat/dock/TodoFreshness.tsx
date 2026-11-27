@@ -1,11 +1,4 @@
-/**
- * How current the session's todo list is, said the same way on every surface that shows its "now" row or progress
- * (the dock's todo card, the work board's plan zone, the status strip): when the list last changed, the instructions
- * received since that change, and a warning with its reason when the list is behind the work (the bridge's reading,
- * `TodoDriftState`). The reading knows when instructions arrived, never whether the list covers them, so one or two
- * fresh ones are news (a neutral dot) and only old or piled-up ones warn. A list whose last change is unknown says
- * nothing.
- */
+/** Shared board, dock and strip reading. Continued work alone is not an actionable warning. */
 import { AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import type { TodoDriftState } from "../../../../../resources/gui-bridge/todo-drift-contracts";
@@ -19,18 +12,12 @@ import { BoardRow, KindMark } from "../../layout/work-board/board-parts";
 /** The mark of a list behind the work, for a surface that draws its own lead icon (a work board row). */
 export const TodoStaleIcon = AlertTriangle;
 
-const STALE_REASON = {
-	instruction: "todoPanel.stale.instruction",
-	drift: "todoPanel.stale.drift",
-} as const;
-
 export interface TodoFreshness {
-	stale: keyof typeof STALE_REASON | null;
+	stale: "instruction" | null;
 	/** `warning` while the list is behind the work, `info` while instructions came since it changed, else null. */
 	level: "warning" | "info" | null;
 	/** Why the list is behind the work, in the person's words; null while it follows it. */
 	reason: string | null;
-	/** The few words a one-line surface shows: "Since list change: 2" while instructions came, "List out of date" for drift. */
 	summary: string | null;
 	/** "12m ago". */
 	ago: string;
@@ -58,24 +45,18 @@ export function useTodoFreshness(): TodoFreshness | null {
 	const stale = useTodoStore(state => state.drift?.stale) ?? null;
 	const received = useTodoStore(state => state.drift?.received) ?? NONE_RECEIVED;
 	const readCount = useTodoStore(state => state.drift?.receivedCount) ?? 0;
-	const ago = useAgeLabels([changedAt], agoLabel)[0] ?? "";
-	if (changedAt === null || ago === "") return null;
-	// Never fewer than the lines shown, whatever a reading says.
 	const receivedCount = Math.max(readCount, received.length);
-	const reason = stale ? t(STALE_REASON[stale]) : null;
+	const visibleAt = stale === "drift" && receivedCount === 0 ? null : changedAt;
+	const ago = useAgeLabels([visibleAt], agoLabel)[0] ?? "";
+	if (visibleAt === null || ago === "") return null;
+	const reason = stale === "instruction" ? t("todoPanel.stale.instruction") : null;
 	const updated = t("todoPanel.updated", { ago });
 	const receivedHeader = receivedCount > 0 ? t("todoPanel.received", { count: receivedCount }) : null;
 	return {
-		stale,
-		level: stale ? "warning" : receivedCount > 0 ? "info" : null,
+		stale: stale === "instruction" ? stale : null,
+		level: reason ? "warning" : receivedCount > 0 ? "info" : null,
 		reason,
-		// One-line surfaces get the short words; the full reason stays for the plan zone's row and the tooltip.
-		summary:
-			receivedCount > 0
-				? t("todoPanel.receivedShort", { count: receivedCount })
-				: stale === "drift"
-					? t("todoPanel.stale.driftShort")
-					: reason,
+		summary: receivedCount > 0 ? t("todoPanel.receivedShort", { count: receivedCount }) : reason,
 		ago,
 		updated,
 		title: [reason, receivedHeader, receivedHeader && t("todoPanel.receivedNote"), updated]

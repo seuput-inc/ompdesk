@@ -273,8 +273,6 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 								<span className="tabular-nums">
 									{plan.done}/{plan.total}
 								</span>
-								{/* Instructions since the list changed or a list behind the work say so in place of its "now" row,
-								    the part in doubt; a tap opens the panel, which lists them. */}
 								{plan.active && !freshness?.summary ? (
 									<span className="omp-work-chip-active">{plan.active}</span>
 								) : null}

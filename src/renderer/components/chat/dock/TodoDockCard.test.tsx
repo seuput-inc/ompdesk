@@ -169,17 +169,26 @@ describe("TodoDockCard", () => {
 			expect(container.textContent).toContain("Since list change: 2Updated 12m ago");
 		});
 
-		it("says why a list went unchanged through a long run of work", async () => {
+		it("keeps progress and the current task without a mark after work alone", async () => {
 			useUiStore.setState({ dockCollapsed: {} });
-			useTodoStore.getState().setPhases(open);
-			useTodoStore.getState().setDrift({ changedAt: twelveMinutesAgo(), stale: "drift", ...NONE_RECEIVED });
+			useTodoStore.getState().setPhases([
+				{
+					name: "Work",
+					tasks: Array.from({ length: 42 }, (_, i) => ({
+						content: `Task ${i + 1}`,
+						status: i < 36 ? "completed" : i === 36 ? "in_progress" : "pending",
+					})),
+				},
+			]);
+			useTodoStore.getState().setDrift({ changedAt: Date.now() - 2 * 3_600_000, stale: "drift", ...NONE_RECEIVED });
 			await mount();
 
-			// The peek holds one line: the short words, the full reason in the tooltip.
-			expect(peekText()).toBe("1/2Wire the peek into the headerList out of dateUpdated 12m ago");
-			expect(container.querySelector("[data-todo-freshness]")?.getAttribute("title")).toContain(
-				"Not updated while the agent kept working",
-			);
+			expect(peekText()).toBe("36/42Task 37");
+			expect(container.querySelector("[data-todo-freshness]")).toBeNull();
+			const toggle = container.querySelector<HTMLButtonElement>('section[aria-label="Todos"] button[aria-expanded]');
+			await act(async () => toggle?.click());
+			expect(container.textContent).toContain("Task 37");
+			expect(container.querySelector("[data-todo-freshness]")).toBeNull();
 		});
 
 		it("shows only when a list that follows the work last changed, with no mark", async () => {
@@ -214,7 +223,7 @@ describe("TodoDockCard", () => {
 			expect(container.textContent).toContain("Updated just now");
 		});
 
-		it("keeps the mark when the person's change was refused: the list did not change", async () => {
+		it("restores the unchanged list reading when an edit is refused", async () => {
 			const behind = { changedAt: twelveMinutesAgo(), stale: "drift" as const, ...NONE_RECEIVED };
 			// The session refuses the write, then answers with the list as it was, still behind the work.
 			const commandForTab = vi.fn(
@@ -265,7 +274,8 @@ describe("TodoDockCard", () => {
 
 				expect(commandForTab).toHaveBeenCalledWith("t1", expect.objectContaining({ type: "set_todos" }), undefined);
 				expect(useTodoStore.getState().phases[0]?.tasks[0]?.status).toBe("completed");
-				expect(container.textContent).toContain("List out of dateUpdated 12m ago");
+				expect(useTodoStore.getState().drift).toEqual(behind);
+				expect(container.querySelector("[data-todo-freshness]")).toBeNull();
 			} finally {
 				await act(async () => root?.unmount());
 				setFocusedSessionRuntime(null);

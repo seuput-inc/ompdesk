@@ -179,7 +179,7 @@ describe("WorkBoardChip, the phone's work strip", () => {
 		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe("1 of 3 done");
 	});
 
-	it("says why a list is behind the work in place of its current task, and when it last changed", async () => {
+	it("keeps the current task after work alone and still reports incoming instructions", async () => {
 		useTodoStore.getState().setPhases([
 			{
 				name: "Fix",
@@ -197,8 +197,8 @@ describe("WorkBoardChip, the phone's work strip", () => {
 		});
 		await mount();
 		const strip = container.querySelector("[data-work-chip]");
-		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe("1/2List out of date·58m ago");
-		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe("1 of 2 done · List out of date");
+		expect(strip?.querySelector(".omp-work-chip-plan")?.textContent).toBe("1/2Wait for the row");
+		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe("1 of 2 done");
 
 		// A list that follows the work keeps its current task and only says when it last changed.
 		await act(async () =>
@@ -214,7 +214,7 @@ describe("WorkBoardChip, the phone's work strip", () => {
 		await act(async () =>
 			useTodoStore.getState().setDrift({
 				changedAt,
-				stale: null,
+				stale: "drift",
 				received: [
 					{ at: changedAt + 60_000, text: "Also fix the README typo on line 3" },
 					{ at: changedAt + 120_000, text: "Then rename parse() to parseConfig() everywhere" },
