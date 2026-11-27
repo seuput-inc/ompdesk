@@ -35,7 +35,7 @@ async fn simultaneous_bot_creates_claim_one_name_and_folder() {
         host.create_bot("Concurrent", None).is_ok()
     };
     let (a, b) = std::thread::scope(|scope| {
-        let other = scope.spawn(&create);
+        let other = scope.spawn(create);
         (create(), other.join().unwrap())
     });
     assert_ne!(a, b);
