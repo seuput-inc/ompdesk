@@ -33,6 +33,9 @@ pub struct BotRecord {
     pub auto_approve: bool,
     /// Paired devices (by id) whose agents may message it.
     pub reach: Vec<String>,
+    /// New bots accept messages from authenticated peers until the owner sets a reach list.
+    /// Older journals have no marker: preserve their list, including an explicit empty list.
+    pub all_paired: bool,
     /// None = never stale.
     pub stale_days: Option<f64>,
     /// Its Look around schedule's id.

@@ -255,6 +255,7 @@ impl AgentControl {
             id: new_id("bot"),
             name: name.to_owned(),
             folder: folder_text,
+            all_paired: true,
             stale_days: Some(STALE_DAYS),
             created_at: crate::aimemory::value::iso(self.now().max(0.0) as u64),
             ..BotRecord::default()
@@ -637,6 +638,7 @@ impl AgentControl {
                         record.stale_days = (days > 0.0).then_some(days);
                     }
                     if let Some(reach) = reach {
+                        record.all_paired = false;
                         record.reach = reach;
                     }
                 })?;
@@ -648,7 +650,9 @@ impl AgentControl {
                     changed
                         .stale_days
                         .map_or_else(|| "never".to_owned(), |days| format!("{days} day(s)")),
-                    if changed.reach.is_empty() {
+                    if changed.all_paired {
+                        "paired computers".to_owned()
+                    } else if changed.reach.is_empty() {
                         "this computer only".to_owned()
                     } else {
                         changed.reach.join(", ")
@@ -906,7 +910,17 @@ impl AgentControl {
         device_name: Option<&str>,
     ) -> R<Value> {
         let bot = self.bot_named(name)?;
+        let home = Self::message_home(&bot, device, device_name)?;
+        Ok(json!({ "path": home, "name": bot.name }))
+    }
+
+    pub(super) fn message_home<'a>(
+        bot: &'a BotRecord,
+        device: Option<&str>,
+        device_name: Option<&str>,
+    ) -> R<&'a str> {
         if let Some(device) = device
+            && !bot.all_paired
             && !bot.reach.iter().any(|known| known == device)
         {
             return fail(format!(
@@ -917,8 +931,8 @@ impl AgentControl {
         if bot.paused {
             return fail(format!("The bot {} is paused", bot.name));
         }
-        match bot.home {
-            Some(home) => Ok(json!({ "path": home, "name": bot.name })),
+        match bot.home.as_deref() {
+            Some(home) => Ok(home),
             None => fail(format!("The bot {} has no home chat yet.", bot.name)),
         }
     }
@@ -1223,6 +1237,7 @@ impl AgentControl {
                         _ => {}
                     }
                     if let Some(reach) = reach {
+                        record.all_paired = false;
                         record.reach = reach;
                     }
                     if let Some(quiet) = request.get("quiet").and_then(Value::as_array) {

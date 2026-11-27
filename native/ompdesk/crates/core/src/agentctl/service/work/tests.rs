@@ -1720,7 +1720,7 @@ async fn a_session_an_item_opened_is_linked_and_names_its_file_once_it_has_one()
 }
 
 #[tokio::test]
-async fn a_bot_by_name_is_its_home_chat_and_another_computer_reaches_it_only_when_let() {
+async fn a_bot_by_name_is_its_home_chat_and_another_computer_reaches_it_unless_restricted() {
     let root = Scratch::new();
     let (control, _, _) = ada(9_709, &root, Mails::default(), |_, _| None).await;
     let tabs = control.host.state().tabs.clone();
@@ -1733,6 +1733,18 @@ async fn a_bot_by_name_is_its_home_chat_and_another_computer_reaches_it_only_whe
             .tab_id,
         "bot1"
     );
+    assert_eq!(
+        control
+            .bot_home("Ada", Some("dev1"), Some("MacBook"))
+            .unwrap()["path"],
+        "/s/bot.jsonl"
+    );
+    control
+        .bots_command(
+            json!({ "action": "update", "id": control.bot_named("Ada").unwrap().id, "reach": [] }),
+        )
+        .await
+        .unwrap();
     let refused = control
         .bot_home("Ada", Some("dev1"), Some("MacBook"))
         .unwrap_err();

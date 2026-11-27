@@ -8394,6 +8394,7 @@ export const ko: Record<string, string> = {
 	"bots.settings.notify.failedHint": "봇의 채팅이나 루틴이 실패했을 때예요.",
 	"bots.access.title": "물어볼 수 있는 사람",
 	"bots.access.onlyYou": "나만",
+	"bots.access.allPaired": "페어링한 컴퓨터",
 	"bots.access.summaryYou": "{bot}에게는 나만 물어볼 수 있어요.",
 	"bots.access.summary": "나와 {devices}가 {bot}에게 물어볼 수 있어요.",
 	"bots.access.what": "그 기기의 에이전트가 봇에게 메시지를 보내고 일을 맡길 수 있어요. 봇은 홈 채팅에서 답해요.",

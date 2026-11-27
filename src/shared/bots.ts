@@ -44,6 +44,7 @@ export interface Bot {
 	autoApprove: boolean;
 	/** Paired devices (by id) whose agents may message it; empty = this computer's only. */
 	reach: string[];
+	allPaired?: boolean;
 	/** Days an open item goes untouched before it reads as stale; null = never. */
 	staleDays: number | null;
 	/** Its Look around routine (a schedule id in Settings › Schedules); null when off. */

@@ -8420,6 +8420,7 @@ export const en: Record<string, string> = {
 	"bots.settings.notify.failedHint": "A chat or routine of it fails.",
 	"bots.access.title": "Who can ask",
 	"bots.access.onlyYou": "Only you",
+	"bots.access.allPaired": "Paired computers",
 	"bots.access.summaryYou": "Only you can ask {bot}.",
 	"bots.access.summary": "You and {devices} can ask {bot}.",
 	"bots.access.what": "Their agents can message it and hand it work; it answers in its home chat.",

@@ -752,12 +752,7 @@ impl AgentControl {
     ) -> R<Value> {
         let text = |key: &str| request.get(key).and_then(Value::as_str).unwrap_or("");
         let bot = self.bot_named(text("id"))?;
-        let Some(home) = bot.home.clone() else {
-            return fail(format!(
-                "{} has no chat yet: open its home chat once.",
-                bot.name
-            ));
-        };
+        let home = Self::message_home(&bot, Some(device), Some(device_name))?;
         let (room, name) = (text("room"), text("roomName"));
         if room.is_empty() || text("mailId").is_empty() {
             return fail("roomAsk needs room and mailId.");
@@ -771,7 +766,7 @@ impl AgentControl {
         });
         let from = format!("the group {name} on {device_name}");
         let mail = room_mail(text("mailId"), room, &from, text("text"), self.now());
-        self.mail_session(&home, mail, true).await;
+        self.mail_session(home, mail, true).await;
         Ok(json!({ "asked": true }))
     }
 
