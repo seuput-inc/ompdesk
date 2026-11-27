@@ -12,7 +12,7 @@ disable-model-invocation: true
 
 Swarm only items that each take minutes of work: a worker starts from nothing and takes a minute or more before its first edit, so a few small edits finish sooner as parallel tool calls in one response, even when the request asks for parallel work.
 
-Add one `todo` item per new phase before launching anything.
+Plan the phases below before launching anything.
 
 1. Frame
 2. Fan out

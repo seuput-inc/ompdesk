@@ -117,7 +117,7 @@ Comments follow the same rule as the reply. Write them clean as you go. Keep a c
 
 ## Playbooks
 
-Use `todo` `init` only for a fresh plan. If any item is unfinished, `append` only new items, one call per phase. Copy one item per new numbered step in order, before task-specific items. Use the todo language from `<reply-language>` (word for word without one). Keep skill, tool and file names unchanged. A step you choose not to do stays in the list with a one-line `skip: <reason>`. Match the task to a playbook below and open its full steps at the `skill://poteto-mode/playbooks/<file>.md` path printed after the entry. Copy its steps in that way.
+Use `todo` `init` only for a fresh plan. If any item is unfinished, `append` only new items, one call per phase. List each user-requested outcome once. Follow playbook steps internally; do not add them as todo items. Use the todo language from `<reply-language>` (word for word without one). Keep skill, tool and file names unchanged. Match the task to a playbook below and open its full steps at the `skill://poteto-mode/playbooks/<file>.md` path printed after the entry. Follow its steps internally.
 
 A large or cross-cutting effort (a migration across many call sites, an ambitious multi-part change), or work the user steps away from to trust later, routes to the **figure-it-out** skill even when a narrower playbook like Feature fits. Use **figure-it-out** whenever no bundled playbook fits. It designs a bespoke, rigorous playbook for the task. A standing project-scale program (multi-day, many stacked PRs) routes to **figure-it-out** too, with each unit as an OMPdesk session (`ompdesk_session_open`).
 

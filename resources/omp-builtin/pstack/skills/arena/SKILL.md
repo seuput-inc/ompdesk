@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 > OMPdesk built-in pack. Tool, agent and model names here are the omp and OMPdesk ones; the adapter is in the `<pstack>` section of your prompt, or `skill://pstack-adapter`.
 
-Add one `todo` item per new phase (Frame, Fan out, Cross-judge, Pick, Graft, Verify) before launching anything.
+Plan the phases below before launching anything.
 
 ## Phase A: Frame
 
