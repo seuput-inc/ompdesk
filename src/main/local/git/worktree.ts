@@ -10,25 +10,17 @@
  * still runs in main after omp has gone, unlike stock removeExitWorktrees.
  */
 
-import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import type { RpcWorktreeCreateResult, WorktreeBaseFetch } from "../../../shared/rpc-types";
 import { GUI_WORKTREE_BRANCH_PREFIX, worktreeBranchPrefix } from "../../../shared/worktree-branch";
-import { CoreError, core } from "../../core/process";
-import { currentStepSignal, SerialChain, trackEffect } from "../../serial-chain";
+import { CoreError } from "../../core/process";
+import { SerialChain } from "../../serial-chain";
 import { stockHelperRequest } from "../../stock-helper";
 import { type BridgeClient, LocalCommandError } from "../types";
 import { primaryRoot, repoRoot } from "./changes";
-import { coreGit, coreHeld, DEFAULT_TIMEOUT_MS, gitRunner, withRepoLock } from "./exec";
+import { coreGit, coreHeld, DEFAULT_TIMEOUT_MS, withRepoLock } from "./exec";
 import { worktreeSlug } from "./parse";
-import {
-	archiveHookRefusal,
-	prepareWorktree,
-	runWorktreeHook,
-	SEED_BUDGET_MS,
-	SETUP_TIMEOUT_MS,
-	WORKTREE_PREPARE_BUDGET_MS,
-} from "./worktree-seed";
+import { archiveHookRefusal, prepareWorktree, SETUP_TIMEOUT_MS, WORKTREE_PREPARE_BUDGET_MS } from "./worktree-seed";
 
 /** `git worktree add` checks out the whole tree: minutes on a large repository. */
 export const WORKTREE_ADD_TIMEOUT_MS = 300_000;
@@ -62,7 +54,6 @@ const REFUSALS = new Set([
 	"not_a_repo",
 	"invalid_base",
 	"invalid_name",
-	"worktree_admission",
 	"worktree_create_failed",
 	"not_a_worktree",
 	"worktree_outside_root",
@@ -213,16 +204,10 @@ export function createWorktree(
 		);
 	}
 	const made = createWorktreeOnce(sessionCwd, args, bridge);
-	const entry = { args: argsKey, made, at: Number.POSITIVE_INFINITY };
-	createRequests.set(key, entry);
-	made.then(
-		() => {
-			entry.at = Date.now();
-		},
-		() => {
-			if (createRequests.get(key) === entry) createRequests.delete(key);
-		},
-	);
+	createRequests.set(key, { args: argsKey, made, at: now });
+	made.catch(() => {
+		if (createRequests.get(key)?.made === made) createRequests.delete(key);
+	});
 	return made;
 }
 
@@ -238,9 +223,8 @@ async function createWorktreeOnce(
 ): Promise<RpcWorktreeCreateResult> {
 	const step = new SerialChain({ name: "worktree create", maxStepMs: PLAN_AND_ADD_MS });
 	const { primary, made, base } = await step.run(() => planAndAdd(sessionCwd, input, bridge), input.name);
-	const setup =
-		input.prepare === false ? null : await runWorktreeHook("setup", { primary, worktree: made.path, cwd: made.path });
-	return { ...made, ...(base ? { base } : {}), ...(setup ? { setup } : {}) };
+	const prepared = input.prepare === false ? {} : await prepareWorktree(primary, made.path);
+	return { ...made, ...(base ? { base } : {}), ...prepared };
 }
 
 /**
@@ -254,7 +238,7 @@ export async function prepareCreatedWorktree(
 	const [primary, own] = await Promise.all([primaryRoot(baseCwd), primaryRoot(worktreePath)]);
 	if (own !== primary || path.resolve(worktreePath) === path.resolve(primary))
 		throw new LocalCommandError(`Not a worktree of ${primary}: ${worktreePath}`, "not_a_worktree");
-	return prepareWorktree(primary, worktreePath, true);
+	return prepareWorktree(primary, worktreePath);
 }
 
 async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<BridgeClient, "request">) {
@@ -302,58 +286,35 @@ async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<B
 	// Only a worktree's folder name can collide; the core compares the full path.
 	const taken = (await recordedFolders().catch(() => [])).filter(folder => path.basename(folder).startsWith("gui-"));
 
-	const id = randomUUID();
-	const signal = currentStepSignal();
-	const git = await gitRunner();
-	signal?.throwIfAborted();
-	const ended = Promise.withResolvers<void>();
-	void trackEffect("git.worktreeAdmit", ended.promise);
-	const host = core();
-	const admission = host.call(
-		"git.worktreeAdmit",
-		{
-			id,
-			git,
-			primary,
-			baseCwd,
-			root,
-			hash,
-			slug,
-			branchPrefix,
-			startPoint,
-			taken,
-			sparse: input.sparse,
-			source: input.branch,
-			seedBudgetMs: input.prepare === false ? undefined : SEED_BUDGET_MS,
-			addTimeoutMs: WORKTREE_ADD_TIMEOUT_MS,
-		},
-		{ signal, timeoutMs: PLAN_AND_ADD_MS, onEnded: ended.resolve },
-	);
-	const generation = host.generation;
-	try {
-		await admission;
-		signal?.throwIfAborted();
-		const made = await withRepoLock(primary, () => {
-			signal?.throwIfAborted();
-			return coreHeld<Pick<RpcWorktreeCreateResult, "path" | "branch" | "seed">>(
+	const made = await withRepoLock(primary, async () => {
+		try {
+			return await worktreeGit<{ path: string; branch: string }>(
 				"git.worktreeAdd",
-				{ id },
+				{
+					primary,
+					baseCwd,
+					root,
+					hash,
+					slug,
+					branchPrefix,
+					startPoint,
+					...(input.sparse ? { sparse: input.sparse } : {}),
+					taken,
+					source: input.branch,
+					addTimeoutMs: WORKTREE_ADD_TIMEOUT_MS,
+				},
+				0,
 				PLAN_AND_ADD_MS,
 			);
-		});
-		return { primary, base, made: { ...made, baseCwd: mainCheckout } };
-	} catch (error) {
-		// A timed-out admission may still be finishing. Never abandon before it publishes its lease.
-		await ended.promise;
-		if (generation && generation === host.generation) await host.call("git.worktreeRelease", { id }, { generation });
-		if (error instanceof CoreError && REFUSALS.has(error.code))
-			throw new LocalCommandError(error.message, error.code);
-		if (error instanceof LocalCommandError) throw error;
-		throw new LocalCommandError(
-			`Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
-			"worktree_create_failed",
-		);
-	}
+		} catch (error) {
+			if (error instanceof LocalCommandError) throw error;
+			throw new LocalCommandError(
+				`Failed to create worktree: ${error instanceof Error ? error.message : String(error)}`,
+				"worktree_create_failed",
+			);
+		}
+	});
+	return { primary, base, made: { ...made, baseCwd: mainCheckout } };
 }
 
 /**

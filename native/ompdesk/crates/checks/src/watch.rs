@@ -278,7 +278,7 @@ mod tests {
         let free = Arc::new(AtomicU64::new(100 * GIB));
         let probe_free = free.clone();
         let volumes = Volumes::of_work(&std::env::temp_dir(), &[], &|_| None).with_probe(Arc::new(
-            move |_| Some((Some(1), probe_free.load(Ordering::Relaxed), 500 * GIB)),
+            move |_| Some((probe_free.load(Ordering::Relaxed), 500 * GIB)),
         ));
         let said = Arc::new(Mutex::new(Vec::<String>::new()));
         let stopped = Arc::new(AtomicBool::new(false));

@@ -510,24 +510,19 @@ describe.skipIf(process.platform === "win32")("worktree setup hook", () => {
 		await fs.mkdir(path.join(repo, ".ompdesk"));
 		await fs.writeFile(
 			path.join(repo, WORKTREE_HOOK_SCRIPTS.setup),
-			'echo "setup in $PWD"\nprintf "%s\\n" "$OMPDESK_ROOT_PATH" >> from-root.txt\n',
+			'echo "setup in $PWD"\nprintf "%s" "$OMPDESK_ROOT_PATH" > from-root.txt\n',
 		);
 		await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env\n");
 		await fs.writeFile(path.join(repo, ".env"), "A=1\n");
 		gitSync(repo, "add", ".ompdesk", ".worktreeinclude");
 		gitSync(repo, "commit", "-q", "-m", "hook");
 
-		const args = { name: "hooked", request: { caller: "local", id: repo } };
-		const [made, repeat] = await Promise.all([
-			createWorktree(repo, args, bridge),
-			createWorktree(repo, args, bridge),
-		]);
-		expect(repeat.path).toBe(made.path);
+		const made = await createWorktree(repo, { name: "hooked" }, bridge);
 
 		expect(made.seed?.copied).toBe(1);
 		expect(made.setup).toMatchObject({ ok: true, exitCode: 0, timedOut: false });
 		expect(made.setup?.outputTail).toContain(`setup in ${made.path}`);
-		expect(await fs.readFile(path.join(made.path, "from-root.txt"), "utf8")).toBe(`${repo}\n`);
+		expect(await fs.readFile(path.join(made.path, "from-root.txt"), "utf8")).toBe(repo);
 		expect(await fs.readFile(made.setup?.logPath ?? "", "utf8")).toContain("setup in");
 	});
 

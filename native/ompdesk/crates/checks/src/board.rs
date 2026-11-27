@@ -791,7 +791,7 @@ mod tests {
         pool.volumes = pool
             .volumes
             .clone()
-            .with_probe(std::sync::Arc::new(|_| Some((Some(1), 1 << 40, 1 << 41))));
+            .with_probe(std::sync::Arc::new(|_| Some((1 << 40, 1 << 41))));
         let lease = pool
             .acquire(
                 1,
@@ -858,7 +858,7 @@ mod tests {
         pool.volumes = pool
             .volumes
             .clone()
-            .with_probe(std::sync::Arc::new(|_| Some((Some(1), 1 << 40, 1 << 41))));
+            .with_probe(std::sync::Arc::new(|_| Some((1 << 40, 1 << 41))));
         let pid = std::process::id();
         let r = run(
             &store,
