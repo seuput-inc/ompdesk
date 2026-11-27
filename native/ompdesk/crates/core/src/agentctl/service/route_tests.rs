@@ -210,7 +210,10 @@ async fn a_form_raised_for_a_bot_s_request_goes_to_that_bot_which_alone_answers_
         json!({ "session": "work", "request": "r1", "answers": [{ "id": "wrong-field", "selected": ["A"] }] }),
     )
     .await;
-    assert!(is_error && text.contains("Missing answer for field"), "{text}");
+    assert!(
+        is_error && text.contains("Missing answer for field"),
+        "{text}"
+    );
     assert!(asked_with(&asked, "answer").is_empty());
     let (text, is_error) = answer(
         &control,
@@ -275,8 +278,17 @@ async fn a_late_bot_answer_is_refused_and_never_answers_the_owner_s_next_card_or
 async fn an_attributed_first_goal_prompt_needs_no_dispatch_number() {
     let (control, asked) = rig(9_909, world(json!([form("goal-form")])), main_replies);
     ada(&control, false);
-    let sender = AskOrigin { mark: None, ..origin() };
-    assert_eq!(control.route_ask("work", "goal-form", &sender).await.as_deref(), Some(CHAT));
+    let sender = AskOrigin {
+        mark: None,
+        ..origin()
+    };
+    assert_eq!(
+        control
+            .route_ask("work", "goal-form", &sender)
+            .await
+            .as_deref(),
+        Some(CHAT)
+    );
     assert_eq!(asked_with(&asked, "mail")[0]["tabId"], "chat");
     control.host.port().close();
 }
@@ -286,7 +298,10 @@ async fn pausing_or_deleting_the_bot_returns_its_open_form_to_the_owner() {
     for (id, deleting) in [(9_910, false), (9_911, true)] {
         let (control, asked) = rig(id, world(json!([form("r1")])), main_replies);
         ada(&control, false);
-        assert_eq!(control.route_ask("work", "r1", &origin()).await.as_deref(), Some(CHAT));
+        assert_eq!(
+            control.route_ask("work", "r1", &origin()).await.as_deref(),
+            Some(CHAT)
+        );
         if deleting {
             control.delete_bot("bot-ada").await.unwrap();
         } else {
@@ -297,8 +312,11 @@ async fn pausing_or_deleting_the_bot_returns_its_open_form_to_the_owner() {
         assert_eq!(returned[0]["tabId"], "work");
         assert!(returned[0]["chatTabId"].is_null());
         let (_, refused) = answer(
-            &control, "chat", json!({ "session": "work", "request": "r1", "choice": "A" })
-        ).await;
+            &control,
+            "chat",
+            json!({ "session": "work", "request": "r1", "choice": "A" }),
+        )
+        .await;
         assert!(refused && asked_with(&asked, "answer").is_empty());
         control.host.port().close();
     }
@@ -336,7 +354,10 @@ async fn the_card_stays_with_the_owner_when_the_bot_is_paused_deleted_or_unreach
         json!({ "session": "work", "approve": true }),
     )
     .await;
-    assert!(is_error && text.contains("not a question an agent can answer"), "{text}");
+    assert!(
+        is_error && text.contains("not a question an agent can answer"),
+        "{text}"
+    );
     control.host.port().close();
     // A tool approval is never routed.
     let approval = json!({ "id": "r1", "request": { "id": "r1", "method": "select", "title": "Allow tool: bash", "options": ["Approve", "Deny"] } });
