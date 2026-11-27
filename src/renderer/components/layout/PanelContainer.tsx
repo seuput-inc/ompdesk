@@ -278,44 +278,34 @@ export function PanelContainer({ closing = false }: { closing?: boolean }) {
 			(s.filePreviewExpanded && s.filePreviewPath !== null && s.panelTab === "files") ||
 			(s.terminalExpanded && s.panelTab === "terminal"),
 	);
-	const [widthHydrated, setWidthHydrated] = useState(false);
+	const resized = useRef<number | null>(null);
 	const dragging = useRef(false);
 	const [actionsTarget, setActionsTarget] = useState<HTMLDivElement | null>(null);
 
 	useEffect(() => {
 		let cancelled = false;
 		const prefs = window.omp?.prefs;
-		if (typeof prefs?.get !== "function") {
-			setWidthHydrated(true);
-			return;
-		}
+		if (typeof prefs?.get !== "function") return;
 		void prefs
 			.get(PANEL_WIDTH_PREF)
 			.then(value => {
-				if (cancelled) return;
+				if (cancelled || resized.current !== null) return;
 				const saved = typeof value === "number" && Number.isFinite(value) ? Math.round(value) : null;
 				if (saved !== null) {
 					rememberRead(undefined, PANEL_WIDTH_READ, saved);
 					setWidth(fitPanelWidth(saved));
 				}
-				setWidthHydrated(true);
 			})
-			.catch(() => {
-				if (!cancelled) setWidthHydrated(true);
-			});
+			.catch(() => {});
 		return () => {
 			cancelled = true;
 		};
 	}, []);
 
-	useEffect(() => {
-		if (!widthHydrated || typeof window.omp?.prefs?.set !== "function") return;
-		const timer = window.setTimeout(() => {
-			rememberRead(undefined, PANEL_WIDTH_READ, Math.round(width));
-			void window.omp.prefs.set(PANEL_WIDTH_PREF, Math.round(width)).catch(() => {});
-		}, 150);
-		return () => window.clearTimeout(timer);
-	}, [width, widthHydrated]);
+	const saveWidth = useCallback((value: number) => {
+		rememberRead(undefined, PANEL_WIDTH_READ, value);
+		void window.omp?.prefs?.set?.(PANEL_WIDTH_PREF, value).catch(() => {});
+	}, []);
 
 	useEffect(() => {
 		const clampToViewport = () => {
@@ -340,12 +330,14 @@ export function PanelContainer({ closing = false }: { closing?: boolean }) {
 		const anchor = left ? (e.currentTarget.parentElement?.getBoundingClientRect().left ?? 0) : window.innerWidth;
 		const hostLimit = Math.min(MAX_WIDTH, Math.round(window.innerWidth * 0.55));
 		const next = Math.min(hostLimit, Math.max(MIN_WIDTH, left ? e.clientX - anchor : anchor - e.clientX));
+		resized.current = next;
 		setWidth(next);
 	}, []);
 
 	const endDrag = useCallback(() => {
+		if (dragging.current && resized.current !== null) saveWidth(resized.current);
 		dragging.current = false;
-	}, []);
+	}, [saveWidth]);
 
 	if (compact) {
 		const views = (
@@ -438,7 +430,7 @@ export function PanelContainer({ closing = false }: { closing?: boolean }) {
 					event.preventDefault();
 					const viewportLimit = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, window.innerWidth - 56));
 					const max = Math.min(MAX_WIDTH, viewportLimit);
-					setWidth(current =>
+					const next =
 						event.key === "Home"
 							? MIN_WIDTH
 							: event.key === "End"
@@ -447,10 +439,12 @@ export function PanelContainer({ closing = false }: { closing?: boolean }) {
 										max,
 										Math.max(
 											MIN_WIDTH,
-											current + ((event.key === "ArrowLeft") === (panelSide === "right") ? 24 : -24),
+											width + ((event.key === "ArrowLeft") === (panelSide === "right") ? 24 : -24),
 										),
-									),
-					);
+									);
+					resized.current = next;
+					setWidth(next);
+					saveWidth(next);
 				}}
 				className={cx(
 					"absolute inset-y-0 z-(--sc-z-raised) w-1 cursor-col-resize transition-colors duration-(--sc-duration-fast) ease-(--sc-ease-standard) hover:bg-(--sc-accent-border) focus-visible:bg-(--sc-accent) active:bg-(--sc-accent)",

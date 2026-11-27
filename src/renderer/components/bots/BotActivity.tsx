@@ -650,7 +650,7 @@ function Automations({ bot, inspector = false }: { bot: Bot; inspector?: boolean
 			)}
 			{inspector && (
 				<Button
-					className="h-auto justify-start whitespace-normal text-left text-sc-xs text-(--sc-text-muted)"
+					className="min-h-fit w-full justify-start py-1 text-left text-(--sc-text-muted)"
 					onClick={() =>
 						void openBotChat(bot, bot.home, t("bots.automations.draft")).catch(error =>
 							toastError({ title: t("bots.automations.failed"), error }),
@@ -659,7 +659,9 @@ function Automations({ bot, inspector = false }: { bot: Bot; inspector?: boolean
 					size="sm"
 					variant="ghost"
 				>
-					{t("bots.automations.ask", { name: bot.name })}
+					<span className="min-w-0 whitespace-normal text-sc-xs font-normal">
+						{t("bots.automations.ask", { name: bot.name })}
+					</span>
 				</Button>
 			)}
 			{!all && others.length > ROWS && (

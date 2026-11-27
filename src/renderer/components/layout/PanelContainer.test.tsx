@@ -170,6 +170,22 @@ describe("PanelContainer", () => {
 		expect((document.querySelector("aside") as HTMLElement | null)?.style.width).toBe("412px");
 	});
 
+	it("keeps a keyboard resize made before a stale saved width arrives", async () => {
+		const pending = Promise.withResolvers<number>();
+		const set = vi.fn(async () => {});
+		ompWindow.omp = { prefs: { get: () => pending.promise, set } };
+		seedActiveTab("agent");
+		await mount(<PanelContainer />);
+		const key = new Event("keydown", { bubbles: true, cancelable: true });
+		Object.defineProperty(key, "key", { value: "ArrowLeft" });
+		await act(async () => {
+			document.querySelector('[role="separator"]')?.dispatchEvent(key);
+		});
+		await act(async () => pending.resolve(280));
+		expect(set).toHaveBeenCalledWith("gui.panelWidth", 304);
+		expect((document.querySelector("aside") as HTMLElement).style.width).toBe("304px");
+	});
+
 	it("resizes from the window edge in both directions without snapping closed", async () => {
 		Object.defineProperty(window, "innerWidth", { configurable: true, value: 1440 });
 		seedActiveTab("agent");
