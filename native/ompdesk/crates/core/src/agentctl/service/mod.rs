@@ -1392,9 +1392,28 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
                     args.get("deviceName")
                         .and_then(Value::as_str)
                         .unwrap_or("A paired computer"),
+                    args.get("createKey").and_then(Value::as_str),
                 )
                 .await,
         ),
+        "botPeerCreated" => reply(
+            control
+                .bots()
+                .peer_created(
+                    &text_arg(&args, "device", method)?,
+                    &text_arg(&args, "createKey", method)?,
+                )
+                .map_err(fail::Fail::Tool),
+        ),
+        "botPeerCandidate" => Reply::json(&control.peer_home_candidate(&args_of(args, method)?)),
+        "botPeerObserve" => reply(control.observe_peer_home(&args_of(args, method)?)),
+        "botPeerReceipt" | "botPeerLimited" => {
+            let limited = method == "botPeerLimited";
+            let journaled =
+                !limited && args.get("journaled").and_then(Value::as_bool) == Some(true);
+            let id = text_arg(&args, "id", method)?;
+            reply(control.settle_peer_home(&args_of(args, method)?, &id, journaled, limited))
+        }
         // This computer's bots as its paired devices get them (`host.bots.list`).
         "botsShare" => Reply::json(&control.bots_share()),
         // What main heard of a paired host's bots: a copy, a change of it, its link, or that it is no longer paired.

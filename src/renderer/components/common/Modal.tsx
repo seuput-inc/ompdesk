@@ -118,6 +118,7 @@ export const DialogSurface = forwardRef<HTMLDivElement, DialogSurfaceProps>(func
 				<div
 					className={cx(
 						"omp-dialog-head flex min-h-11 shrink-0 items-start justify-between gap-3 [html[data-input=touch]_&]:min-h-13",
+						!description && "[html[data-shell=phone]_&]:items-center",
 						SHELL_HEAD_PAD,
 					)}
 				>

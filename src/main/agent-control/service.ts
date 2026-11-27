@@ -65,7 +65,7 @@ import type {
 import type { ScheduleCreated, ScheduleDraft, SchedulesRequest, SchedulesState } from "../../shared/schedules";
 import type { SessionSummary } from "../../shared/session-summary";
 import type { FamilyEdits } from "../../shared/turn-edits";
-import type { HostBotsRoomPost, HostBotsUpdate } from "../bots";
+import type { HostBotsRoomPost, HostBotsUpdate, PeerBotHome, PeerBotIntent } from "../bots";
 import { CorePort } from "../core/ports";
 import { CoreError, core } from "../core/process";
 import { RpcTimeoutError } from "../rpc-client";
@@ -970,8 +970,28 @@ export class AgentControl {
 	}
 
 	/** A paired device's change to one of this computer's bots (`host.bots.command`): this computer's copy after it. */
-	botsFrom(request: unknown, device: string, deviceName: string): Promise<unknown> {
-		return this.#call("botsFrom", { request, device, deviceName });
+	botsFrom(request: unknown, device: string, deviceName: string, createKey?: string): Promise<unknown> {
+		return this.#call("botsFrom", { request, device, deviceName, createKey });
+	}
+
+	botPeerCreated(device: string, createKey: string): Promise<boolean> {
+		return this.#call("botPeerCreated", { device, createKey });
+	}
+
+	botPeerCandidate(home: PeerBotHome): Promise<boolean> {
+		return this.#call("botPeerCandidate", home);
+	}
+
+	botPeerObserve(home: PeerBotHome): Promise<PeerBotIntent | null> {
+		return this.#call("botPeerObserve", home);
+	}
+
+	botPeerReceipt(mail: PeerBotHome & { id: string; journaled: true }): Promise<boolean> {
+		return this.#call("botPeerReceipt", mail);
+	}
+
+	botPeerLimited(mail: PeerBotHome & { id: string }): Promise<boolean> {
+		return this.#call("botPeerLimited", mail);
 	}
 
 	/** What this computer heard of a paired host's bots; `applied` false: read its whole copy again. */

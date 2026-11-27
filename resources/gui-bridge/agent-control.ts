@@ -26,6 +26,8 @@ import {
 	sniffImageType,
 } from "./agent-control-contracts";
 import { crossFamily, JUDGE_ROLES, modelFamily } from "./agent-control-judge-core";
+import { BOT_HOME_OBSERVATION, type BotHomeManager, botHomeOf, requireBotHome } from "./modes/bots-contracts";
+import { latestBot } from "./modes/bots-core";
 import { completeOnSmol, type ModelLike, type NextPromptSession } from "./modes/next-prompt-engine";
 import { type PromptSectionContext, type PromptSectionHost, registerPromptSection } from "./prompt-sections";
 
@@ -51,8 +53,9 @@ interface ControlSession {
 			onPromptAdmitted: () => void;
 		},
 	): Promise<boolean>;
-	sessionManager: {
-		getCwd(): string;
+	sessionManager: BotHomeManager & {
+		getEntries(): readonly unknown[];
+		flush(): Promise<void>;
 		getBranch(): { customType?: unknown; data?: unknown }[];
 		appendCustomEntry(customType: string, data: unknown): unknown;
 	};
@@ -334,6 +337,18 @@ function mailContent(value: unknown): MailContent | undefined {
 }
 
 export const methods: BridgeMethods = {
+	[BOT_HOME_OBSERVATION]: async (params, env) => {
+		const manager = env.session().sessionManager;
+		const id = params && typeof params === "object" && "id" in params ? params.id : undefined;
+		const home = botHomeOf(manager);
+		if (typeof id !== "string") return home;
+		const journaled = hasMailEntry(manager.getEntries(), id);
+		if (journaled) {
+			await manager.flush();
+			requireBotHome(home, botHomeOf(env.session().sessionManager));
+		}
+		return { ...home, journaled, queued: queuedMail.has(id) };
+	},
 	/**
 	 * `{content, details, triggerTurn, deliverAs?}` → `{}`: a report from another session (`ompdesk_report`), as one
 	 * stock custom message: journaled with the session (a relaunch neither loses nor repeats it), shown as a quiet line,
@@ -347,16 +362,22 @@ export const methods: BridgeMethods = {
 		const content = mailContent(record.content);
 		if (!content) throw new Error("agent_control.mail needs content");
 		if (!mailHost) throw new Error("This omp cannot receive reports (no extension sendMessage).");
-		const details = (record.details ?? {}) as Record<string, unknown>;
+		const { peerBotHome, ...details } = (record.details ?? {}) as Record<string, unknown>;
 		const id = typeof details.id === "string" ? details.id : undefined;
 		// Idempotent across restarts of either side: the journal is the record of what arrived, and until stock's loop
 		// takes a queued aside this process remembers it. `journaled` tells main which of the two it is: main keeps a
 		// report until the receiver's journal holds it (a killed omp loses an aside it still queued).
 		const session = env.session();
-		const branch = session.sessionManager.getBranch();
-		const journaled = id !== undefined && hasMailEntry(branch, id);
+		const manager = session.sessionManager;
+		if (peerBotHome !== undefined) {
+			requireBotHome(peerBotHome, botHomeOf(manager));
+			const context = latestBot(manager.getBranch());
+			if (!context || context.bot.id !== peerBotHome.botId || !context.bot.firstRun || context.bot.paused)
+				throw new Error("The active branch does not hold this bot's context.");
+		}
+		const journaled =
+			id !== undefined && hasMailEntry(peerBotHome === undefined ? manager.getBranch() : manager.getEntries(), id);
 		if (id && (journaled || queuedMail.has(id))) return { duplicate: true, journaled };
-		if (id) queuedMail.add(id);
 		const message = { customType: MAIL_CUSTOM_TYPE, content, display: true, details };
 		// Idle, an aside starts a turn (stock), so a no-turn report keeps stock's plain idle delivery: shown at once.
 		const deliverAs = record.deliverAs === "aside" || session.isStreaming ? "aside" : undefined;
@@ -364,6 +385,7 @@ export const methods: BridgeMethods = {
 		// A report that asks for a turn (question, blocked, done, review) is read at once; progress and notes wait.
 		if (id && triggerTurn && session.isStreaming) interruptFor(session.agent, `mail:${id}`);
 		mailHost.sendMessage(message, { triggerTurn, ...(deliverAs ? { deliverAs } : {}) });
+		if (id) queuedMail.add(id);
 		return {};
 	},
 	/**

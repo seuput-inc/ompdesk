@@ -5,6 +5,9 @@
 //! What the record does not hold is read when the state is listed: `specialty` from the folder's `SOUL.md`
 //! (`specialty`), the open items and the Needs-you count from `items.rs`.
 
+pub mod peer;
+pub mod receipt;
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +31,11 @@ pub struct BotRecord {
     pub folder: String,
     /// Its home chat's session file; None until its first chat.
     pub home: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creation_receipt: Option<receipt::CreationReceipt>,
+    /// Host-private creation record. Only `peerPending` is included in bot state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_create: Option<peer::PeerCreate>,
     /// Session files of its chats on this computer, oldest first.
     pub sessions: Vec<String>,
     pub paused: bool,
@@ -208,7 +216,7 @@ impl Bots {
             bot.sessions.push(session.to_owned());
             changed = true;
         }
-        if bot.home.is_none() {
+        if bot.home.is_none() && bot.peer_create.is_none() {
             bot.home = Some(session.to_owned());
             changed = true;
         }

@@ -25,7 +25,7 @@ import {
 	useMasterDetail,
 } from "../common";
 import { BotAvatar } from "./BotAvatar";
-import { openBotDialog } from "./bot-launch";
+import { type NewBotDraft, openBotDialog } from "./bot-launch";
 import {
 	BOT_TEMPLATE_CATEGORIES,
 	BOT_TEMPLATES,
@@ -38,10 +38,12 @@ import { freeBotName } from "./bot-view";
 const SELECTED_KEY = "omp.bots.templateSelected";
 
 export function BotTemplatesDialog({
+	draft,
 	initialQuery = "",
 	initialSelected,
 	onClose,
 }: {
+	draft?: Partial<NewBotDraft>;
 	initialQuery?: string;
 	initialSelected?: string;
 	onClose: () => void;
@@ -49,7 +51,7 @@ export function BotTemplatesDialog({
 	const t = useT();
 	const lang = useCurrentLang();
 	const listId = useId();
-	const bots = useBotsStore(s => s.state.bots).filter(bot => !bot.device);
+	const bots = useBotsStore(s => s.state.bots).filter(bot => bot.device === draft?.device);
 	const searchRef = useRef<HTMLInputElement>(null);
 	const [query, setQuery] = useState(initialQuery);
 	const [category, setCategory] = useState<BotTemplateCategory | null>(null);
@@ -88,7 +90,7 @@ export function BotTemplatesDialog({
 		const line = lineOf(template);
 		openBotDialog({
 			kind: "new",
-			draft: { name: freeBotName(nameOf(template), bots), purpose: line, template: { template, line } },
+			draft: { ...draft, name: freeBotName(nameOf(template), bots), purpose: line, template: { template, line } },
 		});
 	};
 	const move = (delta: number) => {
@@ -147,7 +149,7 @@ export function BotTemplatesDialog({
 								/>
 								<Button
 									icon={<Plus />}
-									onClick={() => openBotDialog({ kind: "new" })}
+									onClick={() => openBotDialog({ kind: "new", draft: { ...draft, template: undefined } })}
 									size="sm"
 									variant="secondary"
 								>
@@ -172,7 +174,12 @@ export function BotTemplatesDialog({
 									actions={
 										<>
 											<Button
-												onClick={() => openBotDialog({ kind: "new", draft: { purpose: query } })}
+												onClick={() =>
+													openBotDialog({
+														kind: "new",
+														draft: { ...draft, template: undefined, purpose: query },
+													})
+												}
 												size="sm"
 												variant="secondary"
 											>

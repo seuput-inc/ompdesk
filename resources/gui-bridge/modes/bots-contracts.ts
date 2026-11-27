@@ -5,6 +5,45 @@
 
 /** The bridge method main calls (through the local command `agent_control_bot`) whenever the payload changed. */
 export const BOT_METHOD = "agent_control.bot";
+/** Host-private: the running session manager's identity, never a device's tab or file claim. */
+export const BOT_HOME_OBSERVATION = "agent_control.bot_home_observation";
+export const BOT_HOME_PERSIST = "agent_control.bot_home_persist";
+
+export interface BotHomeIdentity {
+	cwd: string;
+	sessionId: string;
+	sessionPath: string | undefined;
+}
+
+export interface BotHomeManager {
+	getCwd(): string;
+	getSessionId(): string;
+	getSessionFile(): string | undefined;
+}
+
+export function botHomeOf(manager: BotHomeManager): BotHomeIdentity {
+	return { cwd: manager.getCwd(), sessionId: manager.getSessionId(), sessionPath: manager.getSessionFile() };
+}
+
+/** A session switch between observation and a write must leave the new chat alone. */
+export function requireBotHome(
+	expected: unknown,
+	current: BotHomeIdentity,
+): asserts expected is BotHomeIdentity & Record<string, unknown> {
+	if (
+		!current.sessionPath ||
+		typeof expected !== "object" ||
+		expected === null ||
+		!("sessionPath" in expected) ||
+		expected.sessionPath !== current.sessionPath ||
+		!("sessionId" in expected) ||
+		expected.sessionId !== current.sessionId ||
+		!("cwd" in expected) ||
+		expected.cwd !== current.cwd
+	)
+		throw new Error("The bot's home chat changed before delivery.");
+}
+
 /** The journal entry holding the newest payload, read back after a restart. */
 export const BOT_ENTRY = "ompdesk.bot";
 /** The custom message that tells the bot what changed in its items and its other chats since it last heard. */

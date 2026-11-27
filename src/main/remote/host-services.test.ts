@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { fixtureProviderOptions } from "../../../e2e/models-config-fixture";
+import { BOT_HOME_OBSERVATION, BOT_HOME_PERSIST, BOT_METHOD } from "../../../resources/gui-bridge/modes/bots-contracts";
 import type { PromptOriginEnv } from "../../../resources/gui-bridge/prompt-origin-contracts";
 import type { AccountRotationMode, AccountRotationState } from "../../shared/account-rotation";
 import { type AgentReviewItem, type AgentReviewResult, wrapAgentMessage } from "../../shared/agent-control";
@@ -53,6 +54,7 @@ import { branchEvidence, branchFacts, landingFacts, type WorktreeRef } from "../
 import type { MemoryPageCopy } from "../ai-memory/client";
 import { serveMemoryStore } from "../ai-memory/memory-store-test-rig";
 import { serveConclusionPull, serveConclusionPush, servePull, servePush } from "../ai-memory/sync";
+import type { HostBots } from "../bots";
 import { canonicalCwd } from "../canonical-cwd";
 import { stopCore } from "../core/process";
 import { advanceCoreTimers, fakeCoreTimers, realCoreTimers } from "../core/test-clock";
@@ -108,6 +110,7 @@ import { FrameTooLargeError } from "./wire";
 class FakeHostSidecar extends EventEmitter {
 	status: SidecarStatus = "asleep";
 	processAlive = false;
+	bridgeRequest?: SidecarLike["bridgeRequest"];
 	disposed = false;
 	started: Array<{ resume: string | undefined }> = [];
 	reloads: Array<{ reload: boolean; reconnect: string[] }> = [];
@@ -429,6 +432,196 @@ function setup(graceMs = 60_000, extra: Partial<HostServicesDeps> = {}) {
 	});
 	return { services, sidecars, origins, local, deleteSession, renameStoredSession, machine, recordedCwd };
 }
+
+function fakeBots() {
+	return {
+		created: vi.fn(),
+		from: vi.fn(),
+		share: vi.fn(),
+		home: vi.fn(),
+		remote: vi.fn(),
+		roomPost: vi.fn(),
+		candidate: vi.fn<HostBots["candidate"]>(),
+		observe: vi.fn<HostBots["observe"]>(),
+		receipt: vi.fn<HostBots["receipt"]>(),
+		limited: vi.fn<HostBots["limited"]>(),
+	};
+}
+
+describe("peer bot homes", () => {
+	async function fixture() {
+		const bots = fakeBots();
+		const { services, sidecars } = setup(60_000, { bots: () => bots });
+		onTestFinished(() => services.disposeAll());
+		const conn = new FakeConnection(peer("creator"));
+		const open = (link: FakeConnection) =>
+			services.call(link.peer, "tab.open", { rtab: "home", cwd: workDir, fresh: true }, link);
+		await open(conn);
+		const sidecar = sidecars[0]!;
+		const identity = {
+			cwd: workDir,
+			sessionId: "host-session",
+			sessionPath: join(workDir, "sessions", "home.jsonl"),
+		};
+		const home = { device: conn.peer.deviceId, ...identity };
+		const context = {
+			bot: { id: "bot", name: "Bot", folder: workDir, paused: false, firstRun: true },
+			items: [],
+			needsYou: [],
+			live: [],
+		};
+		const mail = { id: "peer-kickoff-bot", text: "Begin", content: "Canonical kickoff" };
+		const journal: string[] = [];
+		let queued = false;
+		const bridge = vi.fn<NonNullable<SidecarLike["bridgeRequest"]>>(async (method, params) => {
+			if (method === BOT_HOME_OBSERVATION)
+				return params ? { ...identity, journaled: journal.includes(mail.id), queued } : identity;
+			if (method === BOT_HOME_PERSIST || method === BOT_METHOD) return {};
+			throw new Error(`Unexpected bridge call: ${method}`);
+		});
+		sidecar.bridgeRequest = bridge;
+		bots.candidate.mockResolvedValue(true);
+		bots.observe.mockResolvedValue({ context, mail });
+		bots.receipt.mockImplementation(async () => {
+			bots.observe.mockResolvedValue({ context, mail: null });
+			return true;
+		});
+		return {
+			services,
+			conn,
+			open,
+			sidecar,
+			sidecars,
+			bridge,
+			bots,
+			home,
+			identity,
+			context,
+			mail,
+			journal,
+			queue: (value: boolean) => {
+				queued = value;
+			},
+		};
+	}
+
+	it("uses the live host manager, not a device's adopted folder or session claim, and persists a blank home without a turn", async () => {
+		const f = await fixture();
+		const claimed = join(workDir, "peer-claimed");
+		await f.services.call(f.conn.peer, "tab.adoptCwd", { rtab: "home", cwd: claimed }, f.conn);
+		f.sidecar.emit("session", { sessionId: "peer", sessionFile: join(claimed, "other.jsonl") });
+		f.bots.candidate.mockResolvedValueOnce(false);
+		f.bots.observe.mockResolvedValue({ context: f.context, mail: null });
+		f.sidecar.setStatus("ready");
+		await vi.waitFor(() => expect(f.bots.candidate).toHaveBeenCalledWith(f.home));
+		expect(f.bridge.mock.calls.map(([method]) => method)).not.toContain(BOT_HOME_PERSIST);
+		expect(f.bots.observe).not.toHaveBeenCalled();
+		f.services.observeBotHomes();
+		await vi.waitFor(() =>
+			expect(f.bridge).toHaveBeenCalledWith(
+				BOT_METHOD,
+				{ ...f.context, expectedHome: f.identity },
+				expect.any(Number),
+			),
+		);
+		expect(f.bridge).toHaveBeenCalledWith(BOT_HOME_PERSIST, f.identity, expect.any(Number));
+		expect(f.bots.observe).toHaveBeenCalledExactlyOnceWith(f.home);
+		expect(f.sidecar.commands).toEqual([]);
+	});
+
+	it("lets the first eligible session finish persisting; a competing tab in its folder never gets bot context", async () => {
+		const f = await fixture();
+		const pin = Promise.withResolvers<boolean>();
+		f.bots.candidate.mockReturnValueOnce(pin.promise).mockResolvedValue(false);
+		f.bots.observe.mockResolvedValue({ context: f.context, mail: null });
+		f.sidecar.setStatus("ready");
+		await vi.waitFor(() => expect(f.bots.candidate).toHaveBeenCalledWith(f.home));
+		await f.services.call(f.conn.peer, "tab.open", { rtab: "second", cwd: workDir, fresh: true }, f.conn);
+		const other = f.sidecars[1]!;
+		const second = { ...f.identity, sessionId: "second", sessionPath: join(workDir, "sessions", "second.jsonl") };
+		const inspect = vi.fn<NonNullable<SidecarLike["bridgeRequest"]>>(async () => second);
+		other.bridgeRequest = inspect;
+		other.setStatus("ready");
+		await vi.waitFor(() => expect(inspect).toHaveBeenCalled());
+		pin.resolve(true);
+		await vi.waitFor(() => expect(f.bots.observe).toHaveBeenCalledWith(f.home));
+		await vi.waitFor(() => expect(f.bots.candidate).toHaveBeenCalledWith({ ...second, device: f.home.device }));
+		expect(inspect.mock.calls.every(args => args[0] === BOT_HOME_OBSERVATION)).toBe(true);
+		expect(f.bots.observe).toHaveBeenCalledOnce();
+	});
+
+	it("keeps a queued kickoff across reconnect, reserves again for a lost queue, and acknowledges only one journal entry", async () => {
+		const f = await fixture();
+		const { quota } = quotaOver(f.conn.peer);
+		f.services.attachQuota(quota);
+		const attempts: string[] = [];
+		const reservations: number[] = [];
+		vi.spyOn(f.sidecar.rpcClient, "command").mockImplementation(async command => {
+			if (command.type !== "agent_control_mail") throw new Error(command.type);
+			reservations.push(quota.view(f.home.device)!.usage.requests);
+			attempts.push(String(command.details.id));
+			if (attempts.length === 1) f.queue(true);
+			else {
+				f.journal.push(String(command.details.id));
+				throw new Error("answer lost after journaling");
+			}
+			return { type: "response", command: command.type, success: true };
+		});
+		f.sidecar.setStatus("ready");
+		await vi.waitFor(() => expect(attempts).toEqual([f.mail.id]));
+		f.services.disconnected(f.conn.peer, f.conn);
+		const back = new FakeConnection(f.conn.peer);
+		f.bridge.mockClear();
+		await f.open(back);
+		await vi.waitFor(() =>
+			expect(f.bridge).toHaveBeenCalledWith(BOT_HOME_OBSERVATION, { id: f.mail.id }, expect.any(Number)),
+		);
+		expect(f.bots.receipt).not.toHaveBeenCalled();
+		expect(attempts).toEqual([f.mail.id]);
+		f.queue(false); // stock lost its unjournaled queue when its process ended
+		f.sidecar.setStatus("starting");
+		f.sidecar.setStatus("ready");
+		await vi.waitFor(() => expect(f.journal).toEqual([f.mail.id]));
+		f.services.disconnected(back.peer, back);
+		await f.open(new FakeConnection(f.conn.peer));
+		await vi.waitFor(() =>
+			expect(f.bots.receipt).toHaveBeenCalledExactlyOnceWith({ ...f.home, id: f.mail.id, journaled: true }),
+		);
+		expect(f.journal).toEqual([f.mail.id]);
+		expect(attempts).toEqual([f.mail.id, f.mail.id]);
+		expect(reservations).toEqual([1, 2]);
+		expect(quota.view(f.home.device)?.usage.requests).toBe(2);
+	});
+
+	it("keeps a refused kickoff pending, then delivers through quota after the daily reset", async () => {
+		await fakeCoreTimers(["Date", "setTimeout", "clearTimeout"]);
+		try {
+			const f = await fixture();
+			const { quota } = quotaOver({ ...f.conn.peer, limits: { requestsPerDay: 1 } });
+			f.services.attachQuota(quota);
+			expect(quota.reserve(f.home.device).ok).toBe(true); // the create used today's last request
+			vi.spyOn(f.sidecar.rpcClient, "command").mockImplementation(async command => {
+				if (command.type !== "agent_control_mail") throw new Error(command.type);
+				f.journal.push(String(command.details.id));
+				return { type: "response", command: command.type, success: true };
+			});
+			f.sidecar.setStatus("ready");
+			await advanceCoreTimers(1);
+			expect(f.bots.limited).toHaveBeenCalledWith({ ...f.home, id: f.mail.id });
+			expect(f.bots.receipt).not.toHaveBeenCalled();
+			expect(f.journal).toEqual([]);
+			const now = new Date();
+			await advanceCoreTimers(
+				new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime() + 300,
+			);
+			expect(f.journal).toEqual([f.mail.id]);
+			expect(quota.view(f.home.device)?.usage.requests).toBe(1);
+			expect(f.bots.receipt).toHaveBeenCalledExactlyOnceWith({ ...f.home, id: f.mail.id, journaled: true });
+		} finally {
+			await realCoreTimers();
+		}
+	});
+});
 
 describe("delete during a pending open", () => {
 	it("refuses the tombstoned saved session after its workspace lookup resumes", async () => {
@@ -1050,6 +1243,58 @@ describe("LocalHostServices", () => {
 		}
 		const used = (stored: ReturnType<typeof quotaOver>["stored"]) => stored.get("device-x")?.usage?.requests;
 
+		it("reserves one bot kickoff before create, refunds a refusal, and never charges a blank kickoff", async () => {
+			const hold = Promise.withResolvers<unknown>();
+			const from = vi.fn().mockReturnValueOnce(hold.promise).mockResolvedValue({});
+			const created = vi.fn().mockResolvedValue(false);
+			const bots = { ...fakeBots(), from, created };
+			const { services } = setup(60_000, { bots: () => bots });
+			const x = new FakeConnection(peer("device-x"));
+			const { quota, stored } = quotaOver({ ...x.peer, limits: { requestsPerDay: 1 } });
+			services.attachQuota(quota);
+			const create = (fields: Record<string, unknown>) =>
+				services.call(x.peer, "host.bots.command", { request: { action: "create", name: "Ada", ...fields } }, x);
+			const reserved = create({ kickoff: "Start" });
+			const refused = await create({ purpose: "review", kickoff: "Start" }).catch((error: unknown) => error);
+			expect(ipcErrorCode(refused)).toBe("remote_limit_reached");
+			expect(from).toHaveBeenCalledTimes(1);
+			hold.resolve({ refused: "stale" });
+			await reserved;
+			expect(used(stored)).toBe(0);
+			from.mockRejectedValueOnce(new Error("invalid folder"));
+			await expect(create({ kickoff: "Start", folder: "/not-allowed" })).rejects.toThrow(
+				/^\[bot_create_refused\] invalid folder$/,
+			);
+			from.mockRejectedValueOnce(new Error("blank create refused"));
+			await expect(create({})).rejects.toThrow(/^\[bot_create_refused\] blank create refused$/);
+			expect(used(stored)).toBe(0);
+			expect(created.mock.calls).toEqual(from.mock.calls.map(call => [x.peer.deviceId, call[3]]));
+			await create({ kickoff: "\uFEFF" });
+			expect(used(stored)).toBe(1);
+			await create({ purpose: "review", kickoff: "\u0085 " });
+			await create({});
+			expect(used(stored)).toBe(1);
+		});
+
+		it.each(["written", "unreadable"])("retains a lost create's request when its host record is %s", async state => {
+			const from = vi.fn().mockRejectedValue(new Error("answer lost"));
+			const created = vi.fn();
+			if (state === "written") created.mockResolvedValue(true);
+			else created.mockRejectedValue(new Error("disk"));
+			const bots = { ...fakeBots(), from, created };
+			const { services } = setup(60_000, { bots: () => bots });
+			const x = new FakeConnection(peer("device-x"));
+			const { quota, stored } = quotaOver(x.peer);
+			services.attachQuota(quota);
+			const request = { action: "create", name: "Ada", kickoff: "Go" };
+			await expect(services.call(x.peer, "host.bots.command", { request }, x)).rejects.toThrow(/^answer lost$/);
+			const key = from.mock.calls[0]?.[3];
+			expect(key).toEqual(expect.any(String));
+			expect(from).toHaveBeenCalledTimes(1);
+			expect(created).toHaveBeenCalledExactlyOnceWith(x.peer.deviceId, key);
+			expect(used(stored)).toBe(1);
+		});
+
 		it("refuses omfg, tan and a summarizing leaf switch once the limit is used up, and still serves reads", async () => {
 			const { services, sidecars, stored, x } = limited({ requestsPerDay: 1 }, 1);
 			await services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
@@ -1289,11 +1534,8 @@ describe("LocalHostServices", () => {
 		};
 		const { services, recordedCwd, local, deleteSession } = setup(60_000, {
 			bots: () => ({
+				...fakeBots(),
 				share: async () => ({ version: "1", state: { bots: [bot], items: [] } }),
-				home: vi.fn(),
-				from: vi.fn(),
-				remote: vi.fn(),
-				roomPost: vi.fn(),
 			}),
 		});
 		const conn = new FakeConnection(peer("asking-device"));

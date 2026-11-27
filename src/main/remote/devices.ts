@@ -556,6 +556,7 @@ export class RemoteDevices {
 		if (!this.#quota.setLimits(parsed.data.deviceId, parsed.data.limits)) {
 			throw codedError("remote_unknown_device", "Unknown device");
 		}
+		this.#deps.services.observeBotHomes(parsed.data.deviceId);
 		return this.#broadcastState();
 	}
 
@@ -825,6 +826,7 @@ export class RemoteDevices {
 
 	/** The control tools came up: every connected host's bots are read now (a link that came up first told nobody). */
 	botsReady(): void {
+		this.#deps.services.observeBotHomes();
 		for (const [deviceId, link] of this.#links)
 			if (link.client.state === "online") void this.#readBots(deviceId, link);
 	}

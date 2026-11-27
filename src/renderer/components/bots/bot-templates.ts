@@ -8,19 +8,13 @@
  * Connectors (GitHub, Slack, Linear, Google) are named only: they come with the bots connectors slice, so the detail
  * says "Not connected" and the first chat sets up what it can locally (`gh`, an MCP server, an email account).
  */
-import type { ScheduleFrequency } from "../../../shared/schedules";
+import type { BotTemplateRoutine } from "../../../shared/bots";
 import { BOT_TEMPLATE_SKILLS, type BotTemplateSkillId } from "./bot-template-skills";
 
 export const BOT_TEMPLATE_CATEGORIES = ["coding", "releases", "support", "planning", "ops", "personal"] as const;
 export type BotTemplateCategory = (typeof BOT_TEMPLATE_CATEGORIES)[number];
 
 export type BotConnector = "github" | "slack" | "linear" | "google";
-
-export interface BotTemplateRoutine {
-	/** English: the schedule's name after the bot's ("<bot>: <label>") and what its run is asked. */
-	label: string;
-	frequency: ScheduleFrequency;
-}
 
 export interface BotTemplate {
 	id: string;
@@ -39,7 +33,7 @@ export interface BotTemplate {
 }
 
 const WEEKDAYS = [1, 2, 3, 4, 5];
-const daily = (time: string, days: number[] = []): ScheduleFrequency => ({ kind: "daily", time, days });
+const daily = (time: string, days: number[] = []): BotTemplateRoutine["frequency"] => ({ kind: "daily", time, days });
 
 export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
