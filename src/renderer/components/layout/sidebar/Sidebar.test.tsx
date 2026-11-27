@@ -3827,6 +3827,7 @@ describe("Sidebar device sections", () => {
 		async paired => {
 			const device = paired ? "dev-studio" : undefined;
 			const opener = session("/s/second.jsonl", "/bots/ada", { device });
+			const home = session("/s/home.jsonl", opener.cwd, { device });
 			const worker = session("/s/worker.jsonl", "/repo", { device, title: "Review build" });
 			const manual = session("/s/manual.jsonl", worker.cwd, { device, title: worker.title });
 			const bot: Bot = {
@@ -3834,7 +3835,7 @@ describe("Sidebar device sections", () => {
 				name: "Ada",
 				folder: opener.cwd,
 				device,
-				home: "/s/home.jsonl",
+				home: home.path,
 				sessions: [opener.path],
 				workers: [
 					{
@@ -3859,7 +3860,7 @@ describe("Sidebar device sections", () => {
 			};
 			const omp = installMockOmp([]);
 			omp.sessions.list.mockImplementation(async (_scope, host) =>
-				host === device ? [opener, worker, manual] : [session(worker.path, "/different-host")],
+				host === device ? [home, opener, worker, manual] : [session(worker.path, "/different-host")],
 			);
 			seedStores();
 			useSessionStore.setState({ isStreaming: true });
@@ -3876,6 +3877,7 @@ describe("Sidebar device sections", () => {
 			useSidebarFolds.getState().setGroupsFolded(["/different-host"], false);
 			useSidebarPrefs.setState({ hydrated: true, groupAliases: { [worker.cwd]: "Project alias" } });
 			await mount(<Sidebar />);
+			if (paired) await act(() => vi.dynamicImportSettled());
 			const nested = () => container.querySelector(`[data-bot-entry="ada"] [data-bot-worker-rows="${opener.path}"]`);
 			const project = (row: SessionInfo) =>
 				container.querySelector(
@@ -3884,6 +3886,8 @@ describe("Sidebar device sections", () => {
 						: `[data-session-group="/repo"] [data-session-path="${row.path}"]`,
 				);
 			expect(nested()?.textContent).toContain("Review build");
+			expect(container.querySelectorAll("[data-bot-worker-rows]")).toHaveLength(1);
+			expect(nested()?.children).toHaveLength(1);
 			expect(project(manual)).not.toBeNull();
 			expect(project(worker)).toBeNull();
 			if (paired) expect(container.querySelector(`[data-session-path="${worker.path}"]`)).not.toBeNull();
