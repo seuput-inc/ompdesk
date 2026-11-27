@@ -1,6 +1,6 @@
 ### Autopilot-full
 
-> OMPdesk: before step 1, update the plan. Use `todo` `init` only for a fresh plan. If any item is unfinished, `append` only new items, one call per phase. Copy one item per new numbered step in order, before task-specific items. Use the todo language from `<reply-language>` (word for word without one). Keep skill, tool and file names unchanged. Keep earlier work going unless the user explicitly cancels or replaces it. Keep skipped steps with `skip: <reason>`.
+> OMPdesk: before step 1, update the plan. Use `todo` `init` only for a fresh plan. If any item is unfinished, `append` only new items, one call per phase. List each user-requested outcome once. Follow playbook steps internally; do not add them as todo items. Use the todo language from `<reply-language>` (word for word without one). Keep skill, tool and file names unchanged. Keep earlier work going unless the user explicitly cancels or replaces it.
 
 **You own the verdicts, never the PRs. One owner carries each PR from build to merge, and nothing merges until your swarm, which never wrote the code, has proven the code that lands.**
 

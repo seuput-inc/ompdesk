@@ -1,12 +1,12 @@
 ### Feature
 
-> OMPdesk: before step 1, update the plan. Use `todo` `init` only for a fresh plan. If any item is unfinished, `append` only new items, one call per phase. Copy one item per new numbered step in order, before task-specific items. Use the todo language from `<reply-language>` (word for word without one). Keep skill, tool and file names unchanged. Keep earlier work going unless the user explicitly cancels or replaces it. Keep skipped steps with `skip: <reason>`.
+> OMPdesk: before step 1, update the plan. Use `todo` `init` only for a fresh plan. If any item is unfinished, `append` only new items, one call per phase. List each user-requested outcome once. Follow playbook steps internally; do not add them as todo items. Use the todo language from `<reply-language>` (word for word without one). Keep skill, tool and file names unchanged. Keep earlier work going unless the user explicitly cancels or replaces it.
 
 **You own the design. Plan, review, verify.** Delegate implementation. Stay in the lead.
 
 1. `how` over the affected subsystem.
 2. `architect` for parallel design exploration.
-3. Write the throughput checkpoint as four todo items. A dimension that genuinely does not apply (single file, no fan-out) keeps its item with `n/a: <reason>` rather than being dropped:
+3. Use these four questions to plan the work. Record non-applicable dimensions in the checkpoint, not the user’s task list:
    - **Blocking first steps.** Gates run before fan-out.
    - **Independent workstreams.** Disjoint files, services, or layers parallelize. Shared writes serialize.
    - **Shared mutable state.** Default to splitting the target (the **separate-before-serializing-shared-state** principle skill). Serialize only for real invariants.
