@@ -14,7 +14,17 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { guard } from "../health";
 import { type JournalEntry, type PromptSectionHost, registerPromptSection } from "../prompt-sections";
-import { BOT_ENTRY, BOT_METHOD, BOT_NOTE_TYPE, BOT_SECTION_ID, SOUL_FILE } from "./bots-contracts";
+import {
+	BOT_ENTRY,
+	BOT_HOME_PERSIST,
+	BOT_METHOD,
+	BOT_NOTE_TYPE,
+	BOT_SECTION_ID,
+	type BotHomeManager,
+	botHomeOf,
+	requireBotHome,
+	SOUL_FILE,
+} from "./bots-contracts";
 import { botNote, botSection, chatFacts, latestBot, parseBotContext, sameBot } from "./bots-core";
 
 /** The slice of omp's ExtensionAPI this module uses (no omp imports, like prompt-sections.ts). */
@@ -64,13 +74,24 @@ export function install(pi: BotHost): void {
 
 interface BotSession {
 	isStreaming: boolean;
-	sessionManager: {
+	sessionManager: BotHomeManager & {
 		getBranch(): readonly JournalEntry[];
 		appendCustomEntry(customType: string, data: unknown): unknown;
+		ensureOnDisk(): Promise<void>;
+		flush(): Promise<void>;
 	};
 }
 
 export const methods = guard("bots", {
+	[BOT_HOME_PERSIST]: async (expected, env) => {
+		const session = env.session() as unknown as BotSession;
+		const manager = session.sessionManager;
+		requireBotHome(expected, botHomeOf(manager));
+		// Stock otherwise defers a fresh journal until the first assistant message.
+		await manager.ensureOnDisk();
+		requireBotHome(expected, botHomeOf(env.session().sessionManager));
+		return {};
+	},
 	/**
 	 * `BotContext` and `kickoff?` → `{changed}` and `BotChatFacts`: journaled only when it says something the newest
 	 * entry does not.
@@ -80,11 +101,15 @@ export const methods = guard("bots", {
 		if (!context) throw new Error(`${BOT_METHOD} needs a bot with an id, a name and a folder`);
 		const session = env.session() as unknown as BotSession;
 		const manager = session.sessionManager;
+		const expected =
+			params && typeof params === "object" && "expectedHome" in params ? params.expectedHome : undefined;
+		if (expected !== undefined) requireBotHome(expected, botHomeOf(manager));
 		const branch = manager.getBranch();
 		const kickoff = (params as { kickoff?: unknown } | null)?.kickoff;
 		const facts = chatFacts(branch, typeof kickoff === "string" ? kickoff : undefined, session.isStreaming === true);
-		if (sameBot(latestBot(branch), context)) return { changed: false, ...facts };
-		manager.appendCustomEntry(BOT_ENTRY, context);
-		return { changed: true, ...facts };
+		const changed = !sameBot(latestBot(branch), context);
+		if (changed) manager.appendCustomEntry(BOT_ENTRY, context);
+		if (expected !== undefined) await manager.flush();
+		return { changed, ...facts };
 	},
 });

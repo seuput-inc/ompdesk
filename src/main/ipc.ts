@@ -1699,7 +1699,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	deps.hostBots.current = {
 		home: (name, deviceId, deviceName) => agentControl.botHome(name, deviceId, deviceName),
 		share: () => agentControl.botsShare(),
-		from: (request, deviceId, deviceName) => agentControl.botsFrom(request, deviceId, deviceName),
+		from: (request, deviceId, deviceName, createKey) =>
+			agentControl.botsFrom(request, deviceId, deviceName, createKey),
+		created: (device, createKey) => agentControl.control.botPeerCreated(device, createKey),
+		candidate: home => agentControl.control.botPeerCandidate(home),
+		observe: observation => agentControl.control.botPeerObserve(observation),
+		receipt: receipt => agentControl.control.botPeerReceipt(receipt),
+		limited: observation => agentControl.control.botPeerLimited(observation),
 		remote: update => agentControl.botsRemote(update),
 		roomPost: post => agentControl.botsRoomPost(post),
 	};
@@ -2692,13 +2698,22 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// Settings › Schedules on the machine the caller's focused tab runs on: a paired host runs its own schedules.
 	ipc.handle(SCHEDULES_COMMAND, (caller, request: unknown, device?: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid schedules request");
-		return machineFor(caller, device).schedules(request as SchedulesRequest);
+		return machineFor(caller, device).schedules(request as SchedulesRequest, undefined, !!caller.browserWindow);
 	});
 	// The Bots page: this computer's bots and their items (the owner's own; agents use ompdesk_bot and ompdesk_item).
 	ipc.handle(BOTS_COMMAND, (caller, request: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid bots request");
+		if (!caller.browserWindow && "action" in request && request.action === "create" && "folder" in request)
+			throw new Error("This computer chooses the folder for a bot created from a paired device.");
 		if ("action" in request && request.action === "allowLegacyPeers" && !caller.browserWindow)
 			throw new Error("Set up legacy bot access on the owning computer.");
+		if ("action" in request && request.action === "createModels") {
+			const callerTabId = caller.win && sidecarPool.activeTabForWindow(caller.win);
+			if (!callerTabId) throw new Error("No session for the model catalog.");
+			const device = "device" in request ? request.device : undefined;
+			if (device !== undefined && typeof device !== "string") throw new Error("Invalid computer");
+			return agentControl.bots({ action: "createModels", callerTabId, device });
+		}
 		return agentControl.bots(request as BotsCall);
 	});
 	// One owner action: the host picks, reads and stores. No browser supplies a path or receives the file.

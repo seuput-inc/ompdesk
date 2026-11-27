@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
+import { BOT_HOME_OBSERVATION, BOT_HOME_PERSIST, BOT_METHOD } from "../../resources/gui-bridge/modes/bots-contracts";
 import {
 	atEnd,
 	CLEANUP_MS,
@@ -46,6 +47,32 @@ const toolEnds = (frames: readonly Frame[]) => frames.filter(frame => frame.type
 const firstWith = (provider: Provider, id: string) => provider.bodies.findIndex(body => body.includes(id));
 
 describe.skipIf(!existsSync(omp))("a report to a busy receiver on stock omp", () => {
+	it("reopens a creator's blank bot home with its journaled context and no model turn", async () => {
+		const provider = await startProvider();
+		atEnd(() => provider.close());
+		const first = await startOmp(provider);
+		const home = await first.bridge.request<{ cwd: string; sessionId: string; sessionPath: string }>(
+			BOT_HOME_OBSERVATION,
+		);
+		const context = {
+			bot: { id: "blank", name: "Blank", folder: home.cwd, firstRun: false },
+			items: [],
+			needsYou: [],
+			live: [],
+		};
+		await first.bridge.request(BOT_HOME_PERSIST, home);
+		await expect(first.bridge.request(BOT_METHOD, { ...context, expectedHome: home })).resolves.toMatchObject({
+			changed: true,
+		});
+		await first.kill();
+		const again = await startOmp(provider, { root: first.root, isolated: first.isolated, session: home.sessionPath });
+		await expect(again.bridge.request(BOT_HOME_OBSERVATION)).resolves.toEqual(home);
+		await expect(again.bridge.request(BOT_METHOD, { ...context, expectedHome: home })).resolves.toMatchObject({
+			changed: false,
+		});
+		expect(provider.turns).toBe(0);
+	}, 120_000);
+
 	it("reaches the model at the next step boundary of the same turn, and every call of the batch runs", async () => {
 		const provider = await startProvider();
 		provider.release();

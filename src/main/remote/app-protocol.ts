@@ -968,8 +968,8 @@ export const SchedulesCreateParams = z.object({ draft: ScheduleDraftSchema });
 /** `host.bots.home {name}` → `{path, name}`: one of the host's bots by name, refused unless the asking device is in its reach. */
 export const BotsHomeParams = z.object({ name: z.string().trim().min(1).max(200) });
 /**
- * `host.bots.command {request}`: the host's core returns deletion counts for `deletePreview`, a BotFile for `file`,
- * or SharedBots after a change. It refuses what a device may not do (make, import, hand over, groups).
+ * `host.bots.command {request}` returns SharedBots, a requested file, deletion counts or a proposed creation folder.
+ * The host chooses every creation path. Imports, handovers and owner-only settings stay local.
  */
 export const BotsCommandParams = z.object({
 	request: z.looseObject({ action: z.string().min(1).max(64), answer: z.unknown().optional() }),
@@ -1004,7 +1004,12 @@ export const BotsRoomPostSchema = z.object({
 export const SchedulesStateSchema: z.ZodType<SchedulesState> = z.object({
 	paused: z.boolean(),
 	schedules: z.array(
-		ScheduleDraftSchema.extend({ id: z.string(), createdAt: z.string(), device: z.string().optional() }),
+		ScheduleDraftSchema.extend({
+			id: z.string(),
+			createdAt: z.string(),
+			device: z.string().optional(),
+			needsHostActivation: z.boolean().optional(),
+		}),
 	),
 	runs: z.array(ScheduleRunSchema),
 	nextRuns: z.record(z.string(), z.string().nullable()),

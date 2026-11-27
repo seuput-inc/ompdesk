@@ -160,11 +160,16 @@ fn webhook_key() -> String {
 
 /// The journal's writer: the newest state is written in one step by a thread of its own, so a rename Windows holds
 /// back never holds a request.
+struct JournalWrite {
+    text: String,
+    persisted: Option<mpsc::Sender<Result<(), String>>>,
+}
+
 struct Journal {
     file: PathBuf,
     mode: Option<u32>,
     label: &'static str,
-    queue: Mutex<Option<mpsc::Sender<String>>>,
+    queue: Mutex<Option<mpsc::Sender<JournalWrite>>>,
     /// The writer thread, joined by `close`: nothing of it lands after the last write, not even a temp file.
     writer: Mutex<Option<std::thread::JoinHandle<()>>>,
     closed: Arc<AtomicBool>,
@@ -172,21 +177,31 @@ struct Journal {
 
 impl Journal {
     fn open(file: PathBuf, mode: Option<u32>, label: &'static str) -> Journal {
-        let (queue, texts) = mpsc::channel::<String>();
+        let (queue, texts) = mpsc::channel::<JournalWrite>();
         let closed = Arc::new(AtomicBool::new(false));
         let writer = std::thread::spawn({
             let (file, closed) = (file.clone(), Arc::clone(&closed));
             move || {
-                while let Ok(mut text) = texts.recv() {
-                    // Only the newest state is worth writing.
-                    while let Ok(newer) = texts.try_recv() {
-                        text = newer;
+                while let Ok(mut write) = texts.recv() {
+                    // A checkpoint must be answered before the next write can replace it.
+                    while write.persisted.is_none()
+                        && let Ok(newer) = texts.try_recv()
+                    {
+                        write = newer;
                     }
-                    if closed.load(Ordering::SeqCst) {
-                        continue;
-                    }
-                    if let Err(fault) = write_kept(&file, text.as_bytes(), mode, 0o777) {
-                        eprintln!("ompdesk-core: couldn't save the {label}: {}", fault.message);
+                    let result = if closed.load(Ordering::SeqCst) {
+                        Err("The journal closed.".to_owned())
+                    } else {
+                        write_kept(&file, write.text.as_bytes(), mode, 0o777)
+                            .map(|_| ())
+                            .map_err(|fault| fault.message)
+                    };
+                    if let Some(answer) = write.persisted {
+                        let _ = answer.send(result);
+                    } else if let Err(error) = result
+                        && !closed.load(Ordering::SeqCst)
+                    {
+                        eprintln!("ompdesk-core: couldn't save the {label}: {error}");
                     }
                 }
             }
@@ -203,8 +218,26 @@ impl Journal {
 
     fn keep(&self, text: String) {
         if let Some(queue) = &*locked(&self.queue) {
-            let _ = queue.send(text);
+            let _ = queue.send(JournalWrite {
+                text,
+                persisted: None,
+            });
         }
+    }
+
+    fn checkpoint(&self, text: String) -> Result<(), String> {
+        let (answer, persisted) = mpsc::channel();
+        locked(&self.queue)
+            .as_ref()
+            .ok_or("The schedule journal is closed.")?
+            .send(JournalWrite {
+                text,
+                persisted: Some(answer),
+            })
+            .map_err(|_| "The schedule writer stopped.")?;
+        persisted
+            .recv()
+            .map_err(|_| "The schedule writer stopped.")?
     }
 
     /// The last content, written before this returns, once the writer thread ended: nothing older lands after it.
@@ -303,15 +336,28 @@ impl Service {
         }
     }
 
+    fn publish_state(&self, engine: &mut Engine, state: Value) {
+        if let Some(triggers) = locked(&self.triggers).as_mut() {
+            let now = engine.now();
+            triggers.sync(self, engine, &state, now);
+        }
+        self.tell("schedules.state", serde_json::json!({ "state": state }));
+    }
+
+    fn checkpoint(&self, engine: &mut Engine) -> Result<(), String> {
+        self.journal.checkpoint(engine.journal())?;
+        let state = engine.state();
+        self.publish_state(engine, state);
+        self.settle(engine);
+        Ok(())
+    }
+
     fn carry_out(&self, engine: &mut Engine, out: Out) {
         let now = engine.now();
         match out {
             Out::Changed { state, journal } => {
                 self.journal.keep(journal);
-                if let Some(triggers) = locked(&self.triggers).as_mut() {
-                    triggers.sync(self, engine, &state, now);
-                }
-                self.tell("schedules.state", serde_json::json!({ "state": state }));
+                self.publish_state(engine, state);
             }
             Out::Closed { journal } => self.journal.close(&journal),
             Out::Reserve { ask, device } => self.tell(
@@ -462,6 +508,48 @@ fn service(name: &str) -> Result<Arc<Service>, Fault> {
         .ok_or_else(|| Fault::new("schedules_closed", "These schedules are not open"))
 }
 
+fn bot_schedule_service(file: &Path) -> Result<Arc<Service>, String> {
+    locked(&SERVICES)
+        .values()
+        .find(|s| s.journal.file == file)
+        .cloned()
+        .ok_or_else(|| "The bot's schedules are not open yet.".into())
+}
+
+/// Called only with the host's pinned home, never through `schedules.command` or a peer's create draft.
+pub(crate) fn install_bot_routines(
+    file: &Path,
+    bot: &crate::agentctl::journal::bots::BotRecord,
+) -> Result<(), String> {
+    let service = bot_schedule_service(file)?;
+    let now = service.at(None);
+    let mut engine = locked(&service.engine);
+    engine
+        .install_peer_routines(bot, now)
+        .map_err(|fault| fault.message)?;
+    service.checkpoint(&mut engine)
+}
+
+/// A host-performed bot rename can move a dormant routine with its bot, without granting schedule edit authority.
+pub(crate) fn move_dormant_routine(
+    file: &Path,
+    bot: &crate::agentctl::journal::bots::BotRecord,
+    id: &str,
+    title: Option<&str>,
+    moved_home: Option<&str>,
+) -> Result<bool, String> {
+    let service = bot_schedule_service(file)?;
+    let mut engine = locked(&service.engine);
+    if !engine
+        .move_dormant_routine(bot, id, title, moved_home)
+        .map_err(|fault| fault.message)?
+    {
+        return Ok(false);
+    }
+    service.checkpoint(&mut engine)?;
+    Ok(true)
+}
+
 /// Closes every service whose events go to `events`' output, or to none any more. `serve` calls it when its input
 /// ended: a main that died never asks, and the request it keeps open on each service would keep the core alive.
 pub async fn close_all(events: &Events) {
@@ -516,6 +604,8 @@ struct At {
 struct CommandParams {
     request: Value,
     origin: Option<String>,
+    #[serde(default, rename = "hostWindow")]
+    host_window: bool,
 }
 
 #[derive(Deserialize)]
@@ -607,6 +697,7 @@ fn open(call: &Call) -> Result<Reply, Fault> {
         clock: Mutex::default(),
         closed: watch::channel(false).0,
     });
+    let mut engine = locked(&service.engine);
     {
         let mut services = locked(&SERVICES);
         if services.contains_key(&params.service) {
@@ -624,11 +715,11 @@ fn open(call: &Call) -> Result<Reply, Fault> {
         Some(now) if params.manual => now as i64,
         _ => system_now(),
     };
-    let state = service.with(|engine| {
-        engine.load(stored.as_deref(), now);
-        engine.catch_up(now);
-        engine.state()
-    });
+    engine.load(stored.as_deref(), now);
+    engine.catch_up(now);
+    let state = engine.state();
+    service.settle(&mut engine);
+    drop(engine);
     if !params.manual {
         let period = Duration::from_millis(params.tick_ms.max(1));
         let ticking = Arc::downgrade(&service);
@@ -659,7 +750,11 @@ async fn command(call: Call) -> Result<Reply, Fault> {
     let (service, now, params): (_, _, CommandParams) = asked(&call)?;
     let waiting = {
         let mut engine = locked(&service.engine);
-        let commanded = engine.command(&params.request, params.origin.as_deref(), now);
+        let commanded = if params.host_window && params.origin.is_none() {
+            engine.host_window_command(&params.request, now)
+        } else {
+            engine.command(&params.request, params.origin.as_deref(), now)
+        };
         service.settle(&mut engine);
         match commanded? {
             Commanded::Done => None,

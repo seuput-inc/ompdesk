@@ -215,6 +215,8 @@ interface ModelValueSelectBaseProps {
 	compact?: boolean;
 	/** A warning about the value (a remembered pick that is gone): a mark on the trigger, a line above the list. */
 	notice?: string;
+	/** A new bot reads the chosen computer's chat roles and their candidates. Null names this computer. */
+	device?: string | null;
 }
 
 type ModelValueSelectProps = ModelValueSelectBaseProps &
@@ -231,6 +233,7 @@ type ModelValueSelectProps = ModelValueSelectBaseProps &
 
 export function ModelValueSelect({
 	kind,
+	device,
 	value,
 	disabled,
 	onCommit,
@@ -268,7 +271,28 @@ export function ModelValueSelect({
 		const requestId = ++requestIdRef.current;
 		setFetchState("loading");
 		setFetchError(null);
-		const load = kind === "model" ? modelOptions(refreshProviders) : providerOptions(refreshProviders);
+		const load =
+			device !== undefined
+				? window.omp.bots.createModels(device ?? undefined).then(({ roles }) => {
+						const chat = roles.filter(role => role.section === "chat" && !role.hidden);
+						return [
+							{
+								label: t("settings.models.roles"),
+								options: chat.flatMap(role =>
+									role.origin !== "ompdesk" && role.effective?.model
+										? [{ value: `@${role.id}`, label: role.name, detail: role.effective.model }]
+										: [],
+								),
+							},
+							...modelValueGroups(
+								chat.flatMap(role => role.candidates.filter(model => model.kind === "chat")),
+								[],
+							),
+						];
+					})
+				: kind === "model"
+					? modelOptions(refreshProviders)
+					: providerOptions(refreshProviders);
 		return load
 			.then(result => {
 				if (requestIdRef.current !== requestId) return;
@@ -280,7 +304,7 @@ export function ModelValueSelect({
 				setFetchError(cause instanceof Error ? cause.message : String(cause));
 				setFetchState("error");
 			});
-	}, [kind, refreshProviders]);
+	}, [device, kind, refreshProviders, t]);
 
 	// Fetch on every open. A provider/model edit can happen while this settings
 	// row remains mounted, so retaining a previous "ready" result is stale.
@@ -412,10 +436,10 @@ export function ModelValueSelect({
 	// Before a fetched list loads, the store's catalog still names the saved model, so the closed field reads as the
 	// open list will.
 	const shownOption = useMemo(() => {
-		if (currentOption || kind !== "model" || value === "") return currentOption;
+		if (currentOption || device !== undefined || kind !== "model" || value === "") return currentOption;
 		const known = storeModels.find(model => `${model.provider}/${model.id}` === value);
 		return known ? modelValueOption(known, compactModelLabels(storeModels)) : undefined;
-	}, [currentOption, kind, storeModels, value]);
+	}, [currentOption, device, kind, storeModels, value]);
 	const portal = (panel: ReactNode) => (compact ? createPortal(panel, document.body) : panel);
 
 	const moveFocus = (direction: 1 | -1, edge?: "first" | "last") => {

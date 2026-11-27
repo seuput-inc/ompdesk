@@ -109,7 +109,7 @@ export interface MachineServices {
 	 * Settings › Schedules on that machine: its own ScheduleService validates the request and runs the schedules there.
 	 * `origin`: on this computer, the paired device whose request it serves (`host.schedules.command`), charged for its runs.
 	 */
-	schedules(request: SchedulesRequest, origin?: string): Promise<SchedulesState>;
+	schedules(request: SchedulesRequest, origin?: string, hostWindow?: boolean): Promise<SchedulesState>;
 	/** A run's captured output on that machine, tail-capped. */
 	scheduleLog(runId: string): Promise<string>;
 	/**
@@ -420,8 +420,8 @@ export class LocalMachine implements MachineServices {
 		return updater.state();
 	}
 
-	async schedules(request: SchedulesRequest, origin?: string): Promise<SchedulesState> {
-		return this.#scheduleService().command(request, origin);
+	async schedules(request: SchedulesRequest, origin?: string, hostWindow?: boolean): Promise<SchedulesState> {
+		return this.#scheduleService().command(request, origin, hostWindow);
 	}
 
 	async scheduleLog(runId: string): Promise<string> {

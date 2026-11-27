@@ -258,6 +258,8 @@ export interface Schedule extends ScheduleDraft {
 	createdAt: string;
 	/** The paired device that saved it (its agent or Settings there): every run counts against that device's daily model limit on this computer. Absent = this computer's own. */
 	device?: string;
+	/** The host window must turn on this peer-requested template routine before any device can run it. */
+	needsHostActivation?: boolean;
 }
 
 /** `stopped`: ended by the user or by the app closing; `skipped`: the previous run was still going. */

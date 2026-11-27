@@ -327,6 +327,10 @@ fn webhook_event_mut(schedule: &mut Object) -> Option<&mut Object> {
 /// A schedule as anything outside the core sees it: without its webhook's signing secret.
 fn shown(schedule: &Object) -> Object {
     let mut shown = schedule.clone();
+    if shown.shift_remove("peerBotRequester").is_some() {
+        shown.insert("needsHostActivation".into(), true.into());
+        shown.insert("enabled".into(), false.into());
+    }
     if let Some(event) = webhook_event_mut(&mut shown) {
         event.shift_remove("secret");
     }
@@ -467,7 +471,8 @@ impl Engine {
     }
 
     fn enabled(&self, at: usize) -> bool {
-        rules::truthy(self.schedules[at].get("enabled"))
+        !self.schedules[at].contains_key("peerBotRequester")
+            && rules::truthy(self.schedules[at].get("enabled"))
     }
 
     /// The paired device a schedule's starts are charged to, when main charges.
@@ -722,7 +727,7 @@ impl Engine {
             .collect()
     }
 
-    fn journal(&self) -> String {
+    pub(super) fn journal(&self) -> String {
         let mut stored = json!({
             "version": 1,
             "paused": self.paused,
@@ -1290,11 +1295,19 @@ impl Engine {
                 .and_then(|id| engine.find(id))
                 .ok_or_else(|| fault("Schedule not found"))
         };
+        if let Some(at) = id.and_then(Value::as_str).and_then(|id| self.find(id))
+            && self.schedules[at].contains_key("peerBotRequester")
+            && !matches!(request["action"].as_str(), Some("get" | "delete"))
+        {
+            return Err(fault(
+                "Turn this bot routine on in a window on its host computer first.",
+            ));
+        }
         match request.get("action").and_then(Value::as_str) {
             Some("get") => {}
             Some("save") => {
                 let draft = request.get("draft").unwrap_or(&Value::Null);
-                self.save(draft, id, origin)?;
+                self.save(draft, id, origin, None)?;
             }
             Some("delete") => {
                 let at = named(self)?;
@@ -1444,6 +1457,11 @@ impl Engine {
         let at = self
             .find(&schedule)
             .ok_or_else(|| fault("Schedule not found"))?;
+        if self.schedules[at].contains_key("peerBotRequester") {
+            return Err(fault(
+                "Turn this bot routine on in a window on its host computer first.",
+            ));
+        }
         if self.active.contains_key(&schedule) {
             return Err(fault("This schedule is already running"));
         }
@@ -1462,9 +1480,118 @@ impl Engine {
         now: i64,
     ) -> Result<String, Fault> {
         self.now = now;
-        let id = self.save(draft, None, origin)?;
+        let id = self.save(draft, None, origin, None)?;
         self.changed();
         Ok(id)
+    }
+
+    pub(super) fn install_peer_routines(
+        &mut self,
+        bot: &crate::agentctl::journal::bots::BotRecord,
+        now: i64,
+    ) -> Result<(), Fault> {
+        let receipt = bot
+            .creation_receipt
+            .as_ref()
+            .ok_or_else(|| fault("Missing bot creator"))?;
+        let peer = bot
+            .peer_create
+            .as_ref()
+            .ok_or_else(|| fault("Missing peer bot"))?;
+        let home = bot
+            .home
+            .as_deref()
+            .ok_or_else(|| fault("Missing bot home"))?;
+        if self.closed || receipt.device.is_empty() || peer.session_id.is_none() {
+            return Err(fault("No verified home or open scheduler for the bot"));
+        }
+        self.now = now;
+        for (index, routine) in peer.routines.iter().enumerate() {
+            let id = format!("{}-routine-{index}", bot.id);
+            if self.find(&id).is_some() {
+                continue;
+            }
+            let label = &routine.label;
+            let draft = json!({
+                "name":format!("{}: {label}", bot.name),
+                "prompt":format!("Do your scheduled \"{label}\" now, as SOUL.md and your skills say. End with NO_REPLY when nothing is worth saying."),
+                "cwd":bot.folder, "frequency":routine.frequency, "model":bot.model,
+                "autoApprove":false, "enabled":false, "wakeSession":home,
+            });
+            self.save(&draft, None, None, Some(&id))?;
+            self.schedules
+                .last_mut()
+                .expect("just inserted")
+                .insert("peerBotRequester".into(), receipt.device.clone().into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn move_dormant_routine(
+        &mut self,
+        bot: &crate::agentctl::journal::bots::BotRecord,
+        id: &str,
+        title: Option<&str>,
+        moved_home: Option<&str>,
+    ) -> Result<bool, Fault> {
+        let Some(at) = self.find(id) else {
+            return Ok(false);
+        };
+        let row = &mut self.schedules[at];
+        let Some(requester) = row.get("peerBotRequester") else {
+            return Ok(false);
+        };
+        let home = bot
+            .home
+            .as_deref()
+            .ok_or_else(|| fault("Missing bot home"))?;
+        if self.closed
+            || !matches!(id.strip_prefix(&bot.id), Some("-routine-0" | "-routine-1"))
+            || bot
+                .creation_receipt
+                .as_ref()
+                .is_none_or(|receipt| requester.as_str() != Some(&receipt.device))
+        {
+            return Err(fault("This dormant routine does not belong to this bot."));
+        }
+        if let Some(path) = moved_home {
+            let moving = bot
+                .moving
+                .as_ref()
+                .ok_or_else(|| fault("No verified bot move."))?;
+            if text(row, "wakeSession") == Some(home) && text(row, "cwd") == Some(&moving.from) {
+                row.insert("cwd".into(), moving.to.clone().into());
+                row.insert("wakeSession".into(), path.into());
+            } else if text(row, "wakeSession") != Some(path) || text(row, "cwd") != Some(&moving.to)
+            {
+                return Err(fault("The routine's home no longer matches this move."));
+            }
+        }
+        if let Some(title) = title {
+            row.insert("name".into(), title.into());
+        }
+        Ok(true)
+    }
+
+    /// Provenance is supplied by main, never by a field in a schedule request.
+    pub(super) fn host_window_command(
+        &mut self,
+        request: &Value,
+        now: i64,
+    ) -> Result<Commanded, Fault> {
+        if request["action"] == "setEnabled"
+            && request["enabled"] == true
+            && let Some(at) = request["id"].as_str().and_then(|id| self.find(id))
+            && let Some(requester) = self.schedules[at].get("peerBotRequester")
+        {
+            if !requester.as_str().is_some_and(|id| !id.is_empty())
+                || !text(&self.schedules[at], "wakeSession").is_some_and(|path| !path.is_empty())
+            {
+                return Err(fault("This bot routine has no verified requester or home."));
+            }
+            self.schedules[at].shift_remove("peerBotRequester");
+        }
+        self.command(request, None, now)
     }
 
     fn save(
@@ -1472,6 +1599,7 @@ impl Engine {
         draft: &Value,
         id: Option<&Value>,
         origin: Option<&str>,
+        new_id: Option<&str>,
     ) -> Result<String, Fault> {
         let existing = match id.filter(|id| rules::truthy(Some(id))) {
             Some(id) => Some(
@@ -1597,7 +1725,7 @@ impl Engine {
             self.reschedule(at);
             return Ok(id_of(&self.schedules[at]).to_owned());
         }
-        let id = (self.ids)();
+        let id = new_id.map_or_else(|| (self.ids)(), str::to_owned);
         let mut schedule = clean;
         schedule.insert("id".into(), id.clone().into());
         schedule.insert("createdAt".into(), rules::iso(self.now).into());

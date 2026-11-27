@@ -25,7 +25,7 @@ use super::bots_share::Kind;
 use super::schedule::is_absolute;
 use crate::agentctl::journal::attachments::sha256_hex;
 use crate::agentctl::journal::bots::{
-    BotRecord, BotWorker, STALE_DAYS, WORKERS_KEPT, WorkerOrigin, slug, specialty,
+    BotRecord, BotWorker, Bots, STALE_DAYS, WORKERS_KEPT, WorkerOrigin, slug, specialty,
 };
 use crate::agentctl::journal::items::ItemRecord;
 use crate::agentctl::journal::looks::{EVERY_CHOICES, FOCUS_MAX, LookSetting, PER_LOOK, TITLE_MAX};
@@ -51,8 +51,10 @@ const TIDY_PROMPT: &str = "Tidy your memory: MEMORY.md in your folder. First cop
 /// Notification kinds a bot's chats can be quiet about (`Bot.quiet`).
 const QUIET_KINDS: [&str; 3] = ["permission", "done", "failed"];
 /// What a paired device may ask of this computer's bots (`bots_from`).
-const FROM_DEVICE: [&str; 7] = [
+const FROM_DEVICE: [&str; 9] = [
     "get",
+    "create",
+    "createFolder",
     "update",
     "deletePreview",
     "delete",
@@ -62,6 +64,23 @@ const FROM_DEVICE: [&str; 7] = [
 ];
 /// The longest first message a create may carry (a template's or an import's kickoff).
 const KICKOFF_MAX: usize = 8_000;
+
+fn allowed_create_fields(request: &Value, action: &str) -> bool {
+    request.as_object().is_some_and(|fields| {
+        fields.iter().all(|(key, value)| match key.as_str() {
+            "action" | "name" => value.is_string(),
+            "purpose" | "soul" | "kickoff" if action == "create" => value.is_string(),
+            "model" if action == "create" => true,
+            "routines" if action == "create" => value.is_array(),
+            "skills" if action == "create" => value.as_array().is_some_and(|skills| {
+                skills
+                    .iter()
+                    .all(|skill| bot_files::seed_skill(skill).is_ok())
+            }),
+            _ => false,
+        })
+    })
+}
 
 /// A bot's own routine (`bot_routine`).
 #[derive(Clone, Copy)]
@@ -211,6 +230,25 @@ impl AgentControl {
             .iter()
             .map(|bot| {
                 let mut value = serde_json::to_value(bot).unwrap_or(Value::Null);
+                if let Some(fields) = value.as_object_mut() {
+                    fields.remove("creationReceipt");
+                    fields.remove("peerCreate");
+                    if let Some(peer) = &bot.peer_create {
+                        let pending = if bot.home.is_none() {
+                            Some("home")
+                        } else if let Some(mail) = peer.mail.as_ref().filter(|mail| !mail.journaled)
+                        {
+                            Some(if mail.limited { "limit" } else { "kickoff" })
+                        } else if !peer.routines.is_empty() {
+                            Some("home")
+                        } else {
+                            None
+                        };
+                        if let Some(reason) = pending {
+                            fields.insert("peerPending".into(), json!(reason));
+                        }
+                    }
+                }
                 value["lookSetting"] = serde_json::to_value(bot.look()).unwrap_or(Value::Null);
                 if let Some(said) = specialty(Path::new(&bot.folder)) {
                     value["specialty"] = json!(said);
@@ -315,56 +353,77 @@ impl AgentControl {
             .map(|bot| bot.name.clone())
     }
 
+    fn default_bot_folder(&self, bots: &Bots, name: &str) -> R<PathBuf> {
+        let Some(root) = &self.bots_root else {
+            return fail("Name the bot's folder: this app has no bots folder.");
+        };
+        if name.is_empty() {
+            return Ok(root.clone());
+        }
+        let base = slug(name);
+        let mut candidate = root.join(&base);
+        let mut n = 1;
+        loop {
+            match candidate.symlink_metadata() {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    if bots.of_folder(&candidate.to_string_lossy()).is_none() {
+                        return Ok(candidate);
+                    }
+                }
+                Err(e) => return fail(format!("Could not inspect {}: {e}", candidate.display())),
+                Ok(_) => {}
+            }
+            n += 1;
+            candidate = root.join(format!("{base}-{n}"));
+        }
+    }
+
     /// Makes a bot: its folder (`~/.omp/bots/<slug>`, made unique, unless one is named) exists afterwards. Its first run
     /// starts: once its home chat exists, OMPdesk speaks first there (`bot_first_run.rs`).
     pub(crate) fn create_bot(&self, name: &str, folder: Option<&str>) -> R<BotRecord> {
+        let mut bots = self.bots();
+        let bot = self.prepare_bot(&bots, name, folder)?;
+        bots.add(bot.clone());
+        drop(bots);
+        self.bots_changed();
+        Ok(bot)
+    }
+
+    fn prepare_bot(&self, bots: &Bots, name: &str, folder: Option<&str>) -> R<BotRecord> {
         let name = name.trim();
         if name.is_empty() || name.chars().count() > NAME_MAX {
             return fail(format!("A bot's name is 1 to {NAME_MAX} characters."));
         }
-        if self.bots().find(name).is_some() {
+        if bots.find(name).is_some() {
             return fail(format!("There is already a bot named \"{name}\"."));
         }
-        let folder: PathBuf = match folder.map(str::trim).filter(|folder| !folder.is_empty()) {
+        let custom = folder.map(str::trim).filter(|folder| !folder.is_empty());
+        let folder: PathBuf = match custom {
             Some(folder) => {
                 if !Path::new(folder).is_absolute() {
                     return fail("folder must be an absolute path.");
                 }
                 PathBuf::from(folder)
             }
-            None => {
-                let Some(root) = self.bots_root.clone() else {
-                    return fail("Name the bot's folder: this app has no bots folder.");
-                };
-                let base = slug(name);
-                let taken = |path: &Path| {
-                    path.exists() || self.bots().of_folder(&path.to_string_lossy()).is_some()
-                };
-                let mut n = 1;
-                loop {
-                    let candidate = root.join(if n == 1 {
-                        base.clone()
-                    } else {
-                        format!("{base}-{n}")
-                    });
-                    if !taken(&candidate) {
-                        break candidate;
-                    }
-                    n += 1;
-                }
-            }
+            None => self.default_bot_folder(bots, name)?,
         };
         let folder_text = folder.to_string_lossy().into_owned();
-        if let Some(other) = self.bots().of_folder(&folder_text) {
+        if let Some(other) = bots.of_folder(&folder_text) {
             return fail(format!(
                 "{folder_text} is already the folder of the bot {}.",
                 other.name
             ));
         }
-        if let Err(error) = std::fs::create_dir_all(&folder) {
+        let made = if custom.is_some() {
+            std::fs::create_dir_all(&folder)
+        } else {
+            std::fs::create_dir_all(folder.parent().expect("bot folder beneath root"))
+                .and_then(|()| std::fs::create_dir(&folder))
+        };
+        if let Err(error) = made {
             return fail(format!("Could not make the folder {folder_text}: {error}"));
         }
-        let bot = BotRecord {
+        Ok(BotRecord {
             id: new_id("bot"),
             name: name.to_owned(),
             folder: folder_text,
@@ -375,10 +434,7 @@ impl AgentControl {
             created_at: crate::aimemory::value::iso(self.now().max(0.0) as u64),
             first_run: true,
             ..BotRecord::default()
-        };
-        self.bots().add(bot.clone());
-        self.bots_changed();
-        Ok(bot)
+        })
     }
 
     /// Pauses or resumes a bot (durable). A resume hands its held mail over at once, each report once.
@@ -1425,10 +1481,43 @@ impl AgentControl {
 
     /// The owner's `BotsRequest` (Settings, the Bots page): the state after it. A change to a paired host's bot or item
     /// (one its copy holds, `bots_share`) goes to that host, which makes it; nothing of it is written here.
-    pub async fn bots_command(&self, request: Value) -> R<Value> {
+    pub async fn bots_command(&self, mut request: Value) -> R<Value> {
+        if request["action"] == "createModels" {
+            let Some(caller) = request["callerTabId"].as_str() else {
+                return fail("Select an open session to read the bot's models.");
+            };
+            let wanted = match request.get("device") {
+                None => "local",
+                Some(Value::String(id)) if self.host.state().device(id).is_some() => id,
+                Some(_) => return fail("Select a paired computer by its id."),
+            };
+            let response = self
+                .rpc_on(caller, wanted, &json!({"type":"get_model_roles"}))
+                .await?;
+            if !response.success {
+                return fail(
+                    response
+                        .error
+                        .as_deref()
+                        .unwrap_or("Could not read model roles."),
+                );
+            }
+            return match response.data {
+                Some(data) => Ok(data),
+                None => fail("The computer returned no model roles."),
+            };
+        }
+        if matches!(request["action"].as_str(), Some("create" | "createFolder"))
+            && let Some(device) = request.as_object_mut().and_then(|map| map.remove("device"))
+        {
+            let Some(device) = device.as_str().filter(|id| !id.is_empty()) else {
+                return fail("Select a connected computer.");
+            };
+            return self.bots_command_on(device, request).await;
+        }
         match self.bots_owner(&request) {
             Some(device) => self.bots_command_on(&device, request).await,
-            None => self.own_bots_command(request).await,
+            None => self.own_bots_command(request, None).await,
         }
     }
 
@@ -1466,7 +1555,10 @@ impl AgentControl {
                 "{name} is offline: its bots change only while it is connected."
             ));
         }
-        let direct = matches!(request["action"].as_str(), Some("file" | "deletePreview"));
+        let direct = matches!(
+            request["action"].as_str(),
+            Some("file" | "deletePreview" | "createFolder")
+        );
         let answer = self.host.bots_on(device, &request).await?;
         if direct {
             return Ok(answer);
@@ -1508,10 +1600,15 @@ impl AgentControl {
     }
 
     /// A paired device's change to one of this computer's bots (`host.bots.command`): what the owner does on the bot
-    /// page, apart from making a bot (it is made where it is to live), importing, handing over a session (R91) and
-    /// this computer's groups; and its own group's question to one of them (`roomAsk`, `roomAskStop`). Answers this
-    /// computer's copy after it with the command outcome, or the requested file or delete preview.
-    pub async fn bots_from(&self, request: Value, device: &str, device_name: &str) -> R<Value> {
+    /// page, apart from importing, handing over a session (R91) and this computer's groups; and its own group's question
+    /// to one of them (`roomAsk`, `roomAskStop`). Answers this computer's copy, a file, the delete preview or the proposed folder.
+    pub async fn bots_from(
+        &self,
+        request: Value,
+        device: &str,
+        device_name: &str,
+        create_key: Option<&str>,
+    ) -> R<Value> {
         let action = request
             .get("action")
             .and_then(Value::as_str)
@@ -1523,6 +1620,8 @@ impl AgentControl {
             _ => {}
         }
         if !FROM_DEVICE.contains(&action.as_str())
+            || (matches!(action.as_str(), "create" | "createFolder")
+                && !allowed_create_fields(&request, &action))
             || (action == "update"
                 && ["reach", "chatApproval", "skillProjects"]
                     .iter()
@@ -1532,8 +1631,25 @@ impl AgentControl {
                 "{device_name} cannot {action} the bots of this computer."
             ));
         }
-        let answer = self.own_bots_command(request).await?;
-        if matches!(action.as_str(), "file" | "deletePreview") {
+        let receipt = if action == "create" {
+            use crate::agentctl::journal::bots::receipt::CreationReceipt;
+            let Some(key) =
+                create_key.filter(|key| !key.is_empty() && key.len() <= 128 && !device.is_empty())
+            else {
+                return fail("The host did not identify this bot creation.");
+            };
+            Some(CreationReceipt {
+                device: device.to_owned(),
+                key: key.to_owned(),
+            })
+        } else {
+            None
+        };
+        let mut answer = self.own_bots_command(request, receipt).await?;
+        if action == "createFolder" {
+            answer["peerCreate"] = json!(true);
+        }
+        if matches!(action.as_str(), "file" | "deletePreview" | "createFolder") {
             return Ok(answer);
         }
         Ok(with_command_outcome(self.bots_share(), answer))
@@ -1567,7 +1683,11 @@ impl AgentControl {
     }
 
     /// The owner's `BotsRequest` on this computer's own bots: the state after it.
-    async fn own_bots_command(&self, request: Value) -> R<Value> {
+    async fn own_bots_command(
+        &self,
+        request: Value,
+        receipt: Option<crate::agentctl::journal::bots::receipt::CreationReceipt>,
+    ) -> R<Value> {
         let text = |key: &str| request.get(key).and_then(Value::as_str).map(str::to_owned);
         let id = text("id").unwrap_or_default();
         let mut refused: Option<&'static str> = None;
@@ -1587,6 +1707,16 @@ impl AgentControl {
                 }
                 self.bots_changed();
             }
+            "createFolder" => {
+                let Some(name) = request["name"].as_str() else {
+                    return fail("A folder preview needs a bot name.");
+                };
+                let name = name.trim();
+                if name.chars().count() > NAME_MAX {
+                    return fail(format!("A bot's name is 1 to {NAME_MAX} characters."));
+                }
+                return Ok(json!({ "folder": self.default_bot_folder(&self.bots(), name)? }));
+            }
             "create" => {
                 let kickoff = text("kickoff").filter(|kickoff| !kickoff.trim().is_empty());
                 if kickoff
@@ -1597,33 +1727,73 @@ impl AgentControl {
                         "A bot's first message is {KICKOFF_MAX} characters at most."
                     ));
                 }
-                let bot =
-                    self.create_bot(&text("name").unwrap_or_default(), text("folder").as_deref())?;
-                if kickoff.is_some() {
-                    self.bots()
-                        .change(&bot.id, |record| record.kickoff = kickoff);
+                let model = match request.get("model") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(model)) if !model.trim().is_empty() => {
+                        Some(model.trim().to_owned())
+                    }
+                    _ => return fail("Select a model or use the host's default."),
+                };
+                use crate::agentctl::journal::bots::peer::{Kickoff, PeerCreate, Routine};
+                if receipt.is_none() && request.get("routines").is_some() {
+                    return fail("Only a paired bot creation accepts template routines.");
                 }
-                let skills = request
-                    .get("skills")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
+                let routines = Routine::parse(request.get("routines"))
+                    .map_err(|why| super::super::fail::Fail::Tool(why.to_owned()))?;
+                let folder = request["folder"]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|f| !f.is_empty());
+                let mut bots = self.bots();
+                if receipt.is_some() && bots.all().iter().any(|bot| bot.creation_receipt == receipt)
+                {
+                    return Ok(Value::Null);
+                }
+                let mut bot =
+                    self.prepare_bot(&bots, request["name"].as_str().unwrap_or(""), folder)?;
+                if let Some(receipt) = &receipt {
+                    bot.peer_create = Some(PeerCreate {
+                        session_id: None,
+                        mail: kickoff.as_ref().map(|_| Kickoff {
+                            id: format!(
+                                "peer-kickoff-{}",
+                                crate::agentctl::journal::attachments::sha256_hex(
+                                    receipt.key.as_bytes()
+                                )
+                            ),
+                            journaled: false,
+                            limited: false,
+                        }),
+                        routines,
+                    });
+                    // A peer's kickoff is not a host-authorized turn or a standing Look around job.
+                    bot.first_run = false;
+                    if let Some(look) = &mut bot.look_setting {
+                        look.on = false;
+                    }
+                }
+                bot.creation_receipt = receipt;
+                bot.model = model;
+                bot.kickoff = kickoff;
+                let skills = request["skills"].as_array().map_or(&[][..], Vec::as_slice);
                 if let Err(error) = bot_files::seed(
                     Path::new(&bot.folder),
                     &bot.name,
-                    text("purpose").as_deref(),
-                    text("soul").as_deref(),
-                    &skills,
+                    request["purpose"].as_str(),
+                    request["soul"].as_str(),
+                    skills,
                 ) {
-                    // A bot whose seed was refused is not made: the owner fixes the purpose and creates again. The
-                    // folder this made (still empty: a seed checks everything before it writes) goes with it.
-                    self.bots().remove(&bot.id);
-                    if text("folder").is_none() {
+                    if folder.is_none() {
                         let _ = std::fs::remove_dir(&bot.folder);
                     }
-                    self.bots_changed();
                     return Err(error);
                 }
+                if bot.creation_receipt.is_some() {
+                    bots.add_peer(bot).map_err(super::super::fail::Fail::Tool)?;
+                } else {
+                    bots.add(bot);
+                }
+                drop(bots);
                 self.bots_changed();
             }
             // One of the bot's own files, read or written (`BotFileRequest`): its answer, not the state.

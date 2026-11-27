@@ -41,12 +41,17 @@ export function BotsPage() {
 		<MenuButton
 			icon={<Plus />}
 			items={[
-				{ id: "new", label: t("bots.add.new"), icon: BotIcon, onSelect: () => openBotDialog({ kind: "new" }) },
+				{
+					id: "new",
+					label: t("bots.add.new"),
+					icon: BotIcon,
+					onSelect: () => openBotDialog({ kind: "new", draft: { device: bot?.device } }),
+				},
 				{
 					id: "templates",
 					label: t("bots.add.templates"),
 					icon: LayoutTemplate,
-					onSelect: () => openBotDialog({ kind: "templates" }),
+					onSelect: () => openBotDialog({ kind: "templates", draft: { device: bot?.device } }),
 				},
 				{
 					id: "import",

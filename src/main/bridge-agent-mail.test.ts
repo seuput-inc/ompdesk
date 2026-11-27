@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { install, methods } from "../../resources/gui-bridge/agent-control";
 import { MAIL_CUSTOM_TYPE } from "../../resources/gui-bridge/agent-control-contracts";
+import { BOT_ENTRY, BOT_HOME_OBSERVATION } from "../../resources/gui-bridge/modes/bots-contracts";
 
 type BridgeEnv = Parameters<NonNullable<(typeof methods)[string]>>[1];
 
@@ -33,14 +34,29 @@ interface Peeks {
 	hasQueuedAsides?: () => boolean | Promise<boolean>;
 }
 
-function env(session: { isStreaming?: boolean; branch?: unknown[]; agent?: Peeks } = {}): BridgeEnv {
+function env(
+	session: {
+		isStreaming?: boolean;
+		branch?: unknown[];
+		entries?: unknown[];
+		agent?: Peeks;
+		flush?: () => Promise<void>;
+	} = {},
+): BridgeEnv {
 	const branch = session.branch ?? [];
 	const agent = session.agent ?? {};
 	return {
 		session: () => ({
 			isStreaming: session.isStreaming ?? false,
 			sessionId: "s1",
-			sessionManager: { getBranch: () => branch },
+			sessionManager: {
+				getCwd: () => "/bot",
+				getSessionId: () => "s1",
+				getSessionFile: () => "/sessions/s1.jsonl",
+				getBranch: () => branch,
+				getEntries: () => session.entries ?? branch,
+				flush: session.flush ?? (async () => {}),
+			},
 			agent,
 		}),
 		emit: () => undefined,
@@ -86,6 +102,49 @@ describe("agent_control.mail", () => {
 			journaled: false,
 		});
 		expect(sendMessage).toHaveBeenCalledTimes(1);
+	});
+
+	it("checks the expected home and active bot branch at delivery, without journaling private routing data", async () => {
+		const live = { cwd: "/bot", sessionId: "s1", sessionPath: "/sessions/s1.jsonl" };
+		const home = { ...live, botId: "bot-1" };
+		const branch = [
+			{
+				type: "custom",
+				customType: BOT_ENTRY,
+				data: { bot: { id: "bot-1", name: "Bot", folder: "/bot", firstRun: true } },
+			},
+		];
+		const send = (peerBotHome: unknown, branchEntries: unknown[]) =>
+			mail!(
+				{
+					content: "First message",
+					triggerTurn: true,
+					details: { id: "peer-kickoff-1", peerBotHome },
+				},
+				env({ branch: branchEntries }),
+			);
+		await expect(send({ ...home, sessionId: "moved" }, branch)).rejects.toThrow("home chat changed");
+		await expect(send(home, [])).rejects.toThrow("active branch");
+		expect(sendMessage).not.toHaveBeenCalled();
+		await send(home, branch);
+		expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
+			{ customType: MAIL_CUSTOM_TYPE, content: "First message", display: true, details: { id: "peer-kickoff-1" } },
+			{ triggerTurn: true },
+		);
+		const inspect = methods[BOT_HOME_OBSERVATION]!;
+		await expect(inspect({ id: "peer-kickoff-1" }, env({ branch }))).resolves.toEqual({
+			...live,
+			journaled: false,
+			queued: true,
+		});
+		// A fork may no longer show the message. The receipt belongs to the whole flushed journal, not its visible branch.
+		const entry = { type: "custom_message", customType: MAIL_CUSTOM_TYPE, details: { id: "peer-kickoff-1" } };
+		const flushed = Promise.withResolvers<void>();
+		const flush = vi.fn(() => flushed.promise);
+		const ack = inspect({ id: "peer-kickoff-1" }, env({ branch, entries: [entry, ...branch], flush }));
+		expect(flush).toHaveBeenCalledOnce();
+		flushed.resolve();
+		await expect(ack).resolves.toMatchObject({ ...live, journaled: true });
 	});
 
 	it("sends a no-turn report as an aside while a turn runs, and plainly to an idle session", async () => {

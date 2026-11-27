@@ -27,6 +27,7 @@ export function BotDialogs() {
 		case "templates":
 			return (
 				<BotTemplatesDialog
+					draft={dialog.draft}
 					initialQuery={dialog.query}
 					initialSelected={dialog.selected}
 					key="templates"

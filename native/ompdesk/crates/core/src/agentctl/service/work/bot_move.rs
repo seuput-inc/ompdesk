@@ -167,6 +167,21 @@ impl AgentControl {
                         else {
                             continue;
                         };
+                        if schedule.needs_host_activation
+                            && crate::schedules::move_dormant_routine(
+                                &self
+                                    .bots()
+                                    .schedules_file()
+                                    .map_err(super::super::fail::Fail::Tool)?,
+                                bot,
+                                &schedule.id,
+                                Some(&title),
+                                None,
+                            )
+                            .map_err(super::super::fail::Fail::Tool)?
+                        {
+                            continue;
+                        }
                         if let Err(error) = source
                             .update(&schedule.id, |mut draft| {
                                 draft.name = title;
@@ -346,6 +361,31 @@ impl AgentControl {
                 let reports = matches!(&draft.results_to, Some(ScheduleResultsTo::Session { session }) if moved.contains_key(session));
                 if !(wakes || reports || within(&draft.cwd, &from)) {
                     continue;
+                }
+                if schedule.needs_host_activation {
+                    let home = bot
+                        .home
+                        .as_ref()
+                        .and_then(|home| moved.get(home))
+                        .ok_or_else(|| {
+                            super::super::fail::Fail::Tool(
+                                "The routine's moved home is missing.".into(),
+                            )
+                        })?;
+                    if crate::schedules::move_dormant_routine(
+                        &self
+                            .bots()
+                            .schedules_file()
+                            .map_err(super::super::fail::Fail::Tool)?,
+                        &bot,
+                        &schedule.id,
+                        None,
+                        Some(home),
+                    )
+                    .map_err(super::super::fail::Fail::Tool)?
+                    {
+                        continue;
+                    }
                 }
                 source
                     .update(&schedule.id, |mut draft| {
