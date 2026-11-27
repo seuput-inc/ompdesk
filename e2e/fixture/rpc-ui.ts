@@ -22,6 +22,8 @@ import {
 	titleEffective,
 } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import { autopilotRunning } from "../../resources/gui-bridge/modes/autopilot-core";
+import type { BotContext } from "../../resources/gui-bridge/modes/bots-contracts";
+import { chatFacts, parseBotContext } from "../../resources/gui-bridge/modes/bots-core";
 import { parseJudgeAssistEnv } from "../../resources/gui-bridge/modes/judge-assist-contracts";
 import {
 	NEXT_PROMPT_ENTRY,
@@ -465,6 +467,8 @@ export function runRpcUi(): void {
 	if (standIn) Object.assign(model, { provider: "openai-codex", id: "gpt-6.1-sol", name: "GPT-6.1 SOL" });
 	const lanes: Record<"steering" | "followUp", string[]> = { steering: [], followUp: [] };
 	let isStreaming = false;
+	/** The bot context main last handed this chat (gui-bridge modes/bots.ts): a first-run home chat answers as one. */
+	let botContext: BotContext | null = null;
 	/** A `fixture flow` run's compaction is under way (`compact-start` until `compact-end` or the turn's end). */
 	let isCompacting = false;
 	/** The thinking selector and effort; `fixture reply actions` turns stock auto on and classifies the turn high. */
@@ -1837,6 +1841,20 @@ export function runRpcUi(): void {
 		},
 		"agent_control.note": () => ({}),
 		"agent_control.worker": () => ({}),
+		// gui-bridge modes/bots.ts `agent_control.bot`: the bot chat's context, and what its branch says for the core's
+		// first run (bots-core.ts `chatFacts`, over the entries viewed in stock's shape as `agent_control.mail` does).
+		"agent_control.bot": params => {
+			const context = parseBotContext(params);
+			const changed = JSON.stringify(context) !== JSON.stringify(botContext);
+			botContext = context;
+			const asStock = entries.map(entry =>
+				entry.type === "message" && (entry.message as AgentMessage).role === "custom"
+					? { ...(entry.message as AgentMessage), type: "custom_message" }
+					: entry,
+			);
+			const kickoff = typeof params.kickoff === "string" ? params.kickoff : undefined;
+			return { changed, ...chatFacts(asStock, kickoff, isStreaming) };
+		},
 		// gui-bridge agent-control.ts `agent_control.attachment`: a file in this omp's folder, or its n-th newest picture.
 		"agent_control.attachment": params => {
 			const wire = (name: string, mimeType: string, bytes: Buffer) => ({
@@ -1909,7 +1927,14 @@ export function runRpcUi(): void {
 				const answer: AgentMessage = {
 					role: "assistant",
 					content: [
-						{ type: "text", text: `Read the ${String(details.kind)} report from ${String(details.from)}.` },
+						{
+							type: "text",
+							// A first-run home chat answers OMPdesk's kickoff as its rules say: a greeting and one question.
+							text:
+								botContext?.bot.firstRun && String(details.id).startsWith("kickoff-")
+									? "Hi! What should I start on?"
+									: `Read the ${String(details.kind)} report from ${String(details.from)}.`,
+						},
 					],
 					timestamp: Date.now(),
 					provider: model.provider,
@@ -6107,6 +6132,32 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				// Stock auto thinking names the effort it classified for this turn.
 				thinking = { level: "high", configured: "auto" };
 				write({ type: "thinking_level_changed", thinkingLevel: "high", configured: "auto", resolved: "high" });
+			}
+			// A first-run home chat's owner's first task: one small piece of it shown, then SOUL.md written (the rules'
+			// order, bots-core.ts FIRST_RUN_RULES).
+			const bot = botContext?.bot;
+			if (bot?.firstRun) {
+				const work: AgentMessage = {
+					role: "assistant",
+					content: [
+						{
+							type: "text",
+							text: `One small piece of "${message}", done: I read it and listed the first step.\nSaved what I am for and how I work to SOUL.md; tell me to change it.`,
+						},
+					],
+					timestamp: Date.now(),
+					provider: model.provider,
+					model: model.id,
+					stopReason: "stop",
+				};
+				appendMessage(work);
+				write({ type: "message_end", message: work });
+				fs.appendFileSync(
+					nodePath.join(bot.folder, "SOUL.md"),
+					"\n## How I work\nI read what the owner names and report here.\n",
+				);
+				endTurn([user, work]);
+				return;
 			}
 			const answer: AgentMessage = {
 				role: "assistant",

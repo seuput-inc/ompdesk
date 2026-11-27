@@ -50,6 +50,15 @@ pub struct BotRecord {
     /// The newest item event the owner had seen when they last opened its Items tab (`itemsOpened`): a row changed
     /// by anyone else since reads as new.
     pub items_seen: u64,
+    /// Its first run lasts (set at create, `service/work/bot_first_run.rs`): its home chat is sent the kickoff and
+    /// carries the first-run rules until the owner's first turn there ends; never ended by `SOUL.md`.
+    pub first_run: bool,
+    /// The first message OMPdesk sends its home chat when it is not the plain one: a template's or an import's.
+    pub kickoff: Option<String>,
+    /// The mail ids (send fingerprints) of the kickoffs sent to its home chat, oldest first.
+    pub kickoffs: Vec<String>,
+    /// The newest kickoff's turn ended without a word: its page offers Try again.
+    pub kickoff_silent: bool,
 }
 
 impl BotRecord {

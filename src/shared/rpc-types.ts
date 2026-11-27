@@ -169,7 +169,7 @@ export type RpcCommand =
 	| { id?: string; type: "agent_control_note"; text: string }
 	| { id?: string; type: "agent_control_worker"; from: string }
 	// A bot chat's context (main/agent-control's core, gui-bridge modes/bots.ts `agent_control.bot`)
-	| { id?: string; type: "agent_control_bot"; context: BotContext }
+	| { id?: string; type: "agent_control_bot"; context: BotContext; kickoff?: string }
 	| { id?: string; type: "agent_control_turn" }
 	| { id?: string; type: "agent_control_judge"; system: string; user: string }
 	| {

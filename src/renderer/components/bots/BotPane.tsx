@@ -33,6 +33,12 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 	// A bot may have edited its soul since its page last opened.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the read is per bot shown
 	useEffect(() => refreshBots(), [bot.id]);
+	// At launch the last read may predate the end of the kickoff. The core checks the chat before retrying.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: check once per page open, not on every turn
+	useEffect(() => {
+		if (!bot.device && bot.firstRun && !bot.paused && bot.kickoffs?.length === 1)
+			void command({ action: "kickoff", id: bot.id }).catch(() => {});
+	}, [bot.id]);
 	const setPaused = (paused: boolean) =>
 		void command({ action: "update", id: bot.id, paused }).catch((error: unknown) =>
 			toastError({ title: t("bots.pause.failed"), error }),

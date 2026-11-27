@@ -164,6 +164,9 @@ pub struct Mem {
     pub bot_sent: HashMap<String, String>,
     /// Bot chats whose bridge has no `agent_control.bot` (an older omp or bridge): logged once each.
     pub bot_unsupported: HashSet<String>,
+    /// First-run home chats (`bot_first_run.rs`) by the last finished turn they were asked after (`lastRun.id`); one
+    /// absent is asked again at the next bot pass.
+    pub bot_first_asked: HashMap<String, Option<u64>>,
     /// A bot pass runs; another asked meanwhile runs once more when it ends.
     pub bot_ticking: bool,
     pub bot_tick_again: bool,

@@ -61,6 +61,13 @@ export interface Bot {
 	itemsSeen?: number;
 	/** A paired host's bot (its device id), as this computer's views list it; absent = this computer's own. */
 	device?: string;
+	/** Its first run lasts: its home chat is sent the kickoff and carries the first-run rules until the owner's first
+	 *  turn there ends (the core's `bot_first_run.rs`). */
+	firstRun?: boolean;
+	/** The kickoffs sent to its home chat (their mail ids), oldest first. */
+	kickoffs?: string[];
+	/** The newest kickoff's turn ended without a word: its page offers Try again. */
+	kickoffSilent?: boolean;
 }
 
 /** What a bot's chats can notify (Orca's per-bot notification toggles): an approval or question, a finished turn, a failure. */
@@ -290,6 +297,8 @@ export type BotsRequest =
 			/** Its whole SOUL.md (a template's seed). A file already in the folder is kept. */
 			soul?: string;
 			skills?: BotSeedSkill[];
+			/** The first message OMPdesk sends its home chat in place of the plain kickoff (a template's, an import's). */
+			kickoff?: string;
 	  }
 	| {
 			action: "update";
@@ -325,6 +334,9 @@ export type BotsRequest =
 	  }
 	/** The owner opened the bot's Items tab: its items as they are now are seen. */
 	| { action: "itemsOpened"; id: string }
+	/** Its page opened (the kickoff's one retry, `asked` false) or the owner's Try again (`asked`): sent again only
+	 *  when its turn ended without a word and the owner wrote nothing there. */
+	| { action: "kickoff"; id: string; asked?: boolean }
 	| { action: "roomCreate"; name: string; bots: string[] }
 	| { action: "roomUpdate"; id: string; name?: string; bots?: string[]; replyMode?: RoomReplyMode }
 	| { action: "roomDelete"; id: string }

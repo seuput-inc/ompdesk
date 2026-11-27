@@ -1,9 +1,8 @@
 /**
  * Making a bot and starting it (Orca's `NewBotDialog.tsx:182-217` create and `BotFirstScreen.tsx:100-214` steps): the
- * core seeds its soul and skills, then a template or import sends its first message to the home chat.
- * A plain bot's first message is the owner's (the core sends nothing: R88), so its composer just takes focus.
+ * core seeds the bot's folder and delivers the first message to its home chat (`bot_first_run.rs`).
  *
- * What happened is kept per bot (`useBotLaunch`) for the bot page's first screen until its first chat answers.
+ * Opening the home chat is kept per bot (`useBotLaunch`) for the bot page's first screen until its first chat answers.
  * Also the dialogs' store: which bot dialog is open (New bot, Templates, Import, Hand to a bot).
  */
 import { create } from "zustand";
@@ -65,24 +64,17 @@ export const openBotDialog = (dialog: BotDialog): void => useBotDialogs.getState
 
 export type LaunchStep = "pending" | "running" | "done" | "failed" | "skipped";
 
-/** The new bot's first screen: made, its omp started in its home chat, its first message sent. */
+/** The new bot's first screen: its home chat's tab opening (its first message is the core's, read from the bot). */
 export interface BotLaunch {
 	tabId: string | null;
 	start: LaunchStep;
-	first: LaunchStep;
 	error?: string;
-	/** What to send again on Try again. */
-	kickoff: string | null;
 }
 
 export const useBotLaunch = create<{ launches: Record<string, BotLaunch> }>()(() => ({ launches: {} }));
 
-const NEW_LAUNCH: BotLaunch = { tabId: null, start: "pending", first: "pending", kickoff: null };
-
-function noteLaunch(id: string, change: Partial<BotLaunch>): void {
-	useBotLaunch.setState(state => ({
-		launches: { ...state.launches, [id]: { ...(state.launches[id] ?? NEW_LAUNCH), ...change } },
-	}));
+function noteLaunch(id: string, launch: BotLaunch): void {
+	useBotLaunch.setState(state => ({ launches: { ...state.launches, [id]: launch } }));
 }
 
 /** The first turn of a bot brought over from another app (Orca's `bot-import.ts:62-77`: a prompt, no parser). */
@@ -123,14 +115,17 @@ function whenBot(id: string, ready: (bot: Bot) => boolean): Promise<Bot | null> 
 	return promise;
 }
 
-/** Sends `text` as the owner's first message in the bot's home chat tab; the step reads what became of it. */
-export async function sendKickoff(botId: string, tabId: string, text: string): Promise<void> {
-	noteLaunch(botId, { first: "running", error: undefined });
-	const response = await ensureTabRuntime(tabId)
-		.command({ type: "prompt", message: text })
-		.catch((error: unknown) => ({ success: false as const, error: String(error) }));
-	if (response.success) noteLaunch(botId, { first: "done" });
-	else noteLaunch(botId, { first: "failed", error: response.error ?? translate("input.sendFailed") });
+/** The owner's Try again on a first message that got no word: the core sends it again when that still holds. */
+export function retryKickoff(botId: string): Promise<void> {
+	return useBotsStore
+		.getState()
+		.command({ action: "kickoff", id: botId, asked: true })
+		.then(
+			() => undefined,
+			(error: unknown) => {
+				toastError({ title: translate("bots.first.retryFailed"), error });
+			},
+		);
 }
 
 /** Saves a template's routines, off, waking the bot's home chat (so they run as the bot, in its chat). */
@@ -154,7 +149,7 @@ async function saveRoutines(bot: Bot, template: BotTemplate): Promise<void> {
 }
 
 /**
- * Makes the bot and opens its home chat; sends a template's or an import's first message and
+ * Makes the bot with its optional first message and opens its home chat;
  * saves a template's routines (off) once the home chat exists; hands a session over once it does. Rejects with the
  * core's reason when the bot could not be made (the dialog shows it); anything after that is the first screen's.
  */
@@ -164,6 +159,12 @@ export async function createBot(draft: NewBotDraft): Promise<Bot> {
 	const template = draft.template;
 	// The templates' souls and skills load with a template's create only: Sidebar.tsx imports this module statically.
 	const words = template ? await loadChunk(() => import("./bot-templates")) : null;
+	const kickoff =
+		template && words
+			? words.templateKickoff(template.template)
+			: draft.importFrom
+				? importKickoff(draft.importFrom)
+				: null;
 	const state = await store.command({
 		action: "create",
 		name,
@@ -175,16 +176,11 @@ export async function createBot(draft: NewBotDraft): Promise<Bot> {
 			: draft.purpose?.trim()
 				? { purpose: draft.purpose.trim() }
 				: {}),
+		...(kickoff ? { kickoff } : {}),
 	});
 	const bot = state.bots.find(known => known.name === name);
 	if (!bot) throw new Error(translate("bots.new.failed"));
-	const kickoff =
-		template && words
-			? words.templateKickoff(template.template)
-			: draft.importFrom
-				? importKickoff(draft.importFrom)
-				: null;
-	noteLaunch(bot.id, { start: "running", first: kickoff ? "pending" : "skipped", kickoff });
+	noteLaunch(bot.id, { tabId: null, start: "running" });
 	if (draft.model !== undefined)
 		await store
 			.command({ action: "update", id: bot.id, model: draft.model })
@@ -192,11 +188,10 @@ export async function createBot(draft: NewBotDraft): Promise<Bot> {
 	useUiStore.getState().closeDestination();
 	const tabId = await useTabsStore.getState().openTab({ cwd: bot.folder, kind: "agent" });
 	if (!tabId) {
-		noteLaunch(bot.id, { start: "failed", error: translate("bots.launch.notStarted") });
+		noteLaunch(bot.id, { tabId: null, start: "failed", error: translate("bots.launch.notStarted") });
 		return bot;
 	}
 	noteLaunch(bot.id, { tabId, start: "done" });
-	if (kickoff) await sendKickoff(bot.id, tabId, kickoff);
 	if (template) void saveRoutines(bot, template.template).catch(() => {});
 	const handOver = draft.handOver;
 	if (handOver)

@@ -19,6 +19,7 @@ use super::super::types::{
     BotArgs, ControlTab, ScheduleDraft, ScheduleFrequency, SendArgs, TabStatus,
 };
 use super::bot_files;
+use super::bot_first_run::{ChatFacts, bot_command, first_run_home};
 use super::bots_share::Kind;
 use super::schedule::is_absolute;
 use crate::agentctl::journal::attachments::sha256_hex;
@@ -42,6 +43,8 @@ const TIDY_PROMPT: &str = "Tidy your memory: MEMORY.md in your folder. First cop
 const QUIET_KINDS: [&str; 3] = ["permission", "done", "failed"];
 /// What a paired device may ask of this computer's bots (`bots_from`).
 const FROM_DEVICE: [&str; 6] = ["get", "update", "delete", "item", "itemsOpened", "file"];
+/// The longest first message a create may carry (a template's or an import's kickoff).
+const KICKOFF_MAX: usize = 8_000;
 
 /// A bot's own daily routine (`bot_routine`).
 #[derive(Clone, Copy)]
@@ -202,8 +205,8 @@ impl AgentControl {
             .map(|bot| bot.name.clone())
     }
 
-    /// Makes a bot: its folder (`~/.omp/bots/<slug>`, made unique, unless one is named) exists afterwards. Nothing is
-    /// sent anywhere: the owner writes first.
+    /// Makes a bot: its folder (`~/.omp/bots/<slug>`, made unique, unless one is named) exists afterwards. Its first run
+    /// starts: once its home chat exists, OMPdesk speaks first there (`bot_first_run.rs`).
     pub(crate) fn create_bot(&self, name: &str, folder: Option<&str>) -> R<BotRecord> {
         let name = name.trim();
         if name.is_empty() || name.chars().count() > NAME_MAX {
@@ -258,6 +261,7 @@ impl AgentControl {
             all_paired: Some(true),
             stale_days: Some(STALE_DAYS),
             created_at: crate::aimemory::value::iso(self.now().max(0.0) as u64),
+            first_run: true,
             ..BotRecord::default()
         };
         self.bots().add(bot.clone());
@@ -490,7 +494,11 @@ impl AgentControl {
         let bots: Vec<BotRecord> = self.bots().all().to_vec();
         let items: Vec<ItemRecord> = self.items().all(now).to_vec();
         let live: HashSet<String> = state.tabs.iter().map(|tab| tab.tab_id.clone()).collect();
-        self.mem().bot_sent.retain(|tab, _| live.contains(tab));
+        {
+            let mut mem = self.mem();
+            mem.bot_sent.retain(|tab, _| live.contains(tab));
+            mem.bot_first_asked.retain(|tab, _| live.contains(tab));
+        }
         for tab in state.tabs.iter().filter(|tab| tab.device.is_none()) {
             let Some(bot) = bots.iter().find(|bot| bot.folder == tab.cwd) else {
                 continue;
@@ -502,6 +510,10 @@ impl AgentControl {
                 self.mem().bot_sent.remove(&tab.tab_id);
                 continue;
             }
+            let first_run = first_run_home(bot, tab);
+            if first_run && self.first_run_due(tab) {
+                self.mem().bot_sent.remove(&tab.tab_id);
+            }
             let context = bot_context(bot, &items, &state.tabs, &tab.tab_id, now);
             let text = context.to_string();
             if self.mem().bot_sent.get(&tab.tab_id) == Some(&text) {
@@ -511,13 +523,16 @@ impl AgentControl {
                 .host
                 .command(
                     &tab.tab_id,
-                    &json!({ "type": "agent_control_bot", "context": context }),
+                    &bot_command(bot, context),
                     Deadline::Ms(CONTEXT_MS),
                 )
                 .await;
             let Ok(answer) = answer else { continue };
             if answer.success {
                 self.mem().bot_sent.insert(tab.tab_id.clone(), text);
+                if first_run && let Some(facts) = ChatFacts::of(answer.data.as_ref()) {
+                    self.first_run_seen(bot, tab, facts).await;
+                }
                 continue;
             }
             let error = answer.error.clone().unwrap_or_default();
@@ -1170,8 +1185,21 @@ impl AgentControl {
                 self.bots_changed();
             }
             "create" => {
+                let kickoff = text("kickoff").filter(|kickoff| !kickoff.trim().is_empty());
+                if kickoff
+                    .as_ref()
+                    .is_some_and(|kickoff| kickoff.chars().count() > KICKOFF_MAX)
+                {
+                    return fail(format!(
+                        "A bot's first message is {KICKOFF_MAX} characters at most."
+                    ));
+                }
                 let bot =
                     self.create_bot(&text("name").unwrap_or_default(), text("folder").as_deref())?;
+                if kickoff.is_some() {
+                    self.bots()
+                        .change(&bot.id, |record| record.kickoff = kickoff);
+                }
                 let skills = request
                     .get("skills")
                     .and_then(Value::as_array)
@@ -1278,6 +1306,20 @@ impl AgentControl {
             "delete" => self.delete_bot(&id).await?,
             "item" => refused = self.owner_item(&request).await?,
             "itemsOpened" => self.items_opened(&id)?,
+            // The bot's page opened (its one retry, in the background) or the owner's Try again (`asked`).
+            "kickoff" => {
+                if request.get("asked").and_then(Value::as_bool) == Some(true) {
+                    self.kickoff_retry(&id, true).await?;
+                } else {
+                    let control = self.clone();
+                    let id = id.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = control.kickoff_retry(&id, false).await {
+                            eprintln!("[bots] first-run kickoff retry failed: {}", error.message());
+                        }
+                    });
+                }
+            }
             "roomCreate" | "roomUpdate" | "roomDelete" | "roomPost" | "roomStop" => {
                 self.owner_room(&request).await?;
             }
@@ -1314,7 +1356,7 @@ impl AgentControl {
 }
 
 /// `BotContext` (`resources/gui-bridge/modes/bots-contracts.ts`) for the chat `tab_id` of `bot`.
-fn bot_context(
+pub(super) fn bot_context(
     bot: &BotRecord,
     items: &[ItemRecord],
     tabs: &[ControlTab],
@@ -1341,8 +1383,18 @@ fn bot_context(
         .map(|tab| tab.name().to_owned())
         .filter(|name| !name.is_empty())
         .collect();
+    let first_run = tabs
+        .iter()
+        .find(|tab| tab.tab_id == tab_id)
+        .is_some_and(|tab| first_run_home(bot, tab));
     json!({
-        "bot": { "id": bot.id, "name": bot.name, "paused": bot.paused, "folder": bot.folder },
+        "bot": {
+            "id": bot.id,
+            "name": bot.name,
+            "paused": bot.paused,
+            "folder": bot.folder,
+            "firstRun": first_run,
+        },
         "items": open.iter().map(|item| brief(item)).collect::<Vec<Value>>(),
         "needsYou": open
             .iter()
