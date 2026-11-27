@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.151.0] - 2026-11-27
+
+사이드바에서 세션을 정렬하고 오래 쉰 세션을 접을 수 있으며, ‘봇’ 제목을 누르면 봇 페이지가 열립니다.
+
+- 세션을 수동 순서, 에이전트 활동, 최근 순서 또는 이름순으로 볼 수 있습니다. 정렬과 접기 설정은 화면을 보는 기기마다 따로 저장됩니다.
+- 중복된 봇 메뉴와 삭제한 프로젝트 목록을 없앴습니다. 좁은 사이드바에서도 메뉴는 한 줄에 두 개씩 표시되며, 행을 끌 때 글자가 선택되지 않습니다.
+- 모든 봇이 고유한 움직이는 얼굴을 사용합니다. 기존 봇 사진 파일은 삭제하지 않습니다.
+
+<!-- en -->
+
+You can sort sidebar sessions, fold inactive ones, and open the Bots page by selecting the Bots heading.
+
+- Choose manual order, agent activity, recency, or name. Each viewing device remembers its own sort and fold settings.
+- The sidebar no longer lists deleted projects or shows a second entry for Bots. Navigation stays two entries per row at narrow widths, and dragging across rows no longer selects text.
+- Every bot now uses its own animated face. Existing bot photo files are left untouched.
+
 ## [0.150.0] - 2026-11-27
 
 Claude를 연결할 때 Claude 구독 또는 Anthropic API 키를 선택할 수 있습니다.
