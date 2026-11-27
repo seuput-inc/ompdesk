@@ -1442,6 +1442,8 @@ app.whenReady().then(async () => {
 		get uploads() {
 			return hostUploads();
 		},
+		// Sessions a paired computer hands here are staged and recorded under the profile (the core's remote/handoff.rs).
+		handoffDir: app.getPath("userData"),
 		// `devices` is created below; a host tab only opens once it serves connections.
 		hostName: (): string => devices.deviceName(),
 		sessionIndex,

@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.149.0] - 2026-11-27
+
+대화 속 A2UI 카드에 바로 답하고, 저장된 세션을 연결된 컴퓨터로 옮길 수 있습니다.
+
+- A2UI 카드에서 차트를 보고 양식을 제출할 수 있습니다. 이미 응답한 카드는 다시 제출되지 않습니다.
+- 사이드바의 세션 메뉴에서 옮길 컴퓨터를 선택할 수 있습니다. 전송 중 앱이 종료되면 기록된 상태를 바탕으로 복구합니다.
+- 운영체제가 유휴 시간을 알려 주지 않아도 알림 팝업이 사용자를 자리를 비운 상태로 간주하지 않습니다.
+- 의존성과 스킬 팩의 3일 대기를 없앴습니다. 일부 호스트 코드를 Rust로 옮겼고, CI가 오래된 빌드 캐시 대신 변경된 Tauri 구성요소를 다시 빌드하도록 고쳤습니다.
+
+<!-- en -->
+
+You can answer A2UI cards in the conversation and move a saved session to a paired computer.
+
+- View charts and submit forms in A2UI cards. A card that already has an answer cannot be submitted again.
+- Choose the destination computer from the session’s sidebar menu. If the app quits during a transfer, it uses the recorded transfer state to recover.
+- Notification popups no longer treat you as away when the operating system cannot report idle time.
+- Dependencies and skill packs no longer have a three-day wait. Some host code moved to Rust, and CI now rebuilds changed Tauri components instead of using stale cached builds.
+
 ## [0.148.0] - 2026-11-27
 
 Preview가 에뮬레이터 화면과 프로젝트 파일을 보여 주고, 연결된 컴퓨터에서 호스트 세션에 PR을 연결할 수 있게 되었으며, 봇이 살아 있는 얼굴을 갖습니다.

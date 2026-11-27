@@ -82,6 +82,32 @@ export class DeletedSessions {
 	add(path: string, device?: string, now?: number): void {
 		this.#call("add", { path, device: device ?? null, at: now ?? null });
 	}
+
+	/**
+	 * Records that this computer's session at `path` is being handed to the paired computer `host` under the transfer
+	 * `id`, saved before anything crosses (throws when it could not be saved: the hand-over must not start). Until it
+	 * settles the session reads as deleted to every revival path, and its file stays.
+	 */
+	beginHandoff(path: string, id: string, host: string): void {
+		this.#call("handoffBegin", { path, id, host });
+	}
+
+	/** Ends the pending transfer `id`: `to` is where the other computer keeps the session it took; absent, it refused. */
+	settleHandoff(path: string, id: string, to?: string): boolean {
+		return this.#call<boolean>("handoffSettle", { path, id, to: to ?? null });
+	}
+
+	/** The transfers still pending, oldest first. */
+	pendingHandoffs(): PendingHandoff[] {
+		return this.#call("handoffsPending");
+	}
+}
+
+/** A session of this computer on its way to the paired computer `device` (`handOffSession`). */
+export interface PendingHandoff {
+	path: string;
+	id: string;
+	device: string;
 }
 
 let record = new DeletedSessions(null);

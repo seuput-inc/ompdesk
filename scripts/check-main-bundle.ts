@@ -516,7 +516,10 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // 44-byte excess plus 80 bytes carried into the merged budget.
 // The paired page reads its own sort and Hide sleeping when the sidebar mounts. The device-pref routing brings the
 // first screen to 2,255,977 bytes (run 45876781076, 8bccc83f4); allow that measurement plus 80 bytes.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_256_057;
+// The session row menu's Move to <computer> (26 Nov 2026, cross-device-handoff): the item in `session-menu.ts` and the
+// call in `Sidebar.tsx`: 181 bytes over its base (e2e-nightly run 45780059698, omp/agent/cross-device-handoff at
+// 918cb6da4), added to the budget.
+const WEB_FIRST_SCREEN_JS_BYTES = 2_256_238;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

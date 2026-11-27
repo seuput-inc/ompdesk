@@ -1,0 +1,96 @@
+{
+	"checker": {
+		"kind": "tlc",
+		"config": "MC.cfg",
+		"timeoutSec": 600
+	},
+	"properties": [
+		"TypeOK",
+		"AtMostOneRunnable",
+		"NoCommitAfterAbort",
+		"ExactlyOneRunnable"
+	],
+	"waive": {
+		"TypeOK": "Shape check only: no behaviour change breaks it without also breaking a property above it."
+	},
+	"mutations": [
+		{
+			"name": "abort-answers-without-record",
+			"why": "B answers `aborted` without saving it (handoff.rs:577-578 dropped): A takes the session back and a commit still on the wire lands.",
+			"file": "SessionHandoff.tla",
+			"search": "IF AbortRecords THEN \"aborted\" ELSE Unwound",
+			"replace": "Unwound",
+			"breaks": "AtMostOneRunnable",
+			"isolate": true
+		},
+		{
+			"name": "abort-ignores-landed-target",
+			"why": "An abort of a `committing` transfer unwinds without looking at the target (resolve skipped): B aborts a session whose journal is already in place.",
+			"file": "SessionHandoff.tla",
+			"search": "[] bRec = \"committing\" /\\ bTarget -> AbortMoved(\"done\")",
+			"replace": "[] FALSE -> AbortMoved(\"done\")",
+			"breaks": "AtMostOneRunnable",
+			"isolate": true
+		},
+		{
+			"name": "commit-error-gives-back",
+			"why": "A takes the session back on a commit error instead of asking B (session-mutations.ts:311-312 skipped): a duplicate of the commit lands later.",
+			"file": "SessionHandoff.tla",
+			"search": "IF r = \"err\" THEN AskWhoOwns",
+			"replace": "IF r = \"err\" THEN (aState' = \"reclaimed\" /\\ aPc' = \"idle\" /\\ UNCHANGED toB)",
+			"breaks": "AtMostOneRunnable",
+			"isolate": true
+		},
+		{
+			"name": "pending-not-on-disk",
+			"why": "begin_handoff keeps the pending entry in memory only: A restarts and runs its copy while B lands it.",
+			"file": "SessionHandoff.tla",
+			"search": "aSaved' = PendingDurable",
+			"replace": "aSaved' = FALSE",
+			"breaks": "AtMostOneRunnable",
+			"isolate": true
+		},
+		{
+			"name": "commit-ignores-aborted",
+			"why": "commit no longer refuses an aborted id (handoff.rs:459 dropped): a commit held past the abort lands.",
+			"file": "SessionHandoff.tla",
+			"search": "FenceAborted -> CommitRefused",
+			"replace": "FALSE -> CommitRefused",
+			"breaks": "NoCommitAfterAbort",
+			"isolate": true
+		},
+		{
+			"name": "no-reconcile-on-link-up",
+			"why": "Nothing asks B again when its link comes up (index.ts onHostOnline dropped): a transfer left pending stays pending.",
+			"file": "SessionHandoff.tla",
+			"config": "MC_live.cfg",
+			"deadlock": false,
+			"search": "/\\ WF_vars(AReconcile) ",
+			"replace": "",
+			"breaks": "ExactlyOneRunnable",
+			"isolate": true
+		},
+		{
+			"name": "resolve-keeps-tombstone",
+			"why": "F1 fix removed: resolve (handoff.rs:401-403) marks a landed transfer done without clearing B's old tombstone of the path; after a crash between the rename and the clear nobody runs the session.",
+			"file": "SessionHandoff.tla",
+			"config": "MC_back.cfg",
+			"deadlock": false,
+			"search": "ResolveClears == bTomb' = IF ClearOnResolve THEN FALSE ELSE bTomb",
+			"replace": "ResolveClears == UNCHANGED bTomb",
+			"breaks": "ExactlyOneRunnable",
+			"isolate": true
+		},
+		{
+			"name": "no-retry-after-timeout",
+			"why": "F2 fix removed: an abort that failed while the link stayed up schedules no retry (session-mutations.ts:245-253); the transfer stays pending until the link drops.",
+			"file": "SessionHandoff.tla",
+			"config": "MC_timeout.cfg",
+			"deadlock": false,
+			"search": "aAsk \\/ RetryAbort",
+			"replace": "aAsk",
+			"breaks": "ExactlyOneRunnable",
+			"isolate": true
+		}
+	]
+}

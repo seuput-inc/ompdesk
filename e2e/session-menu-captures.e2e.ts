@@ -156,7 +156,10 @@ for (const language of ["en", "ko"] as const)
 				...edits.slice(2, 5),
 				// Handing over is this computer's own: its bots are (components/bots/HandToBotDialog.tsx).
 				text("bots.hand.menu"),
-				...edits.slice(5),
+				edits[5],
+				// This computer's session goes to a connected paired computer; a host's rows have no such item.
+				text("sidebar.menu.handOff").replace("{device}", "Host B"),
+				...edits.slice(6),
 				text("sidebar.menu.hideFromAgents"),
 				text("sidebar.menu.copyTitle"),
 				text("sidebar.menu.reveal"),

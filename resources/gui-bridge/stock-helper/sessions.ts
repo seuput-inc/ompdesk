@@ -365,4 +365,24 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 			? withImageRefs(messages)
 			: messages;
 	},
+	/**
+	 * Where stock keeps a handed-over session on this computer (`session-mutations.ts` `handOffSession`): the blob store
+	 * (`getBlobsDir`) and, for `cwd`, the session folder stock would open there (`SessionManager.getDefaultSessionDir`,
+	 * the folder `moveTo` relocates into).
+	 */
+	"sessions.handoff_paths": async params => {
+		const cwd = typeof params === "object" && params !== null && "cwd" in params ? params.cwd : undefined;
+		if (cwd !== undefined && (typeof cwd !== "string" || !isAbsolute(cwd))) throw new Error("Invalid folder");
+		const [{ SessionManager }, { getBlobsDir }] = await Promise.all([
+			loadOmpModule<{ SessionManager: { getDefaultSessionDir(cwd: string): string } }>(
+				"pi-coding-agent/session/session-manager",
+				"SessionManager",
+			),
+			loadOmpModule<{ getBlobsDir(): string }>("pi-utils", "getBlobsDir"),
+		]);
+		return {
+			blobsDir: getBlobsDir(),
+			...(cwd === undefined ? {} : { sessionDir: SessionManager.getDefaultSessionDir(resolve(cwd)) }),
+		};
+	},
 };

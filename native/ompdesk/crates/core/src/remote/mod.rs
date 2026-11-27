@@ -19,6 +19,7 @@ pub mod crypto;
 pub mod devices;
 mod dial;
 pub mod events;
+mod handoff;
 mod handshake;
 mod host;
 pub mod identity;
@@ -130,6 +131,7 @@ pub fn register(registry: &mut Registry) {
     devices::register(registry);
     kept_calls::register(registry);
     registry.add("remote.uploadPart", upload_parts::receive);
+    handoff::register(registry);
     store::register(registry);
     tailnet::register(registry);
     registry.add("remote.identity", |call| Box::pin(load_identity(call)));

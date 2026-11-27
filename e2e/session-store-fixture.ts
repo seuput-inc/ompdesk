@@ -42,6 +42,11 @@ export class FileSessionStorage {
 	}
 }
 
+/** session-manager `SessionManager.getDefaultSessionDir`: the fake omp keeps every session in one folder (rpc-ui.ts). */
+export const SessionManager = {
+	getDefaultSessionDir: (_cwd: string): string => join(process.env.PI_CODING_AGENT_DIR ?? "", "sessions", "fixture"),
+};
+
 export async function listSessionsReadOnly(dir: string): Promise<unknown[]> {
 	const names = await readdir(dir).catch(() => []);
 	const rows = await Promise.all(

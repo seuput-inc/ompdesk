@@ -375,6 +375,8 @@ src/main/serial-chain.ts	port	2	§1.3: local/git/exec and tailscale/cli take the
 src/main/session-free-stock.test.ts	tooling	-	Vitest suite: says a session is owned while another process holds its lease, and free once that process is gone.
 src/main/session-free.test.ts	tooling	-	Vitest suite: whenSessionFree.
 src/main/session-free.ts	port	2	Each poll re-enters stockHelperRequest to check installation state and select the current helper. stopStockHelper between polls removes the old launcher: pinning its host in native request_in_process could report free for a session the replacement worker still sees owned.
+src/main/session-handoff.test.ts	tooling	-	Vitest suite: a session handed to a paired computer, both sides real (lost answer, restart, late commit, retry).
+src/main/session-handoff.ts	native-client	3	The sender's ports of handOffSession: the link request, the core's remote.handoff.origin, the stock helper's blob store and the parts read from disk. The receiving side and the pending record are the core's (remote/handoff.rs, sessions/deleted.rs).
 src/main/session-index-activity.test.ts	tooling	-	Vitest suite: lists when the conversation last moved, not when a relaunch last wrote the file.
 src/main/session-index-first-prompt.test.ts	tooling	-	Vitest suite: lists the first prompt that stock persists after a long xd:// mount notice.
 src/main/session-index.test.ts	tooling	-	Vitest suite: keeps GUI kind overlays and handles headers with no title slot.

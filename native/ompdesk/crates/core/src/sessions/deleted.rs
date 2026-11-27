@@ -11,6 +11,11 @@
 //! oldest go first. A tombstone of this computer names its file as node's `path.resolve` spells it, and a question is
 //! read the same way; a paired device's path is compared as it came. Saved through `write_kept`: on a full disk the
 //! tombstone stays in memory and is saved when there is room.
+//!
+//! A session handed to a paired computer (`remote::handoff` on the receiving side) is a tombstone here too, carrying
+//! the transfer: pending from before the first byte crosses until the other computer confirms it took the session
+//! (the tombstone then names its path there) or durably refused it (the entry goes). Pending blocks every revival
+//! like any tombstone, so this computer never runs a writer on a session the other one may own.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -34,6 +39,19 @@ struct Tombstone {
     device: Option<String>,
     /// When it was deleted, epoch milliseconds.
     at: f64,
+    /// The session was handed to a paired computer (`session-mutations.ts` `handOffSession`), not deleted.
+    handoff: Option<Handoff>,
+}
+
+/// A hand-over of this computer's session to the paired computer `device`, under the transfer `id`. While `to` is
+/// `None` the transfer is pending: who owns the session is not known yet, so it blocks every revival as a tombstone
+/// does (the file stays here) until that computer confirms it took it (`to`, its path there) or durably refused it
+/// (the entry goes and the session is this computer's again).
+#[derive(Clone, Debug, PartialEq)]
+struct Handoff {
+    id: String,
+    device: String,
+    to: Option<String>,
 }
 
 impl Tombstone {
@@ -44,11 +62,35 @@ impl Tombstone {
         } else {
             json!(self.at)
         };
-        match &self.device {
+        let mut value = match &self.device {
             Some(device) => json!({ "path": self.path, "device": device, "at": at }),
             None => json!({ "path": self.path, "at": at }),
+        };
+        if let Some(handoff) = &self.handoff {
+            let mut moved = json!({ "id": handoff.id, "device": handoff.device });
+            if let Some(to) = &handoff.to {
+                moved["to"] = json!(to);
+            }
+            value["handoff"] = moved;
         }
+        value
     }
+}
+
+fn handoff_of(item: &Value) -> Option<Handoff> {
+    let handoff = item.get("handoff")?;
+    let text = |name: &str| {
+        handoff
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    };
+    Some(Handoff {
+        id: text("id")?,
+        device: text("device")?,
+        to: text("to"),
+    })
 }
 
 fn key(path: &str, device: Option<&str>) -> String {
@@ -107,6 +149,7 @@ impl Store {
                     path: path.to_owned(),
                     device: device.map(str::to_owned),
                     at,
+                    handoff: handoff_of(&item),
                 },
             );
         }
@@ -118,6 +161,11 @@ impl Store {
     }
 
     fn add(&mut self, path: &str, device: Option<&str>, at: f64) {
+        self.insert(path, device, at, None);
+        self.save();
+    }
+
+    fn insert(&mut self, path: &str, device: Option<&str>, at: f64, handoff: Option<Handoff>) {
         let key = key(path, device);
         self.order.retain(|known| *known != key);
         self.order.push(key.clone());
@@ -131,13 +179,90 @@ impl Store {
                 path,
                 device: device.map(str::to_owned),
                 at,
+                handoff,
             },
         );
+        // A pending hand-over never ages out: forgetting it would let the session run here while the other computer
+        // may own it.
         while self.order.len() > MAX_TOMBSTONES {
-            let oldest = self.order.remove(0);
+            let Some(at) = self.order.iter().position(|key| {
+                !self
+                    .entries
+                    .get(key)
+                    .is_some_and(|entry| entry.handoff.as_ref().is_some_and(|h| h.to.is_none()))
+            }) else {
+                break;
+            };
+            let oldest = self.order.remove(at);
             self.entries.remove(&oldest);
         }
-        self.save();
+    }
+
+    /// Records that this computer's session at `path` is being handed to `device` under the transfer `id`, saved
+    /// before anything crosses: an error leaves no record, and the hand-over must not start.
+    fn begin_handoff(&mut self, path: &str, id: &str, device: &str, at: f64) -> Result<(), Fault> {
+        if self.get(path, None).is_some() {
+            return Err(Fault::new(
+                "session_deleted",
+                "The session was deleted or handed to another computer",
+            ));
+        }
+        let handoff = Handoff {
+            id: id.to_owned(),
+            device: device.to_owned(),
+            to: None,
+        };
+        self.insert(path, None, at, Some(handoff));
+        if let Err(fault) = self.save_checked() {
+            self.remove(path, None);
+            return Err(fault);
+        }
+        Ok(())
+    }
+
+    /// Ends the pending transfer `id` of `path`: `to` (the other computer's path) when it took the session, which then
+    /// stays a tombstone here; `None` when it durably refused it, which gives the session back. False when `path`
+    /// has no pending transfer `id`.
+    fn settle_handoff(&mut self, path: &str, id: &str, to: Option<&str>) -> bool {
+        let Some(entry) = self.entries.get_mut(&key(path, None)) else {
+            return false;
+        };
+        let Some(handoff) = entry
+            .handoff
+            .as_mut()
+            .filter(|h| h.id == id && h.to.is_none())
+        else {
+            return false;
+        };
+        match to {
+            Some(to) => {
+                handoff.to = Some(to.to_owned());
+                self.save();
+            }
+            None => self.remove(path, None),
+        }
+        true
+    }
+
+    /// The transfers still pending, oldest first.
+    fn pending_handoffs(&self) -> Vec<Value> {
+        self.order
+            .iter()
+            .filter_map(|key| self.entries.get(key))
+            .filter_map(|entry| {
+                let handoff = entry.handoff.as_ref().filter(|h| h.to.is_none())?;
+                Some(json!({ "path": entry.path, "id": handoff.id, "device": handoff.device }))
+            })
+            .collect()
+    }
+
+    /// Forgets the tombstone of `path`: a session handed to this computer back at a path it once left from.
+    fn remove(&mut self, path: &str, device: Option<&str>) {
+        let key = key(path, device);
+        if self.entries.remove(&key).is_some() {
+            self.order.retain(|known| *known != key);
+            self.save();
+        }
     }
 
     fn list(&self) -> Vec<Value> {
@@ -149,11 +274,17 @@ impl Store {
     }
 
     fn save(&self) {
-        let Some(file) = &self.file else { return };
-        let bytes = Value::Array(self.list()).to_string();
-        if let Err(fault) = write_kept(file, bytes.as_bytes(), Some(0o600), 0o700) {
+        if let Err(fault) = self.save_checked() {
             eprintln!("[deleted-sessions] not saved: {}", fault.message);
         }
+    }
+
+    fn save_checked(&self) -> Result<(), Fault> {
+        let Some(file) = &self.file else {
+            return Ok(());
+        };
+        let bytes = Value::Array(self.list()).to_string();
+        write_kept(file, bytes.as_bytes(), Some(0o600), 0o700).map(|_| ())
     }
 }
 
@@ -209,6 +340,13 @@ pub(crate) fn add(path: &str, device: Option<&str>) {
     });
 }
 
+/// Forgets this computer's tombstone of `path` in the profile's record: a session handed here
+/// (`remote::handoff`) lands at a path this computer may once have handed away or deleted, and its index must list it.
+pub(crate) fn clear(path: &str) {
+    let current = stores().current.clone();
+    with(current.as_deref(), |store| store.remove(path, None));
+}
+
 // ---- the hub kind -------------------------------------------------------------------------------------------------
 
 pub const KIND: Kind = Kind {
@@ -247,6 +385,12 @@ struct Of {
     id: String,
     #[serde(default)]
     at: Option<f64>,
+    /// A hand-over's paired computer (`handoffBegin`).
+    #[serde(default)]
+    host: String,
+    /// Where that computer keeps the session it took (`handoffSettle`); absent: it refused it.
+    #[serde(default)]
+    to: Option<String>,
 }
 
 fn call(_: u64, method: &str, raw: &RawValue) -> Outcome {
@@ -298,6 +442,27 @@ fn call(_: u64, method: &str, raw: &RawValue) -> Outcome {
             }
             Value::Null
         }
+        "handoffBegin" => {
+            if of.id.is_empty() || of.host.is_empty() || of.path.is_empty() {
+                return Outcome::fault(
+                    "invalid_params",
+                    "A hand-over needs a path, an id and a computer",
+                );
+            }
+            let at = of.at.unwrap_or_else(now_ms);
+            if let Err(fault) = with(file, |store| {
+                store.begin_handoff(&of.path, &of.id, &of.host, at)
+            }) {
+                return Outcome::Now(Err(fault));
+            }
+            Value::Null
+        }
+        "handoffSettle" => json!(with(file, |store| store.settle_handoff(
+            &of.path,
+            &of.id,
+            of.to.as_deref()
+        ))),
+        "handoffsPending" => Value::Array(with(file, |store| store.pending_handoffs())),
         _ => return Outcome::fault("no_method", format!("deleted has no {method}")),
     };
     Outcome::Now(Ok(value))
@@ -372,5 +537,70 @@ mod tests {
                 json!({ "path": "/x/b.jsonl", "device": "d", "at": 5 })
             ]
         );
+    }
+
+    #[test]
+    fn a_pending_hand_over_blocks_revival_from_disk_until_it_settles() {
+        let file = folder("handoff").join("deleted-sessions.json");
+        let mut store = Store::load(Some(file.clone()));
+        store
+            .begin_handoff("/work/a.jsonl", "t1", "mini", 7.0)
+            .unwrap();
+        // A restart reads the pending transfer back: the session is still blocked here, its file kept.
+        let again = Store::load(Some(file.clone()));
+        assert!(again.get("/work/a.jsonl", None).is_some());
+        let path = node_resolve("/work/a.jsonl");
+        assert_eq!(
+            again.pending_handoffs(),
+            [json!({ "path": path, "id": "t1", "device": "mini" })]
+        );
+        // A second hand-over or a stale id changes nothing.
+        assert!(
+            store
+                .begin_handoff("/work/a.jsonl", "t2", "mini", 8.0)
+                .is_err()
+        );
+        assert!(!store.settle_handoff("/work/a.jsonl", "t2", None));
+        // Refused by the other computer: the session is this computer's again.
+        assert!(store.settle_handoff("/work/a.jsonl", "t1", None));
+        assert!(store.get("/work/a.jsonl", None).is_none());
+        assert!(Store::load(Some(file.clone())).list().is_empty());
+        // Taken: a tombstone that names where it went, no longer pending, settled once.
+        store
+            .begin_handoff("/work/a.jsonl", "t3", "mini", 9.0)
+            .unwrap();
+        assert!(store.settle_handoff("/work/a.jsonl", "t3", Some("/m/a.jsonl")));
+        assert!(!store.settle_handoff("/work/a.jsonl", "t3", None));
+        let moved = Store::load(Some(file));
+        assert!(moved.get("/work/a.jsonl", None).is_some());
+        assert!(moved.pending_handoffs().is_empty());
+        assert_eq!(
+            moved.list(),
+            [
+                json!({ "path": path, "at": 9, "handoff": { "id": "t3", "device": "mini", "to": "/m/a.jsonl" } })
+            ]
+        );
+    }
+
+    #[test]
+    fn a_pending_hand_over_never_ages_out() {
+        let mut store = Store::load(None);
+        store
+            .begin_handoff("/s/pending.jsonl", "t", "mini", 0.0)
+            .unwrap();
+        for index in 0..MAX_TOMBSTONES + 5 {
+            store.add(&format!("/s/{index}.jsonl"), None, index as f64);
+        }
+        assert_eq!(store.order.len(), MAX_TOMBSTONES);
+        assert!(store.get("/s/pending.jsonl", None).is_some());
+        assert!(store.get("/s/0.jsonl", None).is_none());
+    }
+
+    #[test]
+    fn a_session_handed_back_clears_its_old_tombstone() {
+        let mut store = Store::load(None);
+        store.add("/work/a.jsonl", None, 1.0);
+        store.remove("/work/./a.jsonl", None);
+        assert!(store.get("/work/a.jsonl", None).is_none());
     }
 }

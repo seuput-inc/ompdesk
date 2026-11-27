@@ -22,3 +22,8 @@ export function getWorktreesDir(): string {
 export function hashPath(absPath: string): string {
 	return Bun.hash(nodePath.resolve(absPath)).toString(16).padStart(16, "0").slice(-7);
 }
+
+/** pi-utils `getBlobsDir`, for a session handed between the two apps (session-handoff.e2e.ts). */
+export function getBlobsDir(): string {
+	return nodePath.join(process.env.PI_CODING_AGENT_DIR ?? "", "blobs");
+}

@@ -42,6 +42,7 @@ const RUNTIME_ERROR_SOURCE_TABLE: Record<RuntimeErrorSource, true> = {
 	"web-reload": true,
 	"remote-tab": true,
 	"session-delete": true,
+	"session-handoff": true,
 	"turn-stop": true,
 	"credit-spend": true,
 	"remote-link": true,

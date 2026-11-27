@@ -1,0 +1,71 @@
+{
+	"runs": [
+		{
+			"name": "code-now",
+			"config": "MC.cfg",
+			"expect": "pass"
+		},
+		{
+			"name": "code-now-4-faults",
+			"config": "MC_large.cfg",
+			"expect": "pass"
+		},
+		{
+			"name": "code-now-recovers",
+			"config": "MC_live.cfg",
+			"expect": "pass"
+		},
+		{
+			"name": "F1-fixed-handed-back-crash-before-clear",
+			"config": "MC_back.cfg",
+			"expect": "pass"
+		},
+		{
+			"name": "F2-fixed-abort-times-out-link-up",
+			"config": "MC_timeout.cfg",
+			"expect": "pass"
+		},
+		{
+			"name": "bug-a-abort-answered-without-fence",
+			"config": "MC_bug_abort_unrecorded.cfg",
+			"expect": "invariant",
+			"property": "AtMostOneRunnable"
+		},
+		{
+			"name": "bug-b-commit-after-aborted",
+			"config": "MC_bug_no_fence.cfg",
+			"expect": "invariant",
+			"property": "NoCommitAfterAbort"
+		},
+		{
+			"name": "bug-c-pending-not-durable",
+			"config": "MC_bug_volatile_pending.cfg",
+			"expect": "invariant",
+			"property": "AtMostOneRunnable"
+		},
+		{
+			"name": "bug-F1-resolve-keeps-tombstone",
+			"config": "MC_bug_back_noclear.cfg",
+			"expect": "temporal",
+			"property": "ExactlyOneRunnable"
+		},
+		{
+			"name": "bug-F2-no-retry-after-timeout",
+			"config": "MC_bug_timeout_noretry.cfg",
+			"expect": "temporal",
+			"property": "ExactlyOneRunnable"
+		},
+		{
+			"name": "moved-is-reachable",
+			"config": "MC_sanity_moved.cfg",
+			"expect": "invariant",
+			"property": "NeverMoved"
+		},
+		{
+			"name": "reclaimed-is-reachable",
+			"config": "MC_sanity_reclaimed.cfg",
+			"expect": "invariant",
+			"property": "NeverReclaimed"
+		}
+	]
+}

@@ -331,6 +331,25 @@
 				"resources/gui-bridge/quit-journal-core.ts#replayOfEarlierLife"
 			],
 			"syncCommit": "df9f756aab26a6e4688887ad724e5584d869aeda"
+		},
+		{
+			"id": "session-handoff",
+			"title": "A session handed to a paired computer: pending tombstone, staged commit, durable abort fence; at most one computer can run it",
+			"kind": "tla",
+			"tier": "fast",
+			"dir": "session-handoff/tla",
+			"spec": "SessionHandoff.tla",
+			"matrix": "matrix.json",
+			"mutations": "mutations.json",
+			"covers": [
+				"src/main/session-mutations.ts#handOffSession",
+				"src/main/session-mutations.ts#settleHandOff",
+				"src/main/session-mutations.ts#finishHandOff",
+				"src/main/session-mutations.ts#reconcileHandOffs",
+				"native/ompdesk/crates/core/src/remote/handoff.rs",
+				"native/ompdesk/crates/core/src/sessions/deleted.rs"
+			],
+			"syncCommit": "8101704afaef5d721b2007215805d53b9b0132a9"
 		}
 	]
 }
