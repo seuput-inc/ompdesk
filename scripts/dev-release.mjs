@@ -106,37 +106,32 @@ function main() {
 	);
 	const tip = refs["refs/heads/dev"],
 		main = refs["refs/heads/main"];
+
 	if (!tip || !main) throw Error("missing integration or release branch");
 	const latest = api("releases/latest");
+	// All admitted dispatches for this batch follow its base release's publication.
 	if (!/^v\d+\.\d+\.\d+$/.test(latest.tag_name)) throw Error("unexpected latest tag");
+	if (!latest.published_at) throw Error("missing publication date for the current batch");
 	git("fetch", "--no-tags", remote, tip, main, `refs/tags/${latest.tag_name}`);
 	const tagSha = cmd("gh", "api", `repos/${repo}/commits/${latest.tag_name}`, "--jq", ".sha");
 	git("merge-base", "--is-ancestor", tagSha, main);
 	git("merge-base", "--is-ancestor", main, tip);
 	const dir = join(homedir(), ".ompdesk", "dev-release", "windows");
 	const unreleased = new Set(git("rev-list", `${main}..${tip}`).split("\n"));
-	const find = sha => {
-		const runs = pages(
-			`actions/workflows/ci.yml/runs?head_sha=${sha}&event=workflow_dispatch&branch=dev&per_page=100`,
+	const dispatches = query =>
+		pages(`actions/workflows/ci.yml/runs?event=workflow_dispatch&branch=dev&per_page=100&${query}`).flatMap(
+			page => page.workflow_runs,
 		);
-		return runs
-			.flatMap(page => page.workflow_runs)
-			.find(
-				r =>
-					r.path === ".github/workflows/ci.yml" &&
-					r.head_repository?.full_name === repo &&
-					r.event === "workflow_dispatch" &&
-					r.head_branch === "dev" &&
-					r.head_sha === sha &&
-					r.display_title === title(sha),
-			);
-	};
+
+	const find = sha => windowsReceipt(sha, dispatches(`head_sha=${sha}`), runJobs);
 	const { candidate: dev, claim } = selectWindowsBatch({
 		dir,
 		base: main,
 		tip,
 		contains: sha => unreleased.has(sha),
-		receipt: find,
+		receipt: sha =>
+			find(sha) ??
+			windowsReceipt(sha, dispatches(`created=${encodeURIComponent(`>=${latest.published_at}`)}`), runJobs, true),
 	});
 	// Only a verified descendant of main that remains in dev can be the parent of release metadata.
 	git("merge-base", "--is-ancestor", main, dev);
@@ -219,3 +214,24 @@ function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+
+export function windowsReceipt(sha, runs, jobs, allowRejection = false) {
+	const matches = runs.filter(
+		run =>
+			run.path === ".github/workflows/ci.yml" &&
+			run.head_repository?.full_name === repo &&
+			run.event === "workflow_dispatch" &&
+			run.head_branch === "dev" &&
+			run.display_title === title(sha),
+	);
+	const exact = matches.find(run => run.head_sha === sha);
+	if (exact || !allowRejection || matches.length !== 1) return exact;
+	const [moved] = matches;
+	// A dispatch to the moving dev ref can be rejected on B while the request is recorded under A.
+	if (
+		moved.status === "completed" &&
+		moved.conclusion === "failure" &&
+		jobs(moved.id).some(job => job.name === "reject-windows-candidate" && job.conclusion === "failure")
+	)
+		return moved;
+}
