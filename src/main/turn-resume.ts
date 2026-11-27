@@ -42,7 +42,7 @@ import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
 import { writeFileAtomicDeferred } from "./atomic-file";
 import { canonicalCwd } from "./canonical-cwd";
 import { type HubItem, hub, sharedInstance } from "./core/hub";
-import { type CoreError, isCoreShutdown } from "./core/process";
+import { type CoreError, isCoreShutdown, isHubGivenUp } from "./core/process";
 import { deletedSessionsOpen } from "./deleted-sessions";
 import { RpcTimeoutError } from "./rpc-client";
 import type { SidecarLike } from "./sidecar-types";
@@ -563,13 +563,14 @@ export class TurnResume {
 
 	/**
 	 * A call the core's own timers, the sidecars' status events and the pool's run-state changes make: once the quit has
-	 * ended the core there is nothing to decide, so its refusal is dropped (anything else still throws).
+	 * ended the core there is nothing to decide, so its refusal is dropped; a call main gave up went out in order and the
+	 * live core decides it, and the next change syncs again, so it is dropped too (anything else still throws).
 	 */
 	#atQuit(run: () => void): void {
 		try {
 			run();
 		} catch (error) {
-			if (!isCoreShutdown(error)) throw error;
+			if (!isCoreShutdown(error) && !isHubGivenUp(error)) throw error;
 		}
 	}
 
@@ -895,7 +896,8 @@ export class TurnResume {
 		try {
 			token = this.#call<number | null>("flush", () => ({ env: this.#env(["facts", "online"]) }));
 		} catch (error) {
-			if (isCoreShutdown(error)) return;
+			// Given up: the live core still runs the flush it got, and settles its own continuations.
+			if (isCoreShutdown(error) || isHubGivenUp(error)) return;
 			throw error;
 		}
 		await this.#promise(token);

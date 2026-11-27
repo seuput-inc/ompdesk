@@ -1,5 +1,5 @@
 import { type HubItem, hub } from "./core/hub";
-import { core, isCoreShutdown } from "./core/process";
+import { core, isCoreShutdown, isHubGivenUp } from "./core/process";
 
 /**
  * Whether this computer can reach the internet right now, as far as a waiting
@@ -152,15 +152,16 @@ export class ConnectivityMonitor {
 	}
 
 	/**
-	 * An event the monitor does not own the moment of (a timer, `poll`, a window's report): ignored once stopped, and
-	 * ignored when the core refuses it because the quit already ended it.
+	 * An event the monitor does not own the moment of (a timer, `poll`, a window's report): ignored once stopped,
+	 * ignored when the core refuses it because the quit already ended it, and ignored when main gave the call up (the
+	 * core, alive and slow, still gets it in order, and the next sample or event follows a few seconds later).
 	 */
 	#event(run: () => void): void {
 		if (this.#stopped) return;
 		try {
 			run();
 		} catch (error) {
-			if (!isCoreShutdown(error)) throw error;
+			if (!isCoreShutdown(error) && !isHubGivenUp(error)) throw error;
 		}
 	}
 
