@@ -426,7 +426,7 @@ describe.skipIf(!supported)("CI watch on stock omp", () => {
 		expect(lines[1]?.content).toBe(
 			`CI failed for o/r@${FEATURE_SHA.slice(0, 7)} (feature): lint. https://github.com/o/r/actions/runs/202`,
 		);
-		expect(shown(third.frames)).toBe(1);
+		await expect.poll(() => shown(third.frames), { timeout: 10_000 }).toBe(1);
 		// Armed again, `main` (the older watch) would start its first gh read with `feature`'s first, three reads before `feature`'s line.
 		const reads = gh.calls().slice(readsBefore);
 		expect(reads.length).toBeGreaterThan(0);

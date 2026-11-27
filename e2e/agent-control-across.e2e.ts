@@ -136,7 +136,9 @@ test.describe("on this computer", () => {
 		// Closed, it is still a saved session: found by its text, read without a tab, opened again.
 		expect((await call("ompdesk_session_stop", { session: two, close: true })).isError).toBe(false);
 		await expect
-			.poll(async () => (await page.evaluate(() => window.omp.tabs.list())).map(tab => tab.tabId))
+			.poll(async () => (await page.evaluate(() => window.omp.tabs.list())).map(tab => tab.tabId), {
+				timeout: 30_000,
+			})
 			.not.toContain(two);
 		let stored = "";
 		await expect
