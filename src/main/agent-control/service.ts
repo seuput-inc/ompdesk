@@ -559,6 +559,7 @@ export interface ReleasedSession {
 	hidden?: boolean;
 	/** The session file of the session whose agent opened it, when one did. */
 	openedBySession?: string;
+	openedByDevice?: string;
 	/** Its opener hears that it was closed: an agent's own child, not an Autopilot run's (the run reads those itself). */
 	tellOpener?: true;
 }

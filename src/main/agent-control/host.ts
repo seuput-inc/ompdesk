@@ -510,14 +510,16 @@ export class AgentControlRuntime {
 			const openerWin = parent ? this.#win(parent) : undefined;
 			const opener =
 				parent && openerWin && !openerWin.isDestroyed()
-					? pool.tabsForWindow(openerWin).find(tab => tab.tabId === parent)?.sessionPath
+					? pool.tabsForWindow(openerWin).find(tab => tab.tabId === parent)
 					: undefined;
 			if (held)
 				session = {
 					...held,
 					...(!held.device && this.#hiddenPaths().has(held.path) ? { hidden: true } : {}),
-					...(opener ? { openedBySession: opener } : {}),
-					...(opener && ownChild ? { tellOpener: true as const } : {}),
+					...(opener?.sessionPath
+						? { openedBySession: opener.sessionPath, openedByDevice: opener.device ?? "" }
+						: {}),
+					...(opener?.sessionPath && ownChild ? { tellOpener: true as const } : {}),
 				};
 		}
 		void this.control.runtime
