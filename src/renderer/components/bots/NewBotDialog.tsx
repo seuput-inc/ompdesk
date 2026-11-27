@@ -1,13 +1,6 @@
-/**
- * A new bot starts with its name and purpose (`BOT_PURPOSE_MAX` characters, the first
- * paragraph of its SOUL.md) and model; from a template, the template's skills it keeps. Where it runs is this computer:
- * a bot lives in its folder on this computer. ⌘/Ctrl+Enter creates.
- *
- * The first bot on a computer where another app's bots are found offers to bring one over (Orca's `BotImportNudge`).
- */
 import { LayoutTemplate } from "lucide-react";
-import { useEffect, useId, useMemo, useState } from "react";
-import { BOT_PURPOSE_MAX, type BotImportSource } from "../../../shared/bots";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { BOT_PURPOSE_MAX, BOTS_FOLDER, type BotImportSource } from "../../../shared/bots";
 import { useCurrentLang, useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
 import { botTemplateWords } from "../../locales/bot-templates";
@@ -26,6 +19,9 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 	const lang = useCurrentLang();
 	const formId = useId();
 	const bots = useBotsStore(s => s.state.bots).filter(bot => !bot.device);
+	const localName = t("bots.new.local");
+	const nameRef = useRef<HTMLInputElement>(null);
+	const purposeRef = useRef<HTMLTextAreaElement>(null);
 	const template = draft?.template;
 	const [name, setName] = useState(
 		() => draft?.name ?? (template ? freeBotName(botTemplateWords(lang, template.template.id).name, bots) : ""),
@@ -40,7 +36,11 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 
 	// Only for the first bot here, and until the person says not again.
 	const nudge =
-		bots.length === 0 && !draft?.importFrom && !template && localStorage.getItem(NUDGE_DISMISSED_KEY) !== "1";
+		!draft?.handOver &&
+		bots.length === 0 &&
+		!draft?.importFrom &&
+		!template &&
+		localStorage.getItem(NUDGE_DISMISSED_KEY) !== "1";
 	useEffect(() => {
 		if (!nudge) return;
 		window.omp.bots
@@ -53,16 +53,23 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 		return app ? { app, count: sources.filter(source => source.app === app).length } : null;
 	}, [sources]);
 
-	const typed = name.trim().length > 0 || purpose.trim().length > 0;
+	const trimmed = name.trim();
+	const duplicate = !!trimmed && bots.some(bot => bot.name.toLocaleLowerCase() === trimmed.toLocaleLowerCase());
+	const validName = !!trimmed && [...trimmed].length <= 80 && !duplicate;
+	const typed = !!trimmed || !!purpose.trim();
 	const tooLong = purpose.trim().length > BOT_PURPOSE_MAX;
 
 	const submit = async () => {
 		if (busy) return;
-		if (!name.trim()) {
-			setNameError(t("bots.new.nameMissing"));
+		if (!validName) {
+			setNameError(t(duplicate ? "bots.new.nameTaken" : "bots.new.nameMissing"));
+			nameRef.current?.focus();
 			return;
 		}
-		if (tooLong) return;
+		if (tooLong) {
+			purposeRef.current?.focus();
+			return;
+		}
 		setBusy(true);
 		setError(null);
 		try {
@@ -96,10 +103,11 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 			description={draft?.handOver ? t("bots.new.forHandOver", { title: draft.handOver.title }) : undefined}
 			footer={
 				<>
-					{!template && !typed && !draft?.importFrom && (
+					{!template && !typed && !draft?.importFrom && !draft?.handOver && (
 						<Button
 							className="mr-auto"
 							icon={<LayoutTemplate />}
+							disabled={busy}
 							onClick={() => openBotDialog({ kind: "templates" })}
 							type="button"
 							variant="ghost"
@@ -110,15 +118,8 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 					<Button onClick={onClose} type="button" variant="ghost">
 						{t("common.cancel")}
 					</Button>
-					<Button
-						data-new-bot-create
-						disabled={tooLong}
-						form={formId}
-						loading={busy}
-						type="submit"
-						variant="primary"
-					>
-						{t("bots.new.create")}
+					<Button data-new-bot-create disabled={busy} form={formId} loading={busy} type="submit" variant="primary">
+						{busy ? t("bots.new.creatingOn", { host: localName }) : t("bots.new.create")}
 					</Button>
 				</>
 			}
@@ -128,7 +129,7 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 			title={t("bots.new.title")}
 		>
 			<form
-				className="flex flex-col gap-4"
+				className="flex flex-col gap-3"
 				data-new-bot
 				id={formId}
 				onKeyDown={event => {
@@ -165,20 +166,23 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 						})}
 					</Banner>
 				)}
-				<BotFace color="var(--sc-text-muted)" seed={formId} size={64} />
-				<Input
-					autoFocus
-					data-dialog-autofocus
-					error={nameError ?? undefined}
-					label={t("bots.new.name")}
-					maxLength={80}
-					onChange={event => {
-						setName(event.target.value);
-						setNameError(null);
-					}}
-					placeholder={t("bots.new.namePlaceholder")}
-					value={name}
-				/>
+				<div className="grid grid-cols-[40px_minmax(0,1fr)] items-center gap-3">
+					<BotFace color="var(--sc-text-muted)" seed={formId} size={40} />
+					<Input
+						autoFocus
+						data-dialog-autofocus
+						ref={nameRef}
+						error={duplicate ? t("bots.new.nameTaken") : (nameError ?? undefined)}
+						label={t("bots.new.name")}
+						maxLength={80}
+						onChange={event => {
+							setName(event.target.value);
+							setNameError(null);
+						}}
+						placeholder={t("bots.new.namePlaceholder")}
+						value={name}
+					/>
+				</div>
 				<TextArea
 					autoGrow
 					error={
@@ -194,22 +198,32 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 					label={t("bots.new.purpose")}
 					onChange={event => setPurpose(event.target.value)}
 					placeholder={t("bots.new.purposePlaceholder")}
-					rows={4}
+					ref={purposeRef}
+					rows={2}
 					value={purpose}
 				/>
-				<div className="flex flex-col gap-1.5">
-					<FieldLabel as="label" htmlFor={`${formId}-model`}>
-						{t("bots.new.model")}
-					</FieldLabel>
-					<ModelValueSelect
-						id={`${formId}-model`}
-						kind="model"
-						onCommit={value => setModel(value || null)}
-						placeholder={t("bots.new.modelDefault")}
-						value={model ?? ""}
-					/>
-					<span className="text-sc-xs text-(--sc-text-muted)">{t("bots.new.runsHere")}</span>
+				<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+					<div className="min-w-0">
+						<FieldLabel as="span">{t("bots.new.computer")}</FieldLabel>
+						<p className="text-sc-sm">{localName}</p>
+					</div>
+					<div className="min-w-0">
+						<FieldLabel as="label" htmlFor={`${formId}-model`}>
+							{t("bots.new.model")}
+						</FieldLabel>
+						<ModelValueSelect
+							disabled={busy}
+							id={`${formId}-model`}
+							kind="model"
+							onCommit={value => setModel(value || null)}
+							placeholder={t("bots.new.modelDefault")}
+							value={model ?? ""}
+						/>
+					</div>
 				</div>
+				<p className="min-w-0 wrap-anywhere font-mono text-sc-xs text-(--sc-text-muted)" data-new-bot-folder>
+					{t("bots.new.folder", { host: localName, folder: `~/${BOTS_FOLDER}` })}
+				</p>
 				{template && template.template.skills.length > 0 && (
 					<fieldset className="flex flex-col gap-1.5">
 						<FieldLabel as="legend">{t("bots.new.skills")}</FieldLabel>
