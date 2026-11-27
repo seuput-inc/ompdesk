@@ -229,7 +229,8 @@ test("a renamed bot's folder, files, routine and open chat follow its new name w
 	});
 });
 
-test("a bot renamed before its first chat updates its soul and signs a message on reopen", async () => {
+const renameOnReopen = "a bot renamed before its first chat updates its soul and signs a message on reopen";
+test(renameOnReopen, { tag: "@smoke" }, async () => {
 	test.setTimeout(120_000);
 	const tabs = () => page.evaluate(() => window.omp.tabs.list());
 	const prompt = (id: string, message: string) =>

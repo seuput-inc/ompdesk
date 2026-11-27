@@ -332,7 +332,9 @@ test("paired bot chat omits quiet lookups live and after reopening, without hidi
 	}
 });
 
-test("a paired bot chat reopens its delegated worker in another repository without taking the human sibling", async () => {
+const restoreWorker =
+	"a paired bot chat reopens its delegated worker in another repository without taking the human sibling";
+test(restoreWorker, { tag: "@smoke" }, async () => {
 	test.setTimeout(180_000);
 	const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "paired-bot-worker-")));
 	let host: RemoteInstance | null = null;

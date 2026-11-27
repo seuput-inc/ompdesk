@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { onTestFinished, test, vi } from "vitest";
-import { admission, git as releaseGit } from "./dev-release.mjs";
+import { admission, git as releaseGit, requestOnce } from "./dev-release.mjs";
 
 const jobs = [
 	"static",
@@ -20,6 +20,11 @@ const jobs = [
 	"win-platform (2/3)",
 	"win-platform (3/3)",
 ].map(name => ({ name, conclusion: "success" }));
+const windows = {
+	name: "win-e2e",
+	conclusion: "success",
+	steps: [{ name: "Required Windows app set", conclusion: "success" }],
+};
 const batch = {
 	main: "base",
 	dev: "candidate",
@@ -29,6 +34,7 @@ const batch = {
 	changes: 3,
 	jobs,
 	run: {
+		id: 12345,
 		path: ".github/workflows/ci.yml",
 		head_repository: { full_name: "seuput-inc/ompdesk" },
 		event: "push",
@@ -38,9 +44,21 @@ const batch = {
 		conclusion: "success",
 	},
 };
+const greenReceipt = sha => ({
+	id: 67890,
+	path: batch.run.path,
+	head_repository: batch.run.head_repository,
+	event: "workflow_dispatch",
+	head_branch: "dev",
+	head_sha: sha,
+	display_title: `ci [release-windows=${sha}]`,
+	status: "completed",
+	conclusion: "success",
+});
+const green = { find: greenReceipt, jobs: () => [windows], request: () => assert.fail("duplicate dispatch") };
 
 test("only a complete green push on the still-current dev batch can release", () => {
-	assert.equal(admission(batch), "eligible");
+	assert.equal(admission(batch, green), "eligible");
 	for (const patch of [
 		{ conclusion: "failure" },
 		{ event: "workflow_dispatch" },
@@ -48,7 +66,7 @@ test("only a complete green push on the still-current dev batch can release", ()
 		{ head_sha: "superseded" },
 		{ head_repository: { full_name: "fork/ompdesk" } },
 	]) {
-		assert.notEqual(admission({ ...batch, run: { ...batch.run, ...patch } }), "eligible");
+		assert.notEqual(admission({ ...batch, run: { ...batch.run, ...patch } }, green), "eligible");
 	}
 	for (const patch of [
 		{ jobs: jobs.slice(1) },
@@ -57,8 +75,60 @@ test("only a complete green push on the still-current dev batch can release", ()
 		{ main: batch.dev },
 		{ publicTag: "v0.9.0" },
 	])
-		assert.notEqual(admission({ ...batch, ...patch }), "eligible");
-	assert.equal(admission({ ...batch, changes: 1, exceptional: true }), "eligible");
+		assert.notEqual(admission({ ...batch, ...patch }, green), "eligible");
+	assert.equal(admission({ ...batch, changes: 1, exceptional: true }, green), "eligible");
+});
+
+test("a finished Windows receipt needs the exact SHA, full set, successful job and successful proof step", () => {
+	for (const receipt of [
+		[],
+		[{ ...windows, conclusion: "failure" }],
+		[{ ...windows, conclusion: "cancelled" }],
+		[{ ...windows, conclusion: "skipped" }],
+		[{ ...windows, steps: [] }],
+		[{ ...windows, steps: [{ ...windows.steps[0], conclusion: "skipped" }] }],
+	]) {
+		assert.match(admission(batch, { ...green, jobs: () => receipt }), /win-e2e run 67890/);
+	}
+	for (const patch of [
+		{ conclusion: "failure" },
+		{ head_sha: "ancestor" },
+		{ event: "push" },
+		{ display_title: "manual probe" },
+		{ head_repository: { full_name: "another/ompdesk" } },
+	]) {
+		assert.notEqual(admission(batch, { ...green, find: sha => ({ ...greenReceipt(sha), ...patch }) }), "eligible");
+	}
+});
+
+test("only a qualifying batch requests Windows, once even before its receipt is visible", () => {
+	const dir = mkdtempSync(join(tmpdir(), "windows-receipts-"));
+	onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+	const dispatch = vi.fn();
+	const find = vi.fn();
+	const evidence = { ...green, find, request: sha => requestOnce(dir, sha, dispatch) };
+	assert.equal(admission({ ...batch, changes: 2 }, evidence), "batch too small");
+	assert.equal(find.mock.calls.length, 0);
+	assert.equal(dispatch.mock.calls.length, 0);
+	assert.match(admission(batch, evidence), /waiting for the Windows receipt/);
+	assert.match(admission(batch, evidence), /waiting for the Windows receipt/);
+	assert.deepEqual(dispatch.mock.calls, [[batch.dev]]);
+	find.mockReturnValue({ ...greenReceipt(batch.dev), status: "queued", conclusion: null });
+	assert.match(admission(batch, evidence), /waiting.*67890/);
+	find.mockReturnValue({ ...greenReceipt(batch.dev), conclusion: "cancelled" });
+	assert.match(admission(batch, evidence), /67890.*cancelled/);
+	assert.deepEqual(dispatch.mock.calls, [[batch.dev]]);
+});
+
+test("a lost dispatch acknowledgment is not a reason to submit a second run", () => {
+	const dir = mkdtempSync(join(tmpdir(), "windows-uncertain-"));
+	onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+	const dispatch = vi.fn(() => {
+		throw Error("lost acknowledgement");
+	});
+	assert.throws(() => requestOnce(dir, batch.dev, dispatch), /lost acknowledgement/);
+	requestOnce(dir, batch.dev, dispatch);
+	assert.equal(dispatch.mock.calls.length, 1);
 });
 
 test("an exact candidate stays pinned and a competing release cannot replace the winner", () => {
@@ -84,20 +154,20 @@ test("an exact candidate stays pinned and a competing release cannot replace the
 	releaseGit("-C", join(cwd, "tree"), "fetch", "-q", join(cwd, "remote.git"), "main");
 	assert.ok(existsSync(join(cwd, "tree", ".git", "FETCH_HEAD")));
 	assert.equal(existsSync(join(cwd, "unrelated.git", "FETCH_HEAD")), false);
-	const green = make("feature batch");
+	const firstCandidate = make("feature batch");
 	local("push", "-q", "origin", "HEAD:dev");
 	const winner = make("release: v1.1.0");
 	local("push", "-q", "origin", `${winner}:main`);
-	local("checkout", "-q", "--detach", green);
+	local("checkout", "-q", "--detach", firstCandidate);
 	make("feat: sort");
 	make("fix: fold");
 	const later = make("perf: search");
 	local("push", "-q", "origin", `${later}:dev`);
-	local("checkout", "-q", "--detach", green);
+	local("checkout", "-q", "--detach", firstCandidate);
 	make("different cut of same batch");
 	assert.notEqual(spawnSync("git", ["-C", "tree", "push", "origin", "HEAD:main"], opts).status, 0);
 	assert.equal(git("--git-dir=remote.git", "rev-parse", "main"), winner);
-	assert.equal(git("--git-dir=remote.git", "rev-parse", "main^"), green);
+	assert.equal(git("--git-dir=remote.git", "rev-parse", "main^"), firstCandidate);
 	assert.equal(git("--git-dir=remote.git", "rev-parse", "dev"), later);
 	assert.equal(spawnSync("git", ["-C", "tree", "merge-base", "--is-ancestor", winner, later], opts).status, 1);
 	local("checkout", "-q", "--detach", later);
@@ -114,8 +184,8 @@ test("an exact candidate stays pinned and a competing release cannot replace the
 		publicTag: "v1.1.0",
 		changes: Number(local("rev-list", "--count", "--no-merges", `${winner}..${reconciled}`)),
 	};
-	assert.notEqual(admission({ ...next, run: { ...batch.run, head_sha: later } }), "eligible");
-	assert.equal(admission({ ...next, run: { ...batch.run, head_sha: reconciled } }), "eligible");
+	assert.notEqual(admission({ ...next, run: { ...batch.run, head_sha: later } }, green), "eligible");
+	assert.equal(admission({ ...next, run: { ...batch.run, head_sha: reconciled } }, green), "eligible");
 	const second = make("release: v1.2.0");
 	local("push", "-q", "origin", `${second}:main`);
 	assert.equal(git("--git-dir=remote.git", "rev-parse", "main^"), reconciled);
