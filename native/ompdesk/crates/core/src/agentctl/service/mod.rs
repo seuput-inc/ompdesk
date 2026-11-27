@@ -1306,6 +1306,11 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
             let given = args.get("args").cloned().unwrap_or(Value::Null);
             Reply::json(&control.run(&caller, &tool, given, call_id).await)
         }
+        "acceptItemOpen" => reply(control.accept_item_open(
+            &text_arg(&args, "callerTabId", method)?,
+            &args_of(args["effect"].clone(), method)?,
+            &text_arg(&args, "tabId", method)?,
+        )),
         "childrenOf" => Reply::json(&control.children_of(&text_arg(&args, "callerTabId", method)?)),
         "personClosedChildren" => {
             let fates = control.fates();

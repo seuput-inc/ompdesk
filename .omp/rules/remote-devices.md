@@ -98,6 +98,7 @@ globs:
 
 ### Bots of a paired host
 - A host's bots and items cross every link with no setting (`host.bots.list`, the `host.bots.changed` event; a change goes back as `host.bots.command`), served and kept by the cores (control-tools › Bots, items and rooms › On every paired computer). `devices.ts` only carries them: it reads a host's copy as its link comes up (and once the control tools exist, `botsReady`), passes each change to the core and reads again when one does not apply, tells the link going down (the copy stays, `bots-remote.json`) and forgets a removed host. No device permission beyond pairing: a paired computer is its owner's; an item answer counts against the device's per-device model limit (`#metered`). An older host answers `unsupported` and lists no bots; an older device drops the event.
+- A bot's `reach` permits messages to the bot, not item assignments. Neither an item in the shared board snapshot nor access to its chat grants a remote worker a claim. A managed open refuses a peer without item-fencing support; it does not fall back to an ordinary remote open.
 
 ### Files attached to a host's tab
 - A file that is no text to inline goes to the host: a document stock reads through markit by its name or type (PDF, Office, OpenDocument, RTF, EPUB, HWP, whatever its head looks like, since a PDF can hold no NUL in its first 8,000 bytes), any other file binary by those bytes, or one past the 5 MB inline cap. Text files still go inline; pictures as image content.

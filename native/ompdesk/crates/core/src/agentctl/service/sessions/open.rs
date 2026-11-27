@@ -21,7 +21,7 @@ use crate::agentctl::service::text::{
     folder_key, label, open_in_text, response_data, start_failure, unreached_text, with_dispatch,
 };
 use crate::agentctl::service::types::{
-    ChildWorktree, ControlDevice, ControlTab, ModelInfo, OpenArgs, OpenOne, OpenedChild,
+    ChildWorktree, ControlDevice, ControlTab, ItemOpen, ModelInfo, OpenArgs, OpenOne, OpenedChild,
     RpcResponse, SpawnRequest, SpawnWorktree, StoredSession, WorktreeArg, WorktreeRemoval,
 };
 use crate::agentctl::service::util::Flight;
@@ -30,6 +30,7 @@ use crate::agentctl::service::wrap::{agent_task_title, dispatch_mark, wrap_agent
 struct OpeningItem<'a> {
     control: &'a AgentControl,
     id: &'a str,
+    effect: ItemOpen,
 }
 
 impl Drop for OpeningItem<'_> {
@@ -66,6 +67,46 @@ pub struct OpenCommand<'a> {
 static RESERVED: AtomicU64 = AtomicU64::new(0);
 
 impl AgentControl {
+    pub(in crate::agentctl::service) fn accept_item_open(
+        &self,
+        caller_id: &str,
+        effect: &ItemOpen,
+        tab_id: &str,
+    ) -> R<bool> {
+        let state = self.host.state();
+        let caller = state
+            .tabs
+            .iter()
+            .find(|tab| tab.tab_id == caller_id)
+            .ok_or_else(|| Fail::Tool("The assigning bot chat is gone.".into()))?;
+        let (bot, mut work) = self
+            .items()
+            .get(&effect.item)
+            .filter(|item| item.is_open())
+            .and_then(|item| Some((item.bot.clone(), item.work.clone()?)))
+            .ok_or_else(|| Fail::Tool("No such managed open.".into()))?;
+        if !self.item_assigner(caller, &bot)
+            || Some(&work.requested_by) != caller.session_path.as_ref()
+            || work.generation != effect.generation
+            || work.effect_key != effect.effect_key
+        {
+            return fail("The managed open is no longer authorized.");
+        }
+        let mut store = self.items();
+        if store
+            .get(&effect.item)
+            .is_none_or(|item| !item.is_open() || item.work.as_ref() != Some(&work))
+        {
+            return fail("The item's reservation changed.");
+        }
+        if work.accepted_tab.is_some() {
+            return Ok(false);
+        }
+        work.accepted_tab = Some(tab_id.to_owned());
+        store.commit_work(&effect.item, work).map_err(Fail::Tool)?;
+        Ok(true)
+    }
+
     /// The commands of an open to the child `tab_id`. None has a deadline (the owner's rule: no fixed time limit ends
     /// work as an error): a command is waited for as long as the child lives, and only a child that closed, exited or
     /// failed ends it, with the reason its omp gave. A child that answers `sidecar_not_ready` or
@@ -422,7 +463,7 @@ impl AgentControl {
         } else {
             None
         };
-        let _opening_item = if let Some(id) = &args.item {
+        let opening_item = if let Some(id) = &args.item {
             let Some((bot, sender)) = owner.as_deref().zip(caller.session_path.as_deref()) else {
                 return fail("item works only from a bot's chat.");
             };
@@ -441,22 +482,31 @@ impl AgentControl {
                         Fail::Tool("No open item with that address on this board.".into())
                     })?;
                 if item.work.is_some() {
-                    false
+                    None
                 } else {
+                    let mut random = [0; 16];
+                    crate::sys::random(&mut random).map_err(|e| Fail::other(e.to_string()))?;
+                    let effect = ItemOpen {
+                        item: id.clone(),
+                        generation: 1,
+                        effect_key: crate::hex(&random),
+                    };
                     store
                         .commit_work(
                             id,
                             ItemWork {
-                                generation: 1,
+                                generation: effect.generation,
+                                effect_key: effect.effect_key.clone(),
+                                accepted_tab: None,
                                 requested_by: sender.to_owned(),
                                 session: None,
                             },
                         )
                         .map_err(Fail::Tool)?;
-                    true
+                    Some(effect)
                 }
             };
-            if !reserved {
+            let Some(effect) = reserved else {
                 let opening = self.mem().item_opens.get(id).cloned();
                 drop(assignment);
                 if let Some(opening) = opening {
@@ -465,12 +515,31 @@ impl AgentControl {
                 if !self.item_assigner(caller, bot) {
                     return fail("The assigning bot chat changed.");
                 }
-                let store = self.items();
-                let work = store
+                let state = self.host.state();
+                let mut store = self.items();
+                let mut work = store
                     .get(id)
                     .filter(|item| item.bot == bot && item.is_open())
-                    .and_then(|item| item.work.as_ref())
+                    .and_then(|item| item.work.clone())
                     .ok_or_else(|| Fail::Tool("The item's reservation changed.".into()))?;
+                if work.session.is_none()
+                    && let Some(accepted) = &work.accepted_tab
+                {
+                    let mut matches = state.tabs.iter().filter(|tab| {
+                        tab.device.is_none()
+                            && !tab.viewing
+                            && !tab.session_moved
+                            && tab.opened_by_session.as_ref() == Some(&work.requested_by)
+                            && (tab.tab_id == *accepted || tab.former_ids.contains(accepted))
+                    });
+                    if let Some(path) = matches.next().and_then(|tab| tab.session_path.as_ref())
+                        && !path.is_empty()
+                        && matches.next().is_none()
+                    {
+                        work.session = Some(path.clone());
+                        store.commit_work(id, work.clone()).map_err(Fail::Tool)?;
+                    }
+                }
                 return Ok(OpenResult {
                     held: Some(format!(
                         "Item {id} generation {} {} on this computer: {}.",
@@ -484,9 +553,13 @@ impl AgentControl {
                     )),
                     ..Default::default()
                 });
-            }
+            };
             self.mem().item_opens.insert(id.clone(), Flight::new());
-            Some(OpeningItem { control: self, id })
+            Some(OpeningItem {
+                control: self,
+                id,
+                effect,
+            })
         } else {
             None
         };
@@ -495,6 +568,7 @@ impl AgentControl {
             .spawn(
                 &caller.tab_id,
                 &SpawnRequest {
+                    item_open: opening_item.as_ref().map(|open| open.effect.clone()),
                     folder: if session_path.is_some() {
                         None
                     } else {
@@ -532,6 +606,20 @@ impl AgentControl {
             Err(error) => return Err(error),
         };
         let tab_id = spawned.tab_id.clone();
+        if let Some(open) = &opening_item
+            && !self
+                .items()
+                .get(open.id)
+                .and_then(|item| item.work.as_ref())
+                .is_some_and(|work| {
+                    work.effect_key == open.effect.effect_key
+                        && work.accepted_tab.as_ref() == Some(&tab_id)
+                })
+        {
+            return fail(
+                "The worker host did not confirm the reserved open; no first message was sent.",
+            );
+        }
         let worktree = spawned.worktree.clone();
         let bot_spawn = match owner.as_deref() {
             Some(id) => Some((
@@ -809,7 +897,8 @@ impl AgentControl {
                 .filter(|item| item.is_open())
                 .and_then(|item| item.work.clone())
                 .filter(|work| {
-                    work.session.is_none()
+                    work.accepted_tab.as_deref() == Some(tab_id)
+                        && work.session.is_none()
                         && Some(&work.requested_by) == caller.session_path.as_ref()
                 })
                 .ok_or_else(|| Fail::Tool("The item's reservation changed.".into()))?;

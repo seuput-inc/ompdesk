@@ -23,7 +23,7 @@ A bot by name: `ompdesk_session_send {"session":"bot:<name>"}` reaches its home 
 
 ## `ompdesk_item` (a bot's chat only)
 
-`item` is its number (`3`, `#3`) or id. `action`:
+`item` is its number (`3`, `#3`) or immutable ID. On a board that rejects a number for a write, use the ID from `list`. `action`:
 - `add` — `title`, `description`, `done_means`, `status` (default `planned`).
 - `set` — `item` and any of `status` (`planned`, `working`, `waiting`, `needs_you`, `done`, `canceled`), `title`, `description`, `done_means`, `ask` with `options` and `recommended` (a question only the owner can answer: the item becomes `needs_you`, and their answer reaches you as a message that starts a turn), `asks` (up to 5 questions at once, each `{question, options, recommended, multi}`; `ask` is then the words around them, and the owner answers them in one message, a line `Question → answer` each), `wait` with `until` (what it waits on outside you and the owner: the item becomes `waiting`), `snooze_until` (hidden until then; `""` wakes it). A new question or a close ends a snooze.
 - `withdraw` — close your question when it no longer applies. Give the `item`, the `question` id and a `note` explaining why.
@@ -37,7 +37,11 @@ Post the choice on the item, for example `{"action":"set","item":"3","ask":"Whic
 
 Use the current question id from `set`, `show`, or `list`. If the question changed, read it again. Closing a question removes it from the inbox, keeps the item working and records your note as the bot's, not the owner's. Leave work that requires the owner's answer blocked. Say whether you withdrew the question or decided it yourself, and that the owner did not answer.
 
-Code work goes to sessions: `ompdesk_session_open {"message": …, "item": 3, "folder": <project>}` links each session it opens to the item and a planned item becomes working; a project folder in git opens in a worktree of its own unless you pass `worktree: false`. While every linked session waits for a usage limit the item says until when, and the item's Activity shows each linked session's done or blocked report. The owner's changes to an item reach you as quiet notes, once each; several items the owner moves at once are one note. A snooze alone is not sent.
+From a bot's chat, open one worker for one item: `ompdesk_session_open {"item":"<id from list>","folder":"<project>","message":"Implement the agreed change."}`. Another open of that item returns its holder or pending reservation. Do not repeat the open without `item`. Use distinct items for parallel workers. A local git project gets its own worktree unless you pass `worktree: false`.
+
+Only the assigned worker can confirm its own assignment with `ompdesk_item {"action":"claim","item":"<immutable id>","generation":1}`. Use the generation returned by the open. Linking an existing session or sending it a message does not assign it.
+
+While every linked session waits for a usage limit the item says until when. Activity shows each linked session's done or blocked report. Owner edits arrive as quiet notes; a move of several items produces one note, a snooze alone none.
 
 ## `ompdesk_room` (a bot's chat only)
 

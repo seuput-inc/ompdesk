@@ -87,6 +87,7 @@ import type { Pace } from "../session-pace";
 import { SUPERVISOR_STOPPED_CODE } from "../setup/supervisor";
 import type { ControlTabInfo, SidecarPool, TabActivity } from "../sidecar-pool";
 import type { SidecarLike } from "../sidecar-types";
+import { nextSnowflake } from "../snowflake";
 import { recordTurnStop } from "../turn-stop-log";
 import { type ClientWindow, isWebWindow } from "../web/client-window";
 import type { FileEditReports, FileEditTarget } from "../web/file-edit-reports";
@@ -243,7 +244,12 @@ export interface AgentControlHostDeps {
 		command: RpcCommand,
 		timeoutMs?: number,
 	) => Promise<RpcResponse>;
-	spawnTab: (win: ClientWindow, payload: IpcSpawnTabPayload, opener?: string) => Promise<IpcSpawnTabResult | null>;
+	spawnTab: (
+		win: ClientWindow,
+		payload: IpcSpawnTabPayload,
+		opener?: string,
+		reservedTabId?: string,
+	) => Promise<IpcSpawnTabResult | null>;
 	/** `set`/`changed` persist a list main owns (closed opened sessions) and tell every window; absent where there is no store. */
 	prefs: { get(key: string): unknown; set?(key: string, value: unknown): void; changed?(key: string): void };
 	/** A paired host's display name for a deviceId. */
@@ -1053,6 +1059,13 @@ export class AgentControlRuntime {
 			throw new Error(
 				"A worktree on another device needs that device's repository: pass its absolute folder (the checkout to branch from).",
 			);
+		let reservedTabId: string | undefined;
+		if (request.itemOpen) {
+			if (elsewhere || outside) throw new Error("This host cannot accept a managed open for another computer.");
+			reservedTabId = nextSnowflake();
+			if (!(await this.control.acceptItemOpen(callerTabId, request.itemOpen, reservedTabId)))
+				throw new Error("This managed open was already accepted. No second worker was started.");
+		}
 		let worktree: IpcTabWorktree | undefined;
 		let prepared: string | null = null;
 		if (request.worktree && cwd !== undefined) {
@@ -1084,6 +1097,7 @@ export class AgentControlRuntime {
 				...(request.task ? { task: request.task } : {}),
 			},
 			request.join || request.tag || outside ? undefined : callerTabId,
+			reservedTabId,
 		);
 		if (!result?.tabId) {
 			// The worktree made for a session that never started goes with it (git's own commands, never forced).

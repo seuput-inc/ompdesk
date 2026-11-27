@@ -2087,6 +2087,81 @@ async fn an_item_reads_stale_snoozed_and_limited_from_what_it_links() {
 }
 
 #[tokio::test]
+async fn managed_item_open_recovers_only_a_tab_accepted_by_the_assigner() {
+    use crate::agentctl::journal::items::ItemWork;
+    let root = Scratch::new();
+    let files = kept_files(&root);
+    let (control, _, bot) = ada_in(&root, &files, Mails::default(), |_, _| None).await;
+    let add = control
+        .run(
+            "bot1",
+            "ompdesk_item",
+            json!({"action":"add","title":"Interrupted"}),
+            None,
+        )
+        .await;
+    assert!(!add.is_error, "{}", add.text);
+    let id = control.items().find(&bot, "#1").unwrap().id.clone();
+    let reservation = ItemWork {
+        generation: 1,
+        effect_key: "accepted-effect".into(),
+        requested_by: "/s/bot.jsonl".into(),
+        accepted_tab: Some("before-restart".into()),
+        session: None,
+    };
+    control.items().commit_work(&id, reservation).unwrap();
+    drop(control);
+    let mut state = bot_world(&root.0.join("ada").to_string_lossy());
+    state["tabs"][3]["formerIds"] = json!(["before-restart"]);
+    state["tabs"][3]["openedBySession"] = json!("/s/wrong.jsonl");
+    for proven in [false, true] {
+        if proven {
+            state["tabs"][3]["openedBySession"] = json!("/s/bot.jsonl");
+        }
+        let (restarted, asked) = rig_files(
+            state.clone(),
+            Caps::default(),
+            &files,
+            bots_main(Mails::default(), |_, _| None),
+        );
+        let receipt = restarted
+            .run(
+                "bot1",
+                "ompdesk_session_open",
+                json!({"item":id,"message":"go"}),
+                None,
+            )
+            .await;
+        assert!(!receipt.is_error, "{}", receipt.text);
+        assert_eq!(
+            receipt
+                .text
+                .contains("held on this computer: /s/work.jsonl"),
+            proven
+        );
+        assert_eq!(
+            restarted
+                .items()
+                .get(&id)
+                .unwrap()
+                .work
+                .as_ref()
+                .unwrap()
+                .session
+                .is_some(),
+            proven
+        );
+        assert!(
+            !asked
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|(method, args)| method == "spawn" || args["command"]["type"] == "prompt")
+        );
+    }
+}
+
+#[tokio::test]
 async fn managed_item_open_commits_before_spawn_and_first_prompt() {
     use crate::agentctl::journal::items::Items;
     use crate::disk::saves::Saves;
@@ -2095,10 +2170,32 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
     let root = Scratch::new();
     let file = root.0.join("items.json");
     let disk = file.clone();
+    let receiver = Arc::new(Mutex::new(None::<AgentControl>));
+    let receiving = receiver.clone();
     let (control, asked, bot) = ada(&root, Mails::default(), move |method, args| match method {
         "spawn" => {
             let mut stored = Items::new(Some(disk.clone()));
-            assert!(stored.all(0.0)[0].work.as_ref().unwrap().session.is_none());
+            let effect: super::super::types::ItemOpen =
+                serde_json::from_value(args["request"]["itemOpen"].clone()).unwrap();
+            let work = stored.all(0.0)[0].work.clone().unwrap();
+            assert_eq!(work.effect_key, effect.effect_key);
+            assert!(work.session.is_none() && work.accepted_tab.is_none());
+            let service = receiving.lock().unwrap().take().unwrap();
+            assert!(service.accept_item_open("send1", &effect, "work1").is_err());
+            assert!(service.accept_item_open("bot1", &effect, "work1").unwrap());
+            assert!(!service.accept_item_open("bot1", &effect, "other").unwrap());
+            let receipt = Items::new(Some(disk.clone()));
+            assert_eq!(
+                receipt
+                    .get(&effect.item)
+                    .unwrap()
+                    .work
+                    .as_ref()
+                    .unwrap()
+                    .accepted_tab
+                    .as_deref(),
+                Some("work1")
+            );
             assert!(args["request"]["worktree"].is_object());
             Some(json!({"tabId": "work1", "worktree": worktree("managed")}))
         }
@@ -2116,6 +2213,7 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
         _ => None,
     })
     .await;
+    *receiver.lock().unwrap() = Some(control.clone());
     let full = Arc::new(AtomicBool::new(false));
     let inject = full.clone();
     let saves = Saves::manual(Box::new(move |file, bytes, mode, dir_mode| {

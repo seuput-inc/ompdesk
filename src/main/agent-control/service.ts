@@ -218,6 +218,7 @@ export interface ControlDevice {
 
 /** What `host.spawn` is asked for. */
 export interface SpawnRequest {
+	itemOpen?: { item: string; generation: number; effectKey: string };
 	folder?: string;
 	/** A git worktree for the new session (`omp/agent/<slug>` branch off `base`, default the caller's HEAD). */
 	worktree?: { branch?: string; base?: string };
@@ -908,6 +909,10 @@ export class AgentControl {
 	/** Programmatic open (Autopilot): the same path as the tool, with a tag the tool never sets. */
 	openSessions(callerTabId: string, sessions: readonly OpenOne[], tag?: string): Promise<string[]> {
 		return this.#call("openSessions", { callerTabId, sessions, ...(tag ? { tag } : {}) });
+	}
+
+	acceptItemOpen(callerTabId: string, effect: NonNullable<SpawnRequest["itemOpen"]>, tabId: string): Promise<boolean> {
+		return this.#call("acceptItemOpen", { callerTabId, effect, tabId });
 	}
 
 	/**

@@ -123,6 +123,7 @@ export async function spawnTabForWindow(
 	win: ClientWindow,
 	payload: IpcSpawnTabPayload,
 	opener?: string,
+	reservedTabId?: string,
 ): Promise<IpcSpawnTabResult | null> {
 	const device = typeof payload?.device === "string" && payload.device ? payload.device : undefined;
 	const sessionPath =
@@ -198,7 +199,7 @@ export async function spawnTabForWindow(
 		: canonicalCwd(
 				neutral ? await deps.defaultWorkspace() : (home ?? requested ?? callerCwd ?? (await deps.initialCwd())),
 			);
-	const tabId = nextSnowflake();
+	const tabId = reservedTabId ?? nextSnowflake();
 	// A no-path tab is an explicit New Tab action. It must start empty even
 	// when the CLI's persistent autoResume setting is enabled for the project.
 	const task = typeof payload?.task === "string" && payload.task ? payload.task : undefined;

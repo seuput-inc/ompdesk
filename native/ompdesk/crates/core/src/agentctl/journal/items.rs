@@ -149,6 +149,9 @@ pub struct ItemEvent {
 pub struct ItemWork {
     pub generation: u64,
     pub requested_by: String,
+    pub effect_key: String,
+    /// Receipt for the open effect, not the holder address. Written before main creates a worktree or tab.
+    pub accepted_tab: Option<String>,
     /// None while the reserved open has not bound its new saved session.
     pub session: Option<String>,
 }

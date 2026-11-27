@@ -438,6 +438,8 @@ pub struct ControlDevice {
 #[serde(rename_all = "camelCase")]
 pub struct SpawnRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_open: Option<ItemOpen>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<SpawnWorktree>,
@@ -454,6 +456,14 @@ pub struct SpawnRequest {
     pub task: Option<String>,
     #[serde(skip_serializing_if = "is_false")]
     pub join: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemOpen {
+    pub item: String,
+    pub generation: u64,
+    pub effect_key: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
