@@ -44,6 +44,7 @@ export interface Bot {
 	autoApprove: boolean;
 	/** Paired devices (by id) whose agents may message it; empty = this computer's only. */
 	reach: string[];
+	/** Absent with empty reach: legacy, denied until the owner chooses. False: explicit reach list. */
 	allPaired?: boolean;
 	/** Days an open item goes untouched before it reads as stale; null = never. */
 	staleDays: number | null;
@@ -279,6 +280,7 @@ export interface BotSeedSkill {
 
 export type BotsRequest =
 	| { action: "get" }
+	| { action: "allowLegacyPeers"; ids: string[] }
 	| {
 			action: "create";
 			name: string;

@@ -5,6 +5,7 @@
 //! What the record does not hold is read when the state is listed: `specialty` from the folder's `SOUL.md`
 //! (`specialty`), the open items and the Needs-you count from `items.rs`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -35,7 +36,8 @@ pub struct BotRecord {
     pub reach: Vec<String>,
     /// New bots accept messages from authenticated peers until the owner sets a reach list.
     /// Older journals have no marker: preserve their list, including an explicit empty list.
-    pub all_paired: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub all_paired: Option<bool>,
     /// None = never stale.
     pub stale_days: Option<f64>,
     /// Its Look around schedule's id.
@@ -150,6 +152,31 @@ impl Bots {
             .filter(|bot| bot.paused)
             .flat_map(|bot| bot.home.iter().chain(bot.sessions.iter()).cloned())
             .collect()
+    }
+
+    /// A stale selection must not replace an explicit reach decision made after the dialog opened.
+    pub fn allow_legacy_peers(&mut self, ids: &HashSet<&str>) -> bool {
+        if ids.is_empty()
+            || self
+                .bots
+                .iter()
+                .filter(|bot| {
+                    ids.contains(bot.id.as_str())
+                        && bot.all_paired.is_none()
+                        && bot.reach.is_empty()
+                })
+                .count()
+                != ids.len()
+        {
+            return false;
+        }
+        for bot in &mut self.bots {
+            if ids.contains(bot.id.as_str()) {
+                bot.all_paired = Some(true);
+            }
+        }
+        self.save();
+        true
     }
 
     fn save(&self) {

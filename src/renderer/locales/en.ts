@@ -8421,6 +8421,9 @@ export const en: Record<string, string> = {
 	"bots.access.title": "Who can ask",
 	"bots.access.onlyYou": "Only you",
 	"bots.access.allPaired": "Paired computers",
+	"bots.access.legacyTitle": "Set up paired access for existing bots",
+	"bots.access.legacyHint":
+		"Only selected bots will accept messages from all paired computers. Other bots keep their current access.",
 	"bots.access.summaryYou": "Only you can ask {bot}.",
 	"bots.access.summary": "You and {devices} can ask {bot}.",
 	"bots.access.what": "Their agents can message it and hand it work; it answers in its home chat.",

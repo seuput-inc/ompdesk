@@ -2243,6 +2243,12 @@ async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_onc
         refused.message()
     );
     assert!(host.bot_named("Cy").is_err());
+    for request in [
+        json!({"action":"allowLegacyPeers", "ids":[ada_id]}),
+        json!({"action":"update", "id":ada_id, "reach":["dev-b"]}),
+    ] {
+        assert!(host.bots_from(request, "dev-b", "MacBook").await.is_err());
+    }
 
     // The device: its main carries a change of the host's to it (`botsCommand`) and hands back the host's answer.
     let carried = answer.clone();

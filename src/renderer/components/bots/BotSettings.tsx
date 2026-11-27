@@ -246,10 +246,12 @@ function BotSettingsRoot({
 								? String(bot.reach.length + 1)
 								: t("bots.access.onlyYou")
 					}
-					onClick={() => onPage("access")}
+					onClick={bot.device ? undefined : () => onPage("access")}
 					size="sm"
 					title={t("bots.access.title")}
-					trailing={<ChevronRight aria-hidden className="size-4 text-(--sc-text-subtle)" />}
+					trailing={
+						bot.device ? undefined : <ChevronRight aria-hidden className="size-4 text-(--sc-text-subtle)" />
+					}
 				/>
 				<ListRow
 					description={t("bots.settings.skillsHint")}

@@ -2653,8 +2653,10 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return machineFor(caller, device).schedules(request as SchedulesRequest);
 	});
 	// The Bots page: this computer's bots and their items (the owner's own; agents use ompdesk_bot and ompdesk_item).
-	ipc.handle(BOTS_COMMAND, (_caller, request: unknown) => {
+	ipc.handle(BOTS_COMMAND, (caller, request: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid bots request");
+		if ("action" in request && request.action === "allowLegacyPeers" && !caller.browserWindow)
+			throw new Error("Set up legacy bot access on the owning computer.");
 		return agentControl.bots(request as BotsCall);
 	});
 	// Settings › Schedules › Email accounts: this computer's own (a password goes in and never comes back out).

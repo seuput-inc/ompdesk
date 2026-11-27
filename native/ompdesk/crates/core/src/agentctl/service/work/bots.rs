@@ -255,7 +255,7 @@ impl AgentControl {
             id: new_id("bot"),
             name: name.to_owned(),
             folder: folder_text,
-            all_paired: true,
+            all_paired: Some(true),
             stale_days: Some(STALE_DAYS),
             created_at: crate::aimemory::value::iso(self.now().max(0.0) as u64),
             ..BotRecord::default()
@@ -638,7 +638,7 @@ impl AgentControl {
                         record.stale_days = (days > 0.0).then_some(days);
                     }
                     if let Some(reach) = reach {
-                        record.all_paired = false;
+                        record.all_paired = Some(false);
                         record.reach = reach;
                     }
                 })?;
@@ -650,7 +650,7 @@ impl AgentControl {
                     changed
                         .stale_days
                         .map_or_else(|| "never".to_owned(), |days| format!("{days} day(s)")),
-                    if changed.all_paired {
+                    if changed.all_paired == Some(true) {
                         "paired computers".to_owned()
                     } else if changed.reach.is_empty() {
                         "this computer only".to_owned()
@@ -920,7 +920,7 @@ impl AgentControl {
         device_name: Option<&str>,
     ) -> R<&'a str> {
         if let Some(device) = device
-            && !bot.all_paired
+            && bot.all_paired != Some(true)
             && !bot.reach.iter().any(|known| known == device)
         {
             return fail(format!(
@@ -1103,7 +1103,9 @@ impl AgentControl {
             "roomAskStop" => return self.room_ask_stop(&request).await,
             _ => {}
         }
-        if !FROM_DEVICE.contains(&action.as_str()) {
+        if !FROM_DEVICE.contains(&action.as_str())
+            || (action == "update" && request.get("reach").is_some())
+        {
             return fail(format!(
                 "{device_name} cannot {action} the bots of this computer."
             ));
@@ -1153,6 +1155,20 @@ impl AgentControl {
         let mut refused: Option<&'static str> = None;
         match request.get("action").and_then(Value::as_str).unwrap_or("") {
             "get" => {}
+            "allowLegacyPeers" => {
+                let ids = request
+                    .get("ids")
+                    .and_then(Value::as_array)
+                    .and_then(|ids| {
+                        ids.iter()
+                            .map(Value::as_str)
+                            .collect::<Option<HashSet<_>>>()
+                    });
+                if !ids.is_some_and(|ids| self.bots().allow_legacy_peers(&ids)) {
+                    return fail("Select existing bots whose paired access has not been set.");
+                }
+                self.bots_changed();
+            }
             "create" => {
                 let bot =
                     self.create_bot(&text("name").unwrap_or_default(), text("folder").as_deref())?;
@@ -1237,7 +1253,7 @@ impl AgentControl {
                         _ => {}
                     }
                     if let Some(reach) = reach {
-                        record.all_paired = false;
+                        record.all_paired = Some(false);
                         record.reach = reach;
                     }
                     if let Some(quiet) = request.get("quiet").and_then(Value::as_array) {

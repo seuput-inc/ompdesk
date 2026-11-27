@@ -6,15 +6,17 @@
  */
 import { ChevronLeft, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { Bot } from "../../../shared/bots";
 import { useT } from "../../lib/i18n";
 import { ensureBots, useBotsStore } from "../../stores/bots";
 import { useSidebarFolds } from "../../stores/sidebar-folds";
 import { toastError } from "../../stores/toast";
+import { webRuntime } from "../../web/runtime";
 import { BotAvatar } from "../bots/BotAvatar";
 import { BotSettings } from "../bots/BotSettings";
 import { openBotDialog } from "../bots/bot-launch";
 import { ensureHiddenCards, setCardHidden, useHiddenCards } from "../chat/bots/hidden-cards";
-import { Badge, Button, EmptyState, ListRow, SectionLabel, SwitchField } from "../common";
+import { Badge, Button, Checkbox, EmptyState, ListRow, Modal, SectionLabel, SwitchField } from "../common";
 import { SettingsSection } from "./SettingsLayout";
 
 export function BotsSection() {
@@ -59,6 +61,7 @@ export function BotsSection() {
 				label={t("bots.settings.showInSidebar")}
 				onCheckedChange={on => useSidebarFolds.getState().setNavHidden("bots", !on)}
 			/>
+			{!webRuntime() && <LegacyPeerAccess bots={bots} />}
 			<HiddenCards />
 			{bots.length === 0 ? (
 				<EmptyState size="row" title={t("bots.section.emptyTitle")} />
@@ -82,6 +85,69 @@ export function BotsSection() {
 				</div>
 			)}
 		</SettingsSection>
+	);
+}
+
+function LegacyPeerAccess({ bots }: { bots: readonly Bot[] }) {
+	const t = useT();
+	const [picked, setPicked] = useState<string[] | null>(null);
+	const [saving, setSaving] = useState(false);
+	const eligible = bots.filter(bot => bot.allPaired === undefined && bot.reach.length === 0);
+	if (eligible.length === 0 && !picked) return null;
+	const title = t("bots.access.legacyTitle");
+	if (!picked)
+		return (
+			<Button className="self-start" onClick={() => setPicked([])} variant="secondary">
+				{title}
+			</Button>
+		);
+	const apply = async () => {
+		setSaving(true);
+		try {
+			await useBotsStore.getState().command({ action: "allowLegacyPeers", ids: picked });
+			setPicked(null);
+		} catch (error) {
+			toastError({ title, error });
+			setPicked([]);
+		} finally {
+			setSaving(false);
+		}
+	};
+	return (
+		<Modal
+			open
+			title={title}
+			description={t("bots.access.legacyHint")}
+			onClose={() => setPicked(null)}
+			footer={
+				<>
+					<Button variant="secondary" onClick={() => setPicked(null)}>
+						{t("common.cancel")}
+					</Button>
+					<Button
+						variant="primary"
+						disabled={saving || !picked.length || picked.some(id => !eligible.some(bot => bot.id === id))}
+						onClick={() => void apply()}
+					>
+						{t("common.apply")}
+					</Button>
+				</>
+			}
+		>
+			{eligible.map(bot => (
+				<label key={bot.id} className="flex items-center gap-2 py-1 text-sc-sm">
+					<Checkbox
+						checked={picked.includes(bot.id)}
+						onChange={event =>
+							setPicked(event.target.checked ? [...picked, bot.id] : picked.filter(id => id !== bot.id))
+						}
+					/>
+					<span>
+						{bot.name} · {bot.id}
+					</span>
+				</label>
+			))}
+		</Modal>
 	);
 }
 
