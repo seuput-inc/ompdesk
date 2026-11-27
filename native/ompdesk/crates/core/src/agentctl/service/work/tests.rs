@@ -1476,10 +1476,12 @@ async fn deleting_a_bot_drops_its_held_mail_with_a_note_to_its_sender_and_remove
         .mail("bot1", "m2", &report("m2"), NOTE)
         .await
         .unwrap();
+    let expected = control
+        .bots_command(json!({"action":"deletePreview","id":id}))
+        .await
+        .unwrap();
     let state = control
-        .bots_command(
-            json!({ "action": "delete", "id": id, "expected": {"chats":1,"workers":0,"kept":0} }),
-        )
+        .bots_command(json!({"action":"delete","id":id,"expected":expected}))
         .await
         .unwrap();
     assert_eq!(state["bots"], json!([]));
@@ -1518,6 +1520,166 @@ async fn deleting_a_bot_drops_its_held_mail_with_a_note_to_its_sender_and_remove
         .map(|(_, args)| args["request"]["id"].clone())
         .collect();
     assert_eq!(deleted, vec![json!("sch-bot")]);
+}
+
+#[tokio::test]
+async fn bot_deletion_requires_the_files_in_the_confirmed_preview() {
+    use crate::agentctl::journal::bots::BotRecord;
+
+    let root = Scratch::new();
+    let a = root.0.join("a.jsonl");
+    let b = root.0.join("b.jsonl");
+    std::fs::write(&a, b"A").unwrap();
+    std::fs::write(&b, b"B").unwrap();
+    let allowed = [a.clone(), b.clone()];
+    let (control, asked) = rig_files(
+        bot_world("/repo"),
+        Caps::default(),
+        &bot_files(&root),
+        move |method, args| match method {
+            "stored" => Ok(json!([])),
+            "bots.cleanupSession" => {
+                let path = Path::new(args["session"].as_str().unwrap());
+                if !allowed.iter().any(|file| file == path) {
+                    return Err(format!("unexpected cleanup target: {}", path.display()));
+                }
+                std::fs::remove_file(path).map_err(|e| e.to_string())?;
+                Ok(Value::Null)
+            }
+            "schedules.command" => Ok(json!({"schedules":[]})),
+            _ => Ok(Value::Null),
+        },
+    );
+    control.bots().add(BotRecord {
+        id: "ada".into(),
+        name: "Ada".into(),
+        folder: "/bots/ada".into(),
+        sessions: vec![a.to_str().unwrap().into()],
+        ..BotRecord::default()
+    });
+    let preview = || control.bots_command(json!({"action":"deletePreview","id":"ada"}));
+    let delete = |expected: &Value| {
+        control.bots_command(json!({"action":"delete","id":"ada","expected":expected}))
+    };
+    let first = preview().await.unwrap();
+    assert_eq!(first["chats"], 1);
+    let digest = first["digest"].as_str().unwrap();
+    assert_eq!(digest.len(), 64);
+    assert!(
+        digest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    );
+    control
+        .bots()
+        .change("ada", |bot| bot.sessions.push(b.to_str().unwrap().into()));
+    let added = delete(&first).await.unwrap()["deleteChanged"].clone();
+    assert_eq!(added, preview().await.unwrap());
+    assert_eq!(added["chats"], 2);
+    control.bots().change("ada", |bot| {
+        bot.sessions.remove(0);
+    });
+    let replacement = delete(&first).await.unwrap()["deleteChanged"].clone();
+    assert_eq!(replacement, preview().await.unwrap());
+    for key in ["chats", "workers", "kept"] {
+        assert_eq!(replacement[key], first[key]);
+    }
+    assert_ne!(replacement["digest"], first["digest"]);
+    assert!(control.bot_named("ada").is_ok());
+    assert!(
+        !asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(m, _)| m == "bots.cleanupSession")
+    );
+    assert_eq!(std::fs::read(&a).unwrap(), b"A");
+    assert_eq!(std::fs::read(&b).unwrap(), b"B");
+    assert_eq!(delete(&replacement).await.unwrap()["bots"], json!([]));
+    assert_eq!(std::fs::read(&a).unwrap(), b"A");
+    assert!(!b.exists());
+    assert!(control.bot_named("ada").is_err());
+}
+
+#[tokio::test]
+async fn bot_deletion_binds_each_workers_device_and_classification() {
+    use crate::agentctl::journal::bots::{BotRecord, BotWorker, WorkerOrigin};
+
+    let root = Scratch::new();
+    let (control, asked) = rig_files(
+        bot_world("/repo"),
+        Caps::default(),
+        &bot_files(&root),
+        |method, _| {
+            Ok(if method == "stored" {
+                json!([])
+            } else {
+                Value::Null
+            })
+        },
+    );
+    let worker = |device: &str, origin| BotWorker {
+        session: "/s/shared.jsonl".into(),
+        device: Some(device.into()),
+        origin: Some(origin),
+        ..BotWorker::default()
+    };
+    control.bots().add(BotRecord {
+        id: "ada".into(),
+        name: "Ada".into(),
+        folder: "/bots/ada".into(),
+        workers: vec![
+            worker("studio", WorkerOrigin::Opened),
+            worker("mini", WorkerOrigin::Handed),
+        ],
+        ..BotRecord::default()
+    });
+    let preview = || control.bots_command(json!({"action":"deletePreview","id":"ada"}));
+    let first = preview().await.unwrap();
+    control.bots().change("ada", |bot| bot.workers.reverse());
+    assert_eq!(preview().await.unwrap(), first);
+    control.bots().change("ada", |bot| {
+        for worker in &mut bot.workers {
+            worker.origin = Some(if worker.device.as_deref() == Some("mini") {
+                WorkerOrigin::Opened
+            } else {
+                WorkerOrigin::Handed
+            });
+        }
+    });
+    let current = preview().await.unwrap();
+    for plan in [&first, &current] {
+        assert_eq!(plan["workers"], 1);
+        assert_eq!(plan["kept"], 1);
+    }
+    assert_ne!(current["digest"], first["digest"]);
+    let request = json!({"action":"delete","id":"ada","expected":first});
+    let reply = control
+        .bots_from(request.clone(), "viewer", "Viewer")
+        .await
+        .unwrap();
+    let (viewer, _) = rig(bot_world("/repo"), Caps::default(), move |method, _| {
+        Ok(if method == "botsCommand" {
+            reply.clone()
+        } else {
+            Value::Null
+        })
+    });
+    viewer.bots_remote(&json!({
+        "device":"host", "name":"Host", "online":true, "change":control.bots_share()
+    }));
+    let received = viewer.bots_command(request).await.unwrap();
+    assert_eq!(received["deleteChanged"], current);
+    assert_eq!(received["remote"][0]["bots"][0]["id"], "ada");
+    assert!(viewer.bots_state().get("deleteChanged").is_none());
+    assert!(control.bot_named("ada").is_ok());
+    assert!(
+        !asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(m, _)| m == "bots.cleanupSession")
+    );
 }
 
 #[tokio::test]
@@ -1578,12 +1740,15 @@ async fn bot_deletion_obeys_chat_homes_and_retries_after_session_cleanup() {
     let delete = |expected: Value| {
         control.bots_command(json!({"action":"delete","id":"ada","expected":expected}))
     };
-    let counts = preview().await.unwrap();
-    assert_eq!(counts, json!({"chats":2,"workers":1,"kept":3}));
-    assert!(
-        delete(json!({"chats":2,"workers":2,"kept":2}))
-            .await
-            .is_err()
+    let expected = preview().await.unwrap();
+    assert_eq!(expected["chats"], 2);
+    assert_eq!(expected["workers"], 1);
+    assert_eq!(expected["kept"], 3);
+    let mut wrong_counts = expected.clone();
+    wrong_counts["workers"] = json!(2);
+    assert_eq!(
+        delete(wrong_counts).await.unwrap()["deleteChanged"],
+        expected
     );
     assert!(
         !asked
@@ -1593,7 +1758,7 @@ async fn bot_deletion_obeys_chat_homes_and_retries_after_session_cleanup() {
             .any(|(method, _)| method == "bots.cleanupSession")
     );
     assert!(
-        delete(counts)
+        delete(expected.clone())
             .await
             .unwrap_err()
             .message()
@@ -1618,7 +1783,21 @@ async fn bot_deletion_obeys_chat_homes_and_retries_after_session_cleanup() {
     for path in ["/s/other.jsonl", "/s/handed.jsonl", "/s/unknown.jsonl"] {
         assert_eq!(actions.get(path), Some(&true), "{path}");
     }
-    delete(preview().await.unwrap()).await.unwrap();
+    let remaining = delete(expected).await.unwrap()["deleteChanged"].clone();
+    assert_eq!(remaining, preview().await.unwrap());
+    assert_eq!(remaining["workers"], 0);
+    assert_eq!(remaining["kept"], 0);
+    assert_eq!(
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(m, _)| m == "bots.cleanupSession")
+            .count(),
+        actions.len()
+    );
+    assert!(control.bot_named("ada").is_ok());
+    delete(remaining).await.unwrap();
     assert!(control.bot_named("ada").is_err());
     assert_eq!(
         control.bot_named("other").unwrap().home.as_deref(),
@@ -1659,7 +1838,10 @@ async fn an_offline_worker_stays_linked_and_the_bot_can_retry() {
         }],
         ..BotRecord::default()
     });
-    let expected = json!({"chats":0,"workers":1,"kept":0});
+    let expected = control
+        .bots_command(json!({"action":"deletePreview","id":"ada"}))
+        .await
+        .unwrap();
     let delete = || control.bots_command(json!({"action":"delete","id":"ada","expected":expected}));
     let reason = delete().await.unwrap_err().message().to_owned();
     assert!(

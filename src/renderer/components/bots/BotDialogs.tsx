@@ -3,14 +3,14 @@
  * Mounted with the other on-demand dialogs.
  */
 
-import { useEffect, useState } from "react";
-import type { Bot, BotDeletePreview } from "../../../shared/bots";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
+import type { BotDeletePreview } from "../../../shared/bots";
 import { translate, useT } from "../../lib/i18n";
 import { useBotsStore } from "../../stores/bots";
 import { toastError } from "../../stores/toast";
 import { ConfirmDialog } from "../common";
 import { BotTemplatesDialog } from "./BotTemplatesDialog";
-import { useBotDialogs } from "./bot-launch";
+import { type BotDialog, useBotDialogs } from "./bot-launch";
 import { HandToBotDialog } from "./HandToBotDialog";
 import { ImportBotDialog } from "./ImportBotDialog";
 import { NewBotDialog } from "./NewBotDialog";
@@ -36,7 +36,7 @@ export function BotDialogs() {
 		case "import":
 			return <ImportBotDialog key="import" onClose={close} />;
 		case "delete":
-			return <DeleteBotDialog bot={dialog.bot} key={dialog.bot.id} onClose={close} onDeleted={dialog.onDeleted} />;
+			return <DeleteBotDialog dialog={dialog} key={dialog.bot.id} onClose={close} />;
 		case "hand":
 			return <HandToBotDialog key="hand" onClose={close} tabId={dialog.tabId} title={dialog.title} />;
 		case "group":
@@ -50,32 +50,78 @@ export function BotDialogs() {
 	}
 }
 
-function DeleteBotDialog({ bot, onClose, onDeleted }: { bot: Bot; onClose: () => void; onDeleted?: () => void }) {
+type DeleteDialog = Extract<BotDialog, { kind: "delete" }>;
+type Review = { dialog: DeleteDialog } & (
+	| { phase: "ready" | "changed" | "deleting"; preview: BotDeletePreview }
+	| { phase: "failed" }
+);
+
+function DeleteBotDialog({ dialog, onClose }: { dialog: DeleteDialog; onClose: () => void }) {
+	const { bot } = dialog;
 	const t = useT();
-	const [expected, setExpected] = useState<BotDeletePreview | null>(null);
+	const [review, setReview] = useState<Review>();
+	const submitted = useRef<Review | undefined>(undefined);
+	const warning = useRef<HTMLParagraphElement>(null);
+	const current = review?.dialog === dialog ? review : undefined;
+	const expected = current && "preview" in current ? current.preview : undefined;
 	useEffect(() => {
 		let open = true;
 		void window.omp.bots.deletePreview({ id: bot.id }).then(
 			preview => {
-				if (open) setExpected(preview);
+				if (open && useBotDialogs.getState().dialog === dialog) setReview({ dialog, phase: "ready", preview });
 			},
 			error => {
-				if (!open) return;
-				onClose();
+				if (!open || useBotDialogs.getState().dialog !== dialog) return;
+				setReview({ dialog, phase: "failed" });
 				toastError({ title: translate("bots.delete.previewFailed"), error });
 			},
 		);
 		return () => {
 			open = false;
+			submitted.current = undefined;
 		};
-	}, [bot.id, onClose]);
+	}, [bot.id, dialog]);
+	useEffect(() => {
+		if (current?.phase === "changed") warning.current?.focus();
+	}, [current]);
+
+	function confirm(event: MouseEvent<HTMLButtonElement>) {
+		if (!current || !expected || submitted.current === current || useBotDialogs.getState().dialog !== dialog) return;
+		if (current.phase === "deleting" || event.detail > 1) return;
+		submitted.current = current;
+		setReview({ dialog, phase: "deleting", preview: expected });
+		void useBotsStore
+			.getState()
+			.command({ action: "delete", id: bot.id, expected })
+			.then(
+				state => {
+					if (submitted.current !== current || useBotDialogs.getState().dialog !== dialog) return;
+					if (state.deleteChanged) {
+						setReview({ dialog, phase: "changed", preview: state.deleteChanged });
+						return;
+					}
+					onClose();
+					dialog.onDeleted?.();
+				},
+				error => {
+					if (submitted.current !== current || useBotDialogs.getState().dialog !== dialog) return;
+					setReview({ dialog, phase: "failed" });
+					toastError({ title: translate("bots.delete.failed"), error });
+				},
+			);
+	}
 	return (
 		<ConfirmDialog
-			busy={!expected}
+			busy={!current || current.phase === "deleting"}
 			confirmLabel={t("bots.delete.confirm")}
 			message={
 				expected ? (
 					<div className="space-y-2">
+						{current?.phase === "changed" && (
+							<p className="font-semibold" ref={warning} tabIndex={-1}>
+								{t("bots.delete.changed")}
+							</p>
+						)}
 						<p>{t("bots.delete.message")}</p>
 						{(["chats", "workers", "kept"] as const).map(kind =>
 							expected[kind] > 0 ? (
@@ -88,18 +134,18 @@ function DeleteBotDialog({ bot, onClose, onDeleted }: { bot: Bot; onClose: () =>
 						<p>{t("bots.delete.folder", { folder: bot.folder })}</p>
 					</div>
 				) : (
-					t("bots.delete.checking")
+					t(current?.phase === "failed" ? "bots.delete.checkAgain" : "bots.delete.checking")
 				)
 			}
-			onCancel={onClose}
-			onConfirm={() => {
-				if (!expected) return;
-				onClose();
-				void useBotsStore
-					.getState()
-					.command({ action: "delete", id: bot.id, expected })
-					.then(onDeleted, error => toastError({ title: t("bots.delete.failed"), error }));
-			}}
+			onCancel={
+				current?.phase === "deleting"
+					? null
+					: () => {
+							if ((!current || submitted.current !== current) && useBotDialogs.getState().dialog === dialog)
+								onClose();
+						}
+			}
+			onConfirm={expected ? confirm : undefined}
 			open
 			title={t("bots.delete.title", { name: bot.name })}
 		/>

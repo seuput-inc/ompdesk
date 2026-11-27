@@ -8189,7 +8189,9 @@ export const ko: Record<string, string> = {
 	"bots.delete.keptHint":
 		"봇에 맡긴 세션은 남아요. 어느 봇의 폴더에도 속하지 않으면 일반 세션으로 표시돼요. 다른 봇의 채팅은 그 봇에 남고, 누가 만들었는지 알 수 없는 세션도 남아요.",
 	"bots.delete.folder": "{folder} 폴더와 그 안의 기억 파일은 그대로 남아요.",
-	"bots.delete.checking": "채팅과 워커 수를 확인하고 있어요…",
+	"bots.delete.checking": "채팅과 워커를 확인하고 있어요…",
+	"bots.delete.changed": "삭제하거나 남겨 둘 세션이 바뀌었어요. 아래 내용을 확인한 뒤 다시 삭제를 선택하세요.",
+	"bots.delete.checkAgain": "창을 닫고 다시 열어 어떤 세션이 남아 있는지 확인하세요.",
 	"bots.delete.previewFailed": "삭제할 항목을 확인하지 못했어요",
 	"bots.delete.confirm": "봇 삭제",
 	"bots.delete.failed": "봇을 삭제하지 못했어요",

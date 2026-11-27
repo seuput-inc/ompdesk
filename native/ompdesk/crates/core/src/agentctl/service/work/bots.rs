@@ -134,6 +134,15 @@ impl RedeliverDeps for OutboxTabs<'_> {
     }
 }
 
+fn with_command_outcome(mut state: Value, mut answer: Value) -> Value {
+    for field in ["refused", "deleteChanged"] {
+        if let Some(value) = answer.get_mut(field) {
+            state[field] = value.take();
+        }
+    }
+    state
+}
+
 impl AgentControl {
     // ---- the registry ------------------------------------------------------------------------------------------------
 
@@ -412,12 +421,16 @@ impl AgentControl {
         }
     }
 
-    pub(crate) async fn delete_bot(&self, id: &str, expected: &Value) -> R<()> {
+    pub(crate) async fn delete_bot(&self, id: &str, expected: &Value) -> R<Option<Value>> {
         let _guard = self.bot_moves.lock().await;
         let bot = self.bot_named(id)?;
         let plan = self.bot_delete_plan(&bot).await?;
-        if bot.id != id || &plan.counts() != expected {
-            return fail("The sessions changed. Open the delete confirmation again.");
+        if bot.id != id || !expected["digest"].is_string() {
+            return fail("Open the bot's delete confirmation again.");
+        }
+        let actual = plan.preview(id);
+        if &actual != expected {
+            return Ok(Some(actual));
         }
         self.return_bot_asks(id).await?;
         // A stored chat first discovered here must still identify its wakes and held mail after a partial delete.
@@ -449,8 +462,9 @@ impl AgentControl {
             }
         }
         // A chat may have appeared in another window while its siblings were closing.
-        if !plan.covers(&self.bot_delete_plan(&self.bot_named(id)?).await?) {
-            return fail("The bot has new sessions. Open the delete confirmation again.");
+        let remaining = self.bot_delete_plan(&self.bot_named(id)?).await?;
+        if !plan.covers(&remaining) {
+            return Ok(Some(remaining.preview(id)));
         }
         if let Some(outbox) = self.host.outbox().cloned() {
             let mut senders: Vec<String> = Vec::new();
@@ -484,7 +498,7 @@ impl AgentControl {
         }
         self.bots().remove(id);
         self.bots_changed();
-        Ok(())
+        Ok(None)
     }
 
     /// One quiet note (no turn) into the session file `session_path` on this computer: handed to the tab that holds it
@@ -1457,6 +1471,15 @@ impl AgentControl {
         if direct {
             return Ok(answer);
         }
+        if request["action"] == "delete"
+            && answer.get("deleteChanged").is_none()
+            && !answer["state"]["bots"].as_array().is_some_and(|bots| {
+                bots.iter()
+                    .all(|bot| bot["id"].is_string() && bot["id"] != request["id"])
+            })
+        {
+            return fail(format!("{name} did not confirm that the bot was deleted."));
+        }
         let applied = self
             .across()
             .copies
@@ -1464,11 +1487,7 @@ impl AgentControl {
         if applied {
             self.bots_changed();
         }
-        let mut state = self.bots_state();
-        if let Some(refused) = answer.get("refused") {
-            state["refused"] = refused.clone();
-        }
-        Ok(state)
+        Ok(with_command_outcome(self.bots_state(), answer))
     }
 
     /// `host.bots.list`: this computer's bots and items as its paired devices get them (`{version, state}`). A change
@@ -1491,7 +1510,7 @@ impl AgentControl {
     /// A paired device's change to one of this computer's bots (`host.bots.command`): what the owner does on the bot
     /// page, apart from making a bot (it is made where it is to live), importing, handing over a session (R91) and
     /// this computer's groups; and its own group's question to one of them (`roomAsk`, `roomAskStop`). Answers this
-    /// computer's copy after it (`{version, state, refused?}`), or a file.
+    /// computer's copy after it with the command outcome, or the requested file or delete preview.
     pub async fn bots_from(&self, request: Value, device: &str, device_name: &str) -> R<Value> {
         let action = request
             .get("action")
@@ -1517,11 +1536,7 @@ impl AgentControl {
         if matches!(action.as_str(), "file" | "deletePreview") {
             return Ok(answer);
         }
-        let mut shared = self.bots_share();
-        if let Some(refused) = answer.get("refused") {
-            shared["refused"] = refused.clone();
-        }
-        Ok(shared)
+        Ok(with_command_outcome(self.bots_share(), answer))
     }
 
     /// What main heard of paired host `device` (`botsRemote`): its whole copy or a change of it (`change`), its link up
@@ -1762,9 +1777,16 @@ impl AgentControl {
                 }
             }
             "deletePreview" => {
-                return Ok(self.bot_delete_plan(&self.bot_named(&id)?).await?.counts());
+                let bot = self.bot_named(&id)?;
+                return Ok(self.bot_delete_plan(&bot).await?.preview(&bot.id));
             }
-            "delete" => self.delete_bot(&id, &request["expected"]).await?,
+            "delete" => {
+                if let Some(preview) = self.delete_bot(&id, &request["expected"]).await? {
+                    let mut state = self.bots_state();
+                    state["deleteChanged"] = preview;
+                    return Ok(state);
+                }
+            }
             "item" => refused = self.owner_item(&request).await?,
             "itemsOpened" => self.items_opened(&id)?,
             // The bot's page opened (its one retry, in the background) or the owner's Try again (`asked`).

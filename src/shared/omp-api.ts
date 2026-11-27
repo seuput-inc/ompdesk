@@ -210,6 +210,18 @@ export interface OmpTransport {
 	on(channel: string, listener: (data: unknown) => void): () => void;
 }
 
+function deletionPreview(preview: BotDeletePreview | undefined): BotDeletePreview {
+	if (
+		!preview ||
+		![preview.chats, preview.workers, preview.kept].every(n => Number.isSafeInteger(n) && n >= 0) ||
+		typeof preview.digest !== "string" ||
+		!/^[a-f0-9]{64}$/.test(preview.digest)
+	)
+		throw new Error("The bot's computer did not return a valid deletion preview.");
+	const { chats, workers, kept, digest } = preview;
+	return { chats, workers, kept, digest };
+}
+
 /** `window.omp` without `fs.pathForFile`, which only the Electron preload can answer. */
 export type TransportOmpApi = Omit<OmpApi, "fs"> & { fs: Omit<OmpApi["fs"], "pathForFile"> };
 
@@ -277,16 +289,30 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			},
 		},
 		bots: {
-			command: request => transport.invoke(BOTS_COMMAND, request),
-			deletePreview: async ({ id }) => {
-				const preview = await transport.invoke<BotDeletePreview>(BOTS_COMMAND, { action: "deletePreview", id });
+			command: async request => {
+				if (request.action !== "delete") return transport.invoke<BotsState>(BOTS_COMMAND, request);
+				const state = await transport.invoke<BotsState>(BOTS_COMMAND, {
+					...request,
+					expected: deletionPreview(request.expected),
+				});
+				const invalidList = (list: Pick<BotsState, "bots" | "items">) =>
+					!Array.isArray(list?.bots) ||
+					!Array.isArray(list.items) ||
+					list.items.some(item => typeof item?.id !== "string") ||
+					list.bots.some(
+						bot => typeof bot?.id !== "string" || (!("deleteChanged" in state) && bot.id === request.id),
+					);
 				if (
-					!preview ||
-					![preview.chats, preview.workers, preview.kept].every(n => Number.isSafeInteger(n) && n >= 0)
+					invalidList(state) ||
+					"refused" in state ||
+					("remote" in state && (!Array.isArray(state.remote) || state.remote.some(invalidList)))
 				)
-					throw new Error("The bot's computer did not return valid deletion counts.");
-				return { chats: preview.chats, workers: preview.workers, kept: preview.kept };
+					throw new Error("The bot's computer did not confirm deletion.");
+				if ("deleteChanged" in state) return { ...state, deleteChanged: deletionPreview(state.deleteChanged) };
+				return state;
 			},
+			deletePreview: async ({ id }) =>
+				deletionPreview(await transport.invoke<BotDeletePreview>(BOTS_COMMAND, { action: "deletePreview", id })),
 			file: request => transport.invoke(BOTS_COMMAND, { ...request, action: "file" }),
 			importSources: () => transport.invoke(BOTS_COMMAND, { action: "importSources" }),
 			exportPackage: request => transport.invoke(BOTS_COMMAND, { ...request, action: "export" }),

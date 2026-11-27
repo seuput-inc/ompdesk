@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, BotDeletePreview, BotsState } from "../../../../shared/bots";
 import type { RemoteState } from "../../../../shared/ipc-types";
 import { I18nProvider, loadLocale, setLanguageOverride } from "../../../lib/i18n";
+import { lastRead } from "../../../lib/last-read";
 import { listedBots, useBotsStore } from "../../../stores/bots";
 import { useBotsView } from "../../../stores/bots-view";
 import { useRemoteStore } from "../../../stores/remote";
@@ -186,6 +187,8 @@ describe("SidebarBots", () => {
 });
 
 describe("bot deletion confirmation", () => {
+	const preview = { chats: 1, workers: 2, kept: 3, digest: "a".repeat(64) };
+
 	async function open(lang: "en" | "ko", onDeleted?: () => void) {
 		await loadLocale(lang);
 		setLanguageOverride(lang);
@@ -208,7 +211,7 @@ describe("bot deletion confirmation", () => {
 		expect(document.querySelector('[role="menu"]')).toBeNull();
 		expect(deletePreview).toHaveBeenCalledWith({ id: "a" });
 		expect(button("Delete bot")?.hasAttribute("disabled")).toBe(true);
-		await act(async () => pending.resolve({ chats: 0, workers: 0, kept: 0 }));
+		await act(async () => pending.resolve({ ...preview, chats: 0, workers: 0, kept: 0 }));
 		expect(dialog()?.querySelectorAll("[data-bot-delete-count]")).toHaveLength(0);
 		expect(dialog()?.textContent).toContain("permanently deletes the bot, its routines and the transcripts");
 		expect(dialog()?.textContent).not.toContain("Handed-over sessions");
@@ -240,9 +243,8 @@ describe("bot deletion confirmation", () => {
 			permanent: "영구히",
 			confirm: "봇 삭제",
 		},
-	])("shows both deleted and kept counts in $lang and submits exactly those counts", async row => {
-		const expected = { chats: 1, workers: 2, kept: 3 };
-		deletePreview.mockResolvedValueOnce(expected);
+	])("shows both deleted and kept counts in $lang and submits the exact plan", async row => {
+		deletePreview.mockResolvedValueOnce(preview);
 		const done = vi.fn();
 		await open(row.lang, done);
 		for (const kind of ["chats", "workers", "kept"] as const)
@@ -252,28 +254,95 @@ describe("bot deletion confirmation", () => {
 		for (const note of [row.handed, row.other, row.unknown]) expect(dialog()?.textContent).toContain(note);
 		expect(command).not.toHaveBeenCalled();
 		await click(button(row.confirm));
-		expect(command).toHaveBeenCalledWith({ action: "delete", id: "a", expected });
+		expect(command).toHaveBeenCalledWith({ action: "delete", id: "a", expected: preview });
 		expect(done).toHaveBeenCalledOnce();
+		expect(dialog()).toBeNull();
 	});
 
 	it("reports a failed preview without offering deletion", async () => {
 		deletePreview.mockRejectedValueOnce(new Error("Host unavailable"));
 		await open("en");
-		expect(dialog()).toBeNull();
+		expect(button("Delete bot")?.disabled).toBe(true);
+		expect(dialog()?.textContent).toContain("reopen");
 		expect(command).not.toHaveBeenCalled();
 		expect(useToastStore.getState().toasts).toMatchObject([
 			{ variant: "error", title: "Couldn't preview bot deletion" },
 		]);
 	});
 
-	it("does not report success if the counts changed before confirmation", async () => {
-		deletePreview.mockResolvedValueOnce({ chats: 1, workers: 0, kept: 0 });
-		command.mockRejectedValueOnce(new Error("Deletion counts changed"));
+	it("keeps a failed delete open without offering the old plan again", async () => {
+		deletePreview.mockResolvedValueOnce({ ...preview, workers: 0, kept: 0 });
+		command.mockRejectedValueOnce(new Error("Connection lost"));
 		const done = vi.fn();
 		await open("en", done);
 		expect(dialog()?.querySelectorAll("[data-bot-delete-count]")).toHaveLength(1);
 		await click(button("Delete bot"));
 		expect(done).not.toHaveBeenCalled();
+		expect(button("Delete bot")?.disabled).toBe(true);
+		expect(dialog()?.textContent).toContain("reopen");
 		expect(useToastStore.getState().toasts).toMatchObject([{ variant: "error", title: "Couldn't delete the bot" }]);
+	});
+
+	it.each([
+		{
+			lang: "en" as const,
+			confirm: "Delete bot",
+			changed: "sessions affected by this deletion changed",
+			chats: 1,
+			workers: 2,
+			kept: 3,
+		},
+		{ lang: "ko" as const, confirm: "봇 삭제", changed: "남겨 둘 세션이 바뀌었어요", chats: 0, workers: 3, kept: 1 },
+	])("requires another confirmation for a replacement plan in $lang", async row => {
+		const replacement = { chats: row.chats, workers: row.workers, kept: row.kept, digest: "b".repeat(64) };
+		const pending = Promise.withResolvers<BotsState>();
+		deletePreview.mockResolvedValueOnce(preview);
+		command.mockReturnValueOnce(pending.promise);
+		const done = vi.fn();
+		await open(row.lang, done);
+		const original = dialog();
+		const confirm = button(row.confirm);
+		if (!confirm) throw new Error(`No ${row.confirm} button`);
+		await act(async () => {
+			confirm.click();
+			confirm.click();
+		});
+		expect(command.mock.calls).toEqual([[{ action: "delete", id: "a", expected: preview }]]);
+		expect(dialog()).toBe(original);
+		expect(confirm.disabled).toBe(true);
+		expect(button(row.lang === "en" ? "Cancel" : "취소")?.disabled).toBe(true);
+		await act(async () => pending.resolve({ bots: [bot("a", "Ada")], items: [], deleteChanged: replacement }));
+		expect(dialog()).toBe(original);
+		expect(dialog()?.textContent).toContain(row.changed);
+		for (const kind of ["chats", "workers", "kept"] as const) {
+			const line = dialog()?.querySelector(`[data-bot-delete-count="${kind}"]`);
+			if (replacement[kind]) expect(line?.textContent).toContain(String(replacement[kind]));
+			else expect(line).toBeNull();
+		}
+		expect(useBotsStore.getState().state).not.toHaveProperty("deleteChanged");
+		expect(lastRead<BotsState>(undefined, "bots")).not.toHaveProperty("deleteChanged");
+		await act(async () => {
+			confirm.dispatchEvent(Object.assign(new Event("click", { bubbles: true }), { detail: 2 }));
+		});
+		expect(command).toHaveBeenCalledOnce();
+		expect(done).not.toHaveBeenCalled();
+		await click(button(row.confirm));
+		expect(command).toHaveBeenNthCalledWith(2, { action: "delete", id: "a", expected: replacement });
+		expect(done).toHaveBeenCalledOnce();
+		expect(dialog()).toBeNull();
+	});
+
+	it("does not let a late delete reply close a newer confirmation for the same bot", async () => {
+		const pending = Promise.withResolvers<BotsState>();
+		deletePreview.mockResolvedValueOnce(preview).mockResolvedValueOnce({ ...preview, kept: 4 });
+		command.mockReturnValueOnce(pending.promise);
+		const done = vi.fn();
+		await open("en", done);
+		await click(button("Delete bot"));
+		await act(async () => openBotDialog({ kind: "delete", bot: bot("a", "Ada") }));
+		await act(async () => pending.resolve({ bots: [], items: [] }));
+		expect(dialog()?.textContent).toContain("Sessions to keep: 4");
+		expect(done).not.toHaveBeenCalled();
+		expect(command).toHaveBeenCalledOnce();
 	});
 });

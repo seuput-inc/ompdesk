@@ -268,6 +268,8 @@ export interface BotsState {
 	looks?: BotLooks[];
 	/** The owner's answer named a question the bot has since replaced: nothing was written. */
 	refused?: "question_changed";
+	/** This delete needs a new confirmation. Only the command reply carries it. */
+	deleteChanged?: BotDeletePreview;
 	/** The paired hosts' bots as this computer last heard them (absent while none is held). */
 	remote?: RemoteBots[];
 }
@@ -291,6 +293,7 @@ export interface SharedBots {
 	version: string;
 	state: Pick<BotsState, "bots" | "items">;
 	refused?: BotsState["refused"];
+	deleteChanged?: BotDeletePreview;
 }
 
 /** What changed of a computer's shared bots from `base` to `version`: rows new or different, and ids gone. */
@@ -359,6 +362,8 @@ export interface BotDeletePreview {
 	chats: number;
 	workers: number;
 	kept: number;
+	/** SHA-256 of this bot's device-qualified sessions and their deletion decisions. */
+	digest: string;
 }
 
 export type BotsRequest =

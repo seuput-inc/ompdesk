@@ -8218,6 +8218,9 @@ export const en: Record<string, string> = {
 		"Handed-over sessions stay. Outside bot folders they appear as ordinary sessions. Other bots keep their chats. Sessions of unknown origin also stay.",
 	"bots.delete.folder": "The folder and its memory files will stay at {folder}.",
 	"bots.delete.checking": "Checking chats and workers…",
+	"bots.delete.changed":
+		"The sessions affected by this deletion changed. Review what will be deleted or kept, then confirm again.",
+	"bots.delete.checkAgain": "Close this dialog and reopen it to check which sessions remain.",
 	"bots.delete.previewFailed": "Couldn't preview bot deletion",
 	"bots.delete.confirm": "Delete bot",
 	"bots.delete.failed": "Couldn't delete the bot",

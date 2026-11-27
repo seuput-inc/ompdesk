@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use super::super::AgentControl;
 use super::super::fail::{Fail, R, fail};
@@ -28,16 +29,29 @@ fn saved_file_exists(path: &str) -> R<bool> {
 pub(super) struct DeletePlan(BTreeMap<Key, Action>);
 
 impl DeletePlan {
-    pub(super) fn counts(&self) -> Value {
-        let (mut chats, mut workers, mut kept) = (0, 0, 0);
-        for action in self.0.values() {
-            match action {
-                Action::Chat => chats += 1,
-                Action::Worker => workers += 1,
-                Action::Keep => kept += 1,
-            }
+    pub(super) fn preview(&self, bot_id: &str) -> Value {
+        fn field(hash: &mut Sha256, text: &str) {
+            hash.update((text.len() as u64).to_be_bytes());
+            hash.update(text.as_bytes());
         }
-        json!({ "chats": chats, "workers": workers, "kept": kept })
+        let mut hash = Sha256::new();
+        field(&mut hash, bot_id);
+        let mut counts = [0usize; 3];
+        for ((device, session), action) in &self.0 {
+            let class = match action {
+                Action::Chat => 0,
+                Action::Worker => 1,
+                Action::Keep => 2,
+            };
+            counts[class] += 1;
+            hash.update([class as u8, u8::from(device.is_some())]);
+            if let Some(device) = device {
+                field(&mut hash, device);
+            }
+            field(&mut hash, session);
+        }
+        let [chats, workers, kept] = counts;
+        json!({ "chats": chats, "workers": workers, "kept": kept, "digest": crate::hex(&hash.finalize()) })
     }
 
     pub(super) fn chats(&self) -> impl Iterator<Item = &String> {
