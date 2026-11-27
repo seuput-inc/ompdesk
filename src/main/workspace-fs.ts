@@ -108,7 +108,7 @@ export async function listWorkspace(
 	const listed = await ask<{ entries: FsTreeEntry[]; truncated: boolean }>("fs.list", {
 		root: rootAbs,
 		dir: dirAbs,
-		prefix,
+		prefix: path.relative(rootAbs, dirAbs).split(path.sep).join("/"),
 		maxDepth: payload?.maxDepth,
 		maxEntries: payload?.maxEntries,
 		hideDotfiles: payload?.filters?.hideDotfiles === true,
