@@ -2066,6 +2066,39 @@ async fn a_session_a_bots_chat_opened_is_its_worker_with_its_branch() {
     assert!(!calls.iter().any(|(op, _)| op == "setOpener"));
 }
 
+#[tokio::test]
+async fn a_saved_worker_restores_only_the_chat_its_journal_named() {
+    let root = Scratch::new();
+    let file = root.0.join("bots.json");
+    let origin = "/s/dispatch.jsonl";
+    let since = "2026-11-01T00:00:00Z";
+    let workers = json!([
+        { "session": "/s/worker.jsonl", "openedBySession": origin, "title": "Review", "cwd": "/repo", "branch": null, "since": since },
+        { "session": "/s/older.jsonl", "title": "Review", "cwd": "/repo", "branch": null, "since": since }
+    ]);
+    let journal = json!([{
+        "id": "courier", "name": "Courier", "folder": root.0.join("courier"),
+        "home": "/s/home.jsonl", "sessions": ["/s/home.jsonl", origin], "workers": workers
+    }]);
+    std::fs::write(&file, journal.to_string()).unwrap();
+    let (restored, _) = rig_files(
+        json!({ "tabs": [] }),
+        Caps::default(),
+        &Files {
+            bots: Some(file),
+            ..bot_files(&root)
+        },
+        bots_main(Mails::default(), |_, _| None),
+    );
+    let state = restored.bots_state();
+    let workers = state["bots"][0]["workers"].as_array().unwrap();
+    assert_eq!(workers.len(), 2);
+    assert_eq!(workers[0]["session"], "/s/worker.jsonl");
+    assert_eq!(workers[0]["openedBySession"], origin);
+    assert_eq!(workers[1]["session"], "/s/older.jsonl");
+    assert!(workers[1].get("openedBySession").is_none());
+}
+
 /// Orca's `sharing/bot-package-archive.ts`, as a local file: a bot's soul, skills and memory topics go out and come
 /// back as a new bot; one holding a credential is not exported.
 #[tokio::test]

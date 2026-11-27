@@ -411,8 +411,25 @@ test(restoreWorker, { tag: "@smoke" }, async () => {
 		const tab = await resumed();
 		if (!tab) throw new Error("The reopened child closed");
 		await untilAnswered(b, tab.tabId, { after: message });
+		const followUp = "Parity turn after reopening the Courier worker";
+		const sent = await b.evaluate(
+			([id, text]) => window.omp.rpc.commandForTab(id, { type: "prompt", message: text }),
+			[tab.tabId, followUp] as const,
+		);
+		expect(sent).toMatchObject({ success: true });
+		await untilAnswered(b, tab.tabId, { after: followUp, text: `Answer to ${followUp}` });
 		const state = await b.evaluate(id => window.omp.rpc.commandForTab(id, { type: "get_state" }), tab.tabId);
 		expect(state).toMatchObject({ success: true, data: { sessionFile: worker } });
+		const workerKey = `[data-roving-item=${JSON.stringify(`device-session:${device}:${worker}`)}]`;
+		await expect(botRow.locator(`[data-bot-worker-rows=${JSON.stringify(opener)}] ${workerKey}`)).toBeVisible();
+		await expect(b.locator(`[data-bot-worker-rows] ${workerKey}`)).toHaveCount(1);
+		const workerFile = JSON.stringify(worker);
+		await expect(
+			b
+				.locator(`[data-sidebar-device="${device}"]`)
+				.locator(`[data-device-session=${workerFile}], [data-session-path=${workerFile}]`),
+		).toHaveCount(0);
+		await expect(b.locator(`[data-device-session=${JSON.stringify(humanFile)}]`)).toBeVisible();
 		await test.info().attach("paired-saved-worker", { body: await b.screenshot(), contentType: "image/png" });
 	} finally {
 		if (client) await exitApp(client.app).catch(() => undefined);
