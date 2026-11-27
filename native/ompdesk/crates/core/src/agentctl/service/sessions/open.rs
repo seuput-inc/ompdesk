@@ -426,7 +426,11 @@ impl AgentControl {
             let Some((bot, sender)) = owner.as_deref().zip(caller.session_path.as_deref()) else {
                 return fail("item works only from a bot's chat.");
             };
-            if !self.bots().find(bot).is_some_and(|board| !board.paused && board.has_session(sender)) {
+            if !self
+                .bots()
+                .find(bot)
+                .is_some_and(|board| !board.paused && board.has_session(sender))
+            {
                 return fail("Only a registered chat of this bot can assign its items.");
             }
             if device.as_ref().is_some_and(Option::is_some) {
@@ -434,16 +438,25 @@ impl AgentControl {
             }
             let reserved = {
                 let mut store = self.items();
-                let item = store.get(id).filter(|item| item.bot == bot && item.is_open())
-                    .ok_or_else(|| Fail::Tool("No open item with that address on this board.".into()))?;
+                let item = store
+                    .get(id)
+                    .filter(|item| item.bot == bot && item.is_open())
+                    .ok_or_else(|| {
+                        Fail::Tool("No open item with that address on this board.".into())
+                    })?;
                 if item.work.is_some() {
                     false
                 } else {
-                    store.commit_work(id, ItemWork {
-                        generation: 1,
-                        requested_by: sender.to_owned(),
-                        session: None,
-                    }).map_err(Fail::Tool)?;
+                    store
+                        .commit_work(
+                            id,
+                            ItemWork {
+                                generation: 1,
+                                requested_by: sender.to_owned(),
+                                session: None,
+                            },
+                        )
+                        .map_err(Fail::Tool)?;
                     true
                 }
             };
@@ -453,17 +466,33 @@ impl AgentControl {
                 if let Some(opening) = opening {
                     opening.wait().await;
                 }
-                if !self.host.state().tabs.iter().any(|tab| tab.tab_id == caller.tab_id && tab.session_path == caller.session_path && tab.device.is_none() && tab.cwd == caller.cwd)
-                    || !self.bots().of_folder(&caller.cwd).is_some_and(|board| board.id == bot && !board.paused && board.has_session(sender)) {
+                if !self.host.state().tabs.iter().any(|tab| {
+                    tab.tab_id == caller.tab_id
+                        && tab.session_path == caller.session_path
+                        && tab.device.is_none()
+                        && tab.cwd == caller.cwd
+                }) || !self.bots().of_folder(&caller.cwd).is_some_and(|board| {
+                    board.id == bot && !board.paused && board.has_session(sender)
+                }) {
                     return fail("The assigning bot chat changed.");
                 }
                 let store = self.items();
-                let work = store.get(id).filter(|item| item.bot == bot && item.is_open())
-                    .and_then(|item| item.work.as_ref()).ok_or_else(|| Fail::Tool("The item's reservation changed.".into()))?;
+                let work = store
+                    .get(id)
+                    .filter(|item| item.bot == bot && item.is_open())
+                    .and_then(|item| item.work.as_ref())
+                    .ok_or_else(|| Fail::Tool("The item's reservation changed.".into()))?;
                 return Ok(OpenResult {
-                    held: Some(format!("Item {id} generation {} {} on this computer: {}.", work.generation,
-                        if work.session.is_some() { "held" } else { "reserved by" },
-                        work.session.as_deref().unwrap_or(&work.requested_by))),
+                    held: Some(format!(
+                        "Item {id} generation {} {} on this computer: {}.",
+                        work.generation,
+                        if work.session.is_some() {
+                            "held"
+                        } else {
+                            "reserved by"
+                        },
+                        work.session.as_deref().unwrap_or(&work.requested_by)
+                    )),
                     ..Default::default()
                 });
             }
@@ -773,17 +802,29 @@ impl AgentControl {
                 _ => {
                     let reply = send.send(json!({ "type": "get_state" })).await?;
                     response_data(&reply, "Reading the managed worker's session")?
-                        .get("sessionFile").and_then(Value::as_str).filter(|path| !path.is_empty())
-                        .ok_or_else(|| Fail::Tool("The managed worker has no saved address.".into()))?
+                        .get("sessionFile")
+                        .and_then(Value::as_str)
+                        .filter(|path| !path.is_empty())
+                        .ok_or_else(|| {
+                            Fail::Tool("The managed worker has no saved address.".into())
+                        })?
                         .to_owned()
                 }
             };
             let mut store = self.items();
-            let mut work = store.get(id).filter(|item| item.is_open())
+            let mut work = store
+                .get(id)
+                .filter(|item| item.is_open())
                 .and_then(|item| item.work.clone())
-                .filter(|work| work.session.is_none() && Some(&work.requested_by) == caller.session_path.as_ref())
+                .filter(|work| {
+                    work.session.is_none()
+                        && Some(&work.requested_by) == caller.session_path.as_ref()
+                })
                 .ok_or_else(|| Fail::Tool("The item's reservation changed.".into()))?;
-            notes.push(format!("Item {id} generation {} held on this computer: {path}", work.generation));
+            notes.push(format!(
+                "Item {id} generation {} held on this computer: {path}",
+                work.generation
+            ));
             work.session = Some(path);
             store.commit_work(id, work).map_err(Fail::Tool)?;
         }
@@ -1008,11 +1049,11 @@ impl AgentControl {
                     return fail("item works only from a bot's chat.");
                 };
                 let store = self.items();
-                let Some(found) = store.find(&bot.id, key) else {
-                    return fail(format!("No item \"{key}\" of the bot {}.", bot.name));
-                };
+                let found = store.write_address(&bot.id, key).map_err(Fail::Tool)?;
                 if !addressed.insert(found.id.clone()) {
-                    return fail("Give each worker a different item; the same item cannot open two workers.");
+                    return fail(
+                        "Give each worker a different item; the same item cannot open two workers.",
+                    );
                 }
                 item.item = Some(found.id.clone());
             }
@@ -1039,7 +1080,10 @@ impl AgentControl {
             }
         }
         let text = Self::open_text(&results);
-        if results.iter().all(|result| result.tab_id.is_empty() && result.held.is_none()) {
+        if results
+            .iter()
+            .all(|result| result.tab_id.is_empty() && result.held.is_none())
+        {
             return fail(text);
         }
         Ok(text)

@@ -392,6 +392,7 @@ impl AgentControl {
         let bot = self.prepare_bot(&bots, name, folder)?;
         bots.add(bot.clone());
         drop(bots);
+        self.items().new_board(&bot.id);
         self.bots_changed();
         Ok(bot)
     }

@@ -22,7 +22,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::super::AgentControl;
-use super::super::fail::{R, fail};
+use super::super::fail::{Fail, R, fail};
 use super::super::host::HostState;
 use super::super::types::{ControlTab, ItemArgs, TabStatus};
 use super::bots::new_id;
@@ -305,7 +305,6 @@ impl AgentControl {
             let mut item = ItemRecord {
                 id: new_id("item"),
                 bot: bot.id.clone(),
-                number: self.items().next_number(&bot.id),
                 session,
                 title,
                 description: args.description.clone().filter(|text| !text.is_empty()),
@@ -318,7 +317,7 @@ impl AgentControl {
                 ..ItemRecord::default()
             };
             item.event(&at, "bot", "made", Some(&status));
-            let item = self.items().add(item);
+            let item = self.items().add(item).map_err(Fail::Tool)?;
             self.items_changed();
             return Ok(format!(
                 "Added item #{} “{}” ({}).",
@@ -343,16 +342,25 @@ impl AgentControl {
             if items.is_empty() {
                 return Ok("No items.".to_owned());
             }
-            return Ok(items.iter().map(item_line).collect::<Vec<_>>().join("\n"));
+            return Ok(items
+                .iter()
+                .map(|item| format!("{} (id {})", item_line(item), item.id))
+                .collect::<Vec<_>>()
+                .join("\n"));
         }
         let Some(key) = args.item.as_deref().filter(|key| !key.trim().is_empty()) else {
             return fail(format!("{} needs item (its number or id).", args.action));
         };
-        let Some(found) = self.items().find(&bot.id, key).cloned() else {
-            return fail(format!(
-                "No item \"{key}\" of the bot {}. ompdesk_item {{\"action\":\"list\"}} lists them.",
-                bot.name
-            ));
+        let found = {
+            let store = self.items();
+            if args.action == "show" {
+                store.find(&bot.id, key).ok_or_else(|| {
+                    Fail::Tool(format!("No item \"{key}\" of the bot {}.", bot.name))
+                })?
+            } else {
+                store.write_address(&bot.id, key).map_err(Fail::Tool)?
+            }
+            .clone()
         };
         if args.action == "show" {
             let read = self.read_item(&self.host.state(), Some(&bot), &found, now);

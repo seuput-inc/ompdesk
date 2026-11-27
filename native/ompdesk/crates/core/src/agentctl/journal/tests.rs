@@ -1081,11 +1081,12 @@ fn items_number_per_bot_and_closed_ones_leave_after_seven_days() {
         status: "planned".into(),
         ..ItemRecord::default()
     };
-    assert_eq!(items.next_number("b1"), 1);
-    items.add(item("i1", "b1", 1));
-    items.add(item("i2", "b1", 2));
-    items.add(item("i3", "b2", 1));
-    assert_eq!(items.next_number("b1"), 3);
+    items.new_board("b1");
+    assert_eq!(items.add(item("i1", "b1", 0)).unwrap().number, 1);
+    assert_eq!(items.add(item("i2", "b1", 0)).unwrap().number, 2);
+    assert_eq!(items.add(item("i3", "b2", 0)).unwrap().number, 1);
+    assert!(items.write_address("b2", "#1").is_err(), "legacy board");
+    assert_eq!(items.write_address("b2", "i3").unwrap().number, 1);
     assert_eq!(items.find("b1", "#2").unwrap().id, "i2");
     assert_eq!(items.find("b2", "1").unwrap().id, "i3");
     assert_eq!(items.find("b1", "i1").unwrap().number, 1);
@@ -1097,6 +1098,12 @@ fn items_number_per_bot_and_closed_ones_leave_after_seven_days() {
     assert_eq!(items.all(1_000.0 + week - 1.0).len(), 3);
     assert_eq!(items.all(1_000.0 + week).len(), 2);
     assert_eq!(Items::new(Some(file)).all(0.0).len(), 2);
+    items.change("i2", |item| item.closed = Some(1_000.0));
+    items.all(1_000.0 + week);
+    let mut items = Items::new(Some(dir.file("items.json")));
+    assert_eq!(items.add(item("i4", "b1", 0)).unwrap().number, 3);
+    assert!(items.write_address("b1", "#2").is_err());
+    assert_eq!(items.write_address("b1", "#3").unwrap().id, "i4");
     items.remove_bot("b1");
     assert_eq!(items.all(0.0).len(), 1);
 }
