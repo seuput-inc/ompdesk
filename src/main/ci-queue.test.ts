@@ -41,7 +41,7 @@ interface Job {
 
 interface Workflow {
 	"run-name"?: string;
-	on: Record<string, { inputs?: Record<string, unknown> } | null>;
+	on: Record<string, { inputs?: Record<string, unknown>; branches?: string[] } | null>;
 	concurrency?: { group: string; "cancel-in-progress": unknown };
 	jobs: Record<string, Job>;
 }
@@ -129,12 +129,18 @@ describe("every macOS job of a dispatchable workflow", () => {
 describe("main and any other ref", () => {
 	const ci = workflows.get("ci.yml") as Workflow;
 
-	it("gives a push to main one run going and the newest waiting, never a cancelled running run", () => {
-		expect(ci.concurrency?.group).toMatch(/^\$\{\{ github\.event_name == 'push' && 'ci-main' \|\| /);
-		const cancel = String(ci.concurrency?.["cancel-in-progress"]);
-		expect(cancel).toContain("github.event_name != 'push'");
-		// Only a release commit, whose jobs are all skipped, cancels what runs, so release.yml's runners are free.
-		expect(cancel).toContain("startsWith(github.event.head_commit.message, 'release: v')");
+	it("keeps dev and main pushes independent; only a main release substitutes its own checks", () => {
+		expect(ci.on.push?.branches).toEqual(["main", "dev"]);
+		expect(workflows.get("release.yml")?.on.push?.branches).toEqual(["main"]);
+		expect(ci.concurrency?.group).toContain("github.event_name == 'push' && format('ci-{0}', github.ref_name) ||");
+		expect(ci.concurrency?.["cancel-in-progress"]).toContain(
+			"github.event_name != 'push' || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release: v'))",
+		);
+		for (const id of ["static", "check", "build", "native", "win-native-bin", "win-platform"]) {
+			expect(ci.jobs[id]?.if, id).toContain(
+				"(github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v'))",
+			);
+		}
 	});
 
 	it("names a dispatch by what it was asked to run, in step with its group, so the same inputs are the same run", () => {
@@ -207,9 +213,9 @@ describe("the macOS checks of a push to main", () => {
 		expect(Object.keys(main.jobs)).toEqual(["mac"]);
 		expect(main.jobs.mac?.uses).toBe("./.github/workflows/mac-checks.yml");
 		expect(main.jobs.mac?.if).toContain("!startsWith(github.event.head_commit.message, 'release: v')");
-		// The same pushes ci.yml answers: a macOS check of a push ci.yml skips (docs only) would be a run nobody reads.
-		const ci = workflows.get("ci.yml") as Workflow & { on: { push: { "paths-ignore": string[] } } };
-		expect(main.on.push).toEqual(ci.on.push);
+		// Both push workflows ignore the same files; only main starts the separate macOS checks.
+		const ci = workflows.get("ci.yml") as Workflow;
+		expect(main.on.push).toEqual({ ...ci.on.push, branches: ["main"] });
 	});
 
 	it("are reached by no other workflow's job, so each macOS run of a push is in that queue", () => {

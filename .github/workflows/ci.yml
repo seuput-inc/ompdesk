@@ -8,7 +8,7 @@
 # and the NSIS/DMG packages stay in release.yml.
 #
 # The queue is managed by the workflow, not by whoever dispatches (.omp/rules/e2e-ci-windows.md › CI › The check
-# queue): a push to main has one run going and the newest waiting (`ci-main`), a dispatch replaces its own older run, `gate`
+# queue): each push branch has one run going and the newest waiting, a dispatch replaces its own older run, `gate`
 # (queue-gate.yml) cancels a commit's second identical run.
 # A push's macOS checks run separately in mac-main.yml so a runner wait does not delay the Linux and Windows verdict.
 #
@@ -44,7 +44,7 @@ run-name: ${{ github.event_name == 'workflow_dispatch' && format('ci [{0}]', for
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     # Nothing a check reads: Markdown, the design docs and screenshots, the
     # license and third-party notice texts, the issue forms, the scheduled
     # checks' own workflows.
@@ -101,8 +101,8 @@ on:
 # skipped, release.yml checks it) cancels what runs and waits, so the runners it needs are free.
 # Any other ref: the newest dispatch with the same inputs replaces the older one; other inputs run beside it.
 concurrency:
-  group: ${{ github.event_name == 'push' && 'ci-main' || format('ci-{0}-{1}', github.ref, format('{0}{1}{2}{3}{4}{5}{6}', inputs.batch && 'batch ' || '', inputs.mac && 'mac ' || '', inputs.e2e && 'e2e ' || '', inputs.install_check && 'install-check ' || '', inputs.win_platform && 'win-platform ' || '', inputs.win_e2e && format('win-e2e={0} ', inputs.win_e2e_grep) || '', inputs.installer_check && format('installer={0} ', inputs.legacy_tag) || '')) }}
-  cancel-in-progress: "${{ github.event_name != 'push' || startsWith(github.event.head_commit.message, 'release: v') }}"
+  group: ${{ github.event_name == 'push' && format('ci-{0}', github.ref_name) || format('ci-{0}-{1}', github.ref, format('{0}{1}{2}{3}{4}{5}{6}', inputs.batch && 'batch ' || '', inputs.mac && 'mac ' || '', inputs.e2e && 'e2e ' || '', inputs.install_check && 'install-check ' || '', inputs.win_platform && 'win-platform ' || '', inputs.win_e2e && format('win-e2e={0} ', inputs.win_e2e_grep) || '', inputs.installer_check && format('installer={0} ', inputs.legacy_tag) || '')) }}
+  cancel-in-progress: "${{ github.event_name != 'push' || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release: v')) }}"
 
 permissions:
   contents: read
@@ -132,7 +132,7 @@ jobs:
   # or pull request (scripts/lint-fix-tests.mjs; the full history without blobs).
   static:
     needs: gate
-    if: "!cancelled() && (github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'release: v'))"
+    if: "!cancelled() && (github.event_name != 'push' || (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v')))"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -182,7 +182,7 @@ jobs:
   check:
     name: check (${{ matrix.name }})
     needs: gate
-    if: "!cancelled() && (github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'release: v'))"
+    if: "!cancelled() && (github.event_name != 'push' || (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v')))"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -226,7 +226,7 @@ jobs:
   # `build` job.
   build:
     needs: gate
-    if: "!cancelled() && (github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'release: v'))"
+    if: "!cancelled() && (github.event_name != 'push' || (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v')))"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -254,7 +254,7 @@ jobs:
   native:
     name: native (${{ matrix.name }})
     needs: gate
-    if: "!cancelled() && (github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'release: v'))"
+    if: "!cancelled() && (github.event_name != 'push' || (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v')))"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     permissions:
@@ -279,7 +279,7 @@ jobs:
   # at once (.github/actions/install), so every shard's install restores it and only checks it.
   win-native-bin:
     needs: gate
-    if: "!cancelled() && ((github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'release: v')) || (github.event_name == 'workflow_dispatch' && (inputs.win_platform || inputs.batch)))"
+    if: "!cancelled() && ((github.event_name == 'push' && (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v'))) || (github.event_name == 'workflow_dispatch' && (inputs.win_platform || inputs.batch)))"
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
@@ -310,7 +310,7 @@ jobs:
   win-platform:
     name: win-platform (${{ matrix.shard }}/3)
     needs: [gate, win-native-bin]
-    if: "!cancelled() && needs.win-native-bin.result == 'success' && ((github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'release: v')) || (github.event_name == 'workflow_dispatch' && (inputs.win_platform || inputs.batch)))"
+    if: "!cancelled() && needs.win-native-bin.result == 'success' && ((github.event_name == 'push' && (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v'))) || (github.event_name == 'workflow_dispatch' && (inputs.win_platform || inputs.batch)))"
     runs-on: windows-latest
     timeout-minutes: 20
     permissions:
