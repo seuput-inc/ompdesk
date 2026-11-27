@@ -418,14 +418,9 @@ for (const engine of ENGINES) {
 					}
 				});
 
-				test("takes the number of taps the design promises (plan 2, approval 2, delegation 2, model 2, mic 1)", async () => {
+				test("takes the number of taps the design promises (approval 2, delegation 2, model 2, mic 1)", async () => {
 					const page = await openPhone(engine, { lang, theme, stt: true });
 					try {
-						// Plan: the Run chip, then the Plan switch.
-						await openRun(page);
-						await page.locator("[data-plan-mode]").first().tap();
-						await expect.poll(() => unhandled(page)).toContain("rpc:set_plan_mode");
-						await page.keyboard.press("Escape");
 						// Model: the model chip, then a model.
 						await modelChip(page).tap();
 						const dialog = page.getByRole("dialog");
@@ -460,7 +455,12 @@ for (const engine of ENGINES) {
 					const page = await openPhone(engine, { lang, theme });
 					try {
 						const before = await boxOf(page.locator(".omp-composer-box"));
-						await page.evaluate(() => window.__stores?.session.setState({ planModeEnabled: true }));
+						await page.evaluate(() =>
+							window.__stores?.session.setState({
+								goal: { objective: "Ship it" },
+								goalState: { status: "active" },
+							}),
+						);
 						await expect(runChip(page)).toHaveAttribute("data-active", "");
 						const after = await boxOf(page.locator(".omp-composer-box"));
 						expect(after.height).toBe(before.height);

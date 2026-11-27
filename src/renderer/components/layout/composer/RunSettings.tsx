@@ -91,7 +91,6 @@ function useSessionToggle() {
 			if (session.getState().sessionId !== originSession) return;
 			const state = current.data as RpcSessionState;
 			settings.getState().setFromState(state);
-			session.setState({ planModeEnabled: state.planModeEnabled });
 		} catch (cause) {
 			toastError({ title: t("input.runSettings.failed"), error: cause });
 		} finally {

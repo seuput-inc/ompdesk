@@ -1,14 +1,14 @@
 /**
  * Contract tests for the Run chip's Mode section: the chip names the active session mode(s) and paints
- * itself accent through `data-active`, its popover holds Plan · Goal · Autopilot as segmented tabs (active
- * ones marked), Plan toggles inline, and the app-wide `openModes(tab)` request opens the popover on that tab.
+ * itself accent through `data-active`, its popover holds Goal · Autopilot as segmented tabs (active ones marked), and
+ * the app-wide `openModes(tab)` request opens the popover on that tab.
  * State comes from the session store.
  */
 
 import { parseHTML } from "linkedom";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RpcResponse } from "../../../../shared/rpc-types";
 import { I18nProvider, translate } from "../../../lib/i18n";
 import { useSessionStore } from "../../../stores/session";
@@ -42,16 +42,12 @@ function success(data: unknown): RpcResponse {
 	return { type: "response", command: "test", success: true, data };
 }
 
-let setPlanMode: Mock<(enabled: boolean) => Promise<RpcResponse>>;
-
 /** The mode configs subscribe to sidecar events while mounted; every subscription is a no-op here. */
 function installMockOmp(): void {
-	setPlanMode = vi.fn(async (enabled: boolean) => success({ enabled }));
 	const events = new Proxy({}, { get: () => vi.fn(() => () => {}) });
 	(window as unknown as { omp: unknown }).omp = {
 		rpc: {
 			getSettings: vi.fn(async () => success({ values: {} })),
-			setPlanMode,
 		},
 		prefs: { get: vi.fn(async () => undefined), set: vi.fn(async () => {}) },
 		events,
@@ -88,7 +84,7 @@ afterEach(async () => {
 	container?.remove();
 	document.body.innerHTML = "";
 	useSessionStore.getState().reset();
-	useUiStore.setState({ modesOpen: false, modesTab: "plan" });
+	useUiStore.setState({ modesOpen: false, modesTab: null });
 });
 
 function trigger(): TestElement {
@@ -110,19 +106,16 @@ function tab(name: string): TestElement | undefined {
 }
 
 describe("Composer mode chip", () => {
-	it("names every active mode in an accent chip and marks them in the popover", async () => {
+	it("names the active mode in an accent chip and marks it in the popover", async () => {
 		installMockOmp();
 		useSessionStore.setState({
-			planModeEnabled: true,
 			goal: { objective: "Ship the activity dock" },
 			goalState: { status: "active" },
 		});
 		await mount(<RunChip />);
 
-		const summary = (["plan", "goal"] as const).map(mode => translate(`input.modes.tab.${mode}`)).join(" · ");
-		const named = (["plan", "goal"] as const).map(mode => translate(`input.modes.name.${mode}`)).join(" · ");
-		expect(chipText()).toBe(summary);
-		expect(trigger().getAttribute("aria-label")).toContain(named);
+		expect(chipText()).toBe(translate("input.modes.tab.goal"));
+		expect(trigger().getAttribute("aria-label")).toContain(translate("input.modes.name.goal"));
 		// Accent is a data attribute with a CSS rule, never a utility class that has to win a tie (DR-1).
 		expect(trigger().getAttribute("data-active")).toBe("");
 		expect(trigger().className).not.toContain("bg-(--sc-accent-soft)");
@@ -131,21 +124,17 @@ describe("Composer mode chip", () => {
 		await flush();
 
 		expect(tab("Goal")?.textContent).toBe("Goalon");
-		expect(tab("Plan")).toBeUndefined();
-		// Plan is the switch above the tabs, on; the open tab is a form's and says nothing about Plan.
 		expect(tab("Goal")?.getAttribute("aria-selected")).toBe("true");
-		expect(document.querySelector("[data-plan-mode]")?.getAttribute("aria-checked")).toBe("true");
 	});
 
-	it("counts a paused goal as the session's goal, as goalIsActive does", async () => {
-		// Composer audit L9: the chip read only `active`, the auto-mode guard also `paused`, so the two disagreed.
+	it("counts a paused goal as the session's goal", async () => {
 		installMockOmp();
 		useSessionStore.setState({ goal: null, goalState: { status: "paused" } });
 		await mount(<RunChip />);
 		expect(chipText()).toBe(translate("input.modes.tab.goal"));
 	});
 
-	it("stays a quiet 'Run settings' chip with nothing active and toggles plan mode inline", async () => {
+	it("stays a quiet 'Run settings' chip with nothing active, its tabs Goal and Autopilot", async () => {
 		installMockOmp();
 		await mount(<RunChip />);
 
@@ -158,19 +147,11 @@ describe("Composer mode chip", () => {
 			element => element.textContent,
 		);
 		expect(tabNames).toEqual(["Goal", "Autopilot"]);
-		// Plan has no form: with no Goal or Autopilot open, no tab reads as chosen and no form is drawn.
+		// With no Goal or Autopilot open, no tab reads as chosen and no form is drawn.
 		expect(document.querySelector('[role="tab"][aria-selected="true"]')).toBeNull();
 		expect(tab("Loop")).toBeUndefined();
 		expect(tab("Vibe")).toBeUndefined();
 		expect(tab("Ratchet")).toBeUndefined();
-
-		const planSwitch = document.querySelector('[role="switch"]') as unknown as TestElement | null;
-		expect(planSwitch?.getAttribute("aria-checked")).toBe("false");
-		await act(async () => planSwitch?.click());
-		await flush();
-
-		expect(setPlanMode).toHaveBeenCalledWith(true);
-		expect(useSessionStore.getState().planModeEnabled).toBe(true);
 	});
 
 	it("answers openModes(tab) by opening the popover on that mode, and clears the request on close", async () => {

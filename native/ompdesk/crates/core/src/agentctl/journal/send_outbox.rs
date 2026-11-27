@@ -50,8 +50,8 @@ pub struct OutboxSend {
     pub attachments: Option<AttachedSet>,
     /// Its record of attachments was damaged: it is never delivered as text alone.
     pub attachments_corrupt: bool,
-    /// An open's first message: the commands that set its new child up (`agent_control_worker`, `set_model`,
-    /// `set_plan_mode`), sent again, before the message, to an omp other than the one first handed it (a relaunch
+    /// An open's first message: the commands that set its new child up (`agent_control_worker`, `set_model`),
+    /// sent again, before the message, to an omp other than the one first handed it (a relaunch
     /// between the open's tab and its first message). Each is idempotent.
     pub before: Vec<Value>,
     /// An open's first message in goal mode: handed over as stock's `set_goal {objective: body}`, settled once stock

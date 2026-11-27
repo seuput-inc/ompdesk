@@ -226,13 +226,10 @@ describe("GUI settings visibility", () => {
 		expect(html).not.toContain(">Status Line</h3>");
 	});
 
-	it("keeps conditional Vim and Plan autosave rows aligned with their enabling settings", () => {
+	it("shows the Vim indicator setting only when Vim mode is on", () => {
 		const vim = entry({ path: "tui.vimModeIndicator", condition: "vimModeEnabled", tab: "experience" });
-		const autosave = entry({ path: "plan.autosaveDir", condition: "planAutosaveEnabled", tab: "tasks" });
 		expect(isSettingVisibleInGui(vim, { "tui.vimMode": false })).toBe(false);
 		expect(isSettingVisibleInGui(vim, { "tui.vimMode": true })).toBe(true);
-		expect(isSettingVisibleInGui(autosave, { "plan.enabled": true, "plan.autosave": false })).toBe(false);
-		expect(isSettingVisibleInGui(autosave, { "plan.enabled": true, "plan.autosave": true })).toBe(true);
 	});
 
 	it("renders fixed ordered arrays as choices instead of an arbitrary text field", () => {

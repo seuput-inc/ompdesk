@@ -673,26 +673,6 @@
 	opacity: 1;
 }
 
-/* A plan under review: its text box gives way first, down to 7.5rem or its
-   own height, so the first choice stays in view while the card is capped.
-   Without calc-size (WebKit) the box keeps its height and the body scrolls. */
-@supports (min-height: calc-size(max-content, size)) {
-	.omp-prompt-card > :has(> * > [data-plan-content]) {
-		display: flex;
-		flex-direction: column;
-	}
-
-	.omp-prompt-card > * > :has(> [data-plan-content]) {
-		flex: 1 1 auto;
-		min-height: 0;
-	}
-
-	.omp-prompt-card [data-plan-content] {
-		flex: 0 1 auto;
-		min-height: calc-size(max-content, min(size, 7.5rem));
-	}
-}
-
 /* The dock's cards left with no room beside a waiting card leave the tab
    order and the accessibility tree too. */
 [data-workspace-dock][data-dock-yielded] > :is([data-testid="workspace-dock"], [data-testid="workspace-dock-resize"]) {
@@ -3964,18 +3944,8 @@ html[data-gpu="software"] :is(.omp-context-ring, .omp-context-ring > circle) {
 }
 
 /* The ladder. Labels give way in order of how much the icon alone still says, by the TOOLBAR's width:
-   860 steer/follow-up and the auto-mode chip, 740 the Run chip (a count badge keeps two modes countable), 620 the
-   Run chip's glyphs and the model's effort, 500 the model name (last). */
-@container omp-toolbar (max-width: 860px) {
-	.omp-composer-fold-1 {
-		padding-inline: 0.375rem;
-	}
-
-	.omp-composer-fold-1 :is(.omp-composer-control-label, .omp-composer-chevron) {
-		display: none;
-	}
-}
-
+   740 the Run chip (a count badge keeps two modes countable), 620 the Run chip's glyphs and the model's effort,
+   500 the model name (last). */
 @container omp-toolbar (max-width: 740px) {
 	.omp-composer-fold-2 {
 		padding-inline: 0.375rem;

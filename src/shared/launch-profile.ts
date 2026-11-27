@@ -23,8 +23,6 @@ export interface LaunchProfile {
 	tools?: string[];
 	/** --no-lsp: disable LSP tooling. */
 	noLsp?: boolean;
-	/** --plan-yolo: auto-approve plan-mode execution. */
-	planYolo?: boolean;
 	/** --profile <name>: agent profile to boot from. */
 	profile?: string;
 	/** --session-dir <path>: where session files live. */
@@ -142,7 +140,6 @@ export function profileToFlags(profile: LaunchProfile): string[] {
 		if (tools.length > 0) flags.push("--tools", tools.join(","));
 	}
 	if (profile.noLsp === true) flags.push("--no-lsp");
-	if (profile.planYolo === true) flags.push("--plan-yolo");
 	if (typeof profile.profile === "string" && profile.profile.trim() !== "") {
 		flags.push("--profile", profile.profile.trim());
 	}

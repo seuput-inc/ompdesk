@@ -354,7 +354,6 @@ export interface OutsideCaller {
 export interface ControlTabSnapshot extends Pick<ControlTab, "tabId" | "title" | "status" | "busy" | "hidden"> {
 	resuming: boolean;
 	hasAsk: boolean;
-	hasPlan: boolean;
 }
 
 export class AgentControlRuntime {
@@ -730,7 +729,6 @@ export class AgentControlRuntime {
 				hidden: tab.hidden,
 				resuming: tab.resuming === true,
 				hasAsk: tab.asks.length > 0,
-				hasPlan: tab.plan !== undefined,
 			});
 		}
 		return tabs;
@@ -829,7 +827,7 @@ export class AgentControlRuntime {
 	}
 
 	#controlTab(row: ControlTabInfo, asks: ControlAsk[], hidden: Set<string>): ControlTab {
-		const { facts, plan, formerIds, hasDraft, owner, ...info } = row;
+		const { facts, formerIds, hasDraft, owner, ...info } = row;
 		const autoClosable = this.#autoClosable(info);
 		// A paired web page's tab: what its page last said about unsaved Files edits in it (never assumed clean).
 		const webEdits =
@@ -857,7 +855,6 @@ export class AgentControlRuntime {
 			...(info.resuming ? { resuming: true } : {}),
 			...(info.cutOff ? { cutOff: info.cutOff } : {}),
 			asks,
-			...(plan ? { plan } : {}),
 			hidden: !info.device && typeof info.sessionPath === "string" && hidden.has(info.sessionPath),
 			...(info.worktree ? { worktree: info.worktree } : {}),
 			...(info.sessionPath ? { sessionPath: info.sessionPath } : {}),

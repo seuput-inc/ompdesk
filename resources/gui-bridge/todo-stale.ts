@@ -17,7 +17,7 @@ export function install(pi: ExtensionAPI): void {
 	pi.on("before_agent_start", (event, ctx) => {
 		if (ctx.agent.kind !== "main") return undefined;
 		const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session;
-		if (!session?.getActiveToolNames().includes("todo") || session.getPlanModeState()?.enabled) return undefined;
+		if (!session?.getActiveToolNames().includes("todo")) return undefined;
 		const branch = ctx.sessionManager.getBranch();
 		if (autopilotRunning(branch)) return undefined;
 		const stale = todoStaleness({

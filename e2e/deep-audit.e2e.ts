@@ -248,11 +248,6 @@ function conditionGate(condition: string | undefined): Array<{ path: string; val
 		advisorEnabled: [{ path: "advisor.enabled", value: true }],
 		autoThinkingActive: [{ path: "defaultThinkingLevel", value: "auto" }],
 		usageAwareFallbackEnabled: [{ path: "retry.usageAwareFallback", value: true }],
-		planModeEnabled: [{ path: "plan.enabled", value: true }],
-		planAutosaveEnabled: [
-			{ path: "plan.enabled", value: true },
-			{ path: "plan.autosave", value: true },
-		],
 		unexpectedStopDetection: [{ path: "features.unexpectedStopDetection", value: true }],
 		vimModeEnabled: [{ path: "tui.vimMode", value: true }],
 	};

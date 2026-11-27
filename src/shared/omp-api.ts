@@ -57,8 +57,6 @@ import type {
 	IpcFsMediaStreamResult,
 	IpcFsReadBinaryResult,
 	IpcFsReadImageResult,
-	IpcFsReadPlanPayload,
-	IpcFsReadPlanResult,
 	IpcFsReadResult,
 	IpcFsSaveCopyPayload,
 	IpcFsSaveCopyResult,
@@ -870,8 +868,6 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			stat: (path, tabId) => transport.invoke(IPC_COMMANDS.FS_STAT, { path, tabId }),
 			mutate: (mutation, tabId) => transport.invoke(IPC_COMMANDS.FS_MUTATE, { mutation, tabId }),
 			search: (request, tabId) => transport.invoke(IPC_COMMANDS.FS_SEARCH, { request, tabId }),
-			readPlan: (payload: IpcFsReadPlanPayload) =>
-				transport.invoke(IPC_COMMANDS.FS_READ_PLAN, payload) as Promise<IpcFsReadPlanResult>,
 			readImage: (path: string, tabId?: string) =>
 				transport.invoke(IPC_COMMANDS.FS_READ_IMAGE, { path, tabId }) as Promise<IpcFsReadImageResult>,
 			readBinary: (path: string, maxBytes?: number, tabId?: string) =>

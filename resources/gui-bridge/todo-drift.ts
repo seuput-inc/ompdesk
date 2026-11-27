@@ -34,13 +34,13 @@ export function driftOf(branch: Branch, extra: readonly TodoDriftEvent[] = []): 
 }
 
 /**
- * Whether a main-agent tool call is one the todo rules read: `todo` active, not Plan mode, not an Autopilot run, and no
- * `todo` call beside it in the same message (that one is changing the list now; its result lands after).
+ * Whether a main-agent tool call is one the todo rules read: `todo` active, not an Autopilot run, and no `todo` call
+ * beside it in the same message (that one is changing the list now; its result lands after).
  */
 export function readsTodo(pi: ExtensionAPI, kind: string, branch: Branch): boolean {
 	if (kind !== "main") return false;
 	const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session;
-	if (!session?.getActiveToolNames().includes("todo") || session.getPlanModeState()?.enabled) return false;
+	if (!session?.getActiveToolNames().includes("todo")) return false;
 	return !autopilotRunning(branch) && !todoCallInFlight(branch as TodoDriftEntry[]);
 }
 

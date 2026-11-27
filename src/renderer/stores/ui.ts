@@ -18,7 +18,7 @@ export type PanelTab = (typeof PANEL_TABS)[number];
  * The session views that open as a sheet instead of the side panel (the user's call, 21 Oct 2026: the panel held too
  * much). Each is the component the panel used to hold, over the runtime of the tab focused when it opened.
  */
-export const VIEW_SHEETS = ["jobs", "plan", "logs", "tree", "work"] as const;
+export const VIEW_SHEETS = ["jobs", "logs", "tree", "work"] as const;
 export type ViewSheetId = (typeof VIEW_SHEETS)[number];
 /** A stored session whose folder is gone, as main's `folder-missing` refusal names it: what the missing-folder sheet shows. */
 export interface MissingFolderRequest {
@@ -98,13 +98,12 @@ const BOARD_VIEWS: readonly string[] = ["board", "inbox", "resources"] satisfies
 const DEFAULT_SETTINGS_TAB = "general";
 /** Documents whose rendered/source choice the Files viewer remembers. */
 const FILE_VIEW_MODE_CAP = 200;
-/** Center-dock card identifiers: todo/plan render as live cards above the composer. */
-export type DockCardId = "todo" | "plan";
+/** Center-dock card identifiers: the todo card renders as a live card above the composer. */
+export type DockCardId = "todo";
 
-/** The todo card starts collapsed: its header peek (progress, current task) is
- * the at-a-glance view, and the full list is one click away. The plan card
- * starts open because a proposed plan is there to be read. */
-const DOCK_CARD_DEFAULT_COLLAPSED: Record<DockCardId, boolean> = { todo: true, plan: false };
+/** The todo card starts collapsed: its header peek (progress, current task) is the at-a-glance view, and the full
+ * list is one click away. */
+const DOCK_CARD_DEFAULT_COLLAPSED: Record<DockCardId, boolean> = { todo: true };
 
 /** Whether a center-dock card is collapsed: the user's override, else the card's default. */
 export function isDockCardCollapsed(overrides: Partial<Record<DockCardId, boolean>>, id: DockCardId): boolean {
@@ -112,8 +111,8 @@ export function isDockCardCollapsed(overrides: Partial<Record<DockCardId, boolea
 }
 
 export type TranscriptDetail = "compact" | "full";
-/** Composer Modes popover tabs a request can open (`openModes`). */
-export type ModesTab = "plan" | "goal" | "autopilot";
+/** Composer Modes popover tabs a request can open (`openModes`); none leaves the section closed. */
+export type ModesTab = "goal" | "autopilot";
 
 export interface GuiDisplayPreferences {
 	hideThinkingBlock?: boolean | null;
@@ -208,7 +207,7 @@ interface UiStore {
 	modelSetupOpen: boolean;
 	themePickerOpen: boolean;
 	modesOpen: boolean;
-	modesTab: ModesTab;
+	modesTab: ModesTab | null;
 	importDialogOpen: boolean;
 	copySelectorOpen: boolean;
 	changelogOpen: boolean;
@@ -686,9 +685,9 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 	openThemePicker: () => set({ themePickerOpen: true }),
 	closeThemePicker: () => set({ themePickerOpen: false }),
 	modesOpen: false,
-	modesTab: "plan" as const,
+	modesTab: null,
 	// The mode popover lives on the composer: a request from a page returns to the session.
-	openModes: tab => set({ modesOpen: true, modesTab: tab ?? "plan", destination: "session" }),
+	openModes: tab => set({ modesOpen: true, modesTab: tab ?? null, destination: "session" }),
 	closeModes: () => set({ modesOpen: false }),
 	importDialogOpen: false,
 	openImportDialog: () => set({ importDialogOpen: true }),

@@ -38,7 +38,7 @@ pub struct OpenResult {
     pub where_: Option<String>,
 }
 
-/// The commands of an open (worker marker, model, plan mode, first message or goal) to one child, none with a
+/// The commands of an open (worker marker, model, first message or goal) to one child, none with a
 /// deadline (`#openCommands`).
 pub struct OpenCommand<'a> {
     control: &'a AgentControl,
@@ -187,6 +187,14 @@ impl AgentControl {
         show: Option<&str>,
         tag: Option<&str>,
     ) -> R<Vec<OpenResult>> {
+        if items
+            .iter()
+            .any(|item| item.mode.as_deref().is_some_and(|mode| mode != "goal"))
+        {
+            return fail(
+                r#"Plan mode was removed from OMPdesk: open the session with mode "goal" (the message becomes its goal) or with no mode (a plain first message)."#,
+            );
+        }
         if self.stopping(&caller.tab_id) {
             return fail("Autopilot is ending: start nothing new.");
         }
@@ -561,13 +569,6 @@ impl AgentControl {
                 json!({ "type": "set_model", "provider": model.provider, "modelId": model.id }),
             ));
             notes.push(format!("model {}/{}", model.provider, model.id));
-        }
-        if args.mode.as_deref() == Some("plan") {
-            setup.push((
-                "Turning on plan mode",
-                json!({ "type": "set_plan_mode", "enabled": true }),
-            ));
-            notes.push("plan mode".to_owned());
         }
         if let Some(worktree) = worktree {
             notes.push(format!("worktree {}", worktree.branch));

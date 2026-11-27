@@ -1,5 +1,5 @@
 /**
- * Workspace filesystem behind fs:list / fs:read / fs:read-image / fs:read-binary / fs:read-plan / fs:stat, plus the
+ * Workspace filesystem behind fs:list / fs:read / fs:read-image / fs:read-binary / fs:stat, plus the
  * Files panel's few writes (fs:mutate: new file or folder, rename, write, move to the trash), rooted at a tab's cwd.
  * Shared by the local IPC handlers and by the remote host (src/main/remote/host-services.ts), which serves the same
  * calls for a paired device's tabs with the same confinement and caps. Never throws (`listDirectories` aside): every
@@ -22,8 +22,6 @@ import type {
 	IpcFsReadImagePayload,
 	IpcFsReadImageResult,
 	IpcFsReadPayload,
-	IpcFsReadPlanPayload,
-	IpcFsReadPlanResult,
 	IpcFsReadResult,
 	IpcFsStatResult,
 	RemoteDirListing,
@@ -292,43 +290,6 @@ export async function readWorkspaceImage(
 	if (unchanged) return { ok: true, dataUrl: null, mime: null, size, mtimeMs, unchanged: true };
 	const body = Buffer.from(read.bin.buffer, read.bin.byteOffset, read.bin.byteLength);
 	return { ok: true, dataUrl: `data:${mime};base64,${body.toString("base64")}`, mime, size, mtimeMs };
-}
-
-/**
- * Plan-mode document read — deliberately OFF the RPC bus: reading via the
- * bash RPC injected the plan into the model context and appended
- * bashExecution entries to the transcript on every poll. Reads the
- * configured path, else the newest `*plan.md` in the session-local root.
- * Confined to the workspace and the sessions dir (plan artifacts live there).
- */
-export async function readPlanFile(
-	cwd: string | null,
-	sessionsDir: string,
-	payload: Omit<IpcFsReadPlanPayload, "tabId">,
-): Promise<IpcFsReadPlanResult> {
-	const fail = (error: string, code?: IpcErrorCode): IpcFsReadPlanResult => ({
-		ok: false,
-		path: null,
-		content: null,
-		error,
-		...(code ? { code } : {}),
-	});
-	if (typeof payload?.fsPath !== "string" || payload.fsPath.length === 0) return fail("Invalid path", "invalid_path");
-	if (!cwd) return fail("No workspace", "no_workspace");
-	const withinAllowedRoots = (value: string): string | null =>
-		resolveWithin(cwd, value) ?? resolveWithin(sessionsDir, value);
-	const target = withinAllowedRoots(payload.fsPath);
-	if (!target) return fail("Path escapes allowed roots", "path_escapes_roots");
-	let localRoot: string | null = null;
-	if (typeof payload.localRoot === "string" && payload.localRoot.length > 0) {
-		localRoot = withinAllowedRoots(payload.localRoot);
-		if (!localRoot) return fail("Path escapes allowed roots", "path_escapes_roots");
-	}
-	const plan = await ask<{ content: string | null; fallback: string | null }>("fs.readPlan", { target, localRoot });
-	if (!plan.ok) return fail(plan.error, plan.code);
-	const { content, fallback } = plan.result;
-	if (content === null) return { ok: true, path: null, content: null };
-	return { ok: true, path: fallback !== null && localRoot ? path.join(localRoot, fallback) : target, content };
 }
 
 /**

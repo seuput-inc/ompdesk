@@ -204,7 +204,6 @@ export function stateFixture(tabId: string): RpcSessionState {
 					},
 				],
 		contextUsage: { tokens: 38_400, contextWindow: 1_000_000, percent: 3.8 },
-		planModeEnabled: false,
 		agentsPaused: false,
 	} as RpcSessionState;
 }

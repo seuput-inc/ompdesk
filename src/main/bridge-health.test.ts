@@ -20,14 +20,14 @@ describe("unavailableFeatures", () => {
 			unavailableFeatures({
 				ompVersion: "19.0.0",
 				unavailable: [
-					{ feature: "planMode", missing: ["x"] },
-					{ feature: "planMode" },
+					{ feature: "goalBudget", missing: ["x"] },
+					{ feature: "goalBudget" },
 					{ feature: 3 },
 					null,
 					"btw",
 				],
 			}),
-		).toEqual({ features: ["planMode"], core: false });
+		).toEqual({ features: ["goalBudget"], core: false });
 		expect(
 			unavailableFeatures({ unavailable: [{ feature: "jobs" }, { feature: "relaunchResume", core: true }] }),
 		).toEqual({ features: ["jobs", "relaunchResume"], core: true });
@@ -44,7 +44,7 @@ describe("BridgeHealth", () => {
 		const broken = fakeBridge(async () => ({
 			ompVersion: "19.0.0",
 			unavailable: [
-				{ feature: "planMode", missing: ["AgentSession.setPlanModeState"] },
+				{ feature: "goalBudget", missing: ["AgentSession.goalRuntime.onBudgetMutated"] },
 				{ feature: "guidedGoal", missing: ["@oh-my-pi/pi-coding-agent/goals/settings"] },
 			],
 		}));
@@ -56,7 +56,7 @@ describe("BridgeHealth", () => {
 		expect(broken.request).toHaveBeenCalledWith("capabilities");
 		expect(notify).toHaveBeenCalledTimes(1);
 		expect(health.take()).toEqual([
-			{ kind: "unsupportedOptional", ompVersion: "19.0.0", features: ["planMode", "guidedGoal"] },
+			{ kind: "unsupportedOptional", ompVersion: "19.0.0", features: ["goalBudget", "guidedGoal"] },
 		]);
 		expect(health.take()).toEqual([]);
 
@@ -75,20 +75,20 @@ describe("BridgeHealth", () => {
 		const before = fakeBridge(async () => ({ ompVersion: "18.8.7", unavailable: [] }));
 		await health.observe({ connected: true, ompVersion: "18.8.7", bridge: before.bridge });
 		expect(health.take()).toEqual([]);
-		expect(health.supports("18.8.7", "planMode")).toBe(true);
+		expect(health.supports("18.8.7", "goalBudget")).toBe(true);
 
 		// omp updated itself; the tab that restarted on it reports its own version.
 		const after = fakeBridge(async () => ({
 			ompVersion: "18.9.0",
-			unavailable: [{ feature: "planMode", missing: ["AgentSession.setPlanModeState"] }],
+			unavailable: [{ feature: "goalBudget", missing: ["AgentSession.goalRuntime.onBudgetMutated"] }],
 		}));
 		await health.observe({ connected: true, ompVersion: "18.9.0", bridge: after.bridge });
 		expect(after.request).toHaveBeenCalledWith("capabilities");
 		expect(notify).toHaveBeenCalledTimes(1);
-		expect(health.take()).toEqual([{ kind: "unsupportedOptional", ompVersion: "18.9.0", features: ["planMode"] }]);
-		expect(health.supports("18.9.0", "planMode")).toBe(false);
+		expect(health.take()).toEqual([{ kind: "unsupportedOptional", ompVersion: "18.9.0", features: ["goalBudget"] }]);
+		expect(health.supports("18.9.0", "goalBudget")).toBe(false);
 		// The old version's answer stays; a second tab on 18.9.0 does not warn twice.
-		expect(health.supports("18.8.7", "planMode")).toBe(true);
+		expect(health.supports("18.8.7", "goalBudget")).toBe(true);
 		await health.observe({ connected: true, ompVersion: "18.9.0", bridge: after.bridge });
 		expect(after.request).toHaveBeenCalledTimes(1);
 	});
@@ -102,7 +102,7 @@ describe("BridgeHealth", () => {
 		const current = fakeBridge(async () => ({ unavailable: [] }));
 		await health.observe({ connected: true, ompVersion: "18.8.0", bridge: current.bridge });
 		expect(health.supports("18.7.0", "accountRotation")).toBe(false);
-		expect(health.supports("18.7.0", "planMode")).toBe(true);
+		expect(health.supports("18.7.0", "goalBudget")).toBe(true);
 		expect(health.supports("18.8.0", "accountRotation")).toBe(true);
 	});
 

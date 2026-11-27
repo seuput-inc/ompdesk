@@ -6,7 +6,6 @@
 import type { RpcResponse } from "../../shared/rpc-types";
 import { handlers as agentControl } from "./agent-control";
 import { handlers as agentFiles } from "./agent-files";
-import { handlers as autoMode } from "./auto-mode";
 import { handlers as autopilot } from "./autopilot";
 import { handlers as composer } from "./composer";
 import { handlers as desktopSlot } from "./desktop-slot";
@@ -41,7 +40,6 @@ const LOCAL_HANDLERS = mergeHandlers({
 	sessionDump,
 	sessionLinks,
 	agentControl,
-	autoMode,
 	judgeAssist,
 	autopilot,
 	desktopSlot,

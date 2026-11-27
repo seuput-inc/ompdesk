@@ -2,7 +2,7 @@
 
 ## Open
 
-`ompdesk_session_open` takes one session's fields or `sessions: [ … ]` for several at once. Each: `message`, `folder`, `model` (`provider/id`), `mode` (`plan` or `goal`; `goal` needs a `message`, which becomes the goal), `worktree` (`true`, or `{branch, base}` where `base` is `HEAD` (default), `default` (the remote's default branch) or any branch, tag or commit the repo resolves). Shared: `show` (`background` default, `focus`, `split-right`, `split-down`). It returns the ids. On a paired host's tab it opens on that host.
+`ompdesk_session_open` takes one session's fields or `sessions: [ … ]` for several at once. Each: `message`, `folder`, `model` (`provider/id`), `mode` (`goal` only, and it needs a `message`, which becomes the goal; leave it out for a plain first message), `worktree` (`true`, or `{branch, base}` where `base` is `HEAD` (default), `default` (the remote's default branch) or any branch, tag or commit the repo resolves). Shared: `show` (`background` default, `focus`, `split-right`, `split-down`). It returns the ids. On a paired host's tab it opens on that host.
 
 Before you open: say which parts you will run. Write each first message with the brief template in SKILL.md. When the child writes files, give it `worktree: true` or Ownership no other child shares, so two sessions never edit one file. A `task` subagent is no substitute: it works in your checkout whatever folder you name, so a git worktree you make by hand and hand to it isolates nothing.
 
@@ -39,7 +39,6 @@ Children tell you: each report (`ompdesk_report`) lands in your session as a qui
 
 - finished: use the answer; `ompdesk_session_read` (`limit`, `before` cursor) when the summary is thin.
 - waiting for an answer: `ompdesk_session_answer` only when the answer is a detail you know; a preference, a secret or the user's own choice goes to the user (`ompdesk_tab_focus`, `ompdesk_notify`).
-- waiting for plan approval (a plan-mode session proposed its plan): read the plan file the listing names, then `ompdesk_session_answer` with `approve: true` and `choice` `execute` (fresh context, default), `compact` or `keep_context`, or `approve: false` with `text` as feedback (it revises). A plain `ompdesk_session_send` also counts as feedback and closes the card. Approving needs the user's approve permission unless full control is on; feedback always works.
 - timeout: still running. Wait again or report progress; silence alone is no reason to stop it.
 
 ## Paths in a child's answer
@@ -68,5 +67,5 @@ Children finishing reach the user through OMPdesk's batched notifications. Use `
 
 ```json
 ompdesk_session_open
-{"folder": "/Users/me/work/api-server", "model": "anthropic/claude-opus-4", "mode": "plan", "message": "Plan rate limiting for the public routes. Do not edit files yet. End with the plan as a numbered list.", "show": "split-right"}
+{"folder": "/Users/me/work/api-server", "model": "anthropic/claude-opus-4", "mode": "goal", "message": "Add rate limiting to the public routes until every route test passes.", "show": "split-right"}
 ```

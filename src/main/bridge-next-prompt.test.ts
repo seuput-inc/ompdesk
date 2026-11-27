@@ -190,7 +190,7 @@ describe("a finished turn", () => {
 		expect(world.session.usage[0]).toMatchObject({ purpose: "composer-prediction", role: "smol" });
 	});
 
-	it("carries the app state: failed command and exit, changed files, tests, plan, todos, goal, answered question", async () => {
+	it("carries the app state: failed command and exit, changed files, tests, todos, goal, answered question", async () => {
 		world.session.messages.push(
 			{ role: "user", content: "fix it", timestamp: 3 },
 			{
@@ -226,7 +226,6 @@ describe("a finished turn", () => {
 			{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "tests fail" }], timestamp: 8 },
 		);
 		Object.assign(world.session, {
-			getPlanModeState: () => ({ enabled: true }),
 			getTodoPhases: () => [
 				{
 					tasks: [
@@ -243,7 +242,6 @@ describe("a finished turn", () => {
 		expect(prompt).toContain("last-failure: bash `bun test` exit 1");
 		expect(prompt).toContain("files-changed: 1 (src/a.ts)");
 		expect(prompt).toContain("tests: ran, failed (`bun test`)");
-		expect(prompt).toContain("plan: open");
 		expect(prompt).toContain("todos: 0 of 2 done; in progress: wire api; next: docs");
 		expect(prompt).toContain("goal: active — Ship login");
 	});

@@ -49,7 +49,6 @@ describe("chat-tab availability", () => {
 	it("offers GUI-registered tool commands exactly as in an agent tab", () => {
 		for (const kind of ["agent", "chat"] as const) {
 			seedTab(kind);
-			expect(menuItem("plan").affordance.kind, kind).toBe("toggle");
 			expect(menuItem("security").affordance.kind, kind).toBe("submenu");
 			expect(menuItem("tree").affordance.kind, kind).toBe("window");
 			expect(menuItem("git").affordance.kind, kind).toBe("window");

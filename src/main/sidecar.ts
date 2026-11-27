@@ -189,9 +189,6 @@ const AGENT_EVENT_TYPES: Record<string, true> = {
 	// The built-in prompt suggestions (bridge modes/next-prompt.ts): candidates, and the feature's state/availability.
 	next_prompt_update: true,
 	next_prompt_config: true,
-	plan_proposal: true,
-	// The proposal no longer waits (answered anywhere, or a prompt replied to it): every window drops its card.
-	plan_proposal_resolved: true,
 	// The other live sessions in this session's worktree or repository (modes/checkout-peers.ts): the board's row.
 	checkout_peers: true,
 	queue_update: true,

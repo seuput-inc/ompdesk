@@ -157,7 +157,7 @@ async function launch(name: string, prefs: Record<string, unknown>, options: Lau
 			OMP_GUI_TEST_UPDATE_CHECK_LOG: path.join(root, "update-checks.log"),
 			OMP_GUI_TEST_VERSION_FILE: path.join(root, "omp-version"),
 			OMP_GUI_TEST_BOOT_LOG: path.join(root, "boots.log"),
-			OMP_GUI_TEST_UNAVAILABLE_AFTER_UPDATE: "planMode",
+			OMP_GUI_TEST_UNAVAILABLE_AFTER_UPDATE: "goalBudget",
 			OMPDESK_FAKE_INSTALLER_DIR: installerDir,
 			OMPDESK_FAKE_VERSION_FILE: path.join(root, "omp-version"),
 		},
@@ -204,8 +204,10 @@ async function expectUpdated(launched: Launched): Promise<void> {
 	await expect.poll(() => boots(launched), { timeout: 30_000 }).toEqual([FLOOR, NEWER]);
 	await expect.poll(() => sidecarStatus(page), { timeout: 30_000 }).toBe("ready");
 	await expect(page.locator(".omp-composer-input").first()).toHaveValue(DRAFT);
-	// The restarted bridge answered the capabilities probe for the newer omp; planMode is missing there.
-	await expect(page.getByText(/lacks internals OMPdesk needs for: Plan mode/)).toBeVisible({ timeout: 30_000 });
+	// The restarted bridge answered the capabilities probe for the newer omp; goalBudget is missing there.
+	await expect(page.getByText(/lacks internals OMPdesk needs for: Goal token budget/)).toBeVisible({
+		timeout: 30_000,
+	});
 	// Bun's root owns the fixture, so the unasked pass installed the version it picked, by name, never `omp update`.
 	expect(await installs(launched)).toEqual(["omp bun-global"]);
 	// Every check (main's, and Settings' on the tab) ran with this omp's folder first on PATH: stock's

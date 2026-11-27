@@ -34,7 +34,6 @@ import { useAutopilotStore } from "../stores/autopilot";
 import type { ExtensionUiStore } from "../stores/extension-ui";
 import { type MessagesStore, useMessagesStore } from "../stores/messages";
 import { type ModelStore, useModelStore } from "../stores/model";
-import type { PlanApprovalStore } from "../stores/plan-approval";
 import { type SessionStore, useSessionStore } from "../stores/session";
 import { sessionRuntime, sessionRuntimeStore, setFocusedSessionRuntime } from "../stores/session-runtime-context";
 import { useSettingsStore } from "../stores/settings";
@@ -178,7 +177,6 @@ function installMockOmp(): {
 					contextUsage: null,
 					messageCount: 0,
 					queuedMessageCount: 0,
-					planModeEnabled: false,
 					todoPhases: [],
 				}),
 			),
@@ -283,7 +281,6 @@ function installTabRoutedMockOmp(): {
 					contextUsage: null,
 					messageCount: 0,
 					queuedMessageCount: 0,
-					planModeEnabled: false,
 					todoPhases: [],
 				});
 			case "get_transcript_page":
@@ -601,7 +598,6 @@ describe("useRpcEvents model switch sync", () => {
 				contextUsage: { tokens: 100, contextWindow: 2000, percent: 5 },
 				messageCount: 0,
 				queuedMessageCount: 0,
-				planModeEnabled: false,
 				todoPhases: [],
 			}),
 		);
@@ -628,7 +624,6 @@ function settledState(overrides: Record<string, unknown>): RpcResponse {
 		isCompacting: false,
 		messageCount: 4,
 		queuedMessageCount: 0,
-		planModeEnabled: false,
 		todoPhases: [],
 		...overrides,
 	});
@@ -1042,15 +1037,15 @@ describe("useRpcEvents snapshot churn", () => {
 		await act(async () => {
 			emitTabBatch([{ type: "token_rate", rate: null }], "t-boot");
 		});
-		state.resolve(settledState({ model: { provider: "p", id: "m" }, planModeEnabled: true }));
+		state.resolve(settledState({ model: { provider: "p", id: "m" }, prewalkArmed: true }));
 		await act(async () => {
 			await hydration;
 		});
 
 		// A rate reading changes nothing the snapshot reports. Counted as churn it
-		// discarded the whole boot snapshot, so plan review stayed disabled.
+		// discarded the whole boot snapshot, so the composer's modes went missing.
 		expect(model.getState().model).toMatchObject({ provider: "p", id: "m" });
-		expect(session.getState().planModeEnabled).toBe(true);
+		expect(session.getState().prewalkArmed).toBe(true);
 	});
 
 	it("lands the boot snapshot when the bridge's read metadata arrives mid-fetch", async () => {
@@ -1062,7 +1057,7 @@ describe("useRpcEvents snapshot churn", () => {
 		await act(async () => {
 			emitTabBatch([{ type: "read_group_metadata", toolCallId: "r1", target: { path: "a.ts" } }], "t-read-meta");
 		});
-		state.resolve(settledState({ model: { provider: "p", id: "m" }, planModeEnabled: true }));
+		state.resolve(settledState({ model: { provider: "p", id: "m" }, prewalkArmed: true }));
 		await act(async () => {
 			await hydration;
 		});
@@ -1070,7 +1065,7 @@ describe("useRpcEvents snapshot churn", () => {
 		// The metadata joins its call in the tools store whichever lands first; it is no reason
 		// to drop the snapshot's model and modes.
 		expect(model.getState().model).toMatchObject({ provider: "p", id: "m" });
-		expect(session.getState().planModeEnabled).toBe(true);
+		expect(session.getState().prewalkArmed).toBe(true);
 	});
 
 	it("keeps the composer modes and model selection of a hydration that a lifecycle frame outdated", async () => {
@@ -1087,7 +1082,6 @@ describe("useRpcEvents snapshot churn", () => {
 				model: { provider: "p", id: "m" },
 				thinkingLevel: "high",
 				thinkingConfigured: "auto",
-				planModeEnabled: true,
 				prewalkArmed: true,
 				agentsPaused: true,
 				agentsPausedAt: 42,
@@ -1099,7 +1093,6 @@ describe("useRpcEvents snapshot churn", () => {
 
 		// No event carries the modes, so the frame cannot have outdated them.
 		expect(session.getState()).toMatchObject({
-			planModeEnabled: true,
 			prewalkArmed: true,
 			agentsPaused: true,
 			agentsPausedAt: 42,
@@ -1133,15 +1126,15 @@ describe("useRpcEvents snapshot churn", () => {
 		expect(model.getState()).toMatchObject({ thinkingLevel: "low", thinkingConfigured: "low" });
 	});
 
-	it("keeps plan mode from a turn-end refresh that a trailing frame outdated", async () => {
+	it("keeps the composer's modes from a turn-end refresh that a trailing frame outdated", async () => {
 		const { emitTabBatch, session, state } = await holdNextState("t-refresh");
 		await act(async () => {
 			emitTabBatch([{ type: "agent_end" }, { type: "queue_update", steering: [], followUp: [] }], "t-refresh");
 		});
-		state.resolve(settledState({ planModeEnabled: true }));
+		state.resolve(settledState({ prewalkArmed: true }));
 		await flush();
 
-		expect(session.getState().planModeEnabled).toBe(true);
+		expect(session.getState().prewalkArmed).toBe(true);
 	});
 });
 
@@ -1431,7 +1424,6 @@ describe("useRpcEvents awaiting-model marker", () => {
 				contextUsage: null,
 				messageCount: 3,
 				queuedMessageCount: 0,
-				planModeEnabled: false,
 				todoPhases: [],
 			}),
 		);
@@ -1513,7 +1505,6 @@ describe("useRpcEvents todo lifecycle", () => {
 				contextUsage: null,
 				messageCount: 3,
 				queuedMessageCount: 0,
-				planModeEnabled: false,
 				todoPhases: [],
 			}),
 		);
@@ -2057,7 +2048,6 @@ describe("hydrateSession streaming reconcile (F-HYDRATE)", () => {
 				contextUsage: null,
 				messageCount: 1,
 				queuedMessageCount: 0,
-				planModeEnabled: false,
 				todoPhases: [],
 			}),
 		);
@@ -2079,7 +2069,6 @@ describe("hydrateSession streaming reconcile (F-HYDRATE)", () => {
 				contextUsage: null,
 				messageCount: 1,
 				queuedMessageCount: 0,
-				planModeEnabled: false,
 				todoPhases: [],
 			}),
 		);
@@ -2432,7 +2421,6 @@ describe("hydrateSession streaming reconcile (F-HYDRATE)", () => {
 				contextUsage: null,
 				messageCount: 3,
 				queuedMessageCount: 0,
-				planModeEnabled: false,
 				todoPhases: [],
 			}),
 		);
@@ -2630,7 +2618,6 @@ describe("useRpcEvents tab-scoped routing guards", () => {
 							contextUsage: null,
 							messageCount: 0,
 							queuedMessageCount: 0,
-							planModeEnabled: false,
 							todoPhases: [],
 						}
 					: command.type === "get_transcript_page"
@@ -2669,7 +2656,6 @@ describe("useRpcEvents tab-scoped routing guards", () => {
 			contextUsage: null,
 			messageCount: 0,
 			queuedMessageCount: 0,
-			planModeEnabled: false,
 			todoPhases: [],
 		});
 		// The first get_state for t-first waits until the test answers it.
@@ -2980,29 +2966,6 @@ describe("useRpcEvents background tabs", () => {
 			await hydrateTabSession("t-back");
 		});
 		expect(session.getState()).toMatchObject({ retryInfo: null, compactionInfo: null });
-	});
-
-	it("re-shows a plan proposal made while the tab was in the background", async () => {
-		const { commandForTab } = installTabRoutedMockOmp();
-		const proposal = {
-			planFilePath: "local://PLAN.md",
-			title: "Refactor",
-			suggestedFileName: "REFACTOR.md",
-			planContent: "# Plan",
-			options: ["execute", "refine"],
-		};
-		const original = commandForTab.getMockImplementation()!;
-		commandForTab.mockImplementation(async (tabId, command) => {
-			if (command.type === "get_state") return settledState({ planModeEnabled: true });
-			if (command.type === "get_plan_mode") return success({ enabled: true, proposal });
-			return original(tabId, command);
-		});
-		seedTabs();
-		await mount(<RpcEventsProbe />);
-		await act(async () => {
-			await hydrateTabSession("t-back");
-		});
-		expect(sessionRuntimeStore<PlanApprovalStore>("t-back", "planApproval")?.getState().pending).toEqual(proposal);
 	});
 
 	// 6 Nov 2026, the owner: a background session's subagent chip stayed stale until clicked. A frame can come for a tab

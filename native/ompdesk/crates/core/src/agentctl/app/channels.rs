@@ -176,7 +176,6 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("fs:stat", Risk::Never(OWN_TOOLS)),
     ("fs:mutate", Risk::Never(OWN_TOOLS)),
     ("fs:search", Risk::Never(OWN_TOOLS)),
-    ("fs:read-plan", Risk::Never(OWN_TOOLS)),
     ("fs:read-image", Risk::Never(OWN_TOOLS)),
     ("fs:read-binary", Risk::Never(OWN_TOOLS)),
     ("fs:media-stream", Risk::Never(OWN_TOOLS)),

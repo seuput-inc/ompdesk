@@ -85,13 +85,6 @@ import { useForkHandoffStore } from "./fork-handoff";
 import type { MessagesStore } from "./messages";
 import { useNextPromptStore } from "./next-prompt";
 import { answerHeld } from "./outbox";
-import {
-	type PendingPlanProposal,
-	type PlanApprovalSnapshot,
-	type PlanApprovalStore,
-	type PlanApprovalSubmitState,
-	usePlanApprovalStore,
-} from "./plan-approval";
 import type { QueueStore } from "./queue";
 import { useRemoteStore } from "./remote";
 import { type SessionStore, useSessionStore } from "./session";
@@ -152,7 +145,7 @@ export interface SessionTab {
 	 * open-session-in-new-tab flow — the sidecar starts on a fresh session and
 	 * must be switched over before its transcript hydrates). */
 	pendingSessionPath?: string;
-	/** What the tab's session blocks on: a tool or plan approval, or any other answer (ask, confirm, …). */
+	/** What the tab's session blocks on: a tool approval, or any other answer (ask, confirm, …). */
 	awaitingInput?: AwaitedInput;
 	/** The tab's turn waits for the internet connection and continues by itself once it is back (main's turn-resume). */
 	awaitingConnection?: boolean;
@@ -765,7 +758,6 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 								queue: runtime?.stores.get("queue")?.getState(),
 								composer: runtime?.stores.get("composer")?.getState(),
 								extensionUi: runtime?.stores.get("extensionUi")?.getState(),
-								plan: runtime?.stores.get("planApproval")?.getState(),
 							},
 						] as const;
 					}),
@@ -789,7 +781,6 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 				const composer = sessionRuntimeStore<ComposerStore>(tab.id, "composer")?.getState();
 				const queue = sessionRuntimeStore<QueueStore>(tab.id, "queue")?.getState();
 				const ui = sessionRuntimeStore<ExtensionUiStore>(tab.id, "extensionUi")?.getState();
-				const plan = sessionRuntimeStore<PlanApprovalStore>(tab.id, "planApproval")?.getState();
 				const info = listedById?.get(tab.id);
 				const hasPending =
 					(!info || tabSessionChanged(tab, info)) &&
@@ -798,12 +789,10 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 							composer?.pictureSlots.length ||
 							composer?.sending ||
 							composer?.submissionUncertain ||
-							composer?.cancelSubmit ||
 							composer?.restoredQueue.length ||
 							composer?.editingQueued ||
 							queue?.steering.length ||
-							queue?.followUp.length ||
-							plan?.pending,
+							queue?.followUp.length,
 					) ||
 						ui?.pendingRequests.some(request => BLOCKING_UI_METHODS[request.method] === true));
 				return (
@@ -813,8 +802,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 					prior.runtime !== runtime ||
 					prior.queue !== runtime?.stores.get("queue")?.getState() ||
 					prior.composer !== runtime?.stores.get("composer")?.getState() ||
-					prior.extensionUi !== runtime?.stores.get("extensionUi")?.getState() ||
-					prior.plan !== runtime?.stores.get("planApproval")?.getState()
+					prior.extensionUi !== runtime?.stores.get("extensionUi")?.getState()
 				);
 			});
 		if (cannotReconcile) return false;
@@ -1789,12 +1777,12 @@ export function settleTabExtensionUiRequests(
 	return true;
 }
 
-/** Runtimes whose extension-UI and plan stores already feed their tab's `awaitingInput`. */
+/** Runtimes whose extension-UI store already feeds their tab's `awaitingInput`. */
 const watchedRuntimes = new WeakSet<SessionRuntime>();
 
 /**
  * Mirror "this tab's session blocks on the user" (a response-bearing extension
- * request or a plan proposal) onto its tab entry, so the sidebar and tab
+ * request) onto its tab entry, so the sidebar and tab
  * signals flag background tabs too, whose dialogs are parked in their own
  * runtime until shown. Subscribes once per runtime (a replaced runtime is
  * watched afresh) and re-syncs on every call, since the tab entry can appear
@@ -1803,12 +1791,10 @@ const watchedRuntimes = new WeakSet<SessionRuntime>();
 function watchTabAwaitingInput(tabId: string): void {
 	const runtime = sessionRuntime(tabId);
 	const extensionUi = sessionRuntimeStore<ExtensionUiStore>(tabId, "extensionUi");
-	const plan = sessionRuntimeStore<PlanApprovalStore>(tabId, "planApproval");
-	if (!runtime || !extensionUi || !plan) return;
+	if (!runtime || !extensionUi) return;
 	const sync = () => {
 		if (sessionRuntime(tabId) !== runtime) return;
-		const awaiting =
-			awaitedInput(extensionUi.getState()) ?? (plan.getState().pending !== null ? "approval" : undefined);
+		const awaiting = awaitedInput(extensionUi.getState()) ?? undefined;
 		useTabsStore.setState(state => {
 			const tab = state.tabs.find(entry => entry.id === tabId);
 			if (!tab || tab.awaitingInput === awaiting) return state;
@@ -1818,7 +1804,6 @@ function watchTabAwaitingInput(tabId: string): void {
 	if (!watchedRuntimes.has(runtime)) {
 		watchedRuntimes.add(runtime);
 		extensionUi.subscribe(sync);
-		plan.subscribe(sync);
 	}
 	sync();
 }
@@ -1851,59 +1836,6 @@ export function restoreTabComposer(
 		images: [...images, ...current.images],
 		pictureSlots: [...images, ...current.pictureSlots],
 	}));
-}
-
-/** Finish a plan-approval request in the tab that issued it. The response may
- * arrive after the user switched elsewhere, so both the proposal UI and the
- * plan-mode flag are updated in that tab's parked bundle instead of whichever
- * session happens to be visible. A failed answer (`submitting: null`) to a
- * proposal resolved elsewhere meanwhile closes the card; returns true then, so
- * the caller shows no failure. */
-export function settleTabPlanApproval(
-	tabId: string | null,
-	sessionId: string,
-	target: PendingPlanProposal,
-	result: {
-		clear?: boolean;
-		notice?: string | null;
-		submitting?: PlanApprovalSubmitState | null;
-		exitPlanMode?: boolean;
-	},
-): boolean {
-	const resolvedTabId = tabId ?? useTabsStore.getState().activeTabId;
-	const session = sessionRuntimeStore<SessionStore>(resolvedTabId, "session");
-	const planStore = sessionRuntimeStore<PlanApprovalStore>(resolvedTabId, "planApproval");
-	const settle = (plan: PlanApprovalSnapshot): Partial<PlanApprovalSnapshot> & { lost: boolean } => {
-		const lost = !result.clear && result.submitting === null && plan.resolved;
-		const clear = result.clear || lost;
-		return {
-			lost,
-			pending: clear ? null : target,
-			feedback: clear ? "" : plan.feedback,
-			notice: clear ? null : result.notice === undefined ? plan.notice : result.notice,
-			submitting: clear ? null : result.submitting === undefined ? plan.submitting : result.submitting,
-			...(clear ? { resolved: false } : {}),
-		};
-	};
-	if (!session || !planStore) {
-		if (
-			useTabsStore.getState().activeTabId !== resolvedTabId ||
-			useSessionStore.getState().sessionId !== sessionId ||
-			usePlanApprovalStore.getState().pending !== target
-		)
-			return false;
-		const { lost, ...next } = settle(usePlanApprovalStore.getState());
-		usePlanApprovalStore.setState(next);
-		if (result.exitPlanMode) useSessionStore.setState({ planModeEnabled: false });
-		return lost;
-	}
-	if (session.getState().sessionId !== sessionId) return false;
-	const plan = planStore.getState();
-	if (plan.pending !== target) return false;
-	const { lost, ...next } = settle(plan);
-	planStore.setState(next);
-	if (result.exitPlanMode) session.setState({ planModeEnabled: false });
-	return lost;
 }
 
 /**

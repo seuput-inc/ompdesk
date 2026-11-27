@@ -358,13 +358,6 @@ impl AgentControl {
         {
             parts.push(format!("model {}/{}", model.provider, model.id));
         }
-        if session
-            .state
-            .as_ref()
-            .is_some_and(|state| state.plan_mode_enabled)
-        {
-            parts.push("plan mode".to_owned());
-        }
         if session.subagents > 0 {
             parts.push(format!("{} subagent(s) running", session.subagents));
         }

@@ -554,14 +554,14 @@ describe("mac bundle configs", () => {
 		expect(notices).toContain("LICENSES/MIT-lobe-icons.txt");
 	});
 
-	it("ships the shared auto-mode contract inside the bridge on macOS and Windows", () => {
+	it("ships the shared auto-title contract inside the bridge on macOS and Windows", () => {
 		for (const file of ["darwin", "win32"]) {
 			const bridge = packagedResources(file).find(resource => resource.to === "gui-bridge");
 			expect(bridge?.from, file).toBe("resources/gui-bridge");
-			const source = path.join(PACKAGE_ROOT, bridge?.from ?? "", "modes/auto-mode-contracts.ts");
-			expect(fs.existsSync(source), `${file} omits modes/auto-mode-contracts.ts`).toBe(true);
-			const core = fs.readFileSync(path.join(PACKAGE_ROOT, "resources/gui-bridge/modes/auto-mode-core.ts"), "utf8");
-			expect(core).toContain('from "./auto-mode-contracts"');
+			const source = path.join(PACKAGE_ROOT, bridge?.from ?? "", "modes/auto-title-contracts.ts");
+			expect(fs.existsSync(source), `${file} omits modes/auto-title-contracts.ts`).toBe(true);
+			const core = fs.readFileSync(path.join(PACKAGE_ROOT, "resources/gui-bridge/modes/auto-title-core.ts"), "utf8");
+			expect(core).toContain('from "./auto-title-contracts"');
 			expect(fs.readFileSync(source, "utf8")).not.toMatch(/^\s*import\s/m);
 		}
 	});

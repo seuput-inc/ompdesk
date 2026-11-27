@@ -92,7 +92,6 @@ export const CURATED_SCHEMA_ROWS: Readonly<Record<string, SettingsSectionId>> = 
 	"tools.approvalMode": "permissions",
 	"tools.approval": "permissions",
 	"secrets.enabled": "permissions",
-	"plan.enabled": "agent",
 	"goal.enabled": "agent",
 	"ttsr.enabled": "agent",
 	"advisor.enabled": "agent",
@@ -225,13 +224,6 @@ export const GUI_SEARCH_ITEMS: readonly GuiSearchItem[] = [
 		section: "agent",
 		labelKey: "settings.dictation.cleanup",
 		aliases: "dictation cleanup tidy punctuation small model tiny smol 받아쓰기 다듬기 문장부호 작은 모델",
-	},
-	{
-		id: "autoMode",
-		section: "agent",
-		labelKey: "settings.gui.autoMode",
-		aliases:
-			"auto mode automatic plan goal choose mode small model smart automation 자동 모드 계획 목표 자동 선택 작은 모델 스마트 자동화",
 	},
 	{
 		id: "nextPromptSuggestions",
@@ -600,7 +592,6 @@ export const GUI_SEARCH_ITEMS: readonly GuiSearchItem[] = [
 		"tools",
 		"noRules",
 		"noLsp",
-		"planYolo",
 		"profile",
 		"sessionDir",
 		"config",

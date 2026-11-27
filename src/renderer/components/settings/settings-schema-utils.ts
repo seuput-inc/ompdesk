@@ -23,15 +23,10 @@ const SETTING_CONDITIONS: Record<string, { parent: string; visible: (values: Rec
 		parent: "retry.usageAwareFallback",
 		visible: values => values["retry.usageAwareFallback"] === true,
 	},
-	planModeEnabled: { parent: "plan.enabled", visible: values => values["plan.enabled"] === true },
 	vimModeEnabled: { parent: "tui.vimMode", visible: values => values["tui.vimMode"] === true },
 	composerPredictionsEnabled: {
 		parent: "composer.predictions",
 		visible: values => values["composer.predictions"] === true,
-	},
-	planAutosaveEnabled: {
-		parent: "plan.autosave",
-		visible: values => values["plan.enabled"] === true && values["plan.autosave"] === true,
 	},
 };
 
@@ -95,13 +90,14 @@ const TERMINAL_DISPLAY_SETTINGS = new Set([
 
 /**
  * Stock's own memory backends (`memory.backend`, `memories.*`, mnemopi, hindsight, sharpshooter, autolearn: the
- * schema's `memory` tab) are not offered: ai-memory is OMPdesk's memory (Settings › Memory (ai-memory)).
+ * schema's `memory` tab) are not offered: ai-memory is OMPdesk's memory (Settings › Memory (ai-memory)). Nor are
+ * stock's plan-mode settings (`plan.*`): OMPdesk has no plan mode (removed 27 Nov 2026).
  */
-const STOCK_MEMORY_PATH = /^(memory|memories|mnemopi|hindsight|sharpshooter|autolearn)\./;
+const STOCK_UNLISTED_PATH = /^(memory|memories|mnemopi|hindsight|sharpshooter|autolearn|plan)\./;
 
 export function isSettingSupportedInGui(entry: { path?: string; tab?: string; tuiOnly?: boolean }): boolean {
 	if (entry.tuiOnly === true || TERMINAL_DISPLAY_SETTINGS.has(entry.path ?? "")) return false;
-	return entry.tab !== "memory" && !STOCK_MEMORY_PATH.test(entry.path ?? "");
+	return entry.tab !== "memory" && !STOCK_UNLISTED_PATH.test(entry.path ?? "");
 }
 
 export function isSettingVisibleInGui(entry: SettingEntry, values: Record<string, unknown>): boolean {

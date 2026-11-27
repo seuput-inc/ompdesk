@@ -6,7 +6,7 @@ Commands: `sessions`, `open`, `send`, `wait`, `state`, `result`, `read`, `answer
 
 - A message argument of `-` reads stdin: `echo "..." | ompdesk open -`.
 - `ompdesk send <session> "..." --wait` sends and returns when the turn ended; `ompdesk wait <session> --until idle|blocked|done|any [--timeout SECONDS]` waits without sending.
-- `agent_blocked` means the session waits on the person (a question, an approval, a plan). Ask the person first. Never `--force` a message past a person's question without a reason you can state.
+- `agent_blocked` means the session waits on the person for an answer or approval. Ask the person first. Never `--force` a message past a person's question without a reason you can state.
 - `agent_prompt_stalled`: the session did not start working on the message; check `ompdesk state`.
 - `--json` prints the raw result as JSON (`{"ok":false,"error":{...}}` on failure) instead of the tool's text.
 - `--caller NAME` (or `OMPDESK_CALLER`) names you; sessions you open are yours.

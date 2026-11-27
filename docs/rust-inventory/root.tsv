@@ -76,11 +76,6 @@ src/main/bridge-agent-worker.test.ts	tooling	-	Vitest suite: worker contract.
 src/main/bridge-answer-first.test.ts	tooling	-	Vitest suite: answer-first companion.
 src/main/bridge-ask-form-stock.test.ts	tooling	-	Vitest suite: reaches the card whole, pictures above the question, and the answer comes back as the form's data.
 src/main/bridge-attach-entry-ids.test.ts	tooling	-	Vitest suite: gives every message of a committed agent_end its journal entry id, custom messages included.
-src/main/bridge-auto-mode-core.test.ts	tooling	-	Vitest suite: autoModeSkip (guards).
-src/main/bridge-auto-mode-prefetch-stock.test.ts	tooling	-	Vitest suite: warms the judge once, answers the decision at Enter from the cache, and joins a question still asked.
-src/main/bridge-auto-mode-real.test.ts	tooling	-	Vitest suite: decides six prompts in time.
-src/main/bridge-auto-mode-stock.test.ts	tooling	-	Vitest suite: is available, asks the cheap judge chain, answers guards without a model and never holds a prompt up.
-src/main/bridge-auto-plan-stock.test.ts	tooling	-	Vitest suite: is approved by itself when proposed: no card, plan mode ends, the plan runs in the same session.
 src/main/bridge-auto-title-core.test.ts	tooling	-	Vitest suite: auto title contracts.
 src/main/bridge-auto-title-stock.test.ts	tooling	-	Vitest suite: is available, keeps the origin in stock's own journal, and names nothing for an empty conversation.
 src/main/bridge-auto-title.test.ts	tooling	-	Vitest suite: first title.
@@ -171,6 +166,7 @@ src/main/bridge-restore-card-stock.test.ts	tooling	-	Vitest suite; not shipped i
 src/main/bridge-restore-request-stock.test.ts	tooling	-	Vitest suite: continues the turn whose bash result the model had not answered yet, without running bash again.
 src/main/bridge-restore-subagents-stock.test.ts	tooling	-	Vitest suite: reports a subagent the restore revived to omp's subagent registry, and tells the idle parent once.
 src/main/bridge-role-values.test.ts	tooling	-	Vitest suite: advisor auto policy around stock selector.
+src/main/bridge-saved-plan-stock.test.ts	tooling	-	Reopens a saved plan session with stock RPC and checks it accepts a goal.
 src/main/bridge-scratch.test.ts	tooling	-	Vitest suite: bridge scratch section.
 src/main/bridge-security-stock.test.ts	tooling	-	Vitest suite: shows a scan an earlier process left running as failed, scan and operation alike, on the first read.
 src/main/bridge-session-extras-guard.test.mjs	tooling	-	Checks which session-extra actions stay available when stock lacks MCP argument completions.

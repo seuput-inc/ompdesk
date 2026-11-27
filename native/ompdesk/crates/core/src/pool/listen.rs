@@ -121,7 +121,6 @@ impl Ctx {
                             .take()
                             .and_then(|ids| ids.last().cloned()),
                     );
-                    entry.plan_proposal = None;
                     owned = pool
                         .request_owners
                         .iter()
@@ -516,12 +515,11 @@ impl Ctx {
             goal_before: bool,
         }
         let list = events.as_array().map(Vec::as_slice).unwrap_or_default();
-        let (seen, run_ended, retry_started, stepped, hidden, win) = self.with(|pool| {
+        let (seen, run_ended, retry_started, stepped, win) = self.with(|pool| {
             let now = pool.now;
             let mut serial = pool.retry_serial;
-            let mut plan_serial = pool.plan_serial;
             let Some(entry) = pool.entry_mut(tab) else {
-                return (None, false, false, false, Vec::new(), 0);
+                return (None, false, false, false, 0);
             };
             let seen = Seen {
                 was_busy: entry.busy(),
@@ -535,7 +533,6 @@ impl Ctx {
             let mut run_ended = false;
             let mut retry_started = false;
             let mut stepped = false;
-            let mut hidden: Vec<Value> = Vec::new();
             let remote = entry.device.is_some();
             for event in list {
                 if entry.tracking.track(event, now, &mut serial, remote) {
@@ -548,30 +545,6 @@ impl Ctx {
                     }
                     Some("tool_execution_start" | "tool_execution_end") => stepped = true,
                     Some("auto_retry_start") => retry_started = true,
-                    Some(kind @ ("plan_proposal" | "plan_proposal_resolved")) => {
-                        let path = event["planFilePath"].as_str().unwrap_or("").to_string();
-                        if kind == "plan_proposal" {
-                            let title = event["title"].as_str().unwrap_or("").to_string();
-                            entry.plan_proposal = Some((title, path));
-                            // A tab a paired host runs keeps the host's own number: it is what that host's answer step
-                            // compares. Only a tab of this computer is numbered here.
-                            entry.plan_generation =
-                                match (entry.device.is_some(), event["generation"].as_u64()) {
-                                    (true, Some(host)) => host,
-                                    _ => {
-                                        plan_serial += 1;
-                                        plan_serial
-                                    }
-                                };
-                        } else if entry
-                            .plan_proposal
-                            .as_ref()
-                            .is_some_and(|(_, current)| *current == path)
-                        {
-                            entry.plan_proposal = None;
-                        }
-                        hidden.push(event.clone());
-                    }
                     Some("message_end") => {
                         // Stock writes a new session's file with its first assistant message: until then the prompt
                         // lives nowhere else, and a relaunch sends it again.
@@ -595,8 +568,7 @@ impl Ctx {
             }
             let win = entry.win_id;
             pool.retry_serial = serial;
-            pool.plan_serial = plan_serial;
-            (Some(seen), run_ended, retry_started, stepped, hidden, win)
+            (Some(seen), run_ended, retry_started, stepped, win)
         });
         let Some(seen) = seen else {
             return Ok(());
@@ -649,29 +621,7 @@ impl Ctx {
         if placeholder != seen.was_placeholder {
             self.notify_window_tabs_changed(win).await?;
         }
-        if !hidden.is_empty() {
-            self.forward_to_hidden(
-                tab,
-                "EVENTS_BATCH",
-                json!({"tabId": tab, "payload": hidden}),
-            );
-        }
         Ok(())
-    }
-
-    /// Frames a hidden tab's sidebar row needs go to the windows that show the tab without its full channel.
-    pub(super) fn forward_to_hidden(&self, tab: &str, channel: &str, data: Value) {
-        let wins = self.with(|pool| {
-            pool.entry(tab)
-                .map(|entry| {
-                    Pool::windows_of(entry)
-                        .into_iter()
-                        .filter(|win| !entry.wired_in(*win))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        });
-        self.send(wins, channel, data);
     }
 
     /// A turn ended on a tab that waits for the new omp: one tick later (main's `setImmediate`), so every listener of

@@ -32,7 +32,7 @@ describe("quota command classification", () => {
 	it("reads the union well enough to know the commands it is guarding", () => {
 		const types = rpcCommandTypes();
 		expect(types.length).toBeGreaterThan(200);
-		expect(types).toEqual(expect.arrayContaining(["prompt", "omfg", "switch_leaf", "plan_approval", "get_state"]));
+		expect(types).toEqual(expect.arrayContaining(["prompt", "omfg", "switch_leaf", "set_plan_mode", "get_state"]));
 	});
 
 	it("counts the commands that call a model beyond the original ten", () => {
@@ -56,16 +56,6 @@ describe("quota command classification", () => {
 	it("counts a leaf switch only when it summarizes", () => {
 		expect(commandUsesModel(command({ type: "switch_leaf", entryId: "e" }))).toBe(false);
 		expect(commandUsesModel(command({ type: "switch_leaf", entryId: "e", summarize: true }))).toBe(true);
-	});
-
-	it("counts a plan approval that runs the plan or sends feedback, not a save or a bare rejection", () => {
-		expect(commandUsesModel(command({ type: "plan_approval", approved: true, option: "execute" }))).toBe(true);
-		expect(commandUsesModel(command({ type: "plan_approval", approved: true }))).toBe(true);
-		expect(commandUsesModel(command({ type: "plan_approval", approved: true, option: "compact" }))).toBe(true);
-		expect(commandUsesModel(command({ type: "plan_approval", approved: true, option: "save" }))).toBe(false);
-		expect(commandUsesModel(command({ type: "plan_approval", approved: false }))).toBe(false);
-		expect(commandUsesModel(command({ type: "plan_approval", approved: false, feedback: "  " }))).toBe(false);
-		expect(commandUsesModel(command({ type: "plan_approval", approved: false, feedback: "shorter" }))).toBe(true);
 	});
 
 	it("counts a goal that starts or resumes a turn, not a budget, pause or drop", () => {

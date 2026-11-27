@@ -5,7 +5,6 @@
 import { filePickInProgress } from "../lib/file-pick";
 import { useComposerStore } from "../stores/composer";
 import { useExtensionUiStore } from "../stores/extension-ui";
-import { usePlanApprovalStore } from "../stores/plan-approval";
 import { useUiStore } from "../stores/ui";
 import { useHostUiStore } from "./host-ui/host-ui-store";
 import type { SafeMoment } from "./sw-update";
@@ -20,8 +19,7 @@ export function pageSafeMoment(isVisible: () => boolean = () => document.visibil
 		},
 		attached: () => useComposerStore.getState().images.length > 0,
 		picking: filePickInProgress,
-		askOpen: () =>
-			useExtensionUiStore.getState().pendingRequests.length > 0 || usePlanApprovalStore.getState().pending !== null,
+		askOpen: () => useExtensionUiStore.getState().pendingRequests.length > 0,
 		uploading: () => uploadsInFlight() > 0,
 		// Unsaved Files editor changes (or a switch held back until "Discard"), and any host sheet or
 		// dialog on screen: the editor and models-config sheets keep their draft in the sheet itself.

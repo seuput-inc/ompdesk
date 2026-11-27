@@ -193,8 +193,14 @@ fn build_sessions(p: &Parsed) -> Result<Built, String> {
     ))
 }
 
+/// `--mode plan` from before Plan mode was removed: the refusal the core gives `ompdesk_session_open` too.
+const PLAN_REMOVED: &str = "Plan mode was removed from OMPdesk: use --mode goal (the message becomes its goal) or no --mode (a plain first message)";
+
 fn build_open(p: &Parsed) -> Result<Built, String> {
-    one_of(p.str("mode"), &["plan", "goal"], "mode")?;
+    if p.str("mode") == Some("plan") {
+        return Err(PLAN_REMOVED.into());
+    }
+    one_of(p.str("mode"), &["goal"], "mode")?;
     one_of(
         p.str("show"),
         &["background", "focus", "split-right", "split-down"],
@@ -713,7 +719,7 @@ pub static SPECS: &[Spec] = &[
     },
     Spec {
         name: "open",
-        usage: "open [MESSAGE|-] [--folder F] [--device D] [--model M] [--mode plan|goal] [--worktree [--branch B] [--base REF]] [--reopen ID [--restore]] [--show background|focus|split-right|split-down]",
+        usage: "open [MESSAGE|-] [--folder F] [--device D] [--model M] [--mode goal] [--worktree [--branch B] [--base REF]] [--reopen ID [--restore]] [--show background|focus|split-right|split-down]",
         summary: "Open a session (ompdesk_session_open); MESSAGE `-` reads stdin.",
         flags: &[
             ("folder", S),
@@ -1780,6 +1786,7 @@ mod tests {
                 &["answer", "s", "--answers", "{"],
                 Some("--answers is not valid JSON"),
             ),
+            (&["open", "do it", "--mode", "plan"], Some(PLAN_REMOVED)),
             (&["bot"], Some("bot needs ACTION")),
             (
                 &["bot", "explode"],

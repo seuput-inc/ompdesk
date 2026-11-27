@@ -208,7 +208,6 @@ function stateResponse(isStreaming: boolean): RpcResponse {
 			contextUsage: null,
 			messageCount: 0,
 			queuedMessageCount: 0,
-			planModeEnabled: false,
 			todoPhases: [],
 		},
 	};

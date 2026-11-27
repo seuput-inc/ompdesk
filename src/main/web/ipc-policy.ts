@@ -376,7 +376,6 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[C.FS_STAT]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.FS_MUTATE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.FS_SEARCH]: { dir: "invoke", permission: "workspace", mode: "pass" },
-	[C.FS_READ_PLAN]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.FS_READ_IMAGE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.FS_READ_BINARY]: {
 		dir: "invoke",

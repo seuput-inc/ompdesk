@@ -120,7 +120,6 @@ export class TestBackend implements ControlBackend {
 			hidden: false,
 			resuming: false,
 			hasAsk: state === "blocked",
-			hasPlan: false,
 		}));
 	}
 

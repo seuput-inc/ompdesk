@@ -528,12 +528,6 @@ function onAgentEnd(session: Session, event: unknown): void {
 		return;
 	}
 	if (state.state !== "running") return;
-	if (session.getPlanModeState()?.enabled) {
-		// Plan mode is no stop: main leaves it and asks for the next cycle.
-		requestNudge("plan");
-		scheduleStall(session);
-		return;
-	}
 	const decision = decideAfterCycle({
 		records,
 		settings: state.settings,
@@ -560,7 +554,6 @@ function scheduleStall(session: Session): void {
 			const tasks = phases.flatMap(phase => phase.tasks);
 			const verdict = classifyStall({
 				lastTurnErrored,
-				planMode: Boolean(session.getPlanModeState()?.enabled),
 				todosAllBlocked:
 					tasks.some(task => task.status === "blocked") &&
 					!tasks.some(task => task.status === "pending" || task.status === "in_progress"),
@@ -1064,7 +1057,6 @@ async function arm(session: Session, params: AutopilotArmParams): Promise<Autopi
 	if (!params.resume && previous && previous.state !== "ended") {
 		throw new Error("This session already has an autopilot run; resume or end it first.");
 	}
-	if (session.getPlanModeState()?.enabled) throw new Error("Exit plan mode first.");
 	if (!params.resume && session.getGoalModeState()?.enabled)
 		throw new Error("A goal is already active in this session.");
 	const mountedAtArm = mountedTools(session);

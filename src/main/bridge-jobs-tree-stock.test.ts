@@ -17,7 +17,7 @@ import { configDirName, OMP_COMMAND, INSTALLED_OMP as omp } from "./test-bridge-
 const HELPER = `
 import { probe } from "./health";
 export async function capabilitiesFor(env) {
- return (await probe(env, ["jobs", "cancelJob", "autoMode"])).map(entry => ({ feature: entry.feature, missing: entry.missing }));
+ return (await probe(env, ["jobs", "cancelJob"])).map(entry => ({ feature: entry.feature, missing: entry.missing }));
 }
 `;
 
@@ -166,7 +166,7 @@ describe.skipIf(!existsSync(omp))("background jobs tree on stock omp", () => {
 		expect(probe.cancelShell).toEqual({ cancelled: true });
 	}, 130_000);
 
-	it("keeps the jobs actions and auto mode available: every internal they read, job-tree included, is this omp's", () => {
+	it("keeps the jobs actions available on the installed omp", () => {
 		expect(run().unavailable).toEqual([]);
 	}, 130_000);
 });

@@ -56,6 +56,7 @@ const MERGES: &[Merge] = &[
 
 /// Prefs whose switch was removed, each with why.
 pub(super) const RETIRED: &[(&str, &str)] = &[
+    ("autoMode", "Auto mode was removed (27 Nov 2026)."),
     ("builtinMcp.rea", "OMPdesk no longer ships REA."),
     (
         "modelPool",
@@ -201,9 +202,10 @@ pub(super) fn migrate(store: &mut Map<String, Value>, user_data: &Path) -> bool 
     }
     if let Some(Value::Object(overrides)) = store.get_mut("keymapOverrides") {
         overrides.retain(|id, _| {
-            !RETIRED_PANEL_VIEWS
-                .iter()
-                .any(|view| id.strip_prefix("panel.") == Some(*view))
+            id != "plan.toggle"
+                && !RETIRED_PANEL_VIEWS
+                    .iter()
+                    .any(|view| id.strip_prefix("panel.") == Some(*view))
         });
     }
     for key in THEME_PREFS {

@@ -63,7 +63,6 @@ export class World {
 	answers: Array<{ id: string; tab: string; response: object }> = [];
 	requests: Array<{ kind: "push" | "release"; quote: string; cycle: number; at: number }> = [];
 	stats = new Map<string, { tokens: { total: number }; cost: number }>();
-	plan = false;
 	goal: { enabled: boolean; status?: string } = { enabled: false };
 	failGoalCreate = false;
 	failGoalResume = false;
@@ -113,7 +112,6 @@ export class World {
 			this.failRetries -= 1;
 			return fail("Nothing to retry.");
 		}
-		if (type === "get_plan_mode") return ok({ enabled: this.plan });
 		if (type === "get_goal") return ok(this.goal);
 		if (type === "get_session_stats") return ok(this.stats.get(tab) ?? { tokens: { total: 0 }, cost: 0 });
 		if (type === "set_session_name") this.sessionNames.set(tab, String(rest.name));

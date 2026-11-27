@@ -2,7 +2,7 @@
 //!
 //! Owns these TypeScript methods: `#send` (2574), `#untilDraftSent` (2606), `#deliverSend` (2623), `#handSend`
 //! (2649), `#owedDeps` and `redeliverSends` (2765-2798), `#journalMarks` (2800), `#turnStarts` (2809),
-//! `#reportFields` (2824), `#report` (2839), `#answer` (3363), `#answerPlan` (3474), the mail
+//! `#reportFields` (2824), `#report` (2839), `#answer` (3363), the mail
 //! side of `childAsked` (1387) and `personTyped` (3739), and the receipts, in-flight sends and `#cardsTold` /
 //! `#nudged` state in `Mem`. `#mailbox` is `self.mailbox`, the send outbox
 //! `self.send_outbox` (`journal::send_outbox::deliver_owed`, `redeliver_sends`, `OwedDeps`).
@@ -26,7 +26,7 @@ use super::resolve::OpenOptions;
 use super::state::SessionState;
 use super::text::{
     JournalMarks, OTHER_OPTION, card_text, cleanup_caller, is_agent_card, journal_marks, label,
-    named, pick_option, response_data, saved_id_of_path, transcript_page, waits, with_dispatch,
+    named, pick_option, saved_id_of_path, transcript_page, waits, with_dispatch,
 };
 use super::types::{
     AnswerArgs, ControlTab, ReportArgs, RpcResponse, SendArgs, StoredSession, UiRequest,
@@ -1195,7 +1195,7 @@ impl AgentControl {
         })
     }
 
-    /// `ompdesk_session_answer` (`#answer`, `#answerPlan`).
+    /// `ompdesk_session_answer` (`#answer`).
     pub(super) async fn answer(
         &self,
         caller: &ControlTab,
@@ -1208,11 +1208,6 @@ impl AgentControl {
             .iter()
             .filter(|ask| !is_agent_card(ask))
             .collect();
-        if asks.is_empty()
-            && let Some(plan) = &target.plan
-        {
-            return self.answer_plan(caller, target, plan, args).await;
-        }
         if asks.is_empty() {
             return fail(if !target.asks.is_empty() {
                 "That is a confirmation card for the user (OMPdesk asks the person before an agent action); only the user answers it.".to_owned()
@@ -1495,125 +1490,6 @@ impl AgentControl {
                 error.message()
             ),
         })
-    }
-
-    /// `#answerPlan`: a plan proposal, through the same `plan_approval` command the plan card sends: approve with an
-    /// option, or reject (with `text`, stock's feedback turn). Approving follows the tool-approval rule; rejecting
-    /// always works.
-    async fn answer_plan(
-        &self,
-        caller: &ControlTab,
-        target: &ControlTab,
-        plan: &super::types::TabPlan,
-        args: &AnswerArgs,
-    ) -> R<String> {
-        let resolved = self
-            .resolve_attachments(caller, args.attachments.as_deref())
-            .await?;
-        let approve = args.approve.or_else(|| {
-            args.choice.as_ref().map(|choice| {
-                let lowered = choice.to_lowercase();
-                !["reject", "deny", "no"]
-                    .iter()
-                    .any(|word| lowered.starts_with(word))
-            })
-        });
-        let Some(approve) = approve else {
-            return fail(
-                "Give approve: true (choice execute, compact or keep_context) or approve: false (text = feedback).",
-            );
-        };
-        let name = format!(
-            "\"{}\"",
-            one_line(
-                if plan.title.is_empty() {
-                    "plan"
-                } else {
-                    &plan.title
-                },
-                100
-            )
-        );
-        let feedback = args.text.as_deref().map(trim).filter(|f| !f.is_empty());
-        let (command, summary) = if approve {
-            let option = match args.choice.as_deref() {
-                None | Some("Approve") => "execute",
-                Some(other) => other,
-            };
-            if !matches!(option, "execute" | "compact" | "keep_context") {
-                return fail(format!(
-                    "Plan option \"{option}\": use execute, compact or keep_context."
-                ));
-            }
-            if !self.host.state().approve_enabled {
-                return fail(
-                    "사용자 승인이 필요해요: approving another session's plan needs the user's permission for agents to approve (Settings › Tools & extensions). Tell the user, or show the session with ompdesk_tab_focus. Rejecting with feedback is allowed.",
-                );
-            }
-            (
-                json!({ "type": "plan_approval", "approved": true, "option": option }),
-                format!("approved plan {name} ({option})"),
-            )
-        } else {
-            let command = match feedback {
-                Some(feedback) => {
-                    json!({ "type": "plan_approval", "approved": false, "feedback": feedback })
-                }
-                None => json!({ "type": "plan_approval", "approved": false }),
-            };
-            let summary = if feedback.is_some() {
-                format!("rejected plan {name} with feedback")
-            } else {
-                format!("rejected plan {name}")
-            };
-            (command, summary)
-        };
-        match self
-            .companion(
-                caller,
-                target,
-                if plan.title.is_empty() {
-                    "plan"
-                } else {
-                    &plan.title
-                },
-                &format!("plan:{}", plan.generation.unwrap_or(0)),
-                resolved,
-            )
-            .await?
-        {
-            Some(companion) => {
-                self.host
-                    .answer_with_companion(
-                        &target.tab_id,
-                        json!({ "plan": command, "planFile": plan.plan_file_path, "planGeneration": plan.generation }),
-                        &companion,
-                    )
-                    .await?
-            }
-            None => {
-                let response = self
-                    .host
-                    .command(&target.tab_id, &command, Deadline::Default)
-                    .await?;
-                response_data(&response, "Answering the plan")?;
-            }
-        }
-        let by = if caller.title.is_empty() {
-            &caller.tab_id
-        } else {
-            &caller.title
-        };
-        let _ = self.host.mark_answered(&target.tab_id, by).await;
-        Ok(format!(
-            "Answered {}: {summary}.{}",
-            label(target),
-            if approve || feedback.is_some() {
-                " It continues now."
-            } else {
-                ""
-            }
-        ))
     }
 
     /// `childAsked`: a child showed a question card (stock `ask`, a select, confirm or text prompt): its opener hears

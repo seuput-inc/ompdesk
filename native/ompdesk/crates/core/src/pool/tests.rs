@@ -599,114 +599,6 @@ async fn an_agent_s_answer_claims_the_ask_and_no_other_answer_lands_until_it_is_
 }
 
 #[tokio::test]
-async fn a_plan_is_claimed_by_its_file_and_generation_and_a_revision_that_reuses_the_file_is_another_plan()
- {
-    let mut main = Main::start(opts()).await;
-    main.acquire("a", 1, None, false).await;
-    let proposal = |title: &str| {
-        json!({"tab": "a", "event": "events",
-               "payload": [{"type": "plan_proposal", "planFilePath": "local://PLAN.md", "title": title}]})
-    };
-    main.call("feed", proposal("Plan")).await;
-    let read = main.call("pendingPlan", json!({"tab": "a"})).await;
-    let generation = read["generation"].as_u64().unwrap();
-    // The revision reuses the plan file between the agent's read and its claim.
-    main.call("feed", proposal("Plan, revised")).await;
-    assert_ne!(
-        main.call("pendingPlan", json!({"tab": "a"})).await["generation"],
-        read["generation"]
-    );
-    assert_eq!(
-        main.call(
-            "claimPlan",
-            json!({"tab": "a", "file": "local://PLAN.md", "generation": generation})
-        )
-        .await,
-        Value::Null
-    );
-    let now = main.call("pendingPlan", json!({"tab": "a"})).await["generation"]
-        .as_u64()
-        .unwrap();
-    let claim = main
-        .call(
-            "claimPlan",
-            json!({"tab": "a", "file": "local://PLAN.md", "generation": now}),
-        )
-        .await;
-    assert!(claim.as_u64().is_some());
-    assert_eq!(
-        main.try_call("guardPlan", json!({"tab": "a"})).await["error"]["code"],
-        "being_answered"
-    );
-    assert_eq!(
-        main.try_call("guardPlan", json!({"tab": "a", "own": true}))
-            .await["ok"],
-        true
-    );
-    assert_eq!(
-        main.call("planStillClaimed", json!({"tab": "a", "claim": claim}))
-            .await,
-        true
-    );
-    // A new proposal while the note goes in: the claimed plan is not the pending one any more.
-    main.call("feed", proposal("Plan, revised again")).await;
-    assert_eq!(
-        main.call("planStillClaimed", json!({"tab": "a", "claim": claim}))
-            .await,
-        false
-    );
-    main.call("releasePlan", json!({"tab": "a", "claim": claim}))
-        .await;
-    assert_eq!(
-        main.try_call("guardPlan", json!({"tab": "a"})).await["ok"],
-        true
-    );
-}
-
-#[tokio::test]
-async fn a_tab_a_paired_host_runs_keeps_the_host_s_plan_generation_and_a_local_tab_is_numbered_here()
- {
-    let mut main = Main::start(opts()).await;
-    main.acquire("local", 1, None, false).await;
-    main.call(
-        "acquire",
-        json!({"cwd": "/work", "win": 1, "tab": "remote", "kind": "agent", "device": "dev-1"}),
-    )
-    .await;
-    let proposal = |tab: &str, generation: Option<u64>| {
-        let mut event =
-            json!({"type": "plan_proposal", "planFilePath": "local://PLAN.md", "title": "Plan"});
-        if let Some(generation) = generation {
-            event["generation"] = json!(generation);
-        }
-        json!({"tab": tab, "event": "events", "payload": [event]})
-    };
-    // This computer has numbered other plans already, so its counter is not the host's.
-    for _ in 0..3 {
-        main.call("feed", proposal("local", None)).await;
-    }
-    assert_eq!(
-        main.call("pendingPlan", json!({"tab": "local"})).await["generation"],
-        3
-    );
-    main.call("feed", proposal("remote", Some(42))).await;
-    assert_eq!(
-        main.call("pendingPlan", json!({"tab": "remote"})).await["generation"],
-        42
-    );
-    // The host's number is what a claim names; this computer's counter is not consulted for it.
-    assert!(
-        main.call(
-            "claimPlan",
-            json!({"tab": "remote", "file": "local://PLAN.md", "generation": 42})
-        )
-        .await
-        .as_u64()
-        .is_some()
-    );
-}
-
-#[tokio::test]
 async fn a_shell_line_typed_in_the_start_tab_makes_it_a_tab_of_its_own() {
     let mut main = Main::start(opts()).await;
     main.call(
@@ -751,10 +643,6 @@ async fn the_control_snapshot_reads_every_window_s_tabs_and_their_facts_in_one_c
             assert_eq!(
                 control["facts"],
                 main.call("tabFacts", json!({"tab": tab})).await
-            );
-            assert_eq!(
-                control["plan"],
-                main.call("pendingPlan", json!({"tab": tab})).await
             );
             assert_eq!(
                 control["formerIds"],

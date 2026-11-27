@@ -16,8 +16,7 @@ import { RM_TEMP } from "./test-fake-omp";
  * OpenAI-compatible provider on loopback (no model spend). The automatic update stops waiting for such a card once
  * nobody has given the computer input for ten minutes (app-auto-update.ts): safe only because the same question
  * reopens. Stock replays the cut-off call itself (the batch is fully failed or left pending), so the model is not
- * asked again. A plan proposal is not here: it lives only in the bridge of the omp that made it (modes/plan.ts
- * `pending`), and the automatic update keeps waiting for it.
+ * asked again.
  */
 const PROMPT = "CARD-MARK go";
 

@@ -552,7 +552,7 @@ for (const [language, theme] of [
 }
 
 /** A git project with numbered files, a 1,200-line rewrite and a plan, behind a stand-in `gh`. */
-async function seedProject(root: string): Promise<{ plan: string; bin: string }> {
+async function seedProject(root: string): Promise<{ bin: string }> {
 	const project = path.join(root, "project");
 	const bin = path.join(root, "ghbin");
 	await Promise.all([fs.mkdir(path.join(project, "steps"), { recursive: true }), fs.mkdir(bin, { recursive: true })]);
@@ -570,8 +570,7 @@ async function seedProject(root: string): Promise<{ plan: string; bin: string }>
 	git("add", ".");
 	git("commit", "--quiet", "-m", "seed");
 	await fs.writeFile(path.join(project, "big.ts"), `${lines("const b =").join("\n")}\n`);
-	const plan = path.join(project, "plan.md");
-	await fs.writeFile(plan, "# Delivery plan\n\n- [x] Inspect\n- [ ] Ship\n");
+	await fs.writeFile(path.join(project, "plan.md"), "# Delivery plan\n\n- [x] Inspect\n- [ ] Ship\n");
 	const title = "Keep the selected pull request readable beside the list at the smallest window";
 	const pr = { number: 7, title, url: "https://github.com/o/r/pull/7", author: { login: "dev" }, headRefName: "fix" };
 	await fs.writeFile(path.join(bin, "list.json"), JSON.stringify([pr]));
@@ -580,7 +579,7 @@ async function seedProject(root: string): Promise<{ plan: string; bin: string }>
 		bin,
 		`#!/bin/sh\ncase "$1 $2" in\n"repo view") echo '{"nameWithOwner":"o/r","defaultBranchRef":{"name":"main"}}' ;;\n"pr list") cat "${bin}/list.json" ;;\n"pr view") cat "${bin}/view.json" ;;\n*) exit 1 ;;\nesac\n`,
 	);
-	return { plan, bin };
+	return { bin };
 }
 
 // ── Every settings section, Stats, Agents and every panel view, per language/theme ──
@@ -591,14 +590,14 @@ for (const [language, theme] of [
 	test(`panels, settings and stats walk ${language}-${theme}`, async () => {
 		test.setTimeout(300_000);
 		const root = await tempRoot(`walk-${language}`);
-		const { plan, bin } = await seedProject(root);
+		const { bin } = await seedProject(root);
 		const instance = await launch(root, {
 			language,
 			theme,
 			env: {
 				OMP_GUI_TEST_LOGIN: "1",
 				OMP_GUI_TEST_MODELS: "1",
-				OMP_GUI_TEST_PANEL_PLAN: plan,
+				OMP_GUI_TEST_PANEL_JOBS: "1",
 				PATH: `${bin}${path.delimiter}${process.env.PATH}`,
 			},
 		});
@@ -728,7 +727,6 @@ for (const [language, theme] of [
 			// Background tasks (a sheet from the palette): cancel the running one; it turns cancelled in place.
 			const sheets = {
 				jobs: language === "ko" ? "백그라운드 작업" : "Background tasks",
-				plan: language === "ko" ? "계획 문서" : "Plan document",
 				logs: language === "ko" ? "로그" : "Logs",
 				tree: language === "ko" ? "세션 트리" : "Session tree",
 				work: language === "ko" ? "작업 트리" : "Work tree",
@@ -769,7 +767,7 @@ for (const [language, theme] of [
 			await rec.shoot("jobs-cancelled");
 			await closeSheet("jobs");
 			// The remaining sheets.
-			for (const [index, id] of (["plan", "logs", "tree", "work"] as const).entries()) {
+			for (const [index, id] of (["logs", "tree", "work"] as const).entries()) {
 				await openSheet(id);
 				await page.waitForTimeout(400);
 				await rec.shoot(`panel-option-${index + 1}`);

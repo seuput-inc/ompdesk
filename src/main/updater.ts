@@ -186,10 +186,8 @@ export interface AutoInstallProbe {
 	resumes: () => boolean;
 	/** A tab runs a turn or compacts, or an ask is open (this computer's tabs and the ones it hosts). */
 	busy: () => boolean;
-	/** An ask, an approval or a plan proposal waits on the person (a subset of `busy`; the log names it as the reason). */
+	/** An ask or an approval waits on the person (a subset of `busy`; the log names it as the reason). */
 	asking: () => boolean;
-	/** Of those, a plan proposal: a relaunch loses it, so it holds the automatic restart however long nobody is there. */
-	planWaiting: () => boolean;
 	/** A tab compacts its context: a resume-on restart waits for it (a cut compaction does not resume). */
 	compacting: () => boolean;
 	/** An agent is opening a session that has not taken its first message yet: a restart now would lose the message. */
@@ -997,7 +995,6 @@ export function setupUpdater(ipc: IpcRegistry, probe: AutoInstallProbe): void {
 				resumes,
 				busy: probe.busy(),
 				asking: probe.asking(),
-				planWaiting: probe.planWaiting(),
 				compacting: probe.compacting(),
 				opening: probe.opening(),
 				focused: BrowserWindow.getAllWindows().some(win => win.isFocused()),

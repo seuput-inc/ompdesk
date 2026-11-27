@@ -124,7 +124,7 @@ for (const language of variants(["en", "ko"] as const))
 					expect(edge, `${width}px: Send inside the composer`).toBeGreaterThanOrEqual(0);
 				}
 
-				// A quiet chip is not accent; a Plan mode is, in the real computed colour (the accent drawn on its own wash,
+				// A quiet chip is not accent; an active Goal is, in the real computed colour (the accent drawn on its own wash,
 				// `--sc-accent-on-soft`, so its label holds 4.5:1).
 				await resize(app, 1280, 860);
 				await page.waitForTimeout(300);
@@ -139,14 +139,11 @@ for (const language of variants(["en", "ko"] as const))
 				});
 				expect(await colour(runChip(page))).not.toBe(accent);
 				await captureTo(captures, page, `toolbar-1280-${theme}-${language}-idle`);
-				await runChip(page).click();
-				await page.locator("[data-plan-mode]").click();
+				await page.evaluate(() => window.omp.rpc.command({ type: "bash", command: "fixture:goal:on" }));
 				await expect(runChip(page)).toHaveAttribute("data-active", "");
-				await page.keyboard.press("Escape");
-				await expect(page.locator("[data-composer-modes-section]")).toHaveCount(0);
 				// The chip eases its colour over a few ms: poll to the settled value.
 				await expect.poll(() => colour(runChip(page))).toBe(accent);
-				await captureTo(captures, page, `toolbar-1280-${theme}-${language}-plan-goal`);
+				await captureTo(captures, page, `toolbar-1280-${theme}-${language}-goal`);
 
 				// Tab leaves the popover and closes it; focus does not jump to the top of the app.
 				await runChip(page).click();
@@ -174,9 +171,7 @@ for (const language of variants(["en", "ko"] as const))
 				await page.keyboard.press("Tab");
 				await page.keyboard.press("Escape");
 				await expect(popover).toHaveCount(0);
-				await runChip(page).click();
-				await page.locator("[data-plan-mode]").click();
-				await page.keyboard.press("Escape");
+				await page.evaluate(() => window.omp.rpc.command({ type: "bash", command: "fixture:goal:off" }));
 
 				// The context ring: focus alone never opens it; Enter does.
 				const ring = page.locator(".omp-context-usage-trigger").first();

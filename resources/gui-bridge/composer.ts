@@ -280,7 +280,6 @@ export const methods: BridgeMethods = {
 				cwd: session.sessionManager.getCwd(),
 				autoRetryEnabled: session.autoRetryEnabled,
 				thinkingConfigured: session.configuredThinkingLevel(),
-				planModeEnabled: session.getPlanModeState?.()?.enabled ?? false,
 				prewalkArmed: session.getPrewalkState?.() !== undefined,
 				agentsPaused: agentPauseGate?.paused === true,
 				agentsPausedAt: agentPauseGate?.pausedAt,

@@ -162,13 +162,8 @@ describe("red / no-commit / no-report / churn", () => {
 });
 
 describe("stall classification", () => {
-	const base = { lastTurnErrored: false, planMode: false, todosAllBlocked: false };
+	const base = { lastTurnErrored: false, todosAllBlocked: false };
 	const TABLE: Array<[string, Partial<typeof base>, unknown]> = [
-		[
-			"plan mode is nudged out of, whatever else is true",
-			{ planMode: true, lastTurnErrored: true, todosAllBlocked: true },
-			{ kind: "nudge", reason: "plan" },
-		],
 		["an errored turn takes the error path", { lastTurnErrored: true, todosAllBlocked: true }, { kind: "error" }],
 		["blocked todos are nudged", { todosAllBlocked: true }, { kind: "nudge", reason: "blocked" }],
 		["a quiet turn is nudged", {}, { kind: "nudge", reason: "no_progress" }],

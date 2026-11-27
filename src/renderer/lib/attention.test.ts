@@ -55,18 +55,15 @@ describe("sessionAttention", () => {
 });
 
 describe("pendingAsks", () => {
-	it("lists the blocking requests in order, a sign-in's own and notices left out, then a plan review", () => {
-		expect(pendingAsks({ pendingRequests: [ask, notice, approval], loginRequestIds: {} }, false)).toEqual([
+	it("lists the blocking requests in order, a sign-in's own and notices left out", () => {
+		expect(pendingAsks({ pendingRequests: [ask, notice, approval], loginRequestIds: {} })).toEqual([
 			"question",
 			"approval",
 		]);
-		expect(pendingAsks({ pendingRequests: [signIn, ask], loginRequestIds: { url: true } }, true)).toEqual([
-			"question",
-			"approval",
-		]);
+		expect(pendingAsks({ pendingRequests: [signIn, ask], loginRequestIds: { url: true } })).toEqual(["question"]);
 		// A select that only looks like an approval (other options) is a question.
-		expect(
-			pendingAsks({ pendingRequests: [{ ...approval, options: ["Yes", "No"] }], loginRequestIds: {} }, false),
-		).toEqual(["question"]);
+		expect(pendingAsks({ pendingRequests: [{ ...approval, options: ["Yes", "No"] }], loginRequestIds: {} })).toEqual([
+			"question",
+		]);
 	});
 });

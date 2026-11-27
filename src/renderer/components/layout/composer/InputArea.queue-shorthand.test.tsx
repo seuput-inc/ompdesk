@@ -100,7 +100,6 @@ let steer: Mock;
 let prompt: Mock;
 let setThinkingLevel: Mock;
 let setSetting: Mock;
-let setPlanMode: Mock;
 
 async function flush(): Promise<void> {
 	await act(async () => {
@@ -174,7 +173,6 @@ async function mount(withRuntime = false): Promise<void> {
 	prompt = vi.fn(async () => ok());
 	setThinkingLevel = vi.fn(async (level: string) => ok({ thinkingLevel: level, thinkingConfigured: level }));
 	setSetting = vi.fn(async (_path: string, value: unknown) => ok({ value, provenance: { layers: ["global"] } }));
-	setPlanMode = vi.fn(async (enabled: boolean) => ok({ enabled }));
 	const history: Array<{ prompt: string; cwd?: string; created_at: number }> = [];
 	(window as unknown as Record<string, unknown>).omp = {
 		fs: { list: vi.fn(async () => ({ entries: [] })) },
@@ -182,7 +180,7 @@ async function mount(withRuntime = false): Promise<void> {
 		events: {
 			onTabCommandsUpdate: vi.fn(() => () => {}),
 			onConfigUpdate: vi.fn(() => () => {}),
-			// The Run popover opens on the Goal form (Plan is the switch above the tabs), which listens for goal updates.
+			// The Run popover can open on the Goal form, which listens for goal updates.
 			onBatch: vi.fn(() => () => {}),
 		},
 		prefs: { set: vi.fn(async () => ({})), get: vi.fn(async () => []) },
@@ -206,7 +204,6 @@ async function mount(withRuntime = false): Promise<void> {
 			abortAndRestoreQueue: vi.fn(async () => ok({ steering: [], followUp: [] })),
 			setThinkingLevel,
 			setSetting,
-			setPlanMode,
 		},
 	};
 	useModelStore.setState({
@@ -250,7 +247,6 @@ async function mount(withRuntime = false): Promise<void> {
 					contextUsage: null,
 					messageCount: 0,
 					queuedMessageCount: 0,
-					planModeEnabled: false,
 					todoPhases: [],
 				});
 			if (command.type === "get_transcript_page")
@@ -571,42 +567,6 @@ describe("InputArea queue shorthand submit", () => {
 			expect(steer).toHaveBeenLastCalledWith(text, []);
 		}
 		expect(followUp).not.toHaveBeenCalled();
-	});
-
-	it("offers Stop while the automatic mode choice holds a prompt back, and Stop withdraws it into the draft", async () => {
-		await mount();
-		await act(async () => useSessionStore.setState({ isStreaming: false }));
-		const decision = Promise.withResolvers<RpcResponse>();
-		const autoModeDecide = vi.fn(() => decision.promise);
-		const autoModeEnd = vi.fn(async () => ok({}));
-		Reflect.set(window.omp.rpc, "autoModeDecide", autoModeDecide);
-		Reflect.set(window.omp.rpc, "autoModeEnd", autoModeEnd);
-		// The action button turns Stop while a prompt is held back with nothing typed.
-		const stop = () =>
-			document.querySelector(
-				`[data-slot="send"] button[aria-label="${translate("input.abort")}"]`,
-			) as unknown as TestElement | null;
-		const request = "refactor the whole settings module across all files";
-		await typeInto(findTextarea(), request);
-		await pressEnter(findTextarea());
-		await flush();
-		await flush();
-		expect(autoModeDecide).toHaveBeenCalledOnce();
-		expect(useComposerStore.getState().draft).toBe("");
-		expect(stop()).not.toBeNull();
-		// Esc is the app-wide stop now, not the draft's double Esc.
-		expect((await pressKey({ key: "Escape" })).defaultPrevented).toBe(false);
-
-		await click(stop() as TestElement);
-		decision.resolve(ok({ mode: "plan", latencyMs: 900 }));
-		await flush();
-		await flush();
-		expect(prompt).not.toHaveBeenCalled();
-		expect(autoModeEnd).toHaveBeenCalledWith("plan");
-		expect(useComposerStore.getState().draft).toBe(request);
-		expect(useComposerStore.getState().sending).toBe(false);
-		expect(stop()).toBeNull();
-		expect(useToastStore.getState().toasts).toEqual([]);
 	});
 
 	it("does not dispatch a deferred prompt through a tab selected after Enter", async () => {
@@ -1794,22 +1754,6 @@ describe("InputArea run settings and modes", () => {
 		expect(document.querySelector("[data-run-settings-trigger]")?.getAttribute("aria-label")).toContain(
 			"Ultrafast on",
 		);
-	});
-
-	it("toggles plan mode from the Run chip's Mode section", async () => {
-		await mount();
-		const modes = document.querySelector("button[data-run-settings-trigger]") as unknown as TestElement | null;
-		if (!modes) throw new Error("Run chip missing");
-		await click(modes);
-		await flush();
-
-		const plan = document.querySelector('[role="switch"]') as unknown as TestElement | null;
-		if (!plan) throw new Error("plan switch missing");
-		await click(plan);
-		await flush();
-
-		expect(setPlanMode).toHaveBeenCalledWith(true);
-		expect(useSessionStore.getState().planModeEnabled).toBe(true);
 	});
 });
 

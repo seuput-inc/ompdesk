@@ -2929,10 +2929,7 @@ app.whenReady().then(async () => {
 		busy: () =>
 			sidecarPool.tabInventory().some(tab => tab.inFlight) ||
 			[...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()].some(fact => fact.running || fact.awaitingUi),
-		asking: () =>
-			sidecarPool.restartHolds().planWaiting ||
-			[...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()].some(fact => fact.awaitingUi),
-		planWaiting: () => sidecarPool.restartHolds().planWaiting,
+		asking: () => [...sidecarPool.resumeFacts(), ...hostServices.resumeFacts()].some(fact => fact.awaitingUi),
 		compacting: () => sidecarPool.restartHolds().compacting || hostServices.compacting(),
 		opening: () => agentOpening.current?.() ?? false,
 		// Running subagents and background jobs: `composer.jobs` of every omp whose run is on (background-work.ts).

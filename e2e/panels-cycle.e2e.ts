@@ -263,8 +263,8 @@ async function openView(page: Page, label: string): Promise<Locator> {
 }
 
 const SHEET_TITLES = {
-	en: { jobs: "Background tasks", plan: "Plan document", logs: "Logs", tree: "Session tree", work: "Work tree" },
-	ko: { jobs: "백그라운드 작업", plan: "계획 문서", logs: "로그", tree: "세션 트리", work: "작업 트리" },
+	en: { jobs: "Background tasks", logs: "Logs", tree: "Session tree", work: "Work tree" },
+	ko: { jobs: "백그라운드 작업", logs: "로그", tree: "세션 트리", work: "작업 트리" },
 } as const;
 type SheetId = keyof (typeof SHEET_TITLES)["en"];
 
@@ -764,7 +764,7 @@ for (const [language, theme] of RUNS) {
 						await page.waitForTimeout(800);
 						await shoot(`${name}-terminal`);
 						await expect(panel.getByRole("button", { name: /View options|보기 옵션/ })).toHaveCount(0);
-						for (const id of ["jobs", "plan", "logs", "tree", "work"] as const) {
+						for (const id of ["jobs", "logs", "tree", "work"] as const) {
 							await openSheet(page, language, id);
 							await page.waitForTimeout(350);
 							await shoot(`${name}-sheet-${id}`);
@@ -861,8 +861,8 @@ for (const [language, theme] of RUNS) {
 							await shoot(`${name}-terminal-shell-menu`);
 							await page.keyboard.press("Escape");
 						});
-						await step(`plan-and-jobs-${name}`, async () => {
-							for (const id of ["plan", "jobs"] as const) {
+						await step(`jobs-${name}`, async () => {
+							for (const id of ["jobs"] as const) {
 								await openSheet(page, language, id);
 								await page.waitForTimeout(400);
 								await shoot(`${name}-sheet-${id}`);

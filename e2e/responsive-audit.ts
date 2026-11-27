@@ -267,7 +267,7 @@ export async function resetPage(page: Page): Promise<boolean> {
 		ui.setState(patch);
 		const toast = stores.toast as unknown as { setState(partial: unknown): void };
 		toast.setState({ toasts: [] });
-		// What the other surfaces leave in front of the session: ask/approval cards, a plan, host sheets, a banner.
+		// What the other surfaces leave in front of the session: ask/approval cards, host sheets, a banner.
 		const call = (store: string, action: string, ...args: unknown[]) => {
 			const state = stores[store]?.getState() as
 				| Record<string, ((...rest: unknown[]) => void) | undefined>
@@ -275,7 +275,6 @@ export async function resetPage(page: Page): Promise<boolean> {
 			state?.[action]?.(...args);
 		};
 		call("extensionUi", "clearAll");
-		call("planApproval", "clearProposal");
 		call("hostUi", "reset");
 		call("composer", "setDraft", "");
 		call("session", "pinTranscriptToBottom");

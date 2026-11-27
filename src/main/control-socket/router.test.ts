@@ -378,7 +378,7 @@ describe("control requests", () => {
 			expect(resultOf(await pending)).toMatchObject({ matched: "any", state: "blocked" });
 		});
 
-		it("notices a state change that raises no activity (a plan proposal) on its poll", async () => {
+		it("notices a state change that raises no activity on its poll", async () => {
 			await serve();
 			backend.add("t1", "working");
 			const pending = client.call({ id: 2, method: "wait", session: "t1", until: "blocked" });

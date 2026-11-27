@@ -46,8 +46,6 @@ export const FEATURES = {
 	localLinks: "Opening local:// links",
 	argCompletions: "Slash-command argument completion",
 	share: "Session sharing",
-	planMode: "Plan mode (on and off, and the plan the agent proposes as a card)",
-	planApproval: "Plan approval (execute, compact, keep context, save, feedback)",
 	guidedGoal: "Guided goal interview",
 	goalReplace: "Changing an active goal's objective",
 	goalBudget: "Goal token budget",
@@ -59,8 +57,6 @@ export const FEATURES = {
 	nextPrompt: "Prompt suggestions (next message)",
 	inlineCompletion: "Inline completion while typing in the composer",
 	autoTitle: "Automatic session titles (first message, as the work changes, regenerate)",
-	autoMode: "Automatic mode choice (Plan or Goal for a prompt)",
-	autoModeUndo: "Undoing an automatic mode choice",
 	judgeAssist: "Judge-model assists (needs-you notifications, title check, preview check)",
 	memoryRecall: "Memory recall (earlier decisions and conclusions for a typed prompt)",
 	outputStyle: "Output style (concise, detailed, minimal)",
@@ -268,24 +264,6 @@ const READ_GROUPS: FeatureRequirement = {
 const TRANSCRIPT_REPLAY: FeatureRequirement = {
 	session: ["sessionManager.getEntries()", "sessionManager.getLeafId()", "sessionManager.getBranch()"],
 	modules: { [`${AGENT}/session/session-context`]: ["buildSessionContext()"] },
-};
-
-/** modes/plan.ts `exitPlanMode`: leaving plan mode, as a plan's approval and an undone automatic choice also do. */
-const PLAN_EXIT: FeatureRequirement = {
-	session: [
-		"setPlanModeState()",
-		"peekPlanProposalHandler()",
-		"setPlanProposalHandler()",
-		"setActiveToolsByName()",
-		"sessionManager.getSessionId()",
-		"sessionManager.appendModeChange()",
-	],
-};
-
-/** modes/plan.ts `readPlan`: the plan file, through stock's reader and the session's local:// root. */
-const PLAN_READ: FeatureRequirement = {
-	session: ["sessionManager.getArtifactsDir()", "sessionManager.getSessionId()", "sessionManager.getCwd()"],
-	modules: { [`${AGENT}/plan-mode/plan-files`]: ["readPlanFile()"] },
 };
 
 /** extensions/mcp.ts `listMcpServers`: user and project config, stock's discovery and the live manager's state. */
@@ -739,60 +717,10 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			],
 		},
 	},
-	/**
-	 * modes.get_plan_mode and modes.set_plan_mode with the proposal lifecycle they arm (modes/plan.ts): both install
-	 * the proposal handler, and a session listener turns the agent's completed proposal into the plan card and
-	 * stops the turn. Plan mode without that lifecycle would leave a proposal nobody sees, and nothing guards a
-	 * listener, so its internals are listed here.
-	 */
-	planMode: union(PLAN_EXIT, PLAN_READ, {
-		session: [
-			"subscribe()",
-			"getPlanModeState()",
-			"preparePlanForReview()",
-			"getGoalModeState()",
-			"getPlanReferencePath()",
-			"getEnabledToolNames()",
-			"hasBuiltInTool()",
-			"sendPlanModeContext()",
-			"isStreaming",
-			"markPlanInternalAbortPending()",
-			"clearPlanInternalAbortPending()",
-			"abort()",
-		],
-		modules: {
-			[`${AGENT}/tools/resolve`]: ["proposeDispatchDetails()|writeDeviceDispatch()"],
-		},
-	}),
-	/**
-	 * modes.plan_approval: the card's answer (execute in a fresh session, compact, keep context, save, or feedback).
-	 * A plan the automatic mode choice entered is approved by the same code, with "keep context".
-	 */
-	planApproval: union(PLAN_EXIT, PLAN_READ, {
-		session: [
-			"subscribe()",
-			"isStreaming",
-			"prompt()",
-			"followUp()",
-			"newSession()",
-			"compact()",
-			"setPlanReferencePath()",
-			"markPlanReferenceSent()",
-			"setSessionName()",
-			"sessionManager.getSessionName()",
-		],
-		modules: {
-			[`${AGENT}/plan-mode/approved-plan`]: ["humanizePlanTitle()"],
-			[`${AGENT}/internal-urls`]: ["copyLocalArtifacts()", "resolveLocalUrlToPath()"],
-			[UTILS]: ["prompt.render()"],
-		},
-		prompts: ["system/plan-mode-compact-instructions.md", "system/plan-mode-approved.md"],
-	}),
 	guidedGoal: {
 		session: [
 			"subscribe()",
 			"settings",
-			"getPlanModeState()",
 			"getGoalModeState()",
 			"getEnabledToolNames()",
 			"setActiveToolsByName()",
@@ -931,7 +859,6 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"getMountedToolCommandNames()|getMountedXdevToolNames()",
 			"setActiveToolPresentation()",
 			"getGoalModeState()",
-			"getPlanModeState()",
 			"getTodoPhases()",
 			"getSessionStats()",
 			"sessionManager.getBranch()",
@@ -967,10 +894,10 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	contextHookIdle: {
 		api: ["extension.handlers"],
 	},
-	/** modes/pstack.ts: the always-on pstack section reads the main session's plan mode and tool set. */
+	/** modes/pstack.ts: the always-on pstack section reads the main session's tool set. */
 	pstack: {
 		pkg: ["AgentRegistry.global()", "MAIN_AGENT_ID"],
-		session: ["getPlanModeState()", "getActiveToolNames()", "sessionManager.getBranch()"],
+		session: ["getActiveToolNames()", "sessionManager.getBranch()"],
 	},
 	/** modes/ecc-hint.ts: the public `before_agent_start` hook and the context's `cwd` only. */
 	eccHint: {},
@@ -1175,9 +1102,9 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[`${AGENT}/session/todo-tracker`]: ["TodoTracker.prototype.checkCompletion()"],
 		},
 	},
-	/** todo-stale.ts: stock's journal todo readers, the session's active tools and plan state, at each turn's start. */
+	/** todo-stale.ts: stock's journal todo readers and the session's active tools, at each turn's start. */
 	todoStale: {
-		session: ["getActiveToolNames()", "getPlanModeState()", "sessionManager.getBranch()"],
+		session: ["getActiveToolNames()", "sessionManager.getBranch()"],
 		modules: {
 			[`${AGENT}/tools/todo`]: ["getLatestTodoPhasesFromEntries()", "getLatestTodoSnapshotIdentity()"],
 		},
@@ -1185,13 +1112,12 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	/** todo-compact.ts: tool_call reads the calling agent's live list before stock can replace it. */
 	todoCompact: { session: ["getTodoPhases()"] },
 	/**
-	 * todo-drift.ts: the public `tool_result` hook, stock's journal todo readers, the session's active tools and plan
-	 * state after each tool call, its branch for the panel's reading, and one journaled marker per session.
+	 * todo-drift.ts: the public `tool_result` hook, stock's journal todo readers, the session's active tools after each
+	 * tool call, its branch for the panel's reading, and one journaled marker per session.
 	 */
 	todoDrift: {
 		session: [
 			"getActiveToolNames()",
-			"getPlanModeState()",
 			"sessionManager.getBranch()",
 			"sessionManager.getSessionId()",
 			"sessionManager.appendCustomEntry()",
@@ -2083,42 +2009,6 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		pkg: ["AgentRegistry.global()", "AgentRegistry.prototype.get()", "MAIN_AGENT_ID"],
 		session: ["settings", "sessionId", "modelRegistry", "sessionManager"],
 	},
-	/**
-	 * modes.auto_mode_decide and modes.auto_mode_prefetch: the prefetch asks the question the decision will ask, and
-	 * the decision reads its answer from stock's judgment cache. `hasNativeJudge` is the judge warm-up's alone
-	 * (`install`, at session start, nothing guards it): listed here, with the judge it warms.
-	 */
-	autoMode: {
-		session: [
-			"subscribe()",
-			"settings",
-			"sessionId",
-			"model",
-			"isStreaming",
-			"messages",
-			"getTodoPhases()",
-			"getAsyncJobTree()",
-			"modelRegistry",
-			"agent.metadataForProvider()",
-			"agent.telemetry",
-			"sessionManager.getSessionId()",
-			"getPlanModeState()",
-			"getGoalModeState()",
-		],
-		modules: {
-			[`${AGENT}/judgment`]: [
-				"resolveJudge()",
-				"sharedJudgmentCache()",
-				"journalJudgmentUsage()",
-				"hasNativeJudge()",
-			],
-			[`${AGENT}/tiny/message-preproc`]: ["preprocessTinyMessage()"],
-			[`${AGENT}/plan-mode/settings`]: ["cfgPlanEnabled.get()"],
-			[`${AGENT}/config/registry`]: ["lookup()"],
-		},
-	},
-	/** modes.auto_mode_undo: leaves the plan mode an automatic decision entered (modes/plan.ts `exitPlanMode`). */
-	autoModeUndo: union(PLAN_EXIT, { session: ["subscribe()", "getPlanModeState()"] }),
 	/** compaction_points: where auto-compaction triggers for each model and each role's model, by stock's hub code. */
 	compactionPoints: {
 		session: ["settings", "getAvailableModels()", "modelRegistry.getAll()", "modelRegistry.getAvailable()"],
@@ -2382,7 +2272,6 @@ export const COPY_SAFE: Readonly<Record<string, string>> = {
 	[`${AGENT}/skillshare/client`]: "presence probe only: the stock helper loads it in its own process",
 	[`${AGENT}/skillshare/installer`]: "presence probe only: the stock helper loads it in its own process",
 	[`${AGENT}/skillshare/manifest`]: "presence probe only: the stock helper loads it in its own process",
-	[`${AGENT}/tiny/message-preproc`]: "text cleanup: pure",
 	[`${AGENT}/tiny/text`]: "title text helpers: pure",
 	[`${AGENT}/tts/models`]: "the local voice and model tables: data",
 	[`${AGENT}/tts/tts-client`]:
