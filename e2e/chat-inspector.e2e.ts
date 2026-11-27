@@ -38,6 +38,7 @@ test("project and bot conversations keep their own inspector on reopen and on re
 		const capture = async (name: string) => {
 			await expect(panel).toHaveCSS("width", "280px");
 			await expect(panel).toHaveAttribute("aria-busy", "false");
+			await expect.poll(async () => Math.round((await panel.boundingBox())?.x ?? -1)).toBe(1000);
 			await page.evaluate(() => document.fonts.ready.then(() => true));
 			const geometry = await panel.evaluate(element => ({
 				viewport: [innerWidth, innerHeight],
@@ -72,13 +73,39 @@ test("project and bot conversations keep their own inspector on reopen and on re
 		await toggle.click();
 		await selected("Chats");
 		if (!project?.sessionPath) throw new Error("Project conversation was not saved");
-		await page
-			.locator(`[data-session-path=${JSON.stringify(project.sessionPath)}]`)
-			.first()
-			.click();
+		const projectRow = page.locator(`[data-session-path=${JSON.stringify(project.sessionPath)}]`).first();
+		await projectRow.click();
 		await selected("Source Control");
 		await page.locator('[data-bot-row="bot-courier"]').click();
 		await selected("Chats");
+
+		const grip = panel.getByRole("separator", { name: "Resize side panel" });
+		await grip.focus();
+		await page.keyboard.press("ArrowLeft");
+		await expect(panel).toHaveCSS("width", "304px");
+		await expect.poll(() => page.evaluate(() => window.omp.prefs.get("gui.panelWidth"))).toBe(304);
+		await panel.locator("[data-panel-close]").click();
+		await expect(panel).toHaveCount(0);
+		await toggle.click();
+		await expect(panel).toHaveCSS("width", "304px");
+		await projectRow.click();
+		const note = path.join(profile.project, "notes.md");
+		await fs.writeFile(note, "# Original\n");
+		await views.getByRole("button", { name: "Explorer", exact: true }).click();
+		await panel.getByRole("button", { name: "Refresh", exact: true }).click();
+		await panel.locator('[data-tree-id="file:notes.md"]').click();
+		await panel.getByRole("button", { name: "Edit", exact: true }).click();
+		const editor = panel.getByRole("textbox", { name: "Contents of notes.md" });
+		await editor.press("End");
+		await page.keyboard.type("unsaved");
+		await expect(panel.locator("[data-editor-status]")).toHaveText("Unsaved");
+		await page.locator('[data-bot-row="bot-courier"]').click();
+		await expect(editor).toContainText("unsaved");
+		await panel.locator("[data-panel-close]").click();
+		const guard = page.getByRole("dialog").filter({ hasText: "notes.md" });
+		await guard.getByRole("button", { name: "Cancel", exact: true }).click();
+		await expect(editor).toContainText("unsaved");
+		expect(await fs.readFile(note, "utf8")).toBe("# Original\n");
 	} finally {
 		await exitApp(app);
 		await fs.rm(parent, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
