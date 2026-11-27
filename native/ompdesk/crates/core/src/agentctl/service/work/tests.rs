@@ -3157,6 +3157,7 @@ async fn a_renamed_bots_folder_waits_for_a_running_turn() {
     let folder = root.0.join("ada").to_string_lossy().into_owned();
     let mut busy = bot_world(&folder);
     busy["tabs"][1]["busy"] = json!(true);
+    busy["tabs"][1]["cwd"] = json!(root.0.join("ada").join("child"));
     crate::ports::apply_state(control.host.port(), 1, &busy.to_string()).unwrap();
     control
         .bots_command(json!({ "action": "update", "id": id, "name": "Bea" }))
@@ -3219,6 +3220,7 @@ async fn a_move_cut_off_by_a_crash_finishes_on_the_next_start() {
         .await;
         control.bots().change(&id, |record| {
             record.name = "Bea".to_owned();
+            record.sessions.push("/s/other.jsonl".to_owned());
             record.moving = Some(crate::agentctl::journal::bots::FolderMove {
                 from: from.clone(),
                 to: to.clone(),
@@ -3227,17 +3229,35 @@ async fn a_move_cut_off_by_a_crash_finishes_on_the_next_start() {
         std::fs::rename(&from, &to).unwrap();
     }
     let book = Arc::new(Mutex::new(vec![routine("r1", "Bea: Look around", &from)]));
+    let schedules = schedule_book(book.clone());
+    let incomplete = std::sync::atomic::AtomicBool::new(true);
     let (control, asked) = rig_files(
         9_734,
         bot_world(&from),
         Caps::default(),
         &kept_files(&root),
-        bots_main(Mails::default(), schedule_book(book.clone())),
+        bots_main(Mails::default(), move |method, args| {
+            if method == "bots.relocate"
+                && incomplete.swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Some(
+                    json!({"/s/bot.jsonl": moved_to(args["to"].as_str().unwrap(), "/s/bot.jsonl")}),
+                );
+            }
+            schedules(method, args)
+        }),
     );
     assert_eq!(control.bot_named("Bea").unwrap().folder, to);
     control.bots_tick().await;
+    let partial = control.bot_named("Bea").unwrap();
+    assert!(partial.moving.is_some());
+    assert_eq!(partial.home.as_deref(), Some("/s/bot.jsonl"));
+    assert!(partial.sessions.iter().any(|s| s == "/s/other.jsonl"));
+    assert_eq!(book.lock().unwrap()[0]["cwd"], json!(from));
+    control.bots_tick().await;
     let bot = control.bot_named("Bea").unwrap();
     assert_eq!(bot.moving, None);
+    assert!(bot.sessions.contains(&moved_to(&to, "/s/other.jsonl")));
     assert_eq!(
         bot.home.as_deref(),
         Some(moved_to(&to, "/s/bot.jsonl").as_str())
@@ -3255,7 +3275,7 @@ async fn a_move_cut_off_by_a_crash_finishes_on_the_next_start() {
             .unwrap()
             .iter()
             .any(|(method, args)| method == "bots.relocate"
-                && args["sessions"] == json!(["/s/bot.jsonl"])),
+                && args["sessions"] == json!(["/s/bot.jsonl", "/s/other.jsonl"])),
         "the chat open on the old folder moves along"
     );
     assert!(!root.0.join("ada").exists());

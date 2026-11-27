@@ -8,7 +8,7 @@
  */
 
 import { access } from "node:fs/promises";
-import { basename, isAbsolute, posix, resolve } from "node:path";
+import { basename, isAbsolute, posix, relative, resolve, sep } from "node:path";
 import type { AutopilotAction, AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import {
 	AGENT_CARD_PREFIX,
@@ -165,12 +165,17 @@ function tombstones(): Tombstones {
 	return { byPath, byId };
 }
 
-/** This computer's tabs whose folder is `folder` (a bot's chats there). */
+/** Local tabs using this directory or a descendant. Paired views may report the same tab more than once. */
 function tabsIn(pool: Pick<SidecarPool, "controlTabs">, folder: string) {
-	return pool
-		.controlTabs()
-		.flatMap(({ tabs }) => tabs)
-		.filter(row => !row.device && row.cwd === folder);
+	const tabs = new Map<string, ControlTabInfo>();
+	for (const group of pool.controlTabs()) {
+		for (const row of group.tabs) {
+			if (row.device || tabs.has(row.tabId)) continue;
+			const sub = relative(folder, row.cwd);
+			if (sub !== ".." && !sub.startsWith(`..${sep}`) && !isAbsolute(sub)) tabs.set(row.tabId, row);
+		}
+	}
+	return [...tabs.values()];
 }
 
 /** What a session does now, by its summary (the one rows read); unknown before its omp is up. */
@@ -1398,33 +1403,62 @@ export class AgentControlRuntime {
 			},
 			deleteStored: session => deps.deleteSession(session.path, session.device),
 			releaseFolder: async folder => {
-				const sidecars = tabsIn(deps.pool, folder).flatMap(row => deps.pool.sidecarOf(row.tabId) ?? []);
+				const rows = tabsIn(deps.pool, folder);
+				for (const row of rows) {
+					if (
+						relative(folder, row.cwd) ||
+						row.facts?.busy ||
+						row.compacting ||
+						row.resuming ||
+						row.status === "running" ||
+						row.status === "starting" ||
+						row.status === "restarting"
+					)
+						throw new Error(`Chat ${row.tabId} still uses ${row.cwd}.`);
+				}
+				const sidecars = rows.flatMap(row => deps.pool.sidecarOf(row.tabId) ?? []);
 				for (const sidecar of sidecars) if (sidecar.processAlive) sidecar.sleep?.();
 				await Promise.all(sidecars.map(sidecar => sidecar.whenExited?.()));
+				if (
+					tabsIn(deps.pool, folder).some(
+						row => relative(folder, row.cwd) || deps.pool.sidecarOf(row.tabId)?.processAlive,
+					)
+				)
+					throw new Error(`A chat started in ${folder} while it was being released.`);
 			},
 			relocateBot: async (from, to, sessions) => {
 				const moveStored = deps.moveSession;
 				if (!moveStored) throw new Error("Sessions cannot be moved on this computer.");
-				const rows = tabsIn(deps.pool, from);
+				const rows = tabsIn(deps.pool, from).filter(row => !relative(from, row.cwd));
 				const moved: Record<string, string> = {};
 				let stored: SessionInfo[] | null = null;
 				for (const sessionPath of new Set([...sessions, ...rows.flatMap(row => row.sessionPath ?? [])])) {
 					const exists = await access(sessionPath).then(
 						() => true,
-						() => false,
+						(error: NodeJS.ErrnoException) => {
+							if (error.code === "ENOENT") return false;
+							throw error;
+						},
 					);
+					let file: string;
 					if (exists) {
-						// Stock moves it (and refuses while an omp still writes it); a chat holding it starts again on it in `to`.
-						const file = await moveStored(sessionPath, to);
-						moved[sessionPath] = file;
-						const owner = deps.pool.sessionOwner(sessionPath);
-						if (owner) deps.pool.sidecarOf(owner.tabId)?.restart(to, file);
-						continue;
+						file = await moveStored(sessionPath, to);
+					} else {
+						// A prior pass may have moved the journal before it updated the registry.
+						stored ??= (await deps.sessions?.list()) ?? [];
+						const name = basename(sessionPath);
+						const found = stored.filter(
+							info => info.cwd === to && basename(info.path) === name && name.endsWith(`_${info.id}.jsonl`),
+						);
+						if (found.length !== 1) throw new Error(`Cannot locate the moved session ${sessionPath} in ${to}.`);
+						file = found[0].path;
+						await access(file);
 					}
-					// Moved before a crash cut the move off: it is the session of that name in `to` now.
-					stored ??= (await deps.sessions?.list()) ?? [];
-					const found = stored.find(info => info.cwd === to && basename(info.path) === basename(sessionPath));
-					if (found) moved[sessionPath] = found.path;
+					moved[sessionPath] = file;
+				}
+				for (const [source, file] of Object.entries(moved)) {
+					const owner = deps.pool.sessionOwner(source);
+					if (owner) deps.pool.sidecarOf(owner.tabId)?.restart(to, file);
 				}
 				// A new chat there nobody wrote to yet holds no session: it starts again in `to`.
 				for (const row of rows) if (!row.sessionPath) deps.pool.sidecarOf(row.tabId)?.restart(to);

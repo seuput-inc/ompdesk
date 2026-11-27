@@ -211,6 +211,8 @@ pub struct Inner {
     calls: Option<Mutex<CallJournal>>,
     /// The bots (`bots.json`) and their items (`items.json`); take `bots` before `items` when both are held.
     bots: Mutex<Bots>,
+    /// The owner's rename and a bot pass may try to move the same directory concurrently.
+    bot_moves: tokio::sync::Mutex<()>,
     items: Mutex<Items>,
     /// The bot groups and their rooms (`rooms.json` beside `items.json`); never held with `bots` or `items`.
     rooms: Mutex<Rooms>,
@@ -381,6 +383,7 @@ impl AgentControl {
                 .map(|outbox| SendOutbox::with_clock(outbox.file.clone(), clock.clone())),
             mailbox,
             bots: Mutex::new(Bots::new(files.bots.clone())),
+            bot_moves: Default::default(),
             items: Mutex::new(Items::new(files.items.clone())),
             rooms: Mutex::new(Rooms::new(
                 files

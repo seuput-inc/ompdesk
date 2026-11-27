@@ -186,6 +186,9 @@ impl Bots {
         let Some(bot) = self.bots.iter_mut().find(|bot| bot.folder == cwd) else {
             return false;
         };
+        if bot.moving.is_some() {
+            return false;
+        }
         let mut changed = false;
         if !bot.sessions.iter().any(|known| known == session) {
             bot.sessions.push(session.to_owned());

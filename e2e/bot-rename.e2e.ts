@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
 import type { ElectronApplication, Page } from "playwright";
+import { BOTS_FOLDER } from "../src/shared/bots";
 import { exitApp, launchApp } from "./harness";
 
 // A bot's rename reaches more than its prompt (the owner's report, Nov 2026: the folder stayed under the old name, its
@@ -14,6 +16,8 @@ let app: ElectronApplication;
 let page: Page;
 let profile: string;
 let errors: string[];
+let folder: string;
+let missing: string;
 
 test.beforeEach(async () => {
 	profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-bot-rename-"));
@@ -21,6 +25,13 @@ test.beforeEach(async () => {
 	const desktop = path.join(profile, "desktop");
 	const agent = path.join(profile, "agent");
 	await Promise.all([fs.mkdir(project), fs.mkdir(desktop), fs.mkdir(agent)]);
+	folder = path.join(profile, BOTS_FOLDER, "rex");
+	await fs.mkdir(folder, { recursive: true });
+	missing = path.join(agent, "sessions", "fixture", "2026-11-01_missing-chat.jsonl");
+	await fs.writeFile(
+		path.join(desktop, "bots.json"),
+		JSON.stringify([{ id: "bot-rex", name: "Rex", folder, sessions: [missing] }]),
+	);
 	await fs.writeFile(path.join(desktop, "prefs.json"), JSON.stringify({ language: "en", firstRunComplete: true }));
 	app = await launchApp({
 		project,
@@ -34,6 +45,7 @@ test.beforeEach(async () => {
 			PI_CONFIG_DIR: ".",
 			OMP_GUI_HEADLESS: "1",
 			OMP_GUI_TEST_SESSION_FILES: "1",
+			OMP_GUI_TEST_AGENT_SWEEP_MS: "500",
 		},
 	});
 	page = await app.firstWindow();
@@ -55,11 +67,20 @@ const exists = (dir: string) =>
 	);
 
 test("a renamed bot's folder, files, routine and open chat follow its new name with no question", async () => {
-	const folder = await page.evaluate(async () => {
-		const state = await window.omp.bots.command({ action: "create", name: "Rex", purpose: "Reviews pull requests." });
-		return state.bots.find(bot => bot.name === "Rex")?.folder ?? "";
-	});
-	expect(path.basename(folder)).toBe("rex");
+	test.setTimeout(120_000);
+	const getBot = () => page.evaluate(async () => (await window.omp.bots.command({ action: "get" })).bots[0]);
+	const original = path.join(profile, "original.png");
+	const picture = Buffer.from(
+		"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC",
+		"base64",
+	);
+	const digest = async (file: string) =>
+		createHash("sha256")
+			.update(await fs.readFile(file))
+			.digest("hex");
+	await fs.writeFile(original, picture);
+	await fs.copyFile(original, path.join(folder, "picture.png"));
+	const before = await digest(original);
 	await fs.writeFile(path.join(folder, "notes.md"), "kept");
 	const saved = await page.evaluate(
 		cwd =>
@@ -103,6 +124,24 @@ test("a renamed bot's folder, files, routine and open chat follow its new name w
 		.poll(() => page.evaluate(async () => (await window.omp.bots.command({ action: "get" })).bots[0]?.home ?? null))
 		.not.toBeNull();
 	await expect.poll(async () => (await tabOf())?.status).toBe("ready");
+	const beforeState = await page.evaluate(id => window.omp.rpc.commandForTab(id, { type: "get_state" }), chat);
+	const originalId = field(beforeState.data, "sessionId");
+	expect(originalId).toBeTruthy();
+	const oldFile = String(field(beforeState.data, "sessionFile"));
+	await expect.poll(async () => (await getBot()).home).toBe(oldFile);
+	const [slot] = (await fs.readFile(oldFile, "utf8")).split("\n");
+	expect(Buffer.byteLength(`${slot}\n`)).toBe(256);
+	const childFolder = path.join(folder, "nested");
+	await fs.mkdir(childFolder);
+	const child = (await page.evaluate(cwd => window.omp.tabs.spawn({ cwd }), childFolder))?.tabId ?? "";
+	const childTab = () =>
+		page.evaluate(async id => (await window.omp.tabs.list()).find(tab => tab.tabId === id), child);
+	await expect.poll(async () => (await childTab())?.status).toBe("ready");
+	await page.evaluate(
+		id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "fixture stream parts" }),
+		child,
+	);
+	await expect.poll(async () => (await childTab())?.status).toBe("running");
 
 	await page.locator("[data-sidebar-bots-open]:visible").first().click();
 	if ((await page.locator("[data-bot-pane]:visible").count()) === 0)
@@ -113,19 +152,54 @@ test("a renamed bot's folder, files, routine and open chat follow its new name w
 	await input.press("Enter");
 
 	const moved = path.join(path.dirname(folder), "ruby");
+	await expect.poll(getBot).toMatchObject({ name: "Ruby", folder });
+	expect(await childTab()).toMatchObject({ status: "running", cwd: childFolder });
+	expect(await exists(moved)).toBe(false);
+	await page.evaluate(
+		id => window.omp.rpc.commandForTab(id, { type: "bash", command: "fixture:finish:parts" }),
+		child,
+	);
+	await expect.poll(async () => (await childTab())?.status).toBe("ready");
+	expect(await page.evaluate(id => window.omp.tabs.close(id), child)).toBe(true);
 	await expect
 		.poll(() => page.evaluate(async () => (await window.omp.bots.command({ action: "get" })).bots[0]?.folder))
 		.toBe(moved);
 	expect(await exists(folder)).toBe(false);
 	expect(await fs.readFile(path.join(moved, "notes.md"), "utf8")).toBe("kept");
-	await expect
-		.poll(() =>
-			page.evaluate(
-				async id => (await window.omp.schedules.command({ action: "get" })).schedules.find(row => row.id === id),
-				routineId,
-			),
-		)
-		.toMatchObject({ name: "Ruby: nightly", cwd: moved });
+	// The home journal moved, but the index cannot find the second journal on either side.
+	await expect.poll(() => exists(oldFile), { timeout: 30_000 }).toBe(false);
+	expect(await getBot()).toMatchObject({ home: oldFile, sessions: expect.arrayContaining([missing]) });
+	const routine = () =>
+		page.evaluate(
+			async id => (await window.omp.schedules.command({ action: "get" })).schedules.find(r => r.id === id),
+			routineId,
+		);
+	expect(await routine()).toMatchObject({ cwd: folder });
+	const timestamp = "2026-11-01T00:00:00Z";
+	await fs.writeFile(
+		missing,
+		[
+			{ type: "session", version: 3, id: "missing-chat", timestamp, cwd: folder },
+			{
+				type: "message",
+				id: "first",
+				parentId: null,
+				timestamp,
+				message: { role: "user", content: "Second chat", timestamp: Date.parse(timestamp) },
+			},
+		]
+			.map(entry => `${JSON.stringify(entry)}\n`)
+			.join(""),
+	);
+	await expect.poll(routine, { timeout: 30_000 }).toMatchObject({ name: "Ruby: nightly", cwd: moved });
+	await expect.poll(async () => (await getBot()).sessions).not.toContain(missing);
+	const savedBot = await getBot();
+	const second = savedBot.sessions.find(file => path.basename(file) === path.basename(missing));
+	expect(second).toBeTruthy();
+	expect(second).not.toBe(missing);
+	expect(await fs.readFile(String(second), "utf8")).toContain("Second chat");
+	expect(await digest(original)).toBe(before);
+	expect(await digest(path.join(moved, "picture.png"))).toBe(before);
 	await expect(page.locator("[data-bot-pane-header]")).toContainText("Ruby");
 	await expect(page.locator("[data-sidebar-bots]")).toContainText("Ruby");
 
@@ -135,6 +209,8 @@ test("a renamed bot's folder, files, routine and open chat follow its new name w
 	const state = await page.evaluate(id => window.omp.rpc.commandForTab(id, { type: "get_state" }), chat);
 	expect(state).toMatchObject({ success: true });
 	const sessionFile = String(field(state.data, "sessionFile") ?? "");
+	expect(field(state.data, "sessionId")).toBe(originalId);
+	expect(savedBot.home).toBe(sessionFile);
 	const header: unknown = JSON.parse((await fs.readFile(sessionFile, "utf8")).split("\n")[1] ?? "{}");
 	expect(field(header, "cwd")).toBe(moved);
 	const history = await page.evaluate(id => window.omp.rpc.commandForTab(id, { type: "get_branch_messages" }), chat);
@@ -144,4 +220,11 @@ test("a renamed bot's folder, files, routine and open chat follow its new name w
 	await ask("Still there? fixture:result-ok");
 	await expect.poll(lastAnswer).toContain("Result: ok");
 	await expect.poll(async () => (await tabOf())?.status).toBe("ready");
+	console.info("bot rename verified", {
+		originalId,
+		resumedId: field(state.data, "sessionId"),
+		sourceSha256: before,
+		afterSha256: await digest(original),
+		recoveredSecond: path.basename(String(second)),
+	});
 });

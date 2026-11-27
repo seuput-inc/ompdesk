@@ -80,6 +80,20 @@ import { FIXTURE_MIN_OMP_VERSION, FIXTURE_OMP_VERSION } from "./version";
 /** `e2e/`: the recordings, media and `../resources` the fixture reads sit beside the specs, not in `fixture/`. */
 const E2E_DIR = nodePath.dirname(import.meta.dir);
 
+// The standalone fake has no stock imports. Stock's serializeTitleSlot reserves 256 UTF-8 bytes including LF.
+function titleSlot(title: string, source?: "auto" | "user") {
+	const slot = { type: "title", v: 1, title: "", source, updatedAt: new Date().toISOString(), pad: "" };
+	let room = 255 - Buffer.byteLength(JSON.stringify(slot));
+	for (const char of title) {
+		const bytes = Buffer.byteLength(JSON.stringify(char)) - 2;
+		if (bytes > room) break;
+		slot.title += char;
+		room -= bytes;
+	}
+	slot.pad = " ".repeat(room);
+	return slot;
+}
+
 /**
  * `OMP_GUI_README_SCENE=1` (`scripts/readme-media`): every prompt starts a `fixture flow` turn, which the scene script
  * plays op by op with its own text, so the README clips show a natural prompt and answer instead of a fixture phrase.
@@ -238,7 +252,7 @@ export function runRpcUi(): void {
 		const file = fresh ? fresh.file : resumed && sessionFile ? resumed.file : sessionFile;
 		if (!file || entries.length === 0) return;
 		const lines = [
-			{ type: "title", v: 1, title: sessionTitle, source: titleSource, updatedAt: new Date().toISOString() },
+			titleSlot(sessionTitle, titleSource),
 			{
 				type: "session",
 				version: 3,
@@ -2706,9 +2720,7 @@ export function runRpcUi(): void {
 				: fs.mkdtempSync(nodePath.join(os.tmpdir(), "omp-fork-"));
 			const sessionPath = nodePath.join(dir, journalName(forkId));
 			// Stock `createBranchedSession` gives the fork the source's title (the fixture's title line, as `persistSession`).
-			const title = sessionTitle
-				? [{ type: "title", v: 1, title: sessionTitle, updatedAt: new Date().toISOString() }]
-				: [];
+			const title = sessionTitle ? [titleSlot(sessionTitle)] : [];
 			const header = {
 				type: "session",
 				version: 3,

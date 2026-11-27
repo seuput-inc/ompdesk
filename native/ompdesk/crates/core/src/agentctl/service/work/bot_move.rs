@@ -116,14 +116,16 @@ pub(crate) fn renamed_title(title: &str, old: &str, new: &str) -> Option<String>
 }
 
 impl AgentControl {
-    /// The title of a tab of this computer in `folder` (or below it) that runs a turn.
+    /// A running chat, or an open descendant whose session may not be rebased onto the bot's root.
     fn turn_in(&self, folder: &str) -> Option<String> {
         let state = self.host.state();
         state
             .tabs
             .iter()
             .find(|tab| {
-                tab.device.is_none() && (tab.busy || tab.resuming) && within(&tab.cwd, folder)
+                tab.device.is_none()
+                    && within(&tab.cwd, folder)
+                    && (tab.busy || tab.resuming || tab.cwd != folder)
             })
             .map(|tab| tab.name().to_owned())
     }
@@ -206,6 +208,7 @@ impl AgentControl {
     /// folder is. A folder that may never move drops the record (with the reason logged); one a chat there runs a turn
     /// in, or that something held open this launch, keeps it for a later pass.
     pub(crate) async fn follow_name(&self, id: &str) -> R<String> {
+        let _move = self.bot_moves.lock().await;
         if self.bot_named(id)?.moving.is_some() {
             self.finish_move(id).await?;
         }
@@ -242,7 +245,7 @@ impl AgentControl {
         }
         if let Some(chat) = self.turn_in(&bot.folder) {
             return Ok(format!(
-                "Its folder moves to {target} once \"{chat}\" there ends its turn."
+                "Its folder moves to {target} once \"{chat}\" no longer uses it."
             ));
         }
         let key = format!("{}\n{}", bot.id, bot.folder);
@@ -253,8 +256,14 @@ impl AgentControl {
             ));
         }
         // Its chats' omp stop first: Windows refuses to rename a folder a process runs in.
-        let released = self.host.release_folder(&bot.folder).await;
-        if let Err(error) = released.and_then(|()| self.begin_move(&bot, &target)) {
+        if let Err(error) = self.host.release_folder(&bot.folder).await {
+            return Ok(format!(
+                "Its folder stays {} for now: {}",
+                bot.folder,
+                error.message()
+            ));
+        }
+        if let Err(error) = self.begin_move(&bot, &target) {
             self.mem().folder_unmoved.insert(key);
             eprintln!("[bots] {}: {}", bot.name, error.message());
             return Ok(format!(
@@ -316,6 +325,14 @@ impl AgentControl {
             }
         }
         let moved: HashMap<String, String> = self.host.relocate_bot(&from, &to, &sessions).await?;
+        if let Some(missing) = sessions
+            .iter()
+            .find(|s| moved.get(*s).is_none_or(String::is_empty))
+        {
+            return fail(format!(
+                "The moved session {missing} has not been located in {to}."
+            ));
+        }
         let map = |path: &str| moved.get(path).cloned().unwrap_or_else(|| path.to_owned());
         if let Some(source) = self.schedule_source(None) {
             for schedule in source.schedules().await? {
