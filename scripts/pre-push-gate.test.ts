@@ -1,9 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gitSync, initRepo } from "../src/main/local/git/test-repos";
 import {
+	gatePush,
 	isGated,
 	needsFixTests,
 	parsePushRefs,
@@ -177,6 +178,38 @@ describe("the gate's copy of a pushed commit", () => {
 	afterEach(() => {
 		fs.rmSync(repo, { recursive: true, force: true });
 		fs.rmSync(tree, { recursive: true, force: true });
+	});
+
+	it("allows an unprovisioned push without calling it passed, and still refuses a failed check", async () => {
+		for (const file of ["scripts/lint-fix-tests.mjs", "src/shared/git-env.ts"]) {
+			fs.mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
+			fs.copyFileSync(path.resolve(file), path.join(repo, file));
+		}
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		try {
+			let base = commit("prepare checks");
+			const lines: string[] = [];
+			const push = (...refs: string[]) => gatePush(repo, path.join(repo, ".git"), refs.join("\n"));
+			for (const [file, subject, status, summary] of [
+				["note.md", "docs: note", 0, /^\[pre-push\] passed in /],
+				["scripts/example.ts", "feat: example", 0, /^\[pre-push\] SKIPPED: .*Check CI/],
+				["scripts/example.ts", "fix: missing test", 1, /^\[pre-push\] FAILED: refused/],
+			] as const) {
+				write(file, subject);
+				const tip = commit(subject);
+				const line = `HEAD ${tip} refs/heads/check-${lines.length} ${base}`;
+				lines.push(line);
+				expect(await push(line)).toBe(status);
+				expect(log.mock.lastCall?.[0]).toMatch(summary);
+				base = tip;
+			}
+			expect(await push(lines[1], lines[0])).toBe(0);
+			expect(log.mock.lastCall?.[0]).toBe("[pre-push] push: SKIPPED");
+			expect(await push(lines[1], lines[2])).toBe(1);
+			expect(log.mock.lastCall?.[0]).toBe("[pre-push] push: FAILED");
+		} finally {
+			log.mockRestore();
+		}
 	});
 
 	it("holds the folders the checks read, the top-level files and native's JSON, never native code or docs", () => {

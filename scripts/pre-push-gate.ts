@@ -340,13 +340,9 @@ export function worktreeHolds(root: string, sha: string): boolean {
  * The first-screen budget's verdict without a build: `out/` carries the pushed inputs' stamp (written only after
  * `check-main-bundle.ts` passed on it) when the working tree is the pushed commit and `bun run build` left `out/` as it is.
  */
-export function budgetNote(root: string, inPlace: boolean): string {
-	if (!inPlace)
-		return "budget skipped: this working tree is not the pushed commit, and only a build of its inputs counts";
-	const reason = rebuildReason(root, inputHash(root, process.env), process.env);
-	return reason
-		? `budget skipped: out/ is not built from these inputs (${reason}); \`bun run build\` checks it, CI's build job always does`
-		: "budget ok: out/ was built from exactly these inputs and passed the first-screen budget";
+function budgetSkipReason(root: string, inPlace: boolean): string | undefined {
+	if (!inPlace) return "this working tree is not the pushed commit";
+	return rebuildReason(root, inputHash(root, process.env), process.env);
 }
 
 /** The static checks, run in `dir`; `types` is the typecheck's command. */
@@ -395,7 +391,9 @@ async function copyChecks(root: string, tree: string, sha: string, plan: Plan): 
 	return Promise.all(staticChecks(plan, tree, link, tscCommand(link, ".gate.tsbuildinfo")));
 }
 
-async function gate(root: string, gitDir: string, ref: PushRef): Promise<number> {
+type Verdict = "passed" | "SKIPPED" | "FAILED";
+
+async function gate(root: string, gitDir: string, ref: PushRef): Promise<Verdict> {
 	const started = performance.now();
 	const base = rangeBase(root, ref);
 	const files = gitText(root, ["diff", "--no-renames", "--name-only", "--diff-filter=ACMR", base, ref.localSha])
@@ -411,14 +409,14 @@ async function gate(root: string, gitDir: string, ref: PushRef): Promise<number>
 		console.error(
 			`[pre-push] refused: this push to main carries commits of ${probes.join(", ")}. A probe branch never lands; commit the fix with its test on a branch of its own.`,
 		);
-		return 1;
+		return "FAILED";
 	}
 
-	const notes: string[] = [];
+	const skipped: string[] = [];
 	const results: StepResult[] = needsFixTests(ref)
 		? [await runStep("fix commits carry a test", [process.execPath, "scripts/lint-fix-tests.mjs", range], root)]
 		: [];
-	if (!needsFixTests(ref)) notes.push("probe branch: the fix-commit rule is not checked here; it is where it lands");
+	if (!needsFixTests(ref)) say("probe branch: the fix-commit rule applies where it lands");
 	if (plan.tables)
 		results.push(
 			await runStep(
@@ -456,31 +454,51 @@ async function gate(root: string, gitDir: string, ref: PushRef): Promise<number>
 				);
 			}
 		} catch (error) {
-			notes.push(
-				`SKIPPED biome, surfaces and types: the gate could not run them (${(error as Error).message}); the push goes on`,
-			);
+			skipped.push(`static checks: ${(error as Error).message}`);
 		}
 	}
-	if (plan.budget) notes.push(budgetNote(root, inPlace));
+	if (plan.budget) {
+		const reason = budgetSkipReason(root, inPlace);
+		if (reason) skipped.push(`first-screen budget: ${reason}`);
+		else say("ok     first-screen budget: out/ was built from the pushed inputs");
+	}
 
 	for (const result of results)
 		say(`${result.code === 0 ? "ok     " : "FAILED "}${result.label} (${seconds(result.ms)})`);
-	for (const note of notes) say(note);
+	for (const reason of skipped) say(`SKIPPED ${reason}`);
 	const failed = results.filter(result => result.code !== 0);
 	for (const result of failed) console.error(`\n[pre-push] ${result.label}:\n${result.output.trimEnd()}`);
-	say(`${failed.length > 0 ? "refused" : "passed"} in ${seconds(performance.now() - started)}`);
-	if (failed.length === 0) return 0;
+	if (failed.length === 0) {
+		const incomplete = skipped.length > 0 || results.length === 0;
+		say(
+			incomplete
+				? `SKIPPED: local verification incomplete; ${results.length} local check(s) passed. Check CI for ${ref.localSha}`
+				: `passed in ${seconds(performance.now() - started)}`,
+		);
+		return incomplete ? "SKIPPED" : "passed";
+	}
+	say(`FAILED: refused in ${seconds(performance.now() - started)}`);
 	fs.writeFileSync(path.join(gateDir, "refused"), `${ref.localSha}\n`);
 	console.error(
 		"[pre-push] Fix it, commit, push again. A test that shows a bug before its fix, or an old commit to rerun, goes to a `probe/<name>` branch (no fix-commit rule there). `git push --no-verify` is a person's call, never an agent's.",
 	);
-	return 1;
+	return "FAILED";
+}
+
+export async function gatePush(root: string, gitDir: string, stdin: string): Promise<number> {
+	const refs = parsePushRefs(stdin).filter(isGated);
+	let verdict: Verdict = "passed";
+	for (const ref of refs) {
+		const result = await gate(root, gitDir, ref);
+		if (result !== "passed") verdict = result;
+		if (result === "FAILED") break;
+	}
+	if (refs.length > 1) say(`push: ${verdict}`);
+	return verdict === "FAILED" ? 1 : 0;
 }
 
 if (import.meta.main) {
 	const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 	const gitDir = path.resolve(root, gitText(root, ["rev-parse", "--absolute-git-dir"]));
-	let code = 0;
-	for (const ref of parsePushRefs(fs.readFileSync(0, "utf8")).filter(isGated)) code ||= await gate(root, gitDir, ref);
-	process.exit(code);
+	process.exit(await gatePush(root, gitDir, fs.readFileSync(0, "utf8")));
 }
