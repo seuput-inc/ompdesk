@@ -744,7 +744,6 @@ if (dir) {
 				const sent = await call("ompdesk_session_send", {
 					session: workerId,
 					message: "Choose the badge color fixture:bot-form",
-					requestId: "badge-color",
 				});
 				expect(sent.isError, sent.text).toBe(false);
 				await expect
