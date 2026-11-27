@@ -108,8 +108,10 @@ async function lastAnswer(tabId: string): Promise<string> {
 async function ownerSeesNoCard(worker: string): Promise<void> {
 	const open = await page.evaluate(() => window.omp.ui.openRequests());
 	expect(open.filter(item => item.tabId === worker)).toEqual([]);
-	await page.evaluate(id => window.omp.tabs.setActive(id), worker);
-	await expect(page.locator("[data-prompt-card]")).toHaveCount(0);
+	await page.getByRole("button", { name: /^Pick the badge color fixture:bot-form/ }).click();
+	const pane = page.locator(`.omp-session-pane[data-tab-id="${worker}"][data-active="true"]`);
+	await expect(pane).toBeVisible();
+	await expect(pane.locator("[data-prompt-card]")).toHaveCount(0);
 }
 
 test("the bot answers the form a session raised for its request; the owner gets no card", async () => {
@@ -160,8 +162,10 @@ test("the bot passes a form on; the owner answers it in the bot's chat and the s
 	await ownerSeesNoCard(worker);
 
 	// The card is in the bot's chat, with the session's question and options.
-	await page.evaluate(id => window.omp.tabs.setActive(id), chat);
-	const card = page.locator("[data-prompt-card]").filter({ hasText: "Which color should the badge be?" });
+	await page.getByRole("button", { name: "Ada", exact: true }).click();
+	const pane = page.locator(`.omp-session-pane[data-tab-id="${chat}"][data-active="true"]`);
+	await expect(pane).toBeVisible();
+	const card = pane.locator("[data-prompt-card]").filter({ hasText: "Which color should the badge be?" });
 	await expect(card).toBeVisible({ timeout: 30_000 });
 	await card.locator('[data-choice="Blue"]').click();
 	await card.getByRole("button", { name: "Submit", exact: true }).click();
