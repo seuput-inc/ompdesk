@@ -6,9 +6,15 @@
  * those refusals as `main-unhandled-rejection` in 0.23 s and then died of one more as `main-uncaught`, before the quit
  * waited for its omps and its core. Such a call has nothing left to do, so the refusal is handled here, once for every
  * caller: one `core-shutdown` line naming the caller (its stack reaches past the hub, `shutdownRefusal`), whose
- * repeats the runtime log folds into a count. Any other failure is logged and ends main as Node would.
+ * repeats the runtime log folds into a count.
+ *
+ * A hub call main gave up (`isHubGivenUp`: the core was silent past the call's bound, and lives) that its caller did
+ * not catch is no reason to end main either: ending main ends every session, while the throw cut off one timer tick or
+ * listener. It is one `hub` line naming the call (its message starts with the method) and the caller's stack, counted
+ * for the diagnostics report (`cutOffCallers`). The callers on a timer catch it themselves; this is the backstop. Any
+ * other failure is logged and ends main as Node would.
  */
-import { isCoreShutdown } from "./core/process";
+import { isCoreShutdown, isHubGivenUp } from "./core/process";
 import type { RuntimeLogReport } from "./runtime-log-core";
 
 /** The process events this installs on (Node's `process`; a test hands an emitter). */
@@ -29,14 +35,30 @@ function errorMessage(value: unknown): { message: string; stack?: string } {
 	}
 }
 
+let cutOff = 0;
+
+/** How many callers a given-up hub call cut off since main started (diagnostics.ts). */
+export function cutOffCallers(): number {
+	return cutOff;
+}
+
 export function installMainFailureLogging(target: MainProcess, write: (report: RuntimeLogReport) => void): void {
 	const refused = (error: unknown) => write({ source: "core-shutdown", ...errorMessage(error) });
+	const cut = (error: unknown, origin: string) => {
+		cutOff++;
+		write({ source: "hub", ...errorMessage(error), details: { cutOff: origin, code: "hub_unknown" } });
+	};
 	target.on("uncaughtExceptionMonitor", (error, origin) => {
-		if (!isCoreShutdown(error)) write({ source: "main-uncaught", ...errorMessage(error), details: { origin } });
+		if (!isCoreShutdown(error) && !isHubGivenUp(error))
+			write({ source: "main-uncaught", ...errorMessage(error), details: { origin } });
 	});
-	target.on("uncaughtException", error => {
+	target.on("uncaughtException", (error, origin) => {
 		if (isCoreShutdown(error)) {
 			refused(error);
+			return;
+		}
+		if (isHubGivenUp(error)) {
+			cut(error, origin);
 			return;
 		}
 		// What Node does with no listener: the stack on stderr, exit code 1.
@@ -45,6 +67,7 @@ export function installMainFailureLogging(target: MainProcess, write: (report: R
 	});
 	target.on("unhandledRejection", reason => {
 		if (isCoreShutdown(reason)) refused(reason);
+		else if (isHubGivenUp(reason)) cut(reason, "unhandledRejection");
 		else write({ source: "main-unhandled-rejection", ...errorMessage(reason) });
 	});
 }

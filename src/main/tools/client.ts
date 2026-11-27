@@ -11,6 +11,7 @@ import type { RuntimeErrorSource } from "../../shared/ipc-types";
 import type { OmpUpdateState } from "../../shared/omp-update";
 import type { GitAslrResult, SetupItemState, SetupPlatform, SetupState } from "../../shared/setup";
 import { type HubItem, hub } from "../core/hub";
+import { isHubGivenUp } from "../core/process";
 import type { ExtensionApplyPlan } from "../extension-reload";
 import type { OmpResolution } from "../omp-runtime";
 import { writeRuntimeLog } from "../runtime-log";
@@ -191,7 +192,12 @@ export class ToolsClient {
 					item.timer,
 					setTimeout(() => {
 						this.#timers.delete(item.timer);
-						if (this.#id === id) hub().call(id, "fire", { timer: item.timer, now: Date.now() });
+						try {
+							if (this.#id === id) hub().call(id, "fire", { timer: item.timer, now: Date.now() });
+						} catch (error) {
+							// Given up: the fire went out in order, and the live core runs it.
+							if (!isHubGivenUp(error)) throw error;
+						}
 					}, item.ms),
 				);
 				return;

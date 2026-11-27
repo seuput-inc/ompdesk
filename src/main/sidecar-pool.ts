@@ -85,7 +85,7 @@ import { TargetAnswer } from "./agent-control/target-answer";
 import type { BackgroundWorkMember } from "./background-work";
 import { canonicalCwd } from "./canonical-cwd";
 import { type Hub, type HubItem, hub } from "./core/hub";
-import { CoreError, isCoreShutdown } from "./core/process";
+import { CoreError, isCoreShutdown, isHubGivenUp } from "./core/process";
 import { deletedSessionsOpen } from "./deleted-sessions";
 import { type ExtensionApplyPlan, extensionApplyDecision } from "./extension-reload";
 import { createMessageUpdateSlimmer } from "./message-update-slim";
@@ -964,8 +964,9 @@ export class SidecarPool {
 			try {
 				this.#call("feed", { tab, event, payload: payload ?? null, fromLink: sidecar.statusFromLink === true });
 			} catch (error) {
-				// An omp's last words (its exit) arrive after the quit ended the core: nothing is left to tell.
-				if (!isCoreShutdown(error)) throw error;
+				// An omp's last words (its exit) arrive after the quit ended the core: nothing is left to tell. A feed main
+				// gave up went out in order, and the live core applies it: the listener has nothing after it to finish.
+				if (!isCoreShutdown(error) && !isHubGivenUp(error)) throw error;
 			}
 		};
 		sidecar.on("status", (payload: SidecarStatusPayload, hostTurn?: HostCloseTurn | null) => {

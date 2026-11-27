@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { afterEach, expect, it, vi } from "vitest";
-import { core } from "./core/process";
-import { installMainFailureLogging } from "./main-failures";
+import { CoreError, core } from "./core/process";
+import { cutOffCallers, installMainFailureLogging } from "./main-failures";
 import type { RuntimeLogReport } from "./runtime-log-core";
 
 const v8Default = Error.stackTraceLimit;
@@ -72,4 +72,30 @@ it("logs any other failure as before, and an uncaught one still ends main", () =
 		["main-unhandled-rejection", "something else broke"],
 		["main-uncaught", "something else broke"],
 	]);
+});
+
+it("keeps main up when a hub call main gave up escapes a timer or a promise, each logged once with the call and the caller", () => {
+	const { target, exits, lines } = fakeMain();
+	const before = cutOffCallers();
+	// What ConnectivityMonitor.poll's interval threw on a starved CI runner before it caught it (run 45866211067).
+	function pollTick(): never {
+		throw new CoreError("hub_unknown", "poll: the hub did not answer, so the call was given up");
+	}
+	let thrown: unknown;
+	try {
+		pollTick();
+	} catch (error) {
+		thrown = error;
+	}
+	target.emit("uncaughtExceptionMonitor", thrown, "uncaughtException");
+	target.emit("uncaughtException", thrown, "uncaughtException");
+	target.emit("unhandledRejection", thrown);
+
+	expect(exits).toEqual([]);
+	expect(lines.map(line => [line.source, line.message])).toEqual([
+		["hub", "poll: the hub did not answer, so the call was given up"],
+		["hub", "poll: the hub did not answer, so the call was given up"],
+	]);
+	expect(lines[0]?.stack).toContain("pollTick");
+	expect(cutOffCallers()).toBe(before + 2);
 });

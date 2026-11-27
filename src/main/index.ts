@@ -154,7 +154,7 @@ import { MacPermissions } from "./mac-permissions";
 import { LocalMachine } from "./machine-services";
 import { MachineState } from "./machine-state";
 import { MailAccounts } from "./mail-accounts";
-import { installMainFailureLogging } from "./main-failures";
+import { cutOffCallers, installMainFailureLogging } from "./main-failures";
 import { McpHub } from "./mcp-hub";
 import { onMcpChange } from "./mcp-live";
 import { MEDIA_SCHEME, MediaStreams } from "./media-stream";
@@ -896,10 +896,12 @@ app.whenReady().then(async () => {
 	const bridgeDir = app.isPackaged ? join(process.resourcesPath, "gui-bridge") : join(devResourcesDir, "gui-bridge");
 	// Memory's own model calls (the core's `omp -p`, the judge's host) follow the Credit use switch as a tab does.
 	configureModelRuns(() => creditSpendRun(bridgeDir, creditSpendEnabled(prefsStore().get(CREDIT_SPEND_PREF))));
-	// A core's loss and why, which otherwise only main's console hears (a packaged app keeps none of it).
+	// A core's loss and why, and each hub call main gave up while the core lived, which otherwise only main's console
+	// hears (a packaged app keeps none of it); the machine's state around each says whether the computer was starved.
 	core().report = (step, details) => {
 		writeRuntimeLog({ source: "core-loss", message: step, details });
 		if (step === "abandoned") machineState.stalled("core-loss");
+		else if (step === "gave-up") machineState.stalled("hub");
 	};
 	// The core keeps this computer's remote identity (its key never leaves it); the device id is read synchronously
 	// from here on, so it is loaded now, beside the rest of the launch, and awaited where the devices are made.
@@ -1921,6 +1923,7 @@ app.whenReady().then(async () => {
 					? systemPreferences.getAnimationSettings().prefersReducedMotion
 					: null,
 		}),
+		cutOffCallers,
 	};
 	registerDiagnosticsIpc(ipc, diagnostics);
 	registerDiagnosticBundleIpc(ipc, {
