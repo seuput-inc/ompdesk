@@ -3,9 +3,12 @@ import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+const ordinaryParent =
+	"e2e/remote-host-family.e2e.ts › a paired device reopens an ordinary host's saved child under its exact parent after reconnect, not its namesake";
 const required = [
 	"e2e/bot-rename.e2e.ts › a bot renamed before its first chat updates its soul and signs a message on reopen",
 	"e2e/bots-remote.e2e.ts › a paired bot chat reopens its delegated worker in another repository without taking the human sibling",
+	ordinaryParent,
 ];
 
 // Selected as N/A before execution. The existing Windows guard must still produce this exact skip, never a pass.
@@ -51,6 +54,9 @@ export default class WindowsReleaseReporter {
 		for (const { test, name, na } of this.cases) {
 			missing.delete(name);
 			const attempts = test.results;
+			if (name === ordinaryParent) {
+				for (const attempt of attempts) console.log(`${name}: ${attempt.status} in ${attempt.duration} ms`);
+			}
 			const statuses = attempts.map(attempt => attempt.status).join(", ") || "not run";
 			const skip = test.annotations.find(annotation => annotation.type === "skip" || annotation.type === "fixme");
 			if (

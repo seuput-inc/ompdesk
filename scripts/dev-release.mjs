@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { withoutGitSelectors } from "../src/shared/git-env.ts";
+import { selectWindowsBatch } from "./windows-batch.mjs";
 
 const repo = "seuput-inc/ompdesk";
 const required = [
@@ -63,10 +64,11 @@ export function admission(
 	const receipt = windows.find(dev);
 	if (!receipt) {
 		if (!windows.request) return `no Windows receipt for ${dev}`;
-		windows.request(dev);
+		if (windows.request(dev) === false)
+			return "waiting for the Windows receipt: a batch claim already exists; reconcile without resubmitting";
 		return `waiting for the Windows receipt for ${dev}`;
 	}
-	const scope = `win-e2e run ${receipt.id} (@smoke including bot-rename reopen and bots-remote paired child)`;
+	const scope = `win-e2e run ${receipt.id} (@smoke including bot-rename reopen, bots-remote paired child and remote-host-family ordinary parent)`;
 	if (
 		receipt.path !== run.path ||
 		receipt.head_repository?.full_name !== repo ||
@@ -102,23 +104,62 @@ function main() {
 			.split("\n")
 			.map(line => line.split("\t").reverse()),
 	);
-	const dev = refs["refs/heads/dev"],
+	const tip = refs["refs/heads/dev"],
 		main = refs["refs/heads/main"];
-	if (!dev || !main) throw Error("missing integration or release branch");
+
+	if (!tip || !main) throw Error("missing integration or release branch");
 	const latest = api("releases/latest");
+	// All admitted dispatches for this batch follow its base release's publication.
 	if (!/^v\d+\.\d+\.\d+$/.test(latest.tag_name)) throw Error("unexpected latest tag");
-	git("fetch", "--no-tags", remote, dev, main, `refs/tags/${latest.tag_name}`);
+	if (!latest.published_at) throw Error("missing publication date for the current batch");
+	git("fetch", "--no-tags", remote, tip, main, `refs/tags/${latest.tag_name}`);
 	const tagSha = cmd("gh", "api", `repos/${repo}/commits/${latest.tag_name}`, "--jq", ".sha");
 	git("merge-base", "--is-ancestor", tagSha, main);
+	git("merge-base", "--is-ancestor", main, tip);
+	const dir = join(homedir(), ".ompdesk", "dev-release", "windows");
+	const unreleased = new Set(git("rev-list", `${main}..${tip}`).split("\n"));
+	const dispatches = query =>
+		pages(`actions/workflows/ci.yml/runs?event=workflow_dispatch&branch=dev&per_page=100&${query}`).flatMap(
+			page => page.workflow_runs,
+		);
+
+	const find = sha => windowsReceipt(sha, dispatches(`head_sha=${sha}`), runJobs);
+	const { candidate: dev, claim } = selectWindowsBatch({
+		dir,
+		base: main,
+		tip,
+		contains: sha => unreleased.has(sha),
+		receipt: sha =>
+			find(sha) ??
+			windowsReceipt(sha, dispatches(`created=${encodeURIComponent(`>=${latest.published_at}`)}`), runJobs, true),
+	});
+	// Only a verified descendant of main that remains in dev can be the parent of release metadata.
 	git("merge-base", "--is-ancestor", main, dev);
+	git("merge-base", "--is-ancestor", dev, tip);
 	const range = new Set(git("rev-list", "--no-merges", `${tagSha}..${dev}`).split("\n"));
+	const liveRange = dev === tip ? range : new Set(git("rev-list", "--no-merges", `${tagSha}..${tip}`).split("\n"));
 	if (
 		changeIds.some(
-			id => !range.has(id) || !/^(feat|fix|perf)(\([^)]*\))?!?:/.test(git("show", "-s", "--format=%s", id)),
+			id => !liveRange.has(id) || !/^(feat|fix|perf)(\([^)]*\))?!?:/.test(git("show", "-s", "--format=%s", id)),
 		)
 	)
 		throw Error("change outside unreleased feature/fix/perf commits");
-	const run = api(`actions/runs/${runId}`);
+	const wake = api(`actions/runs/${runId}`);
+	if (
+		wake.path !== ".github/workflows/ci.yml" ||
+		wake.event !== "push" ||
+		wake.head_repository?.full_name !== repo ||
+		wake.head_branch !== "dev" ||
+		(wake.head_sha !== dev && wake.head_sha !== tip)
+	)
+		throw Error("unrelated dev push");
+	const run =
+		wake.head_sha === dev
+			? wake
+			: pages(`actions/workflows/ci.yml/runs?head_sha=${dev}&event=push&branch=dev&per_page=100`).flatMap(
+					page => page.workflow_runs,
+				)[0];
+	if (!run) throw Error(`no dev push for pinned candidate ${dev}`);
 	const jobs = runJobs(run.id);
 	const liveVersion = JSON.parse(git("show", `${main}:package.json`)).version;
 	let receiptJobs = [];
@@ -131,19 +172,17 @@ function main() {
 			jobs,
 			liveVersion,
 			publicTag: latest.tag_name,
-			changes: new Set(changeIds).size,
+			changes: new Set(changeIds.filter(id => range.has(id))).size,
 			exceptional,
 		},
 		{
-			find: sha =>
-				pages(`actions/workflows/ci.yml/runs?head_sha=${sha}&event=workflow_dispatch&branch=dev&per_page=100`)
-					.flatMap(page => page.workflow_runs)
-					.find(candidate => candidate.display_title === title(sha)),
+			find,
 			jobs: id => (receiptJobs = runJobs(id)),
 			request: statusOnly
 				? undefined
-				: sha =>
-						requestOnce(join(homedir(), ".ompdesk", "dev-release", "windows"), sha, candidate =>
+				: sha => {
+						if (!claim()) return false;
+						return requestOnce(join(dir, "requests"), sha, candidate =>
 							cmd(
 								"gh",
 								"workflow",
@@ -156,10 +195,13 @@ function main() {
 								"-f",
 								`windows_candidate=${candidate}`,
 							),
-						),
+						);
+					},
 		},
 	);
-	console.log(JSON.stringify({ verdict, main, dev, publicTag: latest.tag_name, run: run.id }));
+	console.log(
+		JSON.stringify({ verdict, main, dev, originDev: tip, candidate: dev, publicTag: latest.tag_name, run: run.id }),
+	);
 	if (verdict !== "eligible") process.exitCode = 2;
 	if (verdict.startsWith("win-e2e run ")) {
 		const job = receiptJobs.find(job => job.name === "win-e2e");
@@ -172,3 +214,24 @@ function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
+
+export function windowsReceipt(sha, runs, jobs, allowRejection = false) {
+	const matches = runs.filter(
+		run =>
+			run.path === ".github/workflows/ci.yml" &&
+			run.head_repository?.full_name === repo &&
+			run.event === "workflow_dispatch" &&
+			run.head_branch === "dev" &&
+			run.display_title === title(sha),
+	);
+	const exact = matches.find(run => run.head_sha === sha);
+	if (exact || !allowRejection || matches.length !== 1) return exact;
+	const [moved] = matches;
+	// A dispatch to the moving dev ref can be rejected on B while the request is recorded under A.
+	if (
+		moved.status === "completed" &&
+		moved.conclusion === "failure" &&
+		jobs(moved.id).some(job => job.name === "reject-windows-candidate" && job.conclusion === "failure")
+	)
+		return moved;
+}

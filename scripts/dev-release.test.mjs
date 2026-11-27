@@ -4,7 +4,8 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { onTestFinished, test, vi } from "vitest";
-import { admission, git as releaseGit, requestOnce } from "./dev-release.mjs";
+import { admission, git as releaseGit, requestOnce, windowsReceipt } from "./dev-release.mjs";
+import { selectWindowsBatch } from "./windows-batch.mjs";
 
 const jobs = [
 	"static",
@@ -99,6 +100,34 @@ test("a finished Windows receipt needs the exact SHA, full set, successful job a
 	]) {
 		assert.notEqual(admission(batch, { ...green, find: sha => ({ ...greenReceipt(sha), ...patch }) }), "eligible");
 	}
+});
+
+test("dev moving between dispatch and GitHub resolving its ref only releases the rejected candidate", () => {
+	const base = "1".repeat(40);
+	const a = "a".repeat(40);
+	const b = "b".repeat(40);
+	const dir = mkdtempSync(join(tmpdir(), "windows-moved-"));
+	onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
+	const moved = { ...greenReceipt(a), head_sha: b, conclusion: "failure" };
+	const rejected = [{ name: "reject-windows-candidate", conclusion: "failure" }];
+	const select = (tip, runs, checkJobs) =>
+		selectWindowsBatch({
+			dir,
+			base,
+			tip,
+			contains: sha => sha === a || sha === tip,
+			receipt: sha => windowsReceipt(sha, runs, () => checkJobs, true),
+		});
+	assert.equal(select(a, [], []).claim(), true);
+	assert.equal(select(b, [moved], []).candidate, a);
+	assert.equal(select(b, [{ ...moved, conclusion: "success" }], rejected).candidate, a);
+	assert.equal(select(b, [moved, { ...moved, id: 67891 }], rejected).candidate, a);
+	assert.equal(select(b, [moved], rejected).candidate, b);
+	// Its display title still names A: even an apparent success on B cannot supply B's app proof.
+	assert.equal(
+		windowsReceipt(b, [{ ...moved, conclusion: "success" }], () => [windows]),
+		undefined,
+	);
 });
 
 test("only a qualifying batch requests Windows, once even before its receipt is visible", () => {
