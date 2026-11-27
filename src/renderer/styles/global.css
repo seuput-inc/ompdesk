@@ -433,6 +433,7 @@ html:not([data-input="touch"]) .omp-inspector [data-bot-views] > button:not([ari
 
 .omp-inspector [data-bot-views] > button[aria-pressed="true"] {
 	border-radius: var(--sc-radius-md);
+	border-width: 0;
 	background: var(--sc-hover);
 	box-shadow: none;
 }
@@ -441,6 +442,30 @@ html:not([data-input="touch"]) .omp-inspector [data-bot-views] > button:not([ari
 	min-height: var(--sc-control-md);
 	padding: 0 var(--sc-space-2);
 	font-size: var(--sc-font-xs);
+}
+
+html:not([data-input="touch"]) .omp-inspector {
+	& [data-panel-close] {
+		width: var(--sc-control-md);
+		height: var(--sc-space-6);
+	}
+	& [data-panel-close] > svg,
+	& [data-inspector-bot] header [aria-haspopup="menu"] > svg {
+		width: var(--sc-icon-md);
+		height: var(--sc-icon-md);
+	}
+	& [data-inspector-bot] header [aria-haspopup="menu"] {
+		width: var(--sc-control-md);
+		height: var(--sc-control-md);
+	}
+	& .omp-explorer > :first-child button {
+		width: var(--sc-space-6);
+		height: var(--sc-space-6);
+	}
+	& .omp-explorer > :first-child button > svg {
+		width: var(--sc-space-3);
+		height: var(--sc-space-3);
+	}
 }
 
 .omp-inspector .omp-explorer [data-files-search-mode] {
@@ -480,6 +505,7 @@ html:not([data-input="touch"]) .omp-inspector .omp-explorer [data-files-search-m
 
 .omp-inspector [data-inspector-bot] > [data-empty-state] p {
 	line-height: 1.333333;
+	text-wrap: wrap;
 	font-size: var(--sc-font-xs);
 	font-weight: 400;
 }

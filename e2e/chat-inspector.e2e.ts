@@ -51,6 +51,14 @@ test("project and bot conversations keep their own inspector on reopen and on re
 						return {
 							label: node.getAttribute("aria-label") ?? node.getAttribute("class") ?? node.tagName,
 							bounds: node.getBoundingClientRect().toJSON(),
+							textLines:
+								node.childNodes.length === 1 && node.firstChild?.nodeType === Node.TEXT_NODE
+									? (() => {
+											const range = document.createRange();
+											range.selectNodeContents(node);
+											return [...range.getClientRects()].map(rect => rect.width);
+										})()
+									: undefined,
 							font: [style.fontFamily, style.fontSize, style.lineHeight, style.fontWeight],
 						};
 					},
@@ -85,6 +93,9 @@ test("project and bot conversations keep their own inspector on reopen and on re
 		await expect(panel.getByRole("radio", { name: "Names" })).toBeChecked();
 		await expect(panel.getByText("No files in this workspace", { exact: true })).toBeVisible();
 		await capture("project-open");
+		await panel.getByRole("button", { name: "File actions", exact: true }).click();
+		await expect(page.getByRole("menuitem", { name: "New file…", exact: true })).toBeVisible();
+		await page.keyboard.press("Escape");
 		await views.getByRole("button", { name: "Source Control" }).click();
 		await page.locator('[data-bot-row="bot-courier"]').click();
 		await expect.poll(async () => path.normalize((await active())?.cwd ?? "")).toBe(path.normalize(folder));
@@ -92,6 +103,7 @@ test("project and bot conversations keep their own inspector on reopen and on re
 		await selected("Home");
 		await expect(panel.locator('[data-inspector-bot="bot-courier"]')).toContainText("Courier");
 		await expect(panel.getByRole("button", { name: "Look around", exact: true })).toBeVisible();
+		await expect(panel.getByRole("button", { name: /^Ask Courier in chat/ })).toBeVisible();
 		await capture("bot-open");
 		const more = panel.locator("[data-inspector-bot] header").getByRole("button", { name: "More", exact: true });
 		await more.click();

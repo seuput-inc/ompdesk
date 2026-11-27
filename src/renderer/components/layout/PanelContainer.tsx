@@ -7,7 +7,7 @@ import {
 	House,
 	ListChecks,
 	MessagesSquare,
-	PanelRightClose,
+	PanelRight,
 	PanelsTopLeft,
 	Plug,
 	Terminal,
@@ -170,7 +170,7 @@ function PanelHeader({ bare }: { bare?: boolean }) {
 			<IconButton
 				className="no-drag ml-auto shrink-0"
 				data-panel-close=""
-				icon={bare ? <X /> : <PanelRightClose />}
+				icon={bare ? <X /> : <PanelRight />}
 				label={t("panel.close")}
 				onClick={togglePanel}
 				shortcut={actionShortcut("panel.toggle")}

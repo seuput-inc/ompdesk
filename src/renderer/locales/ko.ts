@@ -8263,7 +8263,7 @@ export const ko: Record<string, string> = {
 	"bots.suggestions.failed": "제안을 바꾸지 못했어요",
 	"bots.automations.title": "자동화",
 	"bots.automations.none": "자동화가 없어요.",
-	"bots.automations.ask": "{name}에게 정해진 시간이나 특정 일이 생겼을 때 할 일을 부탁하세요.",
+	"bots.automations.ask": "채팅에서 {name}에게 정해진 시간이나 특정 일이 생겼을 때 할 일을 부탁하세요.",
 	"bots.automations.new": "새 자동화",
 	"bots.automations.draft": "이런 자동화를 만들어 줘: ",
 	"bots.automations.lookAround": "둘러보기",

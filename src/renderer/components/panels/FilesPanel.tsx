@@ -8,7 +8,6 @@
 import {
 	ArrowLeft,
 	AtSign,
-	ChevronsDownUp,
 	Copy,
 	Ellipsis,
 	ExternalLink as ExternalLinkIcon,
@@ -16,6 +15,8 @@ import {
 	Folder,
 	FolderOpen,
 	FolderPlus,
+	ListCollapse,
+	ListFilter,
 	Maximize2,
 	Minimize2,
 	Pencil,
@@ -880,7 +881,7 @@ export function FilesPanel() {
 				)}
 				<IconButton
 					disabled={expanded.size === 0}
-					icon={<ChevronsDownUp />}
+					icon={<ListCollapse />}
 					label={t("prCenter.files.collapseAll")}
 					onClick={() => setExpanded(new Set())}
 					size="sm"
@@ -918,6 +919,7 @@ export function FilesPanel() {
 						<SearchField
 							controlSize="sm"
 							label={t("filesPanel.search")}
+							leadingIcon={<ListFilter />}
 							placeholder={t("filesPanel.find")}
 							value={query}
 							onValueChange={setQuery}
