@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import type { RpcWorktreeCreateResult, WorktreeBaseFetch } from "../../../shared/rpc-types";
 import { GUI_WORKTREE_BRANCH_PREFIX, worktreeBranchPrefix } from "../../../shared/worktree-branch";
-import { core, CoreError } from "../../core/process";
+import { CoreError, core } from "../../core/process";
 import { currentStepSignal, SerialChain, trackEffect } from "../../serial-chain";
 import { stockHelperRequest } from "../../stock-helper";
 import { type BridgeClient, LocalCommandError } from "../types";
