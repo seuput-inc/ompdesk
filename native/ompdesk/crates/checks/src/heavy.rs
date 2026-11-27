@@ -120,12 +120,14 @@ impl Claim {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum Cpu {
-    #[cfg(any(unix, test))]
-    Saturated(bool),
-    #[cfg(windows)]
-    Times { idle: u64, total: u64 },
+#[cfg(unix)]
+pub(crate) type Cpu = bool;
+
+#[cfg(windows)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Cpu {
+    pub idle: u64,
+    pub total: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -138,19 +140,10 @@ pub(crate) struct Pressure {
 
 impl Pressure {
     fn hold(self, before: Self) -> Option<&'static str> {
-        let busy = match self.cpu {
-            #[cfg(any(unix, test))]
-            Cpu::Saturated(busy) => busy,
-            #[cfg(windows)]
-            Cpu::Times { idle, total } => match before.cpu {
-                Cpu::Times {
-                    idle: prev,
-                    total: started,
-                } => total > started && idle == prev,
-                #[cfg(test)]
-                _ => false,
-            },
-        };
+        #[cfg(unix)]
+        let busy = self.cpu;
+        #[cfg(windows)]
+        let busy = self.cpu.total > before.cpu.total && self.cpu.idle == before.cpu.idle;
         if self.critical {
             Some("critical memory pressure")
         } else if self.warning && self.swap > before.swap {
@@ -220,7 +213,7 @@ pub struct Volumes {
     pub danger: u64,
     probe: Probe,
     claims: Result<Option<BTreeMap<PathBuf, u64>>, String>,
-    opaque: Option<Claim>,
+    undeclared: Claim,
     pressure: fn() -> io::Result<Pressure>,
 }
 
@@ -338,12 +331,10 @@ impl Volumes {
             paths,
             need,
             claims,
-            opaque: if bootstrap || detected.script.is_some() {
-                Some(Claim::Exclusive)
-            } else if argv.is_empty() {
-                Some(Claim::Unmetered)
+            undeclared: if bootstrap || detected.script.is_some() {
+                Claim::Exclusive
             } else {
-                None
+                Claim::Unmetered
             },
             pressure: crate::sys::pressure,
             danger,
@@ -361,7 +352,7 @@ impl Volumes {
         self.probe = probe;
         self.pressure = || {
             Ok(Pressure {
-                cpu: Cpu::Saturated(false),
+                cpu: Cpu::default(),
                 critical: false,
                 warning: false,
                 swap: 0,
@@ -409,7 +400,7 @@ impl Volumes {
             .transpose()?
             .unwrap_or_default();
         let mut volumes = Self::of_work(cwd, &argv, env);
-        volumes.opaque = Some(Claim::Unmetered);
+        volumes.undeclared = Claim::Unmetered;
         Ok(volumes)
     }
 
@@ -419,16 +410,12 @@ impl Volumes {
         self
     }
 
-    pub(crate) fn use_previous_command_guard(&mut self) {
-        self.opaque.get_or_insert(Claim::Unmetered);
-    }
-
     /// Native work that owns the write targets, not paths guessed from a command line.
     pub fn for_targets(paths: Vec<PathBuf>, writes: Option<BTreeMap<PathBuf, u64>>) -> Self {
         let mut volumes = Self::of_work(&paths[0], &[], &|k| std::env::var(k).ok());
         volumes.paths = paths;
         volumes.claims = Ok(writes);
-        volumes.opaque = Some(Claim::Exclusive);
+        volumes.undeclared = Claim::Exclusive;
         volumes
     }
 
@@ -437,20 +424,12 @@ impl Volumes {
             .claims
             .as_ref()
             .map_err(|e| io::Error::other(e.clone()))?;
-        if claims.is_none()
-            && let Some(claim) = self.opaque
-        {
+        let Some(paths) = claims else {
             return Ok(disks
                 .iter()
-                .filter_map(|d| d.volume.map(|id| (id, claim)))
+                .filter_map(|d| d.volume.map(|id| (id, self.undeclared)))
                 .collect());
-        }
-        let paths = claims.as_ref().ok_or_else(|| {
-            io::Error::other(format!(
-                "write demand unknown for {}: set {WRITES_ENV} to a JSON map of absolute write paths to incremental bytes",
-                self.paths.first().map_or_else(String::new, |p| p.display().to_string())
-            ))
-        })?;
+        };
         let mut claims = BTreeMap::<u64, u64>::new();
         for (path, bytes) in paths {
             if !path.is_absolute() {
@@ -1222,7 +1201,7 @@ mod tests {
             Ok(Pressure {
                 critical: CRITICAL.get(),
                 warning: false,
-                cpu: Cpu::Saturated(false),
+                cpu: Cpu::default(),
                 swap: 0,
             })
         };
@@ -1457,17 +1436,32 @@ mod tests {
     }
 
     #[test]
-    fn first_use_bootstrap_excludes_a_writer_and_opaque_commands_fail_before_queue() {
+    fn an_unknown_command_waits_for_the_legacy_floor() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let (dir, mut pool) = temp_pool(1);
+        let low = Arc::new(AtomicBool::new(true));
+        let disk = low.clone();
+        let probe: Probe = Arc::new(move |_| {
+            let free = if disk.load(Ordering::Relaxed) { 9 } else { 11 };
+            Some((Some(1), free * GIB, 100 * GIB))
+        });
+        pool.volumes = Volumes::of_work(&dir, &["opaque-tool".into()], &|_| None).with_probe(probe);
+        let lease = pool
+            .acquire(1, owner("opaque"), |w| {
+                assert_eq!(w.low_disk[0].need, 10 * GIB);
+                low.store(false, Ordering::Relaxed);
+            })
+            .unwrap();
+        assert!(!low.load(Ordering::Relaxed));
+        drop(lease);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn first_use_bootstrap_excludes_a_writer() {
         let (dir, mut pool) = temp_pool(2);
         let probe = pool.volumes.probe.clone();
-        pool.volumes =
-            Volumes::of_work(&dir, &["opaque-tool".into()], &|_| None).with_probe(probe.clone());
-        let error = pool
-            .acquire(1, owner("opaque"), |_| panic!("enqueued"))
-            .err()
-            .unwrap();
-        assert!(error.to_string().contains(WRITES_ENV));
-        assert!(!dir.join("counter").exists());
         pool.volumes = Volumes::of_work(&dir, &["bun".into(), "install".into()], &|k| {
             (k == "BUN_INSTALL_CACHE_DIR").then(|| dir.join("cache").display().to_string())
         })
@@ -1501,7 +1495,7 @@ mod tests {
     #[test]
     fn warning_alone_does_not_hold_work_but_growing_swap_or_saturation_does() {
         let base = Pressure {
-            cpu: Cpu::Saturated(false),
+            cpu: Cpu::default(),
             critical: false,
             warning: true,
             swap: 9,
@@ -1513,7 +1507,10 @@ mod tests {
         );
         assert_eq!(
             Pressure {
-                cpu: Cpu::Saturated(true),
+                #[cfg(unix)]
+                cpu: true,
+                #[cfg(windows)]
+                cpu: Cpu { idle: 0, total: 1 },
                 ..base
             }
             .hold(base),
@@ -1535,7 +1532,6 @@ mod tests {
         let mut pool = Pool::new(dir.to_owned(), size).unwrap();
         pool.volumes.paths = vec![dir.to_owned()];
         pool.volumes.need = Some(10 * GIB);
-        pool.volumes.opaque = None;
         pool.volumes.claims = Ok(Some(BTreeMap::from([(dir.to_owned(), 0)])));
         pool.volumes = pool
             .volumes

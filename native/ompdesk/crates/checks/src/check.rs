@@ -1278,14 +1278,6 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
         let taken = heavy::Pool::new(heavy::pool_dir(&lookup), heavy::machine_size(&lookup))
             .and_then(|mut pool| {
                 pool.volumes = heavy::Volumes::of_work(&cwd, &argv, &lookup);
-                // Existing opaque checks keep their protection; a new shell command must name its writes.
-                if detected.kind == Kind::Command
-                    && rt.store.of_key(&rt.run.key).iter().any(|r| {
-                        r.id != rt.run.id && matches!(r.state, State::Passed | State::Failed)
-                    })
-                {
-                    pool.volumes.use_previous_command_guard();
-                }
                 pool.volumes.paths.push(rt.store.dir.clone());
                 pool.acquire_unless(
                     1,
