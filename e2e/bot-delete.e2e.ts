@@ -47,7 +47,8 @@ const looks = (["en", "ko"] as const).flatMap(language =>
 	(["desktop", "phone-390"] as const).map(view => ({ language, view })),
 );
 for (const { language, view } of variants(looks)) {
-	test(`deleting a bot keeps only the handed session (${view}, ${language})`, async () => {
+	const tag = language === "en" && view === "desktop" ? ["@smoke"] : [];
+	test(`deleting a bot keeps only the handed session (${view}, ${language})`, { tag }, async () => {
 		test.setTimeout(180_000);
 		const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-bot-delete-")));
 		let host: RemoteInstance | undefined;

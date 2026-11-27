@@ -204,7 +204,7 @@ For this repository, `origin/dev` integrates ordinary work; `main` is release-on
 ## Release
 
 - Semver `X.Y.Z`; tag `vX.Y.Z`; commit `release: vX.Y.Z`. No AI attribution trailers in commit messages.
-- `scripts/dev-release.mjs` pins one Windows candidate per release batch. Promote only its returned `candidate` after its own push and Windows-applicable `@smoke` tests pass, including bot rename/reopen, the paired delegated worker and ordinary-parent reconnect/close/fold. Newer `dev` commits wait for the next batch. Only a failed or cancelled set plus a changed tip permits a replacement. Missing, skipped or uncertain evidence holds the cut. The full nightly suite remains informational.
+- `scripts/dev-release.mjs` pins one Windows candidate per release batch. Promote only its returned `candidate` after its own push and Windows-applicable `@smoke` tests pass, including bot rename/reopen, the paired delegated worker, ordinary-parent reconnect/close/fold and bot deletion with a handed session. Newer `dev` commits wait for the next batch. Only a failed or cancelled set plus a changed tip permits a replacement. Missing, skipped or uncertain evidence holds the cut. The full nightly suite remains informational.
 
 ### Steps
 

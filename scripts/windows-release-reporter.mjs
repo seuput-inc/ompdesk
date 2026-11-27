@@ -6,6 +6,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const ordinaryParent =
 	"e2e/remote-host-family.e2e.ts › a paired device reopens an ordinary host's saved child under its exact parent after reconnect, not its namesake";
 const required = [
+	"e2e/bot-delete.e2e.ts › deleting a bot keeps only the handed session (desktop, en)",
 	"e2e/bot-rename.e2e.ts › a bot renamed before its first chat updates its soul and signs a message on reopen",
 	"e2e/bots-remote.e2e.ts › a paired bot chat reopens its delegated worker in another repository without taking the human sibling",
 	ordinaryParent,
