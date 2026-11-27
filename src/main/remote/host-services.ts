@@ -1781,14 +1781,22 @@ export class LocalHostServices implements HostServices {
 			case "host.bots.command": {
 				const { request } = parse(BotsCommandParams, method, params);
 				const bots = this.#bots();
-				const change = () => bots.from(request, peer.deviceId, peer.name);
-				const turn = request.action === "roomAsk" || (request.action === "item" && request.answer !== undefined);
+				const createKey = request.action === "create" ? randomUUID() : undefined;
+				const change = () => bots.from(request, peer.deviceId, peer.name, createKey);
+				// Rust str::trim uses Unicode White_Space, not JavaScript's trim set.
+				const turn =
+					request.action === "roomAsk" ||
+					(request.action === "item" && request.answer !== undefined) ||
+					(request.action === "create" &&
+						typeof request.kickoff === "string" &&
+						/\P{White_Space}/u.test(request.kickoff));
 				if (!turn) return change();
 				return this.#metered(
 					peer.deviceId,
 					1,
 					change,
 					answer => typeof answer === "object" && answer !== null && !("refused" in answer),
+					createKey ? () => bots.created(peer.deviceId, createKey) : undefined,
 				);
 			}
 			case "host.projects.command":
@@ -3187,6 +3195,7 @@ export class LocalHostServices implements HostServices {
 		requests: number,
 		work: () => Promise<T>,
 		succeeded: (result: T) => boolean,
+		kept?: () => Promise<boolean>,
 	): Promise<T> {
 		const reservation = this.#quota?.reserve(deviceId, requests);
 		if (reservation && !reservation.ok) {
@@ -3197,12 +3206,16 @@ export class LocalHostServices implements HostServices {
 					: `This device's ${reservation.refusal === "requests" ? "request" : "token"} limit for today on this computer's models is used up.`,
 			);
 		}
+		const refund = async (): Promise<void> => {
+			// A lost create reply is not evidence the host failed to write its bot.
+			if (reservation && (!kept || (await kept().catch(() => true)) === false)) reservation.refund();
+		};
 		try {
 			const result = await work();
-			if (!succeeded(result)) reservation?.refund();
+			if (!succeeded(result)) await refund();
 			return result;
 		} catch (error) {
-			reservation?.refund();
+			await refund();
 			throw error;
 		}
 	}

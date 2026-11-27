@@ -10,6 +10,7 @@
  * Dependency-free (types aside).
  */
 import type { LOOK_EVERY } from "./bot-limits";
+import type { ModelRolesResult } from "./rpc-types";
 import type { ScheduleEvent } from "./schedules";
 import type { ApprovalMode } from "./tool-approval";
 
@@ -355,10 +356,10 @@ export interface BotSeedSkill {
 export type BotsRequest =
 	| { action: "get" }
 	| { action: "allowLegacyPeers"; ids: string[] }
-	| {
+	| ({
 			action: "create";
 			name: string;
-			folder?: string;
+			model?: string | null;
 			/** What it is for, `BOT_PURPOSE_MAX` characters at most: its SOUL.md's first paragraph unless `soul` is given. */
 			purpose?: string;
 			/** Its whole SOUL.md (a template's seed). A file already in the folder is kept. */
@@ -366,7 +367,7 @@ export type BotsRequest =
 			skills?: BotSeedSkill[];
 			/** The first message OMPdesk sends its home chat in place of the plain kickoff (a template's, an import's). */
 			kickoff?: string;
-	  }
+	  } & ({ device: string; folder?: never } | { device?: undefined; folder?: string }))
 	| {
 			action: "update";
 			id: string;
@@ -469,18 +470,32 @@ export interface BotExportRequest {
 	file: string;
 }
 
-/** Everything `BOTS_COMMAND` takes: a change to the state, a file, the import sources, or an export. */
-export type BotsCall = BotsRequest | BotFileRequest | { action: "importSources" } | BotExportRequest;
+export type BotCreateFolder = { action: "createFolder"; name: string; device?: string };
+export type BotCreateModels = { action: "createModels"; device?: string; callerTabId: string };
+type BotFolderPreview = { folder: string };
+export type BotsCall =
+	| BotsRequest
+	| BotFileRequest
+	| { action: "importSources" }
+	| BotExportRequest
+	| BotCreateFolder
+	| BotCreateModels;
 export type BotsAnswer<C extends BotsCall> = C extends BotFileRequest
 	? BotFile
 	: C extends { action: "importSources" }
 		? { sources: BotImportSource[] }
 		: C extends BotExportRequest
 			? { file: string }
-			: BotsState;
+			: C extends BotCreateFolder
+				? BotFolderPreview
+				: C extends BotCreateModels
+					? ModelRolesResult
+					: BotsState;
 
 export interface BotsApi {
 	command(request: BotsRequest): Promise<BotsState>;
+	createFolder(name: string, device?: string): Promise<BotFolderPreview>;
+	createModels(device?: string): Promise<ModelRolesResult>;
 	file(request: Omit<BotFileRequest, "action">): Promise<BotFile>;
 	importSources(): Promise<{ sources: BotImportSource[] }>;
 	exportPackage(request: Omit<BotExportRequest, "action">): Promise<{ file: string }>;

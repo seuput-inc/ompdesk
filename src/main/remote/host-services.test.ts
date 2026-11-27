@@ -1050,6 +1050,54 @@ describe("LocalHostServices", () => {
 		}
 		const used = (stored: ReturnType<typeof quotaOver>["stored"]) => stored.get("device-x")?.usage?.requests;
 
+		it("reserves one bot kickoff before create, refunds a refusal, and never charges a blank kickoff", async () => {
+			const hold = Promise.withResolvers<unknown>();
+			const from = vi.fn().mockReturnValueOnce(hold.promise).mockResolvedValue({});
+			const created = vi.fn().mockResolvedValue(false);
+			const bots = { from, created, home: vi.fn(), remote: vi.fn(), share: vi.fn(), roomPost: vi.fn() };
+			const { services } = setup(60_000, { bots: () => bots });
+			const x = new FakeConnection(peer("device-x"));
+			const { quota, stored } = quotaOver({ ...x.peer, limits: { requestsPerDay: 1 } });
+			services.attachQuota(quota);
+			const create = (fields: Record<string, unknown>) =>
+				services.call(x.peer, "host.bots.command", { request: { action: "create", name: "Ada", ...fields } }, x);
+			const reserved = create({ kickoff: "Start" });
+			const refused = await create({ purpose: "review", kickoff: "Start" }).catch((error: unknown) => error);
+			expect(ipcErrorCode(refused)).toBe("remote_limit_reached");
+			expect(from).toHaveBeenCalledTimes(1);
+			hold.resolve({ refused: "stale" });
+			await reserved;
+			expect(used(stored)).toBe(0);
+			from.mockRejectedValueOnce(new Error("invalid folder"));
+			await expect(create({ kickoff: "Start", folder: "/not-allowed" })).rejects.toThrow("invalid folder");
+			expect(used(stored)).toBe(0);
+			expect(created.mock.calls).toEqual(from.mock.calls.map(call => [x.peer.deviceId, call[3]]));
+			await create({ kickoff: "\uFEFF" });
+			expect(used(stored)).toBe(1);
+			await create({ purpose: "review", kickoff: "\u0085 " });
+			await create({});
+			expect(used(stored)).toBe(1);
+		});
+
+		it.each(["written", "unreadable"])("retains a lost create's request when its host record is %s", async state => {
+			const from = vi.fn().mockRejectedValue(new Error("answer lost"));
+			const created = vi.fn();
+			if (state === "written") created.mockResolvedValue(true);
+			else created.mockRejectedValue(new Error("disk"));
+			const bots = { from, created, home: vi.fn(), remote: vi.fn(), share: vi.fn(), roomPost: vi.fn() };
+			const { services } = setup(60_000, { bots: () => bots });
+			const x = new FakeConnection(peer("device-x"));
+			const { quota, stored } = quotaOver(x.peer);
+			services.attachQuota(quota);
+			const request = { action: "create", name: "Ada", kickoff: "Go" };
+			await expect(services.call(x.peer, "host.bots.command", { request }, x)).rejects.toThrow("answer lost");
+			const key = from.mock.calls[0]?.[3];
+			expect(key).toEqual(expect.any(String));
+			expect(from).toHaveBeenCalledTimes(1);
+			expect(created).toHaveBeenCalledWith(x.peer.deviceId, key);
+			expect(used(stored)).toBe(1);
+		});
+
 		it("refuses omfg, tan and a summarizing leaf switch once the limit is used up, and still serves reads", async () => {
 			const { services, sidecars, stored, x } = limited({ requestsPerDay: 1 }, 1);
 			await services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);

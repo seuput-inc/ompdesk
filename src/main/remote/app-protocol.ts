@@ -953,8 +953,8 @@ export const SchedulesCreateParams = z.object({ draft: ScheduleDraftSchema });
 /** `host.bots.home {name}` → `{path, name}`: one of the host's bots by name, refused unless the asking device is in its reach. */
 export const BotsHomeParams = z.object({ name: z.string().trim().min(1).max(200) });
 /**
- * `host.bots.command {request}` → SharedBots (or a BotFile for `file`): the owner's change to one of the host's bots,
- * made by the host's core, which refuses what a device may not do (make, import, hand over, groups).
+ * `host.bots.command {request}` → SharedBots, a BotFile, or the host-chosen creation folder. The core accepts bot
+ * creation content, not a client-chosen host path. Imports, handovers and owner-only settings stay local.
  */
 export const BotsCommandParams = z.object({
 	request: z.looseObject({ action: z.string().min(1).max(64), answer: z.unknown().optional() }),

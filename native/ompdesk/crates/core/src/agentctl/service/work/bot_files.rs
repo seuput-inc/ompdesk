@@ -50,6 +50,23 @@ fn skill_name_ok(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+pub(super) fn seed_skill(skill: &Value) -> R<(&str, &str)> {
+    let name = skill["name"].as_str().unwrap_or("");
+    let content = skill["content"].as_str().unwrap_or("");
+    if !skill_name_ok(name) {
+        return fail(format!("\"{name}\" is not a skill name (a-z, 0-9 and -)."));
+    }
+    if content.trim().is_empty() || content.len() > SKILL_MAX {
+        return fail(format!(
+            "The skill {name} is empty or longer than {SKILL_MAX} bytes."
+        ));
+    }
+    if !skill.as_object().is_some_and(|fields| fields.len() == 2) {
+        return fail("A bot skill takes only a name and content.");
+    }
+    Ok((name, content))
+}
+
 /// What a new bot starts with: `SOUL.md` from `soul`, else from `purpose` (its first paragraph, which is what the state
 /// reads as its specialty), and each skill's `.omp/skills/<name>/SKILL.md`. A file already there is kept.
 pub fn seed(
@@ -70,18 +87,7 @@ pub fn seed(
     }
     let mut seeded: Vec<(PathBuf, String)> = Vec::new();
     for skill in skills {
-        let skill_name = skill.get("name").and_then(Value::as_str).unwrap_or("");
-        let content = skill.get("content").and_then(Value::as_str).unwrap_or("");
-        if !skill_name_ok(skill_name) {
-            return fail(format!(
-                "\"{skill_name}\" is not a skill name (a-z, 0-9 and -)."
-            ));
-        }
-        if content.trim().is_empty() || content.len() > SKILL_MAX {
-            return fail(format!(
-                "The skill {skill_name} is empty or longer than {SKILL_MAX} bytes."
-            ));
-        }
+        let (skill_name, content) = seed_skill(skill)?;
         seeded.push((
             folder
                 .join(".omp")

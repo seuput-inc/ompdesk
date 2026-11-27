@@ -1391,8 +1391,18 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
                     args.get("deviceName")
                         .and_then(Value::as_str)
                         .unwrap_or("A paired computer"),
+                    args.get("createKey").and_then(Value::as_str),
                 )
                 .await,
+        ),
+        "botPeerCreated" => reply(
+            control
+                .bots()
+                .peer_created(
+                    &text_arg(&args, "device", method)?,
+                    &text_arg(&args, "createKey", method)?,
+                )
+                .map_err(fail::Fail::Tool),
         ),
         // This computer's bots as its paired devices get them (`host.bots.list`).
         "botsShare" => Reply::json(&control.bots_share()),

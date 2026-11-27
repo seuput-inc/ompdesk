@@ -32,7 +32,9 @@ export interface HostBots {
 	/** This computer's bots and items as its paired devices get them (`host.bots.list`). */
 	share(): Promise<SharedBots>;
 	/** A device's change to one of this computer's bots (`host.bots.command`): the copy after it, or a file. */
-	from(request: unknown, deviceId: string, deviceName: string): Promise<unknown>;
+	from(request: unknown, deviceId: string, deviceName: string, createKey?: string): Promise<unknown>;
+	/** Whether the host durably recorded this exact create. An unknown outcome is not a refund. */
+	created(device: string, createKey: string): Promise<boolean>;
 	/** What this computer heard of a paired host's bots; `applied` false: read its whole copy again. */
 	remote(update: HostBotsUpdate): Promise<{ applied: boolean }>;
 	/** A paired host's bot posted in one of this computer's groups. */

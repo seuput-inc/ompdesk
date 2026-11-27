@@ -278,6 +278,8 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 		},
 		bots: {
 			command: request => transport.invoke(BOTS_COMMAND, request),
+			createFolder: (name, device) => transport.invoke(BOTS_COMMAND, { action: "createFolder", name, device }),
+			createModels: device => transport.invoke(BOTS_COMMAND, { action: "createModels", device }),
 			file: request => transport.invoke(BOTS_COMMAND, { ...request, action: "file" }),
 			importSources: () => transport.invoke(BOTS_COMMAND, { action: "importSources" }),
 			exportPackage: request => transport.invoke(BOTS_COMMAND, { ...request, action: "export" }),

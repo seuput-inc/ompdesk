@@ -5,6 +5,8 @@
 //! What the record does not hold is read when the state is listed: `specialty` from the folder's `SOUL.md`
 //! (`specialty`), the open items and the Needs-you count from `items.rs`.
 
+pub mod receipt;
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +30,8 @@ pub struct BotRecord {
     pub folder: String,
     /// Its home chat's session file; None until its first chat.
     pub home: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creation_receipt: Option<receipt::CreationReceipt>,
     /// Session files of its chats on this computer, oldest first.
     pub sessions: Vec<String>,
     pub paused: bool,

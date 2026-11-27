@@ -966,8 +966,12 @@ export class AgentControl {
 	}
 
 	/** A paired device's change to one of this computer's bots (`host.bots.command`): this computer's copy after it. */
-	botsFrom(request: unknown, device: string, deviceName: string): Promise<unknown> {
-		return this.#call("botsFrom", { request, device, deviceName });
+	botsFrom(request: unknown, device: string, deviceName: string, createKey?: string): Promise<unknown> {
+		return this.#call("botsFrom", { request, device, deviceName, createKey });
+	}
+
+	botPeerCreated(device: string, createKey: string): Promise<boolean> {
+		return this.#call("botPeerCreated", { device, createKey });
 	}
 
 	/** What this computer heard of a paired host's bots; `applied` false: read its whole copy again. */
