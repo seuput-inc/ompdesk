@@ -181,10 +181,14 @@ test("an ordinary bug report lists its outcome, not internal playbook steps", as
 		expect(outcome.copied).toEqual([]);
 		expect(outcome.items.length).toBeLessThanOrEqual(2);
 		for (const item of outcome.items) {
-			expect(item).toMatch(/\b(sum(?:ming|mation)?|add(?:ition|ing)?|total|reduce[rd]?|accumulator|test(?:\.js|s)?|assertion|off.by.one|bug|incorrect result)\b/i);
+			expect(item).toMatch(
+				/\b(sum(?:ming|mation)?|add(?:ition|ing)?|total|reduce[rd]?|accumulator|test(?:\.js|s)?|assertion|off.by.one|bug|incorrect result)\b/i,
+			);
 		}
 	}
-	console.log(`[real-pstack] bug-fix playbook read ${reads}/3; read with visible list ${readsWithList}/3; earlier full-follow baseline 3/5`);
+	console.log(
+		`[real-pstack] bug-fix playbook read ${reads}/3; read with visible list ${readsWithList}/3; earlier full-follow baseline 3/5`,
+	);
 	results.push({ case: "bug fix adherence", reads, readsWithList, attempts: 3, earlierFullFollow: "3/5" });
 	expect(reads).toBeGreaterThanOrEqual(1);
 	expect(readsWithList).toBeGreaterThanOrEqual(1);
