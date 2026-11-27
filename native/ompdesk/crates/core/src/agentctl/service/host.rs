@@ -736,6 +736,21 @@ impl Host {
         .await
     }
 
+    /// `escalateAsk(tabId, requestId, chatTabId)`: the card a bot holds shows in the windows of its chat `chatTabId`,
+    /// where the owner answers it for the tab that asked (`route.rs`). False when the card is not open any more.
+    pub async fn escalate_ask(
+        &self,
+        tab_id: &str,
+        request_id: &str,
+        chat_tab_id: Option<&str>,
+    ) -> R<bool> {
+        self.ask(
+            "escalateAsk",
+            json!({ "tabId": tab_id, "requestId": request_id, "chatTabId": chat_tab_id }),
+        )
+        .await
+    }
+
     /// `markAnswered(tabId, byTitle)`.
     pub async fn mark_answered(&self, tab_id: &str, by_title: &str) -> R<()> {
         self.ask(

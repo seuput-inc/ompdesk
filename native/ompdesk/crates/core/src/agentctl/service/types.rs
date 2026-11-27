@@ -149,6 +149,9 @@ pub struct UiRequest {
     pub options: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<AskQuestion>,
+    /// A `form`'s HTML (stock 19.1): the asking session's bridge projects it into questions (`project_ask_form`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html: Option<String>,
 }
 
 /// A blocking request a session waits on, as the pool holds it.
@@ -1380,6 +1383,9 @@ pub struct AnswerArgs {
     pub text: Option<String>,
     #[serde(default)]
     pub answers: Option<Vec<AnswerItem>>,
+    /// The bot a question was routed to passes it on to the owner (`route.rs`).
+    #[serde(default)]
+    pub escalate: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]

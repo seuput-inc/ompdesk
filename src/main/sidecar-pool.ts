@@ -163,6 +163,12 @@ export type TabActivity =
 	| { type: "idle"; tabId: string; outcome: IpcTabRunOutcome | undefined }
 	| { type: "ask"; tabId: string; requestId: string; text: string }
 	/**
+	 * A question of a run another session's message started, held off the windows while agent control decides whose it
+	 * is (`routeAsk`): `origin` is the sender's saved id and the dispatch or request id its message carried. The owner's
+	 * ask, if it becomes one, is announced again as an `ask`.
+	 */
+	| { type: "askHeld"; tabId: string; requestId: string; origin: { session: string; mark: string | null } }
+	/**
 	 * A question or approval closed. `answered` is set when a window, a page or an agent answered it here: the card's
 	 * title and the choice in its words (an option, yes/no, the answers, or "dismissed").
 	 */
@@ -1345,6 +1351,7 @@ export class SidecarPool {
 		const view: HostedTabView = new HostedTabView({
 			sidecar: handle.sidecar,
 			promptOrigin: origin,
+			poolRoutesQuestions: true,
 			labelTranscript: data => {
 				const page = data as { messages?: PromptOriginLabel[] } | undefined;
 				if (!page?.messages?.some(message => message.promptFromId !== undefined)) return data;
@@ -1762,6 +1769,19 @@ export class SidecarPool {
 	/** Whether `requestId` is a question `tabId`'s omp still waits on. */
 	isRequestOpen(tabId: string, requestId: string): boolean {
 		return this.#call<boolean>("isRequestOpen", { tab: tabId, id: requestId });
+	}
+
+	delegatedPrompt(tabId: string, text: string, revoke = false): void {
+		this.#call("delegatedPrompt", { tab: tabId, text, revoke });
+	}
+
+	/**
+	 * Where agent control sent a held question (`askHeld`): no `chat`, to the owner's windows as any other ask; a bot
+	 * chat's id, kept off them for that bot; with `escalate`, shown in that chat's windows, whose answer goes to the
+	 * asking tab. False when it is not open or not held.
+	 */
+	routeAsk(tabId: string, requestId: string, chat?: string, escalate = false): boolean {
+		return this.#call<boolean>("routeAsk", { tab: tabId, id: requestId, ...(chat ? { chat, escalate } : {}) });
 	}
 
 	/** Throws `being_answered` when an agent's answer holds the question and `claim` is not its own. */

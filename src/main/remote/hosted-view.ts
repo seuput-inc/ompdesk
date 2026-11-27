@@ -72,6 +72,8 @@ export interface HostedTabPort {
 	readonly sidecar: SidecarLike;
 	/** Who types through this view: its prompts are journaled as theirs. */
 	readonly promptOrigin: PromptOrigin;
+	/** The pool sends ask/form frames after it decides which chat owns them. */
+	poolRoutesQuestions?: boolean;
 	/** A transcript page as the omp labelled it, relabelled for the viewer. */
 	labelTranscript(data: unknown): unknown;
 	/** Spawn the tab's omp if it has not run yet (a revived tab). */
@@ -120,6 +122,10 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 		this.#port = port;
 		for (const name of VIEW_EVENTS) {
 			const forward = (...args: unknown[]): void => {
+				if (name === "extensionUi" && port.poolRoutesQuestions) {
+					const { method } = args[0] as ExtensionUIRequest;
+					if (method === "ask" || method === "form") return;
+				}
 				this.emit(name, ...args);
 			};
 			port.sidecar.on(name, forward);

@@ -219,6 +219,26 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
             &p.s("tab").unwrap_or_default(),
             &p.s("id").unwrap_or_default(),
         )),
+        "delegatedPrompt" => {
+            ctx.delegated_prompt(
+                &p.s("tab").unwrap_or_default(),
+                p.s("text").unwrap_or_default(),
+                p.0["revoke"].as_bool() == Some(true),
+            );
+            now(Value::Null)
+        }
+        // Where agentctl sent a question of a run another session started (`Ctx::route_ask`).
+        "routeAsk" => later(async move {
+            Ok(Value::from(
+                ctx.route_ask(
+                    &p.s("tab")?,
+                    &p.s("id")?,
+                    p.os("chat"),
+                    p.0["escalate"].as_bool() == Some(true),
+                )
+                .await?,
+            ))
+        }),
         "releaseRequest" => {
             ctx.release_request(
                 &p.s("id").unwrap_or_default(),

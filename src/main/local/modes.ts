@@ -81,9 +81,11 @@ const viaBridge: LocalHandler = async ({ type, id: _id, ...params }, ctx) =>
 	ctx.bridge.request(`modes.${type}`, params);
 
 /** Like the TUI, a new objective starts working at once; while streaming the goal context was steered in instead. */
-async function startObjectiveTurn(ctx: LocalCommandContext, objective: string): Promise<void> {
+async function startObjectiveTurn(ctx: LocalCommandContext, message: string): Promise<boolean> {
 	const state = await ctx.send<{ isStreaming?: boolean }>({ type: "get_state" });
-	if (!state.isStreaming) await ctx.send({ type: "prompt", message: objective, streamingBehavior: "followUp" });
+	if (state.isStreaming) return false;
+	await ctx.send({ type: "prompt", message, streamingBehavior: "followUp" });
+	return true;
 }
 
 /**
@@ -107,7 +109,7 @@ async function setTimeLimit(ctx: LocalCommandContext, minutes: number | null): P
 	await ctx.bridge.request("modes.goal_set_time_limit", { minutes });
 }
 
-async function setGoal(command: { [k: string]: unknown }, ctx: LocalCommandContext): Promise<RpcGoalState> {
+async function setGoal(command: { [k: string]: unknown }, ctx: LocalCommandContext) {
 	if (command.action === "pause" || command.action === "resume" || command.action === "drop") {
 		// A goal paused at its OMPdesk time limit gets another span of it first; resumed as is, the bridge's
 		// limit check would pause it again on the resume itself. Best effort: an omp without it resumes as stock.
@@ -121,12 +123,19 @@ async function setGoal(command: { [k: string]: unknown }, ctx: LocalCommandConte
 			? command.timeLimitMinutes
 			: undefined;
 	if (objective) {
+		const firstTurn = async (result: StockGoalResult) => {
+			const started = await startObjectiveTurn(
+				ctx,
+				typeof command.message === "string" ? command.message : objective,
+			);
+			const goal = await withTimeLimit(ctx, projectGoal(result));
+			return !started && command.message ? { ...goal, promptSkipped: true } : goal;
+		};
 		const current = await ctx.send<StockGoalResult>({ type: "goal", op: "get" });
 		if (current.state?.enabled) {
 			const replaced = await ctx.bridge.request<StockGoalResult>("modes.goal_replace", { objective, tokenBudget });
 			if (timeLimit !== undefined) await setTimeLimit(ctx, timeLimit);
-			await startObjectiveTurn(ctx, objective);
-			return withTimeLimit(ctx, projectGoal(replaced));
+			return firstTurn(replaced);
 		}
 		if (current.state?.goal.status === "paused") {
 			throw new Error("Resume the current goal first, or drop it before setting a new objective.");
@@ -139,8 +148,7 @@ async function setGoal(command: { [k: string]: unknown }, ctx: LocalCommandConte
 		});
 		// Before the first turn, so the whole run counts against the limit.
 		if (timeLimit !== undefined && timeLimit !== null) await setTimeLimit(ctx, timeLimit);
-		await startObjectiveTurn(ctx, objective);
-		return withTimeLimit(ctx, projectGoal(created));
+		return firstTurn(created);
 	}
 	if (command.tokenBudget !== undefined || timeLimit !== undefined) {
 		let state: RpcGoalState | undefined;

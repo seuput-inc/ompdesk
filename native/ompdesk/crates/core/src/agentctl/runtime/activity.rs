@@ -101,6 +101,22 @@ impl Runtime {
                 let _ = control.child_asked(&parent, &child, &request).await;
             });
         }
+        // A card routed to a bot closed: the bot hears how, unless its own answer closed it (`service/route.rs`).
+        if activity.kind == ActivityKind::AskClosed
+            && let Some(request) = &activity.request_id
+        {
+            let control = self.control.clone();
+            let (child, request) = (tab.to_owned(), request.clone());
+            let choice = activity
+                .answered
+                .as_ref()
+                .map(|answered| answered.choice.clone());
+            tokio::spawn(async move {
+                control
+                    .routed_ask_closed(&child, &request, choice.as_deref())
+                    .await;
+            });
+        }
         // The card its opener was told of closed without the opener's answer: the opener hears how, once.
         if activity.kind == ActivityKind::AskClosed
             && activity.announce

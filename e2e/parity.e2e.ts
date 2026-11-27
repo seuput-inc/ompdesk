@@ -782,9 +782,63 @@ if (dir) {
 				answered.set("Parity board", session);
 				return session;
 			};
+			const routedSession = async (which: "routing-bot" | "routing-worker"): Promise<HostSession> => {
+				const existing = answered.get(which);
+				if (existing) return existing;
+				const folder = path.join(parent, "routing-bot");
+				await b.evaluate(
+					folder => window.omp.bots.command({ action: "create", name: "Badge bot", folder }),
+					folder,
+				);
+				const chat = (await b.evaluate(cwd => window.omp.tabs.spawn({ cwd }), folder))?.tabId;
+				if (!chat) throw new Error("No bot chat");
+				const tab = async (id: string) =>
+					(await b.evaluate(() => window.omp.tabs.list())).find(t => t.tabId === id);
+				await expect.poll(async () => (await tab(chat))?.status).toBe("ready");
+				await b.evaluate(id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "Hello" }), chat);
+				await untilAnswered(b, chat);
+				const chatPath = (await tab(chat))?.sessionPath;
+				if (!chatPath) throw new Error("Bot chat has no file");
+				await expect
+					.poll(async () =>
+						(await b.evaluate(() => window.omp.bots.command({ action: "get" }))).bots.some(
+							bot => bot.home === chatPath,
+						),
+					)
+					.toBe(true);
+				const worker = await answeredSession("Parity badge worker", [["hello", "Local fixture reply"]]);
+				const workerId = (await b.evaluate(() => window.omp.tabs.list())).find(
+					t => t.sessionPath === worker.path,
+				)?.tabId;
+				if (!workerId) throw new Error("No badge worker");
+				const call = await controlToolCaller(b, hostProfile.record, chat);
+				const sent = await call("ompdesk_session_send", {
+					session: workerId,
+					message: "Choose the badge color fixture:bot-form",
+				});
+				expect(sent.isError, sent.text).toBe(false);
+				await expect
+					.poll(
+						async () => {
+							const reply = await b.evaluate(
+								id =>
+									window.omp.rpc.commandForTab(id, { type: "get_transcript_page", fromEnd: true, limit: 10 }),
+								chat,
+							);
+							return JSON.stringify(reply.data).includes("Which color should the badge be?");
+						},
+						{ timeout: 30_000 },
+					)
+					.toBe(true);
+				const bot = { path: chatPath, cwd: folder };
+				answered.set("routing-bot", bot);
+				answered.set("routing-worker", worker);
+				return which === "routing-bot" ? bot : worker;
+			};
 			/** B's `session` as it is when a view shows it. */
-			const hostSession = async (session: ParitySession): Promise<HostSession> =>
-				session === "work"
+			const hostSession = async (session: ParitySession): Promise<HostSession> => {
+				if (session === "routing-bot" || session === "routing-worker") return routedSession(session);
+				return session === "work"
 					? work
 					: session === "reply"
 						? replySession()
@@ -820,10 +874,21 @@ if (dir) {
 																: session === "board"
 																	? boardSession()
 																	: limitSession();
+			};
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {
 					const { path: sessionPath } = await hostSession(session);
+					if (session === "routing-bot") {
+						await b.getByRole("button", { name: "Badge bot", exact: true }).click();
+						await expect
+							.poll(
+								async () =>
+									(await b.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.sessionPath,
+							)
+							.toBe(sessionPath);
+						return;
+					}
 					await openRow(
 						b,
 						b.locator(`.omp-sidebar-session-row[data-session-path=${cssString(sessionPath)}]`),
