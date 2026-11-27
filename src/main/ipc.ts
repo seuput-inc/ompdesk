@@ -37,6 +37,7 @@ import {
 	privacyPaneUrl,
 	reviewFromDevice,
 } from "../shared/agent-control";
+import { BOT_CONNECTORS_COMMAND } from "../shared/bot-connector-channels";
 import { BOTS_COMMAND, BOTS_FOLDER, type BotsCall } from "../shared/bots";
 import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
@@ -164,6 +165,7 @@ import {
 	readCheckoutClaims,
 	readCheckoutPlace,
 } from "./checkout-peers";
+import { type ConnectorAccounts, connectorCommand } from "./connector-accounts";
 import { createControlBackend } from "./control-socket/backend";
 import { controlSocketFailure, startControlSocket } from "./control-socket/index";
 import { defaultWorkspace } from "./default-workspace";
@@ -173,6 +175,7 @@ import { savedWorktreesForSpawn } from "./disk/saved-worktrees";
 import { openInExternalEditor } from "./editor";
 import { getMainLanguage, mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
+import { ghRunner, resolveBin } from "./local/git/exec";
 import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { removedModeRefusal } from "./local/modes";
@@ -347,11 +350,13 @@ export interface IpcDeps {
 	/** A preference was written through PREFS_SET (main-side effects such as keep-awake). */
 	onPrefChanged?: (key: string) => void;
 	/** The Schedules service, created later than the handlers: read per use. */
-	schedules?: () => Pick<ScheduleService, "command" | "create" | "prune"> | null;
+	schedules?: () => Pick<ScheduleService, "command" | "create" | "prune" | "mirror" | "mirrorAction"> | null;
 	/** The owner's mail accounts for email routines, created with the Schedules service: read per use. */
 	mailAccounts?: () => Pick<MailAccounts, "state" | "save" | "remove" | "test"> | null;
 	/** This computer's Linear and Jira connections (tracker-accounts.ts): read per use. */
-	trackerAccounts?: () => Pick<TrackerAccounts, "command" | "accounts"> | null;
+	trackerAccounts?: () => Pick<TrackerAccounts, "command" | "accounts" | "linearAccount"> | null;
+	/** Bots' Slack apps (connector-accounts.ts): read per use. */
+	connectorAccounts?: () => Pick<ConnectorAccounts, "command" | "slackTokens"> | null;
 	/** This computer's sidebar project list: it looks for new folders when the session index changes. */
 	sidebarProjects?: Pick<SidebarProjects, "schedule" | "layoutChanged">;
 	/**
@@ -1234,6 +1239,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			// while the person was in the session are listed to it now (agent-control/pending-cleanups.ts).
 			if (channel !== undefined && personsPrompt(cmd)) {
 				if (issuerTabId) agentControl.personTyped(issuerTabId);
+				// A bot's Slack thread chat posts the owner's words back to its thread (schedules.ts `mirror`); the
+				// bot's home chat and every other session post nothing.
+				const typedIn = issuerTabId && !sidecar.device ? sidecarPool.sessionFileOf(issuerTabId) : undefined;
+				const typed = "message" in cmd && typeof cmd.message === "string" ? cmd.message : undefined;
+				if (typedIn && typed) void deps.schedules?.()?.mirror(typedIn, typed);
 				if (!sidecar.device)
 					await noteTypedPrompt(
 						client,
@@ -1557,6 +1567,25 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		botsShared: change => remoteDevices.hostBotsChanged(change),
 		// One of this computer's bots answered a paired device's group: handed to that device's link.
 		botsRoomPostTo: (device, post) => remoteDevices.hostBotsRoomPost(device, post),
+		// One reply through a bot's connector: the credential main holds for that post only (connectors.rs).
+		connectorCredential: async (service, account) => {
+			if (service === "slack") {
+				const tokens = deps.connectorAccounts?.()?.slackTokens(account);
+				if (!tokens) throw new Error("That Slack app is no longer kept: set it up again on the bot's page");
+				return { botToken: tokens.botToken };
+			}
+			if (service === "linear") {
+				const trackers = deps.trackerAccounts?.();
+				if (!trackers) throw new Error("Trackers are not available yet");
+				return trackers.linearAccount(account);
+			}
+			if (service === "github") {
+				const bin = await resolveBin("gh");
+				if (!bin) throw new Error("the GitHub CLI (gh) is not installed");
+				return { home: os.homedir(), runner: await ghRunner(bin) };
+			}
+			throw new Error(`No connector ${service}`);
+		},
 		sendOutboxFile: path.join(app.getPath("userData"), "send-outbox.json"),
 		attachmentsDir: path.join(app.getPath("userData"), "agent-attachments"),
 		uploads: deps.uploads,
@@ -2650,6 +2679,17 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		if ("action" in request && request.action === "allowLegacyPeers" && !caller.browserWindow)
 			throw new Error("Set up legacy bot access on the owning computer.");
 		return agentControl.bots(request as BotsCall);
+	});
+	// One owner action: the host picks, reads and stores. No browser supplies a path or receives the file.
+	ipc.handle(BOT_CONNECTORS_COMMAND, (caller, request: unknown) => {
+		const accounts = deps.connectorAccounts?.();
+		if (!accounts) throw new Error("Bot connectors are not available yet");
+		return connectorCommand(caller, request, accounts, async () => {
+			const win = caller.browserWindow;
+			if (!win) throw new Error("A native window is required");
+			const chosen = await dialog.showOpenDialog(win, { properties: ["openFile"] });
+			return chosen.canceled ? null : (chosen.filePaths[0] ?? null);
+		});
 	});
 	// Settings › Schedules › Email accounts: this computer's own (a password goes in and never comes back out).
 	ipc.handle(MAIL_ACCOUNTS_COMMAND, async (_caller, request: unknown) => {

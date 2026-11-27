@@ -38,6 +38,7 @@ export const ScheduleEventSchema: z.ZodType<ScheduleEvent> = z.discriminatedUnio
 		from: z.array(Short).max(20).optional(),
 		contains: Short.optional(),
 		label: Short.optional(),
+		ask: z.string().max(40).optional(),
 	}),
 	z.object({ source: z.literal("files"), path: Path }),
 	z.object({ source: z.literal("git"), repo: Path, branch: z.string().max(250) }),
@@ -54,6 +55,9 @@ export const ScheduleEventSchema: z.ZodType<ScheduleEvent> = z.discriminatedUnio
 		to: z.string().max(200).optional(),
 	}),
 	z.object({ source: z.literal("calendar"), url: z.string().max(2000), leadMinutes: z.number().int() }),
+	z.object({ source: z.literal("slack"), account: Short, from: z.array(Short).max(10) }),
+	z.object({ source: z.literal("linear"), account: Short, handle: z.string().max(40), from: z.array(Short).max(10) }),
+	z.object({ source: z.literal("google"), account: Short, leadMinutes: z.number().int() }),
 ]);
 
 export const ScheduleFrequencySchema: z.ZodType<ScheduleFrequency> = z.discriminatedUnion("kind", [

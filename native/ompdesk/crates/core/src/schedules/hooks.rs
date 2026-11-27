@@ -33,7 +33,8 @@ const DELIVERY_HEADERS: [&str; 5] = [
 /// Headers a run is never told and no filter reads: credentials.
 const SECRET_HEADERS: [&str; 3] = ["authorization", "cookie", "proxy-authorization"];
 
-/// Whose signature a call carries (`WEBHOOK_SENDERS` in `src/shared/schedules.ts`).
+/// Whose signature a call carries (`WEBHOOK_SENDERS` in `src/shared/schedules.ts`; Slack's is a bot's Slack connector's,
+/// whose signing secret main hands over with each call and this never keeps).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sender {
     Standard,
@@ -42,6 +43,7 @@ pub enum Sender {
     Linear,
     Pagerduty,
     Stripe,
+    Slack,
 }
 
 impl Sender {
@@ -53,6 +55,7 @@ impl Sender {
             "linear" => Sender::Linear,
             "pagerduty" => Sender::Pagerduty,
             "stripe" => Sender::Stripe,
+            "slack" => Sender::Slack,
             _ => return None,
         })
     }
@@ -66,6 +69,7 @@ impl Sender {
             Sender::Linear => "linear",
             Sender::Pagerduty => "pagerduty",
             Sender::Stripe => "stripe",
+            Sender::Slack => "slack",
         }
     }
 
@@ -77,6 +81,7 @@ impl Sender {
             Sender::Linear => "Linear",
             Sender::Pagerduty => "PagerDuty",
             Sender::Stripe => "Stripe",
+            Sender::Slack => "Slack",
         }
     }
 }
@@ -208,6 +213,22 @@ pub fn verify(
             let at = at.ok_or(NO_TIMESTAMP)?;
             let mac = hmac_sha256(secret.as_bytes(), &[at.as_bytes(), b".", body]);
             signed(one_is(&mac, signatures, false))?;
+            within(
+                at.parse::<i64>().map_err(|_| NO_TIMESTAMP)? * 1000,
+                now,
+                SIGNED_WINDOW_MS,
+            )
+        }
+        // Slack's v0: `v0=` and the hex HMAC of `v0:<timestamp>:<body>`, its timestamp (seconds) within five minutes.
+        Sender::Slack => {
+            let at = header("x-slack-request-timestamp").map_err(|_| NO_TIMESTAMP)?;
+            let given = header("x-slack-signature")?;
+            let at = at.trim();
+            let mac = hmac_sha256(
+                secret.as_bytes(),
+                &["v0:".as_bytes(), at.as_bytes(), b":", body],
+            );
+            signed(!secret.is_empty() && one_is(&mac, given.trim().strip_prefix("v0="), false))?;
             within(
                 at.parse::<i64>().map_err(|_| NO_TIMESTAMP)? * 1000,
                 now,
@@ -396,6 +417,7 @@ pub fn delivery(
     let id = match sender? {
         Sender::Stripe => lookup(document, "body.id"),
         Sender::Pagerduty => lookup(document, "body.event.id"),
+        Sender::Slack => lookup(document, "body.event_id"),
         _ => None,
     }?;
     id.as_str()
@@ -466,6 +488,51 @@ mod tests {
         assert_eq!(
             verify(Sender::Pagerduty, "s3cret", &pagerduty, body, 0),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn slack_signs_v0_with_its_timestamp_within_five_minutes() {
+        let body = br#"{"type":"event_callback","event_id":"Ev1"}"#;
+        let at = "1700000000";
+        let mac = crate::hex(&hmac_sha256(
+            b"shh",
+            &[b"v0:".as_slice(), at.as_bytes(), b":", body],
+        ));
+        let signature = format!("v0={mac}");
+        let signed = headers(&[
+            ("x-slack-signature", signature.as_str()),
+            ("x-slack-request-timestamp", at),
+        ]);
+        let now = 1_700_000_000_000;
+        assert_eq!(
+            verify(Sender::Slack, "shh", &signed, body, now + 299_000),
+            Ok(())
+        );
+        assert_eq!(
+            verify(Sender::Slack, "shh", &signed, body, now + 301_000),
+            Err(STALE)
+        );
+        assert_eq!(
+            verify(Sender::Slack, "other", &signed, body, now),
+            Err(BAD_SIGNATURE)
+        );
+        assert_eq!(
+            verify(Sender::Slack, "", &signed, body, now),
+            Err(BAD_SIGNATURE)
+        );
+        let bare = headers(&[
+            ("x-slack-signature", mac.as_str()),
+            ("x-slack-request-timestamp", at),
+        ]);
+        assert_eq!(
+            verify(Sender::Slack, "shh", &bare, body, now),
+            Err(BAD_SIGNATURE)
+        );
+        let document = document(&BTreeMap::new(), body);
+        assert_eq!(
+            delivery(&BTreeMap::new(), &document, Some(Sender::Slack)).as_deref(),
+            Some("event:Ev1")
         );
     }
 

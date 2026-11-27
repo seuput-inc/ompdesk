@@ -116,6 +116,7 @@ export type ParitySession =
 	| "cut"
 	| "stress"
 	| "schedule"
+	| "connector"
 	| "board";
 
 /** The fake omp's voice script (`voiceScript`, e2e/fixture/rpc-ui.ts); e2e/parity.e2e.ts names the file. */
@@ -2622,6 +2623,82 @@ export const SURFACES: readonly Surface[] = [
 		settle: 600,
 		when: () => false,
 		parity: { session: "work" },
+	},
+	// The setup sheets need no home chat: a missing one shows as the dialog's warning banner.
+	...(
+		[
+			["bot-connectors", "The bot page's Settings › Connectors: the empty row and its Add button", null, null],
+			[
+				"bot-connector-add",
+				"Add to <bot>: the catalog of Slack, GitHub, Linear and Google",
+				"add",
+				"[data-connector-catalog]",
+			],
+			[
+				"bot-connector-slack",
+				"Connect Slack: Socket Mode or request URL, the manifest, credential import and who can ask",
+				"slack",
+				"[data-connector-setup='slack']",
+			],
+			[
+				"bot-connector-github",
+				"Connect GitHub: repository and who can ask",
+				"github",
+				"[data-connector-setup='github']",
+			],
+			[
+				"bot-connector-linear",
+				"Connect Linear: workspace and who can ask",
+				"linear",
+				"[data-connector-setup='linear']",
+			],
+			[
+				"bot-connector-google",
+				"Connect Google: the Google Cloud steps, the client file and Sign in with Google",
+				"google",
+				"[data-connector-setup='google']",
+			],
+		] as const
+	).map(
+		([id, title, step, ready]): Surface => ({
+			id,
+			area: "B",
+			title,
+			open: async (page, look) => {
+				await ensureParityBot(page);
+				await openDrawer(page, look);
+				await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+				if ((await page.locator("[data-bot-pane]:visible").count()) === 0)
+					await page.locator("[data-bots-page-row]:visible").first().click();
+				await page.locator('[data-bot-pane-tabs] [data-tab-id="settings"]:visible').first().click();
+				const section = page.locator("[data-bot-connectors]:visible").first();
+				await section.scrollIntoViewIfNeeded();
+				if (step === null) return;
+				await section.locator("[data-bot-connectors-add]").first().click();
+				if (step !== "add") await page.locator(`[data-connector-pick="${step}"]:visible`).first().click();
+			},
+			ready: ready ?? "[data-bot-pane] [data-bot-connectors]",
+			settle: 600,
+			when: () => false,
+			parity: { session: "work", ...(step === null ? {} : { after: closeOverlay }) },
+		}),
+	),
+	{
+		id: "bot-connector-offer",
+		area: "A",
+		title: "A bot offers a Slack connection in its chat; only its own computer manages credentials",
+		open: async page => {
+			await showTurn(page, "fixture connector offer");
+			const card = page.locator(".omp-execution-group").last();
+			const head = card.locator(".omp-execution-group-header").first();
+			if ((await head.count()) > 0 && (await head.getAttribute("aria-expanded")) !== "true") await head.click();
+			const step = card.locator(".omp-tool-card button[aria-expanded]").first();
+			if ((await step.getAttribute("aria-expanded")) !== "true") await step.click();
+			await page.locator("[data-connector-offer='slack']").scrollIntoViewIfNeeded();
+		},
+		ready: "[data-connector-offer='slack']",
+		when: () => false,
+		parity: { session: "connector", inView: "[data-connector-offer='slack']" },
 	},
 	{
 		id: "bot-pane-offline",

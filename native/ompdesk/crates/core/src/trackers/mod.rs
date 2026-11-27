@@ -589,6 +589,30 @@ async fn run(op: Op, ctx: &Ctx) -> Result<Reply, Fault> {
     }
 }
 
+/// A bot's reply as a comment on a Linear issue (`routines/connectors.rs`), through the app's proxy.
+pub(crate) async fn linear_comment(
+    account: &Account,
+    issue: &str,
+    body: &str,
+) -> Result<(), Fault> {
+    let ctx = Ctx {
+        proxy: proxy(&Value::Null).await,
+    };
+    linear::comment(&ctx, account, issue, body).await
+}
+
+/// A Linear connector's read (`routines/runtime/linear.rs`): what asked by `keyword` since `since`.
+pub(crate) async fn linear_asks(
+    account: &Account,
+    keyword: &str,
+    since: &str,
+) -> Result<Value, Fault> {
+    let ctx = Ctx {
+        proxy: proxy(&Value::Null).await,
+    };
+    linear::asks(&ctx, account, keyword, since).await
+}
+
 pub fn register(registry: &mut Registry) {
     registry.add("trackers.request", |call| {
         Box::pin(async move {

@@ -934,6 +934,16 @@ impl AgentControl {
                     .await?;
                 self.hand_to(&bot, &target, text).await
             }
+            "connectors" | "reply" | "offer_connector" => {
+                self.connector_tool(
+                    caller,
+                    &args.action,
+                    args.to.as_deref(),
+                    args.text.as_deref(),
+                    args.service.as_deref(),
+                )
+                .await
+            }
             other => fail(format!("ompdesk_bot has no action {other}.")),
         }
     }
@@ -1773,6 +1783,17 @@ impl AgentControl {
                     );
                 };
                 self.hand_to(&bot, &target, &text("text").unwrap_or_default())
+                    .await?;
+            }
+            // A connector of the bot (its page's Connectors): saved new, or changed in place by `schedule`.
+            "connect" => {
+                let bot = self.bot_named(&id)?;
+                let on = request.get("on").cloned().unwrap_or(Value::Null);
+                self.connect(&bot, &on, text("schedule").as_deref()).await?;
+            }
+            "disconnect" => {
+                let bot = self.bot_named(&id)?;
+                self.disconnect(&bot, &text("schedule").unwrap_or_default())
                     .await?;
             }
             other => return fail(format!("bots: no action {other}")),

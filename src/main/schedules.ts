@@ -36,6 +36,7 @@ import {
 	type ScheduleRunUsage,
 	type SchedulesRequest,
 	type SchedulesState,
+	type SlackMirrorAction,
 } from "../shared/schedules";
 import { CoreError, core } from "./core/process";
 import type { CoreRunner } from "./local/git/exec";
@@ -59,6 +60,8 @@ const REOPEN_MS = 30_000;
 /** One started run: `stop()` ends it, `done` settles once it ended (an omp: exited, its log flushed). */
 export interface RunProcess {
 	stop(): void;
+	/** A Slack thread's run that opened its thread's chat: that chat's session file (`schedules.threadChat`). */
+	opened?: string;
 	/**
 	 * `usage`: what a fresh run's model replies used, as its omp counted it (stock's session tally); `session`: the
 	 * session file that omp saved; `worktree`: the worktree it ran in.
@@ -71,6 +74,9 @@ export interface RunProcess {
 		worktree?: string;
 	}>;
 }
+
+/** A wake-up's schedule as the core tells it: a bot's Slack thread's run names its thread. */
+export type ThreadWake = Schedule & { thread?: string };
 
 export type RunLauncher = (schedule: Schedule, files: { log: string; prompt: string }) => Promise<RunProcess>;
 
@@ -88,9 +94,11 @@ export interface ScheduleServiceOptions {
 	 * Delivers a wake-up's prompt (`schedule.prompt`, with what fired it) into its session on this computer
 	 * (`Schedule.wakeSession`) and follows the turn it starts: `done` settles when that turn ends (`code` 0, or null and
 	 * the turn's error), `stop()` stops that turn. Rejects with a readable reason when it cannot deliver. Absent: a
-	 * wake-up's run fails (no tab holds sessions here).
+	 * wake-up's run fails (no tab holds sessions here). A bot's Slack connector's run for a thread (`thread`, the core's
+	 * `slack_mirror::thread_key`) with no `wakeSession` opens that thread's chat in the schedule's folder first and
+	 * names it in `opened`.
 	 */
-	wake?: (schedule: Schedule, runId: string) => Promise<RunProcess>;
+	wake?: (schedule: ThreadWake, runId: string) => Promise<RunProcess>;
 	/** How often due schedules are checked (default `SCHEDULE_TICK_MS`); only a test launch shortens it. */
 	tickMs?: number;
 	/** The length of a minute for intervals (default 60 000 ms); only a test launch shortens it. */
@@ -114,13 +122,24 @@ export interface ScheduleServiceOptions {
 	result?: (name: string, to: ScheduleResultsTo, text: string) => void;
 	/** How a schedule's precheck command runs (a shell and its `-c`, the login environment); absent: prechecks say no. */
 	shell?: () => Promise<CoreRunner>;
+	/**
+	 * A bot's Slack connector's signing secret (`account`: its Slack app), handed to the core with each call to the
+	 * connector's `/hooks/<id>` and nowhere else; null when none is kept.
+	 */
+	slackSigningSecret?: (account: string) => string | null;
+	/**
+	 * A bot's Slack app's bot token (`account`), handed to the core for one post of a thread chat's mirror
+	 * (`schedules.mirror`, `schedules.mirrorAction`) and nowhere else; null when none is kept.
+	 */
+	slackBotToken?: (account: string) => string | null;
 }
 
 /**
  * What a webhook call came to (`ScheduleService.webhook`): started or kept for after the running one, passed over by
- * its filters or already taken (both answered 202), or why not.
+ * its filters or already taken (both answered 202), Slack's URL check of a bot's Slack connector (`challenge`: the
+ * edge echoes its challenge), or why not.
  */
-export type WebhookOutcome = "fired" | "ignored" | "duplicate" | "unknown" | "denied" | "off";
+export type WebhookOutcome = "fired" | "ignored" | "duplicate" | "challenge" | "unknown" | "denied" | "off";
 
 /** A webhook call as the core's edge read it: the bearer key it sent (null: a sender's signature instead), its
  * headers (lowercase names, credentials left out) and its body, base64. */
@@ -135,7 +154,7 @@ export interface WebhookCallIn {
 interface StartAsk {
 	run: string;
 	/** The schedule with the prompt as the run is told it (what fired it under it). */
-	schedule: Schedule;
+	schedule: ThreadWake;
 	files: { log: string; prompt: string };
 	wake: boolean;
 	/** The request the start was charged with (`schedules.reserve`'s `ask`). */
@@ -149,7 +168,7 @@ interface RoutineToken {
 interface RoutineAsk {
 	token: RoutineToken;
 	ask: number;
-	kind: "git" | "github" | "email";
+	kind: "git" | "github" | "email" | "slack" | "linear" | "google";
 	account: string;
 }
 
@@ -174,6 +193,10 @@ export class ScheduleService {
 	readonly #refunds = new Map<number, () => void>();
 	#unsubscribe: (() => void)[] = [];
 	#routineHost: RoutineHost | undefined;
+	/** Each bot Slack connector's routine id and its Slack app, from the newest state (`webhook` signs with it). */
+	#slackRoutines = new Map<string, string>();
+	/** Each bot Slack thread chat's session file, with its routine and thread (`threads` of the newest state). */
+	#threadChats = new Map<string, { id: string; key: string }>();
 	readonly #routineObservers = new Map<number, () => void>();
 	#tick: NodeJS.Timeout | null = null;
 	#retry: NodeJS.Timeout | null = null;
@@ -202,7 +225,20 @@ export class ScheduleService {
 			host.on(
 				"schedules.state",
 				mine<{ state: SchedulesState }>(({ state }) => {
-					if (!this.#disposed) this.#options.onState(state);
+					if (this.#disposed) return;
+					this.#slackRoutines = new Map(
+						state.schedules.flatMap(schedule =>
+							schedule.frequency.kind === "event" && schedule.frequency.event.source === "slack"
+								? [[schedule.id, schedule.frequency.event.account] as const]
+								: [],
+						),
+					);
+					this.#threadChats = new Map(
+						Object.entries(state.threads ?? {}).flatMap(([id, chats]) =>
+							chats.flatMap(chat => (chat.session ? [[chat.session, { id, key: chat.key }] as const] : [])),
+						),
+					);
+					this.#options.onState(state);
 				}),
 			),
 			host.on(
@@ -364,7 +400,14 @@ export class ScheduleService {
 		if (!host || this.#disposed) return;
 		let answer: { value: unknown } | { error: string };
 		try {
-			answer = { value: kind === "email" ? host.email(account) : await host[kind]() };
+			let value: unknown;
+			if (kind === "email") value = await host.email(account);
+			else if (kind === "slack" || kind === "linear" || kind === "google") {
+				const own = host[kind];
+				if (!own) throw new Error("A bot's connectors are not available here");
+				value = own(account);
+			} else value = await host[kind]();
+			answer = { value };
 		} catch (error) {
 			answer = { error: error instanceof Error ? error.message : String(error) };
 		}
@@ -395,13 +438,43 @@ export class ScheduleService {
 	}
 
 	/**
+	 * The owner typed `text` in `session`: when it is a bot's Slack thread chat set to post, the core posts it to that
+	 * thread with the app's bot token (Orca `slack-mirror.ts:120-145` `admitted`). Any other session, the bot's home
+	 * chat among them, posts nothing. Never throws: a post that failed shows on the chat's card.
+	 */
+	async mirror(session: string, text: string): Promise<void> {
+		const chat = this.#threadChats.get(session);
+		const app = chat ? this.#slackRoutines.get(chat.id) : undefined;
+		if (app === undefined) return;
+		try {
+			// A keystore that cannot be read now posts nothing; its card says so once the owner opens the bot's page.
+			const botToken = this.#options.slackBotToken?.(app);
+			if (botToken) await this.#call("schedules.mirror", { session, text, botToken });
+		} catch {
+			// Nothing to tell the person typing: the chat's card shows what posted.
+		}
+	}
+
+	/** The owner's change of a thread chat's mirror: its switch, or Retry, Dismiss or Delete from Slack of one post. */
+	async mirrorAction(request: SlackMirrorAction): Promise<SchedulesState> {
+		const app = this.#slackRoutines.get(request.id);
+		const botToken = app === undefined ? null : (this.#options.slackBotToken?.(app) ?? null);
+		if (!botToken && request.op !== "set" && request.op !== "dismiss")
+			throw new Error("The Slack app's bot token is not kept on this computer");
+		return this.#call<SchedulesState>("schedules.mirrorAction", { ...request, ...(botToken ? { botToken } : {}) });
+	}
+
+	/**
 	 * `POST /hooks/<id>` (the core's edge, relayed by src/main/web/server.ts): fires the routine whose webhook it is,
 	 * when the call carries its key or, once the routine has a signing secret, its sender's signature. The core checks
 	 * both in constant time and keeps the routine's recent calls.
 	 */
 	async webhook(call: WebhookCallIn): Promise<WebhookOutcome> {
 		if (this.#disposed) return "off";
-		return this.#send<WebhookOutcome>("schedules.webhook", { ...call });
+		// A bot's Slack connector is signed with its app's secret, which main's keystore holds: it goes with this call.
+		const app = this.#slackRoutines.get(call.id);
+		const secret = app === undefined ? null : (this.#options.slackSigningSecret?.(app) ?? null);
+		return this.#send<WebhookOutcome>("schedules.webhook", { ...call, ...(secret ? { secret } : {}) });
 	}
 
 	/**
@@ -410,6 +483,11 @@ export class ScheduleService {
 	 * A run now from a device is charged to that device and refused past its limit.
 	 */
 	async command(request: SchedulesRequest, origin?: string): Promise<SchedulesState> {
+		// A thread chat's mirror carries the Slack app's token, which only this side holds: never a paired device's.
+		if (request.action === "mirror") {
+			if (origin !== undefined) throw new Error("A bot's Slack thread chat is this computer's own");
+			return this.mirrorAction(request);
+		}
 		return this.#send<SchedulesState>("schedules.command", { request, origin });
 	}
 
@@ -493,6 +571,7 @@ export class ScheduleService {
 			if (charge !== null) this.#refunds.delete(charge);
 			if (this.#disposed) process.stop();
 			// The core sends a stop that was asked for meanwhile once it hears the run started.
+			if (process.opened) await this.#send("schedules.threadChat", { run, session: process.opened });
 			await this.#send("schedules.started", { run });
 			result = await process.done;
 		} catch (error) {

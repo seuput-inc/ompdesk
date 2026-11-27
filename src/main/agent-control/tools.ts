@@ -735,7 +735,7 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 			"Make, list, pause or set up a bot: a folder whose sessions are its chats.\n" +
 			"offer {name, text} proposes a bot instead of making it: the owner sees a card in this chat with its name, what it would do (text) and Create bot, and nothing is made until they press it. " +
 			"rename {bot, name} renames it and tells its home chat to update its own files. A folder in ~/.omp/bots follows the new name's slug, with its chats and routines (once the chats there end their turns); a folder outside it never moves, nor one whose new name's folder is taken. " +
-			"A bot is a folder on this computer (default ~/.omp/bots/<name>); every session in that folder is one of its chats, the first its home chat. create {name, folder?} makes the folder and sends nothing: the owner writes first (asks the user first only if they turned off \"Let agents manage other sessions\"). list shows each bot with its folder, home chat, pause, specialty (from its SOUL.md) and open and owner-waiting items. pause {bot} holds every message to it until resume {bot}, which hands each held one over once; a send to a paused bot is refused. set {bot, model?, auto_approve?, stale_days?, reach?} sets the model its new chats and routines use (\"\" for omp's default), whether its routines run without asking, after how many untouched days an open item reads stale (0 never), and the paired devices whose agents may message it. look_around {bot?, on?, every?, weekdays_only?, focus?} changes only what it names of its Look around: a read-only look in its home chat at the preset's hours (every-4h, the default, every-2h, twice-daily or mornings), weekdays unless weekdays_only is false, looking for focus (the owner's words); change it only when the owner asks. From a bot's chat, bot defaults to that bot. suggestions {bot?} lists what its Suggestions list holds, what the owner started lately and what they dismissed; suggest {suggestions: [{title, why, ask, link?}]} (a bot's chat only, at most 5) replaces that list with this look's next steps, an empty list clearing it. hand {bot?, session, text} hands a session to the bot: the bot's home chat becomes its opener and the text reaches it from the bot; from a bot's chat it takes the session over for that bot. Only the owner deletes a bot or picks how its chats are approved. See skill://ompdesk/references/bots.md.",
+			"A bot is a folder on this computer (default ~/.omp/bots/<name>); every session in that folder is one of its chats, the first its home chat. create {name, folder?} makes the folder and sends nothing: the owner writes first (asks the user first only if they turned off \"Let agents manage other sessions\"). list shows each bot with its folder, home chat, pause, specialty (from its SOUL.md) and open and owner-waiting items. pause {bot} holds every message to it until resume {bot}, which hands each held one over once; a send to a paused bot is refused. set {bot, model?, auto_approve?, stale_days?, reach?} sets the model its new chats and routines use (\"\" for omp's default), whether its routines run without asking, after how many untouched days an open item reads stale (0 never), and the paired devices whose agents may message it. look_around {bot?, on?, every?, weekdays_only?, focus?} changes only what it names of its Look around: a read-only look in its home chat at the preset's hours (every-4h, the default, every-2h, twice-daily or mornings), weekdays unless weekdays_only is false, looking for focus (the owner's words); change it only when the owner asks. From a bot's chat, bot defaults to that bot. suggestions {bot?} lists what its Suggestions list holds, what the owner started lately and what they dismissed; suggest {suggestions: [{title, why, ask, link?}]} (a bot's chat only, at most 5) replaces that list with this look's next steps, an empty list clearing it. hand {bot?, session, text} hands a session to the bot: the bot's home chat becomes its opener and the text reaches it from the bot; from a bot's chat it takes the session over for that bot. From a bot's own chat: connectors lists where people can ask it (Slack, GitHub, Linear, Google) and who may; reply {to, text} answers someone who asked it there (to is the handle its run was told); offer_connector {service} shows the owner a Connect card for a service it lacks. Only the owner deletes a bot or picks how its chats are approved. See skill://ompdesk/references/bots.md.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -753,6 +753,9 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 						"suggestions",
 						"suggest",
 						"hand",
+						"connectors",
+						"reply",
+						"offer_connector",
 					],
 				},
 				name: { type: "string", maxLength: BOT_NAME_MAX, description: "create, offer, rename: the bot's name." },
@@ -812,7 +815,18 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 					type: "string",
 					maxLength: MESSAGE_MAX_CHARS,
 					description:
-						"hand: what the bot asks of it, sent as its first message from the bot. offer: what the bot would do, one or two sentences.",
+						"hand: what the bot asks of it, sent as its first message from the bot. offer: what the bot would do, one or two sentences. reply: the answer to post (Markdown).",
+				},
+				to: {
+					type: "string",
+					maxLength: 300,
+					description:
+						"reply: where to answer, the handle the run was told after 'reply with ompdesk_bot reply to' (slack:…, github:…, linear:…).",
+				},
+				service: {
+					type: "string",
+					enum: ["slack", "github", "linear", "google"],
+					description: "offer_connector: the service to show the owner a Connect card for in this chat.",
 				},
 			},
 			required: ["action"],
@@ -1287,6 +1301,9 @@ export const ARGS = {
 				"suggestions",
 				"suggest",
 				"hand",
+				"connectors",
+				"reply",
+				"offer_connector",
 			]),
 			name: z.string().trim().min(1).max(BOT_NAME_MAX).optional(),
 			folder: z.string().trim().min(1).max(4096).optional(),
@@ -1314,6 +1331,8 @@ export const ARGS = {
 				.optional(),
 			session: sessionArg.optional(),
 			text: z.string().trim().min(1).max(MESSAGE_MAX_CHARS).optional(),
+			to: z.string().trim().min(1).max(300).optional(),
+			service: z.enum(["slack", "github", "linear", "google"]).optional(),
 		})
 		.strict(),
 	[T.item]: z

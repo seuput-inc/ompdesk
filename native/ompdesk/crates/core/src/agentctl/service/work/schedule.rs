@@ -524,6 +524,7 @@ impl AgentControl {
                 from: from.clone().filter(|logins| !logins.is_empty()),
                 contains: contains.clone().filter(|text| !text.is_empty()),
                 label: label.clone().filter(|text| !text.is_empty()),
+                ask: None,
             },
             ScheduleOn::Files { path } => ScheduleEvent::Files {
                 path: absolute(path, "on.path")?,

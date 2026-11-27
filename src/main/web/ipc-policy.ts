@@ -10,6 +10,7 @@
  * unchanged; `transform` = the host rewrites it for a web page; `client` = the page makes it itself.
  */
 import { AGENT_CONTROL_APP, AGENT_CONTROL_REVIEW, AGENT_CONTROL_VIEW } from "../../shared/agent-control";
+import { BOT_CONNECTORS_COMMAND } from "../../shared/bot-connector-channels";
 import { BOTS_COMMAND, BOTS_STATE } from "../../shared/bots";
 import { BRIDGE_HEALTH_GET } from "../../shared/bridge-health";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
@@ -85,6 +86,7 @@ export type IpcChannel =
 	| typeof SCHEDULES_LOG
 	| typeof SCHEDULES_STATE
 	| typeof BOTS_COMMAND
+	| typeof BOT_CONNECTORS_COMMAND
 	| typeof BOTS_STATE
 	| typeof SIDEBAR_PROJECTS_COMMAND
 	| typeof SIDEBAR_PROJECTS_STATE
@@ -526,6 +528,8 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[SCHEDULES_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
 	// The owner's Bots page: this computer's bots and their items.
 	[BOTS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
+	// Paired callers can list account metadata. The connector handler requires a native window for mutations.
+	[BOT_CONNECTORS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
 	// Mail accounts for email routines: a password is sent to main only, never read back.
 	[MAIL_ACCOUNTS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
 	// Linear and Jira: a paired page reads the host's lists (its token stays on the host); connecting is an account's.

@@ -80,6 +80,7 @@ pub(super) async fn run(
                     if !context.publish(state.mark(), &lines) {
                         return;
                     }
+                    context.access_asked(&filters.take_refused());
                 }
                 Err(error) => context.failure(&key, Some(&error)),
             }

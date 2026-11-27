@@ -483,6 +483,8 @@ export interface AgentControlHost {
 	botsShared?(change: SharedBotsDelta): void;
 	/** One of this computer's bots posted in a paired device's group: handed to that device's link; false when it is not connected. */
 	botsRoomPostTo?(device: string, post: unknown): boolean;
+	/** One reply through a bot's connector (`connectorCredential`): the credential main holds for that post only. */
+	connectorCredential?(service: string, account: string): Promise<unknown>;
 	/**
 	 * Every tombstone (`deleted-sessions.ts`): when the session was deleted, from any path and any launch (the
 	 * sidebar's Delete, `/delete`, a paired device), by its file and computer, or by its saved id alone.
@@ -1326,6 +1328,11 @@ export class AgentControl {
 				}),
 			botsRoomPostTo: ({ device: where, post }: { device: string; post: unknown }) =>
 				coded(() => ({ sent: host.botsRoomPostTo?.(where, post) ?? false })),
+			connectorCredential: ({ service, account }: { service: string; account: string }) =>
+				coded(() => {
+					if (!host.connectorCredential) throw new Error("A bot's connectors are not available here.");
+					return host.connectorCredential(service, account);
+				}),
 			setOpener: ({ tabId, openerTabId }: { tabId: string; openerTabId: string }) =>
 				coded(() => {
 					if (!host.setOpener) throw new Error("Handing a session to a bot is not available here.");

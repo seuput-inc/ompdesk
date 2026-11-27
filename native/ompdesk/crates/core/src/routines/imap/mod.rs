@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine as _;
 use rustls::ClientConfig;
 use rustls::pki_types::ServerName;
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,9 @@ struct Login {
     username: String,
     password: String,
     mailbox: String,
+    /// `password` is an OAuth access token (a bot's Google sign-in, `routines/google.rs`): SASL XOAUTH2, not LOGIN.
+    #[serde(default)]
+    oauth: bool,
 }
 
 impl Login {
@@ -164,16 +168,30 @@ async fn read_stream<I: AsyncRead + AsyncWrite + Unpin>(
     if !upper.starts_with("* OK") && !upper.starts_with("* PREAUTH") {
         return Err("the server did not greet as IMAP".into());
     }
-    let mut credentials = format!(
-        "LOGIN {} {}",
-        quote(&login.username)?,
-        quote(&login.password)?
-    )
+    let mut credentials = if login.oauth {
+        if login.username.contains(['\r', '\n', '\u{1}']) {
+            return Err("a login value or mailbox holds a line break".into());
+        }
+        let raw = format!(
+            "user={}\u{1}auth=Bearer {}\u{1}\u{1}",
+            login.username, login.password
+        );
+        format!(
+            "AUTHENTICATE XOAUTH2 {}",
+            base64::engine::general_purpose::STANDARD.encode(raw)
+        )
+    } else {
+        format!(
+            "LOGIN {} {}",
+            quote(&login.username)?,
+            quote(&login.password)?
+        )
+    }
     .into_bytes();
     let logged_in = session.send(&credentials).await;
     credentials.fill(0);
     logged_in?;
-    session.answer("login").await?;
+    session.answer_with("login", login.oauth).await?;
     let opened = session
         .command(
             &format!("EXAMINE {}", quote(&login.mailbox)?),
@@ -293,6 +311,11 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Session<I> {
         self.answer(what).await
     }
     async fn answer(&mut self, what: &str) -> Result<Vec<Line>, String> {
+        self.answer_with(what, false).await
+    }
+    /// `sasl`: a continuation answers an `AUTHENTICATE` whose credentials went with it (XOAUTH2's refusal carries the
+    /// server's reason there); an empty line ends it and the tagged NO follows.
+    async fn answer_with(&mut self, what: &str, sasl: bool) -> Result<Vec<Line>, String> {
         let tag = format!("A{} ", self.tag);
         let mut lines = Vec::new();
         loop {
@@ -314,7 +337,18 @@ impl<I: AsyncRead + AsyncWrite + Unpin> Session<I> {
                 ));
             }
             if line.text.starts_with('+') {
-                return Err(format!("could not {what}: the server asked for more"));
+                if !sasl {
+                    return Err(format!("could not {what}: the server asked for more"));
+                }
+                let ended = async {
+                    self.io.get_mut().write_all(b"\r\n").await?;
+                    self.io.get_mut().flush().await
+                };
+                tokio::time::timeout(self.timeout, ended)
+                    .await
+                    .map_err(|_| "the server did not answer in time".to_owned())?
+                    .map_err(|error| format!("the connection failed: {error}"))?;
+                continue;
             }
             lines.push(line);
         }

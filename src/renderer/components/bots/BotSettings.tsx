@@ -16,8 +16,9 @@
  * - Who can ask (`BotPairedServersWhoCanAsk.tsx:1-201`, `BotAccessReach.tsx`, FK-B33): the devices paired with this
  *   computer whose agents may message the bot, and the summary of who can ask it.
  *
- * Connectors (Slack, GitHub, Linear, Google) are not here: they come with orca-bots-connectors. Sharing stays a local
- * package file (`sharing/bot-package-archive.ts`); Orca Cloud's share links are not ported.
+ * - Connectors (`BotConnectors.tsx`, FS79): where people can ask the bot (its Slack app, GitHub repositories, Linear
+ *   workspace, Google calendar) and who may. Sharing stays a local package file (`sharing/bot-package-archive.ts`);
+ *   Orca Cloud's share links are not ported.
  */
 import {
 	BookOpen,
@@ -67,6 +68,7 @@ import {
 } from "../common";
 import { ModelValueSelect } from "../settings/ModelValueSelect";
 import { BotAvatar } from "./BotAvatar";
+import { BotConnectorsSection } from "./BotConnectors";
 import { openBotChat } from "./bot-launch";
 
 type Page = "root" | "soul" | "memory" | "access";
@@ -403,6 +405,7 @@ function BotSettingsRoot({
 					/>
 				</section>
 			)}
+			{!bot.device && <BotConnectorsSection bot={bot} />}
 
 			<section className="flex flex-col gap-2">
 				<SectionLabel>{t("bots.settings.notifications")}</SectionLabel>

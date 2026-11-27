@@ -6,7 +6,8 @@
  *   each with its state; a first message whose turn ended without a word has Try again (`bot-kickoff-retry.ts`).
  * - Needs you (`BotNeedsYouSection.tsx:38-422`, FK-B16): its chats' own prompts (approvals first, then questions,
  *   as their rows read them), then its items set to Needs you; five rows, then Show more. A chat's row opens the
- *   chat, an item's row its item page.
+ *   chat, an item's row its item page. Above them, people asking through one of its connectors without being on
+ *   its list (Orca's Request access, `bot-access-request.ts:95-107`), each with Allow (they join the list) and Decline.
  * - Suggestions (`BotUpNextSection.tsx:263-340`, Orca's `shared/bots/bot-look-around.ts:142-176`): what its looks
  *   suggested, apart from its items, with a New mark on what came since the owner last saw the list; Start puts its
  *   ask in the home chat's message box, Dismiss keeps it out for 30 days; Look now runs its Look around (or turns it
@@ -33,6 +34,7 @@ import {
 	X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { type WaitingAsker, waitingAskers } from "../../../shared/bot-connectors";
 import {
 	type Bot,
 	type BotFile,
@@ -64,7 +66,13 @@ import {
 	Spinner,
 	StatusDot,
 } from "../common";
-import { type BotAutomation, botAutomations, turnedOffAfterFailures, useSchedulesOf } from "./bot-automations";
+import {
+	type BotAutomation,
+	botAutomations,
+	isBotSchedule,
+	turnedOffAfterFailures,
+	useSchedulesOf,
+} from "./bot-automations";
 import { type LaunchStep, openBotChat, retryKickoff, useBotLaunch } from "./bot-launch";
 import { openBotPage } from "./bot-page";
 import { openItem } from "./items/item-store";
@@ -163,7 +171,14 @@ function NeedsYou({ bot }: { bot: Bot }) {
 	const items = useBotsStore(s => s.state.items);
 	const tabs = useTabsStore(s => s.tabs);
 	const summaries = useHostedSessionsStore(s => s.summaries);
+	const schedules = useSchedulesOf(bot.device);
 	const [all, setAll] = useState(false);
+	const askers = bot.device
+		? []
+		: waitingAskers(
+				schedules.schedules.filter(schedule => isBotSchedule(bot, schedule)),
+				schedules.asking,
+			);
 	const chats = [bot.home, ...bot.sessions.filter(session => session !== bot.home)].filter(
 		(session): session is string => Boolean(session),
 	);
@@ -203,9 +218,12 @@ function NeedsYou({ bot }: { bot: Bot }) {
 	const shown = all ? rows : rows.slice(0, Math.max(ROWS, approvals));
 	return (
 		<section aria-label={t("bots.needs.title")} className="flex flex-col gap-1" data-bot-needs-you>
-			<SectionLabel count={rows.length}>{t("bots.needs.title")}</SectionLabel>
+			<SectionLabel count={rows.length + askers.length}>{t("bots.needs.title")}</SectionLabel>
+			{askers.map(waiting => (
+				<AccessAsk bot={bot} key={`${waiting.connector.schedule.id}:${waiting.asker.person}`} waiting={waiting} />
+			))}
 			{rows.length === 0 ? (
-				<EmptyState size="row" title={t("bots.needs.none")} />
+				askers.length === 0 && <EmptyState size="row" title={t("bots.needs.none")} />
 			) : (
 				<>
 					{shown.map(row => (
@@ -237,6 +255,54 @@ function NeedsYou({ bot }: { bot: Bot }) {
 
 /** Suggestions shown before "Show N more" (Orca's `SUGGESTION_LIMITS.shown`). */
 const SUGGESTIONS_SHOWN = 3;
+
+/** Someone who asked the bot through a connector without being on its list: Allow adds them, Decline stops asking. */
+function AccessAsk({ bot, waiting }: { bot: Bot; waiting: WaitingAsker }) {
+	const t = useT();
+	const [busy, setBusy] = useState(false);
+	const { connector, asker } = waiting;
+	const service = t(`bots.connectors.service.${connector.service}`);
+	const answer = (allow: boolean) => {
+		setBusy(true);
+		window.omp.schedules
+			.command({ action: "answerAsker", id: connector.schedule.id, person: asker.person, allow })
+			.then(() => {
+				setBusy(false);
+				if (allow) toast({ variant: "success", message: t("bots.needs.accessAllowed", { name: asker.name }) });
+			})
+			.catch((error: unknown) => {
+				setBusy(false);
+				toastError({ title: t("bots.needs.accessFailed"), error });
+			});
+	};
+	return (
+		<ListRow
+			actions={
+				<>
+					{asker.link && (
+						<IconButton
+							icon={<ExternalLink />}
+							label={t("bots.needs.accessOpen", { service })}
+							onClick={() => openExternal(asker.link ?? "")}
+							size="sm"
+						/>
+					)}
+					<Button disabled={busy} onClick={() => answer(false)} size="sm" variant="ghost">
+						{t("bots.needs.accessDecline")}
+					</Button>
+					<Button disabled={busy} onClick={() => answer(true)} size="sm" variant="primary">
+						{t("bots.needs.accessAllow")}
+					</Button>
+				</>
+			}
+			description={t("bots.needs.accessDetail", { service, name: bot.name })}
+			leading={<StatusDot decorative tone="attention" />}
+			rowProps={{ "data-bot-access-ask": connector.service }}
+			size="sm"
+			title={t("bots.needs.access", { name: asker.name, service })}
+		/>
+	);
+}
 
 function Suggestions({ bot }: { bot: Bot }) {
 	const t = useT();

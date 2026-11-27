@@ -66,7 +66,6 @@ import {
 	type RpcWorktreeCreateResult,
 	type TextContent,
 } from "../../shared/rpc-types";
-import type { Schedule } from "../../shared/schedules";
 import type { SessionSummary, VersionedSummaries } from "../../shared/session-summary";
 import type { FamilyEdits } from "../../shared/turn-edits";
 import type { HostBotsRoomPost, HostBotsUpdate } from "../bots";
@@ -83,7 +82,7 @@ import {
 	WorktreeCreateReply,
 } from "../remote/app-protocol";
 import { uploadToHost } from "../remote/host-upload";
-import type { RunProcess, ScheduleService } from "../schedules";
+import type { RunProcess, ScheduleService, ThreadWake } from "../schedules";
 import type { Pace } from "../session-pace";
 import { SUPERVISOR_STOPPED_CODE } from "../setup/supervisor";
 import type { ControlTabInfo, SidecarPool, TabActivity } from "../sidecar-pool";
@@ -260,6 +259,8 @@ export interface AgentControlHostDeps {
 	botsShared?: (change: SharedBotsDelta) => void;
 	/** One of this computer's bots posted in a paired device's group: false when that device is not connected. */
 	botsRoomPostTo?: (device: string, post: unknown) => boolean;
+	/** One reply through a bot's connector: what main holds for that post (`connectorCredential`, connectors.rs). */
+	connectorCredential?: (service: string, account: string) => Promise<unknown>;
 	/** Where the bytes of the attachments an outbox entry still owes are kept, by content; absent: in memory only. */
 	attachmentsDir?: string | null;
 	/** This computer's upload folder (`web/uploads.ts`): where a file sent to a session on this computer lands. */
@@ -562,11 +563,21 @@ export class AgentControlRuntime {
 	 * reason. Delivered, the run follows the turn it started (or the one it joined): it ends when that turn ends, with
 	 * the turn's error if it failed; a tab closed meanwhile, or no turn within the core's wake wait, fails it. `stop()`
 	 * stops that turn. The core keeps the mail and follows the turn; this reaches the session and reports the end.
+	 *
+	 * A bot's Slack thread asked for the first time (`thread` without `wakeSession`, or its chat's file gone) gets a
+	 * new chat of the bot in the schedule's folder, which the run wakes and names in `opened` (the core keeps it for
+	 * that thread, `schedules.threadChat`).
 	 */
-	async wakeSession(schedule: Schedule, runId: string): Promise<RunProcess> {
-		if (schedule.wakeSession === undefined) throw new Error("This schedule wakes no session");
-		const sessionPath = schedule.wakeSession;
-		if (!(await localPathIs(sessionPath, "file"))) throw new Error(`The session to wake is gone (${sessionPath})`);
+	async wakeSession(schedule: ThreadWake, runId: string): Promise<RunProcess> {
+		let sessionPath = schedule.wakeSession;
+		let opened: string | undefined;
+		const kept = sessionPath !== undefined && (await localPathIs(sessionPath, "file"));
+		if (schedule.thread && !kept) {
+			opened = await this.#openThreadChat(schedule.cwd);
+			sessionPath = opened;
+		}
+		if (sessionPath === undefined) throw new Error("This schedule wakes no session");
+		if (!opened && !kept) throw new Error(`The session to wake is gone (${sessionPath})`);
 		const { promise: done, resolve } = Promise.withResolvers<{ code: number | null; error?: string }>();
 		this.#wakes.set(runId, resolve);
 		try {
@@ -583,6 +594,7 @@ export class AgentControlRuntime {
 			throw error;
 		}
 		return {
+			...(opened ? { opened } : {}),
 			done,
 			stop: () => {
 				void this.control.runtime.wakeStop(runId).then(
@@ -596,6 +608,22 @@ export class AgentControlRuntime {
 				);
 			},
 		};
+	}
+
+	/** A new chat in `cwd` (a bot's folder) in a background tab of the front window; its session file. */
+	async #openThreadChat(cwd: string): Promise<string> {
+		const win = this.#deps.outsideWindow?.();
+		if (!win) throw new Error("No window to open the Slack thread's chat in.");
+		const result = await this.#deps.spawnTab(win, { cwd });
+		if (!result?.tabId) throw new Error("The Slack thread's chat could not be started.");
+		this.#windows.set(result.tabId, win);
+		// Its omp's first answer names the session file it writes (a starting tab is waited for, not refused).
+		const state = await this.#hostCommand(result.tabId, { type: "get_state" }, 60_000);
+		const sessionFile = state.success
+			? (state.data as { sessionFile?: string | null } | undefined)?.sessionFile
+			: null;
+		if (!sessionFile) throw new Error("The Slack thread's chat has no session file.");
+		return sessionFile;
 	}
 
 	/**
@@ -1511,6 +1539,10 @@ export class AgentControlRuntime {
 				if (!remote) throw new Error("No paired computers here.");
 				// An answer to an item question reaches the bot's chat on the host before the host answers.
 				return remote.request<unknown>(device, "host.bots.command", { request }, BOTS_COMMAND_TIMEOUT_MS);
+			},
+			connectorCredential: (service, account) => {
+				if (!deps.connectorCredential) throw new Error("A bot's connectors are not available here.");
+				return deps.connectorCredential(service, account);
 			},
 			setOpener: (tabId, openerTabId) => {
 				// As a session the bot's chat opened, or one the call journal names after its opener was lost: its reports

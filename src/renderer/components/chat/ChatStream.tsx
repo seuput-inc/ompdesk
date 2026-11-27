@@ -64,7 +64,7 @@ import {
 import { FirstRunSetupSlot, useFirstRunActive } from "../onboarding/FirstRunSlot";
 import { ReadGroupCard } from "../tools/renderers/ReadGroupCard";
 import { ToolCard } from "../tools/ToolCard";
-import { BotCardsInRun, RunBotCards } from "./bots/bot-card-kind";
+import { BotCardsInRun, RunBotCards, useBotChat } from "./bots/bot-card-kind";
 import { ConversationNavigator } from "./ConversationNavigator";
 import {
 	buildConversationAnchors,
@@ -120,6 +120,8 @@ import { messageTimestampMs } from "./work/work-turn";
 
 /** "Add to chat" over the transcript (Orca's selection quotes), loaded off the phone's first screen. */
 const TranscriptQuote = lazy(() => import("../panels/notes/TranscriptQuote"));
+/** A bot's Slack thread chat's mirror bar (`bots/SlackThreadBar.tsx`), loaded only in a bot's chat. */
+const SlackThreadBar = lazy(() => import("../bots/SlackThreadBar"));
 
 // TanStack's end check needs one CSS pixel for fractional scrollTop rounding.
 // User intent is enforced separately by switching away from end anchoring.
@@ -173,6 +175,7 @@ export function ChatStream() {
 function SessionTranscript() {
 	const t = useT();
 	const tabId = useRuntimeTabId();
+	const botChat = useBotChat(tabId);
 	const messages = useMessagesStore(s => s.messages);
 	const liveMessages = useMessagesStore(s => s.liveMessages);
 	const prevCursor = useMessagesStore(s => s.prevCursor);
@@ -1106,6 +1109,11 @@ function SessionTranscript() {
 	return (
 		<div className="omp-transcript-editorial relative min-h-0 flex-1 bg-transparent">
 			<TurnEndAnnouncer />
+			{botChat && tabId ? (
+				<Suspense fallback={null}>
+					<SlackThreadBar tabId={tabId} />
+				</Suspense>
+			) : null}
 			<div
 				ref={parentRef}
 				aria-label={t("chat.transcript.label")}

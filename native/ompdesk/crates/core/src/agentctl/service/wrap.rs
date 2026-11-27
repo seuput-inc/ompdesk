@@ -219,6 +219,7 @@ pub fn describe_frequency(frequency: &ScheduleFrequency) -> String {
                     from,
                     contains,
                     label,
+                    ..
                 } => {
                     let filters: Vec<String> = [
                         from.as_ref()
@@ -290,6 +291,15 @@ pub fn describe_frequency(frequency: &ScheduleFrequency) -> String {
                 }
                 ScheduleEvent::Calendar { lead_minutes, .. } => {
                     format!("{lead_minutes} min before each calendar event")
+                }
+                ScheduleEvent::Slack { account, .. } => {
+                    format!("when someone asks in Slack through {account}")
+                }
+                ScheduleEvent::Linear { handle, .. } => {
+                    format!("when someone asks bot:{handle} in Linear")
+                }
+                ScheduleEvent::Google { lead_minutes, .. } => {
+                    format!("{lead_minutes} min before each Google Calendar event")
                 }
             },
             by.as_deref(),

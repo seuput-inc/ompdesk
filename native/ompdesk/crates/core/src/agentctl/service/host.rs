@@ -635,6 +635,17 @@ impl Host {
         .await
     }
 
+    /// `connectorCredential {service, account}`: what one reply through a bot's connector posts with (`slack`: the
+    /// app's bot token; `github`: main's gh runner and home; `linear`: the tracker account with its header), from
+    /// main's keystore for that post only, never kept or told.
+    pub async fn connector_credential(&self, service: &str, account: &str) -> R<Value> {
+        self.ask(
+            "connectorCredential",
+            json!({ "service": service, "account": account }),
+        )
+        .await
+    }
+
     /// `botsRoomPostTo {device, post}`: one of this computer's bots posted in a group of paired device `device`, which
     /// main hands to that device's connection (`host.bots.roomPost`). False: the device is not connected.
     pub async fn room_post_to(&self, device: &str, post: &Value) -> R<bool> {

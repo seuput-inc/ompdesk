@@ -24,6 +24,7 @@ mod bot_move;
 mod bot_package;
 mod bots;
 pub(crate) mod bots_share;
+mod connectors;
 mod items;
 mod review;
 mod rooms;

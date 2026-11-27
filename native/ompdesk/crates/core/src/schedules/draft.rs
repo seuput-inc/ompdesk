@@ -93,7 +93,8 @@ fn frequency(frequency: Option<&Value>) -> Value {
                     if let Some(from) = field("from").filter(|from| from.is_array()) {
                         clean["from"] = sorted(Some(from));
                     }
-                    for name in ["contains", "label"] {
+                    // `ask`: a bot's GitHub connector (`routines/connectors.rs`).
+                    for name in ["contains", "label", "ask"] {
                         if let Some(text) = field(name)
                             .and_then(Value::as_str)
                             .map(trim)

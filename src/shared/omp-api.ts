@@ -31,6 +31,8 @@ import type {
 	AiMemorySweep,
 	AiMemoryWriteInput,
 } from "./ai-memory";
+import { BOT_CONNECTORS_COMMAND } from "./bot-connector-channels";
+import type { BotConnectorsApi } from "./bot-connectors";
 import { BOTS_COMMAND, BOTS_STATE, type BotsState } from "./bots";
 import type { CliToolId, CliUpdateState } from "./cli-update";
 import type { CreditSpendState } from "./credit-spend";
@@ -290,6 +292,9 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 					callback(update.device, update.state),
 				),
 		},
+		botConnectors: {
+			command: request => transport.invoke(BOT_CONNECTORS_COMMAND, request),
+		} satisfies BotConnectorsApi,
 		mailAccounts: {
 			command: request => transport.invoke(MAIL_ACCOUNTS_COMMAND, request),
 			test: id => transport.invoke(MAIL_ACCOUNTS_COMMAND, { action: "test", id }),

@@ -6,8 +6,13 @@ mod email;
 mod files;
 mod git;
 mod github;
+mod google;
+mod linear;
 pub(crate) mod sessions;
+mod slack;
 mod watch;
+
+pub(crate) use slack::wake as wake_sockets;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,6 +34,8 @@ pub(crate) struct Timing {
     pub file_max_wait_ms: u64,
     pub file_retry_ms: u64,
     pub quiet_ms: i64,
+    /// A bot's Linear connector reads its workspace this often.
+    pub connector_poll_ms: u64,
 }
 
 impl Default for Timing {
@@ -41,6 +48,7 @@ impl Default for Timing {
             file_max_wait_ms: 10_000,
             file_retry_ms: 60_000,
             quiet_ms: 3_000,
+            connector_poll_ms: 60_000,
         }
     }
 }
@@ -110,6 +118,9 @@ impl Source {
                 "files" => files::run(get("path").into(), mark, context, &working, timing).await,
                 "email" => email::run(&event, mark, &context, &working, timing).await,
                 "calendar" => calendar::run(&event, mark, &context, &working, timing).await,
+                "slack" => slack::run(&event, &context, &working).await,
+                "google" => google::run(&event, mark, &context, &working).await,
+                "linear" => linear::run(&event, mark, &context, &working, timing).await,
                 _ => context.failure("could not start its trigger", Some("unknown source")),
             }
             drop(working);

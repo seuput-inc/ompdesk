@@ -17,6 +17,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use super::connectors;
 use super::text::{clip, describe_commits};
 use crate::control::js::string_of_value;
 
@@ -131,12 +132,16 @@ impl Kind {
 }
 
 /// A GitHub trigger's filters (`ScheduleEvent` github `from`, `contains`, `label`): who did it, words in its title or
-/// text, a label it carries or got.
+/// text, a label it carries or got. With `ask` (a bot's connector, `connectors.rs`) only an issue, a pull request or a
+/// comment that says the bot's keyword starts a run, never the bot's own reply, and the run is told it as an ask.
 #[derive(Default)]
 pub struct Filters {
     from: Vec<String>,
     contains: Option<String>,
     label: Option<String>,
+    ask: Option<String>,
+    /// Who asked a bot's connector without being in `from`, since the last `take_refused`.
+    refused: std::sync::Mutex<Vec<connectors::AccessAsk>>,
 }
 
 impl Filters {
@@ -159,7 +164,66 @@ impl Filters {
                 .collect(),
             contains: text("contains"),
             label: text("label"),
+            ask: text("ask").map(|handle| connectors::keyword(&handle)),
+            refused: Default::default(),
         }
+    }
+
+    /// Who asked without being in `from` (a bot's connector only), each once, since the last call.
+    pub fn take_refused(&self) -> Vec<connectors::AccessAsk> {
+        std::mem::take(
+            &mut *self
+                .refused
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()),
+        )
+    }
+
+    /// The line a bot's connector run is told of a new row it passed (`ask`): GitHub's place and link and where to
+    /// reply, then who wrote it, its title and its text as someone's words.
+    fn asked(&self, kind: Kind, repo: &str, row: Js<'_>) -> Option<String> {
+        self.ask.as_ref()?;
+        let text = |value: Js<'_>| match value {
+            Js::Val(Value::String(text)) => text.clone(),
+            _ => String::new(),
+        };
+        let (number, what, title) = match kind {
+            Kind::Comment => {
+                let on = text(optional(row, "issue_url"));
+                let number = on.rsplit('/').next().unwrap_or_default().to_owned();
+                (number, "a comment", String::new())
+            }
+            Kind::PullRequest => (
+                nullish_template(optional(row, "number")),
+                "a new pull request",
+                text(optional(row, "title")),
+            ),
+            _ => (
+                nullish_template(optional(row, "number")),
+                "a new issue",
+                text(optional(row, "title")),
+            ),
+        };
+        let target = connectors::Target::Github {
+            repo: repo.to_owned(),
+            number: number.parse().ok()?,
+        };
+        let header = format!(
+            "GitHub · {what} on {repo}#{number} · {} · reply with ompdesk_bot reply to {}",
+            nullish_template(optional(row, "html_url")),
+            target.handle()
+        );
+        let title = if title.is_empty() {
+            String::new()
+        } else {
+            format!("Title: {title}\n")
+        };
+        let words = format!(
+            "From: @{}\n{title}\n{}",
+            who(optional(row, "user")),
+            text(optional(row, "body"))
+        );
+        Some(connectors::asked(&header, &words))
     }
 
     /// Whether a new row (`line` what the run is told of it) passes.
@@ -175,7 +239,9 @@ impl Filters {
             Kind::Release => login(optional(row, "author")),
             _ => login(optional(row, "user")),
         };
-        let from = self.from.is_empty() || (kind != Kind::Push && self.from.contains(&by));
+        let from = self.from.is_empty()
+            || (kind != Kind::Push
+                && (self.from.contains(&by) || self.from.iter().any(|f| f == "*")));
         let words = |key: &str| match optional(row, key) {
             Js::Val(Value::String(text)) => text.to_lowercase(),
             _ => String::new(),
@@ -197,7 +263,37 @@ impl Filters {
             .label
             .as_ref()
             .is_none_or(|wanted| labels.contains(wanted));
-        from && contains && label
+        // A bot's connector: an issue, pull request or comment that says its keyword, and never its own reply.
+        let asked = self.ask.as_ref().is_none_or(|keyword| {
+            matches!(kind, Kind::Issue | Kind::PullRequest | Kind::Comment)
+                && (words("title").contains(keyword) || words("body").contains(keyword))
+                && !words("body").contains(&connectors::REPLY_MARK.to_lowercase())
+        });
+        if self.ask.is_some() && asked && contains && label && !from && !by.is_empty() {
+            let login = match optional(optional(row, "user"), "login") {
+                Js::Val(Value::String(login)) => login.clone(),
+                _ => by.clone(),
+            };
+            let what = match kind {
+                Kind::Comment => "a comment",
+                Kind::PullRequest => "a new pull request",
+                _ => "a new issue",
+            };
+            let mut refused = self
+                .refused
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            refused.push(connectors::AccessAsk {
+                name: format!("@{login}"),
+                person: login,
+                place: format!("GitHub, {what}"),
+                link: match optional(row, "html_url") {
+                    Js::Val(Value::String(link)) => link.clone(),
+                    _ => String::new(),
+                },
+            });
+        }
+        from && contains && label && asked
     }
 }
 
@@ -365,12 +461,16 @@ pub async fn read_with(
         state.seen.push((kind.name().to_owned(), ids));
         return Ok(Vec::new());
     };
-    let fresh: Vec<&String> = rows
+    // A bot's connector is told each passed row as an ask; a row that cannot be one (no number) starts nothing.
+    let fresh: Vec<String> = rows
         .iter()
         .filter(|(id, line, row)| {
             !seen.iter().any(|known| known.same(id)) && filters.pass(kind, *row, line)
         })
-        .map(|(_, line, _)| line)
+        .filter_map(|(_, line, row)| match filters.ask {
+            Some(_) => filters.asked(kind, repo, *row),
+            None => Some(line.clone()),
+        })
         .collect();
     for (id, _, _) in &rows {
         if !seen.iter().any(|known| known.same(id)) {
@@ -380,12 +480,7 @@ pub async fn read_with(
     if seen.len() > SEEN_MAX {
         seen.drain(..seen.len() - SEEN_MAX);
     }
-    Ok(fresh
-        .into_iter()
-        .take(EVENTS_PER_POLL)
-        .rev()
-        .cloned()
-        .collect())
+    Ok(fresh.into_iter().take(EVENTS_PER_POLL).rev().collect())
 }
 
 /// One line for the new commits of the default branch, or none (first answer, a new default branch, no news).
@@ -935,5 +1030,52 @@ mod tests {
         for kind in Kind::ALL {
             assert_eq!(Kind::parse(kind.name()), Some(kind));
         }
+    }
+
+    #[test]
+    fn a_bots_connector_takes_only_asks_by_keyword_and_quotes_them() {
+        let filters = Filters::of(&json!({"ask": "Helper", "from": ["ann"]}));
+        let comments = json!([
+            {"id": 1, "issue_url": "https://api.github.com/repos/o/r/issues/12", "body": "BOT:helper look at this",
+             "user": {"login": "Ann"}, "html_url": "c1"},
+            {"id": 2, "issue_url": "https://api.github.com/repos/o/r/issues/12", "body": "no keyword",
+             "user": {"login": "ann"}, "html_url": "c2"},
+            {"id": 3, "issue_url": "https://api.github.com/repos/o/r/issues/12", "body": "Done bot:helper\n\n— Helper, via OMPdesk",
+             "user": {"login": "ann"}, "html_url": "c3"},
+            {"id": 4, "issue_url": "https://api.github.com/repos/o/r/issues/12", "body": "bot:helper hi",
+             "user": {"login": "eve"}, "html_url": "c4"}
+        ]);
+        let rows = rows_of(Kind::Comment, &comments).unwrap();
+        let passed: Vec<bool> = rows
+            .iter()
+            .map(|row| filters.pass(Kind::Comment, *row, ""))
+            .collect();
+        assert_eq!(passed, [true, false, false, false]);
+        // Eve, not listed, asked: the owner is asked to let her in; Ann's own words and replies ask nothing.
+        assert_eq!(
+            filters.take_refused(),
+            [connectors::AccessAsk {
+                person: "eve".into(),
+                name: "@eve".into(),
+                place: "GitHub, a comment".into(),
+                link: "c4".into(),
+            }]
+        );
+        assert!(filters.take_refused().is_empty());
+        let line = filters.asked(Kind::Comment, "o/r", rows[0]).expect("asked");
+        let (header, words) = connectors::split(&line).expect("split");
+        assert_eq!(
+            header,
+            "GitHub · a comment on o/r#12 · c1 · reply with ompdesk_bot reply to github:o/r#12"
+        );
+        assert_eq!(words, "From: @Ann\n\nBOT:helper look at this");
+        // A labeled event is no ask, and anyone is `*`.
+        let anyone = Filters::of(&json!({"ask": "helper", "from": ["*"]}));
+        assert!(anyone.pass(Kind::Comment, rows[3], ""));
+        assert!(!anyone.pass(Kind::Labeled, rows[3], ""));
+        assert_eq!(
+            Filters::default().asked(Kind::Comment, "o/r", rows[0]),
+            None
+        );
     }
 }

@@ -15,6 +15,8 @@ use serde_json::{Map, Value, json};
 use super::hooks;
 use super::rules::{self, Zone};
 use crate::control::js::string_of_value;
+use crate::routines::connectors::{self, SlackEvent};
+use crate::routines::slack_mirror;
 use crate::server::Fault;
 
 /// Event lines kept for the run after the running one (the newest).
@@ -47,6 +49,10 @@ const KEY_OVERLAP_MS: i64 = DAY_MS;
 const FOLD_MS: i64 = 60_000;
 /// The longest signing secret kept.
 const SECRET_MAX_CHARS: usize = 500;
+/// People a bot's connector remembers asking to be let in (open or declined), newest first.
+const ASKERS_KEPT: usize = 20;
+/// Thread chats a bot's Slack connector remembers, newest first: an older thread asks in a new chat.
+const THREADS_KEPT: usize = 200;
 
 /// Whether an answer is a quiet result: its last non-empty line, Markdown dressing aside (a heading's or a list's
 /// mark, `*`, `_`, backticks, `~` around it, a period after it), is `NO_REPLY`. The same rule as `isQuietResult` in
@@ -184,6 +190,8 @@ pub struct HookCall {
     pub bearer: Option<String>,
     pub headers: BTreeMap<String, String>,
     pub body: Vec<u8>,
+    /// A bot's Slack connector's signing secret, handed over by main with the call (its keystore holds it).
+    pub secret: Option<String>,
 }
 
 struct Active {
@@ -194,6 +202,8 @@ struct Active {
     charge: Option<u64>,
     /// What the run is told: the schedule's prompt, with what fired it.
     prompt: String,
+    /// A Slack connector's run: the thread it answers (`slack_mirror::thread_key`), whose chat it wakes.
+    thread: Option<String>,
 }
 
 /// A start waiting for main's answer about its charge.
@@ -253,6 +263,12 @@ pub struct Engine {
     settle_until: i64,
     /// A webhook routine's recent calls, newest first, by schedule id (`SchedulesState.calls`).
     calls: HashMap<String, Vec<Object>>,
+    /// Who asked a bot's connector without being in its `from`, newest first, by schedule id
+    /// (`SchedulesState.asking`): `{person, name, place, link?, at, declined?}`.
+    asking: HashMap<String, Vec<Object>>,
+    /// A Slack connector's thread chats, by schedule id (`SchedulesState.threads`, `routines/slack_mirror.rs`):
+    /// `{key, session?, at, mirror?, chosen?, external?, blocked?, posts?}`, one per (app, channel, root ts).
+    threads: HashMap<String, Vec<Object>>,
     /// The delivery ids each webhook routine took, oldest first (FX4).
     delivered: HashMap<String, VecDeque<String>>,
     /// Where a firing call's body is saved (the run logs' folder); none in a test.
@@ -290,6 +306,14 @@ fn webhook_key(frequency: Option<&Value>) -> Option<&str> {
 fn webhook_event(schedule: &Object) -> Option<&Value> {
     webhook_key(schedule.get("frequency"))?;
     schedule.get("frequency")?.get("event")
+}
+
+/// A bot's Slack connector's trigger (`connectors.rs`), when the schedule is one.
+fn slack_event(schedule: &Object) -> Option<&Value> {
+    let frequency = schedule.get("frequency")?;
+    let event = frequency.get("event")?;
+    (frequency.get("kind")?.as_str()? == "event" && event.get("source")?.as_str()? == "slack")
+        .then_some(event)
 }
 
 fn webhook_event_mut(schedule: &mut Object) -> Option<&mut Object> {
@@ -338,6 +362,45 @@ pub(crate) fn fence_untrusted(text: &str) -> String {
     format!("{UNTRUSTED_LABEL}\n{fence}text\n{text}\n{fence}")
 }
 
+/// What fired a run as it is told it: the plain lines in one fence, then each ask of a bot's connector as OMPdesk's
+/// header (where it came from, where to reply) above a fence of its words.
+fn fired_text(details: &[String]) -> String {
+    let (asks, plain): (Vec<&String>, Vec<&String>) = details
+        .iter()
+        .partition(|detail| connectors::split(detail).is_some());
+    let mut parts = Vec::new();
+    if !plain.is_empty() {
+        let plain: Vec<&str> = plain.iter().map(|line| line.as_str()).collect();
+        parts.push(fence_untrusted(&plain.join("\n")));
+    }
+    for ask in asks {
+        if let Some((header, words)) = connectors::split(ask) {
+            parts.push(format!("{header}\n{}", fence_untrusted(words)));
+        }
+    }
+    parts.join("\n\n")
+}
+
+/// Whether a routine is a bot's connector, whose source writes asks (`connectors::asked`); only its lines may carry
+/// the separator, which any other trigger's line (a webhook's pick, a mail's subject) loses, so outside words can never
+/// pass as OMPdesk's header.
+fn asks(schedule: &Object) -> bool {
+    let Some(event) = schedule
+        .get("frequency")
+        .and_then(|frequency| frequency.get("event"))
+    else {
+        return false;
+    };
+    match event.get("source").and_then(Value::as_str) {
+        Some("slack" | "linear" | "google") => true,
+        Some("github") => event
+            .get("ask")
+            .and_then(Value::as_str)
+            .is_some_and(|ask| !ask.trim().is_empty()),
+        _ => false,
+    }
+}
+
 impl Engine {
     pub fn new(
         limits: Limits,
@@ -369,6 +432,8 @@ impl Engine {
             closed: false,
             settle_until: 0,
             calls: HashMap::new(),
+            asking: HashMap::new(),
+            threads: HashMap::new(),
             delivered: HashMap::new(),
             hook_dir: None,
             call_seq: 0,
@@ -421,7 +486,9 @@ impl Engine {
         self.paused = paused;
         self.schedules = schedules;
         self.runs = runs;
-        self.calls = self.read_calls(stored);
+        self.calls = self.read_per_schedule(stored, "calls", CALLS_KEPT);
+        self.asking = self.read_per_schedule(stored, "asking", ASKERS_KEPT);
+        self.threads = self.read_per_schedule(stored, "threads", THREADS_KEPT);
         let ended = Value::String(rules::iso(now));
         for run in &mut self.runs {
             if text(run, "status") == Some("running") {
@@ -598,48 +665,59 @@ impl Engine {
             "runs": self.runs,
             "nextRuns": next_runs,
         });
-        if let Some(calls) = self.calls_value() {
+        if let Some(calls) = self.per_schedule(&self.calls) {
             state["calls"] = calls;
+        }
+        if let Some(asking) = self.per_schedule(&self.asking) {
+            state["asking"] = asking;
+        }
+        if let Some(threads) = self.per_schedule(&self.threads) {
+            state["threads"] = threads;
         }
         state
     }
 
-    /// The recent webhook calls by schedule, in the schedules' order; none while no routine has one.
-    fn calls_value(&self) -> Option<Value> {
-        let calls: Object = self
+    /// A record kept by schedule (recent calls, access asks), in the schedules' order; none while no routine has one.
+    fn per_schedule(&self, map: &HashMap<String, Vec<Object>>) -> Option<Value> {
+        let kept: Object = self
             .schedules
             .iter()
             .filter_map(|schedule| {
                 let id = id_of(schedule);
-                let calls = self.calls.get(id).filter(|calls| !calls.is_empty())?;
-                Some((id.to_owned(), json!(calls)))
+                let rows = map.get(id).filter(|rows| !rows.is_empty())?;
+                Some((id.to_owned(), json!(rows)))
             })
             .collect();
-        (!calls.is_empty()).then_some(Value::Object(calls))
+        (!kept.is_empty()).then_some(Value::Object(kept))
     }
 
-    /// The recent calls a journal kept, for the routines it holds.
-    fn read_calls(&self, stored: Option<&str>) -> HashMap<String, Vec<Object>> {
+    /// A record by schedule a journal kept under `key`, for the routines it holds, at most `keep` rows each.
+    fn read_per_schedule(
+        &self,
+        stored: Option<&str>,
+        key: &str,
+        keep: usize,
+    ) -> HashMap<String, Vec<Object>> {
         let Some(parsed) = stored.and_then(|stored| {
             serde_json::from_str::<Value>(&crate::json::whole_surrogates(stored)).ok()
         }) else {
             return HashMap::new();
         };
-        let Some(kept) = parsed.get("calls").and_then(Value::as_object) else {
+        let Some(kept) = parsed.get(key).and_then(Value::as_object) else {
             return HashMap::new();
         };
         kept.iter()
             .filter(|(id, _)| self.find(id).is_some())
-            .map(|(id, calls)| {
-                let calls = calls
+            .map(|(id, rows)| {
+                let rows = rows
                     .as_array()
                     .into_iter()
                     .flatten()
                     .filter_map(Value::as_object)
-                    .take(CALLS_KEPT)
+                    .take(keep)
                     .cloned()
                     .collect();
-                (id.clone(), calls)
+                (id.clone(), rows)
             })
             .collect()
     }
@@ -651,8 +729,14 @@ impl Engine {
             "schedules": self.schedules,
             "runs": self.runs,
         });
-        if let Some(calls) = self.calls_value() {
+        if let Some(calls) = self.per_schedule(&self.calls) {
             stored["calls"] = calls;
+        }
+        if let Some(asking) = self.per_schedule(&self.asking) {
+            stored["asking"] = asking;
+        }
+        if let Some(threads) = self.per_schedule(&self.threads) {
+            stored["threads"] = threads;
         }
         // `JSON.stringify(stored, null, 2)`.
         serde_json::to_string_pretty(&stored).unwrap_or_default()
@@ -678,6 +762,89 @@ impl Engine {
             .then_some(at)
     }
 
+    /// Someone not in a bot's connector's `from` asked it (`connectors::AccessAsk`): the owner sees them on the bot's
+    /// Needs you until they allow or decline (`answerAsker`). Asking again moves them to the top; a declined person
+    /// is not asked about again; someone listed since asks nothing. Whether anything changed.
+    pub(crate) fn access_asked(&mut self, id: &str, asks: &[connectors::AccessAsk]) -> bool {
+        let Some(at) = self.find(id) else {
+            return false;
+        };
+        let from = self.schedules[at]
+            .get("frequency")
+            .and_then(|frequency| frequency.get("event"))
+            .map(connectors::people)
+            .unwrap_or_default();
+        let at_iso = rules::iso(self.now);
+        let rows = self.asking.entry(id.to_owned()).or_default();
+        let mut changed = false;
+        for ask in asks {
+            if ask.person.is_empty() || connectors::allowed(&from, &[&ask.person]) {
+                continue;
+            }
+            let known = rows.iter().position(|row| {
+                text(row, "person").is_some_and(|person| person.eq_ignore_ascii_case(&ask.person))
+            });
+            if let Some(known) = known {
+                if rules::truthy(rows[known].get("declined")) {
+                    continue;
+                }
+                rows.remove(known);
+            }
+            let Value::Object(mut row) = json!(ask) else {
+                continue;
+            };
+            row.insert("at".into(), at_iso.clone().into());
+            rows.insert(0, row);
+            rows.truncate(ASKERS_KEPT);
+            changed = true;
+        }
+        changed
+    }
+
+    /// `access_asked` from a routine's trigger, told at once.
+    pub(crate) fn asked_access(&mut self, id: &str, asks: &[connectors::AccessAsk], now: i64) {
+        self.now = now;
+        if self.access_asked(id, asks) {
+            self.changed();
+        }
+    }
+
+    /// The owner's answer to someone asking a bot's connector (`answerAsker`): allowed, they join its `from`
+    /// (Orca `grantAccessRequest`, `bot-access-request.ts:95-107`) and the routine's trigger restarts with them;
+    /// declined, they stay remembered so their next ask does not ask the owner again.
+    fn answer_asker(&mut self, at: usize, person: &str, allow: bool) -> Result<(), Fault> {
+        let id = id_of(&self.schedules[at]).to_owned();
+        let rows = self.asking.entry(id).or_default();
+        let known = rows
+            .iter()
+            .position(|row| text(row, "person") == Some(person))
+            .ok_or_else(|| fault("That request is no longer waiting"))?;
+        if !allow {
+            rows[known].insert("declined".into(), true.into());
+            return Ok(());
+        }
+        rows.remove(known);
+        let event = self.schedules[at]
+            .get_mut("frequency")
+            .and_then(|frequency| frequency.get_mut("event"))
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| fault("Only a bot's connector takes people"))?;
+        let from = event
+            .entry("from")
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if let Value::Array(from) = from
+            && !from.iter().any(|known| {
+                known.as_str().is_some_and(|known| {
+                    known.eq_ignore_ascii_case(person) || known == connectors::ANYONE
+                })
+            })
+        {
+            from.push(person.into());
+        }
+        self.reschedule(at);
+        Ok(())
+    }
+
     /// An event schedule's trigger fired (`detail`: one English line saying what happened). Starts a run now, or keeps
     /// the event for one more run after the running one. False when nothing will run on it: no such routine, it is no
     /// event schedule, off, everything is paused, or the app is closing.
@@ -695,7 +862,12 @@ impl Engine {
     /// A routine's event: a run now, or (true) kept for one more run after the running one.
     fn take_event(&mut self, at: usize, detail: &str) -> bool {
         let id = id_of(&self.schedules[at]).to_owned();
-        let mut line = rules::one_line(detail);
+        // A connector's ask keeps its words whole (they are quoted apart, `start_run`); any other line is one line.
+        let mut line = if asks(&self.schedules[at]) && connectors::split(detail).is_some() {
+            detail.to_owned()
+        } else {
+            rules::one_line(&detail.replace(connectors::ASKED, " "))
+        };
         if line.is_empty() {
             line = "The trigger fired".into();
         }
@@ -753,6 +925,13 @@ impl Engine {
 
     fn hook(&mut self, id: &str, call: &HookCall, told: Option<&str>, now: i64) -> &'static str {
         self.now = now;
+        if let Some(event) = self
+            .find(id)
+            .and_then(|at| slack_event(&self.schedules[at]))
+            .cloned()
+        {
+            return self.slack_call(id, &event, call);
+        }
         let Some(event) = self
             .find(id)
             .and_then(|at| webhook_event(&self.schedules[at]))
@@ -766,6 +945,71 @@ impl Engine {
             return "denied";
         }
         self.hook_call(id, &event, call, false, told)
+    }
+
+    /// A Slack app's Events API call for a bot's Slack connector: signed with the app's signing secret (Slack's v0, a
+    /// five-minute window), its URL check answered (`challenge`: the edge echoes Slack's challenge), and an event
+    /// read as the Socket Mode source reads it (`connectors::slack_event`); a redelivery of an event already taken,
+    /// by Slack's `event_id`, starts nothing.
+    fn slack_call(&mut self, id: &str, event: &Value, call: &HookCall) -> &'static str {
+        let secret = call.secret.as_deref().unwrap_or_default();
+        if let Err(reason) = hooks::verify(
+            hooks::Sender::Slack,
+            secret,
+            &call.headers,
+            &call.body,
+            self.now,
+        ) {
+            self.log_call(id, "refused", Some(reason), None, false);
+            self.changed();
+            return "denied";
+        }
+        let body: Value = serde_json::from_slice(&call.body).unwrap_or(Value::Null);
+        if body.get("type").and_then(Value::as_str) == Some("url_verification") {
+            return "challenge";
+        }
+        let Some(at) = self.routine(id) else {
+            self.log_call(id, "off", None, None, false);
+            self.changed();
+            return "off";
+        };
+        let (event_id, line) = match connectors::slack_event(event, &body) {
+            SlackEvent::Asked { id, line } => (id, line),
+            SlackEvent::Refused { ask, .. } => {
+                self.log_call(id, "ignored", Some("not in who can ask"), None, false);
+                self.access_asked(id, &[ask]);
+                self.changed();
+                return "ignored";
+            }
+            SlackEvent::Passed => {
+                self.log_call(id, "ignored", None, None, false);
+                self.changed();
+                return "ignored";
+            }
+        };
+        let delivery = format!("event:{event_id}");
+        let seen = self.delivered.entry(id.to_owned()).or_default();
+        if seen.contains(&delivery) {
+            self.log_call(id, "duplicate", None, None, false);
+            self.changed();
+            return "duplicate";
+        }
+        seen.push_back(delivery);
+        if seen.len() > DELIVERIES_KEPT {
+            seen.pop_front();
+        }
+        self.call_seq += 1;
+        let call_id = format!("call-{}-{}", self.now, self.call_seq);
+        let queued = self.take_event(at, &line);
+        let run = self.active.get(id).and_then(|active| active.run.clone());
+        let (verdict, run) = if queued {
+            ("queued", None)
+        } else {
+            ("started", run)
+        };
+        self.log_call_as(&call_id, id, verdict, None, run, false);
+        self.changed();
+        "fired"
     }
 
     /// Whether a call may start its routine: its sender's signature once a secret is set (the key alone no longer
@@ -1108,6 +1352,14 @@ impl Engine {
                 let at = named(self)?;
                 self.set_secret(at, request.get("sender"), request.get("secret"))?;
             }
+            Some("answerAsker") => {
+                let at = named(self)?;
+                let person = request
+                    .get("person")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                self.answer_asker(at, person, request.get("allow") == Some(&Value::Bool(true)))?;
+            }
             Some("sampleCall") => {
                 let at = named(self)?;
                 let id = id_of(&self.schedules[at]).to_owned();
@@ -1126,6 +1378,7 @@ impl Engine {
                         "application/json".to_owned(),
                     )]),
                     body: body.to_string().into_bytes(),
+                    secret: None,
                 };
                 // The sample's own outcome is one of its recent calls; the state it changed is told already.
                 self.hook_call(&id, &event, &call, true, None);
@@ -1449,6 +1702,7 @@ impl Engine {
                 stop_requested: false,
                 charge: Some(self.last_ask),
                 prompt: String::new(),
+                thread: None,
             },
         );
         self.outs.push(Out::Reserve {
@@ -1570,6 +1824,7 @@ impl Engine {
                 stop_requested: false,
                 charge: None,
                 prompt: String::new(),
+                thread: None,
             },
         );
         self.held.insert(
@@ -1736,7 +1991,19 @@ impl Engine {
         charge: Option<u64>,
         details: Option<Vec<String>>,
     ) -> String {
-        let detail = details.map(|details| details.join("\n"));
+        // What fired it as the run is told it: plain lines in one fence, a connector's asks each with OMPdesk's own
+        // header outside its fence; the record keeps the plain text.
+        let fired = details.as_deref().map(fired_text);
+        // A Slack connector's asks wake their thread's chat (one thread per run, `after_run`); a test run wakes home.
+        let thread = (trigger == Trigger::Event && slack_event(&self.schedules[at]).is_some())
+            .then(|| {
+                details
+                    .as_ref()?
+                    .first()
+                    .and_then(|line| slack_mirror::thread_key(line))
+            })
+            .flatten();
+        let detail = details.map(|details| details.join("\n").replace(connectors::ASKED, "\n"));
         let id = (self.ids)();
         let schedule_id = id_of(&self.schedules[at]).to_owned();
         let mut run = json!({
@@ -1764,9 +2031,9 @@ impl Engine {
                 "{prompt}\n\nA test run, replaying its last event:\n{}",
                 fence_untrusted(detail)
             ),
-            Some(detail) => format!(
+            Some(_) => format!(
                 "{prompt}\n\nWhat fired this run:\n{}",
-                fence_untrusted(detail)
+                fired.unwrap_or_default()
             ),
         };
         // A fresh run whose result goes somewhere may say there is nothing to send.
@@ -1791,6 +2058,7 @@ impl Engine {
                 stop_requested: false,
                 charge,
                 prompt: prompt.clone(),
+                thread,
             },
         );
         self.record(run);
@@ -1846,12 +2114,101 @@ impl Engine {
         let active = self.active.get(&id);
         let prompt = active.map(|active| active.prompt.clone());
         told.insert("prompt".into(), prompt.into());
+        // A Slack thread's run wakes that thread's chat, or opens one for a thread asked the first time (main's
+        // `wakeSession` without a session to wake, with `thread`): never the bot's home chat.
+        if let Some(key) = active.and_then(|active| active.thread.clone()) {
+            let known = self
+                .threads
+                .get(&id)
+                .and_then(|rows| {
+                    rows.iter()
+                        .find(|row| text(row, "key") == Some(key.as_str()))
+                })
+                .and_then(|row| text(row, "session"))
+                .map(str::to_owned);
+            match known {
+                Some(session) => told.insert("wakeSession".into(), session.into()),
+                None => told.shift_remove("wakeSession"),
+            };
+            told.insert("thread".into(), key.into());
+        }
         self.outs.push(Out::Start {
             run: run.to_owned(),
             schedule: Value::Object(told),
             wake,
             charge: active.and_then(|active| active.charge),
         });
+    }
+
+    /// Main opened the chat a Slack thread's run woke (`schedules.threadChat`): that thread's asks wake it from now on.
+    pub fn thread_chat(&mut self, run: &str, session: &str, now: i64) {
+        self.now = now;
+        let Some(id) = self.running(run) else {
+            return;
+        };
+        let Some(key) = self
+            .active
+            .get(&id)
+            .and_then(|active| active.thread.clone())
+        else {
+            return;
+        };
+        let rows = self.threads.entry(id).or_default();
+        match rows
+            .iter_mut()
+            .find(|row| text(row, "key") == Some(key.as_str()))
+        {
+            Some(row) => {
+                row.insert("session".into(), session.into());
+            }
+            None => {
+                let mut row = Object::new();
+                row.insert("key".into(), key.into());
+                row.insert("session".into(), session.into());
+                row.insert("at".into(), rules::iso(now).into());
+                rows.insert(0, row);
+                rows.truncate(THREADS_KEPT);
+            }
+        }
+        self.changed();
+    }
+
+    /// The thread chat a session is, by schedule id: what the owner types in it posts to that thread. None for any
+    /// other session, the bot's home chat among them.
+    pub fn thread_of_session(&self, session: &str) -> Option<(String, Object)> {
+        self.schedules.iter().find_map(|schedule| {
+            let id = id_of(schedule);
+            slack_event(schedule)?;
+            let row = self
+                .threads
+                .get(id)?
+                .iter()
+                .find(|row| text(row, "session") == Some(session))?;
+            Some((id.to_owned(), row.clone()))
+        })
+    }
+
+    /// A thread chat's row, changed by `change` (its mirror switch, what Slack said of it, one of its posts).
+    pub fn change_thread(&mut self, id: &str, key: &str, change: impl FnOnce(&mut Object)) -> bool {
+        let Some(row) = self
+            .threads
+            .get_mut(id)
+            .and_then(|rows| rows.iter_mut().find(|row| text(row, "key") == Some(key)))
+        else {
+            return false;
+        };
+        change(row);
+        self.changed();
+        true
+    }
+
+    /// A thread chat's row as it is now.
+    pub fn thread_row(&self, id: &str, key: &str) -> Option<Object> {
+        self.threads
+            .get(id)?
+            .iter()
+            .find(|row| text(row, "key") == Some(key))
+            .cloned()
     }
 
     /// Main started the run: a wake-up writes its log line, a stop asked for meanwhile goes out.
@@ -2049,6 +2406,23 @@ impl Engine {
             self.chain.remove(id);
             return;
         };
+        // A Slack connector answers each thread in that thread's own chat: one run takes one thread's asks, the
+        // others wait for the next. Its loop guard is Slack's own (an app's posts never ask, `slack_event`), so its
+        // runs in a row are no chain.
+        if slack_event(&self.schedules[at]).is_some() {
+            let first = details
+                .first()
+                .and_then(|line| slack_mirror::thread_key(line));
+            let (now, later): (Vec<String>, Vec<String>) = details
+                .into_iter()
+                .partition(|line| slack_mirror::thread_key(line) == first);
+            if !later.is_empty() {
+                self.pending.insert(id.to_owned(), later);
+            }
+            self.start_event(at, now);
+            self.changed();
+            return;
+        }
         let chain = self.chain.get(id).copied().unwrap_or(0) + 1;
         if chain >= self.limits.chain_limit {
             self.schedules[at].insert("enabled".into(), false.into());
@@ -2196,6 +2570,8 @@ impl Engine {
         self.pending.remove(&id);
         self.chain.remove(&id);
         self.delivered.remove(&id);
+        self.asking.remove(&id);
+        self.threads.remove(&id);
         if let Some(calls) = self.calls.remove(&id) {
             self.remove_bodies(calls.iter().map(|call| id_of(call).to_owned()).collect());
         }

@@ -284,6 +284,16 @@ export class TrackerAccounts {
 		return (await this.#command(request)) as TrackersResults[R["action"]];
 	}
 
+	/**
+	 * A Linear account as a bot's Linear connector reads and answers through it (`routineAsk` `linear`,
+	 * `connectorCredential`): main → core only, never part of state, an event or a log.
+	 */
+	linearAccount(id: string) {
+		const account = this.#account(id);
+		if (account.provider !== "linear") throw codedError("tracker_failed", "That account is not a Linear one");
+		return this.#wire(account);
+	}
+
 	async #command(request: TrackersRequest): Promise<unknown> {
 		switch (request.action) {
 			case "state":

@@ -824,6 +824,9 @@ pub enum ScheduleEvent {
         contains: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
+        /// A bot's GitHub connector: its handle, asked by `bot:<handle>` (`routines/connectors.rs`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ask: Option<String>,
     },
     Files {
         path: String,
@@ -849,6 +852,23 @@ pub enum ScheduleEvent {
     /// An ICS feed's events, `leadMinutes` before each starts.
     Calendar {
         url: String,
+        #[serde(rename = "leadMinutes")]
+        lead_minutes: i64,
+    },
+    /// A bot's Slack app (`routines/connectors.rs`): mentions and direct messages from `from`.
+    Slack {
+        account: String,
+        from: Vec<String>,
+    },
+    /// A bot's Linear workspace: comments and new issues saying `bot:<handle>`, from `from`.
+    Linear {
+        account: String,
+        handle: String,
+        from: Vec<String>,
+    },
+    /// A bot's Google calendar: each event `leadMinutes` before it starts.
+    Google {
+        account: String,
         #[serde(rename = "leadMinutes")]
         lead_minutes: i64,
     },
@@ -1620,8 +1640,9 @@ pub struct AppArgs {
 /// `ompdesk_bot`'s arguments (`BotArgs` of `tools.ts`).
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct BotArgs {
-    /// `create`, `offer`, `list`, `pause`, `resume`, `set`, `rename`, `look_around`, `suggest`, `suggestions` or
-    /// `hand`. `offer` takes `name` and the purpose in `text`.
+    /// `create`, `offer`, `list`, `pause`, `resume`, `set`, `rename`, `look_around`, `suggest`, `suggestions`,
+    /// `hand`, `connectors`, `reply` or `offer_connector`. `offer` takes `name` and the purpose in `text`.
+    /// `offer_connector` takes `service`.
     pub action: String,
     #[serde(default)]
     pub name: Option<String>,
@@ -1656,6 +1677,12 @@ pub struct BotArgs {
     pub session: Option<String>,
     #[serde(default)]
     pub text: Option<String>,
+    /// `reply`: the handle a connector's run was told (`routines/connectors.rs` `Target`).
+    #[serde(default)]
+    pub to: Option<String>,
+    /// `offer`: slack, github, linear or google.
+    #[serde(default)]
+    pub service: Option<String>,
 }
 
 /// `ompdesk_item`'s arguments (`ItemArgs` of `tools.ts`).

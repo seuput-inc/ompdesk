@@ -67,6 +67,8 @@ pub trait Desktop: Send + Sync {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookOutcome {
     Fired,
+    /// Slack's URL check of a bot's Slack connector, signed: 200 with the challenge the body carries.
+    Challenge,
     Unknown,
     Denied,
     Off,

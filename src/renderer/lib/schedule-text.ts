@@ -137,6 +137,12 @@ function eventSummary(event: ScheduleEvent): string {
 			].join("");
 		case "calendar":
 			return translate("schedules.event.calendar", { minutes: event.leadMinutes });
+		case "slack":
+			return translate("schedules.event.slack");
+		case "linear":
+			return translate("schedules.event.linear", { handle: event.handle });
+		case "google":
+			return translate("schedules.event.google", { minutes: event.leadMinutes });
 	}
 }
 

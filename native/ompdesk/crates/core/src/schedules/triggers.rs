@@ -265,6 +265,14 @@ impl Context {
         .is_some()
     }
 
+    /// Who asked this bot's connector without being in its `from` (`Engine::access_asked`).
+    pub fn access_asked(&self, asks: &[crate::routines::connectors::AccessAsk]) {
+        if asks.is_empty() {
+            return;
+        }
+        self.enter(|_, engine, _, now| engine.asked_access(&self.token.id, asks, now));
+    }
+
     pub fn file_changed(&self, line: &str) {
         self.enter(|triggers, engine, _, now| {
             if !triggers.quiet(&self.token.id, now) {

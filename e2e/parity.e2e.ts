@@ -555,8 +555,8 @@ if (dir) {
 					.toBe(sessionPath);
 			};
 			/** A tab of B's on a session of its own, named `title` once its omp is up. */
-			const titledTab = async (title: string): Promise<string> => {
-				const tabId = (await b.evaluate(cwd => window.omp.tabs.spawn({ cwd }), work.cwd))?.tabId ?? "";
+			const titledTab = async (title: string, cwd = work.cwd): Promise<string> => {
+				const tabId = (await b.evaluate(folder => window.omp.tabs.spawn({ cwd: folder }), cwd))?.tabId ?? "";
 				if (!tabId) throw new Error(`B opened no tab for ${title}`);
 				await expect
 					.poll(
@@ -595,10 +595,14 @@ if (dir) {
 				answered.set(name, session);
 				return session;
 			};
-			const answeredSession = async (title: string, turns: ReadonlyArray<readonly [string, string]>) => {
+			const answeredSession = async (
+				title: string,
+				turns: ReadonlyArray<readonly [string, string]>,
+				cwd = work.cwd,
+			) => {
 				const made = answered.get(title);
 				if (made) return made;
-				const tabId = await titledTab(title);
+				const tabId = await titledTab(title, cwd);
 				let sessionPath = "";
 				for (const [message, answer] of turns) {
 					await b.evaluate(([id, sent]) => window.omp.rpc.commandForTab(id, { type: "prompt", message: sent }), [
@@ -625,7 +629,7 @@ if (dir) {
 						)
 						.not.toBe("");
 				}
-				const session = { path: sessionPath, cwd: work.cwd };
+				const session = { path: sessionPath, cwd };
 				answered.set(title, session);
 				return session;
 			};
@@ -806,6 +810,22 @@ if (dir) {
 				answered.set("Parity board", session);
 				return session;
 			};
+			const connectorSession = async (): Promise<HostSession> => {
+				const folder = await b.evaluate(async () => {
+					const bot =
+						(await window.omp.bots.command({ action: "get" })).bots[0] ??
+						(
+							await window.omp.bots.command({
+								action: "create",
+								name: "Parity bot",
+								purpose: "Checks the connector card.",
+							})
+						).bots[0];
+					if (!bot) throw new Error("No parity bot");
+					return bot.folder;
+				});
+				return answeredSession("Parity connector", [["fixture connector offer", "Offered Slack."]], folder);
+			};
 			const routedSession = async (which: "routing-bot" | "routing-worker"): Promise<HostSession> => {
 				const existing = answered.get(which);
 				if (existing) return existing;
@@ -863,6 +883,7 @@ if (dir) {
 			};
 			/** B's `session` as it is when a view shows it. */
 			const hostSession = async (session: ParitySession): Promise<HostSession> => {
+				if (session === "connector") return connectorSession();
 				if (session === "routing-bot" || session === "routing-worker") return routedSession(session);
 				if (session === "firstRun") return firstRunSession();
 				return session === "work"
@@ -910,8 +931,19 @@ if (dir) {
 			/** Put `view` on B's `session`, with nothing left open from the surface before. */
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {
-					const { path: sessionPath, botId } = await hostSession(session);
+					const { path: sessionPath, botId, cwd } = await hostSession(session);
 					if (botId) return openBotRow(b, botId, sessionPath);
+					if (session === "connector") {
+						const id = await b.evaluate(
+							async folder =>
+								(await window.omp.bots.command({ action: "get" })).bots.find(bot => bot.folder === folder)?.id,
+							cwd,
+						);
+						if (!id) throw new Error("No bot owns the connector chat");
+						const fold = b.locator(`[data-bot-fold=${cssString(id)}]`);
+						await expect(fold).toBeVisible();
+						if ((await fold.getAttribute("aria-expanded")) === "false") await fold.click();
+					}
 					await openRow(
 						b,
 						b.locator(`.omp-sidebar-session-row[data-session-path=${cssString(sessionPath)}]`),

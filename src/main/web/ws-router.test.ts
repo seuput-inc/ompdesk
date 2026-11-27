@@ -5,12 +5,14 @@
  */
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { BOT_CONNECTORS_COMMAND } from "../../shared/bot-connector-channels";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICES_CHANGED, WEB_DEVICES_LIST, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
 import type { AgentSessionEvent } from "../../shared/rpc-types";
 import { SCHEDULES_STATE } from "../../shared/schedule-channels";
 import { SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "../../shared/sidebar-projects";
 import { WEB_PERMISSIONS, WEB_PROTOCOL_VERSION, type WebPermission } from "../../shared/web-protocol";
+import { connectorCommand } from "../connector-accounts";
 import { core } from "../core/process";
 import { BlobStore } from "./blobs";
 import type { WebDevice } from "./devices-store";
@@ -188,6 +190,28 @@ describe("hello and calls", () => {
 		expect(call?.caller.win?.webContents.id).toBeLessThan(0);
 		expect(call?.caller.browserWindow).toBeNull();
 		expect(call?.caller.sender.id).toBe(call?.caller.win?.webContents.id);
+	});
+
+	it("refuses a paired connector import before a picker, file read or credential write", async () => {
+		const { frame, settle, socket, invoke } = await rig();
+		const pick = vi.fn(async () => "dummy-file");
+		const accounts = { command: vi.fn(async () => ({ slack: [], google: [] })) };
+		invoke.mockImplementation(async (_channel, caller, args) => connectorCommand(caller, args[0], accounts, pick));
+		const requests = [
+			{ action: "importSlack", mode: "url", path: "dummy-file" },
+			{ action: "importSlack", mode: "url" },
+			{ action: "importLinear" },
+			{ action: "signInGoogle" },
+		];
+		for (const [id, request] of requests.entries()) {
+			await frame({ t: "inv", id: id + 1, ch: BOT_CONNECTORS_COMMAND, a: [request] });
+		}
+		await settle();
+		expect(socket.frames("res")).toEqual(requests.map((_, id) => expect.objectContaining({ id: id + 1, ok: false })));
+		expect(invoke).toHaveBeenCalledTimes(requests.length);
+		expect(pick).not.toHaveBeenCalled();
+		// This is the host operation that reads the selection and stores the credential.
+		expect(accounts.command).not.toHaveBeenCalled();
 	});
 
 	it("runs a snd through the registry and answers nothing", async () => {
