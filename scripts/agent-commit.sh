@@ -8,18 +8,22 @@
 #   scripts/agent-commit.sh -m "fix: …" path/a.ts path/b.ts
 #   scripts/agent-commit.sh -m "fix: …" --patch-file /tmp/mine.patch
 #   add --push to push to origin/main afterwards (rebases onto a moved origin/main by redoing the commit).
+#   add --retire-work <finished omp/agent/branch> <accepted full sha> to clean only its remote copy after publication.
 set -euo pipefail
 
-msg="" patch="" push=0 paths=()
+msg="" patch="" push=0 retire="" accepted="" paths=()
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-m) msg="$2"; shift 2 ;;
 	--patch-file) patch="$2"; shift 2 ;;
 	--push) push=1; shift ;;
+	--retire-work) retire="$2"; accepted="$3"; shift 3 ;;
 	*) paths+=("$1"); shift ;;
 	esac
 done
 [ -n "$msg" ] || { echo "agent-commit: -m <message> is required" >&2; exit 2; }
+[ -z "$retire" ] || [ "$push" = 1 ] || { echo "agent-commit: --retire-work needs --push" >&2; exit 2; }
 [ -n "$patch" ] || [ ${#paths[@]} -gt 0 ] || { echo "agent-commit: name paths or --patch-file" >&2; exit 2; }
 root=$(git rev-parse --show-toplevel)
 cd "$root"
@@ -172,7 +176,12 @@ if [ "$push" = 1 ]; then
 	for attempt in 1 2 3; do
 		check_origin
 		rm -f "$refused"
-		git push origin HEAD:main && exit 0
+		if git push origin HEAD:main; then
+			if [ -n "$retire" ]; then
+				bun "$script_dir/publish-work.ts" --published "$retire" "$accepted"
+			fi
+			exit 0
+		fi
 		if [ -e "$refused" ]; then
 			echo "agent-commit: the pre-push gate refused $(git rev-parse --short HEAD) (its output is above); the commit stays local: fix, commit again, push" >&2
 			exit 1

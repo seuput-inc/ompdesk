@@ -1025,10 +1025,11 @@ async fn remote_base(git: &Git, cwd: &str) -> Result<RemoteBase, Fault> {
 /// so a merge here that was never pushed keeps it. The push deletes with a lease on the very tip judged, so a copy that
 /// moved since stays. None when there is no `origin` or it holds no such branch; else what happened and why. Never
 /// deletes any other branch, nor the base.
-async fn drop_landed_remote(
+pub(super) async fn drop_landed_remote(
     git: &Git,
     cwd: &str,
     branch: &str,
+    accepted_on_main: Option<&str>,
 ) -> Result<Option<RemoteCopy>, Fault> {
     let remotes = git.raw(cwd, &["remote"]).await?;
     if !remotes
@@ -1067,7 +1068,17 @@ async fn drop_landed_remote(
     // Several `url`s: git fetches from the first and pushes to every one, so one URL each way, the same, or keep.
     let (fetch_urls, push_urls) = (urls(false).await?, urls(true).await?);
     let push_elsewhere = fetch_urls.len() != 1 || fetch_urls != push_urls;
-    let RemoteBase { base, protected } = remote_base(git, cwd).await?;
+    let RemoteBase { base, protected } = if accepted_on_main.is_some() {
+        if !branch.starts_with("omp/agent/") {
+            return kept(RemoteOutcome::Base, "not an agent work branch".to_owned());
+        }
+        let primary = read::primary_root(git, cwd).await?;
+        let mut destination = remote_base(git, &primary).await?;
+        destination.base = Some("main".to_owned());
+        destination
+    } else {
+        remote_base(git, cwd).await?
+    };
     let copy = format!("refs/heads/{branch}");
     let base_ref = base.as_ref().map(|base| format!("refs/heads/{base}"));
     let wanted: Vec<&str> = [Some(copy.as_str()), base_ref.as_deref()]
@@ -1086,6 +1097,12 @@ async fn drop_landed_remote(
     let Some(tip) = tips.get(&copy).cloned() else {
         return Ok(None);
     };
+    if accepted_on_main.is_some_and(|accepted| accepted != tip) {
+        return kept(
+            RemoteOutcome::Moved,
+            "it no longer holds the accepted work tip".to_owned(),
+        );
+    }
     if push_elsewhere {
         return kept(
             RemoteOutcome::PushElsewhere,
@@ -1173,7 +1190,7 @@ async fn drop_landed_remote(
 /// `drop_landed_remote` that never fails what it follows (a merge, a removal): a git that failed reads as kept. A
 /// cancel still fails.
 async fn remote_copy(git: &Git, cwd: &str, branch: &str) -> Result<Option<RemoteCopy>, Fault> {
-    match drop_landed_remote(git, cwd, branch).await {
+    match drop_landed_remote(git, cwd, branch, None).await {
         Err(fault) if !is_cancel(&fault) => Ok(Some(RemoteCopy {
             outcome: RemoteOutcome::Failed,
             message: format!(

@@ -303,6 +303,14 @@ struct WorktreeParams {
     worktree: branches::WorktreeRef,
 }
 
+#[derive(Deserialize)]
+struct PublishedWork {
+    git: Runner,
+    cwd: String,
+    branch: String,
+    accepted: String,
+}
+
 /// `diffChars`: the diff's budget in UTF-16 units; 0 reads no diff.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1013,6 +1021,18 @@ pub fn register(registry: &mut Registry) {
             let WorktreeParams { git, worktree } = call.params()?;
             let git = Git::new(git, call.scope);
             Reply::json(&branches::landing_facts(&git, &worktree).await?)
+        })
+    });
+    registry.add("git.dropPublishedWork", |call| {
+        Box::pin(async move {
+            let PublishedWork {
+                git,
+                cwd,
+                branch,
+                accepted,
+            } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&branches::drop_landed_remote(&git, &cwd, &branch, Some(&accepted)).await?)
         })
     });
     registry.add("git.mergeBranch", |call| {
