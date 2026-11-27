@@ -1,78 +1,136 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useT } from "../../../lib/i18n";
-import { Banner, Button, SkeletonRows } from "../../common";
-import { CustomProviderForm } from "./CustomProviderForm";
-import type { ProviderCatalog } from "./ProviderList";
+import { useFocusedTabDevice } from "../../../stores/remote";
+import { Banner, Button, Input, Modal } from "../../common";
 import { useProviderLogin } from "./ProviderLogin";
 
-/** The picker and Add account both enter here. Only the subscription button starts stock's Claude login. */
-export function useProviderConnection(catalog: ProviderCatalog, onConnected: (id: string) => Promise<void>) {
+export const CLAUDE_API_URL = "https://api.anthropic.com";
+
+export function useProviderConnection(
+	onConnected: (id: string) => Promise<void>,
+	onKeyConnected: (id: string) => void | Promise<void> = onConnected,
+) {
 	const t = useT();
+	const device = useFocusedTabDevice();
 	const login = useProviderLogin(onConnected);
 	const [step, setStep] = useState<"choose" | "key" | null>(null);
-	const close = () => setStep(null);
+	const [error, setError] = useState("");
+	const [saving, setSaving] = useState(false);
+	const input = useRef<HTMLInputElement>(null);
+	const close = () => {
+		if (!saving) setStep(null);
+	};
 	const connect = async (id: string) => {
 		if (id !== "anthropic") return login.start(id);
-		if (!login.busy) setStep("choose");
+		if (!login.busy) {
+			setError("");
+			setStep("choose");
+		}
 		return false;
 	};
-	let claudePanel = null;
-	if (step === "choose") {
-		claudePanel = (
-			<div className="flex flex-col gap-3" data-claude-connect>
-				<h3 className="text-sc-lg font-semibold text-(--sc-text)">{t("providers.claude.choose")}</h3>
-				<div className="grid gap-2 sm:grid-cols-2">
-					<Button
-						autoFocus
-						onClick={() => {
-							close();
-							void login.start("anthropic");
-						}}
-						variant="secondary"
-					>
-						{t("providers.featured.subscription")}
-					</Button>
-					<Button onClick={() => setStep("key")} variant="secondary">
-						{t("providers.featured.apiKey")}
-					</Button>
-				</div>
-				<Button className="self-end" onClick={close} variant="ghost">
-					{t("common.cancel")}
-				</Button>
-			</div>
-		);
-	} else if (step === "key") {
-		claudePanel =
-			catalog.options && !catalog.configError ? (
-				<CustomProviderForm
-					claudeKey
-					editing={null}
-					existing={catalog.customConfigs}
-					onCancel={close}
-					onSaved={id => {
-						close();
-						void onConnected(id);
-					}}
-					options={catalog.options}
-				/>
-			) : (
-				<div className="flex flex-col gap-2">
-					{catalog.configError ? (
-						<Banner
-							actions={<Button onClick={() => void catalog.load(true)}>{t("common.retry")}</Button>}
-							variant="warning"
+	const save = async () => {
+		const apiKey = input.current?.value.trim();
+		if (saving) return;
+		if (!apiKey) {
+			setError(t("providers.claude.keyRequired"));
+			return;
+		}
+		setSaving(true);
+		setError("");
+		let id = "anthropic-api-key";
+		try {
+			const catalog = await window.omp.models.listProviders(device).catch(() => null);
+			const models = catalog?.options.anthropicModels;
+			if (!catalog || !models?.length) {
+				setError(t("providers.claude.noCatalog"));
+				return;
+			}
+			for (let n = 2; catalog.providers.some(provider => provider.id === id); n++) id = `anthropic-api-key-${n}`;
+			await window.omp.models.upsertProvider(
+				{
+					id,
+					onlyIfAbsent: true,
+					baseUrl: CLAUDE_API_URL,
+					api: "anthropic-messages",
+					auth: "apiKey",
+					apiKey,
+					models,
+				},
+				device,
+			);
+		} catch {
+			setError(t("providerCfg.toast.saveFailed"));
+			return;
+		} finally {
+			setSaving(false);
+		}
+		setStep(null);
+		await onKeyConnected(id);
+	};
+	const claudePanel = step && (
+		<Modal
+			description={step === "key" ? t("providers.claude.keyHint") : undefined}
+			onClose={close}
+			open
+			size="sm"
+			title={t(step === "key" ? "providers.claude.keyTitle" : "providers.claude.choose")}
+		>
+			{step === "choose" ? (
+				<div className="flex flex-col gap-3" data-claude-connect>
+					<div className="grid gap-2 sm:grid-cols-2">
+						<Button
+							onClick={() => {
+								close();
+								void login.start("anthropic");
+							}}
+							variant="secondary"
 						>
-							{t("setup.configReadFailed")}
-						</Banner>
-					) : (
-						<SkeletonRows label={t("modelPicker.loading")} widths={[60, 44]} />
-					)}
+							{t("providers.featured.subscription")}
+						</Button>
+						<Button onClick={() => setStep("key")} variant="secondary">
+							{t("providers.featured.apiKey")}
+						</Button>
+					</div>
 					<Button className="self-end" onClick={close} variant="ghost">
 						{t("common.cancel")}
 					</Button>
 				</div>
-			);
-	}
+			) : (
+				<form
+					className="flex flex-col gap-4"
+					data-claude-key
+					onSubmit={event => {
+						event.preventDefault();
+						void save();
+					}}
+				>
+					<Input
+						autoComplete="off"
+						autoFocus
+						disabled={saving}
+						label={t("providerCfg.form.apiKey")}
+						ref={input}
+						required
+						spellCheck={false}
+						type="password"
+					/>
+					{error && (
+						<Banner live variant="danger">
+							{error}
+						</Banner>
+					)}
+					<div className="flex justify-end gap-2">
+						<Button disabled={saving} onClick={close} type="button" variant="secondary">
+							{t("common.cancel")}
+						</Button>
+						<Button loading={saving} type="submit" variant="primary">
+							{t("providers.featured.connect")}
+						</Button>
+					</div>
+				</form>
+			)}
+		</Modal>
+	);
 	return {
 		login: { ...login, start: connect },
 		claudePanel,

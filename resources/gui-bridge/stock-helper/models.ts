@@ -1,6 +1,17 @@
 /** Main-side worker: stock models.yml schemas/catalog need Bun, not Electron's Node runtime. */
 import { ompModuleFile } from "../omp-package";
 
+interface CatalogModel {
+	api: string;
+	id: string;
+	name?: string;
+	reasoning?: boolean;
+	input?: string[];
+	cost?: Record<string, number>;
+	contextWindow?: number;
+	maxTokens?: number;
+}
+
 interface Schema {
 	assert(value: unknown): unknown;
 	get(...keys: Array<string | number>): Schema;
@@ -45,6 +56,12 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 					...auth.authProviders().map((entry: { id: string }) => entry.id),
 				]),
 			],
+			anthropicModels: (providers.seedModels?.("anthropic") ?? []).flatMap(
+				({ api, id, name, reasoning, input, cost, contextWindow, maxTokens }: CatalogModel) =>
+					api === "anthropic-messages" && id
+						? [{ id, name, reasoning, input, cost, contextWindow, maxTokens }]
+						: [],
+			),
 			apis: options("api"),
 			auth: options("auth"),
 			discovery: options("discovery", "type"),

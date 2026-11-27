@@ -16,6 +16,8 @@ const MASK_PREVIEW_LEN: usize = 4;
 #[serde(rename_all = "camelCase")]
 pub(in crate::models) struct Roster {
     pub builtin_providers: Vec<String>,
+    #[serde(default)]
+    pub anthropic_models: Vec<Value>,
     pub apis: Vec<String>,
     pub auth: Vec<String>,
     pub discovery: Vec<String>,
