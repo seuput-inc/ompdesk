@@ -10,6 +10,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "@playwright/test";
+import { parseAgentMessage } from "../src/shared/agent-control";
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, type RemoteInstance } from "./remote-harness";
 
@@ -160,6 +161,32 @@ test("a paired device reopens an ordinary host's saved child under its exact par
 		expect((await hostTabs()).find(tab => tab.tabId === child)?.status).toBe("running");
 		await expect(openerRow).toContainText("Renamed since", { timeout: 30_000 });
 		await expect(childRow).toHaveAttribute("data-child-status", "running");
+
+		await test.step("the person stops and closes the saved child on the host", async () => {
+			await expect.poll(async () => (await hostTabs()).find(tab => tab.active)?.sessionPath).toBe(childSession);
+			await b.getByRole("button", { name: "Stop", exact: true }).click();
+			await expect.poll(async () => (await hostTabs()).find(tab => tab.tabId === child)?.status).toBe("ready");
+			await b.keyboard.press("ControlOrMeta+w");
+			await expect.poll(async () => (await hostTabs()).some(tab => tab.sessionPath === childSession)).toBe(false);
+
+			const rows = await b.evaluate(() => window.omp.sessions.list("global"));
+			const parent = rows.find(row => row.path === openerSession);
+			const closed = rows.find(row => row.path === childSession);
+			if (!parent || !closed) throw new Error("Closing the child lost a saved session");
+			expect(parseAgentMessage(closed.firstMessage)?.session).toBe(parent.id);
+			await expect
+				.poll(async () => {
+					const rows = await a.evaluate(device => window.omp.sessions.list("global", device), deviceId);
+					const stored = rows.find(row => row.path === childSession);
+					return stored && !stored.heldOnHost;
+				})
+				.toBe(true);
+			await expect(openerRow.locator("[data-family-running]")).toHaveCount(0);
+			await expect(section.locator(`[data-session-path=${cssString(childSession)}]`)).toHaveCount(0);
+			await expect(section.locator(`[data-device-session=${cssString(childSession)}]`)).toHaveCount(0);
+			await expect(b.locator(`[data-session-path=${cssString(childSession)}]`)).toHaveCount(0);
+			await expect(namesake).toContainText(title);
+		});
 	} finally {
 		for (const instance of [client, host]) if (instance) await exitApp(instance.app);
 		for (const instance of [client, host]) expect(instance?.errors ?? []).toEqual([]);
