@@ -69,6 +69,13 @@ describe("a Claude API failure before automatic recovery", () => {
 			isTerminal: false,
 			messages: [{ role: "assistant", api: "anthropic-messages", stopReason: "error", content: "partial" }],
 		});
+		trackRunEvent(tab, { type: "agent_start" });
+		trackRunEvent(tab, {
+			type: "message_end",
+			message: { role: "assistant", stopReason: "error", errorMessage: "socket hang up" },
+		});
+		trackRunEvent(tab, { ...START, attempt: 2, errorMessage: "socket hang up" });
+		expect(tab.retryBlocked).toBe(true);
 		trackRunEvent(tab, { type: "auto_retry_end", success: false, attempt: 3, finalError: "socket hang up" });
 		expect(tab.lastRun).toEqual({ stopReason: "error", errorMessage: "socket hang up", retryBlocked: true });
 	});

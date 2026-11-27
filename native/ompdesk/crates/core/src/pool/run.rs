@@ -362,7 +362,9 @@ impl Tracking {
                 self.observed = ObservedTurn::Unfinished;
                 self.stopped = false;
                 self.retry = None;
-                self.retry_blocked = false;
+                if self.run.saga.is_none() {
+                    self.retry_blocked = false;
+                }
             }
             Some("message_end") if event["message"]["retryBlocked"] == true => {
                 self.retry_blocked = true;

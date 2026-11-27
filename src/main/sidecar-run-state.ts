@@ -201,7 +201,7 @@ export function trackRunEvent(tab: RunTracking, event: AgentSessionEvent): boole
 		tab.lastRun = undefined;
 		tab.stopped = false;
 		tab.retry = undefined;
-		delete tab.retryBlocked;
+		if (!tab.run.saga) delete tab.retryBlocked;
 	} else if (event.type === "message_end" && event.message.role === "assistant" && claudeRetryBlocked(event.message)) {
 		tab.retryBlocked = true;
 	} else if (event.type === "auto_retry_start") {
