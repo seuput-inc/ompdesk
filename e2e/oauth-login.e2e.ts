@@ -9,7 +9,9 @@
  * redirect back to the fake's callback, the login completes, and the leftover
  * paste request is answered for stock and never shows as a chat card. Cancel
  * ends the login through the callback's denial instead of answering the paste
- * (which would only re-ask). Captures in light/dark × en/ko.
+ * (which would only re-ask). The two Claude account orders use the same fake
+ * callback and the real models.yml writer in a fresh profile. Provider picker
+ * and ProvidersSection component tests cover the controls in isolation.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -18,7 +20,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { type ElectronApplication, _electron as electron } from "playwright";
 import { en } from "../src/renderer/locales/en";
 import { ko } from "../src/renderer/locales/ko";
-import { exitApp, fixtureOmp, pressShortcutUntilVisible, readRecords, variants } from "./harness";
+import { appLaunchOptions, exitApp, pressShortcutUntilVisible, readRecords, variants } from "./harness";
 
 test.describe.configure({ mode: "parallel" });
 
@@ -36,9 +38,10 @@ interface Launched {
 	record: string;
 	errors: string[];
 	root: string;
+	reopen: () => Promise<ElectronApplication>;
 }
 
-async function launch(language: Language, theme: "light" | "dark"): Promise<Launched> {
+async function launch(language: Language, theme: "light" | "dark", firstRun = false): Promise<Launched> {
 	const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), `omp-oauth-${language}-${theme}-`)));
 	const project = path.join(root, "project");
 	const desktop = path.join(root, "desktop");
@@ -46,45 +49,45 @@ async function launch(language: Language, theme: "light" | "dark"): Promise<Laun
 	await Promise.all([project, desktop, agent].map(dir => fs.mkdir(dir)));
 	await fs.writeFile(
 		path.join(desktop, "prefs.json"),
-		JSON.stringify({ language, themeName: theme, firstRunComplete: true }),
+		JSON.stringify({ language, themeName: theme, firstRunComplete: !firstRun }),
 	);
 	const record = path.join(root, "record.jsonl");
-	const env: Record<string, string | undefined> = {
-		...process.env,
-		PI_CODING_AGENT_DIR: agent,
-		PI_CONFIG_DIR: path.relative(os.homedir(), root),
-		OMP_PROFILE: "",
-		PI_PROFILE: "",
-		OMP_GUI_OMP: await fixtureOmp(root),
-		OMP_GUI_REMOTE_PORT: "0",
-		OMP_GUI_TEST_LOGIN: "1",
-		OMP_GUI_TEST_RECORD: record,
-	};
-	Reflect.deleteProperty(env, "ELECTRON_RUN_AS_NODE");
-	const app = await electron.launch({
-		args: [
-			path.resolve(process.env.OMP_GUI_E2E_OUT ?? "out", "main/index.js"),
-			project,
-			`--user-data-dir=${desktop}`,
-		],
-		env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+	const options = await appLaunchOptions({
+		project,
+		desktop,
+		agent,
+		profile: root,
+		env: {
+			OMP_GUI_REMOTE_PORT: "0",
+			OMP_GUI_TEST_LOGIN: "1",
+			OMP_GUI_TEST_RECORD: record,
+			...(firstRun ? { OMP_GUI_TEST_SIGNED_OUT: "1", OMP_GUI_TEST_MODELS: "0" } : {}),
+		},
 	});
+	for (const key of Object.keys(options.env)) {
+		if (/_API_KEY$|_TOKEN$|^ANTHROPIC_/.test(key)) delete options.env[key];
+	}
+	const reopen = async () => {
+		const app = await electron.launch(options);
+		await app.evaluate(({ BrowserWindow, shell }) => {
+			BrowserWindow.getAllWindows()[0]?.setContentSize(1180, 860);
+			const opened: string[] = [];
+			Object.assign(globalThis, { openedUrls: opened });
+			shell.openExternal = async (url: string) => {
+				opened.push(url);
+			};
+		});
+		return app;
+	};
+	const app = await reopen();
 	const page = await app.firstWindow();
 	const errors: string[] = [];
 	page.on("pageerror", error => errors.push(error.message));
-	await app.evaluate(({ BrowserWindow, shell }) => {
-		BrowserWindow.getAllWindows()[0]?.setContentSize(1180, 860);
-		const opened: string[] = [];
-		Object.assign(globalThis, { openedUrls: opened });
-		shell.openExternal = async (url: string) => {
-			opened.push(url);
-		};
-	});
 	await page.waitForFunction(() => window.omp?.rpc != null);
 	await expect
 		.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 90_000 })
 		.toBe("ready");
-	return { app, page, record, errors, root };
+	return { app, page, record, errors, root, reopen };
 }
 
 /** Settings › Models with the Anthropic row in view; returns the row. */
@@ -102,20 +105,113 @@ async function openAnthropicRow(page: Page, language: Language) {
 async function startSignIn(page: Page, language: Language) {
 	const anthropic = await openAnthropicRow(page, language);
 	await page.locator("[data-settings-page]").locator('button[data-provider-connect="anthropic"]').click();
+	await page.getByRole("button", { name: tr(language, "providers.featured.subscription"), exact: true }).click();
 	await expect(anthropic.locator("[data-login-progress]")).toHaveText(tr(language, "providerList.login.waiting"));
 	return anthropic;
 }
 
 /** The browser half: open the launch page the panel opened and follow it back to omp's callback. */
 async function finishInBrowser(launchUrl: string, query: Record<string, string>): Promise<number> {
+	expect(new URL(launchUrl).hostname).toBe("127.0.0.1");
 	const launch = await fetch(launchUrl, { redirect: "manual" });
 	expect(launch.status).toBe(302);
 	const authorize = new URL(launch.headers.get("location") ?? "");
 	expect(authorize.host).toBe("claude.ai");
 	const callback = new URL(authorize.searchParams.get("redirect_uri") ?? "");
+	expect(callback.origin).toBe(new URL(launchUrl).origin);
 	callback.searchParams.set("state", authorize.searchParams.get("state") ?? "");
 	for (const [key, value] of Object.entries(query)) callback.searchParams.set(key, value);
 	return (await fetch(callback)).status;
+}
+
+for (const first of ["subscription", "key"] as const) {
+	test(`Claude accounts survive relaunch: ${first} first`, async () => {
+		test.setTimeout(120_000);
+		const { app, page, record, root, reopen } = await launch("en", "light", true);
+		let running: ElectronApplication | null = app;
+		const settings = page.locator("[data-settings-page]");
+		const firstRun = page.locator('[data-first-run-step="connect"]');
+		const chooser = page.locator("[data-claude-connect]");
+		const keyId = "anthropic-api-key";
+		const dummy = "offline-fixture-not-a-credential";
+		const loginIds = async () =>
+			(await readRecords(record)).filter(row => row.type === "login").map(row => row.providerId);
+		const opened = () => app.evaluate(() => (Reflect.get(globalThis, "openedUrls") as string[]).length);
+		const saved = (view: Page) =>
+			view.evaluate(async () =>
+				(await window.omp.models.listProviders()).providers.map(({ id, api, baseUrl, hasApiKey }) => ({
+					id,
+					api,
+					baseUrl,
+					hasApiKey,
+				})),
+			);
+		const expected = [
+			{ id: keyId, api: "anthropic-messages", baseUrl: "https://api.anthropic.com", hasApiKey: true },
+		];
+		try {
+			let subscriptions = 0;
+			for (const [index, method] of [first, first === "key" ? "subscription" : "key"].entries()) {
+				if (index === 1) {
+					await expect(firstRun).toHaveCount(0);
+					await pressShortcutUntilVisible(page, "ControlOrMeta+Comma", settings);
+					await settings.locator('[data-settings-section="models"]').click();
+				}
+				const enter =
+					index === 0
+						? firstRun.locator('[data-provider-connect="anthropic"]')
+						: settings.locator(`[data-provider-add="${first === "key" ? keyId : "anthropic"}"]`);
+				await enter.click();
+				const subscription = chooser.getByRole("button", { name: tr("en", "providers.featured.subscription") });
+				const key = chooser.getByRole("button", { name: tr("en", "providers.featured.apiKey") });
+				await expect(subscription).toBeVisible();
+				await expect(key).toBeVisible();
+				await chooser.getByRole("button", { name: "Cancel", exact: true }).click();
+				await expect(enter).toBeVisible();
+				expect(await loginIds()).toHaveLength(subscriptions);
+				expect(await opened()).toBe(subscriptions);
+				await enter.click();
+				if (method === "subscription") {
+					await subscription.click();
+					subscriptions++;
+					await expect.poll(opened).toBe(subscriptions);
+					const url = await app.evaluate(() => (Reflect.get(globalThis, "openedUrls") as string[])[0]);
+					expect(await finishInBrowser(url ?? "", { code: "abc" })).toBe(200);
+					await expect(page.locator("[data-login-progress]")).toHaveCount(0);
+				} else {
+					await key.click();
+					const form = page.getByRole("form").filter({ has: page.getByLabel("API key", { exact: true }) });
+					const input = form.getByLabel("API key", { exact: true });
+					await expect(input).toHaveAttribute("type", "password");
+					await input.fill(dummy);
+					expect(await saved(page)).toEqual([]);
+					await form.getByRole("button", { name: tr("en", "providerCfg.form.save"), exact: true }).click();
+					await expect.poll(() => saved(page)).toEqual(expected);
+					await expect(form).toHaveCount(0);
+					expect(await loginIds()).toHaveLength(subscriptions);
+					expect(await opened()).toBe(subscriptions);
+				}
+			}
+			await expect(settings.locator('[data-provider-row="anthropic"]')).toBeVisible();
+			await expect(settings.locator(`[data-provider-row="${keyId}"]`)).toBeVisible();
+			await exitApp(app);
+			running = null;
+			running = await reopen();
+			const again = await running.firstWindow();
+			const reopenedSettings = again.locator("[data-settings-page]");
+			await pressShortcutUntilVisible(again, "ControlOrMeta+Comma", reopenedSettings);
+			await reopenedSettings.locator('[data-settings-section="models"]').click();
+			await expect(reopenedSettings.locator('[data-provider-row="anthropic"]')).toBeVisible();
+			await expect(reopenedSettings.locator(`[data-provider-row="${keyId}"]`)).toBeVisible();
+			expect(await saved(again)).toEqual(expected);
+			expect(await loginIds()).toEqual(["anthropic"]);
+			expect((await fs.readFile(path.join(root, "agent", "models.yml"), "utf8")).includes(dummy)).toBe(true);
+			expect((await fs.readFile(record, "utf8")).includes(dummy)).toBe(false);
+		} finally {
+			if (running) await exitApp(running);
+			await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+		}
+	});
 }
 
 for (const [language, theme] of variants([

@@ -110,7 +110,7 @@ describe("ProviderPicker featured group", () => {
 		const names = Array.from(document.querySelectorAll("[data-featured-provider] > button:first-child"));
 		expect(names.map(item => item.textContent)).toEqual([
 			`ChatGPT (Plus/Pro)${translate("providers.featured.subscription")}${translate("providers.featured.signIn")}`,
-			`Claude (Pro/Max)${translate("providers.featured.subscription")}${translate("providers.featured.signIn")}`,
+			expect.stringContaining("Claude (Pro/Max)"),
 			`OpenRouter${translate("providers.featured.apiKey")}${translate("providers.featured.connect")}`,
 			`Grok (SuperGrok or X Premium+)${translate("providers.featured.subscription")}${translate("providers.featured.signIn")}`,
 		]);
@@ -134,7 +134,7 @@ describe("ProviderPicker featured group", () => {
 		expect(levels()).toEqual(["H2", "H2"]);
 	});
 
-	it("starts stock's own login per action: subscription OAuth first, Grok's API key second", async () => {
+	it("requests the matching provider for each featured action, including Grok's separate key", async () => {
 		const login = fakeLogin();
 		await mount(stock, login);
 		const click = (selector: string) =>
@@ -151,8 +151,6 @@ describe("ProviderPicker featured group", () => {
 			"xai-oauth",
 			"xai",
 		]);
-		// Only Grok has both logins, so only Grok has a second action.
-		expect(document.querySelectorAll("[data-featured-provider] button").length).toBe(5);
 		// The API-key action lives inside Grok's own card, not beside it.
 		const grok = document.querySelector('[data-featured-provider="xai-oauth"]');
 		expect(grok?.querySelectorAll("button").length).toBe(2);
@@ -207,23 +205,24 @@ describe("ProviderPicker while omp starts", () => {
 		roots.push(root);
 	}
 
-	const claudeCard = () => document.querySelector<HTMLButtonElement>('[data-featured-provider="anthropic"] button');
+	const chatgptCard = () =>
+		document.querySelector<HTMLButtonElement>('[data-featured-provider="openai-codex"] button');
 
 	it("lets a card start a sign-in while the session is starting, held until omp is ready", async () => {
 		const login = fakeLogin();
 		await mountLive("starting", login);
-		expect(claudeCard()?.disabled).toBe(false);
-		expect(claudeCard()?.getAttribute("title")).toBeNull();
-		await act(async () => claudeCard()?.click());
-		expect(login.start).toHaveBeenCalledWith("anthropic");
+		expect(chatgptCard()?.disabled).toBe(false);
+		expect(chatgptCard()?.getAttribute("title")).toBeNull();
+		await act(async () => chatgptCard()?.click());
+		expect(login.start).toHaveBeenCalledWith("openai-codex");
 	});
 
 	it("keeps the cards disabled, saying why, when the session failed", async () => {
 		const login = fakeLogin();
 		await mountLive("error", login);
-		expect(claudeCard()?.disabled).toBe(true);
+		expect(chatgptCard()?.disabled).toBe(true);
 		expect(document.body.textContent).toContain(translate("providers.notConnected"));
-		await act(async () => claudeCard()?.click());
+		await act(async () => chatgptCard()?.click());
 		expect(login.start).not.toHaveBeenCalled();
 	});
 });

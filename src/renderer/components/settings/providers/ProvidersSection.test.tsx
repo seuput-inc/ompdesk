@@ -97,6 +97,7 @@ const getUsage = vi.fn(
 const listProviders = vi.fn(
 	async (): Promise<CustomProvidersConfig> => ({ providers: [], options: fixtureProviderOptions }),
 );
+const upsertProvider = vi.fn<typeof globalThis.window.omp.models.upsertProvider>().mockResolvedValue(undefined);
 const respondExtensionUi = vi.fn();
 const openExternal = vi.fn(async () => {});
 
@@ -117,7 +118,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
 			getProviderAccounts,
 			getUsage,
 		}),
-		models: { listProviders },
+		models: { listProviders, upsertProvider },
 		ui: { respondExtensionUi },
 		system: { openExternal },
 		localEngines: { get: localEnginesGet, set: localEnginesSet },
@@ -135,6 +136,11 @@ function button(name: string): HTMLButtonElement | undefined {
 	return Array.from(document.body.querySelectorAll("button")).find(
 		candidate => (candidate.textContent ?? "").trim() === name || candidate.getAttribute("aria-label") === name,
 	) as HTMLButtonElement | undefined;
+}
+
+async function startClaudeSubscription(): Promise<void> {
+	await act(async () => button(translate("providers.picker.connect", { provider: "Claude" }))?.click());
+	await act(async () => button(translate("providers.featured.subscription"))?.click());
 }
 
 /** Opens one row's overflow menu (the row is named "{provider} {account}") and picks an action. */
@@ -248,6 +254,7 @@ afterEach(async () => {
 	getProviders.mockResolvedValue(providersResponse(snapshot([row("anthropic")])));
 	listProviders.mockReset();
 	listProviders.mockResolvedValue({ providers: [], options: fixtureProviderOptions });
+	upsertProvider.mockClear();
 	logout.mockClear();
 	disconnectProvider.mockClear();
 	getProviderAccounts.mockReset();
@@ -663,7 +670,7 @@ describe("ProvidersSection", () => {
 		);
 		useSessionStore.setState({ status: "ready" });
 		await mount(<ProvidersSection />);
-		await act(async () => button(translate("providers.picker.connect", { provider: "Claude" }))?.click());
+		await startClaudeSubscription();
 		const status = () => document.querySelector("[data-login-progress]")?.textContent ?? "";
 		expect(status()).toBe(translate("providerList.login.starting"));
 
@@ -829,7 +836,7 @@ describe("ProvidersSection", () => {
 					{extra}
 				</>,
 			);
-			await act(async () => button(translate("providers.picker.connect", { provider: "Claude" }))?.click());
+			await startClaudeSubscription();
 			await beforeRequests?.();
 			await act(async () => {
 				useExtensionUiStore.getState().pushRequest(openUrl);
@@ -1074,7 +1081,7 @@ describe("ProvidersSection", () => {
 			await act(async () =>
 				pendingLogin.resolve({ type: "response", command: "login", success: false, error: "Cancelled" }),
 			);
-			await act(async () => connect()?.click());
+			await startClaudeSubscription();
 			expect(login).toHaveBeenCalledTimes(2);
 		});
 
@@ -1105,7 +1112,7 @@ describe("ProvidersSection", () => {
 			// A new sign-in starts clean: it waits for the browser again.
 			pendingLogin = Promise.withResolvers<RpcResponse>();
 			login.mockReturnValueOnce(pendingLogin.promise);
-			await act(async () => button(translate("providers.picker.connect", { provider: "Claude" }))?.click());
+			await startClaudeSubscription();
 			await act(async () => useExtensionUiStore.getState().pushRequest(openUrl));
 			expect(openExternal.mock.calls).toEqual([[openUrl.launchUrl], [openUrl.launchUrl]]);
 			expect(progress()).toBe(translate("providerList.login.waiting"));
@@ -1434,10 +1441,38 @@ describe("ProviderAccounts", () => {
 		expect(logout).toHaveBeenCalledWith("anthropic", 7);
 	});
 
-	it("adds another account through the same sign-in flow", async () => {
+	it("adds a Claude subscription only after the account owner chooses it", async () => {
 		await mountWithAccounts();
 		await act(async () => button(translate("providers.accounts.addTo", { provider: "Anthropic" }))?.click());
-		expect(login).toHaveBeenCalledWith("anthropic");
+		expect(login).not.toHaveBeenCalled();
+		await act(async () => button(translate("providers.featured.subscription"))?.click());
+		expect(login).toHaveBeenCalledExactlyOnceWith("anthropic");
+	});
+
+	it("saves the official key under a separate provider only on Save", async () => {
+		await mountWithAccounts();
+		await act(async () => button(translate("providers.accounts.addTo", { provider: "Anthropic" }))?.click());
+		await act(async () => button(translate("providers.featured.apiKey"))?.click());
+		await typeInto(document.querySelector('input[type="password"]'), "dummy-component-test-key");
+		expect(upsertProvider).not.toHaveBeenCalled();
+		const save = button(translate("providerCfg.form.save"));
+		expect(save?.disabled).toBe(false);
+		await act(async () => {
+			if (save?.type === "submit") {
+				save.closest("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+			} else {
+				save?.click();
+			}
+		});
+		expect(upsertProvider).toHaveBeenCalledTimes(1);
+		expect(upsertProvider.mock.calls[0]?.[0]).toMatchObject({
+			id: "anthropic-api-key",
+			baseUrl: "https://api.anthropic.com",
+			api: "anthropic-messages",
+			apiKey: "dummy-component-test-key",
+		});
+		expect(login).not.toHaveBeenCalled();
+		expect(openExternal).not.toHaveBeenCalled();
 	});
 
 	it("says how old each account's quota is and when each window resets", async () => {

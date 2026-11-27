@@ -486,16 +486,33 @@ describe("FirstRunSetup connect step", () => {
 		await mount(<FirstRunSetup />);
 	}
 
-	/** Click Claude's card; omp's catalog says it is connected by the time `login` returns. */
 	async function signInToClaude(connected: Partial<ProvidersResult>): Promise<void> {
-		catalog = { ...catalog, ...connected };
 		await act(async () => document.querySelector<HTMLButtonElement>('[data-provider-connect="anthropic"]')?.click());
+		catalog = { ...catalog, ...connected };
+		await act(async () => button(translate("providers.featured.subscription"))?.click());
 		await settle();
 	}
+
+	it("offers both Claude methods and returns to the provider step on Cancel without signing in", async () => {
+		await openConnectStep();
+		await act(async () => document.querySelector<HTMLButtonElement>('[data-provider-connect="anthropic"]')?.click());
+		expect(button(translate("providers.featured.subscription"))?.disabled).toBe(false);
+		expect(button(translate("providers.featured.apiKey"))?.disabled).toBe(false);
+		expect(rpc.login).not.toHaveBeenCalled();
+		expect(document.querySelector('input[type="password"]')).toBeNull();
+
+		await act(async () => button(translate("common.cancel"))?.click());
+		expect(button(translate("providers.featured.subscription"))).toBeUndefined();
+		expect(document.querySelector('[data-provider-connect="anthropic"]')).not.toBeNull();
+		expect(useFirstRunStore.getState().phase).toBe("connect");
+		expect(rpc.login).not.toHaveBeenCalled();
+		expect(rpc.setModelRole).not.toHaveBeenCalled();
+	});
 
 	it("ends the setup on its own after a sign-in: the default model is saved and the toast names it", async () => {
 		await openConnectStep();
 		await signInToClaude({ providers: [claudeConnected], models: [claude] });
+		expect(rpc.login).toHaveBeenCalledExactlyOnceWith("anthropic");
 
 		expect(document.querySelector("[data-first-run-step]")).toBeNull();
 		expect(useFirstRunStore.getState().phase).toBe("idle");

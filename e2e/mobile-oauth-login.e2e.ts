@@ -42,6 +42,8 @@ test("a phone signs in on its host through the provider URL and paste, including
 		await phone.getByRole("button", { name: "Add a provider" }).click();
 		const connect = phone.locator('button[data-provider-connect="anthropic"]');
 		await connect.click();
+		const subscription = phone.getByRole("button", { name: en["providers.featured.subscription"], exact: true });
+		await subscription.click();
 		const panel = phone.locator("[data-login-panel]");
 		const paste = panel.getByLabel("Authorization code or redirect address");
 		await expect(paste).toBeVisible();
@@ -54,6 +56,7 @@ test("a phone signs in on its host through the provider URL and paste, including
 		await panel.getByRole("button", { name: "Cancel", exact: true }).click();
 		await expect(connect).toBeEnabled();
 		await connect.click();
+		await subscription.click();
 		await expect(paste).toBeVisible();
 		await phone.reload();
 		await expect(phone.locator("[data-composer-input]").first()).toBeVisible({ timeout: 60_000 });

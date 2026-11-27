@@ -77,6 +77,13 @@ describe.skipIf(!available)("models.yml through installed stock", () => {
 		});
 	});
 
+	test("a stale add cannot replace another window's saved key", async () => {
+		const input = { ...minimal, onlyIfAbsent: true as const, apiKey: "dummy-first" };
+		await upsertModelsProvider(input);
+		await expect(upsertModelsProvider({ ...input, apiKey: "dummy-second" })).rejects.toThrow(/changed_on_disk/);
+		expect(saved().providers[input.id].apiKey === input.apiKey).toBe(true);
+	});
+
 	test("accepts the entry the local engine detector writes and lists it as discovery-only", async () => {
 		// What `models/detect.rs` writes for an engine that answers, with its only-if-absent upsert.
 		const engine = {

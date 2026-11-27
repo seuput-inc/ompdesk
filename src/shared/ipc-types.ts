@@ -1293,6 +1293,8 @@ export interface CustomProviderModelInput {
 
 export interface CustomProviderInput {
 	id: string;
+	/** Refuse to replace an entry another window saved after this form opened. Not part of models.yml. */
+	onlyIfAbsent?: true;
 	api: CustomProviderApi;
 	baseUrl: string;
 	apiKey?: string;
