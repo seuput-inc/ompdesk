@@ -64,6 +64,7 @@ import { tabSignalPresentation } from "../../../lib/tab-signal";
 import { pickWorkspaceDirectory } from "../../../lib/workspace-dirs";
 import { useAgentReviewStore } from "../../../stores/agent-review";
 import { useBotsStore } from "../../../stores/bots";
+import { useBotsView } from "../../../stores/bots-view";
 import { type BranchRow, branchPrOf, branchPrTone, useBranchPrs, watchBranchPrs } from "../../../stores/branch-prs";
 import { summariesOf, useHostedSessionsStore, useSummaryMap } from "../../../stores/hosted-sessions";
 import { pickRemoteDirectory, useTailscaleHint } from "../../../stores/remote";
@@ -82,6 +83,7 @@ import { type SessionTab, tabChipLabel, useTabsStore } from "../../../stores/tab
 import { toast, toastError } from "../../../stores/toast";
 import { useUiStore } from "../../../stores/ui";
 import { webPwa } from "../../../web/pwa";
+import { botMatches, remoteBotTree, withoutBotWorkers } from "../../bots/bot-view";
 import {
 	anchorFromEvent,
 	Button,
@@ -586,6 +588,8 @@ function DeviceSessions({
 	// A device cannot ask the host's git or records. A row made from a tab before the host lists its session keeps the
 	// time this section first saw the tab, as on the host.
 	const liveSince = useRef(new Map<string, string>());
+	const allBots = useBotsStore(s => s.state.bots);
+	const hostBots = useMemo(() => allBots.filter(bot => bot.device === host.deviceId), [allBots, host.deviceId]);
 	const tree = useMemo(() => {
 		const gone = new Set(projectList.gone ?? []);
 		const since = liveSince.current;
@@ -609,6 +613,7 @@ function DeviceSessions({
 				closed: new Set(
 					sessions.flatMap(session => (typeof session.openedBySession === "string" ? [session.path] : [])),
 				),
+				botWorkers: new Set(hostBots.flatMap(bot => bot.workers?.map(worker => worker.session) ?? [])),
 				projects: projectList.projects,
 				removed: projectList.removed,
 				folder: cwd => {
@@ -660,6 +665,7 @@ function DeviceSessions({
 		);
 	}, [
 		sessions,
+		hostBots,
 		deviceTabs,
 		remoteTabs,
 		hostSummaries,
@@ -705,12 +711,23 @@ function DeviceSessions({
 	const botsAvailable = useBotsAvailable();
 	const botsNavHidden = useSidebarFolds(s => s.navHidden.bots === true);
 	const botsShown = botsAvailable && !botsNavHidden;
-	const hostBots = useBotsStore(s => s.state.bots);
+	const hidePausedBots = useBotsView(s => s.hidePaused);
 	const groups = useMemo(() => {
 		if (!botsShown) return folderGroups;
-		const folders = new Set(hostBots.filter(bot => bot.device === host.deviceId).map(bot => bot.folder));
-		return folders.size === 0 ? folderGroups : folderGroups.filter(group => !folders.has(group.cwd));
-	}, [botsShown, folderGroups, hostBots, host.deviceId]);
+		const nested = new Set<string>();
+		const folders = new Set<string>();
+		for (const bot of hostBots) {
+			if ((hidePausedBots && bot.paused && !query) || !botMatches(bot, query)) continue;
+			folders.add(bot.folder);
+			if (!bot.workers?.length || !bot.sessions.length) continue;
+			for (const workers of remoteBotTree(bot, sessions, projectList).children.values())
+				for (const worker of workers) nested.add(worker.path);
+		}
+		return withoutBotWorkers(
+			folderGroups.filter(group => !folders.has(group.cwd)),
+			nested,
+		);
+	}, [botsShown, folderGroups, hostBots, hidePausedBots, query, sessions, projectList]);
 	// The host's tabs on paired devices its sessions opened, by the row they nest under.
 	const remoteChildrenOf = useMemo(() => {
 		const byRoot = new Map<string, SessionTab[]>();

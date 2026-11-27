@@ -5,6 +5,11 @@
  * `bot-collapsed-preview.ts:24-33` (the folded faces' order), re-implemented on OMPdesk's rows.
  */
 import type { Bot } from "../../../shared/bots";
+import type { SessionInfo } from "../../../shared/ipc-types";
+import { isOmpdeskWorktreeFolder } from "../../../shared/project-origin";
+import type { SidebarProjectsState } from "../../../shared/sidebar-projects";
+import type { RowGroup } from "../../../shared/sidebar-rows";
+import { sessionHasContent } from "../../lib/session-title";
 
 /** One chat of a bot as its sidebar row reads it. */
 export interface BotChatFacts {
@@ -143,6 +148,74 @@ export function botMatches(bot: Bot, query: string): boolean {
 			.toLocaleLowerCase();
 	const wanted = fold(query.trim());
 	return !wanted || fold(bot.name).includes(wanted) || fold(bot.specialty ?? "").includes(wanted);
+}
+
+/** Only join saved files on one host. An older worker without a proven opener stays in its project. */
+export function botWorkerChildren<T extends SessionInfo>(
+	bot: Bot,
+	chats: readonly T[],
+	sessions: ReadonlyMap<string, T>,
+	parents: Readonly<Record<string, string>> | undefined,
+): Map<string, T[]> {
+	const shown = new Set(chats.map(chat => chat.path));
+	const children = new Map<string, T[]>();
+	for (const worker of bot.workers ?? []) {
+		const row = sessions.get(worker.session);
+		const opener = row?.openedBySession ?? worker.openedBySession;
+		if (
+			!row ||
+			row.promptOriginDevice ||
+			(row.device && row.device !== bot.device) ||
+			!opener ||
+			opener === row.path ||
+			!shown.has(opener)
+		)
+			continue;
+		if (worker.openedBySession && opener !== worker.openedBySession) continue;
+		if (opener !== bot.home && !bot.sessions.includes(opener)) continue;
+		if (parents?.[row.path] !== undefined && parents[row.path] !== opener) continue;
+		const siblings = children.get(opener);
+		if (siblings) siblings.push(row);
+		else children.set(opener, [row]);
+	}
+	return children;
+}
+
+/** Both paired sections must agree on which saved rows the bot actually presents. */
+export function remoteBotTree(bot: Bot, sessions: readonly SessionInfo[], projects: SidebarProjectsState) {
+	const archived = new Set(projects.layout?.archivedSessions);
+	const gone = new Set(projects.gone);
+	const available = new Map(
+		sessions
+			.filter(
+				row =>
+					(!row.device || row.device === bot.device) &&
+					!archived.has(row.id) &&
+					sessionHasContent(row) &&
+					(row.heldOnHost || !gone.has(row.cwd) || !isOmpdeskWorktreeFolder(row.cwd)),
+			)
+			.map(row => [row.path, row]),
+	);
+	const chats = [...available.values()]
+		.filter(row => row.cwd === bot.folder)
+		.toSorted(
+			(a, b) =>
+				Number(b.path === bot.home) - Number(a.path === bot.home) ||
+				Date.parse(b.modified) - Date.parse(a.modified),
+		);
+	return { chats, children: botWorkerChildren(bot, chats, available, projects.layout?.sessionParents) };
+}
+
+export function withoutBotWorkers(groups: RowGroup[], nested: ReadonlySet<string>): RowGroup[] {
+	if (!nested.size) return groups;
+	return groups.flatMap(group => {
+		const sessions = group.sessions.filter(row => !nested.has(row.path));
+		const folded = group.folded.filter(row => !nested.has(row.path));
+		if (sessions.length === group.sessions.length && folded.length === group.folded.length) return [group];
+		return sessions.length || folded.length || group.listed || group.open
+			? [{ ...group, sessions, folded, sleeping: group.sleeping.filter(path => !nested.has(path)) }]
+			: [];
+	});
 }
 
 /** A free name: `name`, else `name 2`, `name 3`… (Orca's `freeBotName`). */

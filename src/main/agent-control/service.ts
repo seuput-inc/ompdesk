@@ -112,6 +112,7 @@ export interface ControlTab {
 	worktree?: IpcTabWorktree;
 	/** The session file; absent until the session has one. */
 	sessionPath?: string;
+	openedBySession?: string;
 	/** What an agent opened the session for (`agentTaskTitle`) until it has a title. */
 	task?: string;
 	/** How its last finished turn ended; absent while one runs or before the first. */

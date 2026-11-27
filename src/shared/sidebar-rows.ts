@@ -91,6 +91,8 @@ export interface SidebarFacts {
 	usedThere: ReadonlySet<string>;
 	/** Sessions main recorded closing (`agentClosedChildren`): one no opener row holds folds into its project. */
 	closed: ReadonlySet<string>;
+	/** A bot worker has a normal project row unless its bot tree takes it. */
+	botWorkers?: ReadonlySet<string>;
 	projects: readonly SidebarProject[];
 	removed: readonly string[];
 	folder: (cwd: string) => FolderFacts;
@@ -465,7 +467,13 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 	for (const session of code) {
 		// Finished or nested under an opener: never a loose child. A finished worktree's session is no row anywhere unless
 		// a tab the person uses holds it, whatever a record says of the checkout its work went to.
-		if (rootOf.has(session.path) || runParent.has(session.path) || finished(session)) continue;
+		if (
+			rootOf.has(session.path) ||
+			facts.botWorkers?.has(session.path) ||
+			runParent.has(session.path) ||
+			finished(session)
+		)
+			continue;
 		const folder = facts.folder(session.cwd);
 		if (
 			facts.closed.has(session.path) ||

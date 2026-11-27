@@ -107,7 +107,7 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 	const [menu, setMenu] = useState<{ x: number; y: number; bot: Bot } | null>(null);
 	const [deleting, setDeleting] = useState<Bot | null>(null);
 	const facts = new Map(entries.map(entry => [entry.bot.id, entry.facts]));
-	const byId = new Map(entries.map(entry => [entry.bot.id, entry]));
+	const byBot = new Map(entries.map(entry => [entry.bot, entry]));
 	const sorted = sortBots(
 		entries.map(entry => entry.bot),
 		filtering ? "smart" : view.sort,
@@ -322,14 +322,14 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 	);
 
 	const row = (bot: Bot) => {
-		const entry = byId.get(bot.id);
+		const entry = byBot.get(bot);
 		if (!entry) return null;
 		const open = filtering || view.open.includes(bot.id);
 		const fact = entry.facts;
-		const key = `bot:${bot.id}`;
+		const key = bot.device ? `bot:${bot.device}:${bot.id}` : `bot:${bot.id}`;
 		if (renaming === bot.id)
 			return (
-				<div className="px-1 py-0.5" key={bot.id}>
+				<div className="px-1 py-0.5" key={key}>
 					<Input
 						aria-label={t("bots.rename.label", { name: bot.name })}
 						autoFocus
@@ -354,7 +354,7 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 			);
 		const offline = bot.device !== undefined && lost.has(bot.device);
 		return (
-			<div data-bot-entry={bot.id} data-flip-key={key} key={bot.id}>
+			<div data-bot-entry={bot.id} data-flip-key={key} key={key}>
 				<HoverCard content={<BotHoverCard bot={bot} facts={fact} />}>
 					<div
 						className={cx("omp-sidebar-bot", (bot.paused || offline) && "opacity-60")}

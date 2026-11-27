@@ -100,6 +100,7 @@ import { isTabFailed } from "../../../lib/tab-signal";
 import { pickWorkspaceDirectory } from "../../../lib/workspace-dirs";
 import { ensureAgentReviewSubscription, useAgentReviewStore } from "../../../stores/agent-review";
 import { ensureBots, useBotsStore } from "../../../stores/bots";
+import { useBotsView } from "../../../stores/bots-view";
 import { type BranchRow, branchPrOf, branchPrTone, useBranchPrs, watchBranchPrs } from "../../../stores/branch-prs";
 import { ensureClosedChildren, useClosedChildrenStore } from "../../../stores/closed-children";
 import { useComposerStore } from "../../../stores/composer";
@@ -122,7 +123,7 @@ import { toast, toastError } from "../../../stores/toast";
 import { type PanelTab, useUiStore } from "../../../stores/ui";
 import { startInstall, useInstallOffered } from "../../../web/install-ui";
 import { openBotDialog } from "../../bots/bot-launch";
-import { type BotChatFacts, botFacts, botMatches } from "../../bots/bot-view";
+import { type BotChatFacts, botFacts, botMatches, botWorkerChildren, withoutBotWorkers } from "../../bots/bot-view";
 import {
 	anchorFromEvent,
 	Badge,
@@ -439,6 +440,7 @@ export function Sidebar() {
 	const botsNavHidden = useSidebarFolds(state => state.navHidden.bots === true);
 	const botsShown = botsAvailable && !botsNavHidden;
 	const bots = useBotsStore(state => state.state.bots);
+	const hidePausedBots = useBotsView(state => state.hidePaused);
 	const botItems = useBotsStore(state => state.state.items);
 	useEffect(() => {
 		if (botsShown) ensureBots();
@@ -678,11 +680,11 @@ export function Sidebar() {
 		[reviewByTab],
 	);
 	const recordedOpeners = useMemo(() => {
-		const openers = new Map(closedChildren.map(row => [row.path, row.openedBySession]));
+		const openers = new Map(closedChildren.filter(row => !row.device).map(row => [row.path, row.openedBySession]));
 		for (const [openerTabId, items] of Object.entries(reviewByTab)) {
 			const opener = localTabs.find(tab => tab.id === openerTabId)?.sessionPath;
 			if (!opener) continue;
-			for (const item of items) if (item.sessionPath) openers.set(item.sessionPath, opener);
+			for (const item of items) if (!item.device && item.sessionPath) openers.set(item.sessionPath, opener);
 		}
 		return openers;
 	}, [closedChildren, reviewByTab, localTabs]);
@@ -787,18 +789,27 @@ export function Sidebar() {
 	const tabAccounts = useTabAccounts(s => s.accounts);
 	// Session folders main found missing on disk: git's origin only marks a gone OMPdesk worktree.
 	const goneFolders = useMemo(() => new Set(projectList.gone ?? []), [projectList.gone]);
+	const localBots = useMemo(() => bots.filter(bot => !bot.device), [bots]);
+	const workerOpeners = useMemo(() => {
+		const openers = new Map<string, string | undefined>();
+		for (const bot of localBots)
+			for (const worker of bot.workers ?? []) openers.set(worker.session, worker.openedBySession);
+		return openers;
+	}, [localBots]);
 	const rowFacts = useMemo<SidebarFacts>(
 		() => ({
 			// What main recorded of who opened each, as a host says it of its rows to a device.
 			sessions: sessions.map(session => ({
 				...session,
-				openedBySession: recordedOpeners.get(session.path) ?? null,
+				openedBySession:
+					recordedOpeners.get(session.path) ?? session.openedBySession ?? workerOpeners.get(session.path) ?? null,
 			})),
 			tabs: rowTabs,
 			// A session this computer runs (a paired device's tab here, another window's tab) is in use, whatever its
 			// state: its summary says so though this window holds no tab of it.
 			usedThere: new Set([...hostedByKey.keys(), ...summaryByPath.keys(), ...heldByOtherWindows]),
-			closed: new Set(closedChildren.map(row => row.path)),
+			closed: new Set(closedChildren.filter(row => !row.device).map(row => row.path)),
+			botWorkers: new Set(workerOpeners.keys()),
 			projects: projectList.projects,
 			removed: projectList.removed,
 			folder: at => {
@@ -871,6 +882,7 @@ export function Sidebar() {
 		[
 			sessions,
 			recordedOpeners,
+			workerOpeners,
 			rowTabs,
 			hostedByKey,
 			summaryByPath,
@@ -948,12 +960,37 @@ export function Sidebar() {
 	const allGroups = useMemo(() => rows.allGroups.map(named), [rows, named]);
 	// A bot's folder on this computer is no project: its chats list under the bot in the Bots section.
 	const botFolders = useMemo(
-		() => new Set(botsShown ? bots.filter(bot => !bot.device).map(bot => bot.folder) : []),
-		[botsShown, bots],
+		() =>
+			new Set(
+				botsShown ? localBots.filter(bot => !bot.paused || !hidePausedBots || query).map(bot => bot.folder) : [],
+			),
+		[botsShown, localBots, hidePausedBots, query],
 	);
+	const botTree = useMemo(() => {
+		const children = new Map<string, SidebarSession[]>();
+		const nested = new Set<string>();
+		if (!botFolders.size || !localBots.some(bot => bot.workers?.length)) return { children, nested };
+		const available = new Map(
+			rows.allGroups.flatMap(group => [...group.sessions, ...group.folded].map(row => [row.path, row] as const)),
+		);
+		for (const bot of localBots) {
+			if (!botFolders.has(bot.folder)) continue;
+			const groups = botMatches(bot, query) ? rows.allGroups : rows.groups;
+			const chats = groups.find(group => group.cwd === bot.folder)?.sessions ?? [];
+			for (const [parent, workers] of botWorkerChildren(bot, chats, available, sessionParents)) {
+				children.set(parent, workers);
+				for (const worker of workers) nested.add(worker.path);
+			}
+		}
+		return { children, nested };
+	}, [rows, localBots, botFolders, query, sessionParents]);
 	const groups = useMemo(
-		() => rows.groups.filter(group => !botFolders.has(group.cwd)).map(named),
-		[rows, named, botFolders],
+		() =>
+			withoutBotWorkers(
+				rows.groups.filter(group => !botFolders.has(group.cwd)),
+				botTree.nested,
+			).map(named),
+		[rows, named, botFolders, botTree],
 	);
 	const projectDropped = useSidebarListMotion(
 		localMotionRef,
@@ -2122,7 +2159,9 @@ export function Sidebar() {
 			variant === "archived"
 				? []
 				: [
-						...(familyChildrenOf.get(session.path) ?? []).map(child => familyChildFor(child)),
+						...(familyChildrenOf.get(session.path) ?? [])
+							.filter(child => !botTree.nested.has(child.path))
+							.map(child => familyChildFor(child)),
 						...(remoteChildrenOf.get(session.path) ?? []).map(child => remoteFamilyChildFor(child)),
 					];
 		// The name the running omp reports (its summary) outranks the index's, which follows the journal later.
@@ -2651,7 +2690,16 @@ export function Sidebar() {
 								<RemoteBotChats bot={bot} />
 							</Suspense>
 						) : (
-							shown.map(session => renderSessionRow(session, true))
+							shown.map(session => (
+								<Fragment key={session.path}>
+									{renderSessionRow(session, true)}
+									{botTree.children.has(session.path) && (
+										<div className="pl-3" data-bot-worker-rows={session.path}>
+											{botTree.children.get(session.path)?.map(worker => renderSessionRow(worker, true))}
+										</div>
+									)}
+								</Fragment>
+							))
 						),
 						chatCount: bot.device ? bot.sessions.length : shown.length,
 						current,

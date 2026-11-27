@@ -216,7 +216,7 @@ export function openBotHome(bot: Bot): void {
  * host's bot chats on that host, as a tab of it (the way its sessions open); while the host is offline nothing opens and
  * a notice says so: the chat lives there.
  */
-export async function openBotChat(bot: Bot, session: string | null, draft?: string): Promise<void> {
+export async function openBotChat(bot: Bot, session: string | null, draft?: string, cwd = bot.folder): Promise<void> {
 	if (bot.device) {
 		const host = useRemoteStore.getState().state?.hosts.find(known => known.deviceId === bot.device);
 		if (host?.state !== "online") {
@@ -237,7 +237,7 @@ export async function openBotChat(bot: Bot, session: string | null, draft?: stri
 	else
 		tabId = await tabs.openTab(
 			session
-				? { cwd: bot.folder, sessionPath: session, kind: "agent", ...where }
+				? { cwd, sessionPath: session, kind: "agent", ...where }
 				: { cwd: bot.folder, kind: "agent", ...where },
 		);
 	if (tabId && draft) {
