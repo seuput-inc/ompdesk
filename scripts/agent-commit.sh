@@ -180,6 +180,7 @@ if [ "$push" = 1 ]; then
 	for attempt in 1 2 3; do
 		check_origin
 		rm -f "$refused"
+		printf 'agent-commit: AGENTS.md > Change workflow: integration owner, origin/dev FF %s -> %s; report exact push CI. main is release-owner only; deletion requires separate authority. Required approvals still apply.\n' "$(git rev-parse origin/dev)" "$(git rev-parse HEAD)" >&2
 		if git push origin HEAD:refs/heads/dev; then
 			if [ -n "$retire" ]; then
 				bun "$script_dir/publish-work.ts" --published "$retire" "$accepted"
