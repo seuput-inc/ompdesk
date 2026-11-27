@@ -1962,6 +1962,8 @@ export interface IpcTabInfo {
 	openedBy?: string;
 	/** The opener's session file: a relaunch gives every tab a new id, the file is what finds the opener again. */
 	openedBySession?: string;
+	/** Device owning the opener's file, not the device running this tab. */
+	openedByDevice?: string;
 	/** How the tab's last finished run ended; absent while a run is in flight or before the first one ends. */
 	lastRun?: IpcTabRunOutcome;
 	/** Paired host deviceId the tab's omp runs on; absent = this device. */

@@ -323,9 +323,13 @@ async fn sanitize(
         }
         // A path is only a key to match against another tab's session file; it is never opened from here.
         if let Some(opened_by) = non_empty_string(candidate.get("openedBy"))
-            && Some(&opened_by) != session_path.as_ref()
+            && (Some(&opened_by) != session_path.as_ref()
+                || non_empty_string(candidate.get("openedByDevice")) != device)
         {
             descriptor.insert("openedBy".into(), Value::from(opened_by));
+            if let Some(device) = non_empty_string(candidate.get("openedByDevice")) {
+                descriptor.insert("openedByDevice".into(), Value::from(device));
+            }
         }
         let former: Vec<Value> = candidate
             .get("formerIds")

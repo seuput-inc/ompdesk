@@ -161,6 +161,7 @@ function setup(
 	const webTabs: IpcTabInfo[] = (options.webTabs ?? []).map(info);
 	const commands: { tabId: string; command: RpcCommand; win: ClientWindow }[] = [];
 	const openers = vi.fn();
+	const spawnOpeners: (string | undefined)[] = [];
 	const spawned: IpcSpawnTabPayload[] = [];
 	const activity: ((event: { type: string; tabId: string }) => void)[] = [];
 	const sidecars = new Map<string, { cwd: string; device?: string }>([["main0001", { cwd: "/repo" }]]);
@@ -235,7 +236,8 @@ function setup(
 			}
 			return ok();
 		},
-		spawnTab: async (_win, payload) => {
+		spawnTab: async (_win, payload, opener) => {
+			spawnOpeners.push(opener);
 			spawned.push(payload);
 			return { tabId: "new00003" };
 		},
@@ -287,6 +289,7 @@ function setup(
 		activity,
 		prefs,
 		openers,
+		spawnOpeners,
 		sidecars,
 	};
 }
@@ -410,9 +413,9 @@ describe("AgentControlRuntime", () => {
 	});
 
 	it("records the caller as the opener of a session the tool opens, and hands the spawn its task", async () => {
-		const { runtime, win, openers, spawned } = setup();
+		const { runtime, win, spawnOpeners, spawned } = setup();
 		await runtime.run(win, "main0001", T.open, { message: "Title: Fix the upload test\nIt times out." });
-		expect(openers).toHaveBeenCalledWith("new00003", "main0001");
+		expect(spawnOpeners).toEqual(["main0001"]);
 		// The tab is made with its task, so no window hears of it as "New session" first.
 		expect(spawned[0]).toMatchObject({ task: "Fix the upload test" });
 	});

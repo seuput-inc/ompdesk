@@ -544,6 +544,33 @@ async fn a_seeded_tab_keeps_who_opened_it_for_the_devices_and_the_next_layout() 
 }
 
 #[tokio::test]
+async fn acquiring_a_child_saves_its_qualified_opener_in_the_first_layout() {
+    let mut main = Main::start(opts()).await;
+    main.call(
+        "acquire",
+        json!({"cwd": "/work", "win": 1, "tab": "boss", "device": "studio", "sessionPath": "/s/boss.jsonl"}),
+    )
+    .await;
+    main.acquire("unrelated", 2, Some("/s/boss.jsonl"), false)
+        .await;
+    main.call(
+        "acquire",
+        json!({"cwd": "/work", "win": 2, "tab": "child", "sessionPath": "/s/child.jsonl", "opener": "boss", "wt": true}),
+    )
+    .await;
+    let saved = &main
+        .asked
+        .iter()
+        .find(|(q, item)| q == "onWindowTabsChanged" && item["acquire"] == "child")
+        .unwrap()
+        .1["layout"]["tabs"][1];
+    assert_eq!(saved["openedBy"], "/s/boss.jsonl");
+    assert_eq!(saved["openedByDevice"], "studio");
+    assert!(saved.get("device").is_none());
+    assert_eq!(main.call("sessionOpeners", json!({})).await, json!([]));
+}
+
+#[tokio::test]
 async fn an_agent_s_answer_claims_the_ask_and_no_other_answer_lands_until_it_is_released() {
     let mut main = Main::start(opts()).await;
     main.acquire("a", 1, None, false).await;

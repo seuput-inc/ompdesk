@@ -758,7 +758,7 @@ impl Ctx {
                 let Some(file) = entry.session_file.as_ref().filter(|file| !file.is_empty()) else {
                     continue;
                 };
-                if entry.device.is_some() || entry.hosted_view {
+                if entry.device.is_some() || entry.hosted_view || entry.opened_by_device.is_some() {
                     continue;
                 }
                 let from_tab = entry
@@ -802,7 +802,8 @@ impl Ctx {
                     let opened_by = match opener {
                         Some(opener) if opener.device.is_some() => None,
                         Some(opener) => opener.session_file.clone(),
-                        None => entry.opened_by_session.clone(),
+                        None if entry.opened_by_device.is_none() => entry.opened_by_session.clone(),
+                        None => None,
                     }
                     .filter(|file| !file.is_empty())?;
                     let cwd = facts[tab.as_str()]["cwd"].as_str().unwrap_or("");
@@ -1353,20 +1354,7 @@ impl Ctx {
 
     /// Record that `opener`'s agent opened `tab`: the windows nest the session under its opener.
     pub(super) async fn set_tab_opener(&self, tab: &str, opener: &str) -> R<()> {
-        let win = self.with(|pool| {
-            let opener_file = pool
-                .entry(opener)
-                .map(|opener| opener.session_file.clone())?;
-            let entry = pool.entry_mut(tab)?;
-            if entry.opened_by.as_deref() == Some(opener) {
-                return None;
-            }
-            entry.opened_by = Some(opener.to_string());
-            if let Some(file) = opener_file.filter(|file| !file.is_empty()) {
-                entry.opened_by_session = Some(file);
-            }
-            Some(entry.win_id)
-        });
+        let win = self.with(|pool| pool.bind_opener(tab, opener));
         let Some(win) = win else {
             return Ok(());
         };
@@ -1381,7 +1369,7 @@ impl Ctx {
         let item = self.with(|pool| {
             pool.entry(tab).map(|entry| {
                 json!({"k": "opener", "tab": tab, "openedBy": entry.opened_by,
-                       "openedBySession": entry.opened_by_session})
+                       "openedBySession": entry.opened_by_session, "openedByDevice": entry.opened_by_device})
             })
         });
         if let Some(item) = item {
@@ -1866,6 +1854,7 @@ impl Ctx {
                         title: tab["title"].as_str().map(str::to_string),
                         device: device.map(str::to_string),
                         task: None,
+                        opener: None,
                         former_ids: None,
                     })
                     .await?;
@@ -1879,6 +1868,8 @@ impl Ctx {
                             tab["openedBy"].as_str().filter(|opener| !opener.is_empty())
                         {
                             entry.opened_by_session = Some(opener.to_string());
+                            entry.opened_by_device =
+                                tab["openedByDevice"].as_str().map(str::to_string);
                             opened = true;
                         }
                         if let (Some(ids), Some(path)) = (tab["formerIds"].as_array(), path) {
@@ -1998,6 +1989,7 @@ impl Ctx {
                 // Who opened it, as main kept it from the `opener` items: the devices' list and the next layout nest it.
                 entry.opened_by = tab["openedBy"].as_str().map(str::to_string);
                 entry.opened_by_session = tab["openedBySession"].as_str().map(str::to_string);
+                entry.opened_by_device = tab["openedByDevice"].as_str().map(str::to_string);
                 // The file the tab held: it owns it again (F-OWN), as at its acquire. Tabs come in acquisition order.
                 if let Some(file) = tab["sessionFile"].as_str().filter(|file| !file.is_empty()) {
                     entry.session_file = Some(file.to_string());

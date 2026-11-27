@@ -173,6 +173,7 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
                 title: p.os("title"),
                 device: p.os("device"),
                 task: p.os("task"),
+                opener: p.os("opener"),
                 former_ids: p.has("formerIds").then(|| p.strings("formerIds")),
             };
             let (ok, added) = ctx.acquire(args).await?;

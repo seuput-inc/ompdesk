@@ -122,6 +122,7 @@ export async function spawnTabForWindow(
 	deps: SpawnTabDeps,
 	win: ClientWindow,
 	payload: IpcSpawnTabPayload,
+	opener?: string,
 ): Promise<IpcSpawnTabResult | null> {
 	const device = typeof payload?.device === "string" && payload.device ? payload.device : undefined;
 	const sessionPath =
@@ -200,6 +201,7 @@ export async function spawnTabForWindow(
 	const tabId = nextSnowflake();
 	// A no-path tab is an explicit New Tab action. It must start empty even
 	// when the CLI's persistent autoResume setting is enabled for the project.
+	const task = typeof payload?.task === "string" && payload.task ? payload.task : undefined;
 	return deps.sidecarPool.acquire(
 		cwd,
 		win,
@@ -212,7 +214,7 @@ export async function spawnTabForWindow(
 		false,
 		undefined,
 		device,
-		typeof payload?.task === "string" && payload.task ? payload.task : undefined,
+		task || opener ? { task, opener } : undefined,
 	)
 		? neutral
 			? { tabId, cwd }

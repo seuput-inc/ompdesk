@@ -107,6 +107,9 @@ impl Ctx {
                     .filter(|opener| !opener.is_empty())
                 {
                     descriptor.insert("openedBy".into(), Value::from(opener.clone()));
+                    if let Some(device) = &entry.opened_by_device {
+                        descriptor.insert("openedByDevice".into(), Value::from(device.clone()));
+                    }
                 }
                 // This launch's id joins the ones before it: an agent given any of them still reaches the session.
                 if entry

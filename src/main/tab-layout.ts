@@ -37,6 +37,7 @@ export interface PersistedTabDescriptor {
 	 * under it again after a relaunch, once the opener's tab is back. A tab id would not do: every restored tab is new.
 	 */
 	openedBy?: string;
+	openedByDevice?: string;
 	/**
 	 * The ids this tab had in earlier launches, newest first (≤ `MAX_FORMER_TAB_IDS`). Every restored tab gets a new id,
 	 * and an agent given the old one (`ompdesk_session_open`, `ompdesk_sessions`) still reaches this session by it.

@@ -228,7 +228,7 @@ export interface AgentControlHostDeps {
 		command: RpcCommand,
 		timeoutMs?: number,
 	) => Promise<RpcResponse>;
-	spawnTab: (win: ClientWindow, payload: IpcSpawnTabPayload) => Promise<IpcSpawnTabResult | null>;
+	spawnTab: (win: ClientWindow, payload: IpcSpawnTabPayload, opener?: string) => Promise<IpcSpawnTabResult | null>;
 	/** `set`/`changed` persist a list main owns (closed opened sessions) and tell every window; absent where there is no store. */
 	prefs: { get(key: string): unknown; set?(key: string, value: unknown): void; changed?(key: string): void };
 	/** A paired host's display name for a deviceId. */
@@ -691,7 +691,7 @@ export class AgentControlRuntime {
 		const { pool } = this.#deps;
 		if (info.openedBy && pool.sidecarOf(info.openedBy)) return info.openedBy;
 		if (!info.openedBySession) return undefined;
-		return pool.sessionOwner(info.openedBySession)?.tabId ?? undefined;
+		return pool.sessionOwner(info.openedBySession, info.openedByDevice)?.tabId ?? undefined;
 	}
 
 	/**
@@ -1024,14 +1024,18 @@ export class AgentControlRuntime {
 			prepared = describePreparation(made);
 		}
 		const target = worktree?.path ?? cwd;
-		const result = await this.#deps.spawnTab(win, {
-			...(target !== undefined ? { cwd: target } : {}),
-			...(request.sessionPath ? { sessionPath: request.sessionPath } : {}),
-			...(request.restoreSaved ? { restoreSaved: true as const } : {}),
-			...(worktree ? { worktree } : {}),
-			...(device ? { device } : {}),
-			...(request.task ? { task: request.task } : {}),
-		});
+		const result = await this.#deps.spawnTab(
+			win,
+			{
+				...(target !== undefined ? { cwd: target } : {}),
+				...(request.sessionPath ? { sessionPath: request.sessionPath } : {}),
+				...(request.restoreSaved ? { restoreSaved: true as const } : {}),
+				...(worktree ? { worktree } : {}),
+				...(device ? { device } : {}),
+				...(request.task ? { task: request.task } : {}),
+			},
+			request.join || request.tag || outside ? undefined : callerTabId,
+		);
 		if (!result?.tabId) {
 			// The worktree made for a session that never started goes with it (git's own commands, never forced).
 			if (worktree) {
@@ -1049,9 +1053,6 @@ export class AgentControlRuntime {
 		// A view of a tab that holds the session elsewhere stays whoever's it was: no parent, no opener.
 		if (request.join) return { tabId: result.tabId };
 		this.#parents.set(result.tabId, { callerTabId, ...(request.tag ? { tag: request.tag } : {}) });
-		// An Autopilot child already sits under its run (`tag`); a session the tool opens nests under its opener. An
-		// outside caller has no tab to nest under: its sessions sit in the sidebar like the person's own.
-		if (!request.tag && !outside) this.#deps.pool.setTabOpener(result.tabId, callerTabId);
 		return { tabId: result.tabId, ...(worktree ? { worktree } : {}), ...(prepared ? { prepared } : {}) };
 	}
 

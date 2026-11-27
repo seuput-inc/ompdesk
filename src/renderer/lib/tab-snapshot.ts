@@ -25,6 +25,7 @@ export interface TabSnapshotEntry {
 	placeholder?: boolean;
 	openedBy?: string;
 	openedBySession?: string;
+	openedByDevice?: string;
 }
 
 export interface TabSnapshot {
@@ -79,6 +80,7 @@ export function tabSnapshotEntry(tab: TabSnapshotEntry): TabSnapshotEntry {
 		...(tab.placeholder === undefined ? {} : { placeholder: tab.placeholder }),
 		...(tab.openedBy === undefined ? {} : { openedBy: tab.openedBy }),
 		...(tab.openedBySession === undefined ? {} : { openedBySession: tab.openedBySession }),
+		...(tab.openedByDevice === undefined ? {} : { openedByDevice: tab.openedByDevice }),
 	};
 }
 

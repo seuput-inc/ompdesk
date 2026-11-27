@@ -45,6 +45,7 @@ export interface RowTab {
 	placeholder?: boolean;
 	openedBy?: string;
 	openedBySession?: string;
+	openedByDevice?: string;
 	/** When the viewer first saw it: a row made from it sorts by this until the index lists it. */
 	seenAt: string;
 	device?: string;
@@ -214,6 +215,8 @@ export interface FamilyTab {
 	sessionId?: string;
 	openedBy?: string;
 	openedBySession?: string;
+	openedByDevice?: string;
+	device?: string;
 }
 
 /** The session fields the opener rule reads. */
@@ -264,11 +267,16 @@ export function openerOfSessions(
 	}
 	const known = new Set(sessions.map(session => session.path));
 	const direct = new Map<string, string>();
+	const otherHost = new Set<string>();
 	for (const [child, parent] of chosenParents)
 		if (known.has(child) && parent !== child && known.has(parent)) direct.set(child, parent);
 	for (const tab of tabs) {
 		const child = sessionOf.get(tab.id);
 		if (!child || chosenParents.has(child.path)) continue;
+		if (tab.openedByDevice && tab.openedByDevice !== tab.device) {
+			otherHost.add(child.path);
+			continue;
+		}
 		const opener =
 			(tab.openedBy ? tabs.find(entry => entry.id === tab.openedBy) : undefined) ??
 			(tab.openedBySession ? tabs.find(entry => entry.sessionPath === tab.openedBySession) : undefined);
@@ -277,7 +285,7 @@ export function openerOfSessions(
 		if (path && path !== child.path) direct.set(child.path, path);
 	}
 	for (const session of sessions) {
-		if (direct.has(session.path) || chosenParents.has(session.path)) continue;
+		if (direct.has(session.path) || chosenParents.has(session.path) || otherHost.has(session.path)) continue;
 		const opener = recordedOpeners.get(session.path);
 		if (opener && opener !== session.path && known.has(opener)) direct.set(session.path, opener);
 	}
@@ -309,7 +317,7 @@ export function remoteOpenedChildren(
 	const rootOf = (path: string): string | undefined => (local.has(path) ? (rows.rootOf.get(path) ?? path) : undefined);
 	const children = new Map<string, string>();
 	for (const tab of tabs) {
-		if (tab.device === undefined) continue;
+		if (tab.device === undefined || tab.openedByDevice) continue;
 		const opener =
 			(tab.openedBy ? tabs.find(entry => entry.id === tab.openedBy) : undefined) ??
 			(tab.openedBySession ? tabs.find(entry => entry.sessionPath === tab.openedBySession) : undefined);

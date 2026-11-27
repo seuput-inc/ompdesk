@@ -2010,27 +2010,39 @@ describe("SidecarPool session ownership (F-OWN)", () => {
 		const { pool } = fakePool();
 		const fw = fakeWindow(1);
 		pool.acquire(
-			"/a",
-			fw.win,
-			"tab-a",
-			undefined,
+			"/parent",
+			fakeWindow(2).win,
+			"parent",
+			"/s/parent.jsonl",
 			"agent",
 			undefined,
+			false,
+			false,
 			true,
-			false,
-			false,
 			undefined,
-			undefined,
-			"Fix the flaky upload test",
+			"studio",
 		);
+		pool.acquire("/a", fw.win, "tab-a", undefined, "agent", undefined, true, false, false, undefined, undefined, {
+			task: "Fix the flaky upload test",
+			opener: "parent",
+		});
 		// A status without it would paint the row "New session" until the next one (the phone read it, 1 in 60).
 		const statuses = fw
 			.sentTo(IPC_EVENTS.TAB_STATUS)
 			.map(sent => sent.data as IpcTabStatusPayload)
 			.filter(status => status.tabId === "tab-a");
 		expect(statuses.length).toBeGreaterThan(0);
-		for (const status of statuses) expect(status.task).toBe("Fix the flaky upload test");
-		expect(pool.tabsForWindow(fw.win)[0]?.task).toBe("Fix the flaky upload test");
+		for (const status of statuses)
+			expect(status).toMatchObject({
+				task: "Fix the flaky upload test",
+				openedBy: "parent",
+				openedBySession: "/s/parent.jsonl",
+				openedByDevice: "studio",
+			});
+		expect(pool.tabLayoutForWindow(fw.win)?.tabs[0]).toMatchObject({
+			openedBy: "/s/parent.jsonl",
+			openedByDevice: "studio",
+		});
 	});
 
 	it("names a tab that already exists (a relaunched one) in a status and the window's tab list", () => {

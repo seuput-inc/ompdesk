@@ -134,6 +134,7 @@ export interface SessionTab {
 	openedBy?: string;
 	/** That opener's session file, which finds it again after a relaunch gave every tab a new id. */
 	openedBySession?: string;
+	openedByDevice?: string;
 	/** How its last finished turn ended (main's `lastRun`); what tells a finished opened session from a merely open one. */
 	lastRun?: IpcTabRunOutcome;
 	/** Main-owned transcript identity, available even before session_info_update. */
@@ -362,6 +363,7 @@ function projectSessionTab(
 		task: info.task ?? previous?.task,
 		openedBy: info.openedBy ?? previous?.openedBy,
 		openedBySession: info.openedBySession ?? previous?.openedBySession,
+		openedByDevice: info.openedBySession !== undefined ? info.openedByDevice : previous?.openedByDevice,
 		lastRun: sessionChanged || info.status === "running" ? undefined : (info.lastRun ?? previous?.lastRun),
 		sessionPath: info.sessionPath === undefined ? previous?.sessionPath : (info.sessionPath ?? undefined),
 		sessionId: info.sessionId ?? (sessionChanged ? undefined : previous?.sessionId),

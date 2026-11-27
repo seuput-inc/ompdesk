@@ -1542,7 +1542,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				command,
 				timeoutMs,
 			} as IpcRpcCommandPayload) as Promise<RpcResponse>,
-		spawnTab: (win, payload) => spawnTabForWindow(agentSpawnDeps, win, payload),
+		spawnTab: (win, payload, opener) => spawnTabForWindow(agentSpawnDeps, win, payload, opener),
 		prefs: {
 			get: key => prefsStore.get(key),
 			set: (key, value) => prefsStore.set(key, value),

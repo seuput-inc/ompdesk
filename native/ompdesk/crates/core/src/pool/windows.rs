@@ -41,6 +41,7 @@ pub(super) struct Acquire {
     pub title: Option<String>,
     pub device: Option<String>,
     pub task: Option<String>,
+    pub opener: Option<String>,
     pub former_ids: Option<Vec<String>>,
 }
 
@@ -225,7 +226,10 @@ impl Ctx {
                 self.new_acquire_entry(tab.clone(), args.win, args.kind, status)
             }
         };
-        let (seq, needs_file) = self.with(|pool| {
+        let (seq, needs_file, bound) = self.with(|pool| {
+            let bound = args
+                .opener
+                .is_some_and(|id| pool.bind_opener(&tab, &id).is_some());
             let entry = &mut pool.entries[at];
             entry.device = args.device;
             entry.placeholder = args.placeholder;
@@ -238,8 +242,11 @@ impl Ctx {
             {
                 entry.former = Some((path.clone(), ids));
             }
-            (entry.seq, entry.session_file.is_none())
+            (entry.seq, entry.session_file.is_none(), bound)
         });
+        if bound {
+            self.push_opener(&tab);
+        }
         let outcome = self
             .finish_acquire(
                 &tab,

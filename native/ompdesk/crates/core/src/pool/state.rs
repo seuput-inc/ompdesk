@@ -64,6 +64,7 @@ pub(super) struct Entry {
     pub task: Option<String>,
     pub opened_by: Option<String>,
     pub opened_by_session: Option<String>,
+    pub opened_by_device: Option<String>,
     pub former: Option<(String, Vec<String>)>,
     pub session_file: Option<String>,
     pub awaiting_connection: bool,
@@ -134,6 +135,7 @@ impl Entry {
             task: None,
             opened_by: None,
             opened_by_session: None,
+            opened_by_device: None,
             former: None,
             session_file: None,
             awaiting_connection: false,
@@ -323,6 +325,20 @@ impl Pool {
         self.entries.iter_mut().find(|entry| entry.tab_id == tab_id)
     }
 
+    pub(super) fn bind_opener(&mut self, tab: &str, opener: &str) -> Option<i64> {
+        let child = self.entry(tab)?;
+        if child.opened_by.as_deref() == Some(opener) || tab == opener {
+            return None;
+        }
+        let parent = self.entry(opener)?;
+        let (device, file) = (parent.device.clone(), parent.session_file.clone());
+        let child = self.entry_mut(tab)?;
+        child.opened_by = Some(opener.to_string());
+        child.opened_by_session = file;
+        child.opened_by_device = device;
+        Some(child.win_id)
+    }
+
     /// A tab by its entry's identity, live or released and not yet let go of.
     pub(super) fn by_seq(&self, seq: u64) -> Option<&Entry> {
         self.entries
@@ -471,6 +487,9 @@ impl Pool {
         }
         if let Some(opener) = &entry.opened_by_session {
             payload.insert("openedBySession".into(), Value::from(opener.clone()));
+        }
+        if let Some(device) = &entry.opened_by_device {
+            payload.insert("openedByDevice".into(), Value::from(device.clone()));
         }
         if let Some(worktree) = &entry.worktree {
             payload.insert("worktree".into(), worktree.clone());

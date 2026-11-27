@@ -53,6 +53,14 @@ describe("openerOfSessions: an opened session nests under its opener", () => {
 		expect(openerOfSessions(tabs, sessions).get("/s/a")).toBe("/s/boss");
 	});
 
+	it("does not substitute a local copy of a paired opener's file, even when an older record names it", () => {
+		const child = { id: "child", sessionPath: "/s/a", openedBySession: "/s/boss", openedByDevice: "studio" };
+		const record = new Map([["/s/a", "/s/boss"]]);
+		expect(openerOfSessions([child], sessions, record).has("/s/a")).toBe(false);
+		expect(openerOfSessions([{ ...child, device: "studio" }], sessions, record).get("/s/a")).toBe("/s/boss");
+		expect(openerOfSessions([child], sessions, record, new Map([["/s/a", "/s/solo"]])).get("/s/a")).toBe("/s/solo");
+	});
+
 	it("keeps the family one level deep: an opened session's own children go under the first opener", () => {
 		const tabs: FamilyTab[] = [
 			{ id: "t1", sessionPath: "/s/boss" },

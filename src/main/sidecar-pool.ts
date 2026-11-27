@@ -273,6 +273,7 @@ interface TabHandle {
 	/** Who opened the tab (its tab id and that tab's session file), kept like `sessionFile`: the core's `opener` item. */
 	openedBy: string | null;
 	openedBySession: string | null;
+	openedByDevice: string | null;
 	full: FullWiring | null;
 	/** Paired devices that view this tab through their own tab on this host, by the id the core knows them by. */
 	views: Map<number, HostedTabView>;
@@ -597,6 +598,7 @@ export class SidecarPool {
 				sessionFile: handle.sessionFile,
 				openedBy: handle.openedBy,
 				openedBySession: handle.openedBySession,
+				openedByDevice: handle.openedByDevice,
 				full: [...(handle.full?.windows.keys() ?? [])],
 				views: [...handle.views.keys()],
 			}));
@@ -663,6 +665,7 @@ export class SidecarPool {
 				if (handle) {
 					handle.openedBy = (item.openedBy as string | null) ?? null;
 					handle.openedBySession = (item.openedBySession as string | null) ?? null;
+					handle.openedByDevice = (item.openedByDevice as string | null) ?? null;
 				}
 				return;
 			}
@@ -1233,6 +1236,7 @@ export class SidecarPool {
 			sessionFile: null,
 			openedBy: null,
 			openedBySession: null,
+			openedByDevice: null,
 			full: null,
 			views: new Map(),
 		};
@@ -1278,7 +1282,7 @@ export class SidecarPool {
 		deferStart = false,
 		title?: string,
 		device?: string,
-		task?: string,
+		agent?: { task?: string; opener?: string },
 		formerIds?: string[],
 	): SidecarLike | null {
 		return this.#withAcquire(tabId, null, () => {
@@ -1294,7 +1298,8 @@ export class SidecarPool {
 				deferStart,
 				title,
 				device,
-				task,
+				task: agent?.task,
+				opener: agent?.opener,
 				formerIds,
 			});
 			if (!result.added) this.#handles.delete(tabId);
