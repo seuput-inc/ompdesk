@@ -867,7 +867,7 @@ export function FilesPanel() {
 
 	return (
 		<div className="flex h-full min-h-0 min-w-0 flex-col">
-			<PanelToolbar>
+			<PanelToolbar className="min-h-(--sc-control-md) gap-1 px-2 py-0.5">
 				<span className="min-w-0 flex-1 truncate text-sc-sm font-medium" title={cwd}>
 					{basename(cwd)}
 				</span>
@@ -901,7 +901,7 @@ export function FilesPanel() {
 					size="sm"
 				/>
 			</PanelToolbar>
-			<div className="flex shrink-0 flex-col gap-2 px-3 py-2">
+			<div className="flex shrink-0 flex-col gap-2 border-b border-(--sc-divider) p-2">
 				<SegmentedChoice
 					aria-label={t("filesPanel.search")}
 					fit="equal"
@@ -948,7 +948,7 @@ export function FilesPanel() {
 						</div>
 					) : nodes.length === 0 ? (
 						<EmptyState
-							icon={<Folder />}
+							className="gap-1 px-2 py-2 [&_div]:text-sc-xs [&_div]:font-normal [&_div]:text-(--sc-text-muted)"
 							size="sm"
 							title={t(query.trim() ? "filesPanel.noMatch" : "filesPanel.empty")}
 							actions={

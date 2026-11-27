@@ -358,6 +358,26 @@ html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-to
 	margin-inline-start: auto;
 }
 
+/* A named view needs only its switcher. Keep its controls below the actual native caption band, not a second title. */
+html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-topbar[data-view-header] {
+	padding-top: var(--sc-caption-band);
+	min-height: calc(var(--sc-caption-band) + var(--sc-topbar-h));
+	padding-bottom: 0;
+}
+
+.omp-panel-topbar[data-view-header] [data-panel-title] {
+	position: absolute;
+	inset: 0 auto auto 0;
+	width: 1px;
+	max-height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+}
+
+html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-topbar[data-view-header] [data-panel-views] {
+	margin-inline-start: 0;
+}
+
 /* The side panel's views (Orca's activity bar marker): the shown view is the full text colour over a 2 px line along
    its bottom, the others muted; no wash. `box-shadow`, never `::after`, which carries a touch control's hit area. */
 [data-panel-views] > button {

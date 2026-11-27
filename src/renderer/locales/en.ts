@@ -8284,6 +8284,7 @@ export const en: Record<string, string> = {
 	"bots.suggestions.failed": "Couldn't change the suggestion",
 	"bots.automations.title": "Automations",
 	"bots.automations.none": "No automations.",
+	"bots.automations.ask": "Ask {name} to run something on a schedule or when something happens.",
 	"bots.automations.new": "New automation",
 	"bots.automations.draft": "Set up an automation that ",
 	"bots.automations.lookAround": "Look around",

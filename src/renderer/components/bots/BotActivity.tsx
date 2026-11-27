@@ -26,7 +26,10 @@ import {
 	CircleDashed,
 	Clock,
 	ExternalLink,
+	Eye,
 	GitBranch,
+	ListChecks,
+	Moon,
 	Play,
 	Plus,
 	RotateCcw,
@@ -111,7 +114,7 @@ export function BotInspectorHome({ bot }: { bot: Bot }) {
 	const facts = useBotFacts(selected).get(bot.id);
 	const mark = bot.paused ? "paused" : facts?.needsYou ? "needsYou" : facts?.failed ? "failed" : null;
 	return (
-		<div className="flex min-w-0 flex-col gap-4 overflow-auto p-4" data-inspector-bot={bot.id}>
+		<div className="flex min-w-0 flex-col gap-4 overflow-auto px-5 py-4" data-inspector-bot={bot.id}>
 			<header className="flex items-center gap-2">
 				<BotAvatar bot={bot} mark={mark} size={36} working={facts?.working} />
 				<div className="min-w-0 flex-1">
@@ -141,13 +144,14 @@ export function BotInspectorHome({ bot }: { bot: Bot }) {
 				</ul>
 			) : (
 				<EmptyState
-					className="py-8"
+					className="min-h-52 gap-2 px-1 py-6 [&>span]:size-5 [&>span]:bg-transparent"
+					size="sm"
 					description={t("bots.items.empty.body")}
-					icon={<Check />}
+					icon={<ListChecks />}
 					title={t("bots.items.empty.title")}
 				/>
 			)}
-			<Automations bot={bot} />
+			<Automations bot={bot} inspector />
 		</div>
 	);
 }
@@ -517,7 +521,7 @@ function Workers({ bot }: { bot: Bot }) {
 	);
 }
 
-function Automations({ bot }: { bot: Bot }) {
+function Automations({ bot, inspector = false }: { bot: Bot; inspector?: boolean }) {
 	const t = useT();
 	const schedules = useSchedulesOf(bot.device);
 	const [all, setAll] = useState(false);
@@ -537,22 +541,49 @@ function Automations({ bot }: { bot: Bot }) {
 			: row.own === "tidy"
 				? t("bots.automations.tidy")
 				: row.schedule.name.replace(`${bot.name}: `, "");
+	const Section = inspector ? "details" : "section";
 	return (
-		<section aria-label={t("bots.automations.title")} className="flex flex-col gap-1" data-bot-automations>
-			<SectionLabel
-				action={
-					<IconButton
-						icon={<Plus />}
-						label={t("bots.automations.new")}
-						onClick={() => void openBotChat(bot, bot.home, t("bots.automations.draft")).catch(() => {})}
-						size="sm"
-					/>
-				}
-				count={rows.length}
-			>
-				{t("bots.automations.title")}
-			</SectionLabel>
-			{rows.length === 0 ? (
+		<Section
+			aria-label={t("bots.automations.title")}
+			className="flex flex-col gap-1"
+			data-bot-automations
+			open={inspector || undefined}
+		>
+			{inspector ? (
+				<summary className="cursor-pointer text-sc-xs font-medium text-(--sc-text-muted)">
+					{t("bots.automations.title")}
+				</summary>
+			) : (
+				<SectionLabel
+					action={
+						<IconButton
+							icon={<Plus />}
+							label={t("bots.automations.new")}
+							onClick={() => void openBotChat(bot, bot.home, t("bots.automations.draft")).catch(() => {})}
+							size="sm"
+						/>
+					}
+					count={rows.length}
+				>
+					{t("bots.automations.title")}
+				</SectionLabel>
+			)}
+			{inspector &&
+				(["tidy", "lookAround"] as const)
+					.filter(kind => !own.some(row => row.own === kind))
+					.map(kind => (
+						<Button
+							key={kind}
+							className="justify-start"
+							icon={kind === "tidy" ? <Moon /> : <Eye />}
+							onClick={() => openBotPage(bot.id, "settings")}
+							size="sm"
+							variant="ghost"
+						>
+							{t(kind === "tidy" ? "bots.automations.tidy" : "bots.automations.lookAround")}
+						</Button>
+					))}
+			{!inspector && rows.length === 0 ? (
 				<EmptyState size="row" title={t("bots.automations.none")} />
 			) : (
 				shown.map(row => (
@@ -617,6 +648,20 @@ function Automations({ bot }: { bot: Bot }) {
 					/>
 				))
 			)}
+			{inspector && (
+				<Button
+					className="h-auto justify-start whitespace-normal text-left text-sc-xs text-(--sc-text-muted)"
+					onClick={() =>
+						void openBotChat(bot, bot.home, t("bots.automations.draft")).catch(error =>
+							toastError({ title: t("bots.automations.failed"), error }),
+						)
+					}
+					size="sm"
+					variant="ghost"
+				>
+					{t("bots.automations.ask", { name: bot.name })}
+				</Button>
+			)}
 			{!all && others.length > ROWS && (
 				<Button className="self-start" onClick={() => setAll(true)} size="sm" variant="ghost">
 					{t("bots.automations.all", { count: rows.length })}
@@ -633,7 +678,7 @@ function Automations({ bot }: { bot: Bot }) {
 				open={deleting !== null}
 				title={t("bots.automations.deleteTitle")}
 			/>
-		</section>
+		</Section>
 	);
 }
 

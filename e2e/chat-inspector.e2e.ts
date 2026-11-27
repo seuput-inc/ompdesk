@@ -92,7 +92,7 @@ test("project and bot conversations keep their own inspector on reopen and on re
 		const note = path.join(profile.project, "notes.md");
 		await fs.writeFile(note, "# Original\n");
 		await views.getByRole("button", { name: "Explorer", exact: true }).click();
-		await panel.getByRole("button", { name: "Refresh", exact: true }).click();
+		await panel.getByRole("button", { name: "Refresh file tree", exact: true }).click();
 		await panel.locator('[data-tree-id="file:notes.md"]').click();
 		await panel.getByRole("button", { name: "Edit", exact: true }).click();
 		const editor = panel.getByRole("textbox", { name: "Contents of notes.md" });
@@ -105,6 +105,13 @@ test("project and bot conversations keep their own inspector on reopen and on re
 		const guard = page.getByRole("dialog").filter({ hasText: "notes.md" });
 		await guard.getByRole("button", { name: "Cancel", exact: true }).click();
 		await expect(editor).toContainText("unsaved");
+		await panel.locator("[data-panel-close]").click();
+		await guard.getByRole("button", { name: "Discard", exact: true }).click();
+		await expect(editor).toHaveCount(0);
+		await expect.poll(async () => path.normalize((await active())?.cwd ?? "")).toBe(path.normalize(folder));
+		await projectRow.click();
+		await expect.poll(async () => (await active())?.sessionPath).toBe(project.sessionPath);
+		await expect(page.getByText("Show the project status.", { exact: true }).first()).toBeVisible();
 		expect(await fs.readFile(note, "utf8")).toBe("# Original\n");
 	} finally {
 		await exitApp(app);

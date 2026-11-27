@@ -6,6 +6,7 @@ import {
 	House,
 	ListChecks,
 	MessagesSquare,
+	PanelRightClose,
 	PanelsTopLeft,
 	Plug,
 	Terminal,
@@ -24,7 +25,7 @@ import { lastRead, rememberRead } from "../../lib/last-read";
 import { SessionRuntimeProvider, sessionRuntime } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
 import { CLOSED_FILE_VIEW, type InspectorTab, useUiStore } from "../../stores/ui";
-import { IconButton, PanelErrorBoundary, Sheet } from "../common";
+import { Button, IconButton, PanelErrorBoundary, Sheet } from "../common";
 import { PanelActionsContext } from "../panels/PanelChrome";
 import type { PanelView as LoadedPanelView, PanelViewProps } from "./PanelViews";
 
@@ -116,9 +117,12 @@ function PanelHeader({ bare }: { bare?: boolean }) {
 				views[0]);
 	// The pressed view icon beside it already names the view, so the title is said only to screen readers; it shows
 	// where no icon says it (a phone's sheet, whose views are the tab bar under the thumb, and a subagent's transcript).
-	const iconNamed = !bare && !bot && views.some(view => view.id === panelTab);
+	const iconNamed = !bare && views.some(view => view.id === panelTab);
 	return (
-		<div className="omp-panel-topbar drag-region flex min-h-(--sc-topbar-h) shrink-0 flex-wrap items-center gap-x-1 px-3">
+		<div
+			className="omp-panel-topbar drag-region relative flex min-h-(--sc-topbar-h) shrink-0 flex-wrap items-center gap-x-1 px-2"
+			data-view-header={iconNamed || undefined}
+		>
 			<span
 				className="min-w-0 truncate text-sc-sm font-medium text-(--sc-text)"
 				data-panel-title=""
@@ -132,23 +136,37 @@ function PanelHeader({ bare }: { bare?: boolean }) {
 					className="no-drag flex shrink-0 items-center"
 					data-panel-views=""
 				>
-					{views.map(view => (
-						<IconButton
-							key={view.id}
-							data-inspector-tab={view.id}
-							icon={<view.icon />}
-							label={t(view.labelKey)}
-							aria-pressed={panelTab === view.id}
-							onClick={() => setPanelTab(view.id)}
-							size="sm"
-						/>
-					))}
+					{views.map(view =>
+						bot && view.id === panelTab ? (
+							<Button
+								key={view.id}
+								aria-pressed="true"
+								data-inspector-tab={view.id}
+								icon={<view.icon />}
+								onClick={() => setPanelTab(view.id)}
+								size="sm"
+								variant="ghost"
+							>
+								{t(view.labelKey)}
+							</Button>
+						) : (
+							<IconButton
+								key={view.id}
+								data-inspector-tab={view.id}
+								icon={<view.icon />}
+								label={t(view.labelKey)}
+								aria-pressed={panelTab === view.id}
+								onClick={() => setPanelTab(view.id)}
+								size="sm"
+							/>
+						),
+					)}
 				</div>
 			)}
 			<IconButton
 				className="no-drag ml-auto shrink-0"
 				data-panel-close=""
-				icon={<X />}
+				icon={bare ? <X /> : <PanelRightClose />}
 				label={t("panel.close")}
 				onClick={togglePanel}
 				shortcut={actionShortcut("panel.toggle")}
