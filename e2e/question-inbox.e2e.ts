@@ -242,7 +242,9 @@ for (const lang of ["en", "ko"] as const) {
 					"data-inbox-outcome",
 					"changed",
 				);
-				await expect(sender.getByRole("status").filter({ hasText: ko ? "보낸 답변" : "Sent:" })).toBeVisible();
+				await expect(sender.locator("[data-question-inbox]").getByRole("status")).toHaveText(
+					ko ? "전체 답변 4개 중 3개의 전송을 확인했어요." : "Answers confirmed sent: 3 of 4.",
+				);
 				await captureTo(shots, sender, `${lang}-${width}-partial`);
 				await sender.getByRole("button", { name: ko ? "결과 닫기" : "Dismiss results" }).click();
 				await expect(sender.locator("[data-inbox-outcome]")).toHaveCount(0);

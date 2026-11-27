@@ -58,6 +58,10 @@ export interface AnswerReceipt {
 	detail?: string;
 }
 
+export function confirmedAnswers(receipts: readonly AnswerReceipt[]) {
+	return { sent: receipts.filter(receipt => receipt.outcome === "sent").length, total: receipts.length };
+}
+
 function recorded(item: Item | undefined, draft: ReviewedAnswer): AnswerOutcome | undefined {
 	const event = item?.events.find(entry => entry.actor === "owner" && entry.request === draft.requestId);
 	if (event?.kind === "answered" && event.question === draft.question.id) return "sent";
