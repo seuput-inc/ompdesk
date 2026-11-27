@@ -81,6 +81,7 @@ import {
 	transcriptFor,
 } from "./fixture";
 import { ACCOUNT_PROVIDERS, accountsFor } from "./fixture-accounts";
+import { quietBots } from "./fixture-quiet-bot";
 import {
 	BOARD_BUSY,
 	boardJobs,
@@ -826,13 +827,13 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				emit(IPC_EVENTS.REMOTE_STATE, remoteState);
 				return undefined;
 			case BOTS_COMMAND: {
-				// The harness has no bots: their files and other apps' bots read as nothing.
+				// The synthetic roster never reads bot files or contacts another app.
 				const action =
 					typeof payload === "object" && payload !== null && "action" in payload ? payload.action : null;
 				if (action === "file") return { exists: false, content: "", mtimeMs: 0, topics: [], history: [] };
 				if (action === "importSources") return { sources: [] };
 				if (action === "export") return { file: "" };
-				return { bots: [], items: [] };
+				return { bots: quietBots(stateFixture("tab-1").sessionFile ?? ""), items: [] };
 			}
 			case SCHEDULES_COMMAND:
 				return SCHEDULES_STATE;
