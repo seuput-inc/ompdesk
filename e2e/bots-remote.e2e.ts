@@ -21,6 +21,7 @@ import {
 	linkProxy,
 	makeRemoteProfile,
 	type RemoteInstance,
+	type RemoteProfile,
 } from "./remote-harness";
 
 /** Checks `ready` until it holds (30 s); throws `what` when it never does. */
@@ -61,6 +62,42 @@ async function botWithQuestion(a: Page): Promise<{ id: string; home: string; fol
 	return { id: bot.id, home, folder: bot.folder };
 }
 
+async function seedStoredBot(
+	profile: RemoteProfile,
+	bot: { id: string; name: string; folder: string },
+	sessionId: string,
+	text: string,
+) {
+	const journal = path.join(
+		profile.env.PI_CODING_AGENT_DIR,
+		"sessions",
+		"fixture",
+		`1761955200000_${sessionId}.jsonl`,
+	);
+	const timestamp = "2025-11-01T00:00:00.000Z";
+	await fs.mkdir(path.dirname(journal), { recursive: true });
+	await fs.writeFile(
+		journal,
+		[
+			{ type: "session", version: 3, id: sessionId, timestamp, cwd: bot.folder },
+			{
+				type: "message",
+				id: "handover",
+				parentId: null,
+				timestamp,
+				message: { role: "user", content: text, timestamp: Date.parse(timestamp) },
+			},
+		]
+			.map(entry => `${JSON.stringify(entry)}\n`)
+			.join(""),
+	);
+	await fs.writeFile(
+		path.join(profile.desktop, "bots.json"),
+		JSON.stringify([{ ...bot, home: journal, sessions: [journal] }]),
+	);
+	return journal;
+}
+
 test("a bot made on one computer is listed, chatted with and answered on its paired computer, and reads offline", async () => {
 	test.setTimeout(240_000);
 	const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-bots-remote-")));
@@ -82,33 +119,8 @@ test("a bot made on one computer is listed, chatted with and answered on its pai
 			env: { HOME: home, USERPROFILE: home },
 			prefs: { sidebar: { groupAliases: { [folder]: alias } } },
 		});
-		const journal = path.join(
-			hostProfile.env.PI_CODING_AGENT_DIR,
-			"sessions",
-			"fixture",
-			`1761955200000_${oldId}.jsonl`,
-		);
-		const timestamp = "2025-11-01T00:00:00.000Z";
-		await Promise.all([fs.mkdir(folder), fs.mkdir(home), fs.mkdir(path.dirname(journal), { recursive: true })]);
-		await fs.writeFile(
-			journal,
-			[
-				{ type: "session", version: 3, id: oldId, timestamp, cwd: folder },
-				{
-					type: "message",
-					id: "handover",
-					parentId: null,
-					timestamp,
-					message: { role: "user", content: text, timestamp: Date.parse(timestamp) },
-				},
-			]
-				.map(entry => `${JSON.stringify(entry)}\n`)
-				.join(""),
-		);
-		await fs.writeFile(
-			path.join(hostProfile.desktop, "bots.json"),
-			JSON.stringify([{ ...old, home: journal, sessions: [journal] }]),
-		);
+		await Promise.all([fs.mkdir(folder), fs.mkdir(home)]);
+		const journal = await seedStoredBot(hostProfile, old, oldId, text);
 		const clientProfile = await makeRemoteProfile(parent, "b", {
 			language: "en",
 			theme: "light",
@@ -257,15 +269,17 @@ test("paired bot chat omits quiet lookups live and after reopening, without hidi
 		const home = path.join(parent, "home");
 		await fs.mkdir(home);
 		const profile = await makeRemoteProfile(parent, "a", { ...options, env: { HOME: home, USERPROFILE: home } });
+		const bot = { id: "quiet-courier", name: "Courier", folder: path.join(home, "courier") };
+		await fs.mkdir(bot.folder);
+		const journal = await seedStoredBot(profile, bot, "quiet-home", "Morning handover");
 		host = await launchRemote(profile);
 		client = await launchRemote(await makeRemoteProfile(parent, "b", options));
 		const b = client.page;
 		const device = await connectHost(host.page, b, "Studio");
-		const bot = await botWithQuestion(host.page);
 		const open = async () => {
 			await b.locator(`[data-bot-row="${bot.id}"]`).click();
 			const active = () => b.evaluate(async () => (await window.omp.tabs.list()).find(tab => tab.active));
-			await expect.poll(active).toMatchObject({ sessionPath: bot.home, device, status: "ready" });
+			await expect.poll(active).toMatchObject({ sessionPath: journal, device, status: "ready" });
 			const tab = await active();
 			if (!tab) throw new Error("No active remote bot chat");
 			return tab.tabId;
