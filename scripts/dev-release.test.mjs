@@ -3,7 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { onTestFinished, test } from "vitest";
 import { admission } from "./dev-release.mjs";
 
 const jobs = [
@@ -61,9 +61,9 @@ test("only a complete green push on the still-current dev batch can release", ()
 	assert.equal(admission({ ...batch, changes: 1, exceptional: true }), "eligible");
 });
 
-test("an exact candidate stays pinned and a competing release cannot replace the winner", t => {
+test("an exact candidate stays pinned and a competing release cannot replace the winner", () => {
 	const cwd = mkdtempSync(join(tmpdir(), "release-origin-"));
-	t.after(() => rmSync(cwd, { recursive: true, force: true }));
+	onTestFinished(() => rmSync(cwd, { recursive: true, force: true }));
 	const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
 	const opts = { cwd, env, encoding: "utf8" };
 	const git = (...args) =>
