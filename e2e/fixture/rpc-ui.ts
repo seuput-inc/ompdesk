@@ -22,8 +22,14 @@ import {
 	titleEffective,
 } from "../../resources/gui-bridge/modes/auto-title-contracts";
 import { autopilotRunning } from "../../resources/gui-bridge/modes/autopilot-core";
-import type { BotContext } from "../../resources/gui-bridge/modes/bots-contracts";
-import { chatFacts, parseBotContext } from "../../resources/gui-bridge/modes/bots-core";
+import {
+	BOT_ENTRY,
+	BOT_HOME_OBSERVATION,
+	BOT_HOME_PERSIST,
+	BOT_METHOD,
+	requireBotHome,
+} from "../../resources/gui-bridge/modes/bots-contracts";
+import { chatFacts, latestBot, parseBotContext, sameBot } from "../../resources/gui-bridge/modes/bots-core";
 import { parseJudgeAssistEnv } from "../../resources/gui-bridge/modes/judge-assist-contracts";
 import {
 	NEXT_PROMPT_ENTRY,
@@ -186,6 +192,12 @@ export function runRpcUi(): void {
 		}
 		return branch.reverse();
 	};
+	const stockEntries = (source: readonly Entry[]) =>
+		source.map(entry =>
+			entry.type === "message" && (entry.message as AgentMessage).role === "custom"
+				? { ...(entry.message as AgentMessage), type: "custom_message" }
+				: entry,
+		);
 	/** A message's text blocks joined by `separator` (stock's branch picker joins with none). */
 	const messageText = (message: AgentMessage, separator: string) =>
 		typeof message.content === "string"
@@ -248,9 +260,9 @@ export function runRpcUi(): void {
 				`${JSON.stringify({ type: "fixture.journal", op, file: nodePath.basename(file), entries: entries.length, at: Date.now(), recordedBy: sessionId })}\n`,
 			);
 	};
-	const persistSession = () => {
+	const persistSession = (force = false) => {
 		const file = fresh ? fresh.file : resumed && sessionFile ? resumed.file : sessionFile;
-		if (!file || entries.length === 0) return;
+		if (!file || (!entries.length && !force)) return;
 		const lines = [
 			titleSlot(sessionTitle, titleSource),
 			{
@@ -482,8 +494,6 @@ export function runRpcUi(): void {
 	if (standIn) Object.assign(model, { provider: "openai-codex", id: "gpt-6.1-sol", name: "GPT-6.1 SOL" });
 	const lanes: Record<"steering" | "followUp", string[]> = { steering: [], followUp: [] };
 	let isStreaming = false;
-	/** The bot context main last handed this chat (gui-bridge modes/bots.ts): a first-run home chat answers as one. */
-	let botContext: BotContext | null = null;
 	/** A `fixture flow` run's compaction is under way (`compact-start` until `compact-end` or the turn's end). */
 	let isCompacting = false;
 	/** The thinking selector and effort; `fixture reply actions` turns stock auto on and classifies the turn high. */
@@ -556,6 +566,14 @@ export function runRpcUi(): void {
 		dumpTools: autopilot.dumpTools() ?? [],
 		contextUsage: { tokens: 74_800, contextWindow: 128_000, percent: 58 },
 	});
+	const botHome = () => {
+		const live = state();
+		return {
+			cwd: (!fresh && resumed?.cwd) || process.cwd(),
+			sessionId: live.sessionId,
+			sessionPath: live.sessionFile,
+		};
+	};
 	/** Stock `/slow` applies to the model only with `OMP_GUI_TEST_SLOW_MODE=1` (other suites keep their Run settings). */
 	const slowModeSupported = process.env.OMP_GUI_TEST_SLOW_MODE === "1";
 	let slowModeEnabled = false;
@@ -1897,17 +1915,26 @@ export function runRpcUi(): void {
 		"agent_control.worker": () => ({}),
 		// gui-bridge modes/bots.ts `agent_control.bot`: the bot chat's context, and what its branch says for the core's
 		// first run (bots-core.ts `chatFacts`, over the entries viewed in stock's shape as `agent_control.mail` does).
-		"agent_control.bot": params => {
+		[BOT_HOME_OBSERVATION]: params => ({
+			...botHome(),
+			...(typeof params.id === "string"
+				? { journaled: hasMailEntry(stockEntries(entries), params.id), queued: false }
+				: {}),
+		}),
+		[BOT_HOME_PERSIST]: expected => {
+			requireBotHome(expected, botHome());
+			persistSession(true);
+			return {};
+		},
+		[BOT_METHOD]: params => {
+			if (params.expectedHome !== undefined) requireBotHome(params.expectedHome, botHome());
 			const context = parseBotContext(params);
-			const changed = JSON.stringify(context) !== JSON.stringify(botContext);
-			botContext = context;
-			const asStock = entries.map(entry =>
-				entry.type === "message" && (entry.message as AgentMessage).role === "custom"
-					? { ...(entry.message as AgentMessage), type: "custom_message" }
-					: entry,
-			);
+			if (!context) throw new Error(`${BOT_METHOD} needs a bot context`);
+			const branch = activeBranch();
+			const changed = !sameBot(latestBot(branch), context);
+			if (changed) append({ type: "custom", customType: BOT_ENTRY, data: context }, Date.now());
 			const kickoff = typeof params.kickoff === "string" ? params.kickoff : undefined;
-			return { changed, ...chatFacts(asStock, kickoff, isStreaming) };
+			return { changed, ...chatFacts(stockEntries(branch), kickoff, isStreaming) };
 		},
 		// gui-bridge agent-control.ts `agent_control.attachment`: a file in this omp's folder, or its n-th newest picture.
 		"agent_control.attachment": params => {
@@ -1955,14 +1982,20 @@ export function runRpcUi(): void {
 		// a running one reads it at its next step (stock's `aside`), whatever its kind. The woken turn's reply names the
 		// report it read.
 		"agent_control.mail": params => {
-			const details = (params.details ?? {}) as Record<string, unknown>;
+			const { peerBotHome, ...details } = (params.details ?? {}) as Record<string, unknown>;
+			const bot = latestBot(activeBranch())?.bot;
+			if (peerBotHome !== undefined) {
+				requireBotHome(peerBotHome, botHome());
+				if (!bot || bot.id !== peerBotHome.botId || !bot.firstRun || bot.paused)
+					throw new Error("The bot's active branch changed.");
+			}
 			// As the bridge: a report whose id the journal holds (delivered before a relaunch) is not repeated. The
 			// fixture journals custom messages as `message` entries; the bridge's rule reads stock's `custom_message`
 			// shape, so the entries are viewed in that shape.
-			const asStock = entries.map(entry =>
-				entry.type === "message" ? { ...(entry.message as AgentMessage), type: "custom_message" } : entry,
-			);
-			if (typeof details.id === "string" && hasMailEntry(asStock, details.id))
+			if (
+				typeof details.id === "string" &&
+				hasMailEntry(stockEntries(peerBotHome ? entries : activeBranch()), details.id)
+			)
 				return { duplicate: true, journaled: true };
 			const mail = {
 				role: "custom",
@@ -1985,7 +2018,7 @@ export function runRpcUi(): void {
 							type: "text",
 							// A first-run home chat answers OMPdesk's kickoff as its rules say: a greeting and one question.
 							text:
-								botContext?.bot.firstRun && String(details.id).startsWith("kickoff-")
+								bot?.firstRun && (peerBotHome !== undefined || String(details.id).startsWith("kickoff-"))
 									? "Hi! What should I start on?"
 									: `Read the ${String(details.kind)} report from ${String(details.from)}.`,
 						},
@@ -6237,7 +6270,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			}
 			// A first-run home chat's owner's first task: one small piece of it shown, then SOUL.md written (the rules'
 			// order, bots-core.ts FIRST_RUN_RULES).
-			const bot = botContext?.bot;
+			const bot = latestBot(activeBranch())?.bot;
 			if (bot?.firstRun) {
 				const work: AgentMessage = {
 					role: "assistant",

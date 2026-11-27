@@ -117,6 +117,7 @@ export class DevicesRig {
 		const services = {
 			onRunningChange: vi.fn(() => () => {}),
 			attachQuota: vi.fn(),
+			observeBotHomes: vi.fn(),
 			disposeAll: vi.fn(),
 			runningPeers: () => [],
 			dropPeer: vi.fn(),

@@ -75,6 +75,12 @@ pub(crate) fn kickoff_id(home: &str, text: &str, attempt: usize) -> String {
     format!("kickoff-{}-{attempt}", &print[..16])
 }
 
+pub(super) fn kickoff_mail(id: &str, text: &str, now: f64) -> Mail {
+    let mut mail = Mail::new(id, "ompdesk", "OMPdesk", "", MailKind::Question, text, now);
+    mail.instruction = Some(KICKOFF_ASK.to_owned());
+    mail
+}
+
 /// Whether `tab` is the home chat of a bot in its first run.
 pub(crate) fn first_run_home(bot: &BotRecord, tab: &ControlTab) -> bool {
     bot.first_run && bot.home.is_some() && tab.session_path == bot.home
@@ -170,17 +176,8 @@ impl AgentControl {
             return false;
         }
         self.bots_changed();
-        let mut mail = Mail::new(
-            &id,
-            "ompdesk",
-            "OMPdesk",
-            "",
-            MailKind::Question,
-            &text,
-            self.now(),
-        );
-        mail.instruction = Some(KICKOFF_ASK.to_owned());
-        self.mail_session(&home, mail, true).await;
+        self.mail_session(&home, kickoff_mail(&id, &text, self.now()), true)
+            .await;
         true
     }
 

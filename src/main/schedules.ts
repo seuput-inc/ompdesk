@@ -482,13 +482,13 @@ export class ScheduleService {
 	 * schedule that device's (its runs count against its daily model limit here); a save here makes it this computer's.
 	 * A run now from a device is charged to that device and refused past its limit.
 	 */
-	async command(request: SchedulesRequest, origin?: string): Promise<SchedulesState> {
+	async command(request: SchedulesRequest, origin?: string, hostWindow?: boolean): Promise<SchedulesState> {
 		// A thread chat's mirror carries the Slack app's token, which only this side holds: never a paired device's.
 		if (request.action === "mirror") {
 			if (origin !== undefined) throw new Error("A bot's Slack thread chat is this computer's own");
 			return this.mirrorAction(request);
 		}
-		return this.#send<SchedulesState>("schedules.command", { request, origin });
+		return this.#send<SchedulesState>("schedules.command", { request, origin, hostWindow });
 	}
 
 	/**

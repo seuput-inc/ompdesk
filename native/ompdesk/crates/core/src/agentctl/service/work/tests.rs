@@ -4,6 +4,7 @@
 //! captured from the TypeScript (`captured.json`).
 
 mod bot_provenance;
+mod peer_create;
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -3005,13 +3006,16 @@ async fn paired_create_uses_the_hosts_folder_and_returns_its_copy() {
     let folder = root.0.join("ada-2");
     let preview = json!({"action":"createFolder","name":"Ada!"});
     let proposed = from(preview.clone()).await.unwrap();
-    assert_eq!(proposed, json!({"folder":folder}));
-    assert_eq!(proposed, host.bots_command(preview.clone()).await.unwrap());
+    assert_eq!(proposed, json!({"folder":folder,"peerCreate":true}));
+    assert_eq!(
+        host.bots_command(preview.clone()).await.unwrap(),
+        json!({"folder":folder})
+    );
     assert_eq!(
         from(json!({"action":"createFolder","name":""}))
             .await
             .unwrap(),
-        json!({"folder":root.0})
+        json!({"folder":root.0,"peerCreate":true})
     );
     assert!(!folder.exists());
     let request = json!({"action":"create","name":"Ada!","soul":"# Ada!\n\nReview.",

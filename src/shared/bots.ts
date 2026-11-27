@@ -11,7 +11,7 @@
  */
 import type { LOOK_EVERY } from "./bot-limits";
 import type { ModelRolesResult } from "./rpc-types";
-import type { ScheduleEvent } from "./schedules";
+import type { ScheduleEvent, ScheduleFrequency } from "./schedules";
 import type { ApprovalMode } from "./tool-approval";
 
 /**
@@ -80,6 +80,7 @@ export interface Bot {
 	/** Its first run lasts: its home chat is sent the kickoff and carries the first-run rules until the owner's first
 	 *  turn there ends (the core's `bot_first_run.rs`). */
 	firstRun?: boolean;
+	peerPending?: "home" | "kickoff" | "limit";
 	/** The kickoffs sent to its home chat (their mail ids), oldest first. */
 	kickoffs?: string[];
 	/** The newest kickoff's turn ended without a word: its page offers Try again. */
@@ -144,6 +145,8 @@ export const BOT_QUIET_KINDS = ["permission", "done", "failed"] as const;
 export type BotQuietKind = (typeof BOT_QUIET_KINDS)[number];
 /** The longest purpose a new bot is given (Orca's `BOT_PURPOSE_MAX_LENGTH`; the core refuses a longer one). */
 export const BOT_PURPOSE_MAX = 200;
+/** Prefix for a host refusal after its durable lookup confirmed there is no bot for this create. */
+export const BOT_CREATE_REFUSED = "[bot_create_refused] ";
 export const ITEM_STATUSES = ["planned", "working", "waiting", "needs_you", "done", "canceled"] as const;
 /** `waiting`: on something outside the bot and its owner; `needs_you`: on the owner's answer. */
 export type ItemStatus = (typeof ITEM_STATUSES)[number];
@@ -359,6 +362,11 @@ export interface BotSeedSkill {
 	content: string;
 }
 
+export interface BotTemplateRoutine {
+	label: string;
+	frequency: Extract<ScheduleFrequency, { kind: "daily" | "interval" }>;
+}
+
 export interface BotDeletePreview {
 	chats: number;
 	workers: number;
@@ -379,6 +387,7 @@ export type BotsRequest =
 			/** Its whole SOUL.md (a template's seed). A file already in the folder is kept. */
 			soul?: string;
 			skills?: BotSeedSkill[];
+			routines?: readonly BotTemplateRoutine[];
 			/** The first message OMPdesk sends its home chat in place of the plain kickoff (a template's, an import's). */
 			kickoff?: string;
 	  } & ({ device: string; folder?: never } | { device?: undefined; folder?: string }))
@@ -486,7 +495,7 @@ export interface BotExportRequest {
 
 export type BotCreateFolder = { action: "createFolder"; name: string; device?: string };
 export type BotCreateModels = { action: "createModels"; device?: string; callerTabId: string };
-type BotFolderPreview = { folder: string };
+type BotFolderPreview = { folder: string; peerCreate?: true };
 export type BotsCall =
 	| BotsRequest
 	| { action: "deletePreview"; id: string }

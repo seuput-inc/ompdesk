@@ -8257,8 +8257,35 @@ export const en: Record<string, string> = {
 	"bots.new.modelDefault": "omp's default",
 	"bots.new.computer": "Computer",
 	"bots.new.local": "This computer",
-	"bots.new.folder": "Bot folder root on {host}: {folder}",
-	"bots.new.nameTaken": "A bot on this computer already has that name.",
+	"bots.new.host.ready": "Ready",
+	"bots.new.host.offline": "Offline",
+	"bots.new.host.update": "Update OMPdesk",
+	"bots.new.host.busy": "Busy: no folder response",
+	"bots.new.host.checking": "Checking folder…",
+	"bots.new.host.connecting": "Connecting…",
+	"bots.new.group.ready": "Ready computers",
+	"bots.new.group.unavailable": "Unavailable computers",
+	"bots.new.folder": "Folder on {host}: {folder}",
+	"bots.new.activateRoutines": "Routines start off. Turn them on at {host}.",
+	"bots.automations.turnOnAt": "Turn on at {host}",
+	"bots.new.pending.home": "Waiting for the computer that created this bot to open its home chat.",
+	"bots.new.pending.kickoff":
+		"The first message is saved. It will be delivered when the creating computer reconnects to the home chat.",
+	"bots.new.pending.limit":
+		"This device reached its model limit. The first message is saved and will be retried when the limit resets.",
+	"bots.new.error.update":
+		"The version of OMPdesk on {host} is too old to create this bot. Update that computer and try again.",
+	"bots.new.error.name": "A bot named “{name}” already exists on {host}. Choose another name.",
+	"bots.new.error.requests":
+		"You’ve reached the requests-per-day limit on {host}. Try again after midnight on that computer.",
+	"bots.new.error.tokens":
+		"You’ve reached the tokens-per-day limit on {host}. Try again after midnight on that computer.",
+	"bots.new.error.limit":
+		"You’ve reached a daily request or token limit on {host}. Try again after midnight on that computer.",
+	"bots.new.error.offline": "Can’t reach {host}. Reconnect and check that computer’s bot list.",
+	"bots.new.error.refused": "{host} declined the request. No bot was created. Reason:",
+	"bots.new.error.unconfirmed":
+		"Couldn’t confirm whether {host} created the bot. Check its bot list before trying again.",
 	"bots.new.creatingOn": "Creating on {host}…",
 	"bots.new.skills": "Skills it comes with",
 	"bots.new.templates": "Templates",

@@ -56,10 +56,12 @@ import { openExternal } from "../../lib/open-external";
 import { sessionRun } from "../../lib/session-run";
 import { useBotsStore } from "../../stores/bots";
 import { tabSummary, useHostedSessionsStore } from "../../stores/hosted-sessions";
+import { useRemoteStore } from "../../stores/remote";
 import { useRuntimeTabId } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
 import { toast, toastError } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";
+import { webRuntime } from "../../web/runtime";
 import {
 	Badge,
 	Banner,
@@ -76,6 +78,7 @@ import {
 import { BotActionsMenu } from "./BotActionsMenu";
 import { BotAvatar } from "./BotAvatar";
 import { BotLineText } from "./BotLineText";
+import { useBotHostName } from "./BotOwner";
 import {
 	type BotAutomation,
 	botAutomations,
@@ -178,6 +181,12 @@ function BotFirstScreen({ bot }: { bot: Bot }) {
 	const [retrying, setRetrying] = useState(false);
 	const sent = (bot.kickoffs?.length ?? 0) > 0;
 	const silent = bot.kickoffSilent === true;
+	if (bot.peerPending)
+		return (
+			<Banner compact data-bot-pending={bot.peerPending} variant="neutral">
+				{t(`bots.new.pending.${bot.peerPending}`)}
+			</Banner>
+		);
 	if (!bot.firstRun || (!silent && (!launch || (bot.home && sent)))) return null;
 	const steps: { label: string; step: LaunchStep }[] = [
 		{ label: t("bots.first.create"), step: "done" },
@@ -529,6 +538,11 @@ function Workers({ bot }: { bot: Bot }) {
 function Automations({ bot, inspector = false }: { bot: Bot; inspector?: boolean }) {
 	const t = useT();
 	const schedules = useSchedulesOf(bot.device);
+	const remoteName = useBotHostName(bot.device);
+	const localName = useRemoteStore(s => s.state?.host.name);
+	const hostWindow = !bot.device && !webRuntime();
+	const hostName = remoteName || localName || t("bots.new.local");
+	const activateAtHost = t("bots.new.activateRoutines", { host: hostName });
 	const [all, setAll] = useState(false);
 	const [deleting, setDeleting] = useState<BotAutomation | null>(null);
 	const rows = botAutomations(bot, schedules);
@@ -593,69 +607,90 @@ function Automations({ bot, inspector = false }: { bot: Bot; inspector?: boolean
 				{!inspector && rows.length === 0 ? (
 					<EmptyState size="row" title={t("bots.automations.none")} />
 				) : (
-					shown.map(row => (
-						<ListRow
-							actionCount={3}
-							actions={
-								<>
-									<IconButton
-										icon={<Play />}
-										label={t("bots.automations.runNow")}
-										onClick={() =>
-											run({ action: "runNow", id: row.schedule.id }, t("bots.automations.queued"))
-										}
-										size="sm"
-									/>
-									{/* Settings › Schedules is this computer's: a paired host's bot's schedules are listed here only. */}
-									{!bot.device && (
+					shown.map(row => {
+						const needsHost = !hostWindow && row.schedule.needsHostActivation;
+						return (
+							<ListRow
+								actionCount={3}
+								actions={
+									<>
+										{!needsHost && (
+											<IconButton
+												icon={<Play />}
+												label={t("bots.automations.runNow")}
+												onClick={() =>
+													run({ action: "runNow", id: row.schedule.id }, t("bots.automations.queued"))
+												}
+												size="sm"
+											/>
+										)}
+										{/* Settings › Schedules is this computer's: a paired host's bot's schedules are listed here only. */}
+										{!bot.device && (
+											<IconButton
+												icon={<ExternalLink />}
+												label={t("bots.automations.open")}
+												onClick={() => useUiStore.getState().openSettings("schedules")}
+												size="sm"
+											/>
+										)}
 										<IconButton
-											icon={<ExternalLink />}
-											label={t("bots.automations.open")}
-											onClick={() => useUiStore.getState().openSettings("schedules")}
+											icon={<Trash2 />}
+											label={t("bots.automations.delete")}
+											onClick={() => setDeleting(row)}
 											size="sm"
 										/>
-									)}
-									<IconButton
-										icon={<Trash2 />}
-										label={t("bots.automations.delete")}
-										onClick={() => setDeleting(row)}
-										size="sm"
-									/>
-								</>
-							}
-							actionsOnHover
-							data-bot-automation={row.state}
-							description={
-								row.state === "failed"
-									? (row.last?.error ?? t("bots.automations.lastFailed"))
-									: row.next
-										? t("bots.automations.next", { when: formatClock(row.next) })
-										: undefined
-							}
-							key={row.schedule.id}
-							leading={
-								row.state === "failed" ? (
-									<CircleAlert aria-hidden className="size-4 text-(--sc-danger)" />
-								) : row.state === "running" ? (
-									<Spinner size="sm" />
-								) : (
-									<Clock aria-hidden className="size-4 text-(--sc-text-muted)" />
-								)
-							}
-							meta={
-								<Badge
-									size="xs"
-									variant={row.state === "paused" ? "muted" : row.state === "failed" ? "error" : "default"}
-								>
-									{t(`bots.automations.state.${row.state}`)}
-								</Badge>
-							}
-							onClick={() => run({ action: "setEnabled", id: row.schedule.id, enabled: !row.schedule.enabled })}
-							size="sm"
-							title={label(row)}
-							tooltip={row.schedule.enabled ? t("bots.automations.pause") : t("bots.automations.resume")}
-						/>
-					))
+									</>
+								}
+								actionsOnHover
+								data-bot-automation={row.state}
+								description={
+									needsHost ? (
+										<>
+											<span aria-hidden>{t("bots.automations.turnOnAt", { host: hostName })}</span>
+											<span className="sr-only">{activateAtHost}</span>
+										</>
+									) : row.state === "failed" ? (
+										(row.last?.error ?? t("bots.automations.lastFailed"))
+									) : row.next ? (
+										t("bots.automations.next", { when: formatClock(row.next) })
+									) : undefined
+								}
+								descriptionLines={needsHost ? 2 : 1}
+								key={row.schedule.id}
+								leading={
+									row.state === "failed" ? (
+										<CircleAlert aria-hidden className="size-4 text-(--sc-danger)" />
+									) : row.state === "running" ? (
+										<Spinner size="sm" />
+									) : (
+										<Clock aria-hidden className="size-4 text-(--sc-text-muted)" />
+									)
+								}
+								meta={
+									<Badge
+										size="xs"
+										variant={row.state === "paused" ? "muted" : row.state === "failed" ? "error" : "default"}
+									>
+										{t(`bots.automations.state.${row.state}`)}
+									</Badge>
+								}
+								onClick={
+									needsHost
+										? undefined
+										: () => run({ action: "setEnabled", id: row.schedule.id, enabled: !row.schedule.enabled })
+								}
+								size="sm"
+								title={label(row)}
+								tooltip={
+									needsHost
+										? activateAtHost
+										: row.schedule.enabled
+											? t("bots.automations.pause")
+											: t("bots.automations.resume")
+								}
+							/>
+						);
+					})
 				)}
 				{inspector && (
 					<Button

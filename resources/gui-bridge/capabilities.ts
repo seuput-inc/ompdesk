@@ -828,6 +828,11 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			"modelRegistry.resolver()",
 			"messages",
 			"sessionManager.getCwd()",
+			"sessionManager.getSessionId()",
+			"sessionManager.getSessionFile()",
+			"sessionManager.getBranch()",
+			"sessionManager.getEntries()",
+			"sessionManager.flush()",
 			"agent.hasIrcInterrupts()",
 			"agent.hasQueuedAsides()",
 		],
@@ -882,7 +887,15 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 	},
 	/** modes/bots.ts: the public `before_agent_start` hook (a `message` result) and the journal for the bot's payload. */
 	bots: {
-		session: ["sessionManager.getBranch()", "sessionManager.appendCustomEntry()"],
+		session: [
+			"sessionManager.getBranch()",
+			"sessionManager.appendCustomEntry()",
+			"sessionManager.getCwd()",
+			"sessionManager.getSessionId()",
+			"sessionManager.getSessionFile()",
+			"sessionManager.ensureOnDisk()",
+			"sessionManager.flush()",
+		],
 	},
 	/** xdev-notice.ts: the public `context` hook and the context's `getSystemPrompt()` (checked at run time). */
 	xdevNotice: {},

@@ -39,10 +39,16 @@
 import { randomUUID } from "node:crypto";
 import { isAbsolute, relative } from "node:path";
 import { z } from "zod";
+import {
+	BOT_HOME_OBSERVATION,
+	BOT_HOME_PERSIST,
+	BOT_METHOD,
+	requireBotHome,
+} from "../../../resources/gui-bridge/modes/bots-contracts";
 import { PROMPT_ORIGIN_HOST_ID, type PromptOriginEnv } from "../../../resources/gui-bridge/prompt-origin-contracts";
 import { ACCOUNT_ROTATION_MODES } from "../../shared/account-rotation";
 import { type AgentReviewResult, reviewUnmerged } from "../../shared/agent-control";
-import type { SharedBotsDelta } from "../../shared/bots";
+import { BOT_CREATE_REFUSED, type SharedBotsDelta } from "../../shared/bots";
 import { codedError, ipcErrorCode, isIpcErrorCode } from "../../shared/ipc-error-codes";
 import {
 	HOST_UPDATE_ACTIONS,
@@ -76,7 +82,7 @@ import { branchEvidence, branchFacts, landingFacts, mergeBranch, removeSafeWorkt
 import { type AnswerStep, TargetAnswer } from "../agent-control/target-answer";
 import { AtomicSaver } from "../atomic-file";
 import type { BackgroundWorkMember } from "../background-work";
-import type { HostBots } from "../bots";
+import type { HostBots, PeerBotIntent } from "../bots";
 import type { BridgeConnectResult } from "../bridge-health";
 import type { CheckoutMember } from "../checkout-peers";
 import { controlEnvFor } from "../control-socket/env";
@@ -438,6 +444,9 @@ interface HostTab extends RunTracking {
 	/** Session file the sidecar last reported (live-owner checks for delete/rename). */
 	sessionFile: string | undefined;
 	graceTimer: NodeJS.Timeout | undefined;
+	botTimer?: NodeJS.Timeout;
+	botChecking?: boolean;
+	botAgain?: boolean;
 	/** The rtabs this tab had before a relaunched device adopted it under a new one, newest first (`tabs.kept`). */
 	formerRtabs: string[];
 	run: RunState;
@@ -560,6 +569,12 @@ export type HostedAgentReview = (
 const Rtab = z.string().min(1).max(128);
 const AbsolutePath = z.string().min(1).refine(isAbsolute, "absolute path required");
 const SessionPath = z.string().endsWith(".jsonl");
+const ObservedBotHome = z.object({
+	cwd: AbsolutePath,
+	sessionId: z.string().min(1),
+	sessionPath: SessionPath.refine(isAbsolute),
+});
+const ObservedBotMail = ObservedBotHome.extend({ journaled: z.boolean(), queued: z.boolean() });
 const Scope = z.enum(["local", "global"]);
 
 const RtabParams = z.object({ rtab: Rtab });
@@ -721,6 +736,7 @@ export class LocalHostServices implements HostServices {
 	readonly #deps: HostServicesDeps;
 	readonly #graceMs: number;
 	readonly #tabs = new Map<string, HostTab>();
+	readonly #botClaims = new Set<string>();
 	/** Moves a device's command has on its way, by `resumeId` (turn-resume.ts `trackMove`). */
 	readonly #moves = new MovesInFlight();
 	readonly #uploadOwner = ++nextUploadOwner;
@@ -1805,7 +1821,21 @@ export class LocalHostServices implements HostServices {
 				const { request } = parse(BotsCommandParams, method, params);
 				const bots = this.#bots();
 				const createKey = request.action === "create" ? randomUUID() : undefined;
-				const change = () => bots.from(request, peer.deviceId, peer.name, createKey);
+				let receipt: Promise<boolean> | undefined;
+				const kept = createKey
+					? () => (receipt ??= bots.created(peer.deviceId, createKey).catch(() => true))
+					: undefined;
+				const change = async () => {
+					try {
+						return await bots.from(request, peer.deviceId, peer.name, createKey);
+					} catch (error) {
+						if (kept && (await kept()) === false)
+							throw new Error(BOT_CREATE_REFUSED + (error instanceof Error ? error.message : String(error)), {
+								cause: error,
+							});
+						throw error;
+					}
+				};
 				// Rust str::trim uses Unicode White_Space, not JavaScript's trim set.
 				const turn =
 					request.action === "roomAsk" ||
@@ -1819,7 +1849,7 @@ export class LocalHostServices implements HostServices {
 					1,
 					change,
 					answer => typeof answer === "object" && answer !== null && !("refused" in answer),
-					createKey ? () => bots.created(peer.deviceId, createKey) : undefined,
+					kept,
 				);
 			}
 			case "host.projects.command":
@@ -2000,6 +2030,107 @@ export class LocalHostServices implements HostServices {
 	/** What devices list of this computer's bots changed (the core's `botsShared`): every connected device follows. */
 	botsChanged(change: SharedBotsDelta): void {
 		for (const conn of this.#conns) emitSafely(conn, BOTS_EVENT, change);
+		if (change.set.bots.length || change.set.items.length || change.remove.items.length) this.observeBotHomes();
+	}
+
+	observeBotHomes(device?: string): void {
+		for (const tab of this.#tabs.values()) if (!device || tab.peerId === device) this.#observeBot(tab);
+	}
+
+	#observeBot(tab: HostTab): void {
+		const { conn, sidecar, omp } = tab;
+		const bots = this.#deps.bots?.();
+		if (!conn || tab.viewing || !sidecar.processAlive || !sidecar.bridgeRequest || !bots) return;
+		if (tab.botChecking) {
+			tab.botAgain = true;
+			return;
+		}
+		clearTimeout(tab.botTimer);
+		tab.botChecking = true;
+		const active = () =>
+			sidecar.processAlive && tab.conn === conn && tab.omp === omp && this.#connOf.get(tab.peerId) === conn;
+		const request = sidecar.bridgeRequest.bind(sidecar);
+		const inspect = (method: string, params?: unknown) => request(method, params, 15_000);
+		const pass = async (): Promise<number | undefined> => {
+			// Neither tab.open/adoptCwd nor the cached session path proves which journal this omp is writing.
+			const observed = ObservedBotHome.safeParse(
+				await inspect(BOT_HOME_OBSERVATION).catch(error => {
+					if (error instanceof Error && error.message.includes("Unknown bridge method:")) return null;
+					throw error;
+				}),
+			);
+			if (!observed.success || !active()) return;
+			const identity = observed.data;
+			const home = { ...identity, device: conn.peer.deviceId };
+			// Serialize materialization with the core's first-wins claim. A competing chat never gets bot context.
+			const claim = `${home.device}\0${home.cwd}`;
+			if (this.#botClaims.has(claim)) return 250;
+			this.#botClaims.add(claim);
+			let intent: PeerBotIntent | null;
+			try {
+				if (!(await bots.candidate(home)) || !active()) return;
+				await inspect(BOT_HOME_PERSIST, identity);
+				if (!active()) return;
+				intent = await bots.observe(home);
+			} finally {
+				this.#botClaims.delete(claim);
+			}
+			if (!intent || !active()) return;
+			await inspect(BOT_METHOD, { ...intent.context, expectedHome: identity });
+			const pending = intent.mail;
+			if (!pending || !active()) return;
+			const mail = { ...home, id: pending.id };
+			const seen = ObservedBotMail.parse(await inspect(BOT_HOME_OBSERVATION, { id: pending.id }));
+			if (!active()) return;
+			requireBotHome(identity, seen);
+			if (seen.journaled) {
+				await bots.receipt({ ...mail, journaled: true });
+				return;
+			}
+			if (seen.queued || !this.#quota?.view(home.device)) return 5_000;
+			try {
+				// Peer ownership and quota are checked by the same command path as a live device's mail.
+				const sent = await this.#command(
+					conn.peer,
+					{
+						rtab: tab.rtab,
+						command: {
+							type: "agent_control_mail",
+							content: pending.content,
+							details: {
+								id: pending.id,
+								from: "ompdesk",
+								fromTitle: "OMPdesk",
+								kind: "question",
+								text: pending.text,
+								peerBotHome: { ...identity, botId: intent.context.bot.id },
+							},
+							triggerTurn: true,
+						},
+					},
+					true,
+				);
+				// A successful send may only have queued the message; ask the live journal before acknowledging it.
+				return sent.success ? 250 : 30_000;
+			} catch (error) {
+				if (ipcErrorCode(error) !== "remote_limit_reached") throw error;
+				await bots.limited(mail);
+				const now = new Date();
+				return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - now.getTime();
+			}
+		};
+		void pass()
+			.catch(() => 30_000)
+			.then(delay => {
+				tab.botChecking = false;
+				if (tab.botAgain) {
+					tab.botAgain = false;
+					this.#observeBot(tab);
+				} else if (delay !== undefined && active()) {
+					tab.botTimer = setTimeout(() => this.#observeBot(tab), delay);
+					tab.botTimer.unref?.();
+				}
+			});
 	}
 
 	/** One of this computer's bots posted in device `device`'s group: told to that device's link; false when it has none. */
@@ -2134,6 +2265,7 @@ export class LocalHostServices implements HostServices {
 	 */
 	#startGrace(tab: HostTab): void {
 		tab.conn = null;
+		clearTimeout(tab.botTimer);
 		this.#syncHostWait(tab);
 		clearTimeout(tab.graceTimer);
 		tab.graceTimer = setTimeout(() => {
@@ -2325,6 +2457,7 @@ export class LocalHostServices implements HostServices {
 			existing.graceTimer = undefined;
 			if (existing.conn !== conn) existing.keptHanded = undefined;
 			existing.conn = conn;
+			this.#observeBot(existing);
 			// Back: what the omp asks from now on is the device's again, and its kept calls go to this connection.
 			existing.away = undefined;
 			existing.awayShown = undefined;
@@ -2688,7 +2821,10 @@ export class LocalHostServices implements HostServices {
 							tab.awaitingStarts = undefined;
 						}
 						this.#emit(tab, name, this.#statusArg(tab, payload));
-						if (payload.status === "ready") void this.#handKept(tab);
+						if (payload.status === "ready") {
+							void this.#handKept(tab);
+							this.#observeBot(tab);
+						}
 					});
 					break;
 				case "session":
@@ -2700,12 +2836,16 @@ export class LocalHostServices implements HostServices {
 						this.#emit(tab, name, identity);
 						if (changed) this.#dedupe(tab);
 						if (changed) this.listingChanged();
-						if (changed) void this.#handKept(tab);
+						if (changed) {
+							void this.#handKept(tab);
+							this.#observeBot(tab);
+						}
 					});
 					break;
 				case "bridge":
 					sidecar.on(name, (result: BridgeConnectResult) => {
 						void serializeBridge(result).then(arg => this.#emit(tab, name, arg));
+						if (result.connected) this.#observeBot(tab);
 					});
 					break;
 				case "awaitingConnection":
@@ -2994,7 +3134,7 @@ export class LocalHostServices implements HostServices {
 		return tab.linkEvents;
 	}
 
-	async #command(peer: PeerInfo, params: z.infer<typeof CommandParams>): Promise<RpcResponse> {
+	async #command(peer: PeerInfo, params: z.infer<typeof CommandParams>, peerKickoff = false): Promise<RpcResponse> {
 		// A message the device held while its link was down may come again (its answer was lost): omp gets it once
 		// (delivery-ledger.ts).
 		const { deliveryId, ...rest } = params.command;
@@ -3086,6 +3226,8 @@ export class LocalHostServices implements HostServices {
 							1,
 							() => this.#run(tab, client, command, params.timeoutMs),
 							result => result.success,
+							// A lost kickoff reply does not prove the turn failed to start.
+							peerKickoff ? async () => true : undefined,
 						)
 					: this.#run(tab, client, command, params.timeoutMs),
 			);
@@ -3400,6 +3542,7 @@ export class LocalHostServices implements HostServices {
 		this.#tabs.delete(key);
 		this.#deps.localTabs.modelWait?.forget(`hosted:${tab.resumeId}`);
 		clearTimeout(tab.graceTimer);
+		clearTimeout(tab.botTimer);
 		clearTimeout(tab.hostWaitTimer);
 		tab.conn = null;
 		// The windows here that show it close their tab first, quietly, while its omp still runs.

@@ -1833,6 +1833,16 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		tests: ["src/main/bridge-a2ui-stock.test.ts", "src/main/bridge-a2ui.test.ts"],
 	},
 	{
+		id: "B69",
+		area: "bridge",
+		contract: "internal",
+		summary:
+			"Pins a peer bot's home to the live session manager and materializes its journal without starting a turn.",
+		files: ["resources/gui-bridge/modes/bots.ts", "resources/gui-bridge/capabilities.ts"],
+		stock: ["SessionManager.getCwd", "SessionManager.getSessionFile", "SessionManager.ensureOnDisk"],
+		tests: ["src/main/bridge-agent-mail-stock.test.ts", "src/main/bridge-capabilities.test.ts"],
+	},
+	{
 		id: "H01",
 		area: "helper",
 		contract: "internal",

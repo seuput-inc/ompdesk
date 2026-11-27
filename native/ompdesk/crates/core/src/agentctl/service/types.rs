@@ -1004,6 +1004,8 @@ pub struct Schedule {
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub needs_host_activation: bool,
     #[serde(flatten)]
     pub draft: ScheduleDraft,
 }

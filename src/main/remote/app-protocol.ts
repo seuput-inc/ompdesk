@@ -991,7 +991,12 @@ export const BotsRoomPostSchema = z.object({
 export const SchedulesStateSchema: z.ZodType<SchedulesState> = z.object({
 	paused: z.boolean(),
 	schedules: z.array(
-		ScheduleDraftSchema.extend({ id: z.string(), createdAt: z.string(), device: z.string().optional() }),
+		ScheduleDraftSchema.extend({
+			id: z.string(),
+			createdAt: z.string(),
+			device: z.string().optional(),
+			needsHostActivation: z.boolean().optional(),
+		}),
 	),
 	runs: z.array(ScheduleRunSchema),
 	nextRuns: z.record(z.string(), z.string().nullable()),

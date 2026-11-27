@@ -23,6 +23,7 @@ mod bot_files;
 mod bot_first_run;
 mod bot_move;
 mod bot_package;
+mod bot_peer;
 mod bot_provenance;
 mod bots;
 pub(crate) mod bots_share;

@@ -71,6 +71,7 @@ fn allowed_create_fields(request: &Value, action: &str) -> bool {
             "action" | "name" => value.is_string(),
             "purpose" | "soul" | "kickoff" if action == "create" => value.is_string(),
             "model" if action == "create" => true,
+            "routines" if action == "create" => value.is_array(),
             "skills" if action == "create" => value.as_array().is_some_and(|skills| {
                 skills
                     .iter()
@@ -231,6 +232,22 @@ impl AgentControl {
                 let mut value = serde_json::to_value(bot).unwrap_or(Value::Null);
                 if let Some(fields) = value.as_object_mut() {
                     fields.remove("creationReceipt");
+                    fields.remove("peerCreate");
+                    if let Some(peer) = &bot.peer_create {
+                        let pending = if bot.home.is_none() {
+                            Some("home")
+                        } else if let Some(mail) = peer.mail.as_ref().filter(|mail| !mail.journaled)
+                        {
+                            Some(if mail.limited { "limit" } else { "kickoff" })
+                        } else if !peer.routines.is_empty() {
+                            Some("home")
+                        } else {
+                            None
+                        };
+                        if let Some(reason) = pending {
+                            fields.insert("peerPending".into(), json!(reason));
+                        }
+                    }
                 }
                 value["lookSetting"] = serde_json::to_value(bot.look()).unwrap_or(Value::Null);
                 if let Some(said) = specialty(Path::new(&bot.folder)) {
@@ -1628,7 +1645,10 @@ impl AgentControl {
         } else {
             None
         };
-        let answer = self.own_bots_command(request, receipt).await?;
+        let mut answer = self.own_bots_command(request, receipt).await?;
+        if action == "createFolder" {
+            answer["peerCreate"] = json!(true);
+        }
         if matches!(action.as_str(), "file" | "deletePreview" | "createFolder") {
             return Ok(answer);
         }
@@ -1714,6 +1734,12 @@ impl AgentControl {
                     }
                     _ => return fail("Select a model or use the host's default."),
                 };
+                use crate::agentctl::journal::bots::peer::{Kickoff, PeerCreate, Routine};
+                if receipt.is_none() && request.get("routines").is_some() {
+                    return fail("Only a paired bot creation accepts template routines.");
+                }
+                let routines = Routine::parse(request.get("routines"))
+                    .map_err(|why| super::super::fail::Fail::Tool(why.to_owned()))?;
                 let folder = request["folder"]
                     .as_str()
                     .map(str::trim)
@@ -1725,7 +1751,21 @@ impl AgentControl {
                 }
                 let mut bot =
                     self.prepare_bot(&bots, request["name"].as_str().unwrap_or(""), folder)?;
-                if receipt.is_some() {
+                if let Some(receipt) = &receipt {
+                    bot.peer_create = Some(PeerCreate {
+                        session_id: None,
+                        mail: kickoff.as_ref().map(|_| Kickoff {
+                            id: format!(
+                                "peer-kickoff-{}",
+                                crate::agentctl::journal::attachments::sha256_hex(
+                                    receipt.key.as_bytes()
+                                )
+                            ),
+                            journaled: false,
+                            limited: false,
+                        }),
+                        routines,
+                    });
                     // A peer's kickoff is not a host-authorized turn or a standing Look around job.
                     bot.first_run = false;
                     if let Some(look) = &mut bot.look_setting {

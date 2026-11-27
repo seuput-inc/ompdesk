@@ -153,6 +153,12 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 			},
 			{ id: "page", label: t("bots.menu.page"), icon: PanelRight, onSelect: () => openBotPage(bot.id) },
 			{
+				id: "new",
+				label: t("bots.add.new"),
+				icon: Plus,
+				onSelect: () => openBotDialog({ kind: "new", draft: { device: bot.device } }),
+			},
+			{
 				id: "settings",
 				label: t("bots.menu.settings"),
 				icon: Settings2,
