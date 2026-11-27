@@ -70,6 +70,8 @@ describe.skipIf(process.platform === "win32")("agent-commit.sh", () => {
 			origin = path.join(temp, "origin.git");
 			fs.rmSync(repo, { recursive: true });
 			await initRepoWithRemote(repo, origin);
+			gitSync(repo, "switch", "-c", "dev");
+			gitSync(repo, "push", "-u", "origin", "dev");
 			tree = path.join(temp, "worker");
 			gitSync(repo, "worktree", "add", "-b", branch, tree);
 			fs.writeFileSync(path.join(tree, "work"), "accepted");
@@ -85,36 +87,40 @@ describe.skipIf(process.platform === "win32")("agent-commit.sh", () => {
 			const done = commit("--push", "--retire-work", branch, accepted, "-m", "land", "receipt");
 			expect(done.status, done.stderr).toBe(0);
 			expect(remoteTip(branch)).toBe("");
-			expect(remoteTip("main")).toBe(gitSync(repo, "rev-parse", "HEAD"));
+			expect(remoteTip("dev")).toBe(gitSync(repo, "rev-parse", "HEAD"));
+			expect(remoteTip("main")).toBe(gitSync(repo, "rev-parse", "main"));
 			const again = retire(branch, accepted);
 			expect(again.status, again.stderr).toBe(0);
 			expect(gitSync(tree, "rev-parse", branch)).toBe(accepted);
 			expect(fs.readFileSync(path.join(tree, "work"), "utf8")).toBe("accepted");
 		});
 
-		it("keeps unpublished work, a moved accepted ref even when landed, and main", () => {
-			expect(retire(branch, accepted).stdout).toContain("not in origin/main");
+		it("keeps unpublished work, a moved accepted ref even when landed, and both permanent branches", () => {
+			expect(retire(branch, accepted).stdout).toContain("not in origin/dev");
 			expect(remoteTip(branch)).toBe(accepted);
 			gitSync(tree, "commit", "--allow-empty", "-m", "new work");
 			const moved = gitSync(tree, "rev-parse", "HEAD");
-			gitSync(tree, "push", "origin", branch, "HEAD:main");
+			gitSync(tree, "push", "origin", branch, "HEAD:dev");
 			expect(retire(branch, accepted).stdout).toContain("no longer holds the accepted work tip");
 			expect(remoteTip(branch)).toBe(moved);
-			expect(retire("main", moved).stdout).toContain("stays");
-			expect(remoteTip("main")).toBe(moved);
+			for (const name of ["main", "dev"]) {
+				const before = remoteTip(name);
+				expect(retire(name, before).stdout).toContain("stays");
+				expect(remoteTip(name)).toBe(before);
+			}
 		});
 
-		it("a rejected main publication never retires even an already-merged branch", () => {
-			gitSync(tree, "push", "origin", "HEAD:main");
+		it("a rejected dev publication never retires even an already-merged branch", () => {
+			gitSync(tree, "push", "origin", "HEAD:dev");
 			gitSync(repo, "merge", "--ff-only", branch);
-			const main = remoteTip("main");
-			fs.writeFileSync(path.join(origin, "hooks", "pre-receive"), "#!/bin/sh\n! grep -q ' refs/heads/main$'\n", {
+			const dev = remoteTip("dev");
+			fs.writeFileSync(path.join(origin, "hooks", "pre-receive"), "#!/bin/sh\n! grep -q ' refs/heads/dev$'\n", {
 				mode: 0o755,
 			});
 			fs.writeFileSync(path.join(repo, "receipt"), "not published");
 			const refused = commit("--push", "--retire-work", branch, accepted, "-m", "land", "receipt");
 			expect(refused.status).not.toBe(0);
-			expect(remoteTip("main")).toBe(main);
+			expect(remoteTip("dev")).toBe(dev);
 			expect(remoteTip(branch)).toBe(accepted);
 		});
 	});

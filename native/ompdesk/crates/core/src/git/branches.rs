@@ -916,6 +916,15 @@ pub async fn remove_linked(git: &Git, base_cwd: &str, path: &str) -> Result<Opti
 
 /// `update-ref -d` of `reference` against the very tip judged, so a branch something moved meanwhile stays.
 async fn delete_at(git: &Git, primary: &str, reference: &str, tip: &str) -> Result<Removal, Fault> {
+    if super::permanent_branch(
+        git,
+        primary,
+        reference.strip_prefix("refs/heads/").unwrap_or(reference),
+    )
+    .await?
+    {
+        return Ok(Removal::BranchKept);
+    }
     let deleted = git
         .raw(primary, &["update-ref", "-d", reference, tip])
         .await?;
@@ -1029,7 +1038,7 @@ pub(super) async fn drop_landed_remote(
     git: &Git,
     cwd: &str,
     branch: &str,
-    accepted_on_main: Option<&str>,
+    accepted_on_dev: Option<&str>,
 ) -> Result<Option<RemoteCopy>, Fault> {
     let remotes = git.raw(cwd, &["remote"]).await?;
     if !remotes
@@ -1045,6 +1054,12 @@ pub(super) async fn drop_landed_remote(
             message: format!("Its copy on origin ({branch}) stays: {why}."),
         }))
     };
+    if super::permanent_branch(git, cwd, branch).await? {
+        return kept(
+            RemoteOutcome::Base,
+            "permanent integration or release branch".to_owned(),
+        );
+    }
     // Judged by what `ls-remote`/`fetch` read, deleted by what `push` reaches: when those differ, an identical tip at
     // the push destination says nothing of its base there.
     let urls = |push: bool| async move {
@@ -1068,16 +1083,20 @@ pub(super) async fn drop_landed_remote(
     // Several `url`s: git fetches from the first and pushes to every one, so one URL each way, the same, or keep.
     let (fetch_urls, push_urls) = (urls(false).await?, urls(true).await?);
     let push_elsewhere = fetch_urls.len() != 1 || fetch_urls != push_urls;
-    let RemoteBase { base, protected } = if accepted_on_main.is_some() {
+    let RemoteBase { base, protected } = if accepted_on_dev.is_some() {
         if !branch.starts_with("omp/agent/") {
             return kept(RemoteOutcome::Base, "not an agent work branch".to_owned());
         }
         let primary = read::primary_root(git, cwd).await?;
         let mut destination = remote_base(git, &primary).await?;
-        destination.base = Some("main".to_owned());
+        destination.base = Some("dev".to_owned());
         destination
     } else {
-        remote_base(git, cwd).await?
+        let mut destination = remote_base(git, cwd).await?;
+        if super::ompdesk_origin(git, cwd).await? {
+            destination.base = Some("dev".to_owned());
+        }
+        destination
     };
     let copy = format!("refs/heads/{branch}");
     let base_ref = base.as_ref().map(|base| format!("refs/heads/{base}"));
@@ -1097,7 +1116,7 @@ pub(super) async fn drop_landed_remote(
     let Some(tip) = tips.get(&copy).cloned() else {
         return Ok(None);
     };
-    if accepted_on_main.is_some_and(|accepted| accepted != tip) {
+    if accepted_on_dev.is_some_and(|accepted| accepted != tip) {
         return kept(
             RemoteOutcome::Moved,
             "it no longer holds the accepted work tip".to_owned(),
@@ -1149,7 +1168,7 @@ pub(super) async fn drop_landed_remote(
         }
     }
     let landed = contains(git, cwd, &base_tip, &tip).await?
-        || landed_by_content(git, cwd, &base_tip, &tip).await?;
+        || (accepted_on_dev.is_none() && landed_by_content(git, cwd, &base_tip, &tip).await?);
     if !landed {
         let short = tip.get(..9).unwrap_or(&tip);
         return kept(
@@ -1343,6 +1362,18 @@ pub async fn merge(
     };
     let message = format!("Merge {} into {base_branch}{labelled}", worktree.branch);
     let cwd = &worktree.base_cwd;
+    if git
+        .raw(cwd, &["symbolic-ref", "--quiet", "HEAD"])
+        .await?
+        .text()
+        .trim()
+        == "refs/heads/main"
+        && super::ompdesk_origin(git, cwd).await?
+    {
+        return Err(branch_error(
+            "OMPdesk main is release-only; merge work in the dev integration checkout.".to_owned(),
+        ));
+    }
     let args = [
         "merge",
         "--no-ff",

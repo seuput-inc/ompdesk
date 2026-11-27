@@ -124,7 +124,8 @@ const LS_REMOTE_MS: u64 = 30_000;
 /// Per main checkout, when its default branch was last fetched. One fetch at a time per repository: a create that
 /// follows a prefetch still running waits for it, then skips its own.
 type LastFetch = Arc<tokio::sync::Mutex<Option<Instant>>>;
-static FETCHES: LazyLock<Mutex<HashMap<String, LastFetch>>> = LazyLock::new(Default::default);
+static FETCHES: LazyLock<Mutex<HashMap<(String, String), LastFetch>>> =
+    LazyLock::new(Default::default);
 
 /// What fetching the remote default branch before a `default`-based worktree did: `behind` counts the commits the
 /// fetch brought, `subjects` the newest three of them; `fetched` is false when a fetch under 30 s old was reused or
@@ -175,7 +176,7 @@ async fn fetch_base(git: &Git, primary: &str, reference: &str) -> Result<BaseFet
     let slot = FETCHES
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .entry(primary.to_owned())
+        .entry((primary.to_owned(), reference.to_owned()))
         .or_default()
         .clone();
     let mut last = slot.lock().await;
@@ -258,6 +259,14 @@ pub async fn plan(
     let primary = read::primary_root(git, cwd).await?;
     let mut fetch = None;
     let start_point = match base_ref {
+        None if super::ompdesk_origin(git, &primary).await? => {
+            let report = fetch_base(git, &primary, "origin/dev").await?;
+            if let Some(error) = report.error {
+                return Err(refuse("invalid_base", error));
+            }
+            fetch = Some(report);
+            "origin/dev".to_owned()
+        }
         None | Some("HEAD") => "HEAD".to_owned(),
         Some("default") => match default_branch(git, &primary).await? {
             Some(name) => {
@@ -472,7 +481,9 @@ async fn add_new(
     )
     .await
     {
-        let _ = git.raw(primary, &["branch", "-D", branch]).await;
+        if !super::permanent_branch(git, primary, branch).await? {
+            let _ = git.raw(primary, &["branch", "-D", branch]).await;
+        }
         return Err(error);
     }
     Ok(())
@@ -573,7 +584,10 @@ async fn add_named(
             )
             .await;
             // A sparse checkout that failed after `-b` made the branch takes it back; it did not exist before.
-            if added.is_err() && branch_exists(git, primary, name).await.unwrap_or(false) {
+            if added.is_err()
+                && !super::permanent_branch(git, primary, name).await?
+                && branch_exists(git, primary, name).await.unwrap_or(false)
+            {
                 let _ = git.raw(primary, &["branch", "-D", name]).await;
             }
             added
@@ -604,6 +618,9 @@ async fn rename_unpushed_around(
     to: &str,
     between: impl FnOnce(),
 ) -> Result<Option<String>, Fault> {
+    if super::permanent_branch(git, cwd, from).await? {
+        return Ok(None);
+    }
     let head = git
         .raw(cwd, &["symbolic-ref", "--quiet", "--short", "HEAD"])
         .await?;
@@ -1167,7 +1184,10 @@ pub async fn session_remove(
         )));
     }
     git.raw(primary, &["worktree", "prune"]).await?;
-    if !moved && git.raw(primary, &["branch", "-D", branch]).await?.code != 0 {
+    if !moved
+        && !super::permanent_branch(git, primary, branch).await?
+        && git.raw(primary, &["branch", "-D", branch]).await?.code != 0
+    {
         return Err(failed(format!(
             "Removed worktree {path} but failed to delete branch '{branch}'."
         )));
@@ -1260,6 +1280,59 @@ mod fetch_tests {
 
     fn s(path: &Path) -> &str {
         path.to_str().unwrap()
+    }
+
+    #[tokio::test]
+    async fn only_an_implicit_ompdesk_worker_starts_at_dev() {
+        let (pusher, clone) = remote_and_clone("ompdesk-dev");
+        assert_eq!(
+            plan(&git(), s(&clone), s(&clone).to_owned(), None)
+                .await
+                .unwrap()
+                .start_point,
+            "HEAD"
+        );
+        let canonical = "https://github.com/seuput-inc/ompdesk.git";
+        let bare = pusher.parent().unwrap().join("origin.git");
+        sh(
+            &clone,
+            &[
+                "config",
+                &format!("url.{}.insteadOf", bare.display()),
+                canonical,
+            ],
+        );
+        sh(&clone, &["remote", "set-url", "origin", canonical]);
+        sh(
+            &pusher,
+            &["commit", "-q", "--allow-empty", "-m", "dev work"],
+        );
+        sh(&pusher, &["push", "-q", "origin", "HEAD:dev"]);
+        prefetch(&git(), s(&clone)).await.unwrap();
+        let made = plan(&git(), s(&clone), s(&clone).to_owned(), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            sh(&clone, &["rev-parse", &made.start_point]),
+            sh(&pusher, &["rev-parse", "HEAD"])
+        );
+        assert_eq!(
+            plan(&git(), s(&clone), s(&clone).to_owned(), Some("HEAD"))
+                .await
+                .unwrap()
+                .start_point,
+            "HEAD"
+        );
+        sh(&clone, &["branch", "dev", "origin/dev"]);
+        let before = sh(&clone, &["rev-parse", "dev"]);
+        session_remove(&git(), s(&clone), "unused", "dev", None, false, 30_000)
+            .await
+            .unwrap();
+        assert_eq!(sh(&clone, &["rev-parse", "dev"]), before);
+        super::super::branches::drop_landed_remote(&git(), s(&clone), "dev", None)
+            .await
+            .unwrap();
+        assert_eq!(sh(&bare, &["rev-parse", "dev"]), before);
     }
 
     #[tokio::test]

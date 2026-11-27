@@ -15,7 +15,7 @@ const env = withoutGitSelectors(process.env);
 if (!published) {
 	const tip = execFileSync(bin, ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`], { env, encoding: "utf8" });
 	if (!branch.startsWith("omp/agent/") || tip.trim() !== accepted) throw new Error("Not the accepted work branch tip");
-	execFileSync(bin, ["push", "origin", `${accepted}:refs/heads/main`], { env, stdio: "inherit" });
+	execFileSync(bin, ["push", "origin", `${accepted}:refs/heads/dev`], { env, stdio: "inherit" });
 }
 try {
 	const { result } = await core().call<{ message: string } | null>(
@@ -30,7 +30,7 @@ try {
 	);
 	console.log(result?.message ?? `No copy of ${branch} on origin to retire.`);
 } catch (error) {
-	console.error(`Could not confirm remote cleanup for ${branch}; do not repeat the main push.`, error);
+	console.error(`Could not confirm remote cleanup for ${branch}; do not repeat the dev push.`, error);
 	process.exitCode = 1;
 } finally {
 	await shutdownCore();
