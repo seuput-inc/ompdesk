@@ -31,9 +31,10 @@ import { KEYCHAIN_WOULD_ASK } from "../../../shared/keychain";
 import type { OmpUpdateState } from "../../../shared/omp-update";
 import type { RpcDoctorCheck, RpcOmpUpdateResult, RpcPluginDoctorResult } from "../../../shared/rpc-types";
 import { type InlineFailure, inlineFailure } from "../../lib/error-detail";
-import { useT } from "../../lib/i18n";
+import { useLang, useT } from "../../lib/i18n";
 import { useTabRpc } from "../../lib/tab-rpc";
 import { useSecondsUntil } from "../../lib/use-seconds-until";
+import { useInstalledReleaseSummary } from "../../lib/whats-new";
 import { useFocusedHost, useHostView } from "../../stores/remote";
 import { useSessionStore } from "../../stores/session";
 import { toast, toastError } from "../../stores/toast";
@@ -163,6 +164,8 @@ export function UpdatesSection() {
 	const status = useUpdaterStore(state => state.status);
 	const setStatus = useUpdaterStore(state => state.setStatus);
 	const [guiVersion, setGuiVersion] = useState<string>();
+	const { lang } = useLang();
+	const installedSummary = useInstalledReleaseSummary(guiVersion, lang);
 	const [core, setCore] = useState<RpcOmpUpdateResult>();
 	const [checking, setChecking] = useState(false);
 	const [coreError, setCoreError] = useState<InlineFailure>();
@@ -214,7 +217,10 @@ export function UpdatesSection() {
 				<BrandMark size={40} variant="tile" />
 				<div className="min-w-0 flex-1">
 					<div className="text-sc-lg font-semibold tracking-(--sc-tracking-tight) text-(--sc-text)">OMPdesk</div>
-					<div className="font-mono text-sc-xs text-(--sc-text-muted)">{guiVersion ? `v${guiVersion}` : "—"}</div>
+					<div className="text-sc-xs break-words break-keep text-(--sc-text-muted)">
+						<span className="font-mono">{guiVersion ? `v${guiVersion}` : "—"}</span>
+						{installedSummary && <span data-version-summary="installed"> · {installedSummary}</span>}
+					</div>
 				</div>
 				<Button disabled={checking} icon={<RefreshCw />} loading={checking} onClick={check} size="sm">
 					{t("updates.checkAll")}
@@ -264,8 +270,11 @@ export function UpdatesSection() {
 					<>
 						{/* The brand line above names this version; the row says only what is newer. */}
 						{status.state !== "not-available" && "version" in status && status.version !== guiVersion && (
-							<p className="mt-1 text-sc-xs text-(--sc-text-muted)">
+							<p className="mt-1 text-sc-xs break-words break-keep text-(--sc-text-muted)">
 								{t("updates.latest")} <span className="font-mono text-(--sc-text)">{status.version}</span>
+								{status.summary?.[lang] && (
+									<span data-version-summary="available"> · {status.summary[lang]}</span>
+								)}
 							</p>
 						)}
 						{status.state === "not-available" && status.unsupportedSystem && (

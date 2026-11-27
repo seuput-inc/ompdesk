@@ -829,15 +829,19 @@ export const ModelSetupStatusSchema: z.ZodType<ModelSetupStatus> = z.object({
 });
 
 const Mode = z.enum(["automatic", "relaunch", "manual"]);
+const UpdateRelease = {
+	version: z.string(),
+	mode: Mode,
+	summary: z.object({ en: z.string(), ko: z.string() }).optional(),
+};
 const UpdateStatusSchema: z.ZodType<UpdateStatus> = z.discriminatedUnion("state", [
 	z.object({ state: z.literal("idle") }),
 	z.object({ state: z.literal("checking") }),
-	z.object({ state: z.literal("available"), version: z.string(), notes: z.string().optional(), mode: Mode }),
-	z.object({ state: z.literal("downloading"), version: z.string(), mode: Mode, percent: z.number() }),
+	z.object({ state: z.literal("available"), ...UpdateRelease }),
+	z.object({ state: z.literal("downloading"), ...UpdateRelease, percent: z.number() }),
 	z.object({
 		state: z.literal("downloaded"),
-		version: z.string(),
-		mode: Mode,
+		...UpdateRelease,
 		// The automatic install's countdown, so a paired computer shows the host's as the host does.
 		restartAt: z.number().optional(),
 		installing: z.literal(true).optional(),

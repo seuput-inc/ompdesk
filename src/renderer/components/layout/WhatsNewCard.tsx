@@ -11,14 +11,9 @@
  */
 
 import { useEffect, useRef } from "react";
+import { changelogSummary } from "../../../shared/release-summary";
 import { useLang, useT } from "../../lib/i18n";
-import {
-	changelogSection,
-	changelogSummary,
-	endsWithFinalConsonant,
-	useChangelog,
-	WHATS_NEW_PREF,
-} from "../../lib/whats-new";
+import { changelogSection, endsWithFinalConsonant, useChangelog, WHATS_NEW_PREF } from "../../lib/whats-new";
 import { useUiStore } from "../../stores/ui";
 import { Banner, BrandMark, Button } from "../common";
 import { Collapse } from "../common/Collapse";

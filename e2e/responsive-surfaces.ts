@@ -1,10 +1,16 @@
 import * as fs from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Locator, Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { STRESS_PROMPT } from "../src/renderer/dev-harness/fixture";
 import { en } from "../src/renderer/locales/en";
 import { ko } from "../src/renderer/locales/ko";
 import type { RpcCommand } from "../src/shared/rpc-types";
+import {
+	availableSummary,
+	availableVersion,
+	installedSummary,
+	installedVersion,
+} from "./fixture/version-summary-release";
 import { type Look, touchLook } from "./responsive-audit";
 
 /** A control's words in the look's language, so a Korean look finds by name what an English one does. */
@@ -2395,6 +2401,29 @@ export const SURFACES: readonly Surface[] = [
 		ready: "[data-settings-page] [data-updates-auth-dropped]",
 		settle: 600,
 		// The marker is in the parity launch's profile only (e2e/parity.e2e.ts).
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
+		id: "settings-version-summaries",
+		area: "B",
+		title: "Settings › Updates & about with the changes for the installed release and the newer release",
+		open: async (page, look) => {
+			await openSettingsUpdates(page, look);
+			const installed = page.locator("[data-about-brand] [data-version-summary='installed']");
+			const available = page.locator("[data-settings-page] [data-version-summary='available']").first();
+			for (const [summary, version, sentence] of [
+				[installed, `v${installedVersion}`, await installedSummary(look.lang)],
+				[available, availableVersion, availableSummary[look.lang]],
+			] as const) {
+				await expect(summary).toHaveText(`· ${sentence}`, { timeout: 30_000 });
+				await expect(summary.locator("..").getByText(version, { exact: true })).toBeVisible();
+			}
+			await page.locator("[data-about-brand]").evaluate(brand => brand.scrollIntoView({ block: "start" }));
+			await expect(installed).toBeInViewport({ ratio: 1 });
+			await expect(available).toBeInViewport({ ratio: 1 });
+		},
+		ready: "[data-settings-page] [data-version-summary='available']",
 		when: () => false,
 		parity: { session: "work" },
 	},

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import changelogMarkdown from "../../../CHANGELOG.md?raw";
+import { changelogSummary, publishedReleaseSummary } from "../../shared/release-summary";
 import {
 	changelogReleases,
 	changelogSection,
 	changelogSince,
-	changelogSummary,
 	displayReleaseHeadings,
 	endsWithFinalConsonant,
 	loadChangelog,
@@ -66,6 +66,12 @@ describe("changelog languages", () => {
 	it("falls back to Korean when a release has no English part, or an empty one", () => {
 		expect(changelogSection(BILINGUAL, "0.4.0", "en")).toBe("- 한국어만");
 		expect(changelogSection(BILINGUAL, "0.3.9", "en")).toBe("- 마지막");
+	});
+
+	it("leaves a Settings version unannotated without an exact section in the selected language", () => {
+		expect(changelogSection(BILINGUAL, "0.4.0", "en", false)).toBeNull();
+		expect(changelogSection(BILINGUAL, "0.3.9", "en", false)).toBeNull();
+		expect(changelogSection(BILINGUAL, "0.5", "ko", false)).toBeNull();
 	});
 
 	it("localizes the whole list release by release", () => {
@@ -151,6 +157,21 @@ describe("changelogSummary", () => {
 	it("takes the first item of a section that opens with a list, and skips a leading heading", () => {
 		expect(changelogSummary("- 하나\n- 둘")).toBe("하나");
 		expect(changelogSummary("### 추가\n\n- 새 기능")).toBe("새 기능");
+	});
+});
+
+describe("publishedReleaseSummary", () => {
+	const requirement = "---\n\nRequires omp **19.2.0** or newer (`omp update`).";
+
+	it("reads both opening sentences, even when the English starts past the old 500-character limit", () => {
+		const notes = `첫 문장입니다. 더 있습니다.\n\n- ${"자".repeat(500)}\n\n---\n\nUse **v1.2.3**. More follows.\n\n${requirement}`;
+		expect(publishedReleaseSummary(notes)).toEqual({ ko: "첫 문장입니다.", en: "Use v1.2.3." });
+	});
+
+	it("does not turn a missing translation or the compatibility footer into a change", () => {
+		expect(publishedReleaseSummary(`한국어만.\n\n${requirement}`)).toEqual({ ko: "한국어만.", en: "" });
+		expect(publishedReleaseSummary(`---\nEnglish only.\n\n${requirement}`)).toEqual({ ko: "", en: "English only." });
+		expect(publishedReleaseSummary(requirement)).toEqual({ ko: "", en: "" });
 	});
 });
 

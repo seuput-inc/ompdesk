@@ -6,7 +6,9 @@
  * its details list every release since the last seen one.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { releaseSentence } from "../../shared/release-summary";
+import type { UiLanguage } from "../../shared/ui-language";
 
 let changelog: string | null = null;
 let loading: Promise<string> | null = null;
@@ -69,21 +71,21 @@ export const WHATS_NEW_PREF = "whatsNewSeenVersion";
 export const ENGLISH_MARKER = "<!-- en -->";
 
 /** The part of one section body in `lang`; English falls back to the Korean text when there is none. */
-function pick(body: string, lang: string): string {
+function pick(body: string, lang: string, fallback = true): string {
 	const lines = body.split("\n");
 	const split = lines.findIndex(line => line.trim() === ENGLISH_MARKER);
-	if (split < 0) return body.trim();
+	if (split < 0) return lang === "en" && !fallback ? "" : body.trim();
 	const part = lang === "en" ? lines.slice(split + 1) : lines.slice(0, split);
-	return part.join("\n").trim() || lines.slice(0, split).join("\n").trim();
+	return part.join("\n").trim() || (fallback ? lines.slice(0, split).join("\n").trim() : "");
 }
 
 /** One release's notes in `lang`, without its `## [X.Y.Z]` heading; null when it has none. */
-export function changelogSection(markdown: string, version: string, lang = "ko"): string | null {
+export function changelogSection(markdown: string, version: string, lang = "ko", fallback = true): string | null {
 	const lines = markdown.split("\n");
 	const start = lines.findIndex(line => line.startsWith(`## [${version}]`));
 	if (start < 0) return null;
 	const end = lines.findIndex((line, index) => index > start && line.startsWith("## "));
-	const body = pick(lines.slice(start + 1, end < 0 ? undefined : end).join("\n"), lang);
+	const body = pick(lines.slice(start + 1, end < 0 ? undefined : end).join("\n"), lang, fallback);
 	return body || null;
 }
 
@@ -135,22 +137,12 @@ export function displayReleaseHeadings(markdown: string, lang = "ko"): string {
 	});
 }
 
-/**
- * The one-line summary of a release's notes: its first paragraph (what the card shows), as plain text.
- * A section that opens with a list takes its first item.
- */
-export function changelogSummary(notes: string): string {
-	const block = notes.split(/\n\s*\n/).find(part => part.trim() !== "" && !part.trimStart().startsWith("#")) ?? "";
-	const lines = block
-		.split("\n")
-		.map(line => line.trim())
-		.filter(Boolean);
-	const list = /^[-*]\s+/.test(lines[0] ?? "");
-	return (list ? lines.slice(0, 1) : lines)
-		.join(" ")
-		.replace(/^[-*]\s+/, "")
-		.replace(/\*\*|`/g, "")
-		.trim();
+export function useInstalledReleaseSummary(version: string | undefined, lang: UiLanguage): string {
+	const markdown = useChangelog(Boolean(version));
+	return useMemo(
+		() => (markdown && version ? releaseSentence(changelogSection(markdown, version, lang, false) ?? "", lang) : ""),
+		[markdown, version, lang],
+	);
 }
 
 /**
