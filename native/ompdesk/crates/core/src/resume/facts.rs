@@ -15,6 +15,8 @@ pub struct RunOutcome {
     pub stop_reason: String,
     #[serde(default)]
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub retry_blocked: bool,
 }
 
 /// Stock's auto-retry saga waiting for its next attempt: one object per `auto_retry_start`, so one id.

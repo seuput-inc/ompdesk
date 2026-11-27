@@ -1,6 +1,6 @@
 import type { StoreApi } from "zustand/vanilla";
 import { CREDIT_SPEND_OFF_WORDING } from "../../shared/credit-spend";
-import { isBillingCap } from "../../shared/quota-reset";
+import { anthropicSpendRefusal, isBillingCap } from "../../shared/quota-reset";
 import type {
 	AgentMessage,
 	ImageContent,
@@ -115,6 +115,8 @@ export type TurnErrorKind =
 	| "modelUnavailable"
 	| "rateLimit"
 	| "billing"
+	| "lowCredit"
+	| "spendLimit"
 	| "overloaded"
 	| "compaction"
 	| "unknown";
@@ -145,6 +147,8 @@ const TURN_ERROR_ACTIONS: Record<TurnErrorKind, readonly TurnErrorAction[]> = {
 	modelUnavailable: ["changeModel", "openProviders"],
 	rateLimit: ["retry", "changeModel"],
 	billing: ["openProviders", "changeModel"],
+	lowCredit: ["openProviders", "changeModel"],
+	spendLimit: ["openProviders", "changeModel"],
 	overloaded: ["retry", "changeModel"],
 	compaction: ["changeModel", "retry"],
 	unknown: ["retry", "changeModel"],
@@ -225,8 +229,9 @@ export function describeTurnError(errorMessage: string | undefined, stopReason?:
 	let kind: TurnErrorKind = stopReason === "aborted" ? "aborted" : "unknown";
 	if (kind === "unknown" && detail) {
 		kind = TURN_ERROR_PATTERNS.find(([, patterns]) => patterns.some(pattern => pattern.test(detail)))?.[0] ?? kind;
-		// An account out of money ("insufficient_quota", 402, a credit wall) reads like a limit but no wait lifts it.
-		if ((kind === "rateLimit" || kind === "unknown") && isBillingCap(detail)) kind = "billing";
+		if (kind === "rateLimit" || kind === "unknown") {
+			kind = anthropicSpendRefusal(detail) ?? (isBillingCap(detail) ? "billing" : kind);
+		}
 	}
 	return {
 		kind,

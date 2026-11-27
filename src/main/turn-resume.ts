@@ -494,7 +494,14 @@ function wireFact(fact: ResumeFact, limitHeld?: boolean): Record<string, unknown
 	return {
 		...rest,
 		...(lastRun
-			? { lastRun: { id: idOf(lastRun), stopReason: lastRun.stopReason, errorMessage: lastRun.errorMessage } }
+			? {
+					lastRun: {
+						id: idOf(lastRun),
+						stopReason: lastRun.stopReason,
+						errorMessage: lastRun.errorMessage,
+						retryBlocked: lastRun.retryBlocked,
+					},
+				}
 			: {}),
 		...(retry ? { retry: { id: idOf(retry), errorMessage: retry.errorMessage } } : {}),
 		...(limitHeld ? { limitHeld: true } : {}),

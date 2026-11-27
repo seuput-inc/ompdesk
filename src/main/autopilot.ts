@@ -40,7 +40,7 @@ import {
 import { autopilotLogTitle, formatAutopilotLog } from "../shared/autopilot-log";
 import { withoutGitSelectors } from "../shared/git-env";
 import type { IpcSpawnTabPayload, IpcSpawnTabResult } from "../shared/ipc-types";
-import { isLimitWording, quotaWaitUntil } from "../shared/quota-reset";
+import { isBillingCap, isLimitWording, quotaWaitUntil } from "../shared/quota-reset";
 import type { RpcCommand, RpcResponse, UsageReport } from "../shared/rpc-types";
 import { type ApproverRun, AutopilotApprover } from "./autopilot-approver";
 import { CorePort } from "./core/ports";
@@ -355,6 +355,13 @@ export class Autopilot {
 		}
 		if (activity.type !== "idle" || activity.outcome?.stopReason !== "error") return;
 		if (!this.#mirror.has(activity.tabId)) return;
+		if (activity.outcome.retryBlocked || isBillingCap(activity.outcome.errorMessage)) {
+			this.#tell("frame", {
+				tab: activity.tabId,
+				frame: { type: "autopilot_stop_requested", reason: "provider_review" },
+			});
+			return;
+		}
 		const kind = isLimitWording(activity.outcome.errorMessage ?? "") ? "limit" : "error";
 		this.#tell("activity", { tab: activity.tabId, kind });
 	}

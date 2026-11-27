@@ -237,6 +237,10 @@ export const MAIN_TEXT = {
 		en: "The repository folder is gone ({detail}).",
 		ko: "저장소 폴더가 사라졌어요({detail}).",
 	},
+	"autopilot.reason.provider_review": {
+		en: "Check the failed request before resuming. It was not sent again by Autopilot.",
+		ko: "재개하기 전에 실패한 요청을 확인하세요. 오토파일럿은 요청을 다시 보내지 않았어요.",
+	},
 	"autopilot.reason.ban_violation": {
 		en: "Autopilot's safety check saw a git change it did not expect ({detail}) and paused the run. Check it, then Resume to continue.",
 		ko: "오토파일럿 안전 점검이 예상하지 못한 git 변경을 보고 멈췄어요({detail}). 확인한 뒤 재개하면 이어서 돌아요.",

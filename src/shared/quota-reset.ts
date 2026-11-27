@@ -56,8 +56,39 @@ const BILLING_CAP =
 	/\b402\b|\bout of credit|\badd (?:more )?credit|\btop ?up\b|insufficient|available balance|out of budget|billing|\b(?:exceed\w*|not enough)\b[^\n]{0,40}\bcredits?\b|\bcredits?\b[^\n]{0,40}\b(?:exhausted|depleted)\b|\busage_pricing_required\b|\bprepaid balance\b[^\n]{0,40}\b(?:used up|exhausted|depleted)\b|spend(?:ing)?[\s_-]?(?:limit|cap)\b|\busage credits are required\b|\bcredits_required\b/i;
 const IN_FLIGHT_RESERVATION = /\bin-flight requests\b/i;
 
+/** Anthropic's documented spend refusals (api/rate-limits and api-credits-for-subscribers). */
+export function anthropicSpendRefusal(message: string): "spendLimit" | "lowCredit" | undefined {
+	const lowCredit = "Your credit balance is too low to access the Anthropic API";
+	if (message.startsWith(lowCredit)) return "lowCredit";
+	const http = /\b(400|402|429) (\{.*\})/s.exec(message);
+	if (!http) return undefined;
+	try {
+		const envelope = JSON.parse(http[2]);
+		const error = envelope?.type === "error" && envelope.error;
+		if (!error || typeof error.message !== "string") return undefined;
+		if (error.message.startsWith(lowCredit)) return "lowCredit";
+		if (
+			(http[1] === "429" &&
+				error.type === "rate_limit_error" &&
+				error.details?.error_code === "enforced_spend_limit_reached") ||
+			(http[1] === "400" &&
+				error.type === "invalid_request_error" &&
+				/^You have reached your specified (?:workspace )?API usage limits\b/.test(error.message))
+		) {
+			return "spendLimit";
+		}
+	} catch {
+		// Not a stock HTTP error envelope.
+	}
+	return undefined;
+}
+
 export function isBillingCap(message: string | undefined): boolean {
-	return message !== undefined && !IN_FLIGHT_RESERVATION.test(message) && BILLING_CAP.test(message);
+	return (
+		message !== undefined &&
+		!IN_FLIGHT_RESERVATION.test(message) &&
+		(BILLING_CAP.test(message) || anthropicSpendRefusal(message) !== undefined)
+	);
 }
 
 /** Stock's hint on a failed reply (pi-ai `utils/retry-after.ts` appends ` retry-after-ms=<n>` from the provider's headers). */

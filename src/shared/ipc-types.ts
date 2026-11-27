@@ -2015,6 +2015,8 @@ export interface IpcTabRunOutcome {
 	/** The last assistant message's stop reason ("stop", "error", "aborted", …). */
 	stopReason: string;
 	errorMessage?: string;
+	/** The provider may already have started a paid response; automatic recovery must not resend it. */
+	retryBlocked?: boolean;
 	/**
 	 * The start of the last assistant reply's text (at most 4000 characters, sidecar-pool.ts), so
 	 * a background tab's completion banner reads its opening prose like a visible tab's does.

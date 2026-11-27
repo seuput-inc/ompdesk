@@ -300,6 +300,21 @@ describe("a failed turn", () => {
 	});
 	const asked = () => world.stock("ap-1", "prompt").length;
 
+	it.each([
+		failed("402 Payment Required"),
+		failed(
+			'429 {"type":"error","error":{"type":"rate_limit_error","message":"Limit","details":{"error_code":"enforced_spend_limit_reached"}}}',
+		),
+		{ ...failed("partial"), outcome: { stopReason: "error", errorMessage: "529 overloaded", retryBlocked: true } },
+	])("leaves billing refusals and started responses for manual review", async activity => {
+		await start();
+		autopilot.observeActivity(activity);
+		await autopilot.idle();
+		expect(world.statuses.get("ap-1")).toMatchObject({ state: "paused", reason: "provider_review" });
+		expect(world.stock("ap-1", "retry")).toEqual([]);
+		expect(asked()).toBe(0);
+	});
+
 	// The core's clock cannot be moved: the failed turn's grace and the nudge windows are the short real durations of
 	// `TUNING` (`errorGraceMs` 30 ms, `errorNudgeMs` 250 ms; the window tests widen the window to 600 ms).
 	it("asks for the next cycle once the retries leave nothing pending, and never pauses", async () => {

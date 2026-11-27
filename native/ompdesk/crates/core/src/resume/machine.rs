@@ -945,7 +945,7 @@ impl Inst {
         if fact.awaiting_connection {
             return;
         }
-        if outcome.stop_reason != "error" {
+        if outcome.stop_reason != "error" || outcome.retry_blocked {
             self.st.borrow_mut().attempts.remove(&tab);
             return;
         }

@@ -100,8 +100,44 @@ static BILLING_CAP: Lazy = Lazy::new(|| {
     )
 });
 
+fn anthropic_spend_refusal(message: &str) -> bool {
+    const LOW_CREDIT: &str = "Your credit balance is too low to access the Anthropic API";
+    if message.starts_with(LOW_CREDIT) {
+        return true;
+    }
+    let Some(start) = message.find('{') else {
+        return false;
+    };
+    let (prefix, body) = message.split_at(start);
+    let status = prefix.split_whitespace().next_back();
+    if !matches!(status, Some("400" | "402" | "429")) {
+        return false;
+    }
+    let Some(end) = body.rfind('}') else {
+        return false;
+    };
+    let Ok(envelope) = serde_json::from_str::<Value>(&body[..=end]) else {
+        return false;
+    };
+    if envelope["type"] != "error" {
+        return false;
+    }
+    let error = &envelope["error"];
+    let Some(text) = error["message"].as_str() else {
+        return false;
+    };
+    text.starts_with(LOW_CREDIT)
+        || (status == Some("429")
+            && error["type"] == "rate_limit_error"
+            && error["details"]["error_code"] == "enforced_spend_limit_reached")
+        || (status == Some("400")
+            && error["type"] == "invalid_request_error"
+            && (text.starts_with("You have reached your specified API usage limits")
+                || text.starts_with("You have reached your specified workspace API usage limits")))
+}
+
 pub fn is_billing_cap(message: Option<&str>) -> bool {
-    message.is_some_and(|message| BILLING_CAP.test(message))
+    message.is_some_and(|message| BILLING_CAP.test(message) || anthropic_spend_refusal(message))
 }
 
 /// A failure that stock's own retries gave up on but that a later attempt may well clear: server errors, overload,

@@ -374,6 +374,7 @@ describe("what waiting cannot fix is never waited for", () => {
 	it.each([
 		// An account out of money: stock's billing cap wordings (pi-ai `isBillingCapUsageLimit`).
 		"402 the organization is out of credit, add more to continue (type=insufficient_quota)",
+		'429 {"type":"error","error":{"type":"rate_limit_error","message":"Limit","details":{"error_code":"enforced_spend_limit_reached"}}} retry-after-ms=1000',
 		"429 You exceeded your current quota, please check your plan and billing details",
 		"429 insufficient_quota",
 		"429 This request would exceed your available credits given your current in-flight requests",
@@ -392,6 +393,15 @@ describe("what waiting cannot fix is never waited for", () => {
 		await w.fail(message);
 		await advance(24 * HOUR);
 		expect(w.shown).toEqual([]);
+		expect(w.commands).toEqual([]);
+		expect(w.markers()).toEqual([]);
+	});
+
+	it("does not resend a Claude request that failed after message_start, even after the network returns", async () => {
+		const w = world();
+		w.start();
+		w.set({ running: false, lastRun: { stopReason: "error", errorMessage: "socket hang up", retryBlocked: true } });
+		await advance(24 * HOUR);
 		expect(w.commands).toEqual([]);
 		expect(w.markers()).toEqual([]);
 	});
