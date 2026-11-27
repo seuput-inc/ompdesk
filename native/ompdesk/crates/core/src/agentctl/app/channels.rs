@@ -339,6 +339,7 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("remote:remove-host", Risk::Never(OPERATOR)),
     ("remote:list-dirs", Risk::Never(OPERATOR)),
     ("rpc:events", Risk::Never(PUSH)),
+    ("worktree:wait", Risk::Never(PUSH)),
     ("sidecar:status", Risk::Never(PUSH)),
     ("tab:status", Risk::Never(PUSH)),
     ("tab:list-changed", Risk::Never(PUSH)),

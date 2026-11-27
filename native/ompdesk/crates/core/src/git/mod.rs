@@ -464,6 +464,7 @@ struct SeedParams {
     budget_ms: u64,
     #[serde(default)]
     admit: bool,
+    wait_id: Option<String>,
     pretend_clones: Option<u32>,
 }
 
@@ -1162,15 +1163,18 @@ pub fn register(registry: &mut Registry) {
                 budget_ms,
                 pretend_clones,
                 admit,
+                wait_id,
             } = call.params()?;
             let limits = seed::Limits {
                 budget: std::time::Duration::from_millis(budget_ms),
                 pretend_clones,
             };
             if admit {
-                return Reply::json(
-                    &admission::standalone_seed(git, call.scope, primary, target, limits).await?,
-                );
+                let notices = wait_id.map(|id| (call.events, id));
+                let report =
+                    admission::standalone_seed(git, call.scope, primary, target, limits, notices)
+                        .await?;
+                return Reply::json(&report);
             }
             let git = Git::new(git, call.scope.clone());
             Reply::json(&seed::seed(git, call.scope, primary, target, limits).await?)

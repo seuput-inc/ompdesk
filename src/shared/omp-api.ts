@@ -179,6 +179,7 @@ import type {
 	RpcResponse,
 	SessionInfoUpdateFrame,
 	SubagentFrame,
+	WorktreeWaitFrame,
 } from "./rpc-types";
 import { SCHEDULES_COMMAND, SCHEDULES_LOG, SCHEDULES_STATE } from "./schedule-channels";
 import type { SchedulesState } from "./schedules";
@@ -434,6 +435,8 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 					callback(change ?? {}),
 				),
 			onLogBatch: (callback: (batch: LogBatch) => void) => subscribe<LogBatch>(IPC_EVENTS.LOG_LINE, callback),
+			onWorktreeWait: (callback: (frame: WorktreeWaitFrame) => void) =>
+				subscribe<WorktreeWaitFrame>(IPC_EVENTS.WORKTREE_WAIT, callback),
 			onTabBatch: (callback: (events: AgentSessionEvent[], tabId: string) => void) =>
 				subscribeTab<AgentSessionEvent[]>(IPC_EVENTS.EVENTS_BATCH, callback),
 			onTabSidecarStatus: (callback: (status: IpcSidecarStatusPayload, tabId: string) => void) =>

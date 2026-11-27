@@ -5,9 +5,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { timeoutForCommand } from "../../../shared/rpc-client";
-import type { RpcCommand } from "../../../shared/rpc-types";
+import type { RpcCommand, WorktreeWaitFrame } from "../../../shared/rpc-types";
 import { nativeBinPath } from "../../native-bin";
-import type { BridgeClient } from "../types";
+import { handlers } from "../git";
+import type { BridgeClient, LocalCommandContext } from "../types";
 import { withRepoLock } from "./exec";
 import { GITHUB_COMMAND_BUDGET_MS } from "./github";
 import { PR_COMMAND_BUDGETS_MS } from "./pr";
@@ -299,33 +300,53 @@ describe("removeWorktree", () => {
 		const holder = spawn(nativeBinPath("ompdesk"), ["heavy", "hold", "--all"], { env, stdio: "pipe" });
 		const exited = once(holder, "exit");
 		try {
-			const first = await Promise.race([once(holder.stdout, "data"), exited]);
-			expect(String(first[0])).toMatch(/^held \d/);
-			const watching = new AbortController();
-			const watch = fs.watch(path.join(pool, "queue"), { signal: watching.signal });
-			const ticket = (async () => {
-				for await (const event of watch) if (/^\d+\.\d+$/.test(String(event.filename))) return;
-			})();
-			try {
-				const args = { name: "queued", request: { caller: "local", id: scratch } };
-				const opening = Promise.all([createWorktree(outside, args, bridge), createWorktree(outside, args, bridge)]);
-				await ticket;
-				await withRepoLock(outside, async () => {
-					expect(await pathExists(path.join(root, "gui-queued-abc1234"))).toBe(false);
-					expect(gitSync(outside, "branch", "--list", "omp/gui/queued")).toBe("");
-				});
-				holder.stdin.end();
-				const [first, again] = await opening;
-				expect(first.path).toBe(again.path);
-				expect(gitSync(outside, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(2);
-			} finally {
-				watching.abort();
+			const held = await Promise.race([once(holder.stdout, "data"), exited]);
+			expect(String(held[0])).toMatch(/^held \d/);
+			const frames: WorktreeWaitFrame[] = [];
+			const unused = async (): Promise<never> => {
+				throw new Error("unexpected stock command");
+			};
+			const ctx: LocalCommandContext = {
+				cwd: outside,
+				bridge: { ...bridge, connected: true },
+				omp: { bin: "omp", version: "", run: unused },
+				send: unused,
+				worktreeWait: frame => frames.push(frame),
+			};
+			const seed = await stockShapedWorktree(outside, root, "seed");
+			await fs.writeFile(path.join(outside, ".worktreeinclude"), ".env\n");
+			const create = { type: "worktree_create", name: "queued", prepare: false, requestId: "creation-row" };
+			const prepare = { type: "worktree_prepare", path: seed.path, requestId: "seed-row" };
+			const opening = Promise.all([
+				handlers.worktree_create!(create, ctx),
+				handlers.worktree_create!(create, ctx),
+				handlers.worktree_prepare!(prepare, ctx),
+			]);
+			await expect
+				.poll(() => frames.map(f => [f.requestId, f.step]), { timeout: 10_000 })
+				.toEqual(
+					expect.arrayContaining([
+						["creation-row", "create"],
+						["seed-row", "prepare"],
+					]),
+				);
+			for (const frame of frames) expect(["slots", "reservedVolume", "queue"]).toContain(frame.wait?.reason);
+			await withRepoLock(outside, async () => {
+				expect(await pathExists(path.join(root, "gui-queued-abc1234"))).toBe(false);
+				expect(gitSync(outside, "branch", "--list", "omp/gui/queued")).toBe("");
+			});
+			holder.stdin.end();
+			const [first, again] = await opening;
+			expect(first).toEqual(again);
+			expect(gitSync(outside, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(3);
+			for (const id of ["creation-row", "seed-row"]) {
+				expect(frames.findLast(f => f.requestId === id)?.wait).toBeNull();
 			}
 		} finally {
 			holder.stdin.end();
 			await exited;
 		}
-	});
+	}, 30_000);
 	it("refuses an unmeasurable destination before creating its branch, checking out files or running setup", async () => {
 		await initRepo(outside);
 		const missing = path.join(scratch, "missing-volume");

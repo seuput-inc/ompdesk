@@ -72,7 +72,7 @@ pub fn physical_memory() -> Option<u64> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
+pub(crate) fn pressure(sample_load: bool) -> std::io::Result<crate::heavy::Pressure> {
     use crate::heavy::Pressure;
     use std::ffi::CStr;
     use std::io::Error;
@@ -108,14 +108,16 @@ pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
     read(c"kern.memorystatus_vm_pressure_level", &mut level)?;
     let mut swap = Swap::default();
     read(c"vm.swapusage", &mut swap)?;
-    let mut load = 0.0;
-    // SAFETY: the output points to one double and the requested count is one.
-    if unsafe { libc::getloadavg(&mut load, 1) } != 1 {
-        return Err(Error::other("CPU load unknown"));
-    }
-    let cpus = std::thread::available_parallelism()?.get();
+    let busy = sample_load && {
+        let mut load = 0.0;
+        // SAFETY: the output points to one double and the requested count is one.
+        if unsafe { libc::getloadavg(&mut load, 1) } != 1 {
+            return Err(Error::other("host load unknown"));
+        }
+        load >= std::thread::available_parallelism()?.get() as f64
+    };
     Ok(Pressure {
-        cpu: load >= cpus as f64,
+        cpu: busy,
         critical: level == 4,
         warning: match level {
             1 => false,
@@ -127,7 +129,7 @@ pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
+pub(crate) fn pressure(sample_load: bool) -> std::io::Result<crate::heavy::Pressure> {
     use crate::heavy::Pressure;
     use std::io::Error;
     let mem = std::fs::read_to_string("/proc/meminfo")?;
@@ -142,13 +144,16 @@ pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
     let swap = kb("SwapTotal:")?
         .checked_sub(kb("SwapFree:")?)
         .ok_or_else(|| Error::other("swap usage unknown"))?;
-    let load: f64 = std::fs::read_to_string("/proc/loadavg")?
-        .split_whitespace()
-        .next()
-        .and_then(|s| s.parse().ok())
-        .ok_or_else(|| Error::other("CPU load unknown"))?;
+    let busy = sample_load && {
+        let load: f64 = std::fs::read_to_string("/proc/loadavg")?
+            .split_whitespace()
+            .next()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| Error::other("host load unknown"))?;
+        load >= std::thread::available_parallelism()?.get() as f64
+    };
     Ok(Pressure {
-        cpu: load >= std::thread::available_parallelism()?.get() as f64,
+        cpu: busy,
         critical: free < total / 20,
         warning: free < total / 10,
         swap,
@@ -156,7 +161,7 @@ pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
 }
 
 #[cfg(windows)]
-pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
+pub(crate) fn pressure(sample_load: bool) -> std::io::Result<crate::heavy::Pressure> {
     use crate::heavy::{Cpu, Pressure};
     use std::ffi::c_void;
     use std::io::Error;
@@ -208,7 +213,7 @@ pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
         FileTime::default(),
     );
     // SAFETY: each output points to a live FILETIME.
-    if unsafe { GetSystemTimes(&mut idle, &mut kernel, &mut user) } == 0 {
+    if sample_load && unsafe { GetSystemTimes(&mut idle, &mut kernel, &mut user) } == 0 {
         return Err(Error::other("CPU time unknown"));
     }
     Ok(Pressure {

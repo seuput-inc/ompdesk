@@ -19,10 +19,17 @@ use super::{
 };
 use crate::server::{Call, Events, Fault, Reply, Scope};
 
+#[derive(serde::Serialize)]
+struct WaitNotice<'a> {
+    id: &'a str,
+    wait: Option<heavy::WaitReason>,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Request {
     id: String,
+    wait_id: Option<String>,
     seed_budget_ms: Option<u64>,
     #[serde(flatten)]
     add: AddParams,
@@ -55,6 +62,7 @@ impl Permit {
         writes: Option<BTreeMap<PathBuf, u64>>,
         label: &'static str,
         scope: Scope,
+        notices: Option<(Events, String)>,
     ) -> Result<Self, Fault> {
         read::blocking(move || {
             let env = |key: &str| std::env::var(key).ok();
@@ -71,6 +79,7 @@ impl Permit {
                 run_id: None,
                 session: None,
             };
+            let mut waited = false;
             let lease = pool
                 .acquire_unless(
                     1,
@@ -81,15 +90,34 @@ impl Permit {
                             "{label}: waiting ({} ahead, {} holders, pressure: {})",
                             wait.ahead,
                             wait.holders.len(),
-                            wait.pressure.unwrap_or("none")
+                            wait.pressure.map_or("none", heavy::WaitReason::label)
                         );
                         for disk in &wait.low_disk {
                             eprintln!("{label}: free {} bytes, need {}", disk.free, disk.need);
+                        }
+                        if let Some((events, id)) = &notices {
+                            waited = true;
+                            events.send(
+                                "git.worktreeWait",
+                                &WaitNotice {
+                                    id,
+                                    wait: Some(wait.reason()),
+                                },
+                            );
                         }
                     },
                     &|| scope.cancelled(),
                 )
                 .map_err(refused)?;
+            if waited && let Some((events, id)) = notices {
+                events.send(
+                    "git.worktreeWait",
+                    &WaitNotice {
+                        id: &id,
+                        wait: None,
+                    },
+                );
+            }
             Ok(Self {
                 lease,
                 volumes: pool.volumes,
@@ -173,7 +201,7 @@ fn blob_bytes(list: &[u8]) -> Option<u64> {
 }
 
 pub(super) async fn admit(call: Call) -> Result<Reply, Fault> {
-    let request: Request = call.params()?;
+    let mut request: Request = call.params()?;
     let add = &request.add;
     let git = Git::new(add.git.clone(), call.scope.clone());
     let tree = tree(add, &git).await?;
@@ -222,6 +250,7 @@ pub(super) async fn admit(call: Call) -> Result<Reply, Fault> {
         writes,
         "git worktree add",
         call.scope.clone(),
+        request.wait_id.take().map(|id| (call.events.clone(), id)),
     )
     .await?;
     let mut ready = READY.lock().unwrap_or_else(|p| p.into_inner());
@@ -300,6 +329,7 @@ pub(super) async fn standalone_seed(
     primary: String,
     target: String,
     limits: seed::Limits,
+    notices: Option<(Events, String)>,
 ) -> Result<Option<seed::Report>, Fault> {
     if !Path::new(&primary).join(".worktreeinclude").is_file() {
         return Ok(None);
@@ -310,6 +340,7 @@ pub(super) async fn standalone_seed(
         Some(BTreeMap::from([(path, seed::SEED_MAX_BYTES)])),
         "worktree seed",
         scope.clone(),
+        notices,
     )
     .await?;
     permit

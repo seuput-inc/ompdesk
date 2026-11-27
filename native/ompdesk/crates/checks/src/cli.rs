@@ -199,7 +199,10 @@ fn minutes(ms: u64) -> String {
 
 fn wait_line(w: &Waiting) -> String {
     if let Some(reason) = w.pressure {
-        return format!("ompdesk: waiting before starting heavy work: {reason}\n");
+        return format!(
+            "ompdesk: waiting before starting heavy work: {}\n",
+            reason.label()
+        );
     }
     if !w.low_disk.is_empty() {
         let disks: Vec<String> = w

@@ -1646,6 +1646,7 @@ export class SidecarManager extends EventEmitter {
 				: runtime,
 			send,
 			bridge,
+			worktreeWait: frame => this.emit("worktreeWait", frame),
 			...(this.#processes ? { leftProcesses: this.#processes.leftover, processes: this.#processes } : {}),
 		};
 	}

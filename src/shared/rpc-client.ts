@@ -107,7 +107,7 @@ export interface SessionRpcClient {
 		},
 	): Promise<RpcResponse>;
 	/** The seed and setup hook of a worktree `worktreeCreate(…, {prepare: false})` made (`RpcWorktreePrepared`). */
-	worktreePrepare(baseCwd: string, path: string): Promise<RpcResponse>;
+	worktreePrepare(baseCwd: string, path: string, requestId?: string): Promise<RpcResponse>;
 	/** Fetches the remote default branch ahead of a `default`-based create; its answer is only informative. */
 	worktreePrefetch(baseCwd?: string): Promise<RpcResponse>;
 	/** The repository's `.ompdesk/sparse` presets (`RpcSparsePreset[]`). */
@@ -533,7 +533,8 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 				...(options?.sparse ? { sparse: options.sparse } : {}),
 				...(options?.prepare === false ? { prepare: false } : {}),
 			}),
-		worktreePrepare: (baseCwd, path) => rpcCommand({ type: "worktree_prepare", baseCwd, path }),
+		worktreePrepare: (baseCwd, path, requestId) =>
+			rpcCommand({ type: "worktree_prepare", baseCwd, path, ...(requestId ? { requestId } : {}) }),
 		worktreePrefetch: baseCwd => rpcCommand({ type: "worktree_prefetch", ...(baseCwd ? { baseCwd } : {}) }),
 		worktreeSparsePresets: baseCwd =>
 			rpcCommand({ type: "worktree_sparse_presets", ...(baseCwd ? { baseCwd } : {}) }),

@@ -138,18 +138,46 @@ pub(crate) struct Pressure {
     pub swap: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "reason", rename_all = "camelCase")]
+pub enum WaitReason {
+    CriticalMemory,
+    GrowingSwap,
+    HostLoad,
+    UnknownReservation,
+    ReservedVolume,
+    Disk { free: u64, need: u64 },
+    Queue { ahead: usize },
+    Slots,
+}
+
+impl WaitReason {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CriticalMemory => "critical memory pressure",
+            Self::GrowingSwap => "memory pressure with growing swap",
+            Self::HostLoad => "high host load",
+            Self::UnknownReservation => "waiting for a holder with unknown reservations to finish",
+            Self::ReservedVolume => "write volume reserved by another job",
+            Self::Disk { .. } => "low disk space",
+            Self::Queue { .. } => "queued",
+            Self::Slots => "no free slots",
+        }
+    }
+}
+
 impl Pressure {
-    fn hold(self, before: Self) -> Option<&'static str> {
+    fn hold(self, before: Self, competing_work: bool) -> Option<WaitReason> {
         #[cfg(unix)]
         let busy = self.cpu;
         #[cfg(windows)]
         let busy = self.cpu.total > before.cpu.total && self.cpu.idle == before.cpu.idle;
         if self.critical {
-            Some("critical memory pressure")
+            Some(WaitReason::CriticalMemory)
         } else if self.warning && self.swap > before.swap {
-            Some("memory pressure with growing swap")
-        } else if busy {
-            Some("CPU saturated")
+            Some(WaitReason::GrowingSwap)
+        } else if busy && competing_work {
+            Some(WaitReason::HostLoad)
         } else {
             None
         }
@@ -166,6 +194,11 @@ struct SlotRecord<'a> {
 #[derive(Deserialize)]
 struct Reservations {
     remaining: BTreeMap<u64, Claim>,
+}
+
+struct LiveReservations {
+    occupied: bool,
+    claims: Option<BTreeMap<u64, Claim>>,
 }
 
 pub fn now_ms() -> u64 {
@@ -214,7 +247,8 @@ pub struct Volumes {
     probe: Probe,
     claims: Result<Option<BTreeMap<PathBuf, u64>>, String>,
     undeclared: Claim,
-    pressure: fn() -> io::Result<Pressure>,
+    wait_for_host_load: bool,
+    pressure: fn(bool) -> io::Result<Pressure>,
 }
 
 /// The nearest folder of `path` that exists (an output folder is often made by the command itself).
@@ -336,6 +370,7 @@ impl Volumes {
             } else {
                 Claim::Unmetered
             },
+            wait_for_host_load: true,
             pressure: crate::sys::pressure,
             danger,
             probe: std::sync::Arc::new(|path| {
@@ -350,7 +385,7 @@ impl Volumes {
     #[cfg(test)]
     pub fn with_probe(mut self, probe: Probe) -> Volumes {
         self.probe = probe;
-        self.pressure = || {
+        self.pressure = |_| {
             Ok(Pressure {
                 cpu: Cpu::default(),
                 critical: false,
@@ -416,6 +451,8 @@ impl Volumes {
         volumes.paths = paths;
         volumes.claims = Ok(writes);
         volumes.undeclared = Claim::Exclusive;
+        // Checkout and seed copy files; builds and install hooks take their own heavy slot.
+        volumes.wait_for_host_load = false;
         volumes
     }
 
@@ -536,7 +573,24 @@ pub struct Waiting {
     pub holders: Vec<Owner>,
     /// The volumes too full to start: waiting is for disk space, not (only) for a slot.
     pub low_disk: Vec<Disk>,
-    pub pressure: Option<&'static str>,
+    pub pressure: Option<WaitReason>,
+}
+
+impl Waiting {
+    pub fn reason(&self) -> WaitReason {
+        if let Some(disk) = self.low_disk.first() {
+            WaitReason::Disk {
+                free: disk.free,
+                need: disk.need,
+            }
+        } else if let Some(reason) = self.pressure {
+            reason
+        } else if self.ahead > 0 {
+            WaitReason::Queue { ahead: self.ahead }
+        } else {
+            WaitReason::Slots
+        }
+    }
 }
 
 /// A slot of the pool, as `status` shows it.
@@ -778,7 +832,8 @@ impl Pool {
         serde_json::from_str(&text).ok()
     }
 
-    fn reservations(&self) -> io::Result<Option<BTreeMap<u64, Claim>>> {
+    fn reservations(&self) -> io::Result<LiveReservations> {
+        let mut occupied = false;
         let mut totals = BTreeMap::<u64, Claim>::new();
         for i in 0..self.size {
             let slot = open_rw(&self.slot_path(i))?;
@@ -792,8 +847,14 @@ impl Pool {
                 Ok(record) => record,
                 Err(_) if try_lock(&slot)? => continue,
                 // A legacy holder, or a lease between unlink and unlock. Both stop competing on unlock.
-                Err(_) => return Ok(None),
+                Err(_) => {
+                    return Ok(LiveReservations {
+                        occupied: true,
+                        claims: None,
+                    });
+                }
             };
+            occupied = true;
             for (id, claim) in record.remaining {
                 let combined = match (totals.get(&id).copied(), claim) {
                     (None, c) => c,
@@ -807,7 +868,10 @@ impl Pool {
                 totals.insert(id, combined);
             }
         }
-        Ok(Some(totals))
+        Ok(LiveReservations {
+            occupied,
+            claims: Some(totals),
+        })
     }
 
     /// Attempts one all-or-nothing claim under the queue lock.
@@ -876,7 +940,8 @@ impl Pool {
             }
             Ok(disks)
         };
-        let mut before = (self.volumes.pressure)()?;
+        let sample = || (self.volumes.pressure)(self.volumes.wait_for_host_load);
+        let mut before = sample()?;
         measure()?;
         let ticket = self.enqueue(release)?;
         let mut held = Vec::new();
@@ -884,9 +949,7 @@ impl Pool {
         std::thread::sleep(POLL);
         let mut published_block = false;
         loop {
-            let now = (self.volumes.pressure)()?;
-            let mut pressure = now.hold(before);
-            before = now;
+            let now = sample()?;
             let gate = self.queue_lock()?;
             if !self.admission_limited()? {
                 return unrestricted();
@@ -902,7 +965,10 @@ impl Pool {
                 .position(|t| t.number == ticket.number && t.pid == std::process::id())
                 .ok_or_else(|| io::Error::other("heavy queue ticket disappeared"))?;
             let mut low_disk = Vec::new();
-            let reserved = self.reservations()?;
+            let live = self.reservations()?;
+            let mut pressure = now.hold(before, self.volumes.wait_for_host_load && live.occupied);
+            before = now;
+            let reserved = live.claims;
             // FIFO except for an older request still blocked by a live, disjoint volume reservation.
             let can_try = tickets[..ahead].iter().all(|t| {
                 if t.class == Class::Legacy {
@@ -927,7 +993,7 @@ impl Pool {
             });
             if can_try {
                 if reserved.is_none() {
-                    pressure = Some("waiting for a holder with unknown reservations to finish");
+                    pressure = Some(WaitReason::UnknownReservation);
                 }
                 for mut disk in measure()? {
                     let id = disk
@@ -957,7 +1023,7 @@ impl Pool {
                             Some(disk.need.max(headroom))
                         }
                         _ => {
-                            pressure = Some("write volume reserved by another job");
+                            pressure = Some(WaitReason::ReservedVolume);
                             if !published_block {
                                 fs::write(
                                     ticket.path.with_added_extension("blocked"),
@@ -1194,10 +1260,107 @@ mod tests {
     }
 
     #[test]
-    fn pressure_holds_even_the_first_request_and_recovery_admits_a_fourth() {
+    fn host_load_only_holds_competing_heavy_work() {
+        let (dir, mut pool) = temp_pool(3);
+        fn busy(_: bool) -> io::Result<Pressure> {
+            #[cfg(windows)]
+            static TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            Ok(Pressure {
+                critical: false,
+                warning: false,
+                swap: 0,
+                #[cfg(unix)]
+                cpu: true,
+                #[cfg(windows)]
+                cpu: Cpu {
+                    idle: 0,
+                    total: TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                },
+            })
+        }
+        pool.volumes.pressure = busy;
+        let mut first = Some(
+            pool.acquire(1, owner("first"), |_| panic!("first waited"))
+                .unwrap(),
+        );
+        let writes = BTreeMap::from([(dir.clone(), 0)]);
+        let mut checkout = synthetic_pool(&dir, 3);
+        checkout.volumes = Volumes::for_targets(vec![dir.clone()], Some(writes))
+            .with_probe(pool.volumes.probe.clone());
+        checkout.volumes.pressure = |load| {
+            assert!(!load, "checkout sampled host load");
+            busy(load)
+        };
+        let tree = checkout
+            .acquire(1, owner("checkout"), |_| panic!("checkout waited"))
+            .unwrap();
+        drop(tree);
+        let next = pool
+            .acquire(1, owner("build"), |w| {
+                assert_eq!(w.reason(), WaitReason::HostLoad);
+                drop(first.take().unwrap());
+            })
+            .unwrap();
+        assert!(first.is_none());
+        drop(next);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn an_uncontended_checkout_still_waits_for_memory_and_disk() {
+        thread_local! { static STAGE: std::cell::Cell<u8> = const { std::cell::Cell::new(0) }; }
+        let (dir, mut pool) = temp_pool(1);
+        pool.volumes =
+            Volumes::for_targets(vec![dir.clone()], Some(BTreeMap::from([(dir.clone(), 42)])))
+                .with_probe(Arc::new(|_| {
+                    let free = if STAGE.get() == 1 { 0 } else { 50 * GIB };
+                    Some((Some(1), free, 100 * GIB))
+                }));
+        pool.volumes.need = Some(GIB);
+        pool.volumes.danger = GIB;
+        pool.volumes.pressure = |load| {
+            assert!(!load);
+            Ok(Pressure {
+                cpu: Cpu::default(),
+                critical: STAGE.get() == 0,
+                warning: false,
+                swap: 0,
+            })
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let lease = pool
+            .acquire_unless(
+                1,
+                owner("checkout"),
+                false,
+                |wait| {
+                    assert!(wait.holders.is_empty());
+                    match STAGE.get() {
+                        0 => assert_eq!(wait.reason(), WaitReason::CriticalMemory),
+                        1 => assert_eq!(
+                            wait.reason(),
+                            WaitReason::Disk {
+                                free: 0,
+                                need: GIB + 42
+                            }
+                        ),
+                        _ => panic!("checkout still waiting after recovery"),
+                    }
+                    STAGE.set(STAGE.get() + 1);
+                },
+                &|| Instant::now() >= deadline,
+            )
+            .unwrap();
+        assert_eq!(STAGE.get(), 2);
+        drop(lease);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn critical_memory_holds_even_the_first_request_and_recovery_admits_a_fourth() {
         thread_local! { static CRITICAL: std::cell::Cell<bool> = const { std::cell::Cell::new(true) }; }
         let (dir, mut pool) = temp_pool(4);
-        pool.volumes.pressure = || {
+        pool.volumes.pressure = |_| {
             Ok(Pressure {
                 critical: CRITICAL.get(),
                 warning: false,
@@ -1215,7 +1378,7 @@ mod tests {
                     false,
                     |w| {
                         assert_eq!(name, "one");
-                        assert_eq!(w.pressure, Some("critical memory pressure"));
+                        assert_eq!(w.pressure, Some(WaitReason::CriticalMemory));
                         assert!(w.holders.is_empty());
                         assert!(CRITICAL.replace(false));
                     },
@@ -1473,7 +1636,7 @@ mod tests {
             .with_writes(BTreeMap::from([(dir.clone(), 1024)]));
         let next = pool
             .acquire(1, owner("small"), |w| {
-                assert_eq!(w.pressure, Some("write volume reserved by another job"));
+                assert_eq!(w.pressure, Some(WaitReason::ReservedVolume));
                 let mut other = synthetic_pool(&dir, 2);
                 other.volumes = other
                     .volumes
@@ -1500,29 +1663,27 @@ mod tests {
             warning: true,
             swap: 9,
         };
-        assert_eq!(base.hold(base), None);
+        assert_eq!(base.hold(base, true), None);
         assert_eq!(
-            Pressure { swap: 10, ..base }.hold(base),
-            Some("memory pressure with growing swap")
+            Pressure { swap: 10, ..base }.hold(base, false),
+            Some(WaitReason::GrowingSwap)
         );
-        assert_eq!(
-            Pressure {
-                #[cfg(unix)]
-                cpu: true,
-                #[cfg(windows)]
-                cpu: Cpu { idle: 0, total: 1 },
-                ..base
-            }
-            .hold(base),
-            Some("CPU saturated")
-        );
+        let busy = Pressure {
+            #[cfg(unix)]
+            cpu: true,
+            #[cfg(windows)]
+            cpu: Cpu { idle: 0, total: 1 },
+            ..base
+        };
+        assert_eq!(busy.hold(base, false), None);
+        assert_eq!(busy.hold(base, true), Some(WaitReason::HostLoad));
         assert_eq!(
             Pressure {
                 critical: true,
                 ..base
             }
-            .hold(base),
-            Some("critical memory pressure")
+            .hold(base, false),
+            Some(WaitReason::CriticalMemory)
         );
     }
 

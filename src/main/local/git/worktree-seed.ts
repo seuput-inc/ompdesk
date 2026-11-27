@@ -66,7 +66,7 @@ export const WORKTREE_PREPARE_BUDGET_MS = 3 * DEFAULT_TIMEOUT_MS + SETUP_TIMEOUT
 export function seedWorktree(
 	primary: string,
 	target: string,
-	deps: { pretendClones?: number; admit?: boolean } = {},
+	deps: { pretendClones?: number; admit?: boolean; waitId?: string } = {},
 ): Promise<WorktreeSeedReport | null> {
 	return coreGit("git.worktreeSeed", { primary, target, budgetMs: SEED_BUDGET_MS, ...deps }, 2);
 }
@@ -161,8 +161,9 @@ export async function prepareWorktree(
 	primary: string,
 	target: string,
 	admit = false,
+	waitId?: string,
 ): Promise<{ seed?: WorktreeSeedReport; setup?: WorktreeSetupReport }> {
-	const seed = await seedWorktree(primary, target, { admit }).catch((error): WorktreeSeedReport => {
+	const seed = await seedWorktree(primary, target, { admit, waitId }).catch((error): WorktreeSeedReport => {
 		if (error instanceof CoreError && ["worktree_admission", "cancelled", "timeout"].includes(error.code))
 			throw error;
 		return {

@@ -8,7 +8,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it } from "vitest";
 import { I18nProvider } from "../../../lib/i18n";
-import { type NewTask, useNewTasksStore } from "../../../stores/new-tasks";
+import { applyWorktreeWait, type NewTask, useNewTasksStore } from "../../../stores/new-tasks";
 import { NewTaskRows } from "./NewTaskRows";
 
 const { document, window, Event, HTMLElement, Element, Node } = parseHTML("<html><body></body></html>");
@@ -90,4 +90,25 @@ it("says what refused a failed task, its headline in the tooltip", async () => {
 	const row = document.querySelector("[data-new-task]");
 	expect(row?.textContent).toContain("fatal: invalid reference: no-such-base");
 	expect(row?.getAttribute("title")).toBe("Couldn't start the task\nfatal: invalid reference: no-such-base");
+});
+
+it("shows a wait only on its running request and step, and clears it on admission", async () => {
+	const running = (id: string): NewTask => ({
+		...task(id, undefined),
+		status: "running",
+		steps: [{ id: "prepare", state: "running" }],
+	});
+	useNewTasksStore.setState({ tasks: { first: running("first"), second: running("second") } });
+	await mount(<NewTaskRows cwd="/work/project" />);
+	const frame = { requestId: "second", step: "prepare" } as const;
+	await act(async () => {
+		applyWorktreeWait({ ...frame, wait: { reason: "disk", free: 1024, need: 2048 } });
+		applyWorktreeWait({ ...frame, step: "create", wait: { reason: "criticalMemory" } });
+	});
+	const text = (id: string) => document.querySelector(`[data-new-task="${id}"]`)?.textContent;
+	expect(text("first")).toContain("Preparing");
+	expect(text("second")).toContain("Waiting for disk space (1.0 KB free, 2.0 KB needed)");
+	await act(async () => applyWorktreeWait({ ...frame, wait: null }));
+	expect(text("second")).toContain("Preparing");
+	expect(text("second")).not.toContain("Waiting");
 });

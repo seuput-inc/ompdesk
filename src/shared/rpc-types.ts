@@ -564,7 +564,7 @@ export type RpcCommand =
 	// The worktree dialog fetches the remote default branch when it opens, so a `default`-based create finds it fresh.
 	| { id?: string; type: "worktree_prefetch"; baseCwd?: string }
 	// The seed and setup hook of a worktree `worktree_create {prepare: false}` made (`RpcWorktreePrepared`).
-	| { id?: string; type: "worktree_prepare"; baseCwd: string; path: string }
+	| { id?: string; type: "worktree_prepare"; baseCwd: string; path: string; requestId?: string }
 	// The repository's sparse checkout presets (`RpcSparsePreset[]`).
 	| { id?: string; type: "worktree_sparse_presets"; baseCwd?: string }
 	// A setup hook drafted from another tool's config, when the repository has none (`RpcSetupDraft | null`).
@@ -3052,6 +3052,17 @@ export interface PromptResultFrame {
 
 export interface SessionSettledFrame {
 	type: "session_settled";
+}
+
+export type WorktreeWait =
+	| { reason: "criticalMemory" | "growingSwap" | "hostLoad" | "unknownReservation" | "reservedVolume" | "slots" }
+	| { reason: "disk"; free: number; need: number }
+	| { reason: "queue"; ahead: number };
+
+export interface WorktreeWaitFrame {
+	requestId: string;
+	step: "create" | "prepare";
+	wait: WorktreeWait | null;
 }
 
 export interface CommandOutputFrame {

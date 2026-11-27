@@ -54,6 +54,7 @@ import {
 } from "../stores/extension-ui";
 import { useMessagesStore } from "../stores/messages";
 import { useModelStore } from "../stores/model";
+import { applyWorktreeWait } from "../stores/new-tasks";
 import { useNextPromptStore } from "../stores/next-prompt";
 import { useQueueStore } from "../stores/queue";
 import { type SessionStore, useSessionStore } from "../stores/session";
@@ -401,6 +402,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 		const lastEventAt = new Map<string, number>();
 		const missedProbes = new Map<string, number>();
 		const unsubscribe = window.omp.events.onTabBatch(reduceEvents);
+		const unsubWorktreeWait = window.omp.events.onWorktreeWait(applyWorktreeWait);
 		function reduceEvents(events: AgentSessionEvent[], tabId: string): void {
 			// Any frame from the tab's omp proves its loop runs: a probe that timed out meanwhile was slow, not wedged, and a
 			// banner the probes raised comes down. Any other error (an exit, a failed start) stays.
@@ -1075,6 +1077,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 			disposed = true;
 			stopHeartbeat();
 			unsubscribe();
+			unsubWorktreeWait();
 			unsubStatus();
 			unsubSubagent();
 			unsubModelCatalog();

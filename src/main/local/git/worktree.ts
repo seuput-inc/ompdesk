@@ -129,6 +129,7 @@ export function worktreeBranchSource(value: unknown): WorktreeBranchSource | und
 
 interface CreateInput {
 	name: string;
+	waitId?: string;
 	baseCwd?: string;
 	baseRef?: string | null;
 	branchPrefix?: string;
@@ -250,11 +251,12 @@ async function createWorktreeOnce(
 export async function prepareCreatedWorktree(
 	baseCwd: string,
 	worktreePath: string,
+	waitId?: string,
 ): Promise<Pick<RpcWorktreeCreateResult, "seed" | "setup">> {
 	const [primary, own] = await Promise.all([primaryRoot(baseCwd), primaryRoot(worktreePath)]);
 	if (own !== primary || path.resolve(worktreePath) === path.resolve(primary))
 		throw new LocalCommandError(`Not a worktree of ${primary}: ${worktreePath}`, "not_a_worktree");
-	return prepareWorktree(primary, worktreePath, true);
+	return prepareWorktree(primary, worktreePath, true, waitId);
 }
 
 async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<BridgeClient, "request">) {
@@ -313,6 +315,7 @@ async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<B
 		"git.worktreeAdmit",
 		{
 			id,
+			waitId: input.waitId,
 			git,
 			primary,
 			baseCwd,

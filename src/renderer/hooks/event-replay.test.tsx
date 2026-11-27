@@ -304,6 +304,7 @@ it("ends every reordered and replayed delivery around snapshot loads as the run 
 				emit = callback;
 				return () => {};
 			},
+			onWorktreeWait: noop,
 			onTabSidecarStatus: noop,
 			onTabSubagentFrame: noop,
 			onTabModelCatalogUpdate: noop,

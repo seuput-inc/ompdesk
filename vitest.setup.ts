@@ -14,7 +14,10 @@ import { dropGitSelectors } from "./src/shared/git-env";
 dropGitSelectors();
 
 // Fixture checkouts must not contend with the real check that already owns this test worker's slot.
-process.env.OMPDESK_HEAVY_DIR ??= join(tmpdir(), `worktree-test-pool-${process.pid}`);
+process.env.OMPDESK_HEAVY_DIR = join(
+	tmpdir(),
+	`worktree-test-pool-${process.pid}-${process.env.VITEST_WORKER_ID ?? 0}`,
+);
 
 // Nor the plumbing of the OMPdesk session a run is launched from (its bridge socket, computer-use engine, memory file,
 // ...): a stock test's omp inherits `process.env`, and one left on that session's agent-desktop engine without the

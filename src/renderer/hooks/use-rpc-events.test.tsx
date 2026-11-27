@@ -93,6 +93,7 @@ interface MockOmp {
 	};
 	events: {
 		onTabBatch: Mock<(callback: Stamped<BatchHandler>) => () => void>;
+		onWorktreeWait: Mock<() => () => void>;
 		onTabSidecarStatus: Mock<() => () => void>;
 		onTabSubagentFrame: Mock<() => () => void>;
 		onTabModelCatalogUpdate: Mock<(callback: Stamped<ModelCatalogUpdateHandler>) => () => void>;
@@ -192,6 +193,7 @@ function installMockOmp(): {
 				batchHandler = callback;
 				return () => {};
 			}),
+			onWorktreeWait: vi.fn(() => () => {}),
 			onTabSidecarStatus: vi.fn(() => () => {}),
 			onTabSubagentFrame: vi.fn(() => () => {}),
 			onTabModelCatalogUpdate: vi.fn((callback: Stamped<ModelCatalogUpdateHandler>) => {
@@ -315,6 +317,7 @@ function installTabRoutedMockOmp(): {
 				tabBatchHandler = callback;
 				return () => {};
 			}),
+			onWorktreeWait: noopSub,
 			onTabSidecarStatus: vi.fn((callback: TabSidecarStatusHandler) => {
 				tabStatusHandler = callback;
 				return () => {};

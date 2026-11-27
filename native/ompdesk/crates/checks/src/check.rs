@@ -1290,7 +1290,7 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
                             rt.save();
                         }
                         let line = if let Some(reason) = w.pressure {
-                            format!("waiting before starting: {reason}")
+                            format!("waiting before starting: {}", reason.label())
                         } else if w.low_disk.is_empty() {
                             format!(
                                 "waiting for a heavy slot ({} ahead, {} in use)",

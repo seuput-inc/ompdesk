@@ -78,6 +78,7 @@ import {
 	type SidecarStatusPayload,
 	type SubagentFrame,
 	type SubagentSubscriptionLevel,
+	type WorktreeWaitFrame,
 } from "../shared/rpc-types";
 import { failureOf, unsavedSessionKey } from "../shared/session-summary";
 import { isApprovalSelect } from "../shared/tool-approval";
@@ -997,6 +998,9 @@ export class SidecarPool {
 		sidecar.on("shownElsewhere", (holder: TabHolder | null) => feed("shownElsewhere", holder));
 		// A paired host told this tab it views a window of that host: the lists say so.
 		sidecar.on("shared", () => feed("shared"));
+		sidecar.on("worktreeWait", (frame: WorktreeWaitFrame) => {
+			for (const win of this.windowsShowingTab(tab)) forwardToWindow(win, IPC_EVENTS.WORKTREE_WAIT, frame);
+		});
 		// The review list of the host's session this tab views: the sessions its agent opened are tabs of that host's
 		// windows, never of this computer, so they come tagged with the device that opens them (agent-control.ts).
 		sidecar.on(AGENT_REVIEW_EVENT, (review: AgentReviewResult) => {

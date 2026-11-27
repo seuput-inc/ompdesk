@@ -129,6 +129,12 @@ describe("RemoteSidecar", () => {
 		sidecar.handleEvent({ rtab: "tab-1", name: "extensionUi", arg: { id: "ui-1", method: "confirm" } });
 		sidecar.handleEvent({ rtab: "tab-1", name: "hostToolCall", arg: { id: "ht-1", toolName: "gui_notify" } });
 		expect(events).toEqual([batch, { id: "ui-1", method: "confirm" }, { id: "ht-1", toolName: "gui_notify" }]);
+		const wait = { requestId: "row", step: "prepare", wait: { reason: "slots" } };
+		const waits: unknown[] = [];
+		sidecar.on("worktreeWait", event => waits.push(event));
+		sidecar.handleEvent({ rtab: "tab-1", name: "worktreeWait", arg: wait });
+		sidecar.handleEvent({ rtab: "tab-1", name: "worktreeWait", arg: { ...wait, wait: "raw stderr" } });
+		expect(waits).toEqual([wait]);
 
 		const bridges: BridgeConnectResult[] = [];
 		sidecar.on("bridge", (result: BridgeConnectResult) => bridges.push(result));
