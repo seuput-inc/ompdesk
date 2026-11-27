@@ -22,11 +22,6 @@ interface BotsStore {
 	reset: () => void;
 }
 
-/** The last read without pictures: they come with the first live read and are too big for the snapshot. */
-function remembered(state: BotsState): BotsState {
-	return { ...state, bots: state.bots.map(({ picture: _picture, ...bot }) => bot) };
-}
-
 export const useBotsStore = create<BotsStore>()(set => ({
 	state: lastRead<BotsState>(undefined, READ_KEY) ?? EMPTY,
 	live: false,
@@ -36,7 +31,7 @@ export const useBotsStore = create<BotsStore>()(set => ({
 		return state;
 	},
 	receive: state => {
-		rememberRead(undefined, READ_KEY, remembered(state));
+		rememberRead(undefined, READ_KEY, state);
 		set({ state, live: true });
 	},
 	reset: () => set({ state: EMPTY, live: false }),
@@ -55,7 +50,7 @@ export function ensureBots(): void {
 		.catch(() => {});
 }
 
-/** Reads again (a bot may have written its picture or soul since: files are read when the state is listed). */
+/** The bot may have edited its soul since the last read. */
 export function refreshBots(): void {
 	void useBotsStore
 		.getState()

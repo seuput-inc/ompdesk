@@ -69,18 +69,12 @@ describe("a bot's face", () => {
 		expect(new Set(roster).size).toBe(24);
 	});
 
-	it("shows an uploaded picture over the face, and the face when there is none", async () => {
-		const picture = "data:image/png;base64,AAAA";
-		const page = await mount(
-			<>
-				<BotAvatar bot={{ id: "bot-1", name: "Ada", picture }} />
-				<BotAvatar bot={{ id: "bot-2", name: "Bea" }} />
-			</>,
-		);
-		const [withPicture, withoutPicture] = [...page.querySelectorAll("[data-bot-avatar]")] as HTMLElement[];
-		expect(withPicture.querySelector("img")?.getAttribute("src")).toBe(picture);
-		expect(withPicture.querySelector("[data-bot-face]")).toBeNull();
-		expect(withoutPicture.querySelector("[data-bot-face]")?.getAttribute("data-bot-face")).toBe("bot-2");
+	it("keeps the permanent face and status mark after restoring an old pictured bot", async () => {
+		const legacy = { id: "bot-1", name: "Ada", picture: "data:image/png;base64,AAAA" };
+		const page = await mount(<BotAvatar bot={legacy} mark="needsYou" />);
+		expect(page.querySelector("img")).toBeNull();
+		expect(page.querySelector("[data-bot-face]")?.getAttribute("data-bot-face")).toBe(legacy.id);
+		expect(page.querySelector('[data-bot-mark="needsYou"]')).not.toBeNull();
 	});
 
 	it("holds the rest pose under reduced motion, whatever its bot is doing", async () => {

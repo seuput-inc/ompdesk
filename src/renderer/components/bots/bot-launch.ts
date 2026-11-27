@@ -1,7 +1,6 @@
 /**
  * Making a bot and starting it (Orca's `NewBotDialog.tsx:182-217` create and `BotFirstScreen.tsx:100-214` steps): the
- * core makes the folder and seeds its soul and skills (`BotsRequest` `create` carries the purpose), the picture is
- * saved, the bot's home chat opens in a tab in its folder, and a template's or an import's first message goes to it.
+ * core seeds its soul and skills, then a template or import sends its first message to the home chat.
  * A plain bot's first message is the owner's (the core sends nothing: R88), so its composer just takes focus.
  *
  * What happened is kept per bot (`useBotLaunch`) for the bot page's first screen until its first chat answers.
@@ -35,8 +34,6 @@ export interface BotHandOver {
 export interface NewBotDraft {
 	name: string;
 	purpose?: string;
-	/** A PNG `data:` URI (`rasterizePicture`). */
-	picture?: string;
 	model?: string | null;
 	template?: { template: BotTemplate; line: string };
 	importFrom?: BotImportPick;
@@ -156,7 +153,7 @@ async function saveRoutines(bot: Bot, template: BotTemplate): Promise<void> {
 }
 
 /**
- * Makes the bot, saves its picture and opens its home chat; sends a template's or an import's first message and
+ * Makes the bot and opens its home chat; sends a template's or an import's first message and
  * saves a template's routines (off) once the home chat exists; hands a session over once it does. Rejects with the
  * core's reason when the bot could not be made (the dialog shows it); anything after that is the first screen's.
  */
@@ -187,14 +184,10 @@ export async function createBot(draft: NewBotDraft): Promise<Bot> {
 				? importKickoff(draft.importFrom)
 				: null;
 	noteLaunch(bot.id, { start: "running", first: kickoff ? "pending" : "skipped", kickoff });
-	const changes = {
-		...(draft.picture ? { picture: draft.picture } : {}),
-		...(draft.model !== undefined ? { model: draft.model } : {}),
-	};
-	if (Object.keys(changes).length > 0)
+	if (draft.model !== undefined)
 		await store
-			.command({ action: "update", id: bot.id, ...changes })
-			.catch((error: unknown) => toastError({ title: translate("bots.picture.failed"), error }));
+			.command({ action: "update", id: bot.id, model: draft.model })
+			.catch((error: unknown) => toastError({ title: translate("bots.settings.saveFailed"), error }));
 	useUiStore.getState().closeDestination();
 	const tabId = await useTabsStore.getState().openTab({ cwd: bot.folder, kind: "agent" });
 	if (!tabId) {
