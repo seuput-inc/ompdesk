@@ -8,7 +8,7 @@
 import type { AgentReviewItem, ClosedChild } from "../../../../shared/agent-control";
 import { isTabFailed } from "../../../lib/tab-signal";
 import type { SessionTab } from "../../../stores/tabs";
-import { type ChildStatus, openedChildStatus } from "../sidebar/sidebar-family";
+import { type ChildStatus, openedChildStatus, reviewKey } from "../sidebar/sidebar-family";
 
 export interface OpenedChildRow {
 	/** The tab id, or the session file of one main closed after its work landed. */
@@ -83,7 +83,7 @@ const ORDER: Record<ChildStatus | "none", number> = {
  * tab a new id), then the stored sessions main closed for it. Waiting ones first, the folded "done" ones last.
  */
 export function openedChildRows(input: {
-	parent: Pick<SessionTab, "id" | "sessionPath">;
+	parent: Pick<SessionTab, "id" | "sessionPath" | "device">;
 	tabs: readonly SessionTab[];
 	review: ReadonlyMap<string, AgentReviewItem>;
 	closed: readonly ClosedChild[];
@@ -97,7 +97,9 @@ export function openedChildRows(input: {
 		const opened =
 			tab.id !== parent.id &&
 			(tab.openedBy === parent.id ||
-				(tab.openedBySession !== undefined && tab.openedBySession === parent.sessionPath));
+				(tab.openedBySession !== undefined &&
+					tab.openedBySession === parent.sessionPath &&
+					tab.openedByDevice === parent.device));
 		if (!opened) continue;
 		const item = review.get(tab.id);
 		const failed =
@@ -118,7 +120,7 @@ export function openedChildRows(input: {
 			failed,
 			unmerged,
 		});
-		if (tab.sessionPath) shown.add(tab.sessionPath);
+		if (tab.sessionPath) shown.add(reviewKey(tab.device, tab.sessionPath));
 		rows.push({
 			key: tab.id,
 			tabId: tab.id,
@@ -172,12 +174,18 @@ export function openedChildRows(input: {
 		});
 	}
 	for (const child of closed) {
-		if (child.openedBySession !== parent.sessionPath || shown.has(child.path)) continue;
+		if (
+			child.openedBySession !== parent.sessionPath ||
+			child.openedByDevice !== parent.device ||
+			shown.has(reviewKey(child.device, child.path))
+		)
+			continue;
 		rows.push({
-			key: child.path,
+			key: child.device ? reviewKey(child.device, child.path) : child.path,
 			tabId: null,
 			closed: true,
 			sessionPath: child.path,
+			...(child.device ? { deviceId: child.device, device: deviceName?.(child.device) ?? child.device } : {}),
 			...(child.cwd ? { cwd: child.cwd } : {}),
 			title: child.title,
 			...(child.closedAt ? { at: child.closedAt } : {}),

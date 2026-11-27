@@ -695,6 +695,7 @@ impl AgentControl {
         self.host.record_closed(&ClosedChild {
             path,
             opened_by_session: caller.session_path.clone().unwrap_or_default(),
+            opened_by_device: caller.device.clone(),
             title: tab.name().to_owned(),
             cwd: match (&tab.worktree, removed) {
                 (Some(worktree), true) => worktree.base_cwd.clone(),

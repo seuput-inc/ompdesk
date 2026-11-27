@@ -46,6 +46,7 @@ import {
 	AGENT_CONTROL_PREF,
 	AGENT_HIDDEN_PREFS_KEY,
 	agentHiddenPaths,
+	localClosedOpeners,
 	parseClosedChildren,
 	sidebarViewOf,
 } from "../shared/agent-control";
@@ -1479,11 +1480,7 @@ app.whenReady().then(async () => {
 		windowRemoteOpened: () => sidecarPool.remoteOpenedTabs(),
 		sessionOpeners: () => {
 			// A record of a child main closed, for one on this computer; a tab that holds the session again wins.
-			const openers = new Map(
-				parseClosedChildren(prefs.get(AGENT_CLOSED_CHILDREN_PREF)).flatMap(row =>
-					row.device ? [] : [[row.path, row.openedBySession] as const],
-				),
-			);
+			const openers = localClosedOpeners(parseClosedChildren(prefs.get(AGENT_CLOSED_CHILDREN_PREF)));
 			for (const [child, opener] of sidecarPool.sessionOpeners()) openers.set(child, opener);
 			return openers;
 		},

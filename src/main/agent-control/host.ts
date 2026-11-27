@@ -719,7 +719,9 @@ export class AgentControlRuntime {
 	#recordClosed(child: ClosedChild): void {
 		const { prefs } = this.#deps;
 		if (!prefs.set) return;
-		const rows = parseClosedChildren(prefs.get(AGENT_CLOSED_CHILDREN_PREF)).filter(row => row.path !== child.path);
+		const rows = parseClosedChildren(prefs.get(AGENT_CLOSED_CHILDREN_PREF)).filter(
+			row => row.path !== child.path || row.device !== child.device,
+		);
 		rows.push(child);
 		this.#setClosedChildren(rows.slice(-MAX_CLOSED_CHILDREN));
 	}

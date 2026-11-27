@@ -41,7 +41,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { reviewUnmerged } from "../../../../shared/agent-control";
+import { localClosedOpeners, reviewUnmerged } from "../../../../shared/agent-control";
 import { SIDEBAR_WIDTH } from "../../../../shared/boot-shell-geometry";
 import { itemsNeedingYou } from "../../../../shared/bots";
 import { ipcErrorCode } from "../../../../shared/ipc-error-codes";
@@ -680,7 +680,7 @@ export function Sidebar() {
 		[reviewByTab],
 	);
 	const recordedOpeners = useMemo(() => {
-		const openers = new Map(closedChildren.filter(row => !row.device).map(row => [row.path, row.openedBySession]));
+		const openers = localClosedOpeners(closedChildren);
 		for (const [openerTabId, items] of Object.entries(reviewByTab)) {
 			const opener = localTabs.find(tab => tab.id === openerTabId)?.sessionPath;
 			if (!opener) continue;
@@ -764,6 +764,7 @@ export function Sidebar() {
 				placeholder: tab.placeholder,
 				openedBy: tab.openedBy,
 				openedBySession: tab.openedBySession,
+				openedByDevice: tab.openedByDevice,
 				seenAt: seenAt(tab.id),
 			})),
 			...hostedSessions.map(hosted => ({

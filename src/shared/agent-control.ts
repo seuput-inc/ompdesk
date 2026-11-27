@@ -252,6 +252,8 @@ export interface ClosedChild {
 	path: string;
 	/** The opener's session file (a tab id does not survive a relaunch). */
 	openedBySession: string;
+	/** The opener's computer, independently of where the child ran. */
+	openedByDevice?: string;
 	/** What its row reads. */
 	title: string;
 	/** The folder to open it in: its worktree while that exists, else the checkout it was made from. */
@@ -268,16 +270,21 @@ export interface ClosedChild {
 	split?: CostSplit;
 }
 
+/** The host's session list can name a parent file only when both files belong to this computer. */
+export function localClosedOpeners(rows: readonly ClosedChild[]): Map<string, string> {
+	const openers = new Map<string, string>();
+	for (const row of rows) if (!row.device && !row.openedByDevice) openers.set(row.path, row.openedBySession);
+	return openers;
+}
+
 /** The stored list, tolerating anything else a hand-edited prefs file holds. */
 export function parseClosedChildren(value: unknown): ClosedChild[] {
 	if (!Array.isArray(value)) return [];
 	const rows: ClosedChild[] = [];
 	for (const entry of value) {
 		if (!entry || typeof entry !== "object") continue;
-		const { path, openedBySession, title, cwd, closedAt, model, cost, split, device, tabIds } = entry as Record<
-			string,
-			unknown
-		>;
+		const { path, openedBySession, openedByDevice, title, cwd, closedAt, model, cost, split, device, tabIds } =
+			entry as Record<string, unknown>;
 		if (typeof path !== "string" || !path || typeof openedBySession !== "string" || !openedBySession) continue;
 		const ids = Array.isArray(tabIds)
 			? tabIds.filter((id): id is string => typeof id === "string" && id.length > 0).slice(0, MAX_CLOSED_TAB_IDS)
@@ -285,6 +292,7 @@ export function parseClosedChildren(value: unknown): ClosedChild[] {
 		rows.push({
 			path,
 			openedBySession,
+			...(typeof openedByDevice === "string" && openedByDevice ? { openedByDevice } : {}),
 			title: typeof title === "string" ? title : "",
 			cwd: typeof cwd === "string" ? cwd : "",
 			closedAt: typeof closedAt === "number" ? closedAt : 0,

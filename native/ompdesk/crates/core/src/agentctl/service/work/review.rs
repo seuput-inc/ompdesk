@@ -416,6 +416,8 @@ impl AgentControl {
                 .iter()
                 .filter(|child| {
                     child.opened_by_session == path
+                        && child.opened_by_device.as_deref()
+                            == caller.and_then(|c| c.device.as_deref())
                         && child.closed_at >= since
                         && !shown.contains(&format!(
                             "{}\0{}",

@@ -3037,9 +3037,20 @@ describe("ompdesk_autopilot", () => {
 describe("autoClose: opened sessions whose work landed", () => {
 	/** The caller opens one session; its tab then reads as a finished, agent-opened child with a stored file. */
 	async function finishedChild(
-		options: { worktree?: boolean; throwaway?: boolean; patch?: Partial<FakeTab>; tuning?: Tuning } = {},
+		options: {
+			worktree?: boolean;
+			throwaway?: boolean;
+			patch?: Partial<FakeTab>;
+			tuning?: Tuning;
+			parentDevice?: string;
+		} = {},
 	) {
-		const host = new FakeHost({ tabId: "main0001", title: "Boss", sessionPath: "/s/boss.jsonl" });
+		const host = new FakeHost({
+			tabId: "main0001",
+			title: "Boss",
+			sessionPath: "/s/boss.jsonl",
+			device: options.parentDevice,
+		});
 		const service = control(host, options.tuning);
 		await service.run("main0001", T.open, {
 			message: "do it",
@@ -3062,6 +3073,16 @@ describe("autoClose: opened sessions whose work landed", () => {
 	}
 
 	const closes = (host: FakeHost) => host.views.filter(view => view.how === "close");
+
+	it("records the paired opener of a closed local child even with the same parent file here", async () => {
+		const { host, service } = await finishedChild({ parentDevice: "studio", patch: { device: undefined } });
+		host.add({ tabId: "decoy001", sessionPath: "/s/boss.jsonl" });
+		await service.autoClose("main0001");
+		expect(host.closedRecords).toMatchObject([
+			{ path: "/s/kid.jsonl", openedBySession: "/s/boss.jsonl", openedByDevice: "studio" },
+		]);
+		expect(host.closedRecords[0]?.device).toBeUndefined();
+	});
 
 	it("keeps a child answerable when it asks a question during the final cost read", async () => {
 		const { host, service, child } = await finishedChild();

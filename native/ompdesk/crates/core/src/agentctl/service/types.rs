@@ -774,6 +774,8 @@ pub struct CostSplit {
 pub struct ClosedChild {
     pub path: String,
     pub opened_by_session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_by_device: Option<String>,
     #[serde(default)]
     pub title: String,
     #[serde(default)]

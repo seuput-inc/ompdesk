@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { AgentReviewItem, ClosedChild } from "../../../../shared/agent-control";
+import {
+	type AgentReviewItem,
+	type ClosedChild,
+	localClosedOpeners,
+	parseClosedChildren,
+} from "../../../../shared/agent-control";
 import type { SessionTab } from "../../../stores/tabs";
 import { openedChildCounts, openedChildRows } from "./opened-children";
 
@@ -235,6 +240,19 @@ describe("openedChildRows: the sessions an agent opened as children of its sessi
 			["/s/reopened.jsonl", null],
 		]);
 		expect(rows.at(-1)).toMatchObject({ title: "Reopened", cwd: "/w", status: "done" });
+	});
+
+	it("keeps an auto-closed local child under its paired parent, not a same-file local tab", () => {
+		const closed = parseClosedChildren([
+			{ path: "/s/local-child.jsonl", openedBySession: parent.sessionPath, openedByDevice: "studio" },
+		]);
+		expect(localClosedOpeners(closed).has("/s/local-child.jsonl")).toBe(false);
+		const rows = (device?: string) =>
+			openedChildRows({ parent: { ...parent, device }, tabs: [], review: new Map(), closed }).map(
+				row => row.sessionPath,
+			);
+		expect(rows()).toEqual([]);
+		expect(rows("studio")).toEqual(["/s/local-child.jsonl"]);
 	});
 });
 
