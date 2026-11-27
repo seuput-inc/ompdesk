@@ -738,18 +738,6 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 						/>
 					)}
 					<TodoReceived freshness={freshness} />
-					{plan && plan.done > 0 && (
-						<BoardRow
-							data={{ "data-board-done-folded": "" }}
-							flipKey="plan-done"
-							label={
-								<span className="text-(--sc-text-subtle)">
-									{t("workBoard.doneFolded", { count: plan.done })}
-								</span>
-							}
-							lead={<Check aria-hidden className="size-3 text-(--sc-success)" />}
-						/>
-					)}
 					{plan?.rows.map((row, index) => (
 						<BoardRow
 							data={{ "data-todo-status": row.status }}
@@ -782,6 +770,18 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 					))}
 					{plan && plan.hidden > 0 && (
 						<li className="omp-work-board-more">{t("workBoard.moreTodos", { count: plan.hidden })}</li>
+					)}
+					{plan && plan.done > 0 && (
+						<BoardRow
+							data={{ "data-board-done-folded": "" }}
+							flipKey="plan-done"
+							label={
+								<span className="text-(--sc-text-subtle)">
+									{t("workBoard.doneFolded", { count: plan.done })}
+								</span>
+							}
+							lead={<Check aria-hidden className="size-3 text-(--sc-success)" />}
+						/>
 					)}
 				</BoardSection>
 			)}

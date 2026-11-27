@@ -8,6 +8,8 @@ import { APPROVAL_TITLE_PREFIX } from "../../../../shared/tool-approval";
 import { type AskKind, type Attention, sessionAttention } from "../../../lib/attention";
 import { formatDuration } from "../../../lib/format";
 import { isApprovalRequest } from "../../../stores/extension-ui";
+import type { UiTodoPhase } from "../../../stores/todo";
+import { buildDockModel } from "../../chat/dock/dock-summary";
 import { isLiveSubagentStatus } from "../../panels/subagent-graph";
 
 /** Width of the board and the gap between it and the transcript column (components.css `--omp-board-*`). */
@@ -124,23 +126,22 @@ export interface TodoBoard {
 /** Rows the plan section lists before it folds the rest into a count. */
 export const TODO_BOARD_ROWS = 5;
 
-/**
- * The plan's progress and its unfinished tasks in order; every finished task folds into the one count, wherever it
- * sits (an agent marks steps done out of order), a finished list's too. Abandoned tasks are neither done nor left to
- * do, so they leave the count and the list.
- */
-export function todoBoard(phases: readonly { tasks: readonly TodoTask[] }[]): TodoBoard | null {
-	const tasks = phases.flatMap(phase => phase.tasks).filter(task => task.status !== "abandoned");
-	if (tasks.length === 0) return null;
-	const open = tasks.filter(task => task.status !== "completed");
-	const rows = open.slice(0, TODO_BOARD_ROWS).map(({ content, status }) => ({ content, status }));
+/** Cap the dock's ordered plan, not the stored plan: the active task can be in its last phase. */
+export function todoBoard(phases: readonly UiTodoPhase[]): TodoBoard | null {
+	const plan = buildDockModel(phases);
+	if (!plan.total) return null;
+	const rows: TodoBoardRow[] = [];
+	for (const phase of plan.phases) {
+		rows.push(...phase.tasks.slice(0, TODO_BOARD_ROWS - rows.length));
+		if (rows.length === TODO_BOARD_ROWS) break;
+	}
 	return {
-		done: tasks.length - open.length,
-		total: tasks.length,
-		active: tasks.find(task => task.status === "in_progress")?.content ?? null,
+		done: plan.done,
+		total: plan.total,
+		active: plan.active?.content ?? null,
 		rows,
-		hidden: open.length - rows.length,
-		segments: tasks.map(task => task.status),
+		hidden: plan.total - plan.done - rows.length,
+		segments: phases.flatMap(phase => phase.tasks.filter(t => t.status !== "abandoned").map(t => t.status)),
 	};
 }
 

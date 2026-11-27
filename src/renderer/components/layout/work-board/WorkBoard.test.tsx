@@ -435,26 +435,38 @@ describe("WorkBoard sections", () => {
 	});
 
 	it("shows the todo list with its active item, folds the done ones and scrolls to the card on a click", async () => {
-		const tasks = [
-			...Array.from({ length: 5 }, (_, index) => ({ content: `Done ${index}`, status: "completed" as const })),
-			{ content: "Write the board", status: "in_progress" as const },
-			{ content: "Test it", status: "pending" as const },
-		];
-		useTodoStore.getState().setPhases([{ name: "Work", tasks }]);
+		useTodoStore.getState().setPhases([
+			{
+				name: "Earlier phase",
+				tasks: [
+					{ content: "Finished", status: "completed" },
+					...Array.from({ length: 6 }, (_, i) => ({ content: `Queued ${i}`, status: "pending" as const })),
+				],
+			},
+			{
+				name: "Current phase",
+				tasks: [
+					{ content: "Test it", status: "pending" },
+					{ content: "Write the board", status: "in_progress" },
+				],
+			},
+		]);
 		await mount();
 		expect(pane.hasAttribute("data-work-board-todo")).toBe(true);
 		expect(pane.hasAttribute("data-work-board-running")).toBe(false);
 		const plan = section("plan");
 		// The plan's figure is its header's one bar; the section lists the work and carries no count.
-		expect(plan?.querySelector(".omp-work-board-progress")?.textContent).toBe("5/7");
+		expect(plan?.querySelector(".omp-work-board-progress")?.textContent).toBe("1/9");
 		expect(plan?.querySelector(".omp-work-board-count")).toBeNull();
-		expect(plan?.textContent).toContain("5 done");
-		expect(plan?.querySelector('[data-todo-status="in_progress"]')?.textContent).toContain("Write the board");
-		// Every finished task folds into one "5 done" row; none is left struck through above the active one.
-		expect([...pane.querySelectorAll("[data-todo-status]")].map(row => row.getAttribute("data-todo-status"))).toEqual(
-			["in_progress", "pending"],
-		);
-		expect(pane.querySelectorAll("[data-board-done-folded]")).toHaveLength(1);
+		expect([...pane.querySelectorAll("[data-todo-status]")].map(row => row.textContent)).toEqual([
+			"Write the board",
+			"Test it",
+			"Queued 0",
+			"Queued 1",
+			"Queued 2",
+		]);
+		const tail = plan?.querySelectorAll(".omp-work-board-more, [data-board-done-folded]");
+		expect(tail && [...tail].map(row => row.textContent)).toEqual(["+3 more", "1 done"]);
 
 		const card = document.createElement("div") as unknown as HTMLElement;
 		card.setAttribute("data-todo-snapshot", "s1");

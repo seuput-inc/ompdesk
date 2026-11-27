@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ExtensionUIRequest, SubagentSnapshot, TodoTask } from "../../../../shared/rpc-types";
 import type { AskKind } from "../../../lib/attention";
 import { translate } from "../../../lib/i18n";
+import type { UiTodoTask } from "../../../stores/todo";
 import {
 	boardCounts,
 	goalMeta,
@@ -130,12 +131,16 @@ describe("goal row figure", () => {
 });
 
 describe("todoBoard", () => {
-	const task = (content: string, status: TodoTask["status"]): TodoTask => ({ content, status });
+	const task = (content: string, status: TodoTask["status"]) => ({ id: content, content, status });
+	const phase = (...tasks: UiTodoTask[]) => {
+		const name = tasks[0]?.content ?? "Empty";
+		return { id: name, name, tasks };
+	};
 
 	it("counts done over total and names the active task, leaving abandoned ones out", () => {
 		const board = todoBoard([
-			{ tasks: [task("a", "completed"), task("b", "in_progress")] },
-			{ tasks: [task("c", "pending"), task("d", "abandoned")] },
+			phase(task("a", "completed"), task("b", "in_progress")),
+			phase(task("c", "pending"), task("d", "abandoned")),
 		]);
 		expect(board).toMatchObject({ done: 1, total: 3, active: "b", hidden: 0 });
 		expect(board?.rows.map(row => row.content)).toEqual(["b", "c"]);
@@ -143,12 +148,12 @@ describe("todoBoard", () => {
 
 	it("has no board for an empty or fully abandoned list", () => {
 		expect(todoBoard([])).toBeNull();
-		expect(todoBoard([{ tasks: [task("x", "abandoned")] }])).toBeNull();
+		expect(todoBoard([phase(task("x", "abandoned"))])).toBeNull();
 	});
 
 	it("shows a window around the first open task and counts the rest", () => {
 		const tasks = Array.from({ length: 20 }, (_, index) => task(`t${index}`, index < 9 ? "completed" : "pending"));
-		const board = todoBoard([{ tasks }]);
+		const board = todoBoard([phase(...tasks)]);
 		expect(board?.rows).toHaveLength(TODO_BOARD_ROWS);
 		expect(board?.rows[0]?.content).toBe("t9");
 		expect(board?.hidden).toBe(20 - 9 - TODO_BOARD_ROWS);
@@ -160,25 +165,23 @@ describe("todoBoard", () => {
 	it("folds a finished list whole: no struck-through rows, short or long", () => {
 		for (const length of [3, 10]) {
 			const tasks = Array.from({ length }, (_, index) => task(`t${index}`, "completed"));
-			expect(todoBoard([{ tasks }])).toMatchObject({ rows: [], hidden: 0, done: length });
+			expect(todoBoard([phase(...tasks)])).toMatchObject({ rows: [], hidden: 0, done: length });
 		}
 	});
 
 	it("folds every finished task into one count wherever it sits, and lists the unfinished ones in order", () => {
 		// The user's report: three done before the task in progress folded, two done after it stayed listed.
 		const board = todoBoard([
-			{
-				tasks: [
-					task("a", "completed"),
-					task("b", "completed"),
-					task("c", "completed"),
-					task("d", "in_progress"),
-					task("e", "completed"),
-					task("f", "completed"),
-					task("g", "pending"),
-				],
-			},
-			{ tasks: [task("h", "completed"), task("i", "pending")] },
+			phase(
+				task("a", "completed"),
+				task("b", "completed"),
+				task("c", "completed"),
+				task("d", "in_progress"),
+				task("e", "completed"),
+				task("f", "completed"),
+				task("g", "pending"),
+			),
+			phase(task("h", "completed"), task("i", "pending")),
 		]);
 		expect(board?.rows.map(row => row.content)).toEqual(["d", "g", "i"]);
 		expect(board?.rows.every(row => row.status !== "completed")).toBe(true);
@@ -188,7 +191,7 @@ describe("todoBoard", () => {
 	it("counts the unfinished tasks past the row cap, never a finished one", () => {
 		const statuses = ["pending", "completed", "pending", "pending", "completed", "pending", "pending", "pending"];
 		const board = todoBoard([
-			{ tasks: statuses.map((status, index) => task(`t${index}`, status as TodoTask["status"])) },
+			phase(...statuses.map((status, index) => task(`t${index}`, status as TodoTask["status"]))),
 		]);
 		expect(board?.rows.map(row => row.content)).toEqual(["t0", "t2", "t3", "t5", "t6"]);
 		expect(board).toMatchObject({ done: 2, hidden: 1 });
