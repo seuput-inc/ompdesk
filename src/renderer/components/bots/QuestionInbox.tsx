@@ -10,6 +10,7 @@ import { toastError } from "../../stores/toast";
 import { Button, Card, EmptyState, PageLayout } from "../common";
 import {
 	type AnswerReceipt,
+	confirmedAnswers,
 	editAnswer,
 	type InboxItemRow,
 	type ReviewedAnswer,
@@ -125,7 +126,6 @@ export function QuestionInbox() {
 	const ordered = showResults
 		? receipts.toSorted((a, b) => Number(a.outcome === "sent") - Number(b.outcome === "sent"))
 		: [];
-	const sent = ordered.filter(receipt => receipt.outcome === "sent").length;
 	const inbox = useRef<HTMLDivElement>(null);
 	const [review, setReview] = useState(false);
 	const sending = useItemsUi(s => s.inboxSending);
@@ -182,7 +182,7 @@ export function QuestionInbox() {
 							</Card>
 						)}
 						<p className="sr-only" role="status">
-							{showResults && t("inbox.resultSummary", { sent, other: ordered.length - sent })}
+							{showResults && t("inbox.resultSummary", confirmedAnswers(receipts))}
 						</p>
 						{showResults && (
 							<Card padding="row" surface="elevated">

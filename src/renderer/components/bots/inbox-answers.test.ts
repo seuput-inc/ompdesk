@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BotsRequest, BotsState, Item, ItemEvent, ItemQuestion } from "../../../shared/bots";
+import { loadLocale, translate } from "../../lib/i18n";
 import { questionRows } from "../../lib/question-inbox";
 import { useBotsStore } from "../../stores/bots";
-import { editAnswer, type ReviewedAnswer, sendReviewedAnswers } from "./inbox-answers";
+import { confirmedAnswers, editAnswer, type ReviewedAnswer, sendReviewedAnswers } from "./inbox-answers";
 import { answersText, withRecommendations } from "./items/item-model";
 import { useItemsUi } from "./items/item-store";
 
@@ -79,6 +80,27 @@ it("editing a replacement starts a new answer and accounts for the unsent old dr
 });
 
 describe("sendReviewedAnswers", () => {
+	it("announces only confirmed deliveries when the host records an answer but its reply is lost", async () => {
+		const items = [1, 2, 3].map(openItem);
+		const drafts = items.map(review);
+		const host: BotsState = { bots: [], items: [...items] };
+		const command = vi.fn(async (req: BotsRequest) => {
+			if (req.action !== "item") throw new Error("unexpected action");
+			const i = items.findIndex(item => item.id === req.id);
+			if (i !== 2) host.items[i] = accepted(items[i], drafts[i]);
+			if (i === 1) throw new Error("Reply lost after write");
+			return host;
+		});
+		useBotsStore.setState({ state: { bots: [], items }, command });
+		useItemsUi.setState({ inboxDrafts: drafts });
+		await sendReviewedAnswers();
+		const receipts = useItemsUi.getState().inboxReceipts;
+		expect(host.items[1].events[0].request).toBe(drafts[1].requestId);
+		expect(receipts.map(row => row.outcome)).toEqual(["sent", "failed", "unconfirmed"]);
+		await loadLocale("en");
+		expect(translate("inbox.resultSummary", confirmedAnswers(receipts))).toBe("Answers confirmed sent: 1 of 3.");
+	});
+
 	it("sends each touched item once, skips replacements and withdrawals received during send, and keeps only retryable drafts", async () => {
 		const items = [1, 2, 3, 4, 5, 6].map(openItem);
 		const drafts = items.slice(0, 5).map(review);
