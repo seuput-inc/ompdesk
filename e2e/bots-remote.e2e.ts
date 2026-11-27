@@ -208,6 +208,10 @@ test("a bot made on one computer is listed, chatted with and answered on its pai
 		if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
 		await expect(device.locator(`[data-device-group=${JSON.stringify(hostProfile.project)}]`)).toBeVisible();
 		await expect(device.locator(`[data-device-group=${JSON.stringify(folder)}]`)).toHaveCount(0);
+		const hostProjects = a.locator(".omp-session-sidebar [data-workspace-group]");
+		await expect(a.locator(`[data-workspace-group=${JSON.stringify(hostProfile.project)}]`)).toBeVisible();
+		await expect(a.locator(`[data-workspace-group=${JSON.stringify(folder)}]`)).toHaveCount(0);
+		await expect(hostProjects.getByText(alias, { exact: true })).toHaveCount(0);
 		await legacyRow.locator(`[data-bot-row="${old.id}"]`).click();
 		const resumed = async () =>
 			(await b.evaluate(() => window.omp.tabs.list())).find(
