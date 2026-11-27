@@ -3,11 +3,9 @@
  * rows are chosen. Pure, so the breakpoint and the sections are tested without a DOM.
  */
 
-import type { ExtensionUIRequest, RpcGoalState, SubagentSnapshot, TodoTask } from "../../../../shared/rpc-types";
-import { APPROVAL_TITLE_PREFIX } from "../../../../shared/tool-approval";
+import type { RpcGoalState, SubagentSnapshot, TodoTask } from "../../../../shared/rpc-types";
 import { type AskKind, type Attention, sessionAttention } from "../../../lib/attention";
 import { formatDuration } from "../../../lib/format";
-import { isApprovalRequest } from "../../../stores/extension-ui";
 import type { UiTodoPhase } from "../../../stores/todo";
 import { buildDockModel } from "../../chat/dock/dock-summary";
 import { isLiveSubagentStatus } from "../../panels/subagent-graph";
@@ -160,32 +158,6 @@ export function isWaitingSubagent(status: string): boolean {
 /** The live subagents that are at work. */
 export function workingSubagents(agents: readonly SubagentSnapshot[]): SubagentSnapshot[] {
 	return agents.filter(agent => !isWaitingSubagent(agent.status));
-}
-
-/** One line for a question or approval waiting on the user, in the user's language. */
-export function requestLabel(
-	request: ExtensionUIRequest,
-	t: (key: string, params?: Record<string, string>) => string,
-): string {
-	switch (request.method) {
-		case "select": {
-			// The guard narrows to every select, so the approval's tool is read through a ternary.
-			const tool = isApprovalRequest(request)
-				? (request.title.slice(APPROVAL_TITLE_PREFIX.length).split("\n", 1)[0]?.trim() ?? "")
-				: "";
-			return tool ? t("workBoard.approve", { tool }) : request.title.trim() || t("workBoard.question");
-		}
-		case "confirm":
-		case "input":
-		case "editor":
-			return request.title.trim() || t("workBoard.question");
-		case "ask": {
-			const first = request.questions[0];
-			return first?.question.trim() || first?.header?.trim() || t("workBoard.question");
-		}
-		default:
-			return t("workBoard.question");
-	}
 }
 
 /** What the board counts, once: its head, the Needs you section, the live region and the strip's label all read these. */

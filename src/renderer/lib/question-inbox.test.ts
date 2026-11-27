@@ -72,6 +72,41 @@ describe("question inbox", () => {
 		}
 	});
 
+	it("merges the dock's prompt with its host copy, not another session's or device's, and keeps bot items", () => {
+		const rows = questionRows(
+			{ bots: [bot], items: [item] },
+			[{ summaries: [session, { ...session, sessionPath: "/s/other" }] }, { summaries: [session], device: "peer" }],
+			empty,
+			5000,
+			t,
+			{
+				tabId: "here",
+				tab: {
+					id: "here",
+					cwd: bot.folder,
+					kind: "agent",
+					sessionPath: session.sessionPath,
+					status: "ready",
+					unreadDone: false,
+				},
+				pendingRequests: [
+					{ type: "extension_ui_request", id: "r1", method: "input", title: "The local question" },
+					{ type: "extension_ui_request", id: "r2", method: "input", title: "Paste code" },
+					{ type: "extension_ui_request", id: "r3", method: "input", title: "Not listed yet" },
+				],
+				loginRequestIds: { r2: true },
+				arrivedAt: { r1: 10, r3: 20 },
+			},
+		);
+		const here = rows.filter(
+			row => !row.device && (!("session" in row) || row.session.sessionPath === session.sessionPath),
+		);
+		expect(here.map(row => row.detail)).toEqual(["The local question", "Not listed yet", "Where?"]);
+		expect(here[0]).toMatchObject({ source: "ask", requestId: "r1", localTabId: "here" });
+		expect(rows.filter(row => row.detail === "Choose a region")).toHaveLength(2);
+		expect(rows.filter(row => "session" in row && row.requestId === "r2")).toHaveLength(2);
+	});
+
 	it("does not conflate ordinary sessions with the same displayed title in the same project", () => {
 		const other = { ...session, title: "Checks" };
 		const rows = questionRows(

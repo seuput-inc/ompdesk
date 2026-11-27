@@ -1,5 +1,5 @@
 import { parseHTML } from "linkedom";
-import { act } from "react";
+import { act, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RpcAsyncJobItem, RpcGoalState, RpcJobRow, SubagentSnapshot } from "../../../../shared/rpc-types";
@@ -19,7 +19,9 @@ import { useTodoStore } from "../../../stores/todo";
 import { type ToolEntry, useToolsStore } from "../../../stores/tools";
 import { useUiStore } from "../../../stores/ui";
 import { useWorkBoardStore } from "../../../stores/work-board";
+import { QuestionInbox } from "../../bots/QuestionInbox";
 import { bareEmail } from "../AccountLimit";
+import { InboxCount } from "../sidebar/InboxCount";
 import { showBoardRequests } from "./question-fixture";
 
 const { document, window, Element, Event, HTMLElement, Node } = parseHTML("<html><body></body></html>");
@@ -103,7 +105,7 @@ function agent(id: string, status: string, index: number, patch: Partial<Subagen
 	return { id, index, agent: "task", status, lastUpdate: Date.now(), ...patch };
 }
 
-async function mount(width = 1600): Promise<void> {
+async function mount(width = 1600, alongside?: ReactNode): Promise<void> {
 	useTabsStore.setState({
 		tabs: [{ id: "t1", cwd: "/w", status: "ready", kind: "agent", unreadDone: false }],
 		activeTabId: "t1",
@@ -119,6 +121,7 @@ async function mount(width = 1600): Promise<void> {
 		root.render(
 			<I18nProvider>
 				<WorkBoardHost />
+				{alongside}
 			</I18nProvider>,
 		);
 	});
@@ -820,9 +823,45 @@ describe("WorkBoard sections", () => {
 		expect(pane.querySelectorAll("[aria-live]")).toHaveLength(1);
 	});
 
-	it("focuses the docked card when a waiting row is clicked", async () => {
-		showBoardRequests({ id: "c1", kind: "input", label: "Overwrite the file?" });
+	it("shows the pane's unlisted question in the folded strip, inbox and badge without counting a login", async () => {
+		await mount(
+			600,
+			<>
+				<span data-inbox-count>
+					<InboxCount />
+				</span>
+				<QuestionInbox />
+			</>,
+		);
+		await act(async () => {
+			useTabsStore.setState({ tabs: [] });
+			const ui = useExtensionUiStore.getState();
+			ui.restoreLoginRequest({ type: "extension_ui_request", id: "login", method: "input", title: "Paste code" });
+			ui.pushRequest({ type: "extension_ui_request", id: "ask", method: "input", title: "Pick a region" });
+		});
+		expect(pane.querySelector("[data-work-chip] [role=status]")?.textContent).toBe(translate("attention.question"));
+		expect(pane.querySelector("[data-inbox-count]")?.textContent).toBe("1");
+		const inbox = pane.querySelector("[data-question-inbox]");
+		expect(inbox?.querySelectorAll("[data-question-row]")).toHaveLength(1);
+		expect(inbox?.textContent).toContain("Pick a region");
+		expect(inbox?.textContent).not.toContain("Paste code");
+		await click("[data-question-row=ask] button");
+		expect(useExtensionUiStore.getState().selectedRequestId).toBe("ask");
+	});
+
+	it("focuses the docked card and shows its local label once when the host lists the same request", async () => {
+		showBoardRequests({ id: "c1", kind: "approval", label: "Stale prompt" });
+		useExtensionUiStore.getState().pushRequest({
+			type: "extension_ui_request",
+			id: "c1",
+			method: "confirm",
+			title: "Overwrite the file?",
+			message: "",
+		});
 		await mount();
+		expect(section("needs")?.querySelectorAll("li")).toHaveLength(1);
+		expect(pane.querySelector('[data-board-waiting="c1"]')?.textContent).toContain("Overwrite the file?");
+		expect(pane.querySelector("[data-board-status]")?.textContent).toBe(translate("attention.question"));
 		const card = document.createElement("section") as unknown as HTMLElement;
 		card.setAttribute("data-prompt-card", "");
 		const input = document.createElement("button") as unknown as HTMLElement;

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ExtensionUIRequest, SubagentSnapshot, TodoTask } from "../../../../shared/rpc-types";
 import type { AskKind } from "../../../lib/attention";
 import { translate } from "../../../lib/i18n";
+import { requestLabel } from "../../../lib/question-inbox";
 import type { UiTodoTask } from "../../../stores/todo";
 import {
 	boardCounts,
@@ -10,7 +11,6 @@ import {
 	isWaitingSubagent,
 	liveSubagents,
 	READING_COLUMN_PX,
-	requestLabel,
 	TODO_BOARD_ROWS,
 	todoBoard,
 	transcriptColumnWidth,

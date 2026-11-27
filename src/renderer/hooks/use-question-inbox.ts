@@ -5,12 +5,20 @@ import { useT } from "../lib/i18n";
 import { useMinuteTick } from "../lib/now-tick";
 import { type QuestionRow, questionRows } from "../lib/question-inbox";
 import { ensureBots, useBotsStore } from "../stores/bots";
+import { useExtensionUiStore } from "../stores/extension-ui";
 import { summariesOf, useHostedSessionsStore } from "../stores/hosted-sessions";
 import { usePairedHosts } from "../stores/remote";
+import { useRuntimeTabId } from "../stores/session-runtime-context";
 import { useTabsStore } from "../stores/tabs";
 
 export function useQuestionInbox(): QuestionRow[] {
 	const t = useT();
+	const runtimeTabId = useRuntimeTabId();
+	const tabId = useTabsStore(s => runtimeTabId ?? s.activeTabId);
+	const tab = useTabsStore(s => s.tabs.find(entry => entry.id === tabId));
+	const pendingRequests = useExtensionUiStore(s => s.pendingRequests);
+	const loginRequestIds = useExtensionUiStore(s => s.loginRequestIds);
+	const arrivedAt = useExtensionUiStore(s => s.arrivedAt);
 	const state = useBotsStore(s => s.state);
 	useEffect(ensureBots, []);
 	const schedules = useSchedulesOf(
@@ -36,8 +44,16 @@ export function useQuestionInbox(): QuestionRow[] {
 		state.items.some(item => item.snoozedUntil !== undefined && Date.parse(item.snoozedUntil) > Date.now()),
 	);
 	return useMemo(
-		() => questionRows(state, computers, schedules, Math.max(minute, Date.now()), t),
-		[state, computers, schedules, minute, t],
+		() =>
+			questionRows(
+				state,
+				computers,
+				schedules,
+				Math.max(minute, Date.now()),
+				t,
+				tabId ? { tabId, tab, pendingRequests, loginRequestIds, arrivedAt } : undefined,
+			),
+		[state, computers, schedules, minute, t, tabId, tab, pendingRequests, loginRequestIds, arrivedAt],
 	);
 }
 
@@ -47,15 +63,14 @@ export function useSessionQuestions(tabId: string | null): QuestionRow[] {
 	const tab = useTabsStore(state => state.tabs.find(entry => entry.id === tabId));
 	return useMemo(
 		() =>
-			!tab
-				? []
-				: rows.filter(row => {
-						if (row.device !== tab.device) return false;
-						const path = tab.sessionPath ?? unsavedSessionKey(tab.id);
-						if (row.source === "item") return row.item.session === path;
-						if (row.source === "access") return row.bot.home === path;
-						return row.session.sessionPath === path;
-					}),
-		[rows, tab],
+			rows.filter(row => {
+				if ("session" in row && row.localTabId) return row.localTabId === tabId;
+				if (!tab || row.device !== tab.device) return false;
+				const path = tab.sessionPath ?? unsavedSessionKey(tab.id);
+				if (row.source === "item") return row.item.session === path;
+				if (row.source === "access") return row.bot.home === path;
+				return row.session.sessionPath === path;
+			}),
+		[rows, tab, tabId],
 	);
 }

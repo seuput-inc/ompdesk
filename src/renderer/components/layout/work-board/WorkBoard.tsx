@@ -37,7 +37,7 @@ import { costKinds, costWords } from "../../../lib/spend";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { ensureAgentReviewSubscription, useAgentReviewStore } from "../../../stores/agent-review";
 import { isAutopilotTab, isLiveAutopilot, useAutopilotStore } from "../../../stores/autopilot";
-import { type ExtensionUiStore, useExtensionUiStore } from "../../../stores/extension-ui";
+import type { ExtensionUiStore } from "../../../stores/extension-ui";
 import { useMessagesStore } from "../../../stores/messages";
 import { useSessionStore } from "../../../stores/session";
 import { sessionRuntimeStore, useRuntimeTabId } from "../../../stores/session-runtime-context";
@@ -64,7 +64,6 @@ import {
 	goalMeta,
 	isWaitingSubagent,
 	liveSubagents,
-	requestLabel,
 	todoBoard,
 	workBoardDocks,
 	workBoardForm,
@@ -299,7 +298,6 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 	// A run's head carries each metered provider's charge in its totals' tooltip, so the board's own spend line gives way.
 	const runTotals = useAutopilotStore(state => isAutopilotTab(state) && state.status.totals !== undefined);
 	const autopilotRunning = useAutopilotStore(state => isLiveAutopilot(state) && state.status.state === "running");
-	const pending = useExtensionUiStore(state => state.pendingRequests);
 	const questions = useSessionQuestions(tabId);
 
 	const lastTurn = useTodoStore(state => state.lastTurn);
@@ -433,9 +431,8 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 	// Each row's tag is the same kind `sessionAttention` names on the head, so an approval never reads as a question.
 	const askItems = questions.map(row => {
 		const sessionAsk = "session" in row;
-		const request = sessionAsk && pending.find(request => request.id === row.requestId);
 		const id = sessionAsk ? row.requestId : row.source === "item" ? row.item.id : undefined;
-		const label = request ? requestLabel(request, t) : row.source === "access" ? row.title : row.detail || row.title;
+		const label = row.source === "access" ? row.title : row.detail || row.title;
 		return {
 			id: id ?? row.key,
 			key: row.key,

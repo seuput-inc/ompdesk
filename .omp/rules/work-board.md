@@ -20,6 +20,8 @@ globs:
 
 The Questions destination and its badge use the same live question rows as the scoped bot and session views. This is a projection of shared bot items, session summaries and this host's access requests, not a second journal. Only item answers can be batched. Recommendations fill a review list; they never send an answer or approve a tool or access request. Each submission names the original asking event and reports its own result. A new question gets no selection from its predecessor. Ordinary sessions still use their blocking form. The two-viewer harness scenario is `e2e/question-inbox.e2e.ts`.
 
+A blocking request appears on its tab's board and folded strip without waiting for the host to report it. The inbox counts the same request once. When the host reports the same request ID for that device and session, the local card supplies the label and receives focus. Sign-in prompts stay out of these views.
+
 ### Work board and work card
 
 - **Work board** (`layout/work-board/WorkBoard.tsx`, rows `board-parts.tsx`, rules in `work-board.ts`, look in `styles/work-board.css`, design record `docs/work-board-design.md`; mounted per session pane by `SplitWorkspace`): a pane with at least 300 px (`WORK_BOARD_MIN_SPARE`) beside its transcript column (`workBoardFits`, measured by ResizeObserver; constants pinned to components.css by `work-board.test.ts`) docks this session's live state in that margin, 264 px wide, 320 px from 420 px of margin (`workBoardWidth`, set on the pane as `--omp-board-width`).

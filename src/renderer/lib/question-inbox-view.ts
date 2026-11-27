@@ -1,7 +1,7 @@
 import { isUnsavedSession, unsavedSessionKey } from "../../shared/session-summary";
 import { openBotPage } from "../components/bots/bot-page";
-import type { ExtensionUiStore } from "../stores/extension-ui";
-import { sessionRuntimeStore } from "../stores/session-runtime-context";
+import { type ExtensionUiStore, useExtensionUiStore } from "../stores/extension-ui";
+import { focusedSessionRuntime, sessionRuntimeStore } from "../stores/session-runtime-context";
 import { useTabsStore } from "../stores/tabs";
 import { toast } from "../stores/toast";
 import { useUiStore } from "../stores/ui";
@@ -48,6 +48,15 @@ export async function openInboxRow(row: QuestionRow): Promise<void> {
 	}
 	const { session, device } = row;
 	const tabs = useTabsStore.getState();
+	if (row.localTabId && row.requestId) {
+		const store =
+			sessionRuntimeStore<ExtensionUiStore>(row.localTabId, "extensionUi") ??
+			(row.localTabId === tabs.activeTabId && !focusedSessionRuntime() ? useExtensionUiStore : null);
+		store?.setState({ selectedRequestId: row.requestId });
+		useUiStore.getState().closeDestination();
+		await tabs.switchTab(row.localTabId);
+		return;
+	}
 	const tab = tabs.tabs.find(
 		entry => entry.device === device && (entry.sessionPath ?? unsavedSessionKey(entry.id)) === session.sessionPath,
 	);
