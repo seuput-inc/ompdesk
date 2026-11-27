@@ -54,8 +54,6 @@ export interface Bot {
 	quiet: BotQuietKind[];
 	/** The first paragraph of its SOUL.md that is not a heading, about 120 characters: what it is for. */
 	specialty?: string;
-	/** Its picture (`picture.png|jpg|webp` in its folder) as a data URI; absent = its drawn face. */
-	picture?: string;
 	createdAt: string;
 	/** The newest item event the owner had seen when they last opened its Items tab (`itemsOpened`). */
 	itemsSeen?: number;
@@ -66,9 +64,6 @@ export const BOT_QUIET_KINDS = ["permission", "done", "failed"] as const;
 export type BotQuietKind = (typeof BOT_QUIET_KINDS)[number];
 /** The longest purpose a new bot is given (Orca's `BOT_PURPOSE_MAX_LENGTH`; the core refuses a longer one). */
 export const BOT_PURPOSE_MAX = 200;
-/** The largest picture the core keeps (`bot_files.rs` `PICTURE_MAX`). */
-export const BOT_PICTURE_MAX_BYTES = 512 * 1024;
-
 export const ITEM_STATUSES = ["planned", "working", "waiting", "needs_you", "done", "canceled"] as const;
 /** `waiting`: on something outside the bot and its owner; `needs_you`: on the owner's answer. */
 export type ItemStatus = (typeof ITEM_STATUSES)[number];
@@ -272,8 +267,6 @@ export type BotsRequest =
 			/** Turn its memory upkeep routine on (daily at `time`, default 03:00) or off. */
 			tidy?: { on: boolean; time?: string };
 			quiet?: BotQuietKind[];
-			/** A `data:image/(png|jpeg|webp);base64,…` picture, or null for its drawn face. */
-			picture?: string | null;
 	  }
 	| { action: "delete"; id: string }
 	/** The owner's change to an item (`id`), or one move of several (`ids`): each chat is mailed once. */

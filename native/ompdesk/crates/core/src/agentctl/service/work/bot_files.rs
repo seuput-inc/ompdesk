@@ -1,28 +1,17 @@
 //! A bot's own files as the owner's Bots page and Settings › Bots read and change them (Orca's bot home files,
-//! `settings/bots/bot-home-files.ts`, and its picture, `bots/use-new-bot-picture.ts`): the `SOUL.md` and skills a new
-//! bot starts with (`BotsRequest` `create`), its picture (`update.picture`), its soul and memory files (`file`) and the
-//! bots of other apps on this computer an import can bring over (`importSources`, Orca's `bot-import-sources.ts`).
+//! `settings/bots/bot-home-files.ts`): the soul, skills and memory files of a bot and the bots an import can bring over.
 //!
-//! Only these files: `SOUL.md`, `MEMORY.md`, `memory/<name>.md`, `memory/history/<name>.md` and `picture.*` in the
+//! Only these files: `SOUL.md`, `MEMORY.md`, `memory/<name>.md`, `memory/history/<name>.md` in the
 //! bot's folder, and `.omp/skills/<name>/SKILL.md` written once at create. Nothing outside the folder.
 
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use base64::Engine;
 use serde_json::{Value, json};
 
 use super::super::fail::{R, fail};
 use crate::disk::tree::write_atomic_if;
 
-/// The picture formats a bot's folder may hold (`picture.<ext>`), and their MIME types.
-const PICTURES: [(&str, &str); 3] = [
-    ("picture.png", "image/png"),
-    ("picture.jpg", "image/jpeg"),
-    ("picture.webp", "image/webp"),
-];
-/// The largest picture the state carries (it goes to every window and paired page on each change).
-pub const PICTURE_MAX: usize = 512 * 1024;
 /// The largest soul or memory file read or written here.
 const FILE_MAX: usize = 200_000;
 /// The most skills a create may seed, and each one's longest text.
@@ -50,53 +39,6 @@ fn mtime_ms(path: &Path) -> f64 {
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map_or(0.0, |age| age.as_millis() as f64)
-}
-
-/// `<folder>/picture.*` as a data URI, when one is there and no larger than `PICTURE_MAX`.
-pub fn picture_of(folder: &Path) -> Option<String> {
-    PICTURES.iter().find_map(|(name, mime)| {
-        let path = folder.join(name);
-        let meta = std::fs::metadata(&path).ok()?;
-        if !meta.is_file() || meta.len() as usize > PICTURE_MAX {
-            return None;
-        }
-        let bytes = std::fs::read(&path).ok()?;
-        Some(format!(
-            "data:{mime};base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        ))
-    })
-}
-
-/// Sets the bot's picture from a `data:image/(png|jpeg|webp);base64,…` URI, or removes it (`None`).
-pub fn set_picture(folder: &Path, uri: Option<&str>) -> R<()> {
-    let Some(uri) = uri else {
-        for (name, _) in PICTURES {
-            let _ = std::fs::remove_file(folder.join(name));
-        }
-        return Ok(());
-    };
-    let Some((head, data)) = uri.split_once(',') else {
-        return fail("A picture is a data: URI.");
-    };
-    let Some((name, _)) = PICTURES
-        .iter()
-        .find(|(_, mime)| head == format!("data:{mime};base64"))
-    else {
-        return fail("A picture is a PNG, JPEG or WebP image.");
-    };
-    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(data.trim()) else {
-        return fail("The picture is not valid base64.");
-    };
-    if bytes.is_empty() || bytes.len() > PICTURE_MAX {
-        return fail(format!("A picture is at most {} KB.", PICTURE_MAX / 1024));
-    }
-    for (other, _) in PICTURES {
-        if other != *name {
-            let _ = std::fs::remove_file(folder.join(other));
-        }
-    }
-    write(&folder.join(name), &bytes)
 }
 
 /// A skill's folder name: lowercase letters, digits and `-`, 1 to 64 of them.
@@ -441,20 +383,6 @@ mod tests {
         .unwrap();
         let listed = file_request(&dir.0, &json!({ "file": "MEMORY.md" })).unwrap();
         assert_eq!(listed["history"], json!(["2026-11-26-0300.md"]));
-    }
-
-    #[test]
-    fn a_picture_round_trips_and_only_images_are_taken() {
-        let dir = scratch();
-        let png = format!(
-            "data:image/png;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(b"\x89PNG fake")
-        );
-        set_picture(&dir.0, Some(&png)).unwrap();
-        assert_eq!(picture_of(&dir.0).as_deref(), Some(png.as_str()));
-        assert!(set_picture(&dir.0, Some("data:text/html;base64,PGI+")).is_err());
-        set_picture(&dir.0, None).unwrap();
-        assert_eq!(picture_of(&dir.0), None);
     }
 
     #[test]
