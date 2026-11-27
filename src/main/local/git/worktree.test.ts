@@ -1,11 +1,14 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { timeoutForCommand } from "../../../shared/rpc-client";
 import type { RpcCommand } from "../../../shared/rpc-types";
+import { nativeBinPath } from "../../native-bin";
 import type { BridgeClient } from "../types";
+import { withRepoLock } from "./exec";
 import { GITHUB_COMMAND_BUDGET_MS } from "./github";
 import { PR_COMMAND_BUDGETS_MS } from "./pr";
 import { SCM_COMMAND_BUDGETS_MS } from "./scm";
@@ -286,6 +289,55 @@ describe("removeWorktree", () => {
 
 		const head = await createWorktree(outside, { name: "head", baseRef: "HEAD" }, bridge);
 		expect(head.base).toBeUndefined();
+	});
+	it("leaves the repository lock free while a checkout waits for capacity, then creates it once", async () => {
+		await initRepo(outside);
+		const pool = process.env.OMPDESK_HEAVY_DIR;
+		if (!pool) throw new Error("The test needs an isolated heavy pool");
+		const env = { ...process.env };
+		delete env.OMPDESK_HEAVY_HELD;
+		const holder = spawn(nativeBinPath("ompdesk"), ["heavy", "hold", "--all"], { env, stdio: "pipe" });
+		const exited = once(holder, "exit");
+		try {
+			const first = await Promise.race([once(holder.stdout, "data"), exited]);
+			expect(String(first[0])).toMatch(/^held \d/);
+			const watching = new AbortController();
+			const watch = fs.watch(path.join(pool, "queue"), { signal: watching.signal });
+			const ticket = (async () => {
+				for await (const event of watch) if (/^\d+\.\d+$/.test(String(event.filename))) return;
+			})();
+			try {
+				const args = { name: "queued", request: { caller: "local", id: scratch } };
+				const opening = Promise.all([createWorktree(outside, args, bridge), createWorktree(outside, args, bridge)]);
+				await ticket;
+				await withRepoLock(outside, async () => {
+					expect(await pathExists(path.join(root, "gui-queued-abc1234"))).toBe(false);
+					expect(gitSync(outside, "branch", "--list", "omp/gui/queued")).toBe("");
+				});
+				holder.stdin.end();
+				const [first, again] = await opening;
+				expect(first.path).toBe(again.path);
+				expect(gitSync(outside, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(2);
+			} finally {
+				watching.abort();
+			}
+		} finally {
+			holder.stdin.end();
+			await exited;
+		}
+	});
+	it("refuses an unmeasurable destination before creating its branch, checking out files or running setup", async () => {
+		await initRepo(outside);
+		const missing = path.join(scratch, "missing-volume");
+		const link = path.join(scratch, "worktree-volume");
+		await fs.symlink(missing, link, "junction");
+		root = path.join(link, "target");
+		await expect(createWorktree(outside, { name: "refused" }, bridge)).rejects.toMatchObject({
+			code: "worktree_admission",
+		});
+		expect(await pathExists(missing)).toBe(false);
+		expect(gitSync(outside, "branch", "--list")).toBe("* main");
+		expect(gitSync(outside, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(1);
 	});
 	it("answers a repeated request id with the same worktree, refuses it with other arguments, and leaves calls without one alone", async () => {
 		await initRepo(outside);

@@ -30,6 +30,7 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import type { WorktreeBaseFetch, WorktreeSeedReport, WorktreeSetupReport } from "../../../shared/rpc-types";
+import { CoreError } from "../../core/process";
 import { currentStepSignal, fencedEffect } from "../../serial-chain";
 import { superviseWorktreeHook } from "../../setup/supervisor";
 import { LocalCommandError } from "../types";
@@ -53,7 +54,7 @@ export const MERGE_HOOKS_BUDGET_MS = 2 * SETUP_TIMEOUT_MS;
  * How long a seed may start new entries; what it has not reached by then is skipped as `budget`. The request waits
  * one git timeout more, for a `check-ignore` that started just before.
  */
-const SEED_BUDGET_MS = DEFAULT_TIMEOUT_MS;
+export const SEED_BUDGET_MS = DEFAULT_TIMEOUT_MS;
 /** Longest `prepareWorktree` holds `worktree_create`'s answer (the seed and its last git, the hook's git dir, the hook). */
 export const WORKTREE_PREPARE_BUDGET_MS = 3 * DEFAULT_TIMEOUT_MS + SETUP_TIMEOUT_MS;
 
@@ -65,13 +66,9 @@ export const WORKTREE_PREPARE_BUDGET_MS = 3 * DEFAULT_TIMEOUT_MS + SETUP_TIMEOUT
 export function seedWorktree(
 	primary: string,
 	target: string,
-	deps: { pretendClones?: number } = {},
+	deps: { pretendClones?: number; admit?: boolean } = {},
 ): Promise<WorktreeSeedReport | null> {
-	return coreGit(
-		"git.worktreeSeed",
-		{ primary, target, budgetMs: SEED_BUDGET_MS, pretendClones: deps.pretendClones },
-		2,
-	);
+	return coreGit("git.worktreeSeed", { primary, target, budgetMs: SEED_BUDGET_MS, ...deps }, 2);
 }
 
 /**
@@ -163,15 +160,18 @@ export async function saveSetupScript(primary: string, text: string): Promise<{ 
 export async function prepareWorktree(
 	primary: string,
 	target: string,
+	admit = false,
 ): Promise<{ seed?: WorktreeSeedReport; setup?: WorktreeSetupReport }> {
-	const seed = await seedWorktree(primary, target).catch(
-		(error): WorktreeSeedReport => ({
+	const seed = await seedWorktree(primary, target, { admit }).catch((error): WorktreeSeedReport => {
+		if (error instanceof CoreError && ["worktree_admission", "cancelled", "timeout"].includes(error.code))
+			throw error;
+		return {
 			copied: 0,
 			bytes: 0,
 			cloned: false,
 			skipped: [{ path: WORKTREE_INCLUDE_FILE, reason: error instanceof Error ? error.message : String(error) }],
-		}),
-	);
+		};
+	});
 	const setup = await runWorktreeHook("setup", { primary, worktree: target, cwd: target });
 	return { ...(seed ? { seed } : {}), ...(setup ? { setup } : {}) };
 }
