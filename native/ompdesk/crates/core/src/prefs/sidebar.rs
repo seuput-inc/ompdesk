@@ -33,6 +33,8 @@ const RAIL_PINS: [&str; 9] = [
     "schedules",
 ];
 const MAX_RECENT_WORKSPACES: usize = 100;
+/// How a session list can sort (`SESSION_SORTS`); the first is the default.
+const SESSION_SORTS: [&str; 4] = ["manual", "smart", "recent", "name"];
 const MAX_ORDERED_LISTS: usize = 300;
 const MAX_ORDERED_SESSIONS: usize = 500;
 /// `z.string().max(4096)` of a layout path: zod counts a string's code points, not its UTF-16 units.
@@ -125,6 +127,14 @@ pub enum Change {
         from: String,
         to: Option<String>,
     },
+    /// How every session list sorts (the sidebar header's options).
+    SetSessionSort {
+        sort: String,
+    },
+    /// Whether a project's sleeping rows fold under its "N sleeping" line.
+    SetHideSleeping {
+        hide: bool,
+    },
 }
 
 /// `move` of a session order: present means an object, never null.
@@ -170,6 +180,8 @@ impl Change {
                     && raw.get("value").is_some()
             }
             Change::RenameProjectGroup { from, .. } => !from.is_empty() && raw.get("to").is_some(),
+            Change::SetSessionSort { sort } => SESSION_SORTS.contains(&sort.as_str()),
+            Change::SetHideSleeping { .. } => true,
         }
     }
 
@@ -188,6 +200,8 @@ impl Change {
             Change::TouchWorkspace { .. } => "touch-workspace",
             Change::SetEntry { .. } => "set-entry",
             Change::RenameProjectGroup { .. } => "rename-project-group",
+            Change::SetSessionSort { .. } => "set-session-sort",
+            Change::SetHideSleeping { .. } => "set-hide-sleeping",
         }
     }
 
@@ -357,6 +371,15 @@ pub fn read(value: Option<&Value>) -> Map<String, Value> {
         let name = entries.name();
         out.insert(name.into(), Value::Object(valid_aliases(field(name))));
     }
+    let sort = field("sessionSort")
+        .and_then(Value::as_str)
+        .filter(|sort| SESSION_SORTS.contains(sort))
+        .unwrap_or(SESSION_SORTS[0]);
+    out.insert("sessionSort".into(), json!(sort));
+    out.insert(
+        "hideSleeping".into(),
+        json!(field("hideSleeping") == Some(&Value::Bool(true))),
+    );
     out
 }
 
@@ -554,6 +577,20 @@ pub fn patch(state: &Map<String, Value>, change: &Change, now: f64) -> Map<Strin
                 one("projectGroups", Value::Object(next))
             } else {
                 Map::new()
+            }
+        }
+        Change::SetSessionSort { sort } => {
+            if state.get("sessionSort").and_then(Value::as_str) == Some(sort.as_str()) {
+                Map::new()
+            } else {
+                one("sessionSort", json!(sort))
+            }
+        }
+        Change::SetHideSleeping { hide } => {
+            if state.get("hideSleeping").and_then(Value::as_bool) == Some(*hide) {
+                Map::new()
+            } else {
+                one("hideSleeping", json!(hide))
             }
         }
     }

@@ -25,8 +25,6 @@ export interface BotTemplateRoutine {
 export interface BotTemplate {
 	id: string;
 	category: BotTemplateCategory;
-	/** The face it starts with (`bot-mascots.ts`). */
-	mascot: number;
 	/** English, the bot's own words for itself: its soul's lines. */
 	watches: string;
 	does: string;
@@ -47,7 +45,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "pr-review",
 		category: "coding",
-		mascot: 0,
 		watches: "Pull requests the owner is asked to review.",
 		does: "Reads each one and lists the risky changes, with file and line.",
 		reports: "One short review per pull request, worst risk first.",
@@ -59,7 +56,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "bug-investigation",
 		category: "coding",
-		mascot: 1,
 		watches: "Bugs the owner hands over or that get assigned to them.",
 		does: "Reproduces the bug and finds where it starts.",
 		reports: "Steps to reproduce, the cause with file and line, and a proposed fix.",
@@ -71,7 +67,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "dependency-updates",
 		category: "coding",
-		mascot: 2,
 		watches: "The projects' dependencies.",
 		does: "Checks for outdated and vulnerable packages and proposes upgrades.",
 		reports: "A weekly list: what to upgrade, why, and how risky.",
@@ -83,7 +78,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "unreviewed-work",
 		category: "coding",
-		mascot: 3,
 		watches: "Agent sessions and branches that finished.",
 		does: "Finds finished agent work nobody has looked at yet.",
 		reports: "A daily list with a link to each.",
@@ -95,7 +89,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "workspace-cleanup",
 		category: "coding",
-		mascot: 4,
 		watches: "Worktrees and branches in the owner's projects.",
 		does: "Finds finished or abandoned workspaces and offers to remove them.",
 		reports: "A weekly list of what can go, never removing anything unasked.",
@@ -107,7 +100,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "security-check",
 		category: "coding",
-		mascot: 5,
 		watches: "Changes merged into the main branches.",
 		does: "Looks for leaked secrets and risky code.",
 		reports: "Each finding with file, line and how bad it is.",
@@ -119,7 +111,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "release",
 		category: "releases",
-		mascot: 6,
 		watches: "The next release: open pull requests, failing checks, open blockers.",
 		does: "Tracks what blocks the next release.",
 		reports: "A daily readiness note: ready, or what still blocks it.",
@@ -131,7 +122,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "release-notes",
 		category: "releases",
-		mascot: 7,
 		watches: "Pull requests merged since the last release.",
 		does: "Drafts the next release's notes.",
 		reports: "Notes in the project's own style, ready to paste.",
@@ -143,7 +133,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "ci-failures",
 		category: "releases",
-		mascot: 8,
 		watches: "Failed CI checks.",
 		does: "Explains each failure and keeps a list of flaky tests.",
 		reports: "Whether a failure is flaky or real, and a weekly flaky list.",
@@ -156,7 +145,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "deploy-watch",
 		category: "releases",
-		mascot: 9,
 		watches: "Deploys.",
 		does: "Summarizes what changed in each deploy and flags failed ones.",
 		reports: "One note per deploy.",
@@ -169,7 +157,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "support",
 		category: "support",
-		mascot: 10,
 		watches: "Questions from users and teammates.",
 		does: "Keeps a list of questions nobody has answered.",
 		reports: "Every two hours on weekdays: what still waits for an answer.",
@@ -181,7 +168,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "feedback",
 		category: "support",
-		mascot: 11,
 		watches: "Feedback from users.",
 		does: "Groups feedback into themes.",
 		reports: "A weekly list of themes with examples.",
@@ -193,7 +179,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "bug-intake",
 		category: "support",
-		mascot: 12,
 		watches: "Bug reports.",
 		does: "Turns each into a tracked issue with steps to reproduce.",
 		reports: "The drafted issue, for the owner to file.",
@@ -205,7 +190,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "issue-triage",
 		category: "support",
-		mascot: 13,
 		watches: "New issues on the owner's repositories.",
 		does: "Proposes labels, finds duplicates and asks for missing details.",
 		reports: "One note per new issue.",
@@ -217,7 +201,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "briefing",
 		category: "planning",
-		mascot: 14,
 		watches: "The projects the owner picks.",
 		does: "Reads their week: merged work, open work, risks.",
 		reports: "A weekly brief.",
@@ -229,7 +212,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "docs-upkeep",
 		category: "planning",
-		mascot: 15,
 		watches: "Docs and the code they describe.",
 		does: "Flags docs that no longer match merged code.",
 		reports: "A weekly list with the doc, the line and what changed.",
@@ -241,7 +223,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "spec-drafts",
 		category: "planning",
-		mascot: 0,
 		watches: "Discussions the owner hands over.",
 		does: "Turns a discussion into a short spec.",
 		reports: "A spec the owner can share.",
@@ -253,7 +234,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "backlog-cleanup",
 		category: "planning",
-		mascot: 1,
 		watches: "The backlog.",
 		does: "Finds stale, duplicate and unowned issues.",
 		reports: "A monthly cleanup list.",
@@ -265,7 +245,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "incident-notes",
 		category: "ops",
-		mascot: 2,
 		watches: "Incidents.",
 		does: "Keeps a timeline and drafts the write-up.",
 		reports: "The timeline as it grows, then the write-up.",
@@ -277,7 +256,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "oncall-handoff",
 		category: "ops",
-		mascot: 3,
 		watches: "Alerts, incidents and open follow-ups of the week.",
 		does: "Summarizes the on-call week.",
 		reports: "A weekly handoff note.",
@@ -290,7 +268,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "followup",
 		category: "personal",
-		mascot: 4,
 		watches: "Conversations the owner takes part in.",
 		does: "Notices replies the owner still owes.",
 		reports: "A daily reminder.",
@@ -302,7 +279,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "standup",
 		category: "personal",
-		mascot: 5,
 		watches: "What the owner and their agents did.",
 		does: "Writes standup notes: yesterday, today, blockers.",
 		reports: "Notes every weekday morning.",
@@ -314,7 +290,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "email-digest",
 		category: "personal",
-		mascot: 6,
 		watches: "The owner's email.",
 		does: "Picks the emails that need a reply from the owner.",
 		reports: "Twice a day, the list.",
@@ -329,7 +304,6 @@ export const BOT_TEMPLATES: readonly BotTemplate[] = [
 	{
 		id: "meeting-prep",
 		category: "personal",
-		mascot: 7,
 		watches: "The owner's calendar.",
 		does: "Before each meeting, gathers the issues, pull requests and docs it is about.",
 		reports: "A prep note 15 minutes before.",
