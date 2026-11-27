@@ -5,6 +5,7 @@
  * computer's resume coordinator (turn-resume.ts).
  */
 import type { IpcRetrySaga, IpcTabRunOutcome } from "../shared/ipc-types";
+import { isBillingCap, retryAfterMs } from "../shared/quota-reset";
 import type { AgentMessage, AgentSessionEvent } from "../shared/rpc-types";
 
 export interface RunState {
@@ -189,6 +190,8 @@ export interface RunTracking {
 	stopped?: boolean;
 	/** Stock's auto-retry waiting for its next attempt: set by `auto_retry_start`, cleared by its end or a new run. */
 	retry?: { errorMessage: string };
+	/** A failed attempt coalesced into stock's retry saga had already started a paid response. */
+	retryBlocked?: boolean;
 }
 
 /** {@link applyRunEvent} plus the run's outcome, Stop and pending auto-retry; true when it ended the run's last attempt. */
@@ -198,14 +201,26 @@ export function trackRunEvent(tab: RunTracking, event: AgentSessionEvent): boole
 		tab.lastRun = undefined;
 		tab.stopped = false;
 		tab.retry = undefined;
+		delete tab.retryBlocked;
 	} else if (event.type === "auto_retry_start") {
 		// News for the resume rules: offline, the wait takes stock's retry over (turn-resume.ts).
 		tab.retry = { errorMessage: event.errorMessage };
-	} else if (ended && event.type === "agent_end") {
-		if (event.isTerminal !== false) tab.lastRun = runOutcome(event.messages);
+	} else if (event.type === "agent_end") {
+		if (ended && event.isTerminal !== false) tab.lastRun = runOutcome(event.messages);
+		else if (tab.run.saga) {
+			const last = event.messages?.findLast(message => message.role === "assistant");
+			if (last && claudeRetryBlocked(last)) tab.retryBlocked = true;
+		}
 	} else if (event.type === "auto_retry_end") {
 		tab.retry = undefined;
-		if (ended) tab.lastRun = { stopReason: "error", errorMessage: event.finalError };
+		if (ended) {
+			tab.lastRun = {
+				stopReason: "error",
+				errorMessage: event.finalError,
+				...(tab.retryBlocked && { retryBlocked: true }),
+			};
+		}
+		delete tab.retryBlocked;
 	}
 	return ended;
 }
@@ -217,10 +232,23 @@ export function trackRunEvent(tab: RunTracking, event: AgentSessionEvent): boole
  */
 const RUN_REPLY_PREVIEW_CHARS = 4000;
 
+/** Claude sets responseId at message_start and ttft at the first block, even before visible text. */
+export function claudeRetryBlocked(last: AgentMessage): boolean {
+	if (last.stopReason !== "error" || last.api !== "anthropic-messages") return false;
+	if (last.responseId || typeof last.ttft === "number" || last.content?.length) return true;
+	if (/\bAnthropic stream (?:envelope )?error\b/i.test(last.errorMessage ?? "")) return true;
+	// A separately registered API key gets no automatic replay on an ambiguous transport failure.
+	if (!/^anthropic-api-key(?:-\d+)?$/.test(String(last.provider))) return false;
+	const message = last.errorMessage ?? "";
+	if (isBillingCap(message)) return true;
+	return !(/^429\b/.test(message) && retryAfterMs(message) !== undefined) && !/^529\b/.test(message);
+}
+
 /** A finished run's outcome, read from agent_end's own messages (the last assistant reply). */
 function runOutcome(messages: AgentMessage[] | undefined): IpcTabRunOutcome {
 	const last = messages?.findLast(message => message.role === "assistant");
 	const stopReason = typeof last?.stopReason === "string" ? last.stopReason : "stop";
+	if (last && claudeRetryBlocked(last)) return { stopReason, errorMessage: last.errorMessage, retryBlocked: true };
 	if (typeof last?.errorMessage === "string" && last.errorMessage)
 		return { stopReason, errorMessage: last.errorMessage };
 	const content = last?.content;

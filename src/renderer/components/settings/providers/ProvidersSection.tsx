@@ -28,6 +28,7 @@ import type { ProviderAccountsResult, ProviderInfo } from "../../../../shared/rp
 import { useUsage } from "../../../hooks/use-usage-reports";
 import { errorDetail } from "../../../lib/error-detail";
 import { useT } from "../../../lib/i18n";
+import { openExternal } from "../../../lib/open-external";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { useModelStore } from "../../../stores/model";
 import { useFocusedTabDevice } from "../../../stores/remote";
@@ -118,6 +119,7 @@ function ConnectedProviderRows({
 	// signing out would clear a credential the provider never used; editing
 	// the entry is what actually removes it.
 	const canLogout = handlers.onLogout && !config?.hasApiKey;
+	const claudeApi = config?.baseUrl === CLAUDE_API_URL && config.api === "anthropic-messages";
 	const menu: ContextMenuItem[] = [
 		...(provider.loginAvailable
 			? [
@@ -146,10 +148,20 @@ function ConnectedProviderRows({
 	return (
 		<ProviderGroupItem
 			addDisabled={!sidecarReady || login.busy}
-			onAdd={
-				config?.baseUrl === CLAUDE_API_URL && config.api === "anthropic-messages"
-					? () => void login.start("anthropic")
-					: undefined
+			onAdd={claudeApi ? () => void login.start("anthropic") : undefined}
+			after={
+				claudeApi && config.hasApiKey ? (
+					<div className="flex flex-wrap items-center gap-x-2 text-sc-sm text-(--sc-text-muted)">
+						{t("providers.apiBalanceUnknown")}
+						<Button
+							onClick={() => openExternal("https://platform.claude.com/settings/billing")}
+							size="sm"
+							variant="ghost"
+						>
+							{t("providers.consoleBilling")}
+						</Button>
+					</div>
+				) : undefined
 			}
 			badges={provider.disabled && <Badge variant="warning">{t("providers.badge.disabled")}</Badge>}
 			busy={busyProvider === provider.id || (login.state.running && login.state.providerId === provider.id)}

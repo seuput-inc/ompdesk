@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentSessionEvent } from "../shared/rpc-types";
 import {
 	applyRunEvent,
+	claudeRetryBlocked,
 	idleRun,
 	type RunReading,
 	type RunState,
@@ -26,6 +27,36 @@ function running(events: AgentSessionEvent[], now = 1_000): RunState {
 	for (const event of [{ type: "agent_start" } as AgentSessionEvent, ...events]) applyRunEvent(run, event, now);
 	return run;
 }
+
+describe("a Claude API failure before automatic recovery", () => {
+	it.each(["anthropic-api-key", "anthropic-api-key-2"])(
+		"blocks ambiguous or started responses regardless of which key was selected (%s)",
+		provider => {
+			const failed = { role: "assistant", api: "anthropic-messages", provider, stopReason: "error" } as const;
+			const errorMessage = "429 rate_limit_error retry-after-ms=2000";
+			expect(claudeRetryBlocked({ ...failed, errorMessage })).toBe(false);
+			for (const evidence of [{ responseId: "msg_fixture" }, { ttft: 0 }, { content: "partial" }]) {
+				expect(claudeRetryBlocked({ ...failed, errorMessage, ...evidence })).toBe(true);
+			}
+			expect(claudeRetryBlocked({ ...failed, errorMessage: "529 overloaded" })).toBe(false);
+			expect(claudeRetryBlocked({ ...failed, errorMessage: "429 unclear" })).toBe(true);
+			expect(claudeRetryBlocked({ ...failed, errorMessage: "402 Payment Required" })).toBe(true);
+			expect(claudeRetryBlocked({ ...failed, errorMessage: "connection reset" })).toBe(true);
+		},
+	);
+	it("keeps the replay block when stock coalesces a partial reply into its retry saga’s final error", () => {
+		const tab: RunTracking = { run: idleRun() };
+		trackRunEvent(tab, { type: "agent_start" });
+		trackRunEvent(tab, START);
+		trackRunEvent(tab, {
+			type: "agent_end",
+			isTerminal: false,
+			messages: [{ role: "assistant", api: "anthropic-messages", stopReason: "error", content: "partial" }],
+		});
+		trackRunEvent(tab, { type: "auto_retry_end", success: false, attempt: 3, finalError: "socket hang up" });
+		expect(tab.lastRun).toEqual({ stopReason: "error", errorMessage: "socket hang up", retryBlocked: true });
+	});
+});
 
 describe("a retry saga across a reading", () => {
 	// 25 Oct 2026: a paired desktop joined the host's turn while stock's retried request waited 55 s for its first

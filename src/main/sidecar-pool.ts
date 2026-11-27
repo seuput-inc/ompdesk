@@ -99,7 +99,7 @@ import type { TabHolder } from "./remote/protocol";
 import type { SessionSummaries, SummaryFacts, SummarySource } from "./session-summaries";
 import type { SettleWatch } from "./settle-watch";
 import type { SidecarSessionIdentity, SidecarStartGate } from "./sidecar";
-import type { RunReading } from "./sidecar-run-state";
+import { claudeRetryBlocked, type RunReading } from "./sidecar-run-state";
 import { type SidecarLike, VIEW_ENDED_EVENT } from "./sidecar-types";
 import { nextSnowflake } from "./snowflake";
 import { createSubagentFrameBatcher } from "./subagent-frames";
@@ -348,6 +348,7 @@ function projectEvents(events: AgentSessionEvent[]): ProjectedEvent[] {
 									role: "assistant",
 									stopReason: last.stopReason,
 									errorMessage: last.errorMessage,
+									...(claudeRetryBlocked(last) && { retryBlocked: true }),
 									content:
 										typeof content === "string"
 											? content

@@ -15,6 +15,8 @@ const KINDS: TurnErrorKind[] = [
 	"modelUnavailable",
 	"rateLimit",
 	"billing",
+	"lowCredit",
+	"spendLimit",
 	"overloaded",
 	"compaction",
 	"unknown",
@@ -63,7 +65,15 @@ describe("describeTurnError", () => {
 			"429 You exceeded your current quota, please check your plan and billing details. insufficient_quota",
 			"billing",
 		],
-		["Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing.", "billing"],
+		["Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing.", "lowCredit"],
+		[
+			'429 {"type":"error","error":{"type":"rate_limit_error","message":"Limit","details":{"error_code":"enforced_spend_limit_reached"}}}',
+			"spendLimit",
+		],
+		[
+			'400 {"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified workspace API usage limits."}}',
+			"spendLimit",
+		],
 		["402 Payment Required", "billing"],
 		["Something unexpected happened", "unknown"],
 	])("maps %j to %s", (raw, kind) => {

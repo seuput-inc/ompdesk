@@ -48,6 +48,7 @@ export const AUTOPILOT_PAUSE_REASONS = [
 	"user_abort",
 	"ban_violation",
 	"repo_gone",
+	"provider_review",
 	"budget",
 	"time",
 	"cycles",

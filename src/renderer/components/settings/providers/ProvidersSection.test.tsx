@@ -307,6 +307,22 @@ describe("ProvidersSection", () => {
 		expect(document.querySelector("[data-local-engine-detect]")).toBeNull();
 	});
 
+	it("shows the organization balance as unknown for an API key and opens Console Billing only on click", async () => {
+		const id = "anthropic-api-key";
+		useSessionStore.setState({ status: "ready" });
+		listProviders.mockResolvedValue({
+			providers: [config(id, { api: "anthropic-messages", baseUrl: "https://api.anthropic.com" })],
+			options: fixtureProviderOptions,
+		});
+		getProviders.mockResolvedValue(providersResponse(snapshot([row(id)])));
+		await mount(<ProvidersSection />);
+		expect(text()).toContain(translate("providers.apiBalanceUnknown"));
+		expect(openExternal).not.toHaveBeenCalled();
+		await act(async () => button(translate("providers.consoleBilling"))?.click());
+		expect(openExternal).toHaveBeenCalledWith("https://platform.claude.com/settings/billing");
+		expect(upsertProvider).not.toHaveBeenCalled();
+	});
+
 	it("lists an endpoint OMPdesk wrote to models.yml by itself without the person reloading, and drops it when it goes", async () => {
 		useSessionStore.setState({ status: "ready" });
 		focusTab(undefined);
