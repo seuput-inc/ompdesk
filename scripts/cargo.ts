@@ -55,7 +55,8 @@ export function cargoEnv(cargo: string): NodeJS.ProcessEnv {
 
 /** A gate verdict needs the pushed workspace's exact toolchain, not the build scripts' PATH fallback. */
 export function pinnedClippy(workspace: string) {
-	const { toolchain } = Bun.TOML.parse(fs.readFileSync(path.join(workspace, "rust-toolchain.toml"), "utf8"));
+	const doc = Bun.TOML.parse(fs.readFileSync(path.join(workspace, "rust-toolchain.toml"), "utf8"));
+	const toolchain = "toolchain" in doc ? doc.toolchain : undefined;
 	const channel = toolchain && typeof toolchain === "object" && "channel" in toolchain ? toolchain.channel : undefined;
 	if (typeof channel !== "string" || !/^\d+\.\d+\.\d+$/.test(channel))
 		throw new Error("rust-toolchain.toml does not pin an exact Rust release");
