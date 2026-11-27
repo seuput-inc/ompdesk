@@ -83,7 +83,9 @@ test("an exact candidate stays pinned and a competing release cannot replace the
 	const winner = make("release: v1.1.0");
 	local("push", "-q", "origin", `${winner}:main`);
 	local("checkout", "-q", "--detach", green);
-	const later = make("more work");
+	make("feat: sort");
+	make("fix: fold");
+	const later = make("perf: search");
 	local("push", "-q", "origin", `${later}:dev`);
 	local("checkout", "-q", "--detach", green);
 	make("different cut of same batch");
@@ -91,4 +93,24 @@ test("an exact candidate stays pinned and a competing release cannot replace the
 	assert.equal(git("--git-dir=remote.git", "rev-parse", "main"), winner);
 	assert.equal(git("--git-dir=remote.git", "rev-parse", "main^"), green);
 	assert.equal(git("--git-dir=remote.git", "rev-parse", "dev"), later);
+	assert.equal(spawnSync("git", ["-C", "tree", "merge-base", "--is-ancestor", winner, later], opts).status, 1);
+	local("checkout", "-q", "--detach", later);
+	local("merge", "-q", "--no-edit", winner);
+	const reconciled = local("rev-parse", "HEAD");
+	local("push", "-q", "origin", `${reconciled}:dev`);
+	local("merge-base", "--is-ancestor", winner, reconciled);
+	const next = {
+		...batch,
+		main: winner,
+		tag: winner,
+		dev: reconciled,
+		liveVersion: "1.1.0",
+		publicTag: "v1.1.0",
+		changes: Number(local("rev-list", "--count", "--no-merges", `${winner}..${reconciled}`)),
+	};
+	assert.notEqual(admission({ ...next, run: { ...batch.run, head_sha: later } }), "eligible");
+	assert.equal(admission({ ...next, run: { ...batch.run, head_sha: reconciled } }), "eligible");
+	const second = make("release: v1.2.0");
+	local("push", "-q", "origin", `${second}:main`);
+	assert.equal(git("--git-dir=remote.git", "rev-parse", "main^"), reconciled);
 });
