@@ -52,3 +52,61 @@ export function rustcPath(cargo: string): string {
 export function cargoEnv(cargo: string): NodeJS.ProcessEnv {
 	return { ...process.env, PATH: `${path.dirname(cargo)}${path.delimiter}${process.env.PATH ?? ""}` };
 }
+
+/** A gate verdict needs the pushed workspace's exact toolchain, not the build scripts' PATH fallback. */
+export function pinnedClippy(workspace: string) {
+	const { toolchain } = Bun.TOML.parse(fs.readFileSync(path.join(workspace, "rust-toolchain.toml"), "utf8"));
+	const channel = toolchain && typeof toolchain === "object" && "channel" in toolchain ? toolchain.channel : undefined;
+	if (typeof channel !== "string" || !/^\d+\.\d+\.\d+$/.test(channel))
+		throw new Error("rust-toolchain.toml does not pin an exact Rust release");
+	const rustup = findExe("rustup");
+	if (!rustup) throw new Error(`cannot verify Rust ${channel} without rustup; not using PATH cargo`);
+	const pin = { RUSTUP_AUTO_INSTALL: "0", RUSTUP_TOOLCHAIN: channel };
+	let cargo: string;
+	try {
+		cargo = execFileSync(rustup, ["which", "--toolchain", channel, "cargo"], {
+			cwd: workspace,
+			env: { ...process.env, ...pin },
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		}).trim();
+	} catch (error) {
+		throw new Error(`no installed cargo for Rust ${channel}: ${String(error)}`);
+	}
+	if (!path.isAbsolute(cargo)) throw new Error(`rustup did not return a cargo path for Rust ${channel}`);
+	const sibling = (name: string) => path.join(path.dirname(cargo), win ? `${name}.exe` : name);
+	const rustc = rustcPath(cargo);
+	const clippy = sibling("cargo-clippy");
+	const driver = sibling("clippy-driver");
+	const env = {
+		...cargoEnv(cargo),
+		...pin,
+		CARGO: cargo,
+		RUSTC: rustc,
+		RUSTC_WRAPPER: "",
+		RUSTC_WORKSPACE_WRAPPER: "",
+		CLIPPY_DRIVER_PATH: driver,
+		CARGO_NET_OFFLINE: "true",
+	};
+	const version = (file: string, flag = "--version") => {
+		try {
+			return execFileSync(file, [flag], {
+				cwd: workspace,
+				env,
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "pipe"],
+			}).trim();
+		} catch (error) {
+			throw new Error(`Rust ${channel} cannot run ${path.basename(file)}: ${String(error)}`);
+		}
+	};
+	const rust = version(rustc, "-vV");
+	if (!rust.split(/\r?\n/).includes(`release: ${channel}`) || version(cargo).split(" ")[1] !== channel)
+		throw new Error(`rustup's rustc and cargo do not both report the pinned release ${channel}`);
+	const commit = /^commit-hash: ([0-9a-f]{40})\r?$/m.exec(rust)?.[1];
+	const frontend = version(clippy);
+	const revision = /^clippy \S+ \(([0-9a-f]{7,40}) /.exec(frontend)?.[1];
+	if (!revision || !commit?.startsWith(revision) || version(driver) !== frontend)
+		throw new Error(`cargo-clippy and clippy-driver do not match rustc ${channel} (${commit ?? "unknown commit"})`);
+	return { channel, cargo, clippy, env };
+}

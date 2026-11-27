@@ -14,10 +14,12 @@
  *   tables     scripts/check-captured-tables.ts on the pushed commit, when it touched `ompdesk_app`'s Rust tables or
  *              their captured TypeScript copy (a second; otherwise only CI's `cargo test` finds a mismatch)
  *
- *   clippy     changed Rust workspace crates, including tests; Windows-only cfg paths still need Windows CI.
+ *   clippy     changed Rust workspace crates, including tests, on the commit copy with its locally installed pinned
+ *              toolchain. A SHA change rebuilds workspace crates, not immutable registry dependencies.
+ *              Windows-only cfg paths still need Windows CI.
  *
- * The checks read exactly the pushed commit. In a working tree that holds those files unchanged (a worktree of one's
- * own, after the commit) they run in place, on the warm typecheck cache `bun run check:types` keeps and the `out/`
+ * The checks read exactly the pushed commit. The static checks can run in a working tree that holds those files
+ * unchanged. In place, they use the warm typecheck cache `bun run check:types` keeps and the `out/`
  * `bun run build` left. Otherwise (the shared checkout holds other sessions' unfinished edits, which would refuse a
  * push that is fine) they run on a copy in `<git dir>/ompdesk-gate/tree` that moves from one pushed commit to the next
  * by the files that differ, so its own typecheck cache stays warm too; a mutex keeps two pushes of one checkout from
@@ -37,7 +39,7 @@ import { fileURLToPath } from "node:url";
 import { processAlive } from "../src/main/process-alive";
 import { withoutGitSelectors } from "../src/shared/git-env";
 import { inputHash, rebuildReason } from "./build-cache";
-import { cargoEnv, cargoPath } from "./cargo";
+import { pinnedClippy } from "./cargo";
 import { biomeFiles, changedScope } from "./changed-scope";
 import { CAPTURED_TABLE_INPUT } from "./check-captured-tables";
 
@@ -395,17 +397,20 @@ async function copyChecks(root: string, tree: string, sha: string, plan: Plan): 
 	return Promise.all(staticChecks(plan, tree, link, tscCommand(link, ".gate.tsbuildinfo")));
 }
 
-async function checkRust(root: string, dir: string, changed: string[]): Promise<StepResult[]> {
+async function checkRust(root: string, gateDir: string, sha: string, changed: string[]): Promise<StepResult[]> {
+	const dir = path.join(gateDir, "tree");
+	syncTree(root, dir, sha);
 	const workspace = path.join(dir, WORKSPACE);
-	const cargo = cargoPath(workspace);
-	if (!cargo) throw new Error("cargo is not installed");
-	const env = cargoEnv(cargo);
-	env.CARGO_TARGET_DIR = path.resolve(root, WORKSPACE, env.CARGO_TARGET_DIR ?? "target");
+	const tool = pinnedClippy(workspace);
+	// git archive restores commit times. Even a changed file can be older than the previous build's fingerprint.
+	const target = path.join(gateDir, "clippy-target");
+	const stamp = path.join(target, ".gate-sha");
+	const env = { ...tool.env, CARGO_TARGET_DIR: target, CARGO_BUILD_BUILD_DIR: target, CARGO_BUILD_DIR: target };
 	let packages: { manifest_path: string; name: string }[];
 	const started = performance.now();
 	try {
 		({ packages } = JSON.parse(
-			execFileSync(cargo, ["metadata", "--no-deps", "--locked", "--format-version", "1"], {
+			execFileSync(tool.cargo, ["metadata", "--no-deps", "--locked", "--format-version", "1"], {
 				cwd: workspace,
 				env,
 				encoding: "utf8",
@@ -420,10 +425,19 @@ async function checkRust(root: string, dir: string, changed: string[]): Promise<
 		const prefix = `${path.relative(canonical, path.dirname(pkg.manifest_path)).split(path.sep).join("/")}/`;
 		return changed.some(file => file.startsWith(prefix));
 	});
-	if (!selected.length) return [];
+	if (!selected.length) throw new Error("no changed Rust files belong to a package in the pushed workspace");
+	if (!fs.existsSync(stamp) || fs.readFileSync(stamp, "utf8") !== sha) {
+		fs.mkdirSync(target, { recursive: true });
+		execFileSync(tool.cargo, ["clean", "--locked", ...packages.flatMap(pkg => ["-p", pkg.name])], {
+			cwd: workspace,
+			env,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		fs.writeFileSync(stamp, sha);
+	}
 	const names = selected.map(pkg => pkg.name);
 	const command = [
-		cargo,
+		tool.clippy,
 		"clippy",
 		"--locked",
 		...names.flatMap(name => ["-p", name]),
@@ -434,8 +448,8 @@ async function checkRust(root: string, dir: string, changed: string[]): Promise<
 	];
 	return [
 		await runStep(
-			`clippy (${names.join(", ")})`,
-			[process.execPath, path.join(root, "scripts/build-lock.ts"), "--kind", "other", "--", ...command],
+			`clippy (${names.join(", ")}; Rust ${tool.channel})`,
+			[process.execPath, path.join(import.meta.dirname, "build-lock.ts"), "--kind", "other", "--", ...command],
 			workspace,
 			env,
 		),
@@ -490,11 +504,9 @@ async function gate(root: string, gitDir: string, ref: PushRef): Promise<Verdict
 	])
 		.split("\n")
 		.filter(Boolean);
-	const inPlace =
-		plan.biome.length > 0 || plan.surfaces || plan.types || plan.budget || rust.length
-			? worktreeHolds(root, ref.localSha)
-			: false;
-	if (plan.biome.length > 0 || plan.surfaces || plan.types) {
+	const staticPlanned = plan.biome.length > 0 || plan.surfaces !== null || plan.types;
+	const inPlace = (staticPlanned || plan.budget) && worktreeHolds(root, ref.localSha);
+	if (staticPlanned) {
 		const modules = path.join(root, "node_modules");
 		const wait = () => say("another push of this checkout is running its gate; waiting for it");
 		try {
@@ -524,20 +536,13 @@ async function gate(root: string, gitDir: string, ref: PushRef): Promise<Verdict
 	}
 	if (rust.length) {
 		try {
-			if (inPlace) results.push(...(await checkRust(root, root, rust)));
-			else {
-				const tree = path.join(gateDir, "tree");
-				results.push(
-					...(await withMutex(
-						path.join(gateDir, "lock"),
-						() => {
-							syncTree(root, tree, ref.localSha);
-							return checkRust(root, tree, rust);
-						},
-						() => say("waiting for the pushed-tree copy"),
-					)),
-				);
-			}
+			results.push(
+				...(await withMutex(
+					path.join(gateDir, "lock"),
+					() => checkRust(root, gateDir, ref.localSha, rust),
+					() => say("waiting for the pushed-tree copy"),
+				)),
+			);
 		} catch (error) {
 			skipped.push(`clippy: ${(error as Error).message}`);
 		}

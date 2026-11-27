@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -210,6 +211,111 @@ describe("the gate's copy of a pushed commit", () => {
 		} finally {
 			log.mockRestore();
 		}
+	});
+
+	it.skipIf(process.platform === "win32")("lints each pushed SHA with its own sources and installed Rust", () => {
+		const src = "native/ompdesk/crates/demo/src/lib.rs";
+		const pin = "native/ompdesk/rust-toolchain.toml";
+		const bin = path.join(tree, "bin");
+		const installed = path.join(tree, "1.2.3");
+		const shared = path.join(tree, "shared-target");
+		for (const dir of [bin, installed, shared]) fs.mkdirSync(dir);
+		const exe = (dir: string, name: string, body: string) =>
+			fs.writeFileSync(path.join(dir, name), `#!/bin/sh\nset -eu\n${body}\n`, { mode: 0o755 });
+		exe(bin, "rustup", '[ "$*" = "which --toolchain 1.2.3 cargo" ] && printf "%s/cargo\\n" "$INSTALLED"');
+		for (const name of ["cargo", "rustc", "cargo-clippy", "clippy-driver"])
+			exe(bin, name, 'echo "unexpected PATH tool" >&2; exit 42');
+		exe(
+			installed,
+			"rustc",
+			`echo "rustc 1.2.3"; if [ "$1" = -vV ]; then printf 'release: 1.2.3\\ncommit-hash: ${SHA_A}\\n'; fi`,
+		);
+		const clippyVersion = '[ "$1" != --version ] || { echo "clippy 0.1.2 (aaaaaaaaaa 2026-01-01)"; exit 0; }';
+		exe(
+			installed,
+			"cargo",
+			`case "$1" in
+metadata) printf '{"packages":[{"name":"demo","manifest_path":"%s/crates/demo/Cargo.toml"}]}\\n' "$(pwd -P)";;
+clean) [ "$*" = "clean --locked -p demo" ] && rm -f "$CARGO_BUILD_BUILD_DIR/fingerprint";;
+--version) echo "cargo 1.2.3";;
+*) exit 42;;
+esac`,
+		);
+		exe(
+			installed,
+			"cargo-clippy",
+			`${clippyVersion}
+[ "$("\${RUSTC:-rustc}" --version)" = "rustc 1.2.3" ]
+[ "$("\${CARGO:-cargo}" --version)" = "cargo 1.2.3" ]
+[ "$CARGO_NET_OFFLINE" = true ]
+exec "\${CLIPPY_DRIVER_PATH:-clippy-driver}" "$@"`,
+		);
+		exe(
+			installed,
+			"clippy-driver",
+			`${clippyVersion}
+src=crates/demo/src/lib.rs
+cache="$CARGO_BUILD_BUILD_DIR/fingerprint"
+mkdir -p "$CARGO_BUILD_BUILD_DIR"
+if [ ! -f "$cache" ] || [ "$src" -nt "$cache" ]; then cp "$src" "$cache"; fi
+grep -qx clean "$cache" || { echo "lint in $(cat "$cache")" >&2; exit 1; }`,
+		);
+		write(pin, '[toolchain]\nchannel = "1.2.3"\n');
+		write(src, "base\n");
+		const base = commit("prepare workspace");
+		write(src, "older candidate\n");
+		const older = commit("first candidate");
+		write(src, "clean\n");
+		const clean = commit("second candidate");
+		write(src, "checkout\n");
+		write(pin, '[toolchain]\nchannel = "4.5.6"\n');
+		const checkout = commit("another toolchain");
+
+		const script = `import { gatePush } from ${JSON.stringify(path.resolve("scripts/pre-push-gate.ts"))};
+process.env.PATH = process.env.GATE_PATH;
+process.exit(await gatePush(process.cwd(), process.cwd() + "/.git", process.env.PUSH_REF));`;
+		const push = (sha: string, gatePath = `${bin}${path.delimiter}${process.env.PATH}`) =>
+			spawnSync("bun", ["-e", script], {
+				cwd: repo,
+				env: {
+					...process.env,
+					HOME: tree,
+					GATE_PATH: gatePath,
+					PUSH_REF: `HEAD ${sha} refs/heads/probe/clippy ${base}`,
+					INSTALLED: installed,
+					OMPDESK_BUILD_LOCK_HELD: "1",
+					RUSTUP_TOOLCHAIN: "stable",
+					RUSTC: path.join(bin, "rustc"),
+					CLIPPY_DRIVER_PATH: path.join(bin, "clippy-driver"),
+					CARGO_TARGET_DIR: shared,
+					CARGO_BUILD_BUILD_DIR: shared,
+				},
+				encoding: "utf8",
+			});
+		const good = push(clean);
+		expect(good.status, good.stderr).toBe(0);
+		expect(good.stdout).toContain("ok     clippy (demo; Rust 1.2.3)");
+		const bad = push(older);
+		expect(bad.status, bad.stdout).toBe(1);
+		expect(bad.stderr).toContain("lint in older candidate");
+		expect(fs.readdirSync(shared)).toEqual([]);
+		const unavailable = push(checkout);
+		expect(unavailable.status).toBe(0);
+		expect(unavailable.stdout).toMatch(/SKIPPED clippy: .*Rust 4\.5\.6/);
+		fs.unlinkSync(path.join(installed, "clippy-driver"));
+		const missing = push(clean);
+		expect(missing.status).toBe(0);
+		expect(missing.stdout).toMatch(/SKIPPED clippy: .*1\.2\.3.*clippy-driver/);
+		expect(missing.stdout).toContain("SKIPPED: local verification incomplete");
+		exe(installed, "clippy-driver", 'echo "clippy 0.1.1 (bbbbbbbbbb 2025-01-01)"');
+		const mismatched = push(clean);
+		expect(mismatched.status).toBe(0);
+		expect(mismatched.stdout).toMatch(/SKIPPED clippy: .*do not match rustc 1\.2\.3/);
+		fs.unlinkSync(path.join(bin, "rustup"));
+		for (const name of ["git", "tar"]) fs.symlinkSync(`/usr/bin/${name}`, path.join(bin, name));
+		const plain = push(clean, bin);
+		expect(plain.status).toBe(0);
+		expect(plain.stdout).toMatch(/SKIPPED clippy: .*1\.2\.3.*without rustup/);
 	});
 
 	it("copies Rust workspace sources and imported JSON, not unrelated native code or docs", () => {
