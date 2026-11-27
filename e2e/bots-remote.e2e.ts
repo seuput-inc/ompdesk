@@ -13,7 +13,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { exitApp } from "./harness";
+import { exitApp, untilAnswered } from "./harness";
 import {
 	connectHost,
 	freePort,
@@ -243,5 +243,74 @@ test("a bot made on one computer is listed, chatted with and answered on its pai
 		if (host) await exitApp(host.app).catch(() => undefined);
 		await proxy.close();
 		await fs.rm(parent, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => undefined);
+	}
+});
+
+test("paired bot chat omits quiet lookups live and after reopening, without hiding results, errors or questions", async () => {
+	test.setTimeout(150_000);
+	const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "paired-quiet-bot-")));
+	let host: RemoteInstance | null = null;
+	let client: RemoteInstance | null = null;
+	try {
+		const port = await freePort();
+		const options = { language: "en", theme: "light", port } as const;
+		const home = path.join(parent, "home");
+		await fs.mkdir(home);
+		const profile = await makeRemoteProfile(parent, "a", { ...options, env: { HOME: home, USERPROFILE: home } });
+		host = await launchRemote(profile);
+		client = await launchRemote(await makeRemoteProfile(parent, "b", options));
+		const b = client.page;
+		const device = await connectHost(host.page, b, "Studio");
+		const bot = await botWithQuestion(host.page);
+		const open = async () => {
+			await b.locator(`[data-bot-row="${bot.id}"]`).click();
+			const active = () => b.evaluate(async () => (await window.omp.tabs.list()).find(tab => tab.active));
+			await expect.poll(active).toMatchObject({ sessionPath: bot.home, device, status: "ready" });
+			const tab = await active();
+			if (!tab) throw new Error("No active remote bot chat");
+			return tab.tabId;
+		};
+		let id = await open();
+		const prompt = (message: string) =>
+			b.evaluate(([tab, text]) => window.omp.rpc.commandForTab(tab, { type: "prompt", message: text }), [
+				id,
+				message,
+			] as const);
+		const quote = "I am quoting NO_REPLY.";
+		await prompt(quote);
+		await untilAnswered(b, id, { after: quote });
+		const cards = b.locator("[data-work-card]");
+		await expect(b.getByText(quote, { exact: true }).first()).toBeVisible();
+		const before = await cards.count();
+		for (const suffix of ["one", "two"]) {
+			const text = `fixture quiet lookup ${suffix}`;
+			await prompt(text);
+			await untilAnswered(b, id, { after: text, text: "NO_REPLY" });
+			await expect(b.getByText(text, { exact: true }).first()).toBeVisible();
+		}
+		const quiet = async () => {
+			await expect(b.getByText("NO_REPLY", { exact: true })).toHaveCount(0);
+			await expect(b.locator("[data-bot-quiet-reply]")).toHaveCount(0);
+			await expect(cards).toHaveCount(before);
+			await expect(b.getByText("Local fixture reply", { exact: true }).last()).toBeVisible();
+		};
+		await quiet();
+		await test.info().attach("paired-live", { body: await b.screenshot(), contentType: "image/png" });
+		await b.evaluate(tab => window.omp.tabs.close(tab), id);
+		id = await open();
+		await untilAnswered(b, id, { after: "fixture quiet lookup two", text: "NO_REPLY" });
+		await expect(b.getByText(quote, { exact: true }).first()).toBeVisible();
+		await quiet();
+		await prompt("fixture transcript");
+		const error = b.locator(".omp-message-error").last();
+		await error.getByRole("button", { name: "Details" }).click();
+		await expect(error.locator("pre")).toContainText("503 Service unavailable");
+		await prompt("fixture ask");
+		await expect(b.locator("[data-prompt-card]").filter({ hasText: "Where should this deploy?" })).toBeVisible();
+		await test.info().attach("paired-reopened-controls", { body: await b.screenshot(), contentType: "image/png" });
+	} finally {
+		if (client) await exitApp(client.app).catch(() => undefined);
+		if (host) await exitApp(host.app).catch(() => undefined);
+		await fs.rm(parent, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 	}
 });

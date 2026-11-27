@@ -4471,6 +4471,29 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 			// The omp dies under the turn it just started (an uncaught exception): OMPdesk starts it again and continues the
 			// turn, at most three times in five minutes (interrupted-work.md › A turn that does not go on by itself).
 			setTimeout(() => process.exit(1), 300);
+		} else if (message.startsWith("fixture quiet lookup ")) {
+			const toolCallId = `lookup-${sentAt}`;
+			const entries: AgentMessage[] = [
+				{
+					role: "assistant",
+					stopReason: "toolUse",
+					content: [{ type: "toolCall", name: "read", id: toolCallId, arguments: { path: "sample.txt" } }],
+				},
+				{
+					role: "toolResult",
+					toolName: "read",
+					toolCallId,
+					isError: false,
+					content: [{ type: "text", text: "ok" }],
+				},
+				{ role: "assistant", stopReason: "stop", content: [{ type: "text", text: "NO_REPLY" }] },
+			];
+			for (const [index, entry] of entries.entries()) {
+				entry.timestamp = sentAt + index + 1;
+				appendMessage(entry);
+				write({ type: "message_end", message: entry });
+			}
+			endTurn([user, ...entries]);
 		} else if (message === "fixture work view") {
 			startWorkView(user);
 		} else if (message === "fixture steer work") {
