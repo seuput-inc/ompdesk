@@ -68,7 +68,7 @@ export function admission(
 			return "waiting for the Windows receipt: a batch claim already exists; reconcile without resubmitting";
 		return `waiting for the Windows receipt for ${dev}`;
 	}
-	const scope = `win-e2e run ${receipt.id} (@smoke including bot-rename reopen, bots-remote paired child and remote-host-family ordinary parent)`;
+	const scope = `win-e2e run ${receipt.id} (@smoke including bot-rename reopen, bots-remote paired child, remote-host-family ordinary parent and bot-delete handed session)`;
 	if (
 		receipt.path !== run.path ||
 		receipt.head_repository?.full_name !== repo ||

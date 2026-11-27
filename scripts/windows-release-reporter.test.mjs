@@ -8,6 +8,8 @@ const worker =
 	"e2e/bots-remote.e2e.ts › a paired bot chat reopens its delegated worker in another repository without taking the human sibling";
 const ordinaryParent =
 	"e2e/remote-host-family.e2e.ts › a paired device reopens an ordinary host's saved child under its exact parent after reconnect, not its namesake";
+const deletion = "e2e/bot-delete.e2e.ts › deleting a bot keeps only the handed session (desktop, en)";
+const mandatory = [rename, worker, ordinaryParent, deletion];
 const smoke = "e2e/feature.e2e.ts › @smoke another selected test";
 
 function selected(name, statuses = ["passed"], expectedStatus = "passed", annotations = []) {
@@ -44,9 +46,16 @@ afterEach(() => {
 test("reports actual passes, Windows N/A and runner wall time separately", () => {
 	const parent = selected(ordinaryParent);
 	parent.results[0].duration = 317;
-	const receipt = report([selected(rename), selected(worker), parent, selected(smoke), ...exceptions()]);
+	const receipt = report([
+		selected(rename),
+		selected(worker),
+		parent,
+		selected(deletion),
+		selected(smoke),
+		...exceptions(),
+	]);
 	expect(receipt.status).toBe("passed");
-	expect(receipt.output).toContain("4 passed, 3 N/A, 7 discovered");
+	expect(receipt.output).toContain("5 passed, 3 N/A, 8 discovered");
 	expect(receipt.output).toContain(`${ordinaryParent}: passed in 317 ms`);
 	expect(receipt.output).toContain("Playwright wall time 1234 ms");
 	for (const [name, reason] of windowsNotApplicable)
@@ -54,8 +63,8 @@ test("reports actual passes, Windows N/A and runner wall time separately", () =>
 	expect(receipt.output).not.toContain("::error");
 });
 
-test.each([rename, worker, ordinaryParent])("requires exact discovery of %s", missing => {
-	const present = [rename, worker, ordinaryParent].filter(name => name !== missing).map(name => selected(name));
+test.each(mandatory)("requires exact discovery of %s", missing => {
+	const present = mandatory.filter(name => name !== missing).map(name => selected(name));
 	const wrongFile = missing.replace(/^.*? › /, "e2e/other.e2e.ts › ");
 	const { status, output } = report([
 		...present,
@@ -67,11 +76,11 @@ test.each([rename, worker, ordinaryParent])("requires exact discovery of %s", mi
 	expect(output).toContain(`${missing}: missing from Playwright discovery`);
 });
 
-test("holds a skipped ordinary-parent reconnect", () => {
-	const skipped = selected(ordinaryParent, ["skipped"], "skipped");
-	const { status, output } = report([selected(rename), selected(worker), skipped, ...exceptions()]);
+test.each(mandatory)("holds a skipped required scenario: %s", skipped => {
+	const tests = mandatory.map(name => (name === skipped ? selected(name, ["skipped"], "skipped") : selected(name)));
+	const { status, output } = report([...tests, ...exceptions()]);
 	expect(status).toBe("failed");
-	expect(output).toContain(`${ordinaryParent}: required a pass; expectedStatus=skipped, actual=skipped`);
+	expect(output).toContain(`${skipped}: required a pass; expectedStatus=skipped, actual=skipped`);
 });
 
 test.each([
@@ -84,9 +93,7 @@ test.each([
 	[["failed", "passed"], "passed", "failed, passed"],
 ])("holds a selected test with attempts %j and expected status %s", (attempts, expected, actual) => {
 	const { status, output } = report([
-		selected(rename),
-		selected(worker),
-		selected(ordinaryParent),
+		...mandatory.map(name => selected(name)),
 		selected(smoke, attempts, expected),
 		...exceptions(),
 	]);
@@ -97,7 +104,7 @@ test.each([
 
 test("holds a stale exception whether it passed, vanished or skipped for a new reason", () => {
 	const [name] = windowsNotApplicable.keys();
-	const tests = [selected(rename), selected(worker), selected(ordinaryParent), ...exceptions().slice(1)];
+	const tests = [...mandatory.map(name => selected(name)), ...exceptions().slice(1)];
 	for (const receipt of [
 		report(tests),
 		report([...tests, selected(name)]),
@@ -112,11 +119,11 @@ test("holds a stale exception whether it passed, vanished or skipped for a new r
 test("escapes failure details into one annotation per test without masking Playwright's verdict", () => {
 	const broken = selected(smoke, ["failed"]);
 	broken.results[0].error = { message: "47%\r\n::warning::second line" };
-	const tests = [selected(rename), selected(worker), selected(ordinaryParent), broken, ...exceptions()];
+	const tests = [...mandatory.map(name => selected(name)), broken, ...exceptions()];
 	const { status, output } = report(tests, "interrupted");
 	expect(status).toBe("interrupted");
 	expect(output.match(/::error title=Required Windows app set::/g)).toHaveLength(1);
 	expect(output).toContain("47%25%0D%0A::warning::second line");
-	const passing = [selected(rename), selected(worker), selected(ordinaryParent), ...exceptions()];
+	const passing = [...mandatory.map(name => selected(name)), ...exceptions()];
 	expect(report(passing, "failed").status).toBe("failed");
 });
