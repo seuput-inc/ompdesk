@@ -12,7 +12,7 @@ import * as path from "node:path";
 import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AccountCredits } from "../../src/shared/rpc-types";
-import { accountCredits, creditKind, creditsInRaw, rawCredits } from "./account-credits";
+import { accountCredits, creditKind, creditLimitId, creditsInRaw, rawCredits } from "./account-credits";
 import { matchReportAccount, type StoredAccount } from "./accounts-core";
 import { pickerAccounts, refreshForeignCatalog, wireModel } from "./codex-picker";
 import { creditSpendEnabled } from "./credit-spend-core";
@@ -433,11 +433,11 @@ async function refreshCatalog(env: BridgeEnv, session: AgentSession, forceRefres
 /** Stock's reading of a limit, bound once per read: shaping a list of limits stays synchronous. */
 async function limitShaper() {
 	const { resolveUsedFraction } = await import("./omp/pi-ai");
-	return (limit: UsageLimit) => {
+	return (limit: UsageLimit, credits?: AccountCredits) => {
 		// A balance is no window: Factory's `used: 0` against itself would read as a 0 % gauge.
 		const balance = creditKind(limit.id) === "balance";
 		return {
-			id: limit.id,
+			id: credits && creditLimitId(limit) === credits.limitId ? credits.limitId : limit.id,
 			label: limit.label,
 			...(balance
 				? {}
@@ -543,14 +543,14 @@ async function reportShaper() {
 		const standing = usageStanding(report, { now, creditSpend: creditSpendEnabled(), resetAtMs: usageResetAtMs });
 		// ChatGPT's balance is only in a fetch's `raw`: this read's, else the account's last fetch through this bridge.
 		const credits =
-			accountCredits(report.limits) ??
+			accountCredits(report.limits, account ? report : undefined) ??
 			rawCredits(report.provider, report.raw) ??
 			(account ? lastFetchedCredits(report.provider, account.credentialId) : undefined) ??
 			undefined;
 		return {
 			provider: report.provider,
 			fetchedAt: report.fetchedAt,
-			limits: report.limits.map(shapeLimit),
+			limits: report.limits.map(limit => shapeLimit(limit, credits)),
 			// When every exhausted window has reset (stock's own rule, every row): what a wait for a limit reads.
 			resetAt: usageResetAtMs(report.limits, now),
 			...standing,
@@ -767,10 +767,16 @@ async function providerAccounts(env: BridgeEnv, session: AgentSession, loginProv
 			const report = await read(row);
 			const accountHealth = healthById.get(row.id);
 			// The credits are said once, as `credits`, never as a quota window.
-			const limits = report ? report.limits.filter(limit => !creditKind(limit.id)).map(shapeLimit) : [];
 			const credits = report
-				? (accountCredits(report.limits) ?? lastFetchedCredits(provider, row.id) ?? undefined)
+				? (accountCredits(report.limits, row.credential.type === "oauth" ? report : undefined) ??
+					lastFetchedCredits(provider, row.id) ??
+					undefined)
 				: undefined;
+			const limits = report
+				? report.limits
+						.filter(limit => creditLimitId(limit) !== credits?.limitId && !creditKind(limit.id))
+						.map(limit => shapeLimit(limit))
+				: [];
 			const stored = authStorage.oauth
 				.accounts(provider, sessionId)
 				.find(account => account.credentialId === row.id);

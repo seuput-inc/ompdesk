@@ -4,7 +4,7 @@
  * phone's first screen nothing (scripts/check-main-bundle.ts).
  */
 import type { UsageReport } from "../../../../shared/rpc-types";
-import { accountGauges } from "../../../lib/usage-windows";
+import { usedShare } from "../../../lib/usage-windows";
 import { providerBrand } from "../../settings/providers/provider-marks";
 
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
@@ -24,19 +24,28 @@ export interface UsageAccountGroup {
 	inUse: boolean;
 }
 
+/** Stock can include the same balance in both its limits and its account credits. */
+export function usageWindowLimits({ credits, limits }: UsageReport) {
+	return credits ? limits.filter(limit => limit.id !== credits.limitId) : limits;
+}
+
 /**
- * Every account that reports a measured window, grouped by provider as Settings › Models & accounts groups them
- * (API-key providers have no windows and are not listed). The provider this tab uses comes first, the others by
- * company; inside a group the accounts keep a fixed order (by address), so a reading never moves a row. The
- * session's own account is marked `inUse`, not moved.
+ * Accounts with measured windows or credits, grouped by provider. The percentage summary only includes accounts
+ * with windows. The provider this tab uses comes first, the others by company; accounts stay ordered by address.
  */
 export function usageAccountGroups(
 	reports: readonly UsageReport[],
 	provider: string | null | undefined,
+	includeCreditOnly = true,
 ): UsageAccountGroup[] {
 	const byProvider = new Map<string, UsageReport[]>();
 	for (const report of reports) {
-		if (accountGauges(report.limits).length === 0) continue;
+		if (
+			!(includeCreditOnly && report.credits) &&
+			!usageWindowLimits(report).some(limit => usedShare(limit) !== null)
+		) {
+			continue;
+		}
 		byProvider.set(report.provider, [...(byProvider.get(report.provider) ?? []), report]);
 	}
 	return [...byProvider.entries()]

@@ -1,10 +1,10 @@
 /**
- * What an account has left to spend beyond its plan windows, read from the limits of stock's usage report. Pure: no
+ * What an account has left to spend beyond its plan windows, read from stock's usage report. Pure: no
  * omp imports, so the GUI's own vitest runs it on made-up limits (src/main/bridge-account-credits.test.ts).
  *
- * Which limits are money or credits left is a table by stock's limit id, because the shape alone cannot tell them
- * apart: Factory reports its prepaid balance as a cap of itself (`used: 0`, `limit` = `remaining`), Claude its extra
- * usage as spend against a monthly cap. ChatGPT Codex has no such limit: its balance is the `credits` block of the
+ * Factory reports its prepaid balance as a cap of itself (`used: 0`, `limit` = `remaining`), Claude its extra
+ * usage as spend against a monthly cap. Cursor distinguishes prepaid from included credit by window id; Devin
+ * reports an overage balance in metadata. ChatGPT Codex has no balance limit: its balance is the `credits` block of the
  * provider's own answer, which stock keeps as the report's `raw` and only on the fetch itself (its usage cache drops
  * `raw`), so {@link rawCredits} reads it there and last-reports.ts keeps it per account. OpenRouter, which has no
  * usage report, has no credits here.
@@ -14,8 +14,11 @@ import type { AccountCredits } from "../../src/shared/rpc-types";
 /** The slice of stock's `UsageLimit` this reads. */
 export interface CreditLimitLike {
 	id: string;
+	window?: { id: string };
 	amount: { remaining?: number; limit?: number; unit: string };
 }
+
+const CURSOR_PREPAID_ID = "cursor:usd:individual-api:prepaid";
 
 const CREDIT_LIMITS: Readonly<Record<string, AccountCredits["kind"]>> = {
 	// pi-ai usage/claude.ts buildClaudeExtraUsageLimit: extra usage spent against the monthly cap (`remaining` only
@@ -23,6 +26,7 @@ const CREDIT_LIMITS: Readonly<Record<string, AccountCredits["kind"]>> = {
 	"anthropic:extra": "monthlyCap",
 	// usage/factory-droid.ts: `extraUsageBalanceCents`, usd, with `used: 0` and `limit` = the balance.
 	"factory-droid:extra-balance": "balance",
+	[CURSOR_PREPAID_ID]: "balance",
 	// usage/charm-hyper.ts, usage/commandcode.ts: the API key's balance in credits.
 	"charm-hyper:credits": "balance",
 	"commandcode:balance": "balance",
@@ -33,18 +37,31 @@ export function creditKind(limitId: string): AccountCredits["kind"] | undefined 
 	return Object.hasOwn(CREDIT_LIMITS, limitId) ? CREDIT_LIMITS[limitId] : undefined;
 }
 
-function positive(value: number | undefined): value is number {
+/** The prepaid and included Cursor rails share a stock id but must not share a display id. */
+export function creditLimitId({ id, window }: CreditLimitLike): string {
+	return id === "cursor:usd:individual-api" && window?.id === "prepaid" ? CURSOR_PREPAID_ID : id;
+}
+
+function positive(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 /** The account's credits while something is left: a balance above zero, or a cap with something left of it. */
-export function accountCredits(limits: readonly CreditLimitLike[]): AccountCredits | undefined {
-	for (const { id, amount } of limits) {
+export function accountCredits(
+	limits: readonly CreditLimitLike[],
+	subscription?: { provider: string; metadata?: Record<string, unknown> },
+): AccountCredits | undefined {
+	for (const entry of limits) {
+		const id = subscription ? creditLimitId(entry) : entry.id;
 		const kind = creditKind(id);
-		const { remaining, limit, unit } = amount;
+		const { remaining, limit, unit } = entry.amount;
 		if (!kind || (unit !== "usd" && unit !== "credits") || !positive(remaining)) continue;
 		if (kind === "balance") return { kind, limitId: id, remaining, unit };
 		if (positive(limit)) return { kind, limitId: id, remaining, limit, unit };
+	}
+	const overage = subscription?.metadata?.overageBalanceUsd;
+	if (subscription?.provider === "devin" && positive(overage)) {
+		return { kind: "balance", limitId: "devin:overage-balance", remaining: overage, unit: "usd" };
 	}
 	return undefined;
 }

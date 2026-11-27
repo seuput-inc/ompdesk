@@ -6,11 +6,11 @@
  * reset beneath each, the tooltip and the state marks are one implementation.
  */
 
-import type { AccountUsageState, UsageLimit } from "../../../../shared/rpc-types";
-import { formatClock, formatSpan } from "../../../lib/format";
+import type { AccountCredits, AccountUsageState, UsageLimit } from "../../../../shared/rpc-types";
+import { formatClock, formatCredits, formatSpan } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
-import { accountGauges } from "../../../lib/usage-windows";
-import { Badge, NEAR_FRACTION, UsageGauges, usageTooltip } from "../../common";
+import { accountGauges, usedShare } from "../../../lib/usage-windows";
+import { Badge, NEAR_FRACTION, Tooltip, UsageGauges, usageTooltip } from "../../common";
 import { bareEmail } from "../../layout/AccountLimit";
 
 /** What a row needs of an account to say its quota and state. */
@@ -32,9 +32,44 @@ export interface AccountQuotaSource {
  * one window holding the share used.
  */
 export function quotaLimits(account: Pick<AccountQuotaSource, "limits" | "remainingFraction">): UsageLimit[] {
-	if (account.limits.some(limit => limit.usedFraction !== undefined)) return [...account.limits];
+	if (account.limits.some(limit => usedShare(limit) !== null)) return [...account.limits];
 	if (account.remainingFraction === undefined) return [];
 	return [{ id: "quota", label: "Quota", windowId: "quota", usedFraction: 1 - account.remainingFraction }];
+}
+
+/** The compact panel rounds the visible figure but names the amount and its unit in full. */
+export function CreditsFigure({ credits, compact }: { credits: AccountCredits; compact?: "column" | "line" }) {
+	const t = useT();
+	const left =
+		credits.kind === "unlimited"
+			? t("providers.accounts.creditsUnlimited")
+			: formatCredits(credits.remaining, credits.unit, compact && "compact");
+	const exact =
+		compact && credits.kind !== "unlimited" ? formatCredits(credits.remaining, credits.unit, "exact") : left;
+	const what =
+		credits.kind === "monthlyCap"
+			? t("providers.accounts.creditsMonthlyCap", {
+					left: exact,
+					limit: formatCredits(credits.limit, credits.unit, compact && "exact"),
+				})
+			: credits.kind === "unlimited"
+				? t("providers.accounts.creditsUnlimitedWhat")
+				: t("providers.accounts.creditsBalance", { left: exact });
+	return (
+		<Tooltip content={what} describe={!compact}>
+			<Badge
+				aria-label={compact ? what : undefined}
+				data-account-credits={credits.kind}
+				role={compact ? "img" : undefined}
+				size="xs"
+				tabIndex={compact ? 0 : undefined}
+				variant="muted"
+			>
+				{compact !== "column" && t("providers.accounts.credits")}
+				<span className="text-(--sc-text-secondary) tabular-nums">{left}</span>
+			</Badge>
+		</Tooltip>
+	);
 }
 
 /**
@@ -63,7 +98,7 @@ export function QuotaCell({
 	now,
 }: {
 	account: AccountQuotaSource;
-	columns: readonly string[];
+	columns: readonly UsageLimit[];
 	tracks: number;
 	/** Slim bars with small type (`UsageGauges compact`): the sidebar's width. */
 	compact?: boolean;

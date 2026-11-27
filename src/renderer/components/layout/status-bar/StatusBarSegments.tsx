@@ -42,7 +42,7 @@ function UsageItem() {
 	const reports = useUsageReports();
 	const chips = useMemo(
 		() =>
-			(reports ? usageAccountGroups(reports, provider) : []).map(group => {
+			(reports ? usageAccountGroups(reports, provider, false) : []).map(group => {
 				const account = group.accounts.find(entry => entry.inUse) ?? group.accounts[0];
 				const source = sourceOf(account.report, account.inUse);
 				const fraction = Math.max(0, ...accountGauges(quotaLimits(source)).map(gauge => gauge.fraction));
@@ -57,11 +57,12 @@ function UsageItem() {
 			}),
 		[reports, provider, providers],
 	);
-	if (chips.length === 0) return null;
+	if (chips.length === 0 && !reports?.some(report => report.credits)) return null;
 	return (
 		<>
 			<Button
 				aria-expanded={open}
+				aria-label={chips.length === 0 ? t("sidebar.pin.usage") : undefined}
 				aria-haspopup="dialog"
 				className={SEGMENT}
 				data-status-usage
@@ -81,7 +82,7 @@ function UsageItem() {
 			<Popover
 				anchorRef={anchor}
 				ariaLabel={t("sidebar.pin.usage")}
-				className="p-2"
+				className="omp-status-usage-popover p-2"
 				onClose={() => setOpen(false)}
 				open={open}
 				placement="top-start"

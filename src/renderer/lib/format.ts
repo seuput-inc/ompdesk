@@ -293,7 +293,18 @@ export function formatUsd(value: number): string {
 }
 
 /** What an account has left: dollars as `formatUsd`, a provider's own credits as a number in the UI language. */
-export function formatCredits(amount: number, unit: "usd" | "credits"): string {
+export function formatCredits(amount: number, unit: "usd" | "credits", mode?: "compact" | "exact"): string {
+	if (mode === "exact") {
+		const value = amount.toLocaleString(unit === "usd" ? "en-US" : uiLocale(), {
+			minimumFractionDigits: unit === "usd" ? 2 : 0,
+			maximumFractionDigits: 20,
+		});
+		return unit === "usd" ? `$${value} USD` : translate("providers.accounts.creditsAmount", { value });
+	}
+	if (mode === "compact" && amount >= 100) {
+		const value = Math.round(amount).toLocaleString(unit === "usd" ? "en-US" : uiLocale());
+		return unit === "usd" ? `$${value}` : value;
+	}
 	return unit === "usd" ? formatUsd(amount) : amount.toLocaleString(uiLocale(), { maximumFractionDigits: 2 });
 }
 

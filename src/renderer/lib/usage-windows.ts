@@ -25,7 +25,7 @@ function scopeId(limit: UsageLimit): string {
  * "5H", "7D", "Fable": a whole-account window's own short name (from its id, else the first word of its label), a
  * model-scoped one's model (its window is the whole-account gauge beside it).
  */
-export function shortWindowLabel(limit: UsageLimit): string {
+function windowHeading(limit: UsageLimit): string {
 	// Stock names the model in the label's parenthetical ("Claude 7 Day (Fable)"); OMPdesk keeps no tier wording.
 	const scope = scopeId(limit);
 	if (scope) return /\(([^()]+)\)\s*$/.exec(limit.label)?.[1] ?? scope;
@@ -36,6 +36,20 @@ export function shortWindowLabel(limit: UsageLimit): string {
 	if (id === "weekly" || id === "1w") return "7D";
 	if (id === "monthly") return "30D";
 	return (limit.windowLabel ?? limit.label).split(/[\s(]/)[0]?.slice(0, 4).toUpperCase() ?? "";
+}
+
+/** Two different quotas can reset together. Name them by the differing part of their stock IDs. */
+export function shortWindowLabel(limit: UsageLimit, peers: readonly UsageLimit[] = []): string {
+	const heading = windowHeading(limit);
+	const collides = (peer: UsageLimit) => !sameGauge(limit, peer) && windowHeading(peer) === heading;
+	if (!peers.some(collides)) return heading;
+	const others = peers.filter(collides);
+	const key = gaugeColumn(limit);
+	const tokens = others.map(peer => gaugeColumn(peer).split(":"));
+	const name =
+		key.split(":").find(part => tokens.every(other => !other.includes(part))) ??
+		(others.every(peer => peer.windowId !== limit.windowId) ? windowKey(limit) : `${key} ${windowKey(limit)}`);
+	return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 export interface UsageGaugeEntry {
@@ -56,16 +70,31 @@ export function usedShare(limit: UsageLimit, now = Date.now()): number | null {
 
 function measured(limits: readonly UsageLimit[]): UsageGaugeEntry[] {
 	const now = Date.now();
-	return limits.flatMap(limit => {
+	const seen = new Set<string>();
+	const entries: UsageGaugeEntry[] = [];
+	for (const limit of limits) {
 		const fraction = usedShare(limit, now);
-		return fraction === null ? [] : [{ limit, fraction }];
-	});
+		if (fraction === null) continue;
+		const key = gaugeKey(limit);
+		if (seen.has(key)) continue;
+		seen.add(key);
+		entries.push({ limit, fraction });
+	}
+	return entries;
 }
 
-/** The column a limit's gauge stands in among one provider's accounts: `5h`, `7d`, `7d:fable`. */
+/** The provider-local stock limit ID, independent of the period at which it resets. */
 export function gaugeColumn(limit: UsageLimit): string {
-	const scope = scopeId(limit);
-	return scope ? `${windowKey(limit)}:${scope}` : windowKey(limit) || limit.id;
+	return limit.id.slice(limit.id.indexOf(":") + 1);
+}
+
+/** Some adapters reuse a limit ID for different periods, or a period for different quotas. */
+export function gaugeKey(limit: UsageLimit): string {
+	return JSON.stringify([limit.id, limit.windowId]);
+}
+
+export function sameGauge(a: UsageLimit, b: UsageLimit): boolean {
+	return a.id === b.id && a.windowId === b.windowId;
 }
 
 /**
@@ -86,8 +115,8 @@ export function accountGauges(limits: readonly UsageLimit[]): UsageGaugeEntry[] 
  * The columns the accounts of one provider share, in {@link accountGauges}' order: an account without one of them
  * (Claude reports no 5 hour window for some) leaves that column empty, so the same window lines up down the list.
  */
-export function gaugeColumns(accounts: readonly (readonly UsageLimit[])[]): string[] {
-	return [...new Set(accountGauges(accounts.flat()).map(entry => gaugeColumn(entry.limit)))];
+export function gaugeColumns(accounts: readonly (readonly UsageLimit[])[]): UsageLimit[] {
+	return accountGauges(accounts.flat()).map(({ limit }) => limit);
 }
 
 /**
