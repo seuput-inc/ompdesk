@@ -65,11 +65,15 @@ const VIEW_EVENTS = [
 	"beforeResponse",
 ] as const;
 
+let viewCount = 0;
+
 /** What a view needs from its hosted tab; LocalHostServices keeps the rules behind it. */
 export interface HostedTabPort {
 	readonly sidecar: SidecarLike;
 	/** Who types through this view: its prompts are journaled as theirs. */
 	readonly promptOrigin: PromptOrigin;
+	/** The pool sends ask/form frames after it decides which chat owns them. */
+	poolRoutesQuestions?: boolean;
 	/** A transcript page as the omp labelled it, relabelled for the viewer. */
 	labelTranscript(data: unknown): unknown;
 	/** Spawn the tab's omp if it has not run yet (a revived tab). */
@@ -108,6 +112,8 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 	/** The text a `prompt_origin_set` from the window just named: its prompt carries that origin, not this computer's. */
 	#namedOrigin: string | undefined;
 	#left = false;
+	/** This view as a viewer of the hosted omp (`setShown`), beside the device's own and the other views'. */
+	readonly #viewer = `view:${++viewCount}`;
 	/** Another party works in this omp too: the host decides steer/follow-up. */
 	readonly shared = true;
 
@@ -116,6 +122,10 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 		this.#port = port;
 		for (const name of VIEW_EVENTS) {
 			const forward = (...args: unknown[]): void => {
+				if (name === "extensionUi" && port.poolRoutesQuestions) {
+					const { method } = args[0] as ExtensionUIRequest;
+					if (method === "ask" || method === "form") return;
+				}
 				this.emit(name, ...args);
 			};
 			port.sidecar.on(name, forward);
@@ -205,6 +215,12 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 	syncDefaultBrowser(): void {}
 	syncUserProfile(): void {}
 	syncNextPrompt(): void {}
+
+	/** One party shows a view (the window's pool, or the viewing device): it shows the hosted omp's tab as this view. */
+	setShown(_viewer: string, shown: boolean): void {
+		if (!this.#left) this.#port.sidecar.setShown?.(this.#viewer, shown);
+	}
+
 	syncAutoTitle(): void {}
 	syncJudgeAssist(): void {}
 	syncHostTools(): void {}
@@ -216,6 +232,7 @@ export class HostedTabView extends EventEmitter implements SidecarLike {
 		this.#left = true;
 		for (const [name, forward] of this.#forwarders) this.#port.sidecar.off(name, forward);
 		this.#forwarders.length = 0;
+		this.#port.sidecar.setShown?.(this.#viewer, false);
 		this.#port.leave(this);
 	}
 

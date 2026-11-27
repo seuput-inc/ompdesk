@@ -78,9 +78,10 @@ export const NEXT_PROMPT_UNAVAILABLE: readonly NextPromptUnavailable[] = [
 /**
  * What caused a (re)generation. Only `refresh` (the renderer asking past an unchanged moment) is forced; `draft` (the
  * person emptied the composer) asks only when the moment moved since the last suggestion, so typing and clearing a
- * draft keeps the suggestion the person saw instead of replacing it.
+ * draft keeps the suggestion the person saw instead of replacing it. `shown` (a window, phone or paired device shows
+ * the tab again, `next_prompt_shown`) asks for the moment a hidden tab skipped, and likewise only when it moved.
  */
-export type NextPromptTrigger = "turn" | "compaction" | "bash" | "switch" | "refresh" | "draft";
+export type NextPromptTrigger = "turn" | "compaction" | "bash" | "switch" | "refresh" | "draft" | "shown";
 
 /** The renderer-reported reasons of `refresh_next_prompt`; the bridge adds `turn`, `compaction` and `switch` itself. */
 export const NEXT_PROMPT_REFRESH_REASONS = ["bash", "switch", "refresh"] as const;

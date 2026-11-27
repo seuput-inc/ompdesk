@@ -24,6 +24,7 @@ pub mod js;
 pub mod messages;
 pub mod pace;
 pub mod resolve;
+pub mod route;
 pub mod schedules;
 pub mod sessions;
 pub mod state;
@@ -152,6 +153,8 @@ pub struct Mem {
     pub inflight: HashMap<String, Shared<String>>,
     /// The question cards of each child its opener was already told of (`#cardsTold`).
     pub cards_told: HashMap<String, HashSet<String>>,
+    /// The question cards of each tab routed to the bot whose request its run served (`route.rs`), by request id.
+    pub routes: HashMap<String, HashMap<String, route::Route>>,
     /// Each session's last read cost and split (`#lastSpend`).
     pub last_spend: HashMap<String, Spend>,
     /// Closed children's last turns (`familyEdits`), by device, session file and close (`#closedTurns`).
@@ -492,6 +495,7 @@ impl AgentControl {
             mem.reviewed.remove(tab_id);
             mem.conflicts.remove(tab_id);
             mem.cards_told.remove(tab_id);
+            mem.routes.remove(tab_id);
             mem.last_spend.remove(tab_id);
             mem.watched.remove(tab_id);
             mem.mailed_in

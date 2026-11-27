@@ -188,6 +188,8 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 	#omp: string | undefined;
 	/** The current `starting` is a re-open after a lost link (`reconnecting`): the host's next status decides. */
 	#reattaching = false;
+	/** A window of this computer shows the tab (`setShown`): told to the host at every open and on each change. */
+	#shown = false;
 	/**
 	 * The host's reading of the turn on this re-attach, held until its status: that status may start the page over for
 	 * another omp, and the reading is the new omp's, so it goes to the pool after that start, not before it.
@@ -362,6 +364,12 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 
 	syncImageGeneration(): void {
 		this.#notify("tab.syncImageGeneration", { rtab: this.#rtab });
+	}
+
+	setShown(_viewer: string, shown: boolean): void {
+		if (shown === this.#shown) return;
+		this.#shown = shown;
+		this.#notify("tab.shown", { rtab: this.#rtab, shown });
 	}
 
 	/** The host's own reply-language setting applies to the omp it runs; this machine's is not sent. */
@@ -812,6 +820,8 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 				// A new omp never made the calls the old one was waiting on.
 				if (result.attached) this.#replayReplies();
 				else this.#queuedReplies = [];
+				// An older host answers `unsupported` and suggests as before.
+				this.#notify("tab.shown", { rtab: this.#rtab, shown: this.#shown });
 				return result;
 			});
 		this.#opened = opening;

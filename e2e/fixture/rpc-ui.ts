@@ -186,9 +186,10 @@ export function runRpcUi(): void {
 	 * created with the first entry and reported by get_state, so the GUI's
 	 * session index lists it the way it lists real omp sessions.
 	 */
+	const journalName = (id: string) => `${Date.now()}_${id}.jsonl`;
 	const sessionFile =
 		process.env.OMP_GUI_TEST_SESSION_FILES === "1" && process.env.PI_CODING_AGENT_DIR
-			? nodePath.join(process.env.PI_CODING_AGENT_DIR, "sessions", "fixture", `${sessionId}.jsonl`)
+			? nodePath.join(process.env.PI_CODING_AGENT_DIR, "sessions", "fixture", journalName(sessionId))
 			: undefined;
 	const sessionCreated = new Date().toISOString();
 	let sessionTitle = "";
@@ -999,6 +1000,12 @@ export function runRpcUi(): void {
 	let nextPromptSettings: NextPromptSettings = parseNextPromptEnv(process.env.OMP_GUI_NEXT_PROMPT);
 	/** The user's composer draft is empty (`next_prompt_draft`); a suggestion is only made over an empty one. */
 	let nextPromptDraftEmpty = true;
+	/**
+	 * Main says a window, phone or paired device shows the tab (`next_prompt_shown`): a hidden tab's trigger asks
+	 * nothing (`nextPromptSkipped` remembers it) and showing the tab asks then, as the bridge's gate does.
+	 */
+	let nextPromptShown = true;
+	let nextPromptSkipped: NextPromptTrigger | undefined;
 	let nextPromptFailure: { reason: NextPromptUnavailable; detail: string } | undefined;
 	let nextPromptTimer: NodeJS.Timeout | undefined;
 	const nextPromptRequests = { suggest: 0, inline: 0 };
@@ -1047,6 +1054,7 @@ export function runRpcUi(): void {
 	};
 	const nextPromptRunStarted = () => {
 		nextPromptKept = { candidates: [], at: Date.now() };
+		nextPromptSkipped = undefined;
 	};
 	const pushBridgeEvent = (event: object) => {
 		const frame = `${JSON.stringify({ event })}\n`;
@@ -1222,9 +1230,13 @@ export function runRpcUi(): void {
 		});
 		if (recovered) emitNextPromptConfig();
 	};
-	/** One suggestion after `trigger`, unless a draft is in the way; typing aborts it while pending. */
+	/** One suggestion after `trigger`, unless a draft is in the way or nobody shows the tab; typing aborts it while pending. */
 	const scheduleNextPrompt = (trigger: NextPromptTrigger) => {
 		if (!nextPromptSettings.suggestions || !nextPromptDraftEmpty) return;
+		if (!nextPromptShown) {
+			nextPromptSkipped = trigger;
+			return;
+		}
 		clearTimeout(nextPromptTimer);
 		nextPromptTimer = setTimeout(() => emitNextPrompt(trigger), nextPromptScript.latencyMs ?? 0);
 	};
@@ -1823,8 +1835,36 @@ export function runRpcUi(): void {
 				}
 			: {}),
 	};
+	/**
+	 * `fixture:bot-form` (inside a message, an agent's arrives wrapped): the run raises stock's `form` card with this
+	 * HTML, and its answer ends the run with a reply naming the data (`Form answered: {"color":"red"}`). The bridge's
+	 * `project_ask_form` (resources/gui-bridge/ask-form.ts) is stood in for this one form: one radio question.
+	 */
+	const BOT_FORM_HTML =
+		'<form><p>Which color should the badge be?</p><label><input type="radio" name="color" value="red"> Red</label><label><input type="radio" name="color" value="blue"> Blue</label></form>';
+	const BOT_FORM_OPTIONS = ["Red", "Blue"];
+	const botForms = new Set<string>();
+	let botFormSeq = 0;
 	/** A handler returning `undefined` replies itself (deferred, or ahead of the events it pushes). */
 	const bridgeMethods: Record<string, (params: Params, reply: Reply) => unknown> = {
+		project_ask_form: params => {
+			if (!Array.isArray(params.answers))
+				return {
+					questions: [
+						{
+							id: "field-0",
+							question: "Which color should the badge be?",
+							options: BOT_FORM_OPTIONS.map(label => ({ label })),
+							formField: { custom: false, multiline: false, initialText: "", checked: [] },
+						},
+					],
+				};
+			const picked = (params.answers[0] as { selectedOptions?: unknown } | undefined)?.selectedOptions;
+			const label = Array.isArray(picked) ? picked[0] : undefined;
+			if (typeof label !== "string" || !BOT_FORM_OPTIONS.includes(label))
+				return { problem: "Choose a color", index: 0 };
+			return { data: { color: label.toLowerCase() } };
+		},
 		...voiceMethods,
 		// gui-bridge agent-control.ts: stock's extension-UI confirm, answered by the person (extension_ui_response).
 		"agent_control.confirm": (params, reply) => {
@@ -2664,7 +2704,7 @@ export function runRpcUi(): void {
 			const dir = sessionFile
 				? nodePath.dirname(sessionFile)
 				: fs.mkdtempSync(nodePath.join(os.tmpdir(), "omp-fork-"));
-			const sessionPath = nodePath.join(dir, `${forkId}.jsonl`);
+			const sessionPath = nodePath.join(dir, journalName(forkId));
 			// Stock `createBranchedSession` gives the fork the source's title (the fixture's title line, as `persistSession`).
 			const title = sessionTitle
 				? [{ type: "title", v: 1, title: sessionTitle, updatedAt: new Date().toISOString() }]
@@ -2801,6 +2841,14 @@ export function runRpcUi(): void {
 				nextPromptTimer = undefined;
 			}
 			return { empty: nextPromptDraftEmpty };
+		},
+		next_prompt_shown: params => {
+			nextPromptShown = params.shown === true;
+			if (nextPromptShown && nextPromptSkipped) {
+				nextPromptSkipped = undefined;
+				scheduleNextPrompt("shown");
+			}
+			return { shown: nextPromptShown };
 		},
 		next_prompt_refresh: params => {
 			scheduleNextPrompt(params.reason === "bash" || params.reason === "switch" ? params.reason : "refresh");
@@ -5762,6 +5810,10 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				title: "Allow tool: bash\nls -la",
 				options: ["Approve", "Approve bash for this session", "Deny"],
 			});
+		} else if (message.includes("fixture:bot-form")) {
+			const id = `bot-form-${++botFormSeq}`;
+			botForms.add(id);
+			write({ type: "extension_ui_request", id, method: "form", html: BOT_FORM_HTML });
 		} else if (message === "fixture ask") {
 			write({
 				type: "extension_ui_request",
@@ -6635,6 +6687,21 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 					break;
 				}
 				ok();
+				// The `fixture:bot-form` run goes on with what the form's answer said.
+				if (typeof command.id === "string" && botForms.delete(command.id) && command.cancelled !== true) {
+					const answer: AgentMessage = {
+						role: "assistant",
+						content: [{ type: "text", text: `Form answered: ${JSON.stringify(command.data ?? null)}` }],
+						timestamp: Date.now(),
+						provider: model.provider,
+						model: model.id,
+						stopReason: "stop",
+					};
+					appendMessage(answer);
+					write({ type: "message_end", message: answer });
+					endTurn([answer]);
+					break;
+				}
 				endTurn([]);
 				break;
 			}
@@ -7539,7 +7606,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				titleSource = undefined;
 				autoBeside = "";
 				const id = `fixture-new-${process.pid}-${++freshCount}`;
-				const file = sessionFile ? nodePath.join(nodePath.dirname(sessionFile), `${id}.jsonl`) : undefined;
+				const file = sessionFile ? nodePath.join(nodePath.dirname(sessionFile), journalName(id)) : undefined;
 				fresh = { id, file, created: new Date().toISOString() };
 				if (file) {
 					fs.mkdirSync(nodePath.dirname(file), { recursive: true });

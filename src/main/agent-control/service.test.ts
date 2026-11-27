@@ -1097,7 +1097,11 @@ describe("ompdesk_session_open", () => {
 		const host = new FakeHost({ tabId: "main0001" });
 		await control(host).run("main0001", T.open, { message: "ship it", mode: "goal" });
 		const child = [...host.tabsById.keys()].find(id => id !== "main0001") as string;
-		expect(host.sent.filter(entry => entry.tabId === child).map(entry => entry.command.type)).toContain("set_goal");
+		const goal = host.sent.find(entry => entry.tabId === child && entry.command.type === "set_goal");
+		expect(goal?.command).toMatchObject({
+			objective: "ship it",
+			message: expect.stringContaining("<ompdesk-agent-message"),
+		});
 		expect(prompts(host, child)).toEqual([]);
 	});
 

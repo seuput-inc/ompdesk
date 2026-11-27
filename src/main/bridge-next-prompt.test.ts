@@ -443,6 +443,45 @@ describe("regeneration", () => {
 	});
 });
 
+describe("a tab nobody shows (the owner's decision, 25 Nov 2026)", () => {
+	const shown = (value: boolean) => handlers.next_prompt_shown({ shown: value }, world.env);
+
+	it("asks the model nothing at a hidden tab's turn end, and once for that moment when the tab is shown", async () => {
+		await shown(false);
+		await turnEnds();
+		expect(world.calls).toHaveLength(0);
+		expect(updates(world)).toEqual([]);
+		await shown(true);
+		await vi.advanceTimersByTimeAsync(SUGGEST_DEBOUNCE_MS);
+		await flush();
+		expect(world.calls).toHaveLength(1);
+		expect(updates(world)).toMatchObject([
+			{ status: "ready", trigger: "shown", candidates: ["commit it", "push it", "run the linter"] },
+		]);
+		// Hidden and shown again with nothing new: the suggestion made stands, no second request.
+		await shown(false);
+		await shown(true);
+		await vi.advanceTimersByTimeAsync(SUGGEST_DEBOUNCE_MS);
+		await flush();
+		expect(world.calls).toHaveLength(1);
+	});
+
+	it("lets a request already running when the tab is hidden finish and keeps its answer", async () => {
+		const answer = Promise.withResolvers<{ content: Array<{ type: string; text: string }>; stopReason?: string }>();
+		world.reply.current = () => answer.promise;
+		await turnEnds();
+		expect(world.calls).toHaveLength(1);
+		await shown(false);
+		answer.resolve(text("1. commit it"));
+		await flush();
+		expect(updates(world)).toMatchObject([{ status: "ready", candidates: ["commit it"] }]);
+	});
+
+	it("validates what main sends", async () => {
+		await expect(handlers.next_prompt_shown({ shown: "yes" }, world.env)).rejects.toThrow("shown");
+	});
+});
+
 describe("the session's last suggestion (a page that reloads, a tab shown again, a relaunch)", () => {
 	type Journal = Array<{ type: string; customType?: string; data?: unknown; message?: unknown }>;
 	function withJournal(w: World, journal: Journal): void {

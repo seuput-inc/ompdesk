@@ -373,6 +373,8 @@ export type RpcCommand =
 			id?: string;
 			type: "set_goal";
 			objective?: string;
+			/** Agent-opened goal: its attributed first prompt, separate from the saved objective. */
+			message?: string;
 			tokenBudget?: number | null;
 			/** OMPdesk's goal time limit in minutes (stock goals only have a token budget); `null` clears it. */
 			timeLimitMinutes?: number | null;
