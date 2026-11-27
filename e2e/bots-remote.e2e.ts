@@ -99,6 +99,9 @@ test("a bot made on one computer is listed, chatted with and answered on its pai
 		await expect(row.getByRole("button", { name: "Home chat", exact: true })).toBeVisible();
 		await expect(b.locator(`[data-device-group=${JSON.stringify(courier.folder)}]`)).toHaveCount(0);
 		await b.screenshot({ path: "test-results/bots-remote-listed.png", scale: "css", animations: "disabled" });
+		await b.locator("[data-sidebar-bots-open]").click();
+		const pageRow = b.locator(`[data-bots-page-row="${courier.id}"]`);
+		await expect(pageRow.locator(`[data-bot-owner="${deviceId}"]`)).toHaveText("Studio");
 
 		// Its chat opens on A, as a tab of A on the bot's home chat.
 		await row.locator(`[data-bot-row="${courier.id}"]`).click();
@@ -140,6 +143,8 @@ test("a bot made on one computer is listed, chatted with and answered on its pai
 		);
 		const offline = await b.evaluate(() => window.omp.bots.command({ action: "get" }));
 		expect(offline.remote?.[0]?.bots.map(known => known.id)).toEqual([courier.id]);
+		await b.locator("[data-sidebar-bots-open]").click();
+		await expect(pageRow.locator("[data-bot-offline]")).toHaveText("Studio · offline");
 		await expect(
 			b.evaluate(id => window.omp.bots.command({ action: "update", id, paused: true }), courier.id),
 		).rejects.toThrow(/offline/);

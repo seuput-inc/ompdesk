@@ -116,6 +116,20 @@ describe("a web page's device preferences", () => {
 		expect(all).toEqual({ replyLanguage: "Korean" });
 	});
 
+	it("overlays the phone's sidebar choices on shared manual order in both keyed and whole reads", async () => {
+		const sidebar = { sessionSort: "name", hideSleeping: true, sessionOrder: { chats: ["b", "a"] } };
+		const { web } = rig({ host: { sidebar } });
+		const prefs = web.api.prefs;
+		expect(await prefs.get("sidebar")).toEqual({ sessionOrder: sidebar.sessionOrder });
+		await prefs.updateSidebar({ op: "set-session-sort", sort: "recent" });
+		await prefs.updateSidebar({ op: "set-hide-sleeping", hide: false });
+		const expected = { ...sidebar, sessionSort: "recent", hideSleeping: false };
+		expect(await prefs.get()).toMatchObject({ sidebar: expected });
+		expect(await prefs.get("sidebar")).toEqual(expected);
+		expect(sidebar.sessionSort).toBe("name");
+		expect(sidebar.hideSleeping).toBe(true);
+	});
+
 	it("ignores the host's PREFS_CHANGED for device-local keys and passes the others", async () => {
 		const { web, hostPush } = rig();
 		const seen: string[] = [];

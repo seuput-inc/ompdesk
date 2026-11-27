@@ -507,15 +507,19 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // meanwhile), inside the quick terminal's budget, which stays.
 // The A2UI stack merged with main at b90e7549d: measured 2,254,932 (CI run 45868553036, omp/agent/a2ui-u4-2 at
 // 33356584c), 1,850 bytes over main's 2,253,082. The budget is that measure plus 80 bytes.
+// Sort and Hide sleeping (26 Nov 2026, orca-sidebar-sort): the session list's header options (`SidebarOptions`), the
+// "N sleeping" line (`SidebarSleeping`), the sort and sleep rules in `sidebarRows` and the minute clock they read are
+// on the phone's first screen: 2,247,759 bytes in branch run 45838019432 at ef8cfafa5 over its base's budget of
+// 2,247,284, so 555 bytes with the 80 added to the budget.
+// The Bots section as the Bots page's entry (its header's title button), every nav cell's tooltip and the list of
+// deleted projects gone (27 Nov 2026): 2,253,761 bytes in branch run 45866719061 at d87201a7b (budget 2,253,717), the
+// 44-byte excess plus 80 bytes carried into the merged budget.
+// The paired page reads its own sort and Hide sleeping when the sidebar mounts. The device-pref routing brings the
+// first screen to 2,255,977 bytes (run 45876781076, 8bccc83f4); allow that measurement plus 80 bytes.
 // The session row menu's Move to <computer> (26 Nov 2026, cross-device-handoff): the item in `session-menu.ts` and the
 // call in `Sidebar.tsx`: 181 bytes over its base (e2e-nightly run 45780059698, omp/agent/cross-device-handoff at
 // 918cb6da4), added to the budget.
-// Bots of paired computers (27 Nov 2026, orca-bots-remote): the bots store lists each host's copy after this computer's
-// bots (`stores/bots.ts` `listedBots`), the sidebar's Bots section names a host's bot's owner and greys it while the
-// host is away (`bots/BotOwner.tsx`, `stores/remote.ts` `useLostHosts`), and a host's section leaves its bots' folders
-// out of its projects (`SidebarDevices.tsx`); their chats load on unfolding: 989 bytes over main's measure (2,254,071 in
-// branch run 45863771730 at 4436f9dca), added to main's budget.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_256_182;
+const WEB_FIRST_SCREEN_JS_BYTES = 2_256_238;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass

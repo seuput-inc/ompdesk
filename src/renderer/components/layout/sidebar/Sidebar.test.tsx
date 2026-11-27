@@ -514,7 +514,7 @@ function groupToggle(cwd: string): Element {
 }
 
 describe("Sidebar menus and pinned ordering", () => {
-	it("leads with the nav rows (Bots only once the bots feature is available) and ends with Settings and a help menu", async () => {
+	it("leads with the nav rows, the Bots section (once the bots feature is available) as the Bots page's entry, and ends with Settings and a help menu", async () => {
 		useBotsFeature.setState({ available: false });
 		installMockOmp(LIST);
 		seedStores();
@@ -525,15 +525,23 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(navRows()).toEqual(["board", "agents", "schedules", "stats", "phone"]);
 		expect(container.querySelector("[data-sidebar-bots]")).toBeNull();
 		await act(async () => useBotsFeature.setState({ available: true }));
-		expect(navRows()).toEqual(["board", "agents", "schedules", "bots", "stats", "phone"]);
+		// No Bots nav row, as in Orca: the section pinned atop the lists is the entry.
+		expect(navRows()).toEqual(["board", "agents", "schedules", "stats", "phone"]);
+		const list = container.querySelector('[data-tour="sessions"]');
+		const first = list?.querySelector("[data-sidebar-bots], [data-workspace-group]");
+		expect(first?.getAttribute("data-sidebar-bots")).not.toBeNull();
 		// With no bot yet the section is one card that makes the first (Orca's SidebarBotsEmptyState).
 		const bots = container.querySelector("[data-sidebar-bots]");
 		expect(bots?.textContent).toContain("Your AI teammate");
 		expect([...(bots?.querySelectorAll("button") ?? [])].map(button => button.textContent)).toEqual(
 			expect.arrayContaining(["New bot", "Templates"]),
 		);
-		await fire(container.querySelector('[data-sidebar-nav-row="bots"]'), "onClick");
+		// Its title opens the Bots page; its chevron still folds it.
+		await fire(container.querySelector("[data-sidebar-bots-open]"), "onClick");
 		expect(useUiStore.getState().destination).toBe("bots");
+		await fire(container.querySelector("[data-sidebar-bots-toggle]"), "onClick");
+		expect(container.querySelector("[data-sidebar-bots-toggle]")?.getAttribute("aria-expanded")).toBe("false");
+		await fire(container.querySelector("[data-sidebar-bots-toggle]"), "onClick");
 		await act(async () => useBotsFeature.setState({ available: false }));
 		// The Agents shortcut is the cell's tooltip and aria-keyshortcuts: a half-width cell has no room for it.
 		expect(nav?.textContent).not.toContain("⌥A");
@@ -921,7 +929,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(rows[1]).toContain("Session /work/alpha/one");
 	});
 
-	it("keeps one header line, its search and the project folder button, with chats after the projects in one list", async () => {
+	it("keeps one header line, its search, the list's options and the project folder button, with chats after the projects in one list", async () => {
 		const omp = installMockOmp([
 			...LIST,
 			session("/work/chat-1.jsonl", "/work/chat-home", { kind: "chat", firstMessage: "chat one" }),
@@ -939,9 +947,13 @@ describe("Sidebar menus and pinned ordering", () => {
 			[...(headerRow()?.querySelectorAll("input, button") ?? [])].map(
 				element => element.getAttribute("aria-label") ?? "",
 			);
-		// No Code/Chat switch: one search over every session, then the project folder button.
+		// No Code/Chat switch: one search over every session, the list's options, then the project folder button.
 		expect(container.querySelector('[role="tablist"]')).toBeNull();
-		expect(rowControls()).toEqual([translate("sidebar.filter"), translate("sidebar.project.newFolder")]);
+		expect(rowControls()).toEqual([
+			translate("sidebar.filter"),
+			translate("sidebar.options.label"),
+			translate("sidebar.project.newFolder"),
+		]);
 		expect(headerRow()?.querySelector("input")?.getAttribute("placeholder")).toBe(
 			translate("sidebar.filterPlaceholder"),
 		);
@@ -1466,6 +1478,28 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(alpha()).toEqual(["/work/alpha/two.jsonl", "/work/alpha/one.jsonl"]);
 		await fire(rowFor("Session /work/alpha/one"), "onContextMenu");
 		expect(menuItem("Move up").getAttribute("aria-disabled") === "true").toBe(true);
+	});
+
+	it("sorts by the person's choice, and folds sleeping rows under a line that opens them", async () => {
+		installMockOmp(LIST);
+		seedStores();
+		useSidebarPrefs.setState({ hydrated: true, sessionSort: "recent" });
+		await mount(<Sidebar />);
+		const alpha = () =>
+			[...container.querySelectorAll("[data-session-path]")]
+				.map(element => (element as unknown as Element).getAttribute("data-session-path"))
+				.filter(path => path?.startsWith("/work/alpha/"));
+		// Newest activity first; the manual order put the older session first.
+		expect(alpha()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
+		const line = () => container.querySelector('[data-session-group="/work/alpha"] [data-sidebar-sleeping]');
+		expect(line()).toBeNull();
+
+		// Both rows did nothing for months and no tab uses them: they fold under the project's line.
+		await act(async () => useSidebarPrefs.setState({ hideSleeping: true }));
+		expect(line()?.getAttribute("data-sidebar-sleeping")).toBe("2");
+		expect(alpha()).toEqual([]);
+		await fire(line()?.querySelector("[data-sidebar-sleeping-toggle]") ?? null, "onClick");
+		expect(alpha()).toEqual(["/work/alpha/one.jsonl", "/work/alpha/two.jsonl"]);
 	});
 
 	it("dragging a session row onto another row of its list moves it there, and the order is kept", async () => {
@@ -2332,7 +2366,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(container.querySelector('[data-workspace-group="/work/beta"]')).not.toBeNull();
 	});
 
-	it("folds the projects deleted from this list at its end, and Show lists one again", async () => {
+	it("lists nothing of the projects deleted from this list (the owner removed their folded list, 27 Nov 2026)", async () => {
 		const omp = installMockOmp(LIST);
 		omp.sidebarProjects.lists.local = {
 			projects: [{ path: "/work/alpha", addedAt: 1 }],
@@ -2341,24 +2375,10 @@ describe("Sidebar menus and pinned ordering", () => {
 		};
 		seedStores();
 		await mount(<Sidebar />);
-		const section = () => container.querySelector('[data-sidebar-removed-projects="local"]');
-		expect(section()?.textContent).toContain("Deleted projects (2)");
-		expect(section()?.querySelector("[data-removed-project]")).toBeNull();
-
-		await fire(section()?.querySelector("button[aria-expanded]") as unknown as Element, "onClick");
-		// Newest removal first.
-		expect(
-			[...(section()?.querySelectorAll("[data-removed-project]") ?? [])].map(row =>
-				row.getAttribute("data-removed-project"),
-			),
-		).toEqual(["/work/beta", "/work/old"]);
-
-		await fire(
-			section()?.querySelector('[data-removed-project="/work/beta"] button') as unknown as Element,
-			"onClick",
-		);
-		expect(omp.sidebarProjects.command).toHaveBeenCalledWith({ action: "add", path: "/work/beta" }, undefined);
-		expect(section()?.textContent).toContain("Deleted projects (1)");
+		expect(container.querySelector('[data-workspace-group="/work/alpha"]')).not.toBeNull();
+		expect(container.querySelector('[data-workspace-group="/work/beta"]')).toBeNull();
+		expect(container.querySelector('[data-workspace-group="/work/old"]')).toBeNull();
+		expect(container.querySelector('[data-tour="sessions"]')?.textContent ?? "").not.toContain("Deleted projects");
 	});
 
 	it("lists a project with no session, and Delete takes it out without deleting anything unless asked to", async () => {

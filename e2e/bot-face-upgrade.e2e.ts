@@ -65,7 +65,7 @@ test("a legacy profile keeps its bot identities, template setup and original fil
 					.attach("legacy-face-reopened", { body: await page.screenshot(), contentType: "image/png" });
 			}
 			if (!restart) {
-				await page.locator('[data-sidebar-nav-row="bots"]').click();
+				await page.locator("[data-sidebar-bots-open]").click();
 				await page.getByRole("button", { name: "New bot", exact: true }).last().click();
 				await page.getByText("Browse templates", { exact: true }).last().click();
 				await page.locator("[data-bot-template-use]").click();
