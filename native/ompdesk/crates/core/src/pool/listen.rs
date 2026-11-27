@@ -536,7 +536,7 @@ impl Ctx {
             goal_before: bool,
         }
         let list = events.as_array().map(Vec::as_slice).unwrap_or_default();
-        let (seen, run_ended, retry_started, stepped, win) = self.with(|pool| {
+        let (seen, run_ended, retry_changed, stepped, win) = self.with(|pool| {
             let now = pool.now;
             let mut serial = pool.retry_serial;
             let Some(entry) = pool.entry_mut(tab) else {
@@ -552,9 +552,10 @@ impl Ctx {
                 goal_before: entry.tracking.goal_active,
             };
             let mut run_ended = false;
-            let mut retry_started = false;
+            let mut retry_changed = false;
             let mut stepped = false;
             let remote = entry.device.is_some();
+            let was_blocked = entry.tracking.retry_blocked;
             for event in list {
                 if entry.tracking.track(event, now, &mut serial, remote) {
                     run_ended = true;
@@ -566,7 +567,7 @@ impl Ctx {
                         entry.opening = Opening::First;
                     }
                     Some("tool_execution_start" | "tool_execution_end") => stepped = true,
-                    Some("auto_retry_start") => retry_started = true,
+                    Some("auto_retry_start") => retry_changed = true,
                     Some("message_end") => {
                         note_run_message(entry, &event["message"]);
                         // Stock writes a new session's file with its first assistant message: until then the prompt
@@ -589,9 +590,10 @@ impl Ctx {
                     _ => {}
                 }
             }
+            retry_changed |= was_blocked != entry.tracking.retry_blocked;
             let win = entry.win_id;
             pool.retry_serial = serial;
-            (Some(seen), run_ended, retry_started, stepped, win)
+            (Some(seen), run_ended, retry_changed, stepped, win)
         });
         let Some(seen) = seen else {
             return Ok(());
@@ -613,7 +615,7 @@ impl Ctx {
         // it never shows (or notifies) as a failure first. A goal turning active or not changes the tab's marker.
         if busy_changed
             || run_ended
-            || retry_started
+            || retry_changed
             || unsaved != seen.unsaved_before
             || goal != seen.goal_before
         {

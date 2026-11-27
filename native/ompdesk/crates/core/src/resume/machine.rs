@@ -928,6 +928,17 @@ impl Inst {
         {
             self.drop_wait(&tab, true);
         }
+        // A failed assistant message can arrive before stock announces its retry or after we held it.
+        if fact.blocks_retry() {
+            let st = self.st.borrow();
+            let held = st.waiting.contains(&tab) || st.probing.contains(&tab);
+            drop(st);
+            if held {
+                self.drop_wait(&tab, true);
+            }
+            self.st.borrow_mut().attempts.remove(&tab);
+            return;
+        }
         self.take_over_retry(fact);
         // The outcome is the run's final one (main sets it at the last end event), even while background work keeps
         // the session unsettled: judging it now puts the wait on screen before the renderer sees the failure.
@@ -945,7 +956,7 @@ impl Inst {
         if fact.awaiting_connection {
             return;
         }
-        if outcome.stop_reason != "error" || outcome.retry_blocked {
+        if outcome.stop_reason != "error" {
             self.st.borrow_mut().attempts.remove(&tab);
             return;
         }
@@ -1250,6 +1261,12 @@ impl Inst {
         let env = self.settled(&ctx.tab, &["fact"]).await?;
         Ok(self.stretch(env, |me| {
             let fact = me.fact_for(&ctx.tab);
+            if ctx.action == Action::Retry && fact.as_ref().is_some_and(Fact::blocks_retry) {
+                if !me.called_off(ctx) {
+                    me.bump_cancel(&ctx.tab);
+                }
+                return true;
+            }
             match me.ends("continuing", &ctx.since, fact.as_ref()) {
                 Some("moved") => me.drop_wait(&ctx.tab, false),
                 Some("personsPrompt") => ctx.person_took_over.set(true),

@@ -113,6 +113,8 @@ export interface ResumeFact {
 	/** The tab waits for the connection to continue. */
 	awaitingConnection: boolean;
 	lastRun?: IpcTabRunOutcome;
+	/** A failed assistant message already vetoes replay, before stock finishes its retry saga. */
+	retryBlocked?: boolean;
 	/** Stock's auto-retry saga waiting for its next attempt (one object per `auto_retry_start`), with the failure it retries. */
 	retry?: { errorMessage: string };
 	/**

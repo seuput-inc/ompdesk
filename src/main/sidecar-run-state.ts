@@ -202,12 +202,17 @@ export function trackRunEvent(tab: RunTracking, event: AgentSessionEvent): boole
 		tab.stopped = false;
 		tab.retry = undefined;
 		delete tab.retryBlocked;
+	} else if (event.type === "message_end" && event.message.role === "assistant" && claudeRetryBlocked(event.message)) {
+		tab.retryBlocked = true;
 	} else if (event.type === "auto_retry_start") {
 		// News for the resume rules: offline, the wait takes stock's retry over (turn-resume.ts).
 		tab.retry = { errorMessage: event.errorMessage };
 	} else if (event.type === "agent_end") {
-		if (ended && event.isTerminal !== false) tab.lastRun = runOutcome(event.messages);
-		else if (tab.run.saga) {
+		if (ended && event.isTerminal !== false) {
+			tab.lastRun = runOutcome(event.messages);
+			if (tab.retryBlocked && tab.lastRun.stopReason === "error") tab.lastRun.retryBlocked = true;
+			delete tab.retryBlocked;
+		} else if (tab.run.saga) {
 			const last = event.messages?.findLast(message => message.role === "assistant");
 			if (last && claudeRetryBlocked(last)) tab.retryBlocked = true;
 		}
@@ -219,8 +224,8 @@ export function trackRunEvent(tab: RunTracking, event: AgentSessionEvent): boole
 				errorMessage: event.finalError,
 				...(tab.retryBlocked && { retryBlocked: true }),
 			};
+			delete tab.retryBlocked;
 		}
-		delete tab.retryBlocked;
 	}
 	return ended;
 }

@@ -44,6 +44,22 @@ describe("a Claude API failure before automatic recovery", () => {
 			expect(claudeRetryBlocked({ ...failed, errorMessage: "connection reset" })).toBe(true);
 		},
 	);
+	it.each([false, true])("keeps partial evidence when stock announces its retry first: %s", retryFirst => {
+		const tab: RunTracking = { run: idleRun() };
+		const partial: AgentSessionEvent = {
+			type: "message_end",
+			message: { role: "assistant", api: "anthropic-messages", stopReason: "error", content: "partial" },
+		};
+		trackRunEvent(tab, { type: "agent_start" });
+		for (const event of retryFirst ? [START, partial] : [partial, START]) trackRunEvent(tab, event);
+		expect(tab.retryBlocked).toBe(true);
+		trackRunEvent(tab, { type: "auto_retry_end", success: false, attempt: 1 });
+		trackRunEvent(tab, { type: "agent_end", messages: [{ role: "assistant", stopReason: "error" }] });
+		expect(tab.lastRun?.retryBlocked).toBe(true);
+		trackRunEvent(tab, { type: "agent_start" });
+		expect(tab.retryBlocked).toBeUndefined();
+		expect(tab.lastRun).toBeUndefined();
+	});
 	it("keeps the replay block when stock coalesces a partial reply into its retry saga’s final error", () => {
 		const tab: RunTracking = { run: idleRun() };
 		trackRunEvent(tab, { type: "agent_start" });
