@@ -1879,8 +1879,10 @@ async fn the_owners_create_carries_the_purpose_and_a_refused_seed_makes_no_bot()
         !root.0.join("bad").exists(),
         "the folder it made goes with it"
     );
+    let old_picture = root.0.join("rex/picture.png");
+    std::fs::write(&old_picture, b"owner's file").unwrap();
     let state = control
-        .bots_command(json!({ "action": "update", "id": rex["id"], "quiet": ["done", "nonsense"] }))
+        .bots_command(json!({ "action": "update", "id": rex["id"], "picture": null, "quiet": ["done", "nonsense"] }))
         .await
         .unwrap();
     let rex = state["bots"]
@@ -1890,6 +1892,8 @@ async fn the_owners_create_carries_the_purpose_and_a_refused_seed_makes_no_bot()
         .find(|bot| bot["name"] == "Rex")
         .unwrap();
     assert_eq!(rex["quiet"], json!(["done"]));
+    assert!(rex.get("picture").is_none());
+    assert_eq!(std::fs::read(&old_picture).unwrap(), b"owner's file");
     let soul = control
         .bots_command(json!({ "action": "file", "id": rex["id"], "file": "SOUL.md" }))
         .await
@@ -2159,13 +2163,6 @@ async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_onc
     let root = Scratch::new();
     let mails = Mails::default();
     let (host, host_asked, ada_id) = ada(9_790, &root, mails.clone(), |_, _| None).await;
-    let old_picture = root.0.join("ada/picture.png");
-    std::fs::write(&old_picture, b"owner's file").unwrap();
-    host.bots_command(json!({"action":"update", "id":ada_id, "picture":null}))
-        .await
-        .unwrap();
-    assert_eq!(std::fs::read(&old_picture).unwrap(), b"owner's file");
-    assert!(host.bots_state()["bots"][0].get("picture").is_none());
     let tool = |args: Value| host.run("bot1", "ompdesk_item", args, None);
     assert!(
         !tool(json!({ "action": "add", "title": "Pick a day" }))
