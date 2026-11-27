@@ -162,7 +162,9 @@ impl OwedDeps for Owed<'_> {
         // a goal's objective or the prompt. A step the child refuses keeps it queued and tells the opener once.
         let mut steps: Vec<Value> = entry.before.clone();
         if entry.goal {
-            steps.push(json!({ "type": "set_goal", "objective": entry.body, "message": entry.message }));
+            steps.push(
+                json!({ "type": "set_goal", "objective": entry.body, "message": entry.message }),
+            );
         }
         for command in &steps {
             let deadline = Deadline::Ms(self.ctl.tuning.prompt_ms);

@@ -395,10 +395,14 @@ async fn route_ask_call(call: Call) -> Result<Reply, Fault> {
     let chat = match tokio::time::timeout(
         std::time::Duration::from_secs(30),
         control.route_ask(&params.tab_id, &params.request_id, &params.origin),
-    ).await {
+    )
+    .await
+    {
         Ok(chat) => chat,
         Err(_) => {
-            control.routed_ask_closed(&params.tab_id, &params.request_id, None).await;
+            control
+                .routed_ask_closed(&params.tab_id, &params.request_id, None)
+                .await;
             None
         }
     };

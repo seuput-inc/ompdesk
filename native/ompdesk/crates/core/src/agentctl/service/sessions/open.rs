@@ -596,7 +596,10 @@ impl AgentControl {
                     &caller.title,
                     saved_id_of_path(caller.session_path.as_deref()).as_deref(),
                 );
-                return (None, json!({ "type": "set_goal", "objective": message, "message": prompt }));
+                return (
+                    None,
+                    json!({ "type": "set_goal", "objective": message, "message": prompt }),
+                );
             }
             let dispatch = self.mailbox.dispatch(tab_id);
             let command = json!({

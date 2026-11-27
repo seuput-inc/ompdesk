@@ -1764,13 +1764,20 @@ impl Ctx {
                 };
                 let mut frame = frame.clone();
                 frame["id"] = json!(source);
-                let sent = self.ask("sideChannel", json!({"tab": worker, "frame": frame})).await;
+                let sent = self
+                    .ask("sideChannel", json!({"tab": worker, "frame": frame}))
+                    .await;
                 self.with(|pool| pool.answering.remove(source));
                 sent?;
-                return self.route_answered(seq, source, &frame, None, false, "submitted").await;
+                return self
+                    .route_answered(seq, source, &frame, None, false, "submitted")
+                    .await;
             }
             if self.with(|pool| pool.routed.contains_key(id)) {
-                return Err(fault("being_answered", "This question is held by its routing bot"));
+                return Err(fault(
+                    "being_answered",
+                    "This question is held by its routing bot",
+                ));
             }
         }
         // A question an agent's answer holds takes no answer from a device viewing the tab either.

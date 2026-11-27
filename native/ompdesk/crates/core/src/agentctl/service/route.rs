@@ -143,12 +143,22 @@ impl AgentControl {
             card_text(&ask.request)
         };
         self.host.reach(&chat).await.ok()?;
-        let chat_tab = self.host.wait_for(Some(self.tuning.send_ready_wait_ms), |state| {
-            let tab = state.tabs.iter().find(|tab| tab.device.is_none() && tab.session_path.as_deref() == Some(chat.as_str()))?;
-            tab.status.is_up().then(|| tab.tab_id.clone())
-        }).await?;
+        let chat_tab = self
+            .host
+            .wait_for(Some(self.tuning.send_ready_wait_ms), |state| {
+                let tab = state.tabs.iter().find(|tab| {
+                    tab.device.is_none() && tab.session_path.as_deref() == Some(chat.as_str())
+                })?;
+                tab.status.is_up().then(|| tab.tab_id.clone())
+            })
+            .await?;
         if self.bots().find(&bot.id).is_none_or(|bot| bot.paused)
-            || !self.host.state().tabs.iter().any(|tab| tab.tab_id == tab_id && tab.asks.iter().any(|ask| ask.id == request_id))
+            || !self
+                .host
+                .state()
+                .tabs
+                .iter()
+                .any(|tab| tab.tab_id == tab_id && tab.asks.iter().any(|ask| ask.id == request_id))
         {
             return None;
         }
@@ -187,7 +197,17 @@ impl AgentControl {
                 },
             );
         // A question cannot be queued for later: either the live chat takes it, or the owner gets it.
-        if self.host.send_mail(&chat_tab, &mail_text(&mail), &mail_details(&mail), delivery_for(mail.kind)).await.is_err() {
+        if self
+            .host
+            .send_mail(
+                &chat_tab,
+                &mail_text(&mail),
+                &mail_details(&mail),
+                delivery_for(mail.kind),
+            )
+            .await
+            .is_err()
+        {
             if let Some(routes) = self.mem().routes.get_mut(tab_id) {
                 routes.remove(request_id);
             }
@@ -249,7 +269,11 @@ impl AgentControl {
             .filter(|_| caller.device.is_none())
             .and_then(|path| self.bots().of_session(path).map(|bot| bot.id.clone()));
         let mem = self.mem();
-        let Some(routes) = mem.routes.get(&target.tab_id).filter(|routes| !routes.is_empty()) else {
+        let Some(routes) = mem
+            .routes
+            .get(&target.tab_id)
+            .filter(|routes| !routes.is_empty())
+        else {
             if args.escalate == Some(true) {
                 return fail(format!(
                     "{} raised no card for your request: there is nothing to pass on.",
@@ -268,7 +292,8 @@ impl AgentControl {
         if !mine {
             if let Some(route) = named.filter(|route| !route.closed) {
                 return fail(format!(
-                    "That card was raised for the bot {}'s request: only that bot answers it (or the owner, once it passes it on).", route.bot
+                    "That card was raised for the bot {}'s request: only that bot answers it (or the owner, once it passes it on).",
+                    route.bot
                 ));
             }
             if args.escalate == Some(true) {

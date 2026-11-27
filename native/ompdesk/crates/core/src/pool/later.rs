@@ -120,7 +120,10 @@ impl Ctx {
     ) -> R<()> {
         // A paired computer forwards the displayed id unchanged; only its host resolves the proxy.
         let proxy = id.strip_prefix(ESCALATED_PREFIX).filter(|_| {
-            !self.with(|pool| tab.and_then(|tab| pool.entry(tab)).is_some_and(|entry| entry.device.is_some()))
+            !self.with(|pool| {
+                tab.and_then(|tab| pool.entry(tab))
+                    .is_some_and(|entry| entry.device.is_some())
+            })
         });
         let id = proxy.unwrap_or(id);
         // An agent's answer holds this question while its attachments go in: only the holder's answer passes.
@@ -140,18 +143,24 @@ impl Ctx {
                     return Begin::Unknown;
                 };
                 if tab != Some(chat.as_str())
-                    || !responder.is_some_and(|win| pool.entry(chat).is_some_and(|entry| entry.shown_in(win)))
+                    || !responder.is_some_and(|win| {
+                        pool.entry(chat).is_some_and(|entry| entry.shown_in(win))
+                    })
                     || !pool.request_owners.contains(&id.to_string())
                 {
                     return Begin::Unknown;
                 }
             } else if routed.is_some()
-                && (responder.is_some() || matches!(routed, Some(super::state::Routed::Escalated(_))))
+                && (responder.is_some()
+                    || matches!(routed, Some(super::state::Routed::Escalated(_))))
             {
                 return Begin::Unknown;
             }
-            if routed.is_some() && proxy.is_none()
-                && !tab.and_then(|tab| pool.entry(tab)).is_some_and(|entry| pool.request_owners.get(&id.to_owned()) == Some(&entry.seq))
+            if routed.is_some()
+                && proxy.is_none()
+                && !tab.and_then(|tab| pool.entry(tab)).is_some_and(|entry| {
+                    pool.request_owners.get(&id.to_owned()) == Some(&entry.seq)
+                })
             {
                 return Begin::Unknown;
             }

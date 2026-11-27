@@ -910,7 +910,11 @@ async fn a_bot_s_question_waits_off_the_owner_s_windows_and_shows_in_its_chat_on
     let mut main = Main::start(opts()).await;
     main.acquire("work", 1, None, false).await;
     main.acquire("chat", 2, None, false).await;
-    main.call("delegatedPrompt", json!({"tab": "work", "text": bot_run()[1]["message"]["text"]})).await;
+    main.call(
+        "delegatedPrompt",
+        json!({"tab": "work", "text": bot_run()[1]["message"]["text"]}),
+    )
+    .await;
     main.call(
         "feed",
         json!({"tab": "work", "event": "events", "payload": bot_run()}),
@@ -965,11 +969,7 @@ async fn a_bot_s_question_waits_off_the_owner_s_windows_and_shows_in_its_chat_on
     );
     // The owner answers it there: the answer goes to the tab that asked, once.
     let answer = json!({"token": 1, "id": shown_request["id"], "tab": "chat", "frame": {"type": "extension_ui_response", "id": shown_request["id"], "data": {}}, "responder": 2, "choice": "sent"});
-    main.call(
-        "routeSideChannel",
-        answer.clone(),
-    )
-    .await;
+    main.call("routeSideChannel", answer.clone()).await;
     for _ in 0..10 {
         main.call("size", json!({})).await;
     }
@@ -997,7 +997,11 @@ async fn the_owner_s_own_run_and_a_bot_message_that_only_joined_it_keep_today_s_
     // The owner's own prompt started the run; a bot's message steered in later changes nothing.
     let run = bot_run();
     let steer = &run[1];
-    main.call("delegatedPrompt", json!({"tab": "work", "text": steer["message"]["text"]})).await;
+    main.call(
+        "delegatedPrompt",
+        json!({"tab": "work", "text": steer["message"]["text"]}),
+    )
+    .await;
     main.call(
         "feed",
         json!({"tab": "work", "event": "events", "payload": [
@@ -1016,11 +1020,20 @@ async fn the_owner_s_own_run_and_a_bot_message_that_only_joined_it_keep_today_s_
     assert!(activities(&main, "askHeld").is_empty());
     // A run the bot's message started, whose question the core leaves with the owner: shown then, and announced.
     // Replaying the wrapped text after that steer was consumed does not authorize a new turn.
-    main.call("feed", json!({"tab": "work", "event": "events", "payload": run})).await;
-    let copied = json!({"type": "extension_ui_request", "id": "copy", "method": "ask", "questions": []});
+    main.call(
+        "feed",
+        json!({"tab": "work", "event": "events", "payload": run}),
+    )
+    .await;
+    let copied =
+        json!({"type": "extension_ui_request", "id": "copy", "method": "ask", "questions": []});
     main.call("feed", ask_feed("work", &copied)).await;
     assert!(activities(&main, "askHeld").is_empty());
-    main.call("delegatedPrompt", json!({"tab": "work", "text": steer["message"]["text"]})).await;
+    main.call(
+        "delegatedPrompt",
+        json!({"tab": "work", "text": steer["message"]["text"]}),
+    )
+    .await;
     main.call(
         "feed",
         json!({"tab": "work", "event": "events", "payload": bot_run()}),
