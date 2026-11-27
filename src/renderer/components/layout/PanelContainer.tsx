@@ -1,6 +1,7 @@
 import {
 	Bot,
 	Files,
+	GitBranch,
 	GitCompareArrows,
 	Globe,
 	House,
@@ -78,7 +79,7 @@ function initialPanelWidth(): number {
 const PROJECT_VIEWS = [
 	{ id: "files", labelKey: "panel.inspector.explorer", icon: Files },
 	{ id: "agents", labelKey: "agents.title", icon: PanelsTopLeft },
-	{ id: "diff", labelKey: "panel.inspector.sourceControl", icon: GitCompareArrows },
+	{ id: "diff", labelKey: "panel.inspector.sourceControl", icon: GitBranch },
 	{ id: "checks", labelKey: "chat.work.copy.checks", icon: ListChecks },
 ] satisfies { id: InspectorTab; labelKey: string; icon: typeof Files }[];
 const BOT_VIEWS = [

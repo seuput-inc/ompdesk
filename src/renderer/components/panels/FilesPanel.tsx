@@ -868,7 +868,7 @@ export function FilesPanel() {
 	return (
 		<div className="omp-explorer flex h-full min-h-0 min-w-0 flex-col">
 			<PanelToolbar className="min-h-(--sc-control-md) gap-1 px-2 py-0.5">
-				<span className="min-w-0 flex-1 truncate text-sc-sm font-medium" title={cwd}>
+				<span className="min-w-0 flex-1 truncate text-sc-xs leading-4 font-medium" title={cwd}>
 					{basename(cwd)}
 				</span>
 				{fileCount > 0 && (

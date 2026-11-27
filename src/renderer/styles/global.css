@@ -405,10 +405,30 @@ html:not([data-input="touch"]) .omp-inspector [data-panel-views]:not([data-bot-v
 	height: var(--sc-topbar-h);
 }
 
+.omp-inspector [data-panel-views]:not([data-bot-views]) > button[aria-pressed="true"] {
+	box-shadow: none;
+	background: linear-gradient(var(--sc-text), var(--sc-text)) center bottom / 50% 2px no-repeat;
+}
+
+.omp-inspector [data-panel-views]:not([data-bot-views]) > button > svg {
+	width: var(--sc-icon-md);
+	height: var(--sc-icon-md);
+}
+
+.omp-inspector [data-bot-views] {
+	gap: var(--sc-space-0-5);
+}
+
 .omp-inspector [data-bot-views] > button {
 	padding-inline: var(--sc-space-2);
 	font-size: var(--sc-font-xs);
-	font-weight: 400;
+	font-weight: var(--sc-weight-medium);
+	line-height: 1.333333;
+}
+
+html:not([data-input="touch"]) .omp-inspector [data-bot-views] > button:not([aria-pressed="true"]) {
+	width: var(--sc-control-sm);
+	padding-inline: 0;
 }
 
 .omp-inspector [data-bot-views] > button[aria-pressed="true"] {
@@ -425,7 +445,8 @@ html:not([data-input="touch"]) .omp-inspector [data-panel-views]:not([data-bot-v
 
 .omp-inspector .omp-explorer [data-files-search-mode] {
 	font-size: var(--sc-font-xs);
-	font-weight: 400;
+	font-weight: var(--sc-weight-medium);
+	line-height: 1.333333;
 }
 
 html:not([data-input="touch"]) .omp-inspector .omp-explorer [data-files-search-mode] {
@@ -448,8 +469,8 @@ html:not([data-input="touch"]) .omp-inspector .omp-explorer [data-files-search-m
 	color: var(--sc-text-muted);
 }
 
-.omp-inspector [data-inspector-bot] > [data-empty-state] {
-	min-height: 13.5rem;
+.omp-inspector [data-inspector-bot] > [data-empty-state] > div {
+	gap: var(--sc-space-2);
 }
 
 .omp-inspector [data-inspector-bot] > [data-empty-state] > div > div {
@@ -457,8 +478,8 @@ html:not([data-input="touch"]) .omp-inspector .omp-explorer [data-files-search-m
 	font-weight: 500;
 }
 
-.omp-inspector [data-inspector-bot] > [data-empty-state] p,
-.omp-inspector [data-inspector-bot] [data-bot-automations] button {
+.omp-inspector [data-inspector-bot] > [data-empty-state] p {
+	line-height: 1.333333;
 	font-size: var(--sc-font-xs);
 	font-weight: 400;
 }

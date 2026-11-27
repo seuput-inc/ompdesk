@@ -50,7 +50,7 @@ test("project and bot conversations keep their own inspector on reopen and on re
 			expect(geometry.dpr).toBe(1);
 			const dir = path.join("test-results", "chat-inspector");
 			await fs.mkdir(dir, { recursive: true });
-			await fs.writeFile(path.join(dir, `${name}.json`), JSON.stringify(geometry));
+			await fs.writeFile(path.join(dir, `${name}.json`), JSON.stringify({ ...geometry, fonts }));
 			await page.screenshot({ path: path.join(dir, `${name}.png`), animations: "disabled", scale: "css" });
 		};
 		await expect.poll(async () => path.normalize((await active())?.cwd ?? "")).toBe(path.normalize(profile.project));

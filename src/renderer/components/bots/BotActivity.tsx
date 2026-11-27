@@ -33,7 +33,7 @@ import {
 	Play,
 	Plus,
 	RotateCcw,
-	Settings2,
+	Settings,
 	Trash2,
 	X,
 } from "lucide-react";
@@ -115,22 +115,22 @@ export function BotInspectorHome({ bot }: { bot: Bot }) {
 	const facts = useBotFacts(selected).get(bot.id);
 	const mark = bot.paused ? "paused" : facts?.needsYou ? "needsYou" : facts?.failed ? "failed" : null;
 	return (
-		<div className="flex min-w-0 flex-col gap-4 overflow-auto px-5 py-4" data-inspector-bot={bot.id}>
-			<header className="flex items-center gap-2">
+		<div className="flex min-w-0 flex-col gap-3.5 overflow-auto py-3 pr-2 pl-3.5" data-inspector-bot={bot.id}>
+			<header className="flex items-center gap-1.5 px-2 py-1">
 				<BotAvatar bot={bot} mark={mark} size={36} working={facts?.working} />
 				<div className="min-w-0 flex-1">
-					<div className="truncate text-sc-sm font-medium">{bot.name}</div>
+					<div className="truncate text-sc-md leading-5 font-semibold">{bot.name}</div>
 					<BotLineText
 						bot={bot}
-						className="text-sc-xs text-(--sc-text-muted)"
+						className="text-sc-xs leading-4 text-(--sc-text-muted)"
 						line={facts?.line ?? { kind: "idle" }}
 					/>
 				</div>
 				<IconButton
-					icon={<Settings2 />}
+					icon={<Settings />}
 					label={t("bots.menu.settings")}
 					onClick={() => openBotPage(bot.id, "settings")}
-					size="sm"
+					size="md"
 				/>
 				<BotActionsMenu bot={bot} />
 			</header>
@@ -146,7 +146,7 @@ export function BotInspectorHome({ bot }: { bot: Bot }) {
 				</ul>
 			) : (
 				<EmptyState
-					className="min-h-52 gap-2 px-1 py-6 [&>span]:size-5 [&>span]:bg-transparent"
+					className="mt-3.5 gap-2 px-6 py-12 [&>span]:size-5 [&>span]:bg-transparent [&>span>svg]:size-5"
 					size="sm"
 					description={t("panel.inspector.emptyItems", { name: bot.name })}
 					icon={<ListChecks />}
@@ -547,12 +547,13 @@ function Automations({ bot, inspector = false }: { bot: Bot; inspector?: boolean
 	return (
 		<Section
 			aria-label={t("bots.automations.title")}
-			className="flex flex-col gap-1"
+			className={inspector ? "group/automation" : "flex flex-col gap-1"}
 			data-bot-automations
 			open={inspector || undefined}
 		>
 			{inspector ? (
-				<summary className="cursor-pointer text-sc-xs font-medium text-(--sc-text-muted)">
+				<summary className="flex min-h-7 cursor-pointer list-none items-center gap-2 rounded-md px-2 text-sc-xs leading-4 font-semibold text-(--sc-text-muted)">
+					<ChevronRight aria-hidden className="size-3.5 group-open/automation:rotate-90" />
 					{t("bots.automations.title")}
 				</summary>
 			) : (
@@ -576,7 +577,7 @@ function Automations({ bot, inspector = false }: { bot: Bot; inspector?: boolean
 					.map(kind => (
 						<Button
 							key={kind}
-							className="justify-start"
+							className="w-full justify-start gap-2 border-0 px-2 text-sc-sm leading-5 font-normal"
 							icon={kind === "tidy" ? <Moon /> : <Eye />}
 							onClick={() => openBotPage(bot.id, "settings")}
 							size="sm"
@@ -652,7 +653,7 @@ function Automations({ bot, inspector = false }: { bot: Bot; inspector?: boolean
 			)}
 			{inspector && (
 				<Button
-					className="min-h-fit w-full justify-start py-1 text-left text-(--sc-text-muted)"
+					className="h-auto w-full justify-start py-1 pr-2 pl-8 text-left text-(--sc-text-muted)"
 					onClick={() =>
 						void openBotChat(bot, bot.home, t("bots.automations.draft")).catch(error =>
 							toastError({ title: t("bots.automations.failed"), error }),
@@ -661,7 +662,7 @@ function Automations({ bot, inspector = false }: { bot: Bot; inspector?: boolean
 					size="sm"
 					variant="ghost"
 				>
-					<span className="min-w-0 whitespace-normal text-sc-xs font-normal">
+					<span className="min-w-0 whitespace-normal text-sc-xs leading-4 font-normal">
 						{t("bots.automations.ask", { name: bot.name })}
 					</span>
 				</Button>
