@@ -22,7 +22,6 @@ pub const EXIT_NOT_STARTED: i32 = 127;
 
 pub const HELP: &str = concat!(
     "  run       `run --heavy [--all] [--] CMD [ARG...]`: run CMD under this computer's heavy limit (all slots with --all).\n",
-    "            Add --fresh-admission for a separate operation that must take its own lease.\n",
     "            For unknown writes, set OMPDESK_WRITE_BYTES to a JSON object mapping absolute output paths to incremental bytes.\n",
     "  heavy     `heavy limit off|auto` disables or restores this computer's slot and free-space checks before work starts.\n",
     "            `heavy status [--json]` shows the limit, slots and queue. `heavy hold [--all]` holds slots until stdin closes\n",
@@ -278,13 +277,11 @@ fn held_by_ancestor() -> bool {
 
 fn run(rest: &[String]) -> i32 {
     let mut heavy = false;
-    let mut fresh = false;
     let mut all = false;
     let mut at = 0;
     while at < rest.len() {
         match rest[at].as_str() {
             "--heavy" => heavy = true,
-            "--fresh-admission" => fresh = true,
             "--all" => all = true,
             "--" => {
                 at += 1;
@@ -303,8 +300,7 @@ fn run(rest: &[String]) -> i32 {
         return usage("run --heavy needs a command");
     }
     let line = command.join(" ");
-    // A managed install starts after checkout admission ended; never reuse the invoking session's lease.
-    let lease = if !fresh && held_by_ancestor() {
+    let lease = if held_by_ancestor() {
         None
     } else {
         match take(if all { 0 } else { 1 }, command, &line) {
