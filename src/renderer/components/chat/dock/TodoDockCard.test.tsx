@@ -420,7 +420,8 @@ describe("TodoDockCard", () => {
 		const progress = () => container.querySelector('[role="progressbar"]');
 		for (const label of ["Collapse", "Expand"]) {
 			await act(async () => container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)?.click());
-			expect(progress()?.getAttribute("aria-valuenow")).toBe("40");
+			expect(progress()?.getAttribute("aria-valuemax")).toBe("1");
+			expect(progress()?.getAttribute("aria-valuenow")).toBe("0.4");
 			expect(progress()?.getAttribute("aria-valuetext")).toBe("4/10");
 		}
 		const other = ensureTabRuntime("other-plan");
@@ -442,7 +443,7 @@ describe("TodoDockCard", () => {
 					</I18nProvider>,
 				),
 			);
-			expect(progress()?.getAttribute("aria-valuenow")).toBe("40");
+			expect(progress()?.getAttribute("aria-valuenow")).toBe("0.4");
 		} finally {
 			deleteSessionRuntime("other-plan");
 		}

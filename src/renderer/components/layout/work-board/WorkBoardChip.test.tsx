@@ -32,6 +32,8 @@ Object.assign(globalThis as Record<string, unknown>, {
 	Event,
 	HTMLElement,
 	Node,
+	requestAnimationFrame: (callback: () => void) => setTimeout(callback, 0),
+	cancelAnimationFrame: clearTimeout,
 	IS_REACT_ACT_ENVIRONMENT: true,
 });
 const getJobs = vi.fn(async () => ({ type: "response", command: "get_jobs", success: true, data: { rows: [] } }));
