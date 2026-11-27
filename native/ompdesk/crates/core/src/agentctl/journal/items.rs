@@ -145,15 +145,38 @@ pub struct ItemEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OpenRequest {
+    pub id: String,
+    pub fingerprint: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemWork {
     pub generation: u64,
     pub requested_by: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<OpenRequest>,
     pub effect_key: String,
     /// Receipt for the open effect, not the holder address. Written before main creates a worktree or tab.
     pub accepted_tab: Option<String>,
     /// None while the reserved open has not bound its new saved session.
     pub session: Option<String>,
+}
+
+impl ItemWork {
+    pub fn receipt(&self, item: &str) -> String {
+        match &self.session {
+            Some(path) => format!(
+                "Item {item} generation {} held on this computer: {path}.",
+                self.generation
+            ),
+            None => format!(
+                "Item {item} generation {} reserved by {} on this computer.",
+                self.generation, self.requested_by
+            ),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

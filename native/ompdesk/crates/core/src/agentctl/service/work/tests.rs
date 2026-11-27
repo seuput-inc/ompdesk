@@ -2105,6 +2105,7 @@ async fn managed_item_open_recovers_only_a_tab_accepted_by_the_assigner() {
     let reservation = ItemWork {
         generation: 1,
         effect_key: "accepted-effect".into(),
+        request: None,
         requested_by: "/s/bot.jsonl".into(),
         accepted_tab: Some("before-restart".into()),
         session: None,
@@ -2271,9 +2272,13 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
             .any(|(method, args)| method == "spawn" || args["command"]["type"] == "prompt")
     );
 
+    let call = super::super::CallId {
+        id: "same-call".into(),
+        resent: false,
+    };
     let (a, b) = tokio::join!(
-        control.run("bot1", tool, open.clone(), None),
-        control.run("bot1", tool, open.clone(), None)
+        control.run("bot1", tool, open.clone(), Some(call.clone())),
+        control.run("bot1", tool, open.clone(), Some(call.clone()))
     );
     assert!(!a.is_error && !b.is_error, "{} / {}", a.text, b.text);
     for receipt in [&a.text, &b.text] {
@@ -2286,8 +2291,27 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
             "{receipt}"
         );
     }
-    let retry = control.run("bot1", tool, open, None).await;
-    assert!(retry.text.contains("/s/work.jsonl"), "{}", retry.text);
+    let mut changed = open.clone();
+    changed["message"] = json!("different work");
+    let refused = control.run("bot1", tool, changed, Some(call.clone())).await;
+    assert!(
+        refused.is_error && refused.text.contains("different input"),
+        "{}",
+        refused.text
+    );
+    let retry = control
+        .run(
+            "bot1",
+            tool,
+            open,
+            Some(super::super::CallId {
+                resent: true,
+                ..call
+            }),
+        )
+        .await;
+    assert_eq!(retry.text, a.text);
+    assert_eq!(retry.text, b.text);
     let claim = json!({"action":"claim","item":id,"generation":1});
     let confirm = control
         .run("work1", "ompdesk_item", claim.clone(), None)

@@ -473,6 +473,9 @@ impl AgentControl {
             if device.as_ref().is_some_and(Option::is_some) {
                 return fail("This worker host has not confirmed item fencing support.");
             }
+            let request = crate::agentctl::service::ITEM_OPEN_REQUEST
+                .try_with(Clone::clone)
+                .ok();
             let reserved = {
                 let mut store = self.items();
                 let item = store
@@ -481,8 +484,33 @@ impl AgentControl {
                     .ok_or_else(|| {
                         Fail::Tool("No open item with that address on this board.".into())
                     })?;
-                if item.work.is_some() {
-                    None
+                if let Some(work) = &item.work {
+                    let retry = request.as_ref().zip(work.request.as_ref()).filter(
+                        |((incoming, _), saved)| {
+                            sender == work.requested_by && incoming.id == saved.id
+                        },
+                    );
+                    if let Some(((incoming, _), saved)) = retry
+                        && incoming.fingerprint != saved.fingerprint
+                    {
+                        return fail(
+                            "This item open request was already used with different input.",
+                        );
+                    }
+                    if retry.is_some()
+                        && work.accepted_tab.is_none()
+                        && !self.mem().item_opens.contains_key(id)
+                    {
+                        Some(ItemOpen {
+                            item: id.clone(),
+                            generation: work.generation,
+                            effect_key: work.effect_key.clone(),
+                        })
+                    } else {
+                        None
+                    }
+                } else if request.as_ref().is_some_and(|(_, resent)| *resent) {
+                    return fail("No durable item reservation matches this resent open.");
                 } else {
                     let mut random = [0; 16];
                     crate::sys::random(&mut random).map_err(|e| Fail::other(e.to_string()))?;
@@ -499,6 +527,7 @@ impl AgentControl {
                                 effect_key: effect.effect_key.clone(),
                                 accepted_tab: None,
                                 requested_by: sender.to_owned(),
+                                request: request.map(|(key, _)| key),
                                 session: None,
                             },
                         )
@@ -541,16 +570,7 @@ impl AgentControl {
                     }
                 }
                 return Ok(OpenResult {
-                    held: Some(format!(
-                        "Item {id} generation {} {} on this computer: {}.",
-                        work.generation,
-                        if work.session.is_some() {
-                            "held"
-                        } else {
-                            "reserved by"
-                        },
-                        work.session.as_deref().unwrap_or(&work.requested_by)
-                    )),
+                    held: Some(work.receipt(id)),
                     ..Default::default()
                 });
             };
@@ -873,6 +893,7 @@ impl AgentControl {
                 ..Default::default()
             });
         }
+        let mut receipt = None;
         if let Some(id) = &args.item {
             if !bot_spawn.is_some_and(|(bot, _)| self.item_assigner(caller, bot)) {
                 return fail("The assigning bot chat changed.");
@@ -902,11 +923,8 @@ impl AgentControl {
                         && Some(&work.requested_by) == caller.session_path.as_ref()
                 })
                 .ok_or_else(|| Fail::Tool("The item's reservation changed.".into()))?;
-            notes.push(format!(
-                "Item {id} generation {} held on this computer: {path}",
-                work.generation
-            ));
             work.session = Some(path);
+            receipt = Some(work.receipt(id));
             store.commit_work(id, work).map_err(Fail::Tool)?;
         }
         let kept = match (&self.send_outbox, &first, joined, message, child) {
@@ -1019,7 +1037,7 @@ impl AgentControl {
             worktree: worktree.as_ref().map(|worktree| worktree.branch.clone()),
             started: args.message.is_some(),
             where_: None,
-            held: None,
+            held: receipt,
         })
     }
 
@@ -1091,7 +1109,7 @@ impl AgentControl {
             .collect();
         let ids: Vec<&str> = results
             .iter()
-            .filter(|result| !result.tab_id.is_empty())
+            .filter(|result| !result.tab_id.is_empty() && result.held.is_none())
             .map(|result| result.tab_id.as_str())
             .collect();
         if !ids.is_empty() && results.iter().any(|result| result.started) {

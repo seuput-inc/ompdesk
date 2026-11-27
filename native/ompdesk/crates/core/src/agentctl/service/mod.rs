@@ -76,6 +76,10 @@ tokio::task_local! {
     static CALL_KEY: String;
 }
 
+tokio::task_local! {
+    static ITEM_OPEN_REQUEST: (crate::agentctl::journal::items::OpenRequest, bool);
+}
+
 /// The key of the recorded call the running work belongs to, if any.
 pub fn call_key() -> Option<String> {
     CALL_KEY.try_with(Clone::clone).ok()
@@ -624,6 +628,42 @@ impl AgentControl {
         }
         self.name_untitled(&mut tabs).await;
         let caller = tabs.iter().find(|tab| tab.tab_id == caller_tab_id).cloned();
+        if known_tool == Tool::Open
+            && (args.get("item").is_some()
+                || args["sessions"]
+                    .as_array()
+                    .is_some_and(|batch| batch.iter().any(|one| one.get("item").is_some())))
+        {
+            if args["sessions"]
+                .as_array()
+                .is_some_and(|batch| batch.iter().any(|one| one.get("item").is_none()))
+            {
+                return outcome_of(
+                    tool,
+                    &Fail::Tool(
+                        "Open managed items and ordinary sessions in separate calls.".into(),
+                    ),
+                );
+            }
+            return if let Some(call) = call {
+                let mut args = args;
+                args.sort_all_objects();
+                let request = crate::agentctl::journal::items::OpenRequest {
+                    id: call.id,
+                    fingerprint: crate::agentctl::journal::attachments::sha256_hex(
+                        args.to_string().as_bytes(),
+                    ),
+                };
+                ITEM_OPEN_REQUEST
+                    .scope(
+                        (request, call.resent),
+                        self.outcome(caller_tab_id, &tabs, known_tool, args),
+                    )
+                    .await
+            } else {
+                self.outcome(caller_tab_id, &tabs, known_tool, args).await
+            };
+        }
         let key = match (&call, &caller) {
             (Some(call), Some(caller))
                 if self.calls.is_some()
