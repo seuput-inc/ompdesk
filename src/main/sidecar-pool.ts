@@ -210,6 +210,7 @@ export interface ControlTabInfo extends IpcTabInfo {
 	facts: TabFacts | null;
 	formerIds: readonly string[];
 	hasDraft: boolean;
+	sessionMoved?: boolean;
 	/** The window that owns the tab (`windowOfTab`): the row's own window for a tab a viewer's window lists. */
 	owner: ClientWindow | null;
 }
@@ -1404,6 +1405,10 @@ export class SidecarPool {
 		return this.#later("stopSession", { path: sessionPath, device });
 	}
 
+	stopTabTurns(tab: string): Promise<void> {
+		return this.#later("stopSession", { tab });
+	}
+
 	/** Make `tabId` the window's active tab (moves full event forwarding). False when unknown/foreign. */
 	setActiveTab(win: ClientWindow, tabId: string): boolean {
 		return this.setTabView(win, tabId, [tabId]);
@@ -1537,6 +1542,7 @@ export class SidecarPool {
 						tabs: tabs.map(({ control: { owner, ...control }, ...info }) => ({
 							...info,
 							...control,
+							sessionMoved: control.sessionMoved || this.#moves.has(info.tabId),
 							owner: owner === null ? null : (this.#windows.get(owner) ?? null),
 						})),
 					},
@@ -2100,7 +2106,7 @@ export class SidecarPool {
 	 * Record that `openerTabId`'s agent opened `tabId` (`ompdesk_session_open`): the windows nest the session under
 	 * its opener, and the layout keeps the opener's session file so the family survives a relaunch.
 	 */
-	setTabOpener(tabId: string, openerTabId: string): void {
+	setTabOpener(tabId: string, openerTabId: string | null): void {
 		this.#call("setTabOpener", { tab: tabId, opener: openerTabId });
 	}
 

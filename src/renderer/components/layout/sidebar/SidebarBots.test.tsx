@@ -6,12 +6,15 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Bot, BotsState } from "../../../../shared/bots";
+import type { Bot, BotDeletePreview, BotsState } from "../../../../shared/bots";
 import type { RemoteState } from "../../../../shared/ipc-types";
-import { I18nProvider } from "../../../lib/i18n";
+import { I18nProvider, loadLocale, setLanguageOverride } from "../../../lib/i18n";
 import { listedBots, useBotsStore } from "../../../stores/bots";
 import { useBotsView } from "../../../stores/bots-view";
 import { useRemoteStore } from "../../../stores/remote";
+import { useToastStore } from "../../../stores/toast";
+import { BotDialogs } from "../../bots/BotDialogs";
+import { openBotDialog, useBotDialogs } from "../../bots/bot-launch";
 import { type BotFacts, botFacts } from "../../bots/bot-view";
 import { type SidebarBotEntry, SidebarBots } from "./SidebarBots";
 
@@ -48,7 +51,8 @@ const bot = (id: string, name: string, over: Partial<Bot> = {}): Bot => ({
 });
 
 const command = vi.fn(async (_request: unknown): Promise<BotsState> => ({ bots: [], items: [] }));
-Reflect.set(window, "omp", { bots: { command, onState: () => () => {} } });
+const deletePreview = vi.fn<(request: { id: string }) => Promise<BotDeletePreview>>();
+Reflect.set(window, "omp", { bots: { command, deletePreview, onState: () => () => {} } });
 
 let container: HTMLElement;
 let root: Root;
@@ -58,6 +62,7 @@ async function render(entries: SidebarBotEntry[]): Promise<void> {
 		root.render(
 			<I18nProvider>
 				<SidebarBots entries={entries} filtering={false} />
+				<BotDialogs />
 			</I18nProvider>,
 		);
 	});
@@ -83,6 +88,7 @@ beforeEach(() => {
 	document.body.appendChild(container);
 	root = createRoot(container as unknown as Element);
 	command.mockClear();
+	deletePreview.mockReset();
 });
 
 afterEach(async () => {
@@ -92,6 +98,9 @@ afterEach(async () => {
 	useBotsView.getState().reset();
 	useBotsStore.getState().reset();
 	useRemoteStore.getState().reset();
+	useBotDialogs.getState().close();
+	useToastStore.setState({ toasts: [] });
+	setLanguageOverride(null);
 });
 
 describe("SidebarBots", () => {
@@ -173,5 +182,98 @@ describe("SidebarBots", () => {
 			useBotsStore.getState().command({ action: "item", id: "item-r1", answer: { choice: 0 } }),
 		).rejects.toThrow("Mini is offline");
 		expect(command).not.toHaveBeenCalled();
+	});
+});
+
+describe("bot deletion confirmation", () => {
+	async function open(lang: "en" | "ko", onDeleted?: () => void) {
+		await loadLocale(lang);
+		setLanguageOverride(lang);
+		openBotDialog({ kind: "delete", bot: bot("a", "Ada"), onDeleted });
+		await render([]);
+	}
+
+	const dialog = () => document.querySelector('[role="dialog"]');
+	const button = (label: string) =>
+		[...(dialog()?.querySelectorAll("button") ?? [])].find(b => b.textContent === label);
+
+	it("waits for the preview, hides every zero line and keeps the folder and memory", async () => {
+		const pending = Promise.withResolvers<BotDeletePreview>();
+		deletePreview.mockReturnValueOnce(pending.promise);
+		const ada = bot("a", "Ada");
+		useBotsStore.setState({ state: { bots: [ada], items: [] } });
+		await render([entry(ada, botFacts(ada, [], 0))]);
+		await click(container.querySelector('[data-bot-row="a"]'), "contextmenu");
+		await click([...document.querySelectorAll('[role="menuitem"]')].find(item => item.textContent === "Delete bot…"));
+		expect(document.querySelector('[role="menu"]')).toBeNull();
+		expect(deletePreview).toHaveBeenCalledWith({ id: "a" });
+		expect(button("Delete bot")?.hasAttribute("disabled")).toBe(true);
+		await act(async () => pending.resolve({ chats: 0, workers: 0, kept: 0 }));
+		expect(dialog()?.querySelectorAll("[data-bot-delete-count]")).toHaveLength(0);
+		expect(dialog()?.textContent).toContain("permanently deletes the bot, its routines and the transcripts");
+		expect(dialog()?.textContent).not.toContain("Handed-over sessions");
+		expect(dialog()?.textContent).toContain("The folder and its memory files will stay at /b/a.");
+		await click(button("Cancel"));
+		expect(command).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{
+			lang: "en" as const,
+			chats: "Bot chats to delete: 1",
+			workers: "Bot-created workers to delete: 2",
+			kept: "Sessions to keep: 3",
+			handed: "ordinary sessions",
+			other: "Other bots keep their chats",
+			unknown: "unknown origin",
+			permanent: "permanently",
+			confirm: "Delete bot",
+		},
+		{
+			lang: "ko" as const,
+			chats: "삭제할 봇 채팅: 1개",
+			workers: "봇이 만든 워커 2개 삭제",
+			kept: "남겨 둘 세션: 3개",
+			handed: "일반 세션",
+			other: "다른 봇의 채팅은 그 봇에 남고",
+			unknown: "누가 만들었는지 알 수 없는",
+			permanent: "영구히",
+			confirm: "봇 삭제",
+		},
+	])("shows both deleted and kept counts in $lang and submits exactly those counts", async row => {
+		const expected = { chats: 1, workers: 2, kept: 3 };
+		deletePreview.mockResolvedValueOnce(expected);
+		const done = vi.fn();
+		await open(row.lang, done);
+		for (const kind of ["chats", "workers", "kept"] as const)
+			expect(dialog()?.querySelector(`[data-bot-delete-count="${kind}"]`)?.textContent).toBe(row[kind]);
+		expect(dialog()?.textContent).toContain("/b/a");
+		expect(dialog()?.textContent).toContain(row.permanent);
+		for (const note of [row.handed, row.other, row.unknown]) expect(dialog()?.textContent).toContain(note);
+		expect(command).not.toHaveBeenCalled();
+		await click(button(row.confirm));
+		expect(command).toHaveBeenCalledWith({ action: "delete", id: "a", expected });
+		expect(done).toHaveBeenCalledOnce();
+	});
+
+	it("reports a failed preview without offering deletion", async () => {
+		deletePreview.mockRejectedValueOnce(new Error("Host unavailable"));
+		await open("en");
+		expect(dialog()).toBeNull();
+		expect(command).not.toHaveBeenCalled();
+		expect(useToastStore.getState().toasts).toMatchObject([
+			{ variant: "error", title: "Couldn't preview bot deletion" },
+		]);
+	});
+
+	it("does not report success if the counts changed before confirmation", async () => {
+		deletePreview.mockResolvedValueOnce({ chats: 1, workers: 0, kept: 0 });
+		command.mockRejectedValueOnce(new Error("Deletion counts changed"));
+		const done = vi.fn();
+		await open("en", done);
+		expect(dialog()?.querySelectorAll("[data-bot-delete-count]")).toHaveLength(1);
+		await click(button("Delete bot"));
+		expect(done).not.toHaveBeenCalled();
+		expect(useToastStore.getState().toasts).toMatchObject([{ variant: "error", title: "Couldn't delete the bot" }]);
 	});
 });

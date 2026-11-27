@@ -18,10 +18,12 @@
 
 mod app;
 mod auto;
+mod bot_delete;
 mod bot_files;
 mod bot_first_run;
 mod bot_move;
 mod bot_package;
+mod bot_provenance;
 mod bots;
 pub(crate) mod bots_share;
 mod connectors;

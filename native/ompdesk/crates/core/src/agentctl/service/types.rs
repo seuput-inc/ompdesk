@@ -214,6 +214,8 @@ pub struct ControlTab {
     pub looked: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub user_touched: bool,
+    #[serde(default, skip_serializing)]
+    pub session_moved: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub drafting: bool,
     #[serde(default, skip_serializing_if = "is_false")]

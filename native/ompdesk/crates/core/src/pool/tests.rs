@@ -568,6 +568,13 @@ async fn acquiring_a_child_saves_its_qualified_opener_in_the_first_layout() {
     assert_eq!(saved["openedByDevice"], "studio");
     assert!(saved.get("device").is_none());
     assert_eq!(main.call("sessionOpeners", json!({})).await, json!([]));
+
+    main.call("setTabOpener", json!({"tab": "child", "opener": null}))
+        .await;
+    let saved = main.call("tabLayoutForWindow", json!({"win": 2})).await;
+    assert_eq!(saved["tabs"].as_array().unwrap().len(), 2);
+    assert!(saved["tabs"][1].get("openedBy").is_none());
+    assert!(saved["tabs"][1].get("openedByDevice").is_none());
 }
 
 #[tokio::test]

@@ -280,6 +280,19 @@ impl AgentControl {
         reservation: &str,
         tag: Option<&str>,
     ) -> R<OpenResult> {
+        let owner = if args.reopen.as_deref().is_none_or(str::is_empty)
+            && caller.device.is_none()
+            && self
+                .host
+                .state()
+                .tabs
+                .iter()
+                .any(|tab| tab.tab_id == caller.tab_id)
+        {
+            self.bots().of_folder(&caller.cwd).map(|bot| bot.id.clone())
+        } else {
+            None
+        };
         let worktree_arg: Option<SpawnWorktree> = match &args.worktree {
             Some(WorktreeArg::Flag(true)) => Some(SpawnWorktree::default()),
             Some(WorktreeArg::Flag(false)) | None => None,
@@ -375,6 +388,26 @@ impl AgentControl {
             }
             _ => None,
         };
+        let assignment = if let Some(id) = &owner {
+            let guard = self.bot_moves.lock().await;
+            if self
+                .bots()
+                .of_folder(&caller.cwd)
+                .is_none_or(|bot| &bot.id != id)
+                || !self.host.state().tabs.iter().any(|tab| {
+                    tab.tab_id == caller.tab_id
+                        && tab.device.is_none()
+                        && tab.session_path == caller.session_path
+                        && tab.cwd == caller.cwd
+                })
+            {
+                self.opened_delete(&caller.tab_id, reservation);
+                return fail("The bot chat that asked to open this worker changed or was deleted.");
+            }
+            Some(guard)
+        } else {
+            None
+        };
         let spawned = self
             .host
             .spawn(
@@ -418,6 +451,27 @@ impl AgentControl {
         };
         let tab_id = spawned.tab_id.clone();
         let worktree = spawned.worktree.clone();
+        let bot_spawn = match owner.as_deref() {
+            Some(id) => Some((
+                id,
+                self.record_bot_spawn(
+                    id,
+                    caller,
+                    &tab_id,
+                    target
+                        .as_ref()
+                        .and_then(Option::as_ref)
+                        .map(|host| host.id.as_str()),
+                    worktree
+                        .as_ref()
+                        .map(|tree| tree.path.as_str())
+                        .or(args.folder.as_deref())
+                        .unwrap_or(&caller.cwd),
+                )?,
+            )),
+            None => None,
+        };
+        drop(assignment);
         // A session joined where it is open stays whoever's it was: never "opened by you".
         if joined.is_none() {
             self.opened_add(&caller.tab_id, &tab_id);
@@ -438,6 +492,7 @@ impl AgentControl {
                 session_path.is_some(),
                 joined.as_deref(),
                 tag,
+                bot_spawn,
             )
             .await;
         let error = match set_up {
@@ -538,9 +593,32 @@ impl AgentControl {
         reopened: bool,
         joined: Option<&str>,
         tag: Option<&str>,
+        bot_spawn: Option<(&str, bool)>,
     ) -> R<OpenResult> {
         self.when_ready(tab_id, &caller.tab_id, None).await?;
         let mut send = self.open_commands(tab_id, &caller.tab_id);
+        if let Some((id, true)) = bot_spawn {
+            let state = self.host.state();
+            if let Some(tab) = state.tabs.iter().find(|tab| tab.tab_id == tab_id) {
+                let learned;
+                let path = match tab.session_path.as_deref().filter(|path| !path.is_empty()) {
+                    Some(path) => Some(path),
+                    None => {
+                        let reply = send.send(json!({ "type": "get_state" })).await?;
+                        learned = response_data(&reply, "Reading the new worker's session file")?;
+                        learned.get("sessionFile").and_then(Value::as_str)
+                    }
+                };
+                if let Some(path) = path.filter(|path| !path.is_empty())
+                    && !self.bind_bot_spawn(id, caller, tab, path).await
+                {
+                    return Ok(OpenResult {
+                        error: Some("The worker's assignment changed during startup.".to_owned()),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
         let mut notes: Vec<String> = Vec::new();
         // What sets the child up before its first message, each with what it does (for its error).
         let mut setup: Vec<(&str, Value)> = Vec::new();
@@ -623,6 +701,12 @@ impl AgentControl {
             .state()
             .tabs(&caller.tab_id)
             .and_then(|tabs| tabs.into_iter().find(|tab| tab.tab_id == tab_id));
+        if bot_spawn.is_some() && child.as_ref().is_none_or(|tab| !tab.still_new_worker()) {
+            return Ok(OpenResult {
+                error: Some("The new worker's tab changed during startup.".to_owned()),
+                ..Default::default()
+            });
+        }
         let kept = match (&self.send_outbox, &first, joined, message, child) {
             (Some(outbox), Some((dispatch, command)), None, Some(message), Some(child)) => {
                 child.session_path.clone().map(|path| {

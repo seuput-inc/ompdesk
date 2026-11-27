@@ -3,6 +3,8 @@
 //! parity suite at cutover) and of the pure cuts (`turnEdits`, `costSplitOf`, the command timeouts) against tables
 //! captured from the TypeScript (`captured.json`).
 
+mod bot_provenance;
+
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1183,6 +1185,7 @@ fn bots_main(
                 }
                 _ => Ok(json!({ "success": false, "error": "no" })),
             },
+            "stored" => Ok(json!([])),
             "schedules.command" => Ok(json!({ "schedules": [] })),
             // A bot's folder moved: each session lands in `<to>/.moved/` (stock files it under the new folder's dir).
             "bots.relocate" => {
@@ -1474,7 +1477,9 @@ async fn deleting_a_bot_drops_its_held_mail_with_a_note_to_its_sender_and_remove
         .await
         .unwrap();
     let state = control
-        .bots_command(json!({ "action": "delete", "id": id }))
+        .bots_command(
+            json!({ "action": "delete", "id": id, "expected": {"chats":1,"workers":0,"kept":0} }),
+        )
         .await
         .unwrap();
     assert_eq!(state["bots"], json!([]));
@@ -1513,6 +1518,157 @@ async fn deleting_a_bot_drops_its_held_mail_with_a_note_to_its_sender_and_remove
         .map(|(_, args)| args["request"]["id"].clone())
         .collect();
     assert_eq!(deleted, vec![json!("sch-bot")]);
+}
+
+#[tokio::test]
+async fn bot_deletion_obeys_chat_homes_and_retries_after_session_cleanup() {
+    use crate::agentctl::journal::bots::{BotRecord, BotWorker, WorkerOrigin};
+
+    let root = Scratch::new();
+    let mut world = bot_world("/bots/ada");
+    world["tabs"].as_array_mut().unwrap().push(tab(
+        "second",
+        json!({ "cwd": "/bots/ada", "sessionPath": "/s/second.jsonl" }),
+    ));
+    let fault = std::sync::atomic::AtomicBool::new(true);
+    let (control, asked) = rig_files(
+        world,
+        Caps::default(),
+        &bot_files(&root),
+        move |method, _args| {
+            match method {
+            "stored" => Ok(json!(["other","owned","handed","unknown"].map(|id| json!({
+                "id": id, "path": format!("/s/{id}.jsonl"), "cwd": if id == "other" { "/bots/other" } else { "/repo" }
+            })))),
+            "schedules.command" if fault.swap(false, Ordering::Relaxed) => Err("injected schedule failure".into()),
+            "schedules.command" => Ok(json!({"schedules":[]})),
+            _ => Ok(Value::Null),
+        }
+        },
+    );
+    let link = |session: &str, cwd: &str, origin| BotWorker {
+        session: session.into(),
+        cwd: cwd.into(),
+        opened_by_session: Some("/s/bot.jsonl".into()),
+        origin,
+        ..BotWorker::default()
+    };
+    control.bots().add(BotRecord {
+        id: "other".into(),
+        name: "Other".into(),
+        folder: "/bots/other".into(),
+        home: Some("/s/other.jsonl".into()),
+        ..BotRecord::default()
+    });
+    control.bots().add(BotRecord {
+        id: "ada".into(),
+        name: "Ada".into(),
+        folder: "/bots/ada".into(),
+        home: Some("/s/bot.jsonl".into()),
+        workers: vec![
+            link("/s/second.jsonl", "/bots/ada", Some(WorkerOrigin::Handed)),
+            link("/s/other.jsonl", "/bots/other", Some(WorkerOrigin::Opened)),
+            link("/s/owned.jsonl", "/repo", Some(WorkerOrigin::Opened)),
+            link("/s/handed.jsonl", "/repo", Some(WorkerOrigin::Handed)),
+            link("/s/unknown.jsonl", "/repo", None),
+        ],
+        ..BotRecord::default()
+    });
+    let preview = || control.bots_command(json!({"action":"deletePreview", "id":"ada"}));
+    let delete = |expected: Value| {
+        control.bots_command(json!({"action":"delete","id":"ada","expected":expected}))
+    };
+    let counts = preview().await.unwrap();
+    assert_eq!(counts, json!({"chats":2,"workers":1,"kept":3}));
+    assert!(
+        delete(json!({"chats":2,"workers":2,"kept":2}))
+            .await
+            .is_err()
+    );
+    assert!(
+        !asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(method, _)| method == "bots.cleanupSession")
+    );
+    assert!(
+        delete(counts)
+            .await
+            .unwrap_err()
+            .message()
+            .contains("injected schedule failure")
+    );
+    assert!(control.bot_named("ada").is_ok());
+    let actions: std::collections::BTreeMap<_, _> = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(method, _)| method == "bots.cleanupSession")
+        .map(|(_, args)| {
+            (
+                args["session"].as_str().unwrap().to_owned(),
+                args["release"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    for path in ["/s/bot.jsonl", "/s/second.jsonl", "/s/owned.jsonl"] {
+        assert_eq!(actions.get(path), Some(&false), "{path}");
+    }
+    for path in ["/s/other.jsonl", "/s/handed.jsonl", "/s/unknown.jsonl"] {
+        assert_eq!(actions.get(path), Some(&true), "{path}");
+    }
+    delete(preview().await.unwrap()).await.unwrap();
+    assert!(control.bot_named("ada").is_err());
+    assert_eq!(
+        control.bot_named("other").unwrap().home.as_deref(),
+        Some("/s/other.jsonl")
+    );
+}
+
+#[tokio::test]
+async fn an_offline_worker_stays_linked_and_the_bot_can_retry() {
+    use crate::agentctl::journal::bots::{BotRecord, BotWorker, WorkerOrigin};
+
+    let root = Scratch::new();
+    let offline = std::sync::atomic::AtomicBool::new(true);
+    let (control, _) = rig_files(
+        bot_world("/repo"),
+        Caps::default(),
+        &bot_files(&root),
+        move |method, args| match method {
+            "stored" => Ok(json!([])),
+            "bots.cleanupSession"
+                if args["device"] == "studio" && offline.swap(false, Ordering::Relaxed) =>
+            {
+                Err("Studio is offline".into())
+            }
+            "schedules.command" => Ok(json!({"schedules":[]})),
+            _ => Ok(Value::Null),
+        },
+    );
+    control.bots().add(BotRecord {
+        id: "ada".into(),
+        name: "Ada".into(),
+        folder: "/bots/ada".into(),
+        workers: vec![BotWorker {
+            session: "/s/remote.jsonl".into(),
+            device: Some("studio".into()),
+            origin: Some(WorkerOrigin::Opened),
+            ..BotWorker::default()
+        }],
+        ..BotRecord::default()
+    });
+    let expected = json!({"chats":0,"workers":1,"kept":0});
+    let delete = || control.bots_command(json!({"action":"delete","id":"ada","expected":expected}));
+    let reason = delete().await.unwrap_err().message().to_owned();
+    assert!(
+        reason.contains("/s/remote.jsonl") && reason.contains("Studio is offline"),
+        "{reason}"
+    );
+    assert_eq!(control.bot_named("ada").unwrap().workers.len(), 1);
+    delete().await.unwrap();
+    assert!(control.bot_named("ada").is_err());
 }
 
 #[tokio::test]
@@ -2251,6 +2407,11 @@ async fn a_session_handed_to_a_bot_gets_its_home_chat_as_opener_and_the_text_fro
         ada.workers[0].opened_by_session.as_deref(),
         Some("/s/bot.jsonl")
     );
+    assert_eq!(
+        ada.workers[0].origin,
+        Some(crate::agentctl::journal::bots::WorkerOrigin::Handed)
+    );
+    assert!(!restored.worker_opened_by_bot(&ada, &ada.workers[0]));
 }
 
 #[tokio::test]

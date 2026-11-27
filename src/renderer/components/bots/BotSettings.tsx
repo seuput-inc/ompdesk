@@ -9,7 +9,7 @@
  *   only, what to look for, Orca's `bot-look-around.ts:42-62`; Memory upkeep with its time); Items (stale after);
  *   Soul and memory; Access (who can ask, its skills, the projects whose skills its chats load, this computer's MCP
  *   servers); Package (export to a file); Notifications (needs permission, task complete, couldn't finish: FK-B26,
- *   FS77); Delete bot (its folder stays; its routines go, FK-B50).
+ *   FS77); Delete bot (after previewing what goes, FK-B50).
  * - Soul and Memory (`BotSoulEditor.tsx`, `BotFileChangedNotice.tsx`, FK-B21, FS72, FS73, FK-B22): read or edit the
  *   file; saved on Save or ⌘S; a file changed on disk under an edit asks Keep mine or Use theirs; Memory lists its
  *   topic files and the archive.
@@ -52,7 +52,6 @@ import {
 	Button,
 	Card,
 	Checkbox,
-	ConfirmDialog,
 	FieldLabel,
 	IconButton,
 	Input,
@@ -70,7 +69,7 @@ import { ModelValueSelect } from "../settings/ModelValueSelect";
 import { exportBot } from "./BotActionsMenu";
 import { BotAvatar } from "./BotAvatar";
 import { BotConnectorsSection } from "./BotConnectors";
-import { openBotChat } from "./bot-launch";
+import { openBotChat, openBotDialog } from "./bot-launch";
 
 type Page = "root" | "soul" | "memory" | "access";
 
@@ -106,9 +105,7 @@ function BotSettingsRoot({
 	const t = useT();
 	const id = useId();
 	const update = useUpdate(bot);
-	const command = useBotsStore(s => s.command);
 	const [name, setName] = useState(bot.name);
-	const [deleting, setDeleting] = useState(false);
 	const [tidyTime, setTidyTime] = useState("03:00");
 	const [focus, setFocus] = useState(bot.lookSetting?.focus ?? "");
 	useEffect(() => setName(bot.name), [bot.name]);
@@ -421,22 +418,14 @@ function BotSettingsRoot({
 				))}
 			</section>
 
-			<Button className="self-start" icon={<Trash2 />} onClick={() => setDeleting(true)} variant="danger-soft">
+			<Button
+				className="self-start"
+				icon={<Trash2 />}
+				onClick={() => openBotDialog({ kind: "delete", bot, onDeleted })}
+				variant="danger-soft"
+			>
 				{t("bots.menu.delete")}
 			</Button>
-			<ConfirmDialog
-				confirmLabel={t("bots.delete.confirm")}
-				message={t("bots.delete.message", { folder: bot.folder })}
-				onCancel={() => setDeleting(false)}
-				onConfirm={() => {
-					setDeleting(false);
-					void command({ action: "delete", id: bot.id })
-						.then(() => onDeleted?.())
-						.catch((error: unknown) => toastError({ title: t("bots.delete.failed"), error }));
-				}}
-				open={deleting}
-				title={t("bots.delete.title", { name: bot.name })}
-			/>
 		</div>
 	);
 }

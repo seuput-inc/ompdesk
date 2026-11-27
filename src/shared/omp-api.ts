@@ -33,7 +33,7 @@ import type {
 } from "./ai-memory";
 import { BOT_CONNECTORS_COMMAND } from "./bot-connector-channels";
 import type { BotConnectorsApi } from "./bot-connectors";
-import { BOTS_COMMAND, BOTS_STATE, type BotsState } from "./bots";
+import { BOTS_COMMAND, BOTS_STATE, type BotDeletePreview, type BotsState } from "./bots";
 import type { CliToolId, CliUpdateState } from "./cli-update";
 import type { CreditSpendState } from "./credit-spend";
 import type { DiagnosticBundleRequest, DiagnosticBundleResult } from "./diagnostic-bundle";
@@ -278,6 +278,15 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 		},
 		bots: {
 			command: request => transport.invoke(BOTS_COMMAND, request),
+			deletePreview: async ({ id }) => {
+				const preview = await transport.invoke<BotDeletePreview>(BOTS_COMMAND, { action: "deletePreview", id });
+				if (
+					!preview ||
+					![preview.chats, preview.workers, preview.kept].every(n => Number.isSafeInteger(n) && n >= 0)
+				)
+					throw new Error("The bot's computer did not return valid deletion counts.");
+				return { chats: preview.chats, workers: preview.workers, kept: preview.kept };
+			},
 			file: request => transport.invoke(BOTS_COMMAND, { ...request, action: "file" }),
 			importSources: () => transport.invoke(BOTS_COMMAND, { action: "importSources" }),
 			exportPackage: request => transport.invoke(BOTS_COMMAND, { ...request, action: "export" }),

@@ -3,6 +3,7 @@
  * default RPC timeout, isolating a throwing listener) hold for any transport.
  */
 import { describe, expect, it } from "vitest";
+import { BOTS_COMMAND } from "./bots";
 import { IPC_COMMANDS, IPC_EVENTS } from "./ipc-types";
 import { createOmpApi, type OmpTransport } from "./omp-api";
 import { timeoutForCommand } from "./rpc-client";
@@ -32,6 +33,29 @@ function recording() {
 }
 
 describe("createOmpApi", () => {
+	it("previews and deletes a bot by id on the same channel, passing only the confirmed counts", async () => {
+		const { api, invoked, answers } = recording();
+		const counts = { chats: 1, workers: 0, kept: 2 };
+		answers.set(BOTS_COMMAND, { ...counts, paths: ["/private/session"] });
+		const expected = await api.bots.deletePreview({ id: "b" });
+		expect(expected).toEqual(counts);
+		answers.set(BOTS_COMMAND, { bots: [], items: [] });
+		await api.bots.command({ action: "delete", id: "b", expected });
+		expect(invoked).toEqual([
+			{ channel: BOTS_COMMAND, args: [{ action: "deletePreview", id: "b" }] },
+			{ channel: BOTS_COMMAND, args: [{ action: "delete", id: "b", expected: counts }] },
+		]);
+	});
+
+	it.each([
+		{ version: "old.1", state: { bots: [], items: [] } },
+		{ chats: 1, workers: -1, kept: 0 },
+	])("rejects a host reply without usable deletion counts", async answer => {
+		const { api, answers } = recording();
+		answers.set(BOTS_COMMAND, answer);
+		await expect(api.bots.deletePreview({ id: "b" })).rejects.toThrow("deletion counts");
+	});
+
 	it("sends a focused-tab command with its default timeout", async () => {
 		const { api, invoked } = recording();
 		const command = { type: "get_state" } as const;
