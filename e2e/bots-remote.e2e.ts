@@ -7,6 +7,7 @@
  * - B opens its chat: a tab of A on the bot's home chat.
  * - B answers the item's question, twice with one request id (a retry over the link): A records one answer.
  * - A goes out of reach: B still lists the bot, greyed, its owner label saying offline, and refuses a change.
+ * - After reconnecting, B opens the same pre-upgrade chat from the host's bot row, not a duplicate project.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -68,7 +69,46 @@ test("a bot made on one computer is listed, chatted with and answered on its pai
 	let host: RemoteInstance | null = null;
 	let client: RemoteInstance | null = null;
 	try {
-		const hostProfile = await makeRemoteProfile(parent, "a", { language: "en", theme: "light", port: hostPort });
+		const folder = path.join(parent, "old-workspace");
+		const alias = "Dispatch archive";
+		const old = { id: "bot-pre-upgrade", name: "Night clerk", folder };
+		const oldId = "stored-night-shift";
+		const text = "Handover from the previous shift";
+		const home = path.join(parent, "host-home");
+		const hostProfile = await makeRemoteProfile(parent, "a", {
+			language: "en",
+			theme: "light",
+			port: hostPort,
+			env: { HOME: home, USERPROFILE: home },
+			prefs: { sidebar: { groupAliases: { [folder]: alias } } },
+		});
+		const journal = path.join(
+			hostProfile.env.PI_CODING_AGENT_DIR,
+			"sessions",
+			"fixture",
+			`1761955200000_${oldId}.jsonl`,
+		);
+		const timestamp = "2025-11-01T00:00:00.000Z";
+		await Promise.all([fs.mkdir(folder), fs.mkdir(home), fs.mkdir(path.dirname(journal), { recursive: true })]);
+		await fs.writeFile(
+			journal,
+			[
+				{ type: "session", version: 3, id: oldId, timestamp, cwd: folder },
+				{
+					type: "message",
+					id: "handover",
+					parentId: null,
+					timestamp,
+					message: { role: "user", content: text, timestamp: Date.parse(timestamp) },
+				},
+			]
+				.map(entry => `${JSON.stringify(entry)}\n`)
+				.join(""),
+		);
+		await fs.writeFile(
+			path.join(hostProfile.desktop, "bots.json"),
+			JSON.stringify([{ ...old, home: journal, sessions: [journal] }]),
+		);
 		const clientProfile = await makeRemoteProfile(parent, "b", {
 			language: "en",
 			theme: "light",
@@ -78,6 +118,15 @@ test("a bot made on one computer is listed, chatted with and answered on its pai
 		client = await launchRemote(clientProfile);
 		const a = host.page;
 		const b = client.page;
+		await a.evaluate(
+			async ([legacy, human]) => {
+				for (const path of [legacy, human]) await window.omp.sidebarProjects.command({ action: "add", path });
+			},
+			[folder, hostProfile.project] as const,
+		);
+		expect(await a.evaluate(() => window.omp.prefs.get("sidebar"))).toMatchObject({
+			groupAliases: { [folder]: alias },
+		});
 		const deviceId = await connectHost(a, b, "Studio");
 		const courier = await botWithQuestion(a);
 
@@ -142,13 +191,48 @@ test("a bot made on one computer is listed, chatted with and answered on its pai
 			"B never heard that A went away",
 		);
 		const offline = await b.evaluate(() => window.omp.bots.command({ action: "get" }));
-		expect(offline.remote?.[0]?.bots.map(known => known.id)).toEqual([courier.id]);
+		expect(offline.remote?.[0]?.bots.map(known => known.id).sort()).toEqual([courier.id, old.id].sort());
 		await b.locator("[data-sidebar-bots-open]").click();
 		await expect(pageRow.locator("[data-bot-offline]")).toHaveText("Studio · offline");
 		await expect(
 			b.evaluate(id => window.omp.bots.command({ action: "update", id, paused: true }), courier.id),
 		).rejects.toThrow(/offline/);
 		await b.screenshot({ path: "test-results/bots-remote-offline.png", scale: "css", animations: "disabled" });
+		await proxy.restore();
+		const legacyRow = b.locator(`[data-bot-entry="${old.id}"]`);
+		await expect(legacyRow).toHaveCount(1);
+		await expect(legacyRow.locator(`[data-bot-owner="${deviceId}"]`)).toHaveText("Studio", { timeout: 60_000 });
+		await expect(legacyRow).toContainText(old.name);
+		const device = b.locator(`[data-sidebar-device="${deviceId}"]`);
+		const toggle = device.locator(`[data-sidebar-device-toggle="${deviceId}"]`);
+		if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+		await expect(device.locator(`[data-device-group=${JSON.stringify(hostProfile.project)}]`)).toBeVisible();
+		await expect(device.locator(`[data-device-group=${JSON.stringify(folder)}]`)).toHaveCount(0);
+		await legacyRow.locator(`[data-bot-row="${old.id}"]`).click();
+		const resumed = async () =>
+			(await b.evaluate(() => window.omp.tabs.list())).find(
+				tab => tab.device === deviceId && tab.active && tab.sessionPath === journal && tab.status === "ready",
+			);
+		await until(async () => Boolean(await resumed()), "B never reopened A's stored pre-upgrade chat");
+		const tab = await resumed();
+		if (!tab) throw new Error("The reopened chat closed before its journal could be read");
+		const [state, history] = await b.evaluate(
+			id =>
+				Promise.all([
+					window.omp.rpc.commandForTab(id, { type: "get_state" }),
+					window.omp.rpc.commandForTab(id, { type: "get_branch_messages" }),
+				]),
+			tab.tabId,
+		);
+		expect(state).toMatchObject({ success: true, data: { sessionId: oldId, sessionFile: journal } });
+		expect(history).toMatchObject({
+			success: true,
+			data: { messages: expect.arrayContaining([expect.objectContaining({ text })]) },
+		});
+		await test.info().attach("legacy-reconnected", {
+			body: await b.screenshot({ scale: "css", animations: "disabled" }),
+			contentType: "image/png",
+		});
 		expect(client.errors).toEqual([]);
 	} finally {
 		if (client) await exitApp(client.app).catch(() => undefined);
