@@ -524,21 +524,17 @@ export function QuietReply({ text: words }: { text: string }) {
 // ---- Run results (Orca's `bot-automation-result-note.ts`) -------------------------------------------------------
 
 /**
- * A note the app or a bot mailed: the owner's item changes, a run result as its card, a bot's mail under the bot's name
- * now (a rename included), else the plain note.
+ * A note the app or a bot mailed: the owner's item changes, a run result as its card, else the saved mail.
  */
 export function BotNote({ message }: { message: AgentMessage }) {
 	const itemsHidden = useCardHidden("itemNotes");
 	const hidden = useCardHidden("runResults");
 	const details = resultDetails(message);
-	const fromBot = text(details?.fromBot);
-	const botName = useBotsStore(s => (fromBot ? s.state.bots.find(bot => bot.id === fromBot)?.name : undefined));
 	const app = text(details?.from) === "ompdesk";
 	if (app && text(details?.id).startsWith("item-")) return itemsHidden ? null : <ItemNote message={message} />;
 	const result = app ? parseScheduleResultNote(text(details?.text)) : null;
 	if (result) return hidden ? null : <RunResultNote answer={result.answer} name={result.name} />;
-	const shown = botName ? ({ ...message, details: { ...details, fromTitle: botName } } as AgentMessage) : message;
-	return <MailNote message={shown} />;
+	return <MailNote message={message} />;
 }
 
 /** One of the bot's automations finished: its name and the first line of its answer, opening to the whole answer. */
