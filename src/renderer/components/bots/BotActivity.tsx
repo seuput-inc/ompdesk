@@ -22,6 +22,7 @@
  */
 import {
 	Check,
+	ChevronRight,
 	CircleAlert,
 	CircleDashed,
 	Clock,

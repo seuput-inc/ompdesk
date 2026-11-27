@@ -45,7 +45,30 @@ test("project and bot conversations keep their own inspector on reopen and on re
 				viewport: [innerWidth, innerHeight],
 				dpr: devicePixelRatio,
 				bounds: element.getBoundingClientRect().toJSON(),
+				controls: [...element.querySelectorAll("button, button > svg, summary, input, header .truncate, p")].map(
+					node => {
+						const style = getComputedStyle(node);
+						return {
+							label: node.getAttribute("aria-label") ?? node.getAttribute("class") ?? node.tagName,
+							bounds: node.getBoundingClientRect().toJSON(),
+							font: [style.fontFamily, style.fontSize, style.lineHeight, style.fontWeight],
+						};
+					},
+				),
 			}));
+			const fonts: string[] = [];
+			if (process.platform === "win32") {
+				const cdp = await page.context().newCDPSession(page);
+				await cdp.send("DOM.enable");
+				await cdp.send("CSS.enable");
+				const { root } = await cdp.send("DOM.getDocument");
+				const selector =
+					'aside.omp-inspector :is([data-files-search-mode], [data-bot-views] button[aria-pressed="true"])';
+				const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector });
+				const result = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
+				fonts.push(...result.fonts.map(font => font.postScriptName));
+				await cdp.detach();
+			}
 			expect(geometry.viewport).toEqual([1280, 860]);
 			expect(geometry.dpr).toBe(1);
 			const dir = path.join("test-results", "chat-inspector");
