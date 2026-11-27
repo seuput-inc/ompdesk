@@ -837,16 +837,17 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		name: T.item,
 		label: "Bot item",
 		description:
-			"Keep a bot's work and its questions to the owner as items (a bot's chat only).\n" +
+			"Manage a bot's items in its chat. A worker can only confirm its own board-issued assignment with claim {item: immutable id, generation}.\n" +
 			"Items are what a bot works on for its owner and what it needs from them, numbered per bot; the owner sees them on the Bots page. add {title, description?, done_means?, status?} (status planned by default); set {item, …}: status (planned, working, waiting, needs_you, done, canceled), title, description, ask with options and recommended (a question only the owner can answer: the item waits on them, and their answer arrives here as a message that starts a turn), or asks (up to 5 questions at once, each with its options; ask is then the words around them), wait and until (what it waits on outside you and the owner), snooze_until (hidden until then; \"\" wakes it); comment {item, text}; done {item, note?} and cancel {item, note?} close it (a line goes into memory/journal/YYYY-MM.md in the bot's folder); link {item, url | file | session | pr}; list {status?} (open ones by default); show {item}. item is its number or id. The owner's changes reach you as notes, once each. See skill://ompdesk/references/bots.md.",
 		parameters: {
 			type: "object",
 			properties: {
 				action: {
 					type: "string",
-					enum: ["add", "set", "withdraw", "self_decide", "comment", "done", "cancel", "link", "list", "show"],
+					enum: ["add", "set", "withdraw", "self_decide", "comment", "done", "cancel", "link", "list", "show", "claim"],
 				},
 				item: { type: "string", description: "Its number (3 or #3) or id." },
+				generation: { type: "integer", minimum: 1, description: "claim: the generation assigned by the board." },
 				question: {
 					type: "integer",
 					minimum: 0,
@@ -1346,7 +1347,8 @@ export const ARGS = {
 		.strict(),
 	[T.item]: z
 		.object({
-			action: z.enum(["add", "set", "withdraw", "self_decide", "comment", "done", "cancel", "link", "list", "show"]),
+			action: z.enum(["add", "set", "withdraw", "self_decide", "comment", "done", "cancel", "link", "list", "show", "claim"]),
+			generation: z.number().int().positive().optional(),
 			question: z.number().int().nonnegative().optional(),
 			item: z.string().trim().min(1).max(100).optional(),
 			title: z.string().trim().min(1).max(ITEM_TITLE_MAX).optional(),

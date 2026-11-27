@@ -1728,6 +1728,9 @@ pub struct ItemArgs {
     /// Its number or id.
     #[serde(default)]
     pub item: Option<String>,
+    /// `claim` confirms only this actual worker's board-issued generation.
+    #[serde(default)]
+    pub generation: Option<u64>,
     /// `withdraw` and `self_decide` name the event that asked the question.
     #[serde(default)]
     pub question: Option<u64>,

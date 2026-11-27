@@ -269,7 +269,7 @@ pub fn mutates(tool: Tool, args: &Value) -> bool {
             action,
             Some("list" | "offer" | "connectors" | "offer_connector")
         ),
-        Tool::Item => !matches!(action, Some("list" | "show")),
+        Tool::Item => !matches!(action, Some("list" | "show" | "claim")),
         Tool::Room => action == Some("post"),
         _ => false,
     }

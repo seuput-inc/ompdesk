@@ -2190,6 +2190,38 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
     }
     let retry = control.run("bot1", tool, open, None).await;
     assert!(retry.text.contains("/s/work.jsonl"), "{}", retry.text);
+    let claim = json!({"action":"claim","item":id,"generation":1});
+    let confirm = control
+        .run("work1", "ompdesk_item", claim.clone(), None)
+        .await;
+    assert!(
+        !confirm.is_error && confirm.text.contains("held by this session"),
+        "{}",
+        confirm.text
+    );
+    let stale = control
+        .run(
+            "work1",
+            "ompdesk_item",
+            json!({"action":"claim","item":id,"generation":2}),
+            None,
+        )
+        .await;
+    assert!(stale.is_error);
+    control
+        .link_opened(&control.host.state().tabs[1], &id, "send1")
+        .unwrap();
+    let outsider = control
+        .run("send1", "ompdesk_item", claim.clone(), None)
+        .await;
+    assert!(outsider.is_error && !outsider.text.contains("/s/work"));
+    control.bots().change(&bot, |board| board.paused = true);
+    assert!(
+        control
+            .run("work1", "ompdesk_item", claim, None)
+            .await
+            .is_error
+    );
     let calls = asked.lock().unwrap();
     assert_eq!(
         calls.iter().filter(|(method, _)| method == "spawn").count(),

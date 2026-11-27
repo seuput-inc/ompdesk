@@ -195,6 +195,94 @@ fn edited(
 }
 
 impl AgentControl {
+    pub(in crate::agentctl::service) fn item_assigner(
+        &self,
+        caller: &ControlTab,
+        bot: &str,
+    ) -> bool {
+        let state = self.host.state();
+        let Some(path) = caller
+            .session_path
+            .as_deref()
+            .filter(|path| !path.is_empty())
+        else {
+            return false;
+        };
+        state.enabled
+            && state.parent_of(&caller.tab_id).is_none()
+            && state.tabs.iter().any(|tab| {
+                tab.tab_id == caller.tab_id
+                    && tab.cwd == caller.cwd
+                    && tab.session_path.as_deref() == Some(path)
+                    && tab.device.is_none()
+                    && !tab.viewing
+                    && tab.opened_by_session.is_none()
+            })
+            && self.bots().of_folder(&caller.cwd).is_some_and(|board| {
+                board.id == bot
+                    && !board.paused
+                    && board.has_session(path)
+                    && !board
+                        .workers
+                        .iter()
+                        .any(|w| w.device.is_none() && w.session == path)
+            })
+    }
+
+    /// The board bound this exact saved session during its spawn. Links, opener scans and reach grant nothing.
+    fn confirm_item_assignment(&self, caller: &ControlTab, args: &ItemArgs) -> R<String> {
+        let denied = || {
+            Fail::Tool("No current assignment to this session for that item and generation.".into())
+        };
+        let state = self.host.state();
+        let tab = state
+            .tabs
+            .iter()
+            .find(|tab| {
+                state.enabled
+                    && tab.tab_id == caller.tab_id
+                    && !tab.viewing
+                    && tab.device.is_none()
+                    && tab.session_path == caller.session_path
+            })
+            .ok_or_else(denied)?;
+        let path = tab
+            .session_path
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(denied)?;
+        let key = args.item.as_deref().ok_or_else(denied)?;
+        if args.session.is_some() {
+            return Err(denied());
+        }
+        let (board_id, generation) = {
+            let store = self.items();
+            let item = store
+                .get(key)
+                .filter(|item| item.is_open())
+                .ok_or_else(denied)?;
+            let work = item
+                .work
+                .as_ref()
+                .filter(|work| {
+                    Some(work.generation) == args.generation
+                        && work.session.as_deref() == Some(path)
+                })
+                .ok_or_else(denied)?;
+            (item.bot.clone(), work.generation)
+        };
+        if !self
+            .bots()
+            .find(&board_id)
+            .is_some_and(|bot| bot.id == board_id && !bot.paused)
+        {
+            return Err(denied());
+        }
+        Ok(format!(
+            "Item {key} generation {generation} held by this session."
+        ))
+    }
+
     /// An item as listed now: its read-time `stale`, `limitUntil` and linked sessions' states.
     pub(crate) fn read_item(
         &self,
@@ -269,6 +357,9 @@ impl AgentControl {
 
     /// `ompdesk_item`: only a bot's chat (a session in its folder) has items.
     pub(crate) async fn item_tool(&self, caller: &ControlTab, args: ItemArgs) -> R<String> {
+        if args.action == "claim" {
+            return self.confirm_item_assignment(caller, &args);
+        }
         let Some(bot) = self.bot_of_folder(&caller.cwd) else {
             return fail("ompdesk_item works in a bot's chat");
         };

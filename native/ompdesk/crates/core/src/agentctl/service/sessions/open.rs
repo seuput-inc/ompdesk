@@ -426,11 +426,7 @@ impl AgentControl {
             let Some((bot, sender)) = owner.as_deref().zip(caller.session_path.as_deref()) else {
                 return fail("item works only from a bot's chat.");
             };
-            if !self
-                .bots()
-                .find(bot)
-                .is_some_and(|board| !board.paused && board.has_session(sender))
-            {
+            if !self.item_assigner(caller, bot) {
                 return fail("Only a registered chat of this bot can assign its items.");
             }
             if device.as_ref().is_some_and(Option::is_some) {
@@ -466,14 +462,7 @@ impl AgentControl {
                 if let Some(opening) = opening {
                     opening.wait().await;
                 }
-                if !self.host.state().tabs.iter().any(|tab| {
-                    tab.tab_id == caller.tab_id
-                        && tab.session_path == caller.session_path
-                        && tab.device.is_none()
-                        && tab.cwd == caller.cwd
-                }) || !self.bots().of_folder(&caller.cwd).is_some_and(|board| {
-                    board.id == bot && !board.paused && board.has_session(sender)
-                }) {
+                if !self.item_assigner(caller, bot) {
                     return fail("The assigning bot chat changed.");
                 }
                 let store = self.items();
@@ -797,6 +786,9 @@ impl AgentControl {
             });
         }
         if let Some(id) = &args.item {
+            if !bot_spawn.is_some_and(|(bot, _)| self.item_assigner(caller, bot)) {
+                return fail("The assigning bot chat changed.");
+            }
             let path = match child.as_ref().and_then(|tab| tab.session_path.clone()) {
                 Some(path) if !path.is_empty() => path,
                 _ => {
