@@ -8,7 +8,9 @@
 import {
 	ArrowLeft,
 	AtSign,
+	ChevronsDownUp,
 	Copy,
+	Ellipsis,
 	ExternalLink as ExternalLinkIcon,
 	FilePlus,
 	Folder,
@@ -19,7 +21,6 @@ import {
 	Pencil,
 	Pin,
 	RefreshCw,
-	TextSearch,
 	Trash2,
 } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -29,10 +30,10 @@ import type { RpcGitChanges } from "../../../shared/rpc-types";
 import { useCompactShell } from "../../hooks/use-shell-mode";
 import { errorMessage } from "../../lib/error-detail";
 import { FILE_DRAG_TYPE } from "../../lib/file-drag";
-import { copyText, formatBytes } from "../../lib/format";
+import { basename, copyText, formatBytes } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
-import { actionKbd, PLATFORM } from "../../lib/keymap";
+import { PLATFORM } from "../../lib/keymap";
 import { lastRead, rememberRead } from "../../lib/last-read";
 import { useRuntimeTabId, useSessionRuntime } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
@@ -48,7 +49,9 @@ import {
 	EmptyState,
 	ErrorDetail,
 	IconButton,
+	MenuButton,
 	SearchField,
+	SegmentedChoice,
 	SkeletonRows,
 	Tabs,
 	Tooltip,
@@ -533,7 +536,6 @@ export function FilesPanel() {
 	const openFilePreview = useUiStore(s => s.openFilePreview);
 	const revealPath = useUiStore(s => s.filesRevealPath);
 	const searchSeq = useUiStore(s => s.filesSearchSeq);
-	const keymapOverrides = useUiStore(s => s.keymapOverrides);
 	/** The body searches file contents instead of showing the tree. */
 	const [contentSearch, setContentSearch] = useState(searchSeq > 0);
 	useEffect(() => {
@@ -665,23 +667,24 @@ export function FilesPanel() {
 	/** Folder new entries go into: the selected folder, else the project root. */
 	const createParent = selectedId?.startsWith("dir:") ? selectedId.slice(4) : "";
 
+	const createItems = (parent: string): ContextMenuItem[] => [
+		{
+			id: "new-file",
+			label: t("filesPanel.newFile"),
+			icon: FilePlus,
+			onSelect: () => startCreate("createFile", parent),
+		},
+		{
+			id: "new-folder",
+			label: t("filesPanel.newFolder"),
+			icon: FolderPlus,
+			onSelect: () => startCreate("createFolder", parent),
+		},
+	];
+
 	const menuItems = (entry: Entry): ContextMenuItem[] => {
 		const items: ContextMenuItem[] = [];
-		if (entry.kind === "dir")
-			items.push(
-				{
-					id: "new-file",
-					label: t("filesPanel.newFile"),
-					icon: FilePlus,
-					onSelect: () => startCreate("createFile", entry.path),
-				},
-				{
-					id: "new-folder",
-					label: t("filesPanel.newFolder"),
-					icon: FolderPlus,
-					onSelect: () => startCreate("createFolder", entry.path),
-				},
-			);
+		if (entry.kind === "dir") items.push(...createItems(entry.path));
 		else
 			items.push({
 				id: "mention",
@@ -865,14 +868,23 @@ export function FilesPanel() {
 	return (
 		<div className="flex h-full min-h-0 min-w-0 flex-col">
 			<PanelToolbar>
-				{/* The empty state already says there is nothing; a bare number never stands alone. */}
+				<span className="min-w-0 flex-1 truncate text-sc-sm font-medium" title={cwd}>
+					{basename(cwd)}
+				</span>
 				{fileCount > 0 && (
-					<span className="px-1 text-sc-xs tabular-nums text-(--sc-text-subtle)" data-file-count>
+					<span className="sr-only" data-file-count>
 						{t(truncated ? "filesPanel.countMore" : "filesPanel.count", {
 							count: fileCount,
 						})}
 					</span>
 				)}
+				<IconButton
+					disabled={expanded.size === 0}
+					icon={<ChevronsDownUp />}
+					label={t("prCenter.files.collapseAll")}
+					onClick={() => setExpanded(new Set())}
+					size="sm"
+				/>
 				<IconButton
 					disabled={loading}
 					icon={<RefreshCw />}
@@ -880,27 +892,26 @@ export function FilesPanel() {
 					onClick={refresh}
 					size="sm"
 				/>
-				<IconButton
+				<MenuButton
+					align="end"
 					disabled={error !== null}
-					icon={<FilePlus />}
-					label={t("filesPanel.newFile")}
-					onClick={() => startCreate("createFile", createParent)}
+					icon={<Ellipsis />}
+					items={createItems(createParent)}
+					label={t("filesPanel.actions")}
 					size="sm"
 				/>
-				<IconButton
-					disabled={error !== null}
-					icon={<FolderPlus />}
-					label={t("filesPanel.newFolder")}
-					onClick={() => startCreate("createFolder", createParent)}
-					size="sm"
-				/>
-				<IconButton
-					icon={<TextSearch />}
-					label={t("filesPanel.contentSearch.toggle")}
-					onClick={() => setContentSearch(value => !value)}
-					pressed={contentSearch}
-					shortcut={actionKbd("files.search", keymapOverrides)}
-					size="sm"
+			</PanelToolbar>
+			<div className="flex shrink-0 flex-col gap-2 px-3 py-2">
+				<SegmentedChoice
+					aria-label={t("filesPanel.search")}
+					fit="equal"
+					onChange={mode => setContentSearch(mode === "contents")}
+					optionAttr="data-files-search-mode"
+					options={[
+						{ value: "names", label: t("filesPanel.names") },
+						{ value: "contents", label: t("filesPanel.contents") },
+					]}
+					value={contentSearch ? "contents" : "names"}
 				/>
 				{!contentSearch && (
 					<div className="min-w-0 flex-1">
@@ -918,7 +929,7 @@ export function FilesPanel() {
 						)}
 					</div>
 				)}
-			</PanelToolbar>
+			</div>
 			{contentSearch ? (
 				<FileContentSearch focusSeq={searchSeq} tabId={tabId ?? undefined} />
 			) : (

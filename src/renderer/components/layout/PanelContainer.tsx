@@ -1,7 +1,20 @@
-import { Bot, Files, GitCompareArrows, Globe, Terminal, X } from "lucide-react";
+import {
+	Bot,
+	Files,
+	GitCompareArrows,
+	Globe,
+	House,
+	ListChecks,
+	MessagesSquare,
+	PanelsTopLeft,
+	Plug,
+	Terminal,
+	X,
+} from "lucide-react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useActiveTabRouteReady } from "../../hooks/use-active-tab-route";
+import { useInspectorBot } from "../../hooks/use-chat-inspector";
 import { useCompactShell, useShellMode } from "../../hooks/use-shell-mode";
 import { lazyChunk } from "../../lib/chunk-load";
 import { cx } from "../../lib/format";
@@ -10,7 +23,7 @@ import { actionShortcut } from "../../lib/keymap";
 import { lastRead, rememberRead } from "../../lib/last-read";
 import { SessionRuntimeProvider, sessionRuntime } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
-import { CLOSED_FILE_VIEW, type PanelTab, useUiStore } from "../../stores/ui";
+import { CLOSED_FILE_VIEW, type InspectorTab, useUiStore } from "../../stores/ui";
 import { IconButton, PanelErrorBoundary, Sheet } from "../common";
 import { PanelActionsContext } from "../panels/PanelChrome";
 import type { PanelView as LoadedPanelView, PanelViewProps } from "./PanelViews";
@@ -40,10 +53,9 @@ function PanelViewSlot(props: PanelViewProps) {
 	);
 }
 
-const MIN_WIDTH = 360;
+const MIN_WIDTH = 220;
 const MAX_WIDTH = 840;
-/** Docked default range; dragging may widen it for diffs. */
-const DEFAULT_MAX_WIDTH = 460;
+const DEFAULT_WIDTH = 280;
 const PANEL_WIDTH_PREF = "gui.panelWidth";
 /** `lib/last-read.ts` key of the width the pref last gave: the next mount paints it at its first frame. */
 const PANEL_WIDTH_READ = "panel-width";
@@ -59,24 +71,31 @@ function fitPanelWidth(saved: number): number {
 /** The panel opens at the width it last had, not at the default for a moment until the pref's read answers. */
 function initialPanelWidth(): number {
 	const known = lastRead<number>(undefined, PANEL_WIDTH_READ);
-	return typeof known === "number" && Number.isFinite(known) ? fitPanelWidth(Math.round(known)) : defaultPanelWidth();
+	return fitPanelWidth(typeof known === "number" && Number.isFinite(known) ? Math.round(known) : DEFAULT_WIDTH);
 }
 
-function defaultPanelWidth(): number {
-	const viewportWidth = Number.isFinite(window.innerWidth) && window.innerWidth > 0 ? window.innerWidth : 1440;
-	return Math.min(DEFAULT_MAX_WIDTH, Math.max(MIN_WIDTH, Math.round(viewportWidth * 0.28)));
-}
-
-/**
- * The panel's four views. Every other session view opens as a sheet (`ViewSheetHost`) or lives on the work board,
- * Settings or the composer, so the panel has no View options list.
- */
-const VIEWS = [
-	{ id: "terminal", labelKey: "panel.tabs.terminal", icon: Terminal },
-	{ id: "diff", labelKey: "panel.tabs.diff", icon: GitCompareArrows },
-	{ id: "preview", labelKey: "panel.tabs.preview", icon: Globe },
+const PROJECT_VIEWS = [
+	{ id: "files", labelKey: "panel.inspector.explorer", icon: Files },
+	{ id: "agents", labelKey: "agents.title", icon: PanelsTopLeft },
+	{ id: "diff", labelKey: "panel.inspector.sourceControl", icon: GitCompareArrows },
+	{ id: "checks", labelKey: "chat.work.copy.checks", icon: ListChecks },
+] satisfies { id: InspectorTab; labelKey: string; icon: typeof Files }[];
+const BOT_VIEWS = [
+	{ id: "bot-home", labelKey: "panel.inspector.home", icon: House },
+	{ id: "bot-connectors", labelKey: "bots.connectors.title", icon: Plug },
+	{ id: "bot-chats", labelKey: "bots.pane.chats", icon: MessagesSquare },
 	{ id: "files", labelKey: "panel.tabs.files", icon: Files },
-] satisfies { id: PanelTab; labelKey: string; icon: typeof Files }[];
+] satisfies { id: InspectorTab; labelKey: string; icon: typeof Files }[];
+const AUX_VIEWS = [
+	{ id: "terminal", labelKey: "panel.tabs.terminal", icon: Terminal },
+	{ id: "preview", labelKey: "panel.tabs.preview", icon: Globe },
+] as const;
+const COMPACT_PROJECT_VIEWS = [
+	AUX_VIEWS[0],
+	{ id: "diff", labelKey: "panel.tabs.diff", icon: GitCompareArrows },
+	AUX_VIEWS[1],
+	{ id: "files", labelKey: "panel.tabs.files", icon: Files },
+] as const;
 /** Not one of the switchable views: a dragged or menu-opened subagent row puts it in the panel. */
 const SUBAGENT_VIEW = { id: "subagent", labelKey: "panel.tabs.subagent", icon: Bot } as const;
 
@@ -85,14 +104,23 @@ function PanelHeader({ bare }: { bare?: boolean }) {
 	const panelTab = useUiStore(s => s.panelTab);
 	const setPanelTab = useUiStore(s => s.setPanelTab);
 	const togglePanel = useUiStore(s => s.togglePanel);
-	const current = panelTab === "subagent" ? SUBAGENT_VIEW : (VIEWS.find(view => view.id === panelTab) ?? VIEWS[0]);
+	const bot = useInspectorBot();
+	const compact = useCompactShell();
+	const views = bot ? BOT_VIEWS : compact ? COMPACT_PROJECT_VIEWS : PROJECT_VIEWS;
+	const current =
+		panelTab === "subagent"
+			? SUBAGENT_VIEW
+			: (views.find(view => view.id === panelTab) ??
+				PROJECT_VIEWS.find(view => view.id === panelTab) ??
+				AUX_VIEWS.find(view => view.id === panelTab) ??
+				views[0]);
 	// The pressed view icon beside it already names the view, so the title is said only to screen readers; it shows
 	// where no icon says it (a phone's sheet, whose views are the tab bar under the thumb, and a subagent's transcript).
-	const iconNamed = !bare && panelTab !== "subagent";
+	const iconNamed = !bare && !bot && views.some(view => view.id === panelTab);
 	return (
 		<div className="omp-panel-topbar drag-region flex min-h-(--sc-topbar-h) shrink-0 flex-wrap items-center gap-x-1 px-3">
 			<span
-				className="min-w-24 flex-1 truncate text-sc-sm font-medium text-(--sc-text)"
+				className="min-w-0 truncate text-sc-sm font-medium text-(--sc-text)"
 				data-panel-title=""
 				title={iconNamed ? undefined : t(current.labelKey)}
 			>
@@ -104,9 +132,10 @@ function PanelHeader({ bare }: { bare?: boolean }) {
 					className="no-drag flex shrink-0 items-center"
 					data-panel-views=""
 				>
-					{VIEWS.map(view => (
+					{views.map(view => (
 						<IconButton
 							key={view.id}
+							data-inspector-tab={view.id}
 							icon={<view.icon />}
 							label={t(view.labelKey)}
 							aria-pressed={panelTab === view.id}
@@ -117,7 +146,7 @@ function PanelHeader({ bare }: { bare?: boolean }) {
 				</div>
 			)}
 			<IconButton
-				className="no-drag shrink-0"
+				className="no-drag ml-auto shrink-0"
 				data-panel-close=""
 				icon={<X />}
 				label={t("panel.close")}
@@ -134,12 +163,14 @@ function PanelTabBar() {
 	const t = useT();
 	const panelTab = useUiStore(s => s.panelTab);
 	const setPanelTab = useUiStore(s => s.setPanelTab);
+	const views = useInspectorBot() ? BOT_VIEWS : COMPACT_PROJECT_VIEWS;
 	return (
 		<nav aria-label={t("panel.primaryViews")} className="omp-panel-tabbar" data-panel-tabbar="">
-			{VIEWS.map(view => (
+			{views.map(view => (
 				// controls-ok: the phone's thumb bar; .omp-panel-tabbar draws each view button whole (icon over its word, 44 px)
 				<button
 					aria-current={panelTab === view.id ? "page" : undefined}
+					data-inspector-tab={view.id}
 					key={view.id}
 					onClick={() => setPanelTab(view.id)}
 					type="button"

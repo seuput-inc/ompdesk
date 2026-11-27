@@ -30,10 +30,11 @@ import {
 	Play,
 	Plus,
 	RotateCcw,
+	Settings2,
 	Trash2,
 	X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { type WaitingAsker, waitingAskers } from "../../../shared/bot-connectors";
 import {
 	type Bot,
@@ -66,6 +67,8 @@ import {
 	Spinner,
 	StatusDot,
 } from "../common";
+import { BotAvatar } from "./BotAvatar";
+import { BotLineText } from "./BotLineText";
 import {
 	type BotAutomation,
 	botAutomations,
@@ -77,6 +80,7 @@ import { type LaunchStep, openBotChat, retryKickoff, useBotLaunch } from "./bot-
 import { openBotPage } from "./bot-page";
 import { openItem } from "./items/item-store";
 import { type MemoryLineChange, memoryLineChanges, undoMemoryLine } from "./memory-lines";
+import { useBotFacts } from "./use-bot-facts";
 
 /** The item's own page, under the bot's Items tab. */
 function showItem(bot: Bot, item: Item): void {
@@ -95,6 +99,55 @@ export function BotActivity({ bot }: { bot: Bot }) {
 			{!bot.device && <Workers bot={bot} />}
 			<Automations bot={bot} />
 			<TidyUp bot={bot} />
+		</div>
+	);
+}
+
+export function BotInspectorHome({ bot }: { bot: Bot }) {
+	const t = useT();
+	const items = useBotsStore(s => s.state.items);
+	const open = items.filter(item => item.bot === bot.id && item.device === bot.device && !item.closedAt);
+	const selected = useMemo(() => [bot], [bot]);
+	const facts = useBotFacts(selected).get(bot.id);
+	const mark = bot.paused ? "paused" : facts?.needsYou ? "needsYou" : facts?.failed ? "failed" : null;
+	return (
+		<div className="flex min-w-0 flex-col gap-4 overflow-auto p-4" data-inspector-bot={bot.id}>
+			<header className="flex items-center gap-2">
+				<BotAvatar bot={bot} mark={mark} size={36} working={facts?.working} />
+				<div className="min-w-0 flex-1">
+					<div className="truncate text-sc-sm font-medium">{bot.name}</div>
+					<BotLineText
+						bot={bot}
+						className="text-sc-xs text-(--sc-text-muted)"
+						line={facts?.line ?? { kind: "idle" }}
+					/>
+				</div>
+				<IconButton
+					icon={<Settings2 />}
+					label={t("bots.menu.settings")}
+					onClick={() => openBotPage(bot.id, "settings")}
+					size="sm"
+				/>
+			</header>
+			{open.length ? (
+				<ul aria-label={t("bots.pane.items")}>
+					{open.map(item => (
+						<li key={item.id}>
+							<Button onClick={() => showItem(bot, item)} size="sm" variant="ghost">
+								{item.title}
+							</Button>
+						</li>
+					))}
+				</ul>
+			) : (
+				<EmptyState
+					className="py-8"
+					description={t("bots.items.empty.body")}
+					icon={<Check />}
+					title={t("bots.items.empty.title")}
+				/>
+			)}
+			<Automations bot={bot} />
 		</div>
 	);
 }

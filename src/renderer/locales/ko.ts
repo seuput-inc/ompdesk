@@ -5240,6 +5240,13 @@ export const ko: Record<string, string> = {
 	"scm.history.resetHardBody":
 		"브랜치가 {sha} 커밋으로 옮겨져요. 이후 커밋과 커밋하지 않은 변경 사항이 모두 사라져요.",
 	"scm.history.actionFailed": "git 작업을 마치지 못했어요",
+	"filesPanel.actions": "파일 작업",
+	"filesPanel.names": "이름",
+	"filesPanel.contents": "내용",
+	"panel.inspector.home": "홈",
+	"panel.inspector.explorer": "탐색기",
+	"panel.inspector.sourceControl": "소스 제어",
+	"panel.inspector.remoteConnectors": "이 봇을 소유한 컴퓨터에서 커넥터를 관리하세요.",
 	"panel.tabs.diff": "변경 사항",
 	"panel.tabs.terminal": "터미널",
 	"panel.tabs.preview": "미리보기",

@@ -7,6 +7,7 @@ import { type ElectronApplication, _electron as electron } from "playwright";
 import { writeShellGh } from "./fixture/shell-gh";
 import { exitApp, fixtureOmp, openDestination, pressShortcutUntilVisible, walkRemotePicker } from "./harness";
 import { freePort, remoteTailscale } from "./remote-harness";
+import { selectInspectorView } from "./select-inspector-view";
 import { capturer, type Finding, resize } from "./shell-capture";
 
 // Opt-in flow audit of the right panel, Settings, Stats and Agents
@@ -218,9 +219,9 @@ test("remote connection flow", async () => {
 		// The right panel on a remote tab: the files are B's, the terminal is local-only.
 		const aside = client.page.locator("aside[data-docked]");
 		await pressShortcutUntilVisible(client.page, "ControlOrMeta+j", aside);
-		await aside.locator(".omp-panel-topbar").getByRole("button", { name: "Files", exact: true }).click();
+		await selectInspectorView(client.page, "files");
 		await a.shoot("remote-files");
-		await aside.locator(".omp-panel-topbar").getByRole("button", { name: "Terminal", exact: true }).click();
+		await selectInspectorView(client.page, "terminal");
 		await a.shoot("remote-terminal");
 		await openSettings(client.page, "models");
 		await a.shoot("remote-models");
@@ -529,8 +530,7 @@ for (const [language, theme] of [
 		try {
 			const aside = instance.page.locator("aside[data-docked]");
 			await pressShortcutUntilVisible(instance.page, "ControlOrMeta+j", aside);
-			// The view buttons lead the header; Terminal is the first.
-			await aside.locator(".omp-panel-topbar").getByRole("button").first().click();
+			await selectInspectorView(instance.page, "terminal");
 			const banner = aside.locator('[role="alert"], [role="status"]').filter({
 				hasText: language === "en" ? "The terminal didn't respond" : /터미널/,
 			});
@@ -674,21 +674,14 @@ for (const [language, theme] of [
 			// The right panel: every view, Files in natural order, the big diff, a cancelled task.
 			const aside = page.locator("aside[data-docked]");
 			await pressShortcutUntilVisible(page, "ControlOrMeta+j", aside);
-			const topbar = aside.locator(".omp-panel-topbar");
-			const views = ["Terminal", "Changes", "Preview", "Files"];
-			const koViews: Record<string, string> = {};
+			const views = ["terminal", "diff", "preview", "files"] as const;
 			for (const view of views) {
-				// The view buttons lead the header, in this order, in either language.
-				const button = topbar.getByRole("button").nth(views.indexOf(view));
-				koViews[view] = (await button.getAttribute("aria-label")) ?? view;
-			}
-			for (const view of views) {
-				await topbar.getByRole("button", { name: koViews[view], exact: true }).click();
+				await selectInspectorView(page, view);
 				await page.waitForTimeout(400);
 				await rec.shoot(`panel-${view.toLowerCase()}`);
 			}
 			// Files: numbered names in natural order.
-			await topbar.getByRole("button", { name: koViews.Files, exact: true }).click();
+			await selectInspectorView(page, "files");
 			const names = await aside.locator('[role="treeitem"]').allInnerTexts();
 			const files = names.map(name => name.trim()).filter(name => /^file-\d+\.txt$/.test(name));
 			rec.notes.push(`file order: ${files.join(", ")}`);
@@ -706,7 +699,7 @@ for (const [language, theme] of [
 			}
 			await rec.shoot("files-natural-order");
 			// Changes: the 1,200-line rewrite keeps four-digit line numbers on one line.
-			await topbar.getByRole("button", { name: koViews.Changes, exact: true }).click();
+			await selectInspectorView(page, "diff");
 			await aside.locator('button[title="big.ts"]').click();
 			const preview = aside.locator(".omp-changes-preview");
 			await expect(preview).toContainText("const a = line 1", { timeout: 20_000 });

@@ -2,7 +2,7 @@
  * Side panel (PanelContainer): Changes · Files · Logs · Queue · Tree · Jobs,
  * the same in an agent and a chat tab (a chat is a full agent outside any
  * project). Todo/plan/agents cards stay in the center dock. Docked width
- * defaults into the spec's 360–460px range and stays resizable.
+ * starts at 280px unless the person has saved another width.
  * Same linkedom + react-dom harness as composer/ComposerModes.chip.test.tsx.
  */
 
@@ -118,10 +118,10 @@ describe("PanelContainer", () => {
 			expect(document.querySelector('button[aria-label="View options"]')).toBeNull();
 			expect(document.querySelector(".omp-panel-topbar")?.querySelector('[aria-label="Refresh"]')).toBeNull();
 			expect(document.querySelector("[data-panel-actions]")).not.toBeNull();
-			for (const label of ["Terminal", "Changes", "Preview", "Files"]) {
+			for (const label of ["Explorer", "Agents", "Source Control", "Checks"]) {
 				const button = document.querySelector(`button[aria-label="${label}"]`);
 				expect(button).not.toBeNull();
-				expect(button?.getAttribute("aria-pressed")).toBe(String(label === "Files"));
+				expect(button?.getAttribute("aria-pressed")).toBe(String(label === "Explorer"));
 			}
 			expect(document.querySelector("aside")?.getAttribute("aria-label")).toBe("Side panel");
 			expect(document.querySelector('button[aria-label="Close side panel"]')).not.toBeNull();
@@ -152,12 +152,12 @@ describe("PanelContainer", () => {
 		expect(migrateDefaultPanelTab(null)).toBe("diff");
 	});
 
-	it("defaults to the docked 360–460px range on wide windows", async () => {
+	it("leaves the extra room to the chat when opening a fresh inspector on a wide window", async () => {
 		Object.defineProperty(window, "innerWidth", { configurable: true, value: 2400 });
 		seedActiveTab("agent");
 		await mount(<PanelContainer />);
 
-		expect((document.querySelector("aside") as HTMLElement | null)?.style.width).toBe("460px");
+		expect((document.querySelector("aside") as HTMLElement | null)?.style.width).toBe("280px");
 	});
 
 	it("opens at the width it last had, before the pref's read answers", async () => {
@@ -207,7 +207,7 @@ describe("PanelContainer", () => {
 		useUiStore.setState({ panelTab: "files", panelVisible: true, filePreviewPath: "src/a.ts" });
 		await mount(<PanelContainer />);
 		const aside = document.querySelector("aside") as HTMLElement;
-		expect(aside.style.width).toBe("403px");
+		expect(aside.style.width).toBe("280px");
 
 		const expand = document.querySelector('button[aria-label="Expand panel"]') as HTMLElement;
 		await act(async () => {
@@ -220,7 +220,7 @@ describe("PanelContainer", () => {
 		await act(async () => {
 			useUiStore.getState().closeFilePreview();
 		});
-		expect(aside.style.width).toBe("403px");
+		expect(aside.style.width).toBe("280px");
 		expect(useUiStore.getState().filePreviewExpanded).toBe(false);
 	});
 
