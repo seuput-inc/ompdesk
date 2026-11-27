@@ -12,13 +12,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import changelogMarkdown from "../../../../CHANGELOG.md?raw";
 import { I18nProvider, translate } from "../../lib/i18n";
-import { loadChangelog, WHATS_NEW_PREF } from "../../lib/whats-new";
+import { loadChangelog, WHATS_NEW_AUTO_HIDE_MS, WHATS_NEW_PREF } from "../../lib/whats-new";
 import { useFirstRunStore } from "../../stores/first-run";
 import { useMachineSetupStore } from "../../stores/machine-setup";
 import { useSessionStore } from "../../stores/session";
 import { useStarterGuideStore } from "../../stores/starter-guide";
 import { useUiStore } from "../../stores/ui";
-import { WHATS_NEW_AUTO_HIDE_MS, WhatsNewCard } from "../layout/WhatsNewCard";
+import { WhatsNewCard } from "../layout/WhatsNewCard";
 import { ChangelogDialog, WhatsNewNotice } from "./ChangelogDialog";
 
 // The first versioned release heading of the bundled file (e.g. "[0.1.0] - 2026-10-14"), so the test follows the
@@ -67,12 +67,13 @@ async function mount(ui: ReactElement): Promise<void> {
 	await act(async () => {
 		root?.render(<I18nProvider>{ui}</I18nProvider>);
 	});
+	if (useUiStore.getState().whatsNewCard) await act(async () => void (await import("../layout/WhatsNewCardBody")));
 }
 
-/** Let the changelog import and the notice's async prefs/version reads finish. */
+/** Wait for the bundled notes, any lazy card body, and the notice's prefs/version reads. */
 const settle = () =>
 	act(async () => {
-		await loadChangelog();
+		await Promise.all([loadChangelog(), vi.dynamicImportSettled()]);
 		const { promise, resolve } = Promise.withResolvers<void>();
 		setTimeout(resolve, 0);
 		await promise;

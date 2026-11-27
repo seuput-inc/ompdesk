@@ -845,23 +845,28 @@ export interface RuntimeErrorReport {
  */
 export type UpdateInstallMode = "automatic" | "relaunch" | "manual";
 
+/** One compatible release. The summary comes from this exact version's published notes, if available. */
+export interface UpdateReleaseInfo {
+	readonly version: string;
+	readonly mode: UpdateInstallMode;
+	readonly summary?: { readonly en: string; readonly ko: string };
+}
+
 export type UpdateStatus =
 	| { state: "idle" }
 	| { state: "checking" }
-	| { state: "available"; version: string; notes?: string; mode: UpdateInstallMode }
-	| { state: "downloading"; version: string; mode: UpdateInstallMode; percent: number }
+	| ({ state: "available" } & UpdateReleaseInfo)
+	| ({ state: "downloading"; percent: number } & UpdateReleaseInfo)
 	/**
 	 * `restartAt` (epoch ms): the app installs by itself then (Install updates automatically); "later" postpones it.
 	 * `installing`: the install is under way (the installer starts, then the app quits); the notice says so, and
 	 * "Restart & install" does nothing meanwhile.
 	 */
-	| {
+	| ({
 			state: "downloaded";
-			version: string;
-			mode: UpdateInstallMode;
 			restartAt?: number;
 			installing?: true;
-	  }
+	  } & UpdateReleaseInfo)
 	/** `unsupportedSystem`: a newer release exists that this Mac's macOS cannot run (the macOS notice names it). */
 	| { state: "not-available"; version: string; unsupportedSystem?: UnsupportedSystemUpdate }
 	/** `message` is user-facing copy in the UI language; `detail` keeps the raw

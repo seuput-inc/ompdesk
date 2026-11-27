@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../../lib/i18n";
+import { WHATS_NEW_AUTO_HIDE_MS } from "../../lib/whats-new";
 import { useMachineSetupStore } from "../../stores/machine-setup";
 import { useSessionStore } from "../../stores/session";
 import { FEATURE_TIPS, type FeatureTipId, STARTER_STEPS, useStarterGuideStore } from "../../stores/starter-guide";
@@ -18,7 +19,6 @@ import { webRuntime } from "../../web/runtime";
 import { Banner, Button } from "../common";
 import { Collapse } from "../common/Collapse";
 import { useFirstRunActive } from "../onboarding/FirstRunSlot";
-import { WHATS_NEW_AUTO_HIDE_MS } from "./WhatsNewCard";
 
 const TRY: Record<FeatureTipId, () => void> = {
 	board: () => useUiStore.getState().openBoard(),

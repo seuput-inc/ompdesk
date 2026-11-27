@@ -92,9 +92,10 @@ async function launch(staged: string, failed?: string) {
 	process.env.OMP_DEV_UPDATE_BUNDLE = bundle;
 	process.env.OMP_DEV_UPDATE_STAGED = stagedBundle;
 	process.env.OMP_DEV_UPDATE_STAGED_VERSION = staged;
-	const { setupUpdater, applyUpdate } = await import("./updater");
+	// Each launch needs fresh updater state after resetModules.
+	const updater = await import("./updater");
 	const registry = new IpcRegistry({ handle: () => {}, on: () => {} });
-	setupUpdater(registry, {
+	updater.setupUpdater(registry, {
 		enabled: () => false,
 		resumes: () => true,
 		busy: () => false,
@@ -108,7 +109,7 @@ async function launch(staged: string, failed?: string) {
 	const quit = () => {
 		for (const listener of mocks.appEvents.get("will-quit") ?? []) listener();
 	};
-	return { bundle, stagedBundle, applyUpdate, quit };
+	return { bundle, stagedBundle, updater, applyUpdate: updater.applyUpdate, quit };
 }
 
 afterEach(() => {
@@ -123,6 +124,36 @@ beforeEach(() => {
 });
 
 describe("a quit with a staged version that failed to start before", () => {
+	it("adds notes to a restored installer only after a lookup of its exact version", async () => {
+		const version = "99.0.0";
+		const { updater } = await launch(version, version);
+		// A static spy would patch the feed from before launch reset the module graph.
+		const feed = await import("./update-release");
+		const lookup = vi.spyOn(feed, "lookupRelease");
+		process.env.OMP_DEV_UPDATE_CHECK = "1";
+		const summary = { ko: "설치가 빨라졌습니다.", en: "Installation is faster." };
+		const candidate = (releaseVersion: string) => ({
+			version: releaseVersion,
+			releaseName: `v${releaseVersion}`,
+			releaseDate: "2026-11-01T00:00:00.000Z",
+			notes: `${summary.ko}\n\n---\n\n${summary.en}`,
+			file: { name: feed.UPDATE_ASSETS.mac, size: 120, sha512: "x" },
+			assetUrl: "https://api.github.com/repos/example/example/releases/assets/1",
+			minimumSystemVersion: "23.0.0",
+			macDownloadName: `ompdesk-${releaseVersion}-arm64.dmg`,
+		});
+		const restored = { state: "downloaded", mode: "relaunch", version };
+		try {
+			expect(updater.updateStatus()).toEqual(restored);
+			lookup.mockResolvedValueOnce(candidate(updater.appVersion()));
+			expect(await updater.checkForUpdate()).toEqual(restored);
+			lookup.mockResolvedValueOnce(candidate(version));
+			expect(await updater.checkForUpdate()).toEqual({ ...restored, summary });
+		} finally {
+			lookup.mockRestore();
+		}
+	});
+
 	it("starts no swap at an ordinary quit, and says so", async () => {
 		const { quit } = await launch("0.45.0", "0.45.0");
 		quit();
