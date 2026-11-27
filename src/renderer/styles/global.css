@@ -448,6 +448,21 @@ html:not([data-input="touch"]) .omp-inspector .omp-explorer [data-files-search-m
 	color: var(--sc-text-muted);
 }
 
+.omp-inspector [data-inspector-bot] > [data-empty-state] {
+	min-height: 13.5rem;
+}
+
+.omp-inspector [data-inspector-bot] > [data-empty-state] > div > div {
+	font-size: var(--sc-font-sm);
+	font-weight: 500;
+}
+
+.omp-inspector [data-inspector-bot] > [data-empty-state] p,
+.omp-inspector [data-inspector-bot] [data-bot-automations] button {
+	font-size: var(--sc-font-xs);
+	font-weight: 400;
+}
+
 /* Side panel docked left (Settings › General › Window): it takes the
    top-left corner from the session view when the sidebar is hidden, and
    gives the top-right corner (Windows caption buttons) back to it. */

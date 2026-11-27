@@ -40,6 +40,7 @@ test("project and bot conversations keep their own inspector on reopen and on re
 			await expect(panel).toHaveAttribute("aria-busy", "false");
 			await expect.poll(async () => Math.round((await panel.boundingBox())?.x ?? -1)).toBe(1000);
 			await page.evaluate(() => document.fonts.ready.then(() => true));
+			await page.mouse.move(640, 430);
 			const geometry = await panel.evaluate(element => ({
 				viewport: [innerWidth, innerHeight],
 				dpr: devicePixelRatio,
@@ -59,6 +60,7 @@ test("project and bot conversations keep their own inspector on reopen and on re
 		await toggle.click();
 		await selected("Explorer");
 		await expect(panel.getByRole("radio", { name: "Names" })).toBeChecked();
+		await expect(panel.getByText("No files in this workspace", { exact: true })).toBeVisible();
 		await capture("project-open");
 		await views.getByRole("button", { name: "Source Control" }).click();
 		await page.locator('[data-bot-row="bot-courier"]').click();
@@ -66,6 +68,7 @@ test("project and bot conversations keep their own inspector on reopen and on re
 		await say("Show the project status.");
 		await selected("Home");
 		await expect(panel.locator('[data-inspector-bot="bot-courier"]')).toContainText("Courier");
+		await expect(panel.getByRole("button", { name: "Look around", exact: true })).toBeVisible();
 		await capture("bot-open");
 		const more = panel.locator("[data-inspector-bot] header").getByRole("button", { name: "More", exact: true });
 		await more.click();
