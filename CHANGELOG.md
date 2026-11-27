@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.150.0] - 2026-11-27
+
+Claude를 연결할 때 Claude 구독 또는 Anthropic API 키를 선택할 수 있습니다.
+
+<!-- en -->
+
+When connecting Claude, you can choose a Claude subscription or an Anthropic API key.
+
 ## [0.149.0] - 2026-11-27
 
 대화 속 A2UI 카드에 바로 답하고, 저장된 세션을 연결된 컴퓨터로 옮길 수 있습니다.
