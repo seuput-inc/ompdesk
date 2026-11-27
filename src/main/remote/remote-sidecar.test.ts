@@ -38,8 +38,9 @@ class FakeLink implements RemoteLink {
 		return (this.handlers[method]?.(record) ?? null) as T;
 	}
 
+	/** The requests sent, without the `tab.shown` notice every open is followed by. */
 	methods(): string[] {
-		return this.sent.map(request => request.method);
+		return this.sent.filter(request => request.method !== "tab.shown").map(request => request.method);
 	}
 }
 
@@ -389,6 +390,21 @@ describe("RemoteSidecar", () => {
 			["tab.syncImageGeneration", { rtab: "tab-1" }],
 			["tab.adoptCwd", { rtab: "tab-1", cwd: "/elsewhere" }],
 			["tab.restart", { rtab: "tab-1", sessionPath: "/s/next.jsonl" }],
+		]);
+	});
+
+	it("tells the host whether a window here shows the tab, after the open and on each change", async () => {
+		const { link, sidecar } = setup();
+		// Before the open nothing goes: the open itself is followed by the current answer.
+		sidecar.setShown("windows", true);
+		sidecar.start();
+		await settle();
+		sidecar.setShown("windows", true);
+		sidecar.setShown("windows", false);
+		await settle();
+		expect(link.sent.filter(request => request.method === "tab.shown").map(request => request.params)).toEqual([
+			{ rtab: "tab-1", shown: true },
+			{ rtab: "tab-1", shown: false },
 		]);
 	});
 
@@ -1171,7 +1187,7 @@ describe("RemoteSidecar", () => {
 		sidecar.linkStateChanged("online");
 		expect(sidecar.status).toBe("starting");
 		await settle();
-		expect(link.sent.slice(before).map(request => request.method)).toEqual(["tab.open"]);
+		expect(link.sent.slice(before).map(request => request.method)).toEqual(["tab.open", "tab.shown"]);
 		expect(link.sent[before]?.params).toMatchObject({ sessionPath: "/s/one.jsonl" });
 		sidecar.handleEvent(hostStatus("ready"));
 		expect(sidecar.status).toBe("ready");
@@ -1185,7 +1201,7 @@ describe("RemoteSidecar", () => {
 		const later = link.sent.length;
 		sidecar.linkStateChanged("online");
 		await settle();
-		expect(link.sent.slice(later).map(request => request.method)).toEqual(["tab.open", "tab.start"]);
+		expect(link.sent.slice(later).map(request => request.method)).toEqual(["tab.open", "tab.shown", "tab.start"]);
 	});
 
 	it("never brings up a tab nobody started, and closes its host tab on dispose", async () => {

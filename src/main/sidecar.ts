@@ -758,6 +758,8 @@ export class SidecarManager extends EventEmitter {
 	/** The running omp's bridge; null while none runs. */
 	#bridge: BridgeRelay | null = null;
 	#batcher: EventBatcher | null = null;
+	/** Who shows the tab now (`setShown`): the pool's windows, paired devices, views. */
+	readonly #shownBy = new Set<string>();
 	/**
 	 * The lane sends every `message_update` after the first of its message reduced (`sidecar/stream.rs`); this rebuilds
 	 * them whole, as a paired device rebuilds a host's. The lane sends whole again wherever this may lack the base.
@@ -1293,6 +1295,7 @@ export class SidecarManager extends EventEmitter {
 		this.syncDefaultBrowser();
 		this.syncUserProfile();
 		this.syncNextPrompt();
+		this.#syncShown();
 		this.syncAutoTitle();
 		this.syncJudgeAssist();
 		this.syncAccountRotation();
@@ -1733,6 +1736,18 @@ export class SidecarManager extends EventEmitter {
 				?.request("next_prompt_set", { suggestions: settings.suggestions, inline: settings.inline })
 				.catch(() => {});
 		}
+	}
+
+	setShown(viewer: string, shown: boolean): void {
+		const before = this.#shownBy.size > 0;
+		if (shown) this.#shownBy.add(viewer);
+		else this.#shownBy.delete(viewer);
+		if (before !== this.#shownBy.size > 0) this.#syncShown();
+	}
+
+	/** Fire-and-forget like syncNextPrompt: an unconnected bridge hears it on connect, an older omp refuses it. */
+	#syncShown(): void {
+		void this.#bridge?.request("next_prompt_shown", { shown: this.#shownBy.size > 0 }).catch(() => {});
 	}
 
 	/**

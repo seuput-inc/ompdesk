@@ -130,6 +130,9 @@ function forwardToWindow(win: ClientWindow, channel: string, data: unknown): voi
 export const DRAFT_COMMANDS = ["set_idle_compaction_draft", "set_next_prompt_draft"] as const;
 export type DraftCommand = (typeof DRAFT_COMMANDS)[number];
 
+/** The pool's own `setShown` viewer: the windows (desktop and paired phones' pages) whose full channel the tab has. */
+const POOL_VIEWER = "windows";
+
 /** An extension UI response (`ExtensionUIResponse`) in words, for the logs that keep what was chosen. */
 export function describeAnswer(frame: object): string {
 	if ("cancelled" in frame && frame.cancelled === true) return "dismissed";
@@ -1118,6 +1121,8 @@ export class SidecarPool {
 				for (const remove of removers) remove();
 			},
 		};
+		// The first window shows the tab: its omp may suggest again (a phone's page is a window here).
+		sidecar.setShown?.(POOL_VIEWER, true);
 	}
 
 	/** Stop forwarding the tab's full channel to window `winId` (`unwireFull`); the last window takes the listeners off. */
@@ -1128,6 +1133,7 @@ export class SidecarPool {
 			const handle = this.#handles.get(tab);
 			if (handle) handle.full = null;
 			full.remove();
+			handle?.sidecar.setShown?.(POOL_VIEWER, false);
 			// Already received while shown: deliver them, as when each was sent alone.
 			full.flush();
 			return;

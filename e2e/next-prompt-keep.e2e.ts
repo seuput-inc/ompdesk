@@ -1,10 +1,11 @@
 /**
  * A suggestion never vanishes on its own (the user's report, 24 Oct 2026: "원격이든 현재기기든 추천 프롬프트
  * 날라가지 않도록"). Main forwards a session's frames only while a window shows its tab, a page that reloads starts
- * with an empty memory, and a relaunch starts a new omp: a suggestion made while the tab was in the background, or
- * shown before a reload or a relaunch, was gone until the next turn. The tab's bridge keeps the session's last
- * suggestion (and journals it), `get_next_prompt` answers it as `last`, and every hydration puts it back. The fake
- * omp (e2e/fixture/rpc-ui.ts) mirrors the bridge; the bridge itself is unit-tested (bridge-next-prompt.test.ts).
+ * with an empty memory, and a relaunch starts a new omp. The tab's bridge keeps the session's last suggestion (and
+ * journals it), `get_next_prompt` answers it as `last`, and every hydration puts it back. A tab nobody shows asks the
+ * model nothing (the owner's decision, 25 Nov 2026): a turn that ends behind another tab is suggested for when the tab
+ * is shown again. The fake omp (e2e/fixture/rpc-ui.ts) mirrors the bridge; the bridge itself is unit-tested
+ * (bridge-next-prompt.test.ts), who counts as showing a tab by sidecar-pool.test.ts and host-services.test.ts.
  * A paired host's tab across a lost link: e2e/remote-resume.e2e.ts.
  */
 import * as fs from "node:fs/promises";
@@ -81,35 +82,41 @@ async function suggestions(page: Page, tabId: string): Promise<number> {
 	return (response.data as { requests?: { suggest?: number } } | undefined)?.requests?.suggest ?? 0;
 }
 
-test("a suggestion made while its tab was in the background is there on return, and after a reload", async () => {
+test("a turn that ends behind another tab is suggested for once the tab is shown, and the suggestion survives a reload", async () => {
 	test.setTimeout(150_000);
-	// The suggestion lands 4 s after the turn: the tab is in the background by then.
-	const launched = await launch({ latencyMs: 4_000 });
+	const launched = await launch({ latencyMs: 1 });
 	try {
 		const { page } = launched;
 		const first = await activeTab(page);
-		await composer(page).fill("hello there");
+		// The fake holds this turn open until `fixture:finish`, so it can end while another tab is in front.
+		await composer(page).fill("fixture running");
 		await composer(page).press("Enter");
-		await expect(page.getByText("Local fixture reply")).toHaveCount(1, { timeout: 30_000 });
+		await expect(page.locator(`[data-session-path="tab:${first}"]`)).toHaveCount(1, { timeout: 30_000 });
 		const before = (await tabs(page)).map(tab => tab.tabId);
 		await page.keyboard.press("ControlOrMeta+t");
 		await expect.poll(async () => (await tabs(page)).length).toBe(before.length + 1);
 		const second = (await tabs(page)).find(tab => !before.includes(tab.tabId))?.tabId;
 		if (!second) throw new Error("No new tab");
 		await expect.poll(() => activeTab(page)).toBe(second);
-		// The first tab's omp made its suggestion while the second tab was in front.
-		await expect.poll(() => suggestions(page, first), { timeout: 20_000 }).toBe(1);
-		await page.waitForTimeout(500);
+		const finished = await page.evaluate(
+			id => window.omp.rpc.commandForTab(id, { type: "bash", command: "fixture:finish" }),
+			first,
+		);
+		expect(finished.success).toBe(true);
+		// Nobody shows the first tab: its turn end asked the model nothing.
+		expect(await suggestions(page, first)).toBe(0);
 
 		// Back to the first tab the way a person goes: its sidebar row.
 		await page.locator(`[data-session-path="tab:${first}"]`).locator("button[data-roving-item]").click();
 		await expect.poll(() => activeTab(page)).toBe(first);
 		await expect(composer(page)).toHaveAttribute("placeholder", CANDIDATES[0], { timeout: 10_000 });
+		// Shown again: one request, for the moment it skipped.
+		expect(await suggestions(page, first)).toBe(1);
 
 		// A reload starts the page's memory empty: the tab's omp still has the suggestion.
 		await page.reload();
 		await page.waitForFunction(() => window.omp?.rpc != null);
-		await expect(page.getByText("Local fixture reply")).toHaveCount(1, { timeout: 30_000 });
+		await expect(page.getByText("Background run finished")).toHaveCount(1, { timeout: 30_000 });
 		await expect(composer(page)).toHaveAttribute("placeholder", CANDIDATES[0], { timeout: 10_000 });
 		// Nothing was asked of the model again.
 		expect(await suggestions(page, first)).toBe(1);

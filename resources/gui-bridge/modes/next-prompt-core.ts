@@ -1150,6 +1150,8 @@ export class InlineScheduler {
 
 export interface SuggestionGate {
 	enabled: boolean;
+	/** A window, phone or paired device shows the session's tab (main's `next_prompt_shown`). */
+	shown: boolean;
 	/** The session is idle: no run, no compaction, nothing queued. */
 	idle: boolean;
 	draftEmpty: boolean;
@@ -1164,16 +1166,17 @@ export interface SuggestionGate {
 	force?: boolean;
 }
 
-export type SuggestionSkip = "disabled" | "busy" | "typing" | "subagent" | "no_reply" | "unchanged";
+export type SuggestionSkip = "disabled" | "hidden" | "busy" | "typing" | "subagent" | "no_reply" | "unchanged";
 
 /**
  * Should a suggestion be generated now? Every request costs money, so the answer is no unless the feature
- * is on, the session is idle, the composer empty, there is a reply to follow up, and the state moved since
- * the last suggestion.
+ * is on, someone can see the tab, the session is idle, the composer empty, there is a reply to follow up, and the
+ * state moved since the last suggestion. A hidden tab's moment stays unsuggested, so showing it asks then.
  */
 export function gateSuggestion(gate: SuggestionGate): { ok: true } | { ok: false; reason: SuggestionSkip } {
 	if (!gate.enabled) return { ok: false, reason: "disabled" };
 	if (!gate.main) return { ok: false, reason: "subagent" };
+	if (!gate.shown) return { ok: false, reason: "hidden" };
 	if (!gate.idle) return { ok: false, reason: "busy" };
 	if (!gate.draftEmpty) return { ok: false, reason: "typing" };
 	if (!gate.hasReply) return { ok: false, reason: "no_reply" };
