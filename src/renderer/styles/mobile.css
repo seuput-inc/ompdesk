@@ -1111,6 +1111,30 @@ html[data-shell="phone"][data-input="touch"] .omp-work-chip::after {
 	inset-block: 0 -10px;
 }
 
+html[data-shell="phone"] .omp-work-chip:is([data-lines="2"], [data-lines="3"]) {
+	padding-block: var(--sc-space-1);
+	border-radius: var(--sc-radius-md);
+}
+
+html[data-shell="phone"][data-input="touch"] .omp-work-chip:is([data-lines="2"], [data-lines="3"])::after {
+	inset-block: 0;
+}
+
+.omp-work-chip-lines {
+	display: grid;
+	min-width: 0;
+	flex: 1;
+	line-height: 1.35;
+}
+
+.omp-work-chip-lines > :not(:first-child) {
+	color: var(--sc-text-secondary);
+}
+
+.omp-work-chip-lines [data-work-line="failure"] {
+	color: var(--sc-danger);
+}
+
 .omp-work-chip-plan {
 	display: flex;
 	min-width: 0;

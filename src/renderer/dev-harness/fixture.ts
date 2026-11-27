@@ -194,6 +194,25 @@ const MIXED_TODOS: Array<[string, "completed" | "in_progress" | "pending"]> | nu
 			]
 		: null;
 
+/** The owner's long plan: 25 empty phases, 24 open tasks and one completed item. */
+function longDockPlan() {
+	const open = new Set([0, 5, 10, 15, 20, 24, 28, 32]);
+	return Array.from({ length: 33 }, (_, index) => ({
+		name: `${index + 1}단계`,
+		tasks: !open.has(index)
+			? []
+			: [
+					{ content: `${index + 1}단계 결과 확인`, status: "pending" },
+					{
+						content: index === 24 ? "휴대폰에서 작업 현황 확인" : `${index + 1}단계 변경 검토`,
+						status: index === 24 ? "in_progress" : "pending",
+					},
+					{ content: index === 20 ? "#52 행 높이 측정" : `${index + 1}단계 검사 실행`, status: "pending" },
+					...(index === 24 ? [{ content: "작업 목록 준비", status: "completed" }] : []),
+				],
+	}));
+}
+
 export function stateFixture(tabId: string): RpcSessionState {
 	const seed = SEEDS.find(candidate => candidate.tabId === tabId) ?? SEEDS[0];
 	return {
@@ -217,23 +236,26 @@ export function stateFixture(tabId: string): RpcSessionState {
 		autoRetryEnabled: true,
 		messageCount: seed.messageCount,
 		queuedMessageCount: 0,
-		todoPhases: MIXED_TODOS
-			? [
-					{
-						name: "Ship the board",
-						tasks: MIXED_TODOS.map(([content, status]) => ({ content, status })),
-					},
-				]
-			: [
-					{
-						name: "Fix the test",
-						tasks: [
-							{ content: "Reproduce the flake", status: "completed" },
-							{ content: "Wait for the row to mount before asserting", status: "in_progress" },
-							{ content: "Run the sidebar suite ten times", status: "pending" },
+		todoPhases:
+			typeof location !== "undefined" && new URLSearchParams(location.search).get("todos") === "phases"
+				? longDockPlan()
+				: MIXED_TODOS
+					? [
+							{
+								name: "Ship the board",
+								tasks: MIXED_TODOS.map(([content, status]) => ({ content, status })),
+							},
+						]
+					: [
+							{
+								name: "Fix the test",
+								tasks: [
+									{ content: "Reproduce the flake", status: "completed" },
+									{ content: "Wait for the row to mount before asserting", status: "in_progress" },
+									{ content: "Run the sidebar suite ten times", status: "pending" },
+								],
+							},
 						],
-					},
-				],
 		contextUsage: { tokens: 38_400, contextWindow: 1_000_000, percent: 3.8 },
 		agentsPaused: false,
 	} as RpcSessionState;

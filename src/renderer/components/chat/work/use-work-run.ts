@@ -161,7 +161,12 @@ export function useRunAgents(
  * are replayed once so their files and commands count after a reload too. `stops`: each
  * call's own stop (`callStops`), for calls that span several cards.
  */
-export function useRunOutcome(toolCallIds: readonly string[], stoppedAt?: number, stops?: ReadonlyMap<string, number>) {
+export function useRunOutcome(
+	toolCallIds: readonly string[],
+	stoppedAt?: number,
+	stops?: ReadonlyMap<string, number>,
+	hydrateAgents = true,
+) {
 	const { tools, subagents, messages } = useRunStores();
 	const cwd = useSessionStore(state => state.cwd);
 	const { agents, completions } = useRunAgents(toolCallIds);
@@ -186,7 +191,7 @@ export function useRunOutcome(toolCallIds: readonly string[], stoppedAt?: number
 	const [error, setError] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
 	useEffect(() => {
-		if (!settledKey) return;
+		if (!hydrateAgents || !settledKey) return;
 		let mounted = true;
 		setLoading(true);
 		void Promise.all(
@@ -197,7 +202,7 @@ export function useRunOutcome(toolCallIds: readonly string[], stoppedAt?: number
 		return () => {
 			mounted = false;
 		};
-	}, [settledKey, subagents]);
+	}, [hydrateAgents, settledKey, subagents]);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the keys encode every entry and surface read here.
 	const outcome = useMemo(() => {
 		const entries: WorkEvidence[] = toolCallIds.flatMap(id => {

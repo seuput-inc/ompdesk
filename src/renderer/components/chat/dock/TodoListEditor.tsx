@@ -1,5 +1,5 @@
 import { AlertTriangle, X } from "lucide-react";
-import { Suspense, useCallback, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TodoPhase } from "../../../../shared/rpc-types";
 import { refreshSessionState } from "../../../hooks/session-hydration";
 import { lazyChunk } from "../../../lib/chunk-load";
@@ -9,8 +9,9 @@ import { useTabRpc } from "../../../lib/tab-rpc";
 import { sessionRuntimeStore, useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { toastError } from "../../../stores/toast";
 import { type TodoStore, type UiTodoPhase, type UiTodoTask, useTodoStore } from "../../../stores/todo";
-import { Button, IconButton } from "../../common";
-import { buildTodoDockSummary } from "./dock-summary";
+import { Collapse, DisclosureButton, IconButton } from "../../common";
+import type { DockModel } from "./dock-summary";
+import { TodoStatusIcon } from "./TodoStatusIcon";
 import { useWorkspaceDockFocus } from "./WorkspaceDockFocus";
 
 function todoPayload(phases: UiTodoPhase[]): TodoPhase[] {
@@ -22,40 +23,12 @@ function todoPayload(phases: UiTodoPhase[]): TodoPhase[] {
 
 const TodoSortableList = lazyChunk(() => import("./TodoSortableList").then(m => ({ default: m.TodoSortableList })));
 
-/** The session's todo counts in one phrase ("1 running · 3 pending"). */
-export function useTodoTaskSummary(): string {
-	const t = useT();
-	const phases = useTodoStore(state => state.phases) ?? [];
-	const counts = useMemo(() => {
-		const tasks = phases.flatMap(phase => phase.tasks);
-		return {
-			running: tasks.filter(task => task.status === "in_progress").length,
-			pending: tasks.filter(task => task.status === "pending" || task.status === "blocked").length,
-			completed: tasks.filter(task => task.status === "completed").length,
-		};
-	}, [phases]);
-	return counts.running > 0 && counts.pending > 0
-		? t("dock.todo.runningAndPending", counts)
-		: counts.running > 0
-			? t("dock.todo.running", counts)
-			: counts.pending > 0
-				? t("dock.todo.pending", counts)
-				: t("dock.todo.completed", counts);
-}
-
-/**
- * The editable todo list: reminder, phases with drag reorder and status
- * cycling, persisted through set_todos. Shared by the dock card and the live
- * work card, so both edit the same list the same way.
- */
-export function TodoListEditor() {
+export function TodoListEditor({ model }: { model: DockModel }) {
 	const rpc = useTabRpc();
 	const tabId = useRuntimeTabId();
 	const todoStore = sessionRuntimeStore<TodoStore>(tabId, "todo") ?? useTodoStore;
 	const t = useT();
 	const { managed, focusedCard, focusCard } = useWorkspaceDockFocus();
-	const focused = focusedCard === "todo";
-	const showFull = !managed || focused;
 	const phases = useTodoStore(state => state.phases) ?? [];
 	const reminderVisible = useTodoStore(state => state.reminderVisible) ?? false;
 	const reminderTodos = useTodoStore(state => state.reminderTodos) ?? [];
@@ -63,6 +36,28 @@ export function TodoListEditor() {
 	const setPhases = useTodoStore(state => state.setPhases);
 
 	const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+	const [showClosed, setShowClosed] = useState(false);
+	const previousActive = useRef(model.active);
+	const [justFinished, setJustFinished] = useState<UiTodoTask>();
+	useEffect(() => {
+		const previous = previousActive.current;
+		previousActive.current = model.active;
+		if (
+			previous &&
+			previous.id !== model.active?.id &&
+			model.closed.some(phase =>
+				phase.tasks.some(
+					task => task.id === previous.id && task.content === previous.content && task.status === "completed",
+				),
+			)
+		)
+			setJustFinished(previous);
+	}, [model.active, model.closed]);
+	useEffect(() => {
+		if (!justFinished) return;
+		const timer = setTimeout(() => setJustFinished(undefined), 2400);
+		return () => clearTimeout(timer);
+	}, [justFinished]);
 
 	/* Edits go through setPhases, which archives each change as a transcript
 	   snapshot — so both the optimistic value and its rollback go through it
@@ -115,8 +110,12 @@ export function TodoListEditor() {
 		});
 	}, []);
 
-	const summary = useMemo(() => buildTodoDockSummary(phases), [phases]);
-	const displayedPhases = showFull ? phases : summary.phases;
+	const closedLabel = [
+		model.done > 0 && t("workTree.finished", { count: model.done }),
+		model.abandoned > 0 && t("dock.todo.closed", { count: model.abandoned }),
+	]
+		.filter(Boolean)
+		.join(" · ");
 
 	return (
 		<>
@@ -136,18 +135,45 @@ export function TodoListEditor() {
 			<Suspense fallback={null}>
 				<TodoSortableList
 					collapsed={collapsed}
-					displayedPhases={displayedPhases}
+					model={model}
 					onPatch={patchTask}
 					onReorder={applyPhases}
 					onToggle={togglePhase}
 					phases={phases}
 				/>
+				{!showClosed &&
+					justFinished &&
+					model.closed.some(phase =>
+						phase.tasks.some(
+							task =>
+								task.id === justFinished.id &&
+								task.content === justFinished.content &&
+								task.status === "completed",
+						),
+					) && (
+						<div className="flex items-center gap-2 px-2 py-1 text-sc-sm text-(--sc-text-muted)">
+							<TodoStatusIcon status="completed" />
+							<span className="truncate">{justFinished.content}</span>
+						</div>
+					)}
+				{model.closed.length > 0 && (
+					<>
+						<DisclosureButton
+							className="px-1.5 py-1 text-sc-sm text-(--sc-text-secondary)"
+							onToggle={() => {
+								if (!showClosed && managed && focusedCard !== "todo") focusCard("todo");
+								setShowClosed(!showClosed);
+							}}
+							open={showClosed}
+						>
+							{closedLabel}
+						</DisclosureButton>
+						<Collapse open={showClosed}>
+							<TodoSortableList closed model={model} onPatch={patchTask} phases={phases} />
+						</Collapse>
+					</>
+				)}
 			</Suspense>
-			{managed && !focused && summary.hiddenCount > 0 && (
-				<Button className="mt-1 w-full" onClick={() => focusCard("todo")} size="sm" variant="ghost">
-					{t("dock.viewAllTodos", { hidden: summary.hiddenCount, total: summary.totalCount })}
-				</Button>
-			)}
 		</>
 	);
 }

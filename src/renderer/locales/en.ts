@@ -5722,6 +5722,8 @@ export const en: Record<string, string> = {
 	"dock.todo.running": "{running} running",
 	"dock.todo.pending": "{pending} pending",
 	"dock.todo.completed": "{completed} complete",
+	"dock.todo.closed": "Abandoned {count}",
+	"dock.todo.turn": "Current turn",
 	"dock.todo.next": "Next: {task}",
 	"dock.goal.active": "Active goal",
 	"dock.goal.paused": "Paused goal",

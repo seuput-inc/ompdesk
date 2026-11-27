@@ -16,6 +16,7 @@ import { useTabsStore } from "../../../stores/tabs";
 import { useToastStore } from "../../../stores/toast";
 import { useTodoStore } from "../../../stores/todo";
 import { useUiStore } from "../../../stores/ui";
+import { buildDockModel } from "./dock-summary";
 
 const { document, window, Event, HTMLElement, Element, Node } = parseHTML("<html><body></body></html>");
 Object.assign(globalThis as Record<string, unknown>, {
@@ -38,8 +39,10 @@ const setTodos: Mock<() => Promise<RpcResponse>> = vi.fn(async () => ({
 }));
 (window as unknown as { omp: { rpc: { setTodos: typeof setTodos } } }).omp = { rpc: { setTodos } };
 
+// React DOM and the dock load after linkedom installs the window they use.
 const { createRoot } = await import("react-dom/client");
 const { TodoDockCard } = await import("./TodoDockCard");
+const { TodoListEditor } = await import("./TodoListEditor");
 const { WorkspaceDock } = await import("./WorkspaceDock");
 const { WorkspaceDockFocusProvider } = await import("./WorkspaceDockFocus");
 // The task list is a lazy chunk (it carries @dnd-kit): load it so the first act() can resolve it.
@@ -159,7 +162,7 @@ describe("TodoDockCard", () => {
 			expect(container.querySelector('[data-todo-freshness="received"] [data-status-dot="neutral"]')).not.toBeNull();
 			expect(container.querySelector('[data-todo-freshness="received"] svg')).toBeNull();
 			expect(container.querySelector("[data-todo-freshness]")?.getAttribute("title")).toContain(
-				"Whether the list already covers them is not checked",
+				translate("todoPanel.receivedNote"),
 			);
 
 			// The opened list says it too, above its rows.
@@ -210,8 +213,22 @@ describe("TodoDockCard", () => {
 			expect(peekText()).toBe("1/2Wire the peek into the header");
 		});
 
+		it("keeps the instructions and timestamp without showing a legacy stale warning", async () => {
+			const changedAt = twelveMinutesAgo();
+			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setDrift({ changedAt, stale: "instruction", ...twoReceived(changedAt) });
+			await mount();
+			expect(container.querySelector("[data-todo-received]")?.textContent).toContain("2 instructions");
+			expect(container.querySelector('[data-todo-freshness="received"]')).not.toBeNull();
+			expect(container.textContent).not.toContain(translate("todoPanel.stale.instruction"));
+			expect(container.querySelector("[data-todo-freshness]")?.getAttribute("title")).not.toContain(
+				translate("todoPanel.stale.instruction"),
+			);
+		});
+
 		it("clears the count the moment a person changes the list", async () => {
 			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setTurnActive(true);
 			const changedAt = twelveMinutesAgo();
 			useTodoStore.getState().setDrift({ changedAt, stale: null, ...twoReceived(changedAt) });
 			await mount();
@@ -288,6 +305,7 @@ describe("TodoDockCard", () => {
 		it("lists the instructions received since the list last changed over the opened list", async () => {
 			const changedAt = twelveMinutesAgo();
 			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setTurnActive(true);
 			useTodoStore.getState().setDrift({ changedAt, stale: null, ...twoReceived(changedAt) });
 			await mount();
 
@@ -299,7 +317,9 @@ describe("TodoDockCard", () => {
 			expect(lines.map(line => line.textContent)).toEqual(["Also wire the footer", "And rename the peek to glance"]);
 			// Over the list: the received lines come before the first task.
 			const text = card?.textContent ?? "";
-			expect(text.indexOf("And rename the peek to glance")).toBeLessThan(text.indexOf("Sketch the peek"));
+			expect(text.indexOf("And rename the peek to glance")).toBeLessThan(
+				text.indexOf("Wire the peek into the header"),
+			);
 
 			// A tap shows a line whole where its row would cut it, and a second tap cuts it again.
 			const first = () => card?.querySelector<HTMLButtonElement>("[data-todo-received-line]");
@@ -316,7 +336,7 @@ describe("TodoDockCard", () => {
 		});
 	});
 
-	it("renders a single phase as a flat compact task list with live counts", async () => {
+	it("shows overall and phase progress with a pinned non-draggable active row", async () => {
 		useTodoStore.getState().setPhases([
 			{
 				name: "Implementation",
@@ -328,10 +348,11 @@ describe("TodoDockCard", () => {
 		]);
 		await mount();
 
-		expect(container.textContent).toContain("Todos1 running · 1 pending");
+		expect(container.querySelector('[role="progressbar"]')?.getAttribute("aria-valuetext")).toBe("0/2");
+		expect(container.querySelectorAll(`button[aria-label="${translate("todoPanel.reorder")}"]`)).toHaveLength(1);
 		expect(container.textContent).toContain("Refine compact renderer");
 		expect(container.textContent).toContain("Run visual QA");
-		expect(container.textContent).not.toContain("Implementation");
+		expect(container.textContent).toContain("Implementation0/2");
 	});
 
 	it("collapses when the task header row is clicked", async () => {
@@ -354,7 +375,7 @@ describe("TodoDockCard", () => {
 		expect(useUiStore.getState().dockCollapsed.todo).toBe(true);
 	});
 
-	it("reveals every restored task when view all is clicked", async () => {
+	it("reveals every restored task when the completed disclosure opens", async () => {
 		useTodoStore.getState().setPhases([
 			{
 				name: "Restored",
@@ -374,7 +395,7 @@ describe("TodoDockCard", () => {
 
 		expect(container.querySelector('[title="Restored task 1"]')).toBeNull();
 		const viewAll = [...container.querySelectorAll("button")].find(button =>
-			button.textContent?.includes("view all 12 todos"),
+			button.textContent?.includes(translate("workTree.finished", { count: 12 })),
 		);
 		await act(async () => {
 			(viewAll as unknown as { click: () => void }).click();
@@ -382,6 +403,105 @@ describe("TodoDockCard", () => {
 
 		expect(container.querySelector('[title="Restored task 1"]')).not.toBeNull();
 		expect(container.querySelector('[title="Restored task 12"]')).not.toBeNull();
+	});
+
+	it("keeps 4/10 (40%) through folding and restoring with six closed rows still editable", async () => {
+		const phases = [
+			{
+				name: "Mixed",
+				tasks: Array.from({ length: 12 }, (_, i) => ({
+					content: `Row ${i}`,
+					status: i < 4 ? ("completed" as const) : i < 10 ? ("pending" as const) : ("abandoned" as const),
+				})),
+			},
+		];
+		useTodoStore.getState().setPhases(phases);
+		await mount();
+		const progress = () => container.querySelector('[role="progressbar"]');
+		for (const label of ["Collapse", "Expand"]) {
+			await act(async () => container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)?.click());
+			expect(progress()?.getAttribute("aria-valuemax")).toBe("1");
+			expect(progress()?.getAttribute("aria-valuenow")).toBe("0.4");
+			expect(progress()?.getAttribute("aria-valuetext")).toBe("4/10");
+		}
+		const other = ensureTabRuntime("other-plan");
+		try {
+			await act(async () =>
+				root.render(
+					<I18nProvider>
+						<SessionRuntimeProvider runtime={other}>
+							<TodoDockCard />
+						</SessionRuntimeProvider>
+					</I18nProvider>,
+				),
+			);
+			expect(progress()).toBeNull();
+			await act(async () =>
+				root.render(
+					<I18nProvider>
+						<TodoDockCard />
+					</I18nProvider>,
+				),
+			);
+			expect(progress()?.getAttribute("aria-valuenow")).toBe("0.4");
+		} finally {
+			deleteSessionRuntime("other-plan");
+		}
+		await act(async () => root.render(null));
+		useTodoStore.getState().reset();
+		useTodoStore.getState().setPhases(phases);
+		await act(async () =>
+			root.render(
+				<I18nProvider>
+					<TodoDockCard />
+				</I18nProvider>,
+			),
+		);
+		const disclosure = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b =>
+			b.textContent?.includes(translate("workTree.finished", { count: 4 })),
+		);
+		expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+		await act(async () => disclosure?.click());
+		for (const i of [0, 1, 2, 3, 10, 11]) expect(container.querySelector(`[title="Row ${i}"]`)).not.toBeNull();
+		expect(container.querySelector('[title="Row 10"]')?.className).toContain("line-through");
+		expect(progress()?.getAttribute("aria-valuetext")).toBe("4/10");
+		expect(setTodos).not.toHaveBeenCalled();
+	});
+
+	it("shows the session turn and each runner once, linking only the matching worker to a task", async () => {
+		useTodoStore.getState().setPhases([
+			{
+				name: "Run",
+				tasks: [
+					{ content: "Track work", status: "in_progress" },
+					{ content: "Issue #1", status: "pending" },
+				],
+			},
+		]);
+		const startedAt = Date.now() - 60_000;
+		const model = buildDockModel(useTodoStore.getState().phases, {
+			startedAt,
+			step: "Reading the session",
+			runners: [
+				{ id: "a", session: "owner", title: "Worker A", step: "Editing A", startedAt },
+				{ id: "b", title: "Worker B", step: "Editing B", startedAt },
+				{ id: "c", title: "Child C", step: "Reviewing C", startedAt },
+			],
+			links: [{ number: 1, session: "owner", title: "Item under review" }],
+		});
+		await mount(<TodoListEditor model={model} />);
+		expect(container.textContent).toContain(translate("dock.todo.turn"));
+		expect(container.textContent).toContain("Reading the session");
+		const rows = [...container.querySelectorAll("[data-dock-runner]")];
+		expect(rows).toHaveLength(3);
+		for (const [i, phrase] of ["Editing A", "Editing B", "Reviewing C"].entries()) {
+			expect(rows[i]?.textContent).toContain(phrase);
+			expect(rows[i]?.textContent).toContain(translate("todoPanel.status.inProgress"));
+			expect(rows[i]?.textContent).toMatch(/\d+m/);
+		}
+		expect(rows[0]?.textContent).toContain("Issue #1");
+		expect(rows[1]?.hasAttribute("data-task-id")).toBe(false);
+		expect(rows[2]?.hasAttribute("data-task-id")).toBe(false);
 	});
 
 	it("leaves the dock once the turn that finished every task ends", async () => {
@@ -425,7 +545,7 @@ describe("TodoDockCard", () => {
 		await mount(<WorkspaceDock />);
 
 		const viewAll = [...container.querySelectorAll("button")].find(button =>
-			button.textContent?.includes("view all 30"),
+			button.textContent?.includes(translate("workTree.finished", { count: 30 })),
 		);
 		await act(async () => (viewAll as unknown as { click: () => void }).click());
 
@@ -527,6 +647,10 @@ describe("TodoDockCard", () => {
 		]);
 		useTodoStore.getState().revealClosed();
 		await mount();
+		const closed = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b =>
+			b.textContent?.includes(translate("workTree.finished", { count: 1 })),
+		);
+		await act(async () => closed?.click());
 
 		await act(async () => statusCycleButton().click());
 

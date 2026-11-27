@@ -2,7 +2,7 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { I18nProvider } from "../../lib/i18n";
+import { I18nProvider, translate } from "../../lib/i18n";
 import { useSessionStore } from "../../stores/session";
 import { useSubagentsStore } from "../../stores/subagents";
 import { useTodoStore } from "../../stores/todo";
@@ -147,7 +147,7 @@ it("the focused card's height handle names its height and bounds, and steps with
 		),
 	);
 	const viewAll = [...container.querySelectorAll<HTMLButtonElement>("button")].find(button =>
-		button.textContent?.includes("view all 12 todos"),
+		button.textContent?.includes(translate("workTree.finished", { count: 12 })),
 	);
 	await act(async () => viewAll?.click());
 	const handle = container.querySelector("[data-testid=workspace-dock-resize]");

@@ -2,6 +2,7 @@ import { parseHTML } from "linkedom";
 import { act, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PHONE_QUERY } from "../../../hooks/shell-queries";
 import { I18nProvider } from "../../../lib/i18n";
 import { EMPTY_TURN_METER } from "../../../lib/turn-meter";
 import { useAutopilotStore } from "../../../stores/autopilot";
@@ -31,6 +32,8 @@ Object.assign(globalThis as Record<string, unknown>, {
 	Event,
 	HTMLElement,
 	Node,
+	requestAnimationFrame: (callback: () => void) => setTimeout(callback, 0),
+	cancelAnimationFrame: clearTimeout,
 	IS_REACT_ACT_ENVIRONMENT: true,
 });
 const getJobs = vi.fn(async () => ({ type: "response", command: "get_jobs", success: true, data: { rows: [] } }));
@@ -77,6 +80,67 @@ describe("WorkBoardChip, the phone's work strip", () => {
 	it("shows nothing when there is nothing to say", async () => {
 		await mount();
 		expect(container.querySelector("[data-work-chip]")).toBeNull();
+	});
+
+	it("pins a phone question while other lines advance; touch pauses them and reduced motion keeps the overflow count", async () => {
+		document.documentElement.dataset.platform = "web";
+		const reduced = document.createElement("span");
+		let reduce = false;
+		vi.stubGlobal("matchMedia", (query: string) =>
+			query === "(prefers-reduced-motion: reduce)"
+				? Object.assign(reduced, { matches: reduce })
+				: Object.assign(document.createElement("span"), { matches: query === PHONE_QUERY }),
+		);
+		vi.useFakeTimers();
+		try {
+			useTodoStore.getState().setPhases([
+				{
+					name: "Build",
+					tasks: [
+						{ content: "Build the dock", status: "in_progress" },
+						{ content: "Verify", status: "pending" },
+					],
+				},
+			]);
+			useExtensionUiStore
+				.getState()
+				.pushRequest({ type: "extension_ui_request", id: "q", method: "confirm", title: "Proceed?", message: "" });
+			useSubagentsStore.getState().setSnapshots(
+				["Alpha", "Beta"].map((id, index) => ({
+					id,
+					index,
+					agent: id,
+					status: "running",
+					lastUpdate: Date.now(),
+				})),
+			);
+			await mount();
+			const chip = container.querySelector<HTMLButtonElement>("[data-work-chip]")!;
+			const lines = () => [...chip.querySelectorAll("[data-work-line]")].map(line => line.textContent);
+			const initial = lines();
+			expect(initial).toHaveLength(3);
+			expect(initial[0]).toContain("Proceed?");
+			expect(initial[1]).toContain("Build the dock");
+			await act(async () =>
+				chip.dispatchEvent(Object.assign(new Event("pointerdown", { bubbles: true }), { pointerType: "touch" })),
+			);
+			await act(async () => vi.advanceTimersByTime(5_001));
+			expect(lines()).toEqual(initial);
+			await act(async () => chip.dispatchEvent(new Event("pointerup", { bubbles: true })));
+			await act(async () => vi.advanceTimersByTime(5_001));
+			expect(lines()[0]).toEqual(initial[0]);
+			expect(lines().slice(1)).not.toEqual(initial.slice(1));
+			await act(async () => {
+				reduce = true;
+				reduced.dispatchEvent(new globalThis.Event("change"));
+			});
+			expect(lines()[2]).toContain("+2");
+			expect(container.querySelectorAll("[data-work-strip] ul li")).toHaveLength(5);
+		} finally {
+			delete document.documentElement.dataset.platform;
+			vi.useRealTimers();
+			vi.unstubAllGlobals();
+		}
 	});
 
 	it("marks its pane while it shows, for the dock rows that give way (perf: no :has() on the pane)", async () => {

@@ -5711,6 +5711,8 @@ export const ko: Record<string, string> = {
 	"dock.todo.running": "{running}개 실행 중",
 	"dock.todo.pending": "{pending}개 대기 중",
 	"dock.todo.completed": "{completed}개 완료",
+	"dock.todo.closed": "포기 {count}개",
+	"dock.todo.turn": "현재 턴",
 	"dock.todo.next": "다음: {task}",
 	"dock.goal.active": "활성 목표",
 	"dock.goal.paused": "일시정지된 목표",

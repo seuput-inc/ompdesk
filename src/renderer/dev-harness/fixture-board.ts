@@ -14,6 +14,7 @@ import type { FamilyEdits, RpcTurnEdits } from "../../shared/turn-edits";
 const MINUTE = 60_000;
 const query = typeof location !== "undefined" ? new URLSearchParams(location.search) : new URLSearchParams();
 export const BOARD_BUSY = query.get("board") === "busy";
+export const DOCK_WORKERS = query.has("workers");
 const ko = query.get("lang") === "ko";
 
 const text = (en: string, korean: string) => (ko ? korean : en);
@@ -80,10 +81,11 @@ export function boardSubagents(): SubagentSnapshot[] {
 			text("Editing src/renderer/stores/messages.test.ts", "messages.test.ts 편집 중"),
 			40_000,
 		),
-	];
+	].slice(0, DOCK_WORKERS ? 2 : undefined);
 }
 
 export function boardJobs(): RpcJobRow[] {
+	if (DOCK_WORKERS) return [];
 	const now = Date.now();
 	return [
 		{
@@ -320,7 +322,7 @@ export function boardReview(): { items: AgentReviewItem[] } {
 					at: now - 2 * MINUTE,
 				},
 			}),
-		],
+		].slice(0, DOCK_WORKERS ? 1 : undefined),
 	};
 }
 
@@ -363,7 +365,7 @@ export function boardBusyStores(): {
 		// `&family=1`: the orchestrator of the user's report, idle after its turn while the sessions it opened work.
 		todo: BOARD_FAMILY
 			? { turnActive: false, turnStartedAt: null, lastTurn: { start: now - 3 * MINUTE, end: now - 2 * MINUTE } }
-			: { turnActive: true, turnStartedAt: now - 3 * MINUTE },
+			: { turnActive: true, turnSourceKnown: true, turnStartedAt: now - 3 * MINUTE },
 		session: {
 			goal: {
 				objective: text(

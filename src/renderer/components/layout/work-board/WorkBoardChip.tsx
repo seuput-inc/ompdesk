@@ -10,12 +10,15 @@ import {
 	useMemo,
 	useRef,
 	useState,
+	useSyncExternalStore,
 } from "react";
 import { useBackLayer } from "../../../hooks/use-back-layer";
 import { useBackgroundJobs } from "../../../hooks/use-background-jobs";
+import { useMediaQuery } from "../../../hooks/use-media-query";
 import { useOpenedChildren } from "../../../hooks/use-opened-children";
 import { useOverlayPresence } from "../../../hooks/use-overlay-presence";
 import { useSessionQuestions } from "../../../hooks/use-question-inbox";
+import { useShellMode } from "../../../hooks/use-shell-mode";
 import { attentionClause } from "../../../lib/attention";
 import { useT } from "../../../lib/i18n";
 import { useModelWait } from "../../../lib/model-wait";
@@ -29,7 +32,9 @@ import { useTabsStore } from "../../../stores/tabs";
 import { selectTodoCardVisible, useTodoStore } from "../../../stores/todo";
 import { useWorkBoardStore } from "../../../stores/work-board";
 import { useAutopilotStateText } from "../../autopilot/use-autopilot-state-text";
+import { buildDockModel } from "../../chat/dock/dock-summary";
 import { TodoFreshnessMark, useTodoFreshness } from "../../chat/dock/TodoFreshness";
+import { useDockFacts } from "../../chat/dock/use-dock-facts";
 import { SummaryBoard, type ZoneOpen } from "./board-parts";
 import { boardCounts, liveSubagents, todoBoard, workingSubagents } from "./work-board";
 
@@ -40,6 +45,14 @@ const SWIPE_UP_PX = 32;
 const ROOM_MARGIN_PX = 8;
 /** Room above the strip that still shows a few of the board's rows: the panel opens upward from this much. */
 const MIN_UP_PX = 160;
+
+function onViewportHeightChange(changed: () => void) {
+	const viewport = window.visualViewport ?? window;
+	viewport.addEventListener("resize", changed);
+	return () => viewport.removeEventListener("resize", changed);
+}
+
+const stripSlots = () => ((window.visualViewport?.height ?? window.innerHeight) <= 560 ? 2 : 3);
 
 interface StripRoom {
 	/** The panel opens above the strip (clear of the composer) when its pane leaves room for a few rows there. */
@@ -156,6 +169,8 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 	const modelWait = useModelWait();
 	const phases = useTodoStore(state => state.phases);
 	const planVisible = useTodoStore(selectTodoCardVisible);
+	const phone = useShellMode() === "phone";
+	const facts = useDockFacts(phone);
 	const plan = useMemo(() => (planVisible ? todoBoard(phases) : null), [phases, planVisible]);
 	const freshness = useTodoFreshness();
 	const subagents = useSubagentsStore(state => state.subagents);
@@ -185,6 +200,28 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 	const ended = useAutopilotStore(state => isAutopilotTab(state) && state.status.state === "ended");
 	const autopilotState = runText ?? (ended ? t("autopilot.state.ended") : null);
 	const autopilotRunning = useAutopilotStore(state => isLiveAutopilot(state) && state.status.state === "running");
+	const model = useMemo(
+		() => (phone ? buildDockModel(phases, { ...facts, runState: autopilotState ?? undefined }) : null),
+		[phone, phases, facts, autopilotState],
+	);
+	const lines = model?.lines;
+	const slots = useSyncExternalStore(onViewportHeightChange, stripSlots, () => 3);
+	const overflow = Math.max(0, (lines?.length ?? 0) - slots);
+	const reduced = useMediaQuery("(prefers-reduced-motion: reduce)");
+	const [offset, setOffset] = useState(0);
+	const [focused, setFocused] = useState(false);
+	const [touching, setTouching] = useState(false);
+	const firstId = lines?.[0]?.id;
+	// A new priority starts with the most important three, not the last view's offset.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: reset on first candidate change.
+	useEffect(() => setOffset(0), [firstId]);
+	useEffect(() => {
+		if (!overflow || open || focused || touching || reduced) return;
+		const timer = window.setInterval(() => {
+			if (!document.hidden) setOffset(value => (value + slots - 1) % (overflow + slots - 1));
+		}, 5_000);
+		return () => window.clearInterval(timer);
+	}, [overflow, slots, open, focused, touching, reduced]);
 	const counts = boardCounts({
 		asks: questions.map(questionAttentionKind),
 		childrenWaiting: opened.counts.waiting,
@@ -195,7 +232,7 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 		turnWorking: turnActive || autopilotRunning,
 	});
 	const running = counts.running + counts.childrenRunning;
-	const label = counts.attention
+	const baseLabel = counts.attention
 		? attentionClause(counts.attention, t)
 		: autopilotState
 			? `${t("autopilot.name")} · ${autopilotState}`
@@ -209,6 +246,9 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 						: goal
 							? t("workBoard.goal")
 							: null;
+	const label = baseLabel ?? lines?.[0]?.text ?? null;
+	const phoneLines = !open && lines?.length ? lines : null;
+	const start = reduced ? 0 : offset;
 	// What the strip says is gone (the run ended and the board emptied): nothing to expand either.
 	useEffect(() => {
 		if (label === null && open) close();
@@ -247,62 +287,112 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 	const state = counts.pulse;
 	return (
 		<div className="omp-work-strip" data-work-strip="" ref={root}>
+			{phoneLines && (
+				<ul aria-label={t("workBoard.label")} className="sr-only">
+					{phoneLines.map(line => (
+						<li key={line.id}>
+							{line.id === "autopilot" && `${t("autopilot.name")} · `}
+							{line.text}
+							{line.kind === "active" && freshness?.receivedCount ? ` · ${freshness.summary}` : ""}
+						</li>
+					))}
+				</ul>
+			)}
 			{/* controls-ok: the omp-work-chip class draws the whole control */}
 			<button
 				aria-controls={panel.mounted ? PANEL_ID : undefined}
 				aria-expanded={open}
+				aria-label={phoneLines ? `${t("workBoard.label")} · ${phoneLines[0].text}` : undefined}
 				className="omp-work-chip"
 				data-open={open || undefined}
+				data-lines={phoneLines ? Math.min(slots, phoneLines.length) : undefined}
 				data-opens={room?.up ? "up" : undefined}
 				data-state={state}
 				data-work-chip=""
+				onBlur={() => setFocused(false)}
+				onFocus={() => setFocused(true)}
+				onPointerDown={event => {
+					if (event.pointerType === "touch") setTouching(true);
+				}}
+				onPointerUp={() => setTouching(false)}
+				onPointerCancel={() => setTouching(false)}
+				onLostPointerCapture={() => setTouching(false)}
 				onClick={() => (open ? close() : expand())}
 				onTouchEnd={swipeEnd}
 				onTouchStart={swipeStart}
 				type="button"
 			>
 				<span aria-hidden className="omp-work-board-pulse" data-state={state} />
-				<span aria-live="polite" className="omp-work-chip-label" role="status">
-					{plan && counts.needs === 0 && !autopilotState ? (
-						<>
-							<span className="sr-only">{freshness?.summary ? `${label} · ${freshness.summary}` : label}</span>
-							<span aria-hidden className="omp-work-chip-plan">
-								<span className="omp-work-chip-bar">
-									<span style={{ "--fill": plan.done / plan.total } as CSSProperties} />
+				{phoneLines ? (
+					<span aria-hidden className="omp-work-chip-lines">
+						{phoneLines.slice(0, slots).map((_, slot) => {
+							const line = phoneLines[slot === 0 ? 0 : 1 + ((start + slot - 1) % (phoneLines.length - 1))];
+							return (
+								<span className="flex min-w-0 items-center gap-1.5" data-work-line={line.kind} key={line.id}>
+									{line.id === "autopilot" && (
+										<Rocket className="size-(--sc-icon-sm) shrink-0" data-work-chip-run />
+									)}
+									<span className="truncate">{line.text}</span>
+									{line.kind === "active" && !!freshness?.receivedCount && (
+										<span className="truncate text-(--sc-text-muted)">{freshness.summary}</span>
+									)}
+									{line.kind === "active" && model && (
+										<span className="ms-auto shrink-0 tabular-nums">
+											{model.done}/{model.total}
+										</span>
+									)}
+									{slot === slots - 1 && reduced && overflow > 0 && (
+										<span className="shrink-0">+{overflow}</span>
+									)}
 								</span>
-								<span className="tabular-nums">
-									{plan.done}/{plan.total}
+							);
+						})}
+					</span>
+				) : (
+					<span aria-live="polite" className="omp-work-chip-label" role="status">
+						{plan && counts.needs === 0 && !autopilotState ? (
+							<>
+								<span className="sr-only">
+									{freshness?.summary ? `${label} · ${freshness.summary}` : label}
 								</span>
-								{plan.active && !freshness?.summary ? (
-									<span className="omp-work-chip-active">{plan.active}</span>
-								) : null}
-								<TodoFreshnessMark className="text-(--sc-text-muted)" form="strip" freshness={freshness} />
+								<span aria-hidden className="omp-work-chip-plan">
+									<span className="omp-work-chip-bar">
+										<span style={{ "--fill": plan.done / plan.total } as CSSProperties} />
+									</span>
+									<span className="tabular-nums">
+										{plan.done}/{plan.total}
+									</span>
+									{plan.active && !freshness?.summary ? (
+										<span className="omp-work-chip-active">{plan.active}</span>
+									) : null}
+									<TodoFreshnessMark className="text-(--sc-text-muted)" form="strip" freshness={freshness} />
+								</span>
+							</>
+						) : counts.needs === 0 && autopilotState ? (
+							// A run is its rocket, then its state (the user's call, 23 Oct 2026); the word is for screen readers.
+							<span className="inline-flex min-w-0 items-center gap-1.5">
+								<Rocket aria-hidden className="size-(--sc-icon-sm) shrink-0" data-work-chip-run />
+								<span className="sr-only">{t("autopilot.name")} · </span>
+								<span className="truncate">{autopilotState}</span>
 							</span>
-						</>
-					) : counts.needs === 0 && autopilotState ? (
-						// A run is its rocket, then its state (the user's call, 23 Oct 2026); the word is for screen readers.
-						<span className="inline-flex min-w-0 items-center gap-1.5">
-							<Rocket aria-hidden className="size-(--sc-icon-sm) shrink-0" data-work-chip-run />
-							<span className="sr-only">{t("autopilot.name")} · </span>
-							<span className="truncate">{autopilotState}</span>
-						</span>
-					) : (
-						label
-					)}
-				</span>
-				{opened.counts.total > 0 && (
+						) : (
+							label
+						)}
+					</span>
+				)}
+				{!phoneLines && opened.counts.total > 0 && (
 					<span aria-hidden className="omp-work-chip-count" data-count="sessions">
 						<GitBranch className="size-(--sc-icon-sm)" />
 						{opened.counts.total}
 					</span>
 				)}
-				{agents.length > 0 && (
+				{!phoneLines && agents.length > 0 && (
 					<span aria-hidden className="omp-work-chip-count" data-count="agents">
 						<Bot className="size-(--sc-icon-sm)" />
 						{agents.length}
 					</span>
 				)}
-				{jobs.length > 0 && (
+				{!phoneLines && jobs.length > 0 && (
 					<span aria-hidden className="omp-work-chip-count" data-count="jobs">
 						<SquareTerminal className="size-(--sc-icon-sm)" />
 						{jobs.length}

@@ -218,6 +218,8 @@ window.__stores = {
 	todo,
 };
 
+if (query.get("dock") === "open" || query.has("workers")) ui.getState().focusDockCard("todo");
+
 // `?board=busy` (./fixture-board.ts): the running turn, the waiting question and the goal come from events and
 // cards, not from a transport answer, so they are put into the stores once the session has hydrated.
 if (BOARD_BUSY) {
@@ -225,7 +227,7 @@ if (BOARD_BUSY) {
 		const busy = boardBusyStores();
 		todo.setState(busy.todo);
 		session.setState(busy.session);
-		extensionUi.getState().pushRequest(busy.request);
+		if (!query.has("workers")) extensionUi.getState().pushRequest(busy.request);
 		// `&children=wait`: the transcript's unanswered wait loads as stopped; while the turn runs it is in flight.
 		if (CHILDREN_WAIT) {
 			const state = tools.getState();
