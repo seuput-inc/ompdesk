@@ -91,12 +91,7 @@ import {
 	type TitleParts,
 } from "../../../lib/session-title";
 import { deviceGroupKey, isRememberedSession, LOCAL_DEVICE } from "../../../lib/sidebar-memory";
-import {
-	clampSidebarWidth,
-	LANE_MIN_SIDEBAR_WIDTH,
-	readSidebarWidth,
-	writeSidebarWidth,
-} from "../../../lib/sidebar-width";
+import { clampSidebarWidth, readSidebarWidth, writeSidebarWidth } from "../../../lib/sidebar-width";
 import { snapshotNs, snapshots } from "../../../lib/snapshot-cache";
 import { askTabAccount, useTabAccounts } from "../../../lib/tab-accounts";
 import { performTabClose } from "../../../lib/tab-close";
@@ -2808,7 +2803,6 @@ export function Sidebar() {
 			<aside
 				aria-label={t("sidebar.label")}
 				className="omp-session-sidebar relative flex h-full min-h-0 shrink-0 flex-col border-r border-(--sc-border-subtle) bg-(--sc-surface-1)"
-				data-sidebar-narrow={sidebarWidth < LANE_MIN_SIDEBAR_WIDTH ? "" : undefined}
 				style={{ width: sidebarWidth }}
 			>
 				{/* Traffic-light safe (global.css): on macOS the brand yields its
