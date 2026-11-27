@@ -441,11 +441,18 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 			key: row.key,
 			label,
 			kind: questionAttentionKind(row) === "approval" ? "approval" : "ask",
-			open: () => {
+			open: function open() {
 				if (!sessionAsk)
 					return void import("../../../lib/question-inbox-view")
 						.then(view => view.openInboxRow(row))
-						.catch(error => toastError({ title: row.title, error }));
+						.catch(error =>
+							toastError({
+								title: `${t("inbox.openFailed")}: ${row.title}`,
+								error,
+								durationMs: Infinity,
+								action: { label: t("common.retry"), run: open },
+							}),
+						);
 				const store = sessionRuntimeStore<ExtensionUiStore>(tabId, "extensionUi");
 				if (row.requestId && store && store.getState().selectedRequestId !== row.requestId) {
 					store.setState({ selectedRequestId: row.requestId });

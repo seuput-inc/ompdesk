@@ -104,6 +104,90 @@ function questions(ko: boolean): BotsState {
 }
 
 for (const lang of ["en", "ko"] as const) {
+	test(`${lang}: a failed inbox import keeps the badge and board row; Retry opens without answering`, async ({
+		browser,
+	}) => {
+		const ko = lang === "ko";
+		for (const board of [false, true]) {
+			const look: Look = board
+				? { width: 390, height: 844, orientation: "portrait", theme: "light", dpr: 1, lang }
+				: { width: 1280, height: 900, orientation: "landscape", device: "electron", theme: "light", dpr: 1, lang };
+			const page = await openLook(browser, look, { origin });
+			try {
+				const state = questions(ko);
+				const item = state.items[0];
+				item.session = await page.evaluate(
+					async () => (await window.omp.tabs.list()).find(tab => tab.tabId === "tab-1")!.sessionPath!,
+				);
+				await page.evaluate(
+					([channel, state]) => {
+						if (!window.__harness) throw new Error("No harness");
+						window.__harness.bots = async () => state;
+						window.__harness.emit(channel, state);
+					},
+					[BOTS_STATE, state] as const,
+				);
+				const module = board ? /\/question-inbox-view\.ts(?:\?|$)/ : /\/QuestionInbox\.tsx(?:\?|$)/;
+				let offline = true;
+				let failures = 0;
+				let hold: Promise<void> | undefined;
+				await page.route(module, async route => {
+					if (!offline) return route.continue();
+					failures++;
+					await hold;
+					return route.abort("internetdisconnected");
+				});
+				const badge = page.locator('[data-sidebar-nav-row="questions"]:visible');
+				const chip = page.locator("[data-work-chip]:visible");
+				if (board) {
+					await expect(chip).toContainText(item.question!.text);
+					await chip.click();
+					await page.locator(`[data-board-waiting="${item.id}"]:visible`).click();
+				} else {
+					await expect(badge).toContainText("5");
+					await badge.click();
+				}
+				const alert = page
+					.getByRole("alert")
+					.filter({ hasText: board ? item.title : ko ? "불러오지 못했어요" : "Couldn't load this" });
+				const retry = alert.getByRole("button", { name: ko ? "다시 시도" : "Retry" });
+				await expect(retry).toBeVisible();
+				if (board) {
+					await expect(chip).toHaveAttribute("aria-expanded", "false");
+					await expect(chip).toContainText(item.question!.text);
+				} else await expect(badge).toContainText("5");
+				const firstFailures = failures;
+				expect(firstFailures).toBeGreaterThan(0);
+				const gate = Promise.withResolvers<void>();
+				hold = gate.promise;
+				try {
+					await retry.press("Enter");
+					await expect.poll(() => failures).toBeGreaterThan(firstFailures);
+					await expect(retry).toBeHidden();
+					if (!board) await expect(page.getByTestId("page-skeleton")).toBeVisible();
+				} finally {
+					gate.resolve();
+				}
+				await expect(retry).toBeVisible();
+				offline = false;
+				await retry.press("Enter");
+				await expect(
+					page.locator(board ? `[data-bot-item-page="${item.id}"]` : "[data-question-inbox]"),
+				).toBeVisible();
+				expect(
+					await page.evaluate(() =>
+						window.__harness!.calls.filter(
+							call =>
+								call.channel === "extension-ui:respond" ||
+								(call.channel === "bots:command" && (call.args[0] as BotsRequest).action === "item"),
+						),
+					),
+				).toEqual([]);
+			} finally {
+				await page.context().close();
+			}
+		}
+	});
 	for (const width of [1280, 390])
 		test(`${lang} ${width}: one reviewed send, a replacement and a withdrawal on both viewers`, async ({
 			browser,

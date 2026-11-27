@@ -33,7 +33,7 @@ import { type PageDestination, setSidebarDrawerMode, useUiStore } from "../../st
 import { webRuntime } from "../../web/runtime";
 import { preloadPromptList } from "../chat/ConversationNavigator";
 import { preloadTranscriptFind } from "../chat/TranscriptFind";
-import { Button, IconButton, Skeleton, Tooltip } from "../common";
+import { Button, IconButton, InlineNotice, Skeleton, Tooltip } from "../common";
 import { useFirstVisitTour } from "../onboarding/surface-tours";
 import { preloadComposerExtras } from "./composer/composer-extras";
 import { PanelContainer, preloadPanelViews } from "./PanelContainer";
@@ -55,7 +55,6 @@ import { WhatsNewCard } from "./WhatsNewCard";
 const AgentsPage = lazyChunk(() => import("../agents/AgentsPage").then(m => ({ default: m.AgentsPage })));
 const BoardPage = lazyChunk(() => import("../board/BoardPage").then(m => ({ default: m.BoardPage })));
 const BotsPage = lazyChunk(() => import("../bots/BotsPage").then(m => ({ default: m.BotsPage })));
-const QuestionInbox = lazyChunk(() => import("../bots/QuestionInbox").then(m => ({ default: m.QuestionInbox })));
 // A tip row decides once per launch; its own chunk keeps it off a phone's first screen.
 const FeatureTipCard = lazyChunk(() => import("./FeatureTipCard").then(m => ({ default: m.FeatureTipCard })));
 const InsightsPage = lazyChunk(() => import("../insights/InsightsPage").then(m => ({ default: m.InsightsPage })));
@@ -74,6 +73,44 @@ const PAGE_LOADERS: Record<PageDestination, () => Promise<ComponentType>> = {
 	insights: () => import("../insights/InsightsPage").then(m => m.InsightsPage),
 	settings: () => import("../settings/SettingsPage").then(m => m.SettingsPage),
 };
+
+function QuestionInbox() {
+	const t = useT();
+	const [Page, setPage] = useState<ComponentType | null>(null);
+	const [retry, setRetry] = useState<(() => void) | null>(null);
+	useEffect(
+		() =>
+			loadDeferredChunk({
+				load: PAGE_LOADERS.questions,
+				onLoaded: page => setPage(() => page),
+				onFailed: again => setRetry(() => again),
+				canRetryOnInteraction: () => false,
+				start: "now",
+			}),
+		[],
+	);
+	return Page ? (
+		<Page />
+	) : retry ? (
+		<InlineNotice
+			live
+			tone="danger"
+			title={t("common.loadFailed")}
+			action={
+				<Button
+					onClick={() => {
+						setRetry(null);
+						retry();
+					}}
+				>
+					{t("common.retry")}
+				</Button>
+			}
+		/>
+	) : (
+		<PageFrameSkeleton />
+	);
+}
 
 /** A preload that fails is the open's to retry (lazyChunk); the chip reports a chunk that never loads. */
 function preloadPage(destination: PageDestination): Promise<void> {
