@@ -46,10 +46,13 @@ export function botCardOf(toolName: string, args: Record<string, unknown>): BotC
 	}
 }
 
-/** The owner's item changes the core mailed into a bot chat (`item-<id>-v<version>`). */
-export function isItemMail(message: AgentMessage): boolean {
+/**
+ * Mail the cards' chunk draws: the owner's item changes the core mailed into a bot chat (`item-<id>-v<version>`), and
+ * whatever a bot's chat sent (`fromBot`), whose sender reads as the bot's name now.
+ */
+export function isBotMail(message: AgentMessage): boolean {
 	const details = resultDetails(message);
-	return text(details?.from) === "ompdesk" && text(details?.id).startsWith("item-");
+	return (text(details?.from) === "ompdesk" && text(details?.id).startsWith("item-")) || !!text(details?.fromBot);
 }
 
 export function useCardHidden(kind: BotCardKind | null): boolean {
@@ -68,7 +71,7 @@ export function useBotChat(tabId: string | null): boolean {
 }
 
 const LazyBotToolCard = lazyChunk(() => import("./BotCards").then(module => ({ default: module.BotToolCard })));
-const LazyItemNote = lazyChunk(() => import("./BotCards").then(module => ({ default: module.ItemNote })));
+const LazyItemNote = lazyChunk(() => import("./BotCards").then(module => ({ default: module.BotNote })));
 const LazyQuietReply = lazyChunk(() => import("./BotCards").then(module => ({ default: module.QuietReply })));
 
 export function BotToolCard(props: {
@@ -128,9 +131,12 @@ function RunBotCard({
 	return <BotToolCard args={args} failed={failed} kind={kind} result={entry.result} toolName={toolName} />;
 }
 
+/**
+ * A note the app mailed into a bot's chat, drawn in the cards' own chunk (the phone's first screen stays in budget):
+ * the owner's item changes, a run result (Orca's `bot-automation-result-note.ts`), or else the plain mail note. Each
+ * kind's Hide is read there.
+ */
 export function ItemNote({ message }: { message: AgentMessage }) {
-	const hidden = useCardHidden("itemNotes");
-	if (hidden) return null;
 	return (
 		<Suspense fallback={null}>
 			<LazyItemNote message={message} />

@@ -156,7 +156,7 @@ import type { AnswerStep } from "./agent-control/target-answer";
 import { quitApproved, requestQuit } from "./app-quit";
 import { Autopilot, type AutopilotCommand, type AutopilotNotice } from "./autopilot";
 import { routeHostAutopilotNotice } from "./autopilot-notice-route";
-import { type HostBots, setBotsState } from "./bots";
+import { type HostBots, setBotsAsk, setBotsState } from "./bots";
 import {
 	CHECKOUT_PEERS_SWEEP_MS,
 	type CheckoutMember,
@@ -1582,6 +1582,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			deps.webTabNotice.current?.(tabId, { kind: "completion", title, body });
 		},
 		deleteSession: deleteStoredSession,
+		// A bot's folder moved: its chats' saved sessions follow (the sidebar's Move, without the open-tab refusal: the core
+		// moves an open chat through its own omp instead).
+		moveSession: (sessionPath, cwd) => sessionIndex.moveSession(sessionPath, cwd),
 		checkoutPeers: tabId => checkoutPeers.peersOf(tabId),
 		text: (key, params) => mainT(`agentControl.${key}` as MainTextKey, undefined, params),
 		// `ompdesk_app` runs the app's own handlers as the calling session's window would.
@@ -1647,6 +1650,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		roomPost: post => agentControl.botsRoomPost(post),
 	};
 	remoteDevices.botsReady();
+	setBotsAsk(() => agentControl.bots({ action: "get" }));
 	// The control socket (src/main/control-socket): anything on this computer drives the same service as the tools.
 	void startControlSocket({
 		userData: app.getPath("userData"),

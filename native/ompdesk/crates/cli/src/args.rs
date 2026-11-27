@@ -502,6 +502,7 @@ const BOT_ACTIONS: &[&str] = &[
     "pause",
     "resume",
     "set",
+    "rename",
     "look-around",
     "hand",
 ];
@@ -524,7 +525,13 @@ fn build_bot(p: &Parsed) -> Result<Built, String> {
                 "reach",
             ],
         ),
-        "look-around" => action_shape(p, "bot", &["BOT", "on|off"], &["time"]),
+        "look-around" => action_shape(
+            p,
+            "bot",
+            &["BOT", "on|off"],
+            &["every", "every-day", "focus"],
+        ),
+        "rename" => action_shape(p, "bot", &["BOT", "NAME"], &[]),
         "hand" => action_shape(p, "bot", &["BOT", "SESSION", "TEXT"], &[]),
         _ => action_shape(p, "bot", &["BOT"], &[]),
     };
@@ -552,6 +559,13 @@ fn build_bot(p: &Parsed) -> Result<Built, String> {
                 _ => return Err("bot look-around takes on or off".into()),
             };
             a.insert("on".into(), on.into());
+            p.args_into(&mut a, &["every", "focus"]);
+            if p.bool("every-day") {
+                a.insert("weekdays_only".into(), false.into());
+            }
+        }
+        "rename" => {
+            a.insert("name".into(), p.pos(2).unwrap_or_default().into());
         }
         "hand" => {
             a.insert("session".into(), p.pos(2).unwrap_or_default().into());
@@ -559,7 +573,7 @@ fn build_bot(p: &Parsed) -> Result<Built, String> {
         }
         _ => {}
     }
-    p.args_into(&mut a, &["folder", "time"]);
+    p.args_into(&mut a, &["folder"]);
     Ok(tool("ompdesk_bot", a))
 }
 
@@ -903,7 +917,7 @@ pub static SPECS: &[Spec] = &[
     },
     Spec {
         name: "bot",
-        usage: "bot ACTION [ARGS]; ACTION is create NAME [--folder F] | list | pause BOT | resume BOT | set BOT [--model M] [--auto-approve | --no-auto-approve] [--stale-days N] [--reach DEVICE]... | look-around BOT on|off [--time HH:MM] | hand BOT SESSION TEXT|-",
+        usage: "bot ACTION [ARGS]; ACTION is create NAME [--folder F] | list | pause BOT | resume BOT | set BOT [--model M] [--auto-approve | --no-auto-approve] [--stale-days N] [--reach DEVICE]... | rename BOT NAME | look-around BOT on|off [--every every-4h|every-2h|twice-daily|mornings] [--every-day] [--focus TEXT] | hand BOT SESSION TEXT|-",
         summary: "Bots: a folder whose sessions are its chats (ompdesk_bot). --model \"\" clears it, --stale-days 0 is never.",
         flags: &[
             ("folder", S),
@@ -912,7 +926,9 @@ pub static SPECS: &[Spec] = &[
             ("no-auto-approve", B),
             ("stale-days", N),
             ("reach", M),
-            ("time", S),
+            ("every", S),
+            ("every-day", B),
+            ("focus", S),
         ],
         min: 1,
         max: 4,
@@ -1450,10 +1466,20 @@ mod tests {
                 ),
             ),
             (
-                &["bot", "look-around", "Ops", "on", "--time", "08:30"],
+                &[
+                    "bot",
+                    "look-around",
+                    "Ops",
+                    "on",
+                    "--every",
+                    "mornings",
+                    "--every-day",
+                    "--focus",
+                    "reviews",
+                ],
                 tool(
                     "ompdesk_bot",
-                    json!({ "action": "look_around", "bot": "Ops", "on": true, "time": "08:30" }),
+                    json!({ "action": "look_around", "bot": "Ops", "on": true, "every": "mornings", "focus": "reviews", "weekdays_only": false }),
                 ),
             ),
             (
@@ -1461,6 +1487,13 @@ mod tests {
                 tool(
                     "ompdesk_bot",
                     json!({ "action": "look_around", "bot": "Ops", "on": false }),
+                ),
+            ),
+            (
+                &["bot", "rename", "Ops", "Opal"],
+                tool(
+                    "ompdesk_bot",
+                    json!({ "action": "rename", "bot": "Ops", "name": "Opal" }),
                 ),
             ),
             (
@@ -1790,7 +1823,9 @@ mod tests {
             (&["bot"], Some("bot needs ACTION")),
             (
                 &["bot", "explode"],
-                Some("--action is one of create, list, pause, resume, set, look-around, hand"),
+                Some(
+                    "--action is one of create, list, pause, resume, set, rename, look-around, hand",
+                ),
             ),
             (&["bot", "hand", "Ops", "s"], Some("bot hand needs TEXT")),
             (&["bot", "list", "x"], Some("bot list takes no argument")),

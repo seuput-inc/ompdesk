@@ -46,7 +46,7 @@ export async function fixtureOmp(dir: string): Promise<string> {
 			exports: {
 				"./session/history-storage": "./history-storage.ts",
 				"./session/session-listing": "./session-store.ts",
-				"./session/session-manager": "./session-store.ts",
+				"./session/session-manager": "./session-manager.ts",
 				"./session/session-storage": "./session-store.ts",
 				"./session/session-loader": "./session-store.ts",
 				"./session/transcript/transcript-entry": "./session-store.ts",
@@ -60,6 +60,17 @@ export async function fixtureOmp(dir: string): Promise<string> {
 	);
 	const store = pathToFileURL(path.resolve("e2e/session-store-fixture.ts")).href;
 	await writeFile(path.join(root, "session-store.ts"), `export * from ${JSON.stringify(store)};\n`);
+	// A move must exercise stock's journal relocation and ownership checks, not a simulated header rewrite.
+	const bunHome = process.env.BUN_INSTALL || path.join(os.homedir(), ".bun");
+	const manager = path.join(
+		bunHome,
+		"install/global/node_modules/@oh-my-pi/pi-coding-agent/src/session/session-manager.ts",
+	);
+	await writeFile(
+		path.join(root, "session-manager.ts"),
+		`import { SessionManager as Fixture } from "./session-store.ts";
+export const SessionManager = { ...Fixture, open: async (...args) => (await import(${JSON.stringify(pathToFileURL(manager).href)})).SessionManager.open(...args) };\n`,
+	);
 	const history = pathToFileURL(path.resolve("e2e/history-store-fixture.ts")).href;
 	await writeFile(path.join(root, "history-storage.ts"), `export * from ${JSON.stringify(history)};\n`);
 	const config = pathToFileURL(path.resolve("e2e/models-config-fixture.ts")).href;

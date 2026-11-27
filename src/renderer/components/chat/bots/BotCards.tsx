@@ -14,13 +14,16 @@
  * - Tool added (FC76, `NativeChatToolAddedCard.tsx:1-121`): `ompdesk_app extensions.install_mcp`, with Sign in while
  *   the server needs one and Remove.
  * - A bot chat's turn that ended in NO_REPLY folds to one quiet line that opens to its words.
+ * - Run result (Orca's `bot-automation-result-note.ts`): a bot's own automation that ran on its own answers in the
+ *   bot's home chat as a note; it draws as "<name> finished" with its first line, opening to the whole answer.
  *
  * Each has Hide (FC20, `NativeChatCardHideButton.tsx`): that kind leaves every chat (`hidden-cards.ts`).
  */
-import { EyeOff, ListTodo, Moon, Send, Wrench } from "lucide-react";
+import { CalendarClock, EyeOff, ListTodo, Moon, Send, Wrench } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { type Bot, ITEM_STATUSES, type Item, type ItemStatus } from "../../../../shared/bots";
 import type { AgentMessage } from "../../../../shared/rpc-types";
+import { parseScheduleResultNote } from "../../../../shared/schedule-result-note";
 import { cx, resultBodyText, resultDetails } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { MarkdownRenderer } from "../../../lib/markdown";
@@ -35,8 +38,9 @@ import { openBotPage } from "../../bots/bot-page";
 import { ItemStatusIcon, statusName } from "../../bots/items/ItemStatusIcon";
 import { openItem } from "../../bots/items/item-store";
 import { Badge, Button, Card, Chip, DisclosureButton, IconButton, LinkButton } from "../../common";
+import { MailNote } from "../CustomMessageCard";
 import type { BotCardKind } from "./bot-card-kind";
-import { botTarget } from "./bot-card-kind";
+import { botTarget, useCardHidden } from "./bot-card-kind";
 import { ensureHiddenCards, hideCardKind } from "./hidden-cards";
 
 const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
@@ -511,6 +515,52 @@ export function QuietReply({ text: words }: { text: string }) {
 			{open && body && (
 				<div className="ms-5.5 border-s-2 border-(--sc-border-subtle) ps-2 text-sc-sm text-(--sc-text-secondary)">
 					<MarkdownRenderer content={body} />
+				</div>
+			)}
+		</div>
+	);
+}
+
+// ---- Run results (Orca's `bot-automation-result-note.ts`) -------------------------------------------------------
+
+/**
+ * A note the app or a bot mailed: the owner's item changes, a run result as its card, a bot's mail under the bot's name
+ * now (a rename included), else the plain note.
+ */
+export function BotNote({ message }: { message: AgentMessage }) {
+	const itemsHidden = useCardHidden("itemNotes");
+	const hidden = useCardHidden("runResults");
+	const details = resultDetails(message);
+	const fromBot = text(details?.fromBot);
+	const botName = useBotsStore(s => (fromBot ? s.state.bots.find(bot => bot.id === fromBot)?.name : undefined));
+	const app = text(details?.from) === "ompdesk";
+	if (app && text(details?.id).startsWith("item-")) return itemsHidden ? null : <ItemNote message={message} />;
+	const result = app ? parseScheduleResultNote(text(details?.text)) : null;
+	if (result) return hidden ? null : <RunResultNote answer={result.answer} name={result.name} />;
+	const shown = botName ? ({ ...message, details: { ...details, fromTitle: botName } } as AgentMessage) : message;
+	return <MailNote message={shown} />;
+}
+
+/** One of the bot's automations finished: its name and the first line of its answer, opening to the whole answer. */
+function RunResultNote({ name, answer }: { name: string; answer: string }) {
+	const t = useT();
+	const [open, setOpen] = useState(false);
+	const first = firstLine(answer);
+	return (
+		<div className="ps-(--omp-editorial-inset) pe-(--omp-editorial-edge)" data-bot-run-result>
+			<Row icon={<CalendarClock />} kind="runResults">
+				<DisclosureButton className="min-w-0" inline onToggle={() => setOpen(!open)} open={open}>
+					<span className="truncate">{t("chat.botCards.runResult", { name })}</span>
+				</DisclosureButton>
+				{!open && first && (
+					<span className="min-w-0 truncate text-(--sc-text-subtle)" title={first}>
+						{first}
+					</span>
+				)}
+			</Row>
+			{open && (
+				<div className="ms-5.5 border-s-2 border-(--sc-border-subtle) ps-2 text-sc-sm text-(--sc-text-secondary)">
+					<MarkdownRenderer content={answer} />
 				</div>
 			)}
 		</div>

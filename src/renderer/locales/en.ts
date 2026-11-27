@@ -1,4 +1,5 @@
 import { PRODUCT_REPO } from "../../shared/product-repo";
+import { botAutonomyEn } from "./bot-autonomy";
 import { botItemsEn } from "./bot-items";
 import { memoryEn } from "./memory";
 import { trackersEn } from "./trackers";
@@ -8323,7 +8324,8 @@ export const en: Record<string, string> = {
 	"bots.settings.thisComputer": "This computer",
 	"bots.settings.schedule": "Schedule",
 	"bots.settings.lookAround": "Look around",
-	"bots.settings.lookAroundHint": "Daily, it reads over its projects and suggests up to five things to do.",
+	"bots.settings.lookAroundHint":
+		"It reads what waits on you at the hours below and lists next steps under Suggestions.",
 	"bots.settings.tidy": "Memory upkeep",
 	"bots.settings.tidyHint":
 		"Daily, it merges repeats, files details into topic files and archives old lines. Memory files only.",
@@ -8444,4 +8446,5 @@ export const en: Record<string, string> = {
 	...memoryEn,
 	...trackersEn,
 	...botItemsEn,
+	...botAutonomyEn,
 };

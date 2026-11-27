@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use super::looks::LookSetting;
 use super::{read_array, write_text};
 
 /// Days an open item may go untouched before it reads as stale, unless the bot says otherwise (`ITEM_STALE_DAYS`).
@@ -42,6 +43,18 @@ pub struct BotRecord {
     pub stale_days: Option<f64>,
     /// Its Look around schedule's id.
     pub look_around: Option<String>,
+    /// Its Look around setting; None on a record from before it (`look`).
+    pub look_setting: Option<LookSetting>,
+    /// The approval mode (`tools.approvalMode`) its chats start in; None starts them as any chat.
+    pub chat_approval: Option<String>,
+    /// Sessions its chats opened or were handed (its workers), oldest first, `WORKERS_KEPT` at most.
+    pub workers: Vec<BotWorker>,
+    /// Project folders whose skills its chats load besides its own.
+    pub skill_projects: Vec<String>,
+    /// A move of its folder under way, saved before the directory is renamed (`bot_move.rs`).
+    pub moving: Option<FolderMove>,
+    /// The rename record: the name it had before a rename whose folder has not followed yet (`bot_move.rs`).
+    pub renamed_from: Option<String>,
     /// Its memory upkeep schedule's id (`tidy_memory`).
     pub tidy: Option<String>,
     /// Notification kinds the owner turned off for its chats: `permission`, `done`, `failed`.
@@ -61,10 +74,44 @@ pub struct BotRecord {
     pub kickoff_silent: bool,
 }
 
+/// A bot's folder moving from `from` to `to` (`BotRecord.moving`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct FolderMove {
+    pub from: String,
+    pub to: String,
+}
+
+/// Workers a bot keeps.
+pub const WORKERS_KEPT: usize = 30;
+
+/// One session a bot's chat opened or was handed (Orca's `bot-work-store.ts` link from a bot's chat to its worker):
+/// a link only; what it does now is read from the live tabs.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BotWorker {
+    /// Its session file, else its tab id until it has one.
+    pub session: String,
+    pub title: String,
+    pub cwd: String,
+    /// Its worktree's branch.
+    pub branch: Option<String>,
+    /// When the bot was first seen with it (ISO).
+    pub since: String,
+}
+
 impl BotRecord {
     /// Whether `session` is one of its chats.
     pub fn has_session(&self, session: &str) -> bool {
         self.home.as_deref() == Some(session) || self.sessions.iter().any(|known| known == session)
+    }
+
+    /// Its Look around setting: a record from before the setting keeps on only while it has the schedule.
+    pub fn look(&self) -> LookSetting {
+        self.look_setting.clone().unwrap_or_else(|| LookSetting {
+            on: self.look_around.is_some(),
+            ..LookSetting::default()
+        })
     }
 }
 
@@ -152,6 +199,46 @@ impl Bots {
             self.save();
         }
         changed
+    }
+
+    /// A session a chat of the bot whose folder is `opener_cwd` opened (or was handed) was seen: it joins or updates
+    /// that bot's `workers`, matched by its session file or, until it has one, its tab id (`tab_id`). `since` is now
+    /// (ISO), kept from the first sighting. Whether anything changed.
+    pub fn observe_worker(&mut self, opener_cwd: &str, tab_id: &str, seen: BotWorker) -> bool {
+        let Some(bot) = self.bots.iter_mut().find(|bot| bot.folder == opener_cwd) else {
+            return false;
+        };
+        // A chat of the bot is its chat, never its worker.
+        if seen.cwd == bot.folder {
+            return false;
+        }
+        let at = bot
+            .workers
+            .iter()
+            .position(|known| known.session == seen.session || known.session == tab_id);
+        let worker = match at {
+            Some(at) => BotWorker {
+                since: bot.workers[at].since.clone(),
+                title: if seen.title.is_empty() {
+                    bot.workers[at].title.clone()
+                } else {
+                    seen.title
+                },
+                ..seen
+            },
+            None => seen,
+        };
+        if at.is_some_and(|at| bot.workers[at] == worker) {
+            return false;
+        }
+        match at {
+            Some(at) => bot.workers[at] = worker,
+            None => bot.workers.push(worker),
+        }
+        let extra = bot.workers.len().saturating_sub(WORKERS_KEPT);
+        bot.workers.drain(..extra);
+        self.save();
+        true
     }
 
     /// Session files of every paused bot's chats.

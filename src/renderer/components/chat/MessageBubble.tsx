@@ -41,7 +41,7 @@ import { A2uiChatCard } from "../tools";
 import { isAbsoluteChatPath, referencedFiles } from "../tools/media/chat-media";
 import { ToolImage } from "../tools/media/ToolImage";
 import { type RunningIndicator, ToolCard } from "../tools/ToolCard";
-import { ItemNote, isItemMail, QuietReply, useBotChat } from "./bots/bot-card-kind";
+import { ItemNote, isBotMail, QuietReply, useBotChat } from "./bots/bot-card-kind";
 import { CiNote } from "./CiNote";
 import { ComputerUseNote } from "./ComputerUseNote";
 import { CustomMessageCard, isCustomMessageCardType, MailNote, MemoryRecallNote, RecapCard } from "./CustomMessageCard";
@@ -540,7 +540,7 @@ export const MessageBubble = memo(function MessageBubble({
 		if (isRestartNote(message.customType)) return <RestartNote message={message} />;
 		if (message.customType === "recap") return <RecapCard message={message} />;
 		if (message.customType === MAIL_CUSTOM_TYPE)
-			return isItemMail(message) ? <ItemNote message={message} /> : <MailNote message={message} />;
+			return isBotMail(message) || botChat ? <ItemNote message={message} /> : <MailNote message={message} />;
 		if (message.customType === MEMORY_RECALL_MESSAGE_TYPE) return <MemoryRecallNote message={message} />;
 		if (message.customType === COMPUTER_USE_NOTICE_TYPE) return <ComputerUseNote message={message} />;
 		if (message.customType === CI_MESSAGE_TYPE) return <CiNote message={message} />;

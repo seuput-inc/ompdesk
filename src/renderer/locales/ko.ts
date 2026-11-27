@@ -1,4 +1,5 @@
 import { PRODUCT_REPO } from "../../shared/product-repo";
+import { botAutonomyKo } from "./bot-autonomy";
 import { botItemsKo } from "./bot-items";
 import { memoryKo } from "./memory";
 import { trackersKo } from "./trackers";
@@ -8299,7 +8300,7 @@ export const ko: Record<string, string> = {
 	"bots.settings.thisComputer": "이 컴퓨터",
 	"bots.settings.schedule": "일정",
 	"bots.settings.lookAround": "둘러보기",
-	"bots.settings.lookAroundHint": "매일 프로젝트를 살펴보고 할 일을 최대 다섯 개 제안해요.",
+	"bots.settings.lookAroundHint": "아래 시간마다 나를 기다리는 일을 살펴보고 다음 할 일을 제안 목록에 올려요.",
 	"bots.settings.tidy": "메모리 정리",
 	"bots.settings.tidyHint":
 		"매일 반복을 합치고, 자세한 내용은 주제 파일로 옮기고, 오래된 줄은 보관해요. 기억 파일만 바꿔요.",
@@ -8419,4 +8420,5 @@ export const ko: Record<string, string> = {
 	...memoryKo,
 	...trackersKo,
 	...botItemsKo,
+	...botAutonomyKo,
 };

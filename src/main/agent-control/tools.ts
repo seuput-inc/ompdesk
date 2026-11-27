@@ -8,6 +8,7 @@ import { z } from "zod";
 import { ATTACHMENT_MAX_BYTES } from "../../../resources/gui-bridge/agent-control-contracts";
 import { AUTOPILOT_AREAS } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import { AGENT_SCHEDULE_PREFIX, type AgentControlToolName, AGENT_CONTROL_TOOLS as T } from "../../shared/agent-control";
+import { LOOK_EVERY, LOOK_FOCUS_MAX } from "../../shared/bot-limits";
 import { ITEM_STATUSES } from "../../shared/bots";
 import type { HostToolDefinition } from "../../shared/rpc-types";
 import {
@@ -733,15 +734,28 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 		description:
 			"Make, list, pause or set up a bot: a folder whose sessions are its chats.\n" +
 			"offer {name, text} proposes a bot instead of making it: the owner sees a card in this chat with its name, what it would do (text) and Create bot, and nothing is made until they press it. " +
-			'A bot is a folder on this computer (default ~/.omp/bots/<name>); every session in that folder is one of its chats, the first its home chat. create {name, folder?} makes the folder and sends nothing: the owner writes first (asks the user first only if they turned off "Let agents manage other sessions"). list shows each bot with its folder, home chat, pause, specialty (from its SOUL.md) and open and owner-waiting items. pause {bot} holds every message to it until resume {bot}, which hands each held one over once; a send to a paused bot is refused. set {bot, model?, auto_approve?, stale_days?, reach?} sets the model its new chats and routines use ("" for omp\'s default), whether its routines run without asking, after how many untouched days an open item reads stale (0 never), and the paired devices whose agents may message it. look_around {bot, on, time?} turns on (daily at time, HH:MM, default 09:00) or off its Look around routine: it reads its projects and saves at most 5 suggestions as planned items. hand {bot, session, text} hands a session to the bot: the bot\'s home chat becomes its opener and the text reaches it from the bot. Only the owner deletes a bot. See skill://ompdesk/references/bots.md.',
+			"rename {bot, name} renames it and tells its home chat to update its own files. A folder in ~/.omp/bots follows the new name's slug, with its chats and routines (once the chats there end their turns); a folder outside it never moves, nor one whose new name's folder is taken. " +
+			"A bot is a folder on this computer (default ~/.omp/bots/<name>); every session in that folder is one of its chats, the first its home chat. create {name, folder?} makes the folder and sends nothing: the owner writes first (asks the user first only if they turned off \"Let agents manage other sessions\"). list shows each bot with its folder, home chat, pause, specialty (from its SOUL.md) and open and owner-waiting items. pause {bot} holds every message to it until resume {bot}, which hands each held one over once; a send to a paused bot is refused. set {bot, model?, auto_approve?, stale_days?, reach?} sets the model its new chats and routines use (\"\" for omp's default), whether its routines run without asking, after how many untouched days an open item reads stale (0 never), and the paired devices whose agents may message it. look_around {bot?, on?, every?, weekdays_only?, focus?} changes only what it names of its Look around: a read-only look in its home chat at the preset's hours (every-4h, the default, every-2h, twice-daily or mornings), weekdays unless weekdays_only is false, looking for focus (the owner's words); change it only when the owner asks. From a bot's chat, bot defaults to that bot. suggestions {bot?} lists what its Suggestions list holds, what the owner started lately and what they dismissed; suggest {suggestions: [{title, why, ask, link?}]} (a bot's chat only, at most 5) replaces that list with this look's next steps, an empty list clearing it. hand {bot?, session, text} hands a session to the bot: the bot's home chat becomes its opener and the text reaches it from the bot; from a bot's chat it takes the session over for that bot. Only the owner deletes a bot or picks how its chats are approved. See skill://ompdesk/references/bots.md.",
 		parameters: {
 			type: "object",
 			properties: {
 				action: {
 					type: "string",
-					enum: ["create", "offer", "list", "pause", "resume", "set", "look_around", "hand"],
+					enum: [
+						"create",
+						"offer",
+						"list",
+						"pause",
+						"resume",
+						"set",
+						"rename",
+						"look_around",
+						"suggestions",
+						"suggest",
+						"hand",
+					],
 				},
-				name: { type: "string", maxLength: BOT_NAME_MAX, description: "create, offer: the bot's name." },
+				name: { type: "string", maxLength: BOT_NAME_MAX, description: "create, offer, rename: the bot's name." },
 				folder: {
 					type: "string",
 					description: "create: an absolute folder for it; default ~/.omp/bots/<name>, made unique.",
@@ -761,7 +775,38 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 					description: "set: paired devices (name or id) whose agents may message it; [] this computer only.",
 				},
 				on: { type: "boolean", description: "look_around: true turns it on, false off." },
-				time: { type: "string", description: "look_around: local time HH:MM; default 09:00." },
+				every: {
+					type: "string",
+					enum: [...LOOK_EVERY],
+					description:
+						"look_around: every-4h (8:00 to 20:00), every-2h, twice-daily (8:00, 13:00) or mornings (8:00).",
+				},
+				weekdays_only: { type: "boolean", description: "look_around: false looks every day." },
+				focus: {
+					type: "string",
+					maxLength: LOOK_FOCUS_MAX,
+					description: 'look_around: what to look for, in the owner\'s words; "" is anything waiting on them.',
+				},
+				suggestions: {
+					type: "array",
+					maxItems: 5,
+					description: "suggest: this look's whole list of next steps.",
+					items: {
+						type: "object",
+						properties: {
+							title: { type: "string", maxLength: 80, description: "What to do." },
+							why: { type: "string", maxLength: 400, description: "One sentence on why now." },
+							ask: {
+								type: "string",
+								maxLength: 2000,
+								description: "The message the owner would send the bot to do it, written as them.",
+							},
+							link: { type: "string", description: "The thread, issue or pull request it is about." },
+						},
+						required: ["title", "why", "ask"],
+						additionalProperties: false,
+					},
+				},
 				session: { ...SESSION, description: `hand: the session to hand over. ${SESSION.description}` },
 				text: {
 					type: "string",
@@ -1230,7 +1275,19 @@ export const ARGS = {
 		.strict(),
 	[T.bot]: z
 		.object({
-			action: z.enum(["create", "offer", "list", "pause", "resume", "set", "look_around", "hand"]),
+			action: z.enum([
+				"create",
+				"offer",
+				"list",
+				"pause",
+				"resume",
+				"set",
+				"rename",
+				"look_around",
+				"suggestions",
+				"suggest",
+				"hand",
+			]),
 			name: z.string().trim().min(1).max(BOT_NAME_MAX).optional(),
 			folder: z.string().trim().min(1).max(4096).optional(),
 			bot: z.string().trim().min(1).max(200).optional(),
@@ -1239,9 +1296,21 @@ export const ARGS = {
 			stale_days: z.number().int().min(0).max(365).optional(),
 			reach: z.array(deviceArg).max(50).optional(),
 			on: z.boolean().optional(),
-			time: z
-				.string()
-				.regex(/^([01]\d|2[0-3]):[0-5]\d$/, "time is HH:MM (24 hours)")
+			every: z.enum(LOOK_EVERY).optional(),
+			weekdays_only: z.boolean().optional(),
+			focus: z.string().trim().max(LOOK_FOCUS_MAX).optional(),
+			suggestions: z
+				.array(
+					z
+						.object({
+							title: z.string().trim().min(1).max(80),
+							why: z.string().trim().max(400),
+							ask: z.string().trim().min(1).max(2000),
+							link: z.string().trim().max(2000).optional(),
+						})
+						.strict(),
+				)
+				.max(5)
 				.optional(),
 			session: sessionArg.optional(),
 			text: z.string().trim().min(1).max(MESSAGE_MAX_CHARS).optional(),

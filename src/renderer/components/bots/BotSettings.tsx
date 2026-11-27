@@ -3,25 +3,45 @@
  * page's Settings tab and Settings › Bots both show (FK-B49), with drill-in pages for its soul, its memory and who can
  * ask it. Escape on a page goes back.
  *
- * - Root: its name; Agent (model, routines run without asking, where it runs and its
- *   folder, Active = not paused, with the paused banner's words: FK-B23, B24, B25); Schedule (Look around, Memory
- *   upkeep, each with its time); Items (stale after); Soul and memory; Access (who can ask, its skills); Notifications
- *   (needs permission, task complete, couldn't finish: FK-B26, FS77); Delete bot (its folder stays; its routines go,
- *   FK-B50).
+ * - Root: its name; Agent (model, routines run without asking, the approval mode its
+ *   chats start in (`BotGeneralSettings.tsx:97-163`, Same as chats or one mode), where it runs and its folder, Active
+ *   = not paused, with the paused banner's words: FK-B23, B24, B25); Schedule (Look around: on, how often, weekdays
+ *   only, what to look for, Orca's `bot-look-around.ts:42-62`; Memory upkeep with its time); Items (stale after);
+ *   Soul and memory; Access (who can ask, its skills, the projects whose skills its chats load, this computer's MCP
+ *   servers); Package (export to a file); Notifications (needs permission, task complete, couldn't finish: FK-B26,
+ *   FS77); Delete bot (its folder stays; its routines go, FK-B50).
  * - Soul and Memory (`BotSoulEditor.tsx`, `BotFileChangedNotice.tsx`, FK-B21, FS72, FS73, FK-B22): read or edit the
  *   file; saved on Save or ⌘S; a file changed on disk under an edit asks Keep mine or Use theirs; Memory lists its
  *   topic files and the archive.
  * - Who can ask (`BotPairedServersWhoCanAsk.tsx:1-201`, `BotAccessReach.tsx`, FK-B33): the devices paired with this
  *   computer whose agents may message the bot, and the summary of who can ask it.
  *
- * Connectors (Slack, GitHub, Linear, Google) and sharing are not here: connectors come with orca-bots-connectors,
- * sharing is Orca Cloud's.
+ * Connectors (Slack, GitHub, Linear, Google) are not here: they come with orca-bots-connectors. Sharing stays a local
+ * package file (`sharing/bot-package-archive.ts`); Orca Cloud's share links are not ported.
  */
-import { BookOpen, Brain, ChevronLeft, ChevronRight, Copy, Laptop, Smile, Trash2, Users } from "lucide-react";
+import {
+	BookOpen,
+	Brain,
+	ChevronLeft,
+	ChevronRight,
+	Copy,
+	FileDown,
+	FolderGit2,
+	Laptop,
+	Plug,
+	Plus,
+	Smile,
+	Trash2,
+	Users,
+	X,
+} from "lucide-react";
 import { useEffect, useId, useState } from "react";
+import { BOT_PACKAGE_SUFFIX, BOT_SKILL_PROJECTS_MAX, LOOK_EVERY, LOOK_FOCUS_MAX } from "../../../shared/bot-limits";
 import { BOT_QUIET_KINDS, type Bot, type BotFile, type BotQuietKind, type BotsRequest } from "../../../shared/bots";
+import { APPROVAL_MODES } from "../../../shared/tool-approval";
 import { useT } from "../../lib/i18n";
 import { MarkdownRenderer } from "../../lib/markdown";
+import { pickWorkspaceDirectory } from "../../lib/workspace-dirs";
 import { useBotsStore } from "../../stores/bots";
 import { useRemoteStore } from "../../stores/remote";
 import { toast, toastError } from "../../stores/toast";
@@ -33,6 +53,7 @@ import {
 	Checkbox,
 	ConfirmDialog,
 	FieldLabel,
+	IconButton,
 	Input,
 	ListRow,
 	Modal,
@@ -41,6 +62,7 @@ import {
 	SegmentedChoice,
 	Select,
 	SwitchField,
+	TextArea,
 	TextEditor,
 } from "../common";
 import { ModelValueSelect } from "../settings/ModelValueSelect";
@@ -84,9 +106,12 @@ function BotSettingsRoot({
 	const command = useBotsStore(s => s.command);
 	const [name, setName] = useState(bot.name);
 	const [deleting, setDeleting] = useState(false);
-	const [lookTime, setLookTime] = useState("09:00");
 	const [tidyTime, setTidyTime] = useState("03:00");
+	const [focus, setFocus] = useState(bot.lookSetting?.focus ?? "");
 	useEffect(() => setName(bot.name), [bot.name]);
+	useEffect(() => setFocus(bot.lookSetting?.focus ?? ""), [bot.lookSetting?.focus]);
+	const look = bot.lookSetting;
+	const lookOn = look?.on ?? bot.lookAround !== null;
 	const quietToggle = (kind: BotQuietKind, on: boolean) =>
 		update({ quiet: on ? bot.quiet.filter(known => known !== kind) : [...bot.quiet, kind] });
 	return (
@@ -142,6 +167,20 @@ function BotSettingsRoot({
 					label={t("bots.settings.autoApprove")}
 					onCheckedChange={autoApprove => update({ autoApprove })}
 				/>
+				<Select
+					data-bot-chat-approval
+					disabled={Boolean(bot.device)}
+					hint={t("bots.settings.chatApprovalHint")}
+					label={t("bots.settings.chatApproval")}
+					onChange={event =>
+						update({ chatApproval: APPROVAL_MODES.find(mode => mode === event.target.value) ?? null })
+					}
+					options={[
+						{ value: "", label: t("bots.settings.chatApprovalSame") },
+						...APPROVAL_MODES.map(mode => ({ value: mode, label: t(`input.approval.${mode}`) })),
+					]}
+					value={bot.chatApproval ?? ""}
+				/>
 				<SwitchField
 					checked={!bot.paused}
 					description={t("bots.settings.activeHint")}
@@ -168,37 +207,70 @@ function BotSettingsRoot({
 				</div>
 			</section>
 
-			<section className="flex flex-col gap-2">
+			<section className="flex flex-col gap-2" data-bot-look-around>
 				<SectionLabel>{t("bots.settings.schedule")}</SectionLabel>
-				{(
-					[
-						["lookAround", bot.lookAround, lookTime, setLookTime, "bots.settings.lookAround"],
-						["tidy", bot.tidy, tidyTime, setTidyTime, "bots.settings.tidy"],
-					] as const
-				).map(([key, on, time, setTime, label]) => (
-					<div className="flex items-center gap-2" key={key}>
-						<SwitchField
-							checked={on !== null}
-							className="min-w-0 flex-1"
-							description={!bot.home ? t("bots.settings.needsHome") : t(`${label}Hint`)}
-							disabled={!bot.home}
-							label={t(label)}
-							onCheckedChange={next => update({ [key]: { on: next, time } })}
-						/>
-						<Input
-							aria-label={t("bots.settings.time", { name: t(label) })}
-							className="w-28"
-							controlSize="sm"
-							disabled={!bot.home}
-							onBlur={() => {
-								if (on !== null) update({ [key]: { on: true, time } });
+				<SwitchField
+					checked={lookOn}
+					description={bot.home ? t("bots.settings.lookAroundHint") : t("bots.settings.lookAroundWaits")}
+					label={t("bots.settings.lookAround")}
+					onCheckedChange={on => update({ lookAround: { on } })}
+				/>
+				{lookOn && (
+					<div className="flex flex-col gap-2 ps-1">
+						<Select
+							label={t("bots.settings.lookEvery")}
+							onChange={event => {
+								const every = LOOK_EVERY.find(choice => choice === event.target.value);
+								if (every) update({ lookAround: { every } });
 							}}
-							onChange={event => setTime(event.target.value)}
-							type="time"
-							value={time}
+							options={LOOK_EVERY.map(every => ({ value: every, label: t(`bots.settings.lookEvery.${every}`) }))}
+							value={look?.every ?? "every-4h"}
 						/>
+						<SwitchField
+							checked={look?.weekdaysOnly ?? true}
+							label={t("bots.settings.lookWeekdays")}
+							onCheckedChange={weekdaysOnly => update({ lookAround: { weekdaysOnly } })}
+						/>
+						<div className="flex flex-col gap-1.5">
+							<FieldLabel as="label" htmlFor={`${id}-focus`}>
+								{t("bots.settings.lookFocus")}
+							</FieldLabel>
+							<TextArea
+								id={`${id}-focus`}
+								maxLength={LOOK_FOCUS_MAX}
+								onBlur={() => {
+									if (focus.trim() !== (look?.focus ?? "")) update({ lookAround: { focus: focus.trim() } });
+								}}
+								onChange={event => setFocus(event.target.value)}
+								placeholder={t("bots.settings.lookFocusPlaceholder")}
+								rows={2}
+								value={focus}
+							/>
+						</div>
 					</div>
-				))}
+				)}
+				<div className="flex items-center gap-2">
+					<SwitchField
+						checked={bot.tidy !== null}
+						className="min-w-0 flex-1"
+						description={!bot.home ? t("bots.settings.needsHome") : t("bots.settings.tidyHint")}
+						disabled={!bot.home}
+						label={t("bots.settings.tidy")}
+						onCheckedChange={on => update({ tidy: { on, time: tidyTime } })}
+					/>
+					<Input
+						aria-label={t("bots.settings.time", { name: t("bots.settings.tidy") })}
+						className="w-28"
+						controlSize="sm"
+						disabled={!bot.home}
+						onBlur={() => {
+							if (bot.tidy !== null) update({ tidy: { on: true, time: tidyTime } });
+						}}
+						onChange={event => setTidyTime(event.target.value)}
+						type="time"
+						value={tidyTime}
+					/>
+				</div>
 			</section>
 
 			<section className="flex flex-col gap-2">
@@ -264,7 +336,73 @@ function BotSettingsRoot({
 					size="sm"
 					title={t("bots.settings.skills")}
 				/>
+				{!bot.device && (
+					<>
+						<div className="flex flex-col gap-1" data-bot-skill-projects>
+							<FieldLabel>{t("bots.settings.skillProjects")}</FieldLabel>
+							<p className="text-sc-xs text-(--sc-text-muted)">{t("bots.settings.skillProjectsHint")}</p>
+							{(bot.skillProjects ?? []).map(project => (
+								<ListRow
+									actions={
+										<IconButton
+											icon={<X />}
+											label={t("bots.settings.skillProjectRemove")}
+											onClick={() =>
+												update({
+													skillProjects: (bot.skillProjects ?? []).filter(known => known !== project),
+												})
+											}
+											size="sm"
+										/>
+									}
+									key={project}
+									leading={<FolderGit2 aria-hidden className="size-4 text-(--sc-text-muted)" />}
+									size="sm"
+									title={<PathText path={project} />}
+								/>
+							))}
+							<Button
+								className="self-start"
+								disabled={(bot.skillProjects ?? []).length >= BOT_SKILL_PROJECTS_MAX}
+								icon={<Plus />}
+								onClick={() =>
+									void pickWorkspaceDirectory({ title: t("bots.settings.skillProjectAdd") })
+										.then(folder => {
+											if (folder && !(bot.skillProjects ?? []).includes(folder))
+												update({ skillProjects: [...(bot.skillProjects ?? []), folder] });
+										})
+										.catch(() => {})
+								}
+								size="sm"
+								variant="ghost"
+							>
+								{t("bots.settings.skillProjectAdd")}
+							</Button>
+						</div>
+						<ListRow
+							description={t("bots.settings.mcpHint")}
+							leading={<Plug aria-hidden className="size-4 text-(--sc-text-muted)" />}
+							onClick={() => useUiStore.getState().openSettings("tools:mcp")}
+							size="sm"
+							title={t("bots.settings.mcp")}
+							trailing={<ChevronRight aria-hidden className="size-4 text-(--sc-text-subtle)" />}
+						/>
+					</>
+				)}
 			</section>
+
+			{!bot.device && (
+				<section className="flex flex-col gap-1">
+					<SectionLabel>{t("bots.settings.package")}</SectionLabel>
+					<ListRow
+						description={t("bots.settings.exportHint")}
+						leading={<FileDown aria-hidden className="size-4 text-(--sc-text-muted)" />}
+						onClick={() => void exportBot(bot, t)}
+						size="sm"
+						title={t("bots.settings.export")}
+					/>
+				</section>
+			)}
 
 			<section className="flex flex-col gap-2">
 				<SectionLabel>{t("bots.settings.notifications")}</SectionLabel>
@@ -297,6 +435,25 @@ function BotSettingsRoot({
 			/>
 		</div>
 	);
+}
+
+/** The bot as one package file where the owner picks (`bot_package.rs`); MEMORY.md and its chats stay home. */
+async function exportBot(bot: Bot, t: (key: string, params?: Record<string, string>) => string): Promise<void> {
+	try {
+		const name =
+			bot.name
+				.toLowerCase()
+				.replace(/[^a-z0-9]+/g, "-")
+				.replace(/^-|-$/g, "") || "bot";
+		const file: unknown = await window.omp.system.showSaveDialog(`${name}${BOT_PACKAGE_SUFFIX}`, [
+			{ name: t("bots.settings.packageType"), extensions: ["json"] },
+		]);
+		if (typeof file !== "string" || !file) return;
+		await window.omp.bots.exportPackage({ id: bot.id, file });
+		toast({ variant: "success", message: t("bots.settings.exported", { file }) });
+	} catch (error) {
+		toastError({ title: t("bots.settings.exportFailed"), error });
+	}
 }
 
 function PageHead({ title, onBack }: { title: string; onBack: () => void }) {

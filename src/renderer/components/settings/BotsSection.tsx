@@ -45,7 +45,13 @@ export function BotsSection() {
 	return (
 		<SettingsSection
 			actions={
-				<Button icon={<Plus />} onClick={() => openBotDialog({ kind: "new" })} size="sm" variant="secondary">
+				<Button
+					data-settings-bots-new
+					icon={<Plus />}
+					onClick={() => openBotDialog({ kind: "new" })}
+					size="sm"
+					variant="secondary"
+				>
 					{t("bots.add.new")}
 				</Button>
 			}

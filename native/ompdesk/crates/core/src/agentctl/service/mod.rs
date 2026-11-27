@@ -60,6 +60,7 @@ use crate::agentctl::journal::attachments::AttachmentStore;
 use crate::agentctl::journal::bots::Bots;
 use crate::agentctl::journal::call_journal::{CallBegin, CallJournal, CallRecord, CallResult};
 use crate::agentctl::journal::items::Items;
+use crate::agentctl::journal::looks::Looks;
 use crate::agentctl::journal::mail_outbox::MailOutbox;
 use crate::agentctl::journal::pending_cleanups::PendingCleanups;
 use crate::agentctl::journal::rooms::Rooms;
@@ -170,6 +171,10 @@ pub struct Mem {
     /// First-run home chats (`bot_first_run.rs`) by the last finished turn they were asked after (`lastRun.id`); one
     /// absent is asked again at the next bot pass.
     pub bot_first_asked: HashMap<String, Option<u64>>,
+    /// Bots whose Look around schedule could not be saved this launch (`arm_looks`): not tried again every pass.
+    pub look_unarmed: HashSet<String>,
+    /// `<bot id>\n<folder>` moves whose directory rename failed this launch (`bot_move.rs`): tried again next launch.
+    pub folder_unmoved: HashSet<String>,
     /// A bot pass runs; another asked meanwhile runs once more when it ends.
     pub bot_ticking: bool,
     pub bot_tick_again: bool,
@@ -212,8 +217,12 @@ pub struct Inner {
     /// What this computer shares of its bots with paired devices, and its hosts' bots as last heard (`bots_share`);
     /// never held with `bots`, `items` or `rooms`.
     across: Mutex<work::bots_share::Across>,
+    /// Each bot's Look around suggestions (`looks.json` beside `items.json`); never held with another lock.
+    looks: Mutex<Looks>,
     /// Where a new bot's folder goes (`~/.omp/bots`); None: a bot needs its folder named.
     pub(crate) bots_root: Option<PathBuf>,
+    /// Where each bot's launch settings overlay goes (`bot-config/<id>.yml` beside `items.json`); None: none is kept.
+    pub(crate) bot_config_dir: Option<PathBuf>,
     /// The send outbox, or None where main keeps none (a queued message then lives only in its omp).
     pub send_outbox: Option<SendOutbox>,
     /// Reports between sessions: dispatch ids, coalescing, the last report of each child (`#mailbox`).
@@ -278,6 +287,11 @@ impl Inner {
     /// The bots shared with paired devices and the paired hosts' copies.
     pub(crate) fn across(&self) -> MutexGuard<'_, work::bots_share::Across> {
         lock(&self.across)
+    }
+
+    /// Each bot's Look around suggestions.
+    pub fn looks(&self) -> MutexGuard<'_, Looks> {
+        lock(&self.looks)
     }
 
     /// `Date.now()`.
@@ -380,13 +394,24 @@ impl AgentControl {
                     .as_ref()
                     .map(|items| items.with_file_name("bots-remote.json")),
             )),
+            looks: Mutex::new(Looks::new(
+                files
+                    .items
+                    .as_ref()
+                    .map(|items| items.with_file_name("looks.json")),
+            )),
             bots_root: files.bots_root.clone(),
+            bot_config_dir: files
+                .items
+                .as_ref()
+                .map(|items| items.with_file_name("bot-config")),
             clock,
             mem: Mutex::new(Mem::default()),
             arrived: tokio::sync::Notify::new(),
             app: std::sync::OnceLock::new(),
         }));
         control.hold_paused();
+        control.settle_moves();
         control
     }
 

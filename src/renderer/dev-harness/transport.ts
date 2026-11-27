@@ -790,6 +790,7 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 					typeof payload === "object" && payload !== null && "action" in payload ? payload.action : null;
 				if (action === "file") return { exists: false, content: "", mtimeMs: 0, topics: [], history: [] };
 				if (action === "importSources") return { sources: [] };
+				if (action === "export") return { file: "" };
 				return { bots: [], items: [] };
 			}
 			case SCHEDULES_COMMAND:

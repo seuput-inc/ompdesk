@@ -35,7 +35,9 @@ fn copy_row(row: &Value, kind: Kind) -> Value {
     if kind == Kind::Bots
         && let Some(fields) = row.as_object_mut()
     {
-        fields.remove("picture");
+        for key in ["picture", "launch", "workers", "skillProjects"] {
+            fields.remove(key);
+        }
     }
     row
 }

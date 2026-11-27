@@ -778,6 +778,30 @@ impl Host {
             .await
     }
 
+    /// `bots.release(folder)`: before a bot's folder moves, main stops the omp of every tab of this computer in
+    /// `folder` and answers once each has exited (Windows refuses to rename a folder a process runs in);
+    /// `relocate_bot` starts them again in the new folder.
+    pub async fn release_folder(&self, folder: &str) -> R<()> {
+        self.ask("bots.release", json!({ "folder": folder })).await
+    }
+
+    /// `bots.relocate(from, to, sessions)`: a bot's folder moved from `from` to `to`; main moves each of its chats'
+    /// `sessions` into `to` (an open chat, stopped by `release_folder`, starts again on its moved file there) and
+    /// answers each session's file now, by its file before. A session it cannot move yet is refused, and the whole
+    /// call with it, to be asked again.
+    pub async fn relocate_bot(
+        &self,
+        from: &str,
+        to: &str,
+        sessions: &[String],
+    ) -> R<std::collections::HashMap<String, String>> {
+        self.ask(
+            "bots.relocate",
+            json!({ "from": from, "to": to, "sessions": sessions }),
+        )
+        .await
+    }
+
     /// `stored(device, query)`: saved sessions on this computer or a paired host.
     pub async fn stored(&self, device: Option<&str>, query: Option<&str>) -> R<Vec<StoredSession>> {
         self.ask("stored", json!({ "device": device, "query": query }))

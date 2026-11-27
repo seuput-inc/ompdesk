@@ -7,7 +7,8 @@
  * wait outlives the executor's stack frame and the tab list belongs to that window.
  */
 
-import { isAbsolute, posix, resolve } from "node:path";
+import { access } from "node:fs/promises";
+import { basename, isAbsolute, posix, resolve } from "node:path";
 import type { AutopilotAction, AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import {
 	AGENT_CARD_PREFIX,
@@ -164,6 +165,14 @@ function tombstones(): Tombstones {
 	return { byPath, byId };
 }
 
+/** This computer's tabs whose folder is `folder` (a bot's chats there). */
+function tabsIn(pool: Pick<SidecarPool, "controlTabs">, folder: string) {
+	return pool
+		.controlTabs()
+		.flatMap(({ tabs }) => tabs)
+		.filter(row => !row.device && row.cwd === folder);
+}
+
 /** What a session does now, by its summary (the one rows read); unknown before its omp is up. */
 function summaryWork(summary: SessionSummary): StoredWork | undefined {
 	if (summary.ask) return "waiting";
@@ -224,6 +233,8 @@ export interface AgentControlHostDeps {
 	notify: (win: ClientWindow, tabId: string, title: string, body: string) => void;
 	/** Close a session's tab and delete its saved file (the sidebar's delete). */
 	deleteSession: (sessionPath: string, device: string | undefined) => Promise<void>;
+	/** Move a saved session of this computer to `cwd` (stock `SessionManager.moveTo`); its file after. Absent: none move. */
+	moveSession?: (sessionPath: string, cwd: string) => Promise<string>;
 	text: AgentControlHost["text"];
 	/** How often opened sessions are looked at for closing, in the core's runtime; 0 turns the timer off (default 10 s). */
 	sweepMs?: number;
@@ -1386,6 +1397,39 @@ export class AgentControlRuntime {
 				await deps.deleteSession(info.sessionPath, info.device);
 			},
 			deleteStored: session => deps.deleteSession(session.path, session.device),
+			releaseFolder: async folder => {
+				const sidecars = tabsIn(deps.pool, folder).flatMap(row => deps.pool.sidecarOf(row.tabId) ?? []);
+				for (const sidecar of sidecars) if (sidecar.processAlive) sidecar.sleep?.();
+				await Promise.all(sidecars.map(sidecar => sidecar.whenExited?.()));
+			},
+			relocateBot: async (from, to, sessions) => {
+				const moveStored = deps.moveSession;
+				if (!moveStored) throw new Error("Sessions cannot be moved on this computer.");
+				const rows = tabsIn(deps.pool, from);
+				const moved: Record<string, string> = {};
+				let stored: SessionInfo[] | null = null;
+				for (const sessionPath of new Set([...sessions, ...rows.flatMap(row => row.sessionPath ?? [])])) {
+					const exists = await access(sessionPath).then(
+						() => true,
+						() => false,
+					);
+					if (exists) {
+						// Stock moves it (and refuses while an omp still writes it); a chat holding it starts again on it in `to`.
+						const file = await moveStored(sessionPath, to);
+						moved[sessionPath] = file;
+						const owner = deps.pool.sessionOwner(sessionPath);
+						if (owner) deps.pool.sidecarOf(owner.tabId)?.restart(to, file);
+						continue;
+					}
+					// Moved before a crash cut the move off: it is the session of that name in `to` now.
+					stored ??= (await deps.sessions?.list()) ?? [];
+					const found = stored.find(info => info.cwd === to && basename(info.path) === basename(sessionPath));
+					if (found) moved[sessionPath] = found.path;
+				}
+				// A new chat there nobody wrote to yet holds no session: it starts again in `to`.
+				for (const row of rows) if (!row.sessionPath) deps.pool.sidecarOf(row.tabId)?.restart(to);
+				return moved;
+			},
 			branchFacts: (worktree, device) =>
 				this.#git<BranchFacts>(device, GIT_METHODS.facts, { worktree: gitRef(worktree) }, () =>
 					branchFacts(worktree),

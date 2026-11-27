@@ -15,10 +15,6 @@ export const MAIN_TEXT = {
 	},
 	// A scheduled run's answer sent where its schedule says (`ScheduleDraft.resultsTo`).
 	"schedules.result.title": { en: "Scheduled run: {name}", ko: "예약 실행: {name}" },
-	"schedules.result.note": {
-		en: 'The scheduled run "{name}" finished. Its answer:',
-		ko: '예약 실행 "{name}"이 끝났어요. 답:',
-	},
 	// Files main could not save for lack of space (disk-full-notice.ts): one notice, closed once they are saved.
 	"diskFull.title": { en: "Disk is full", ko: "디스크가 가득 찼어요" },
 	"diskFull.body": {
