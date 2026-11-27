@@ -7,7 +7,7 @@
  * only at their end, which a row must still tell apart.
  */
 import type { SessionArtworks, SessionTarget, SessionTargetQuery, SessionTargets } from "../../shared/session-target";
-import { PROJECT } from "./fixture";
+import { FAMILY_DEMO, PROJECT } from "./fixture";
 
 const WEBSITE = "/Users/dev/projects/website";
 
@@ -19,11 +19,11 @@ const LOGO = `data:image/svg+xml;base64,${btoa(
 const repo = (root: string) => ({ root, name: root.split("/").pop() ?? root, owner: "seuput-inc" });
 
 function targetOf({ sessionPath, cwd }: SessionTargetQuery): SessionTarget {
-	if (sessionPath.includes("sess-1"))
+	if (!FAMILY_DEMO && sessionPath.includes("sess-1"))
 		return { path: cwd, repository: repo(PROJECT), head: { kind: "branch", name: "main" } };
-	if (sessionPath.includes("sess-live"))
+	if (!FAMILY_DEMO && sessionPath.includes("sess-live"))
 		return { path: cwd, repository: repo(PROJECT), head: { kind: "branch", name: "release" } };
-	if (sessionPath.includes("sess-2"))
+	if (FAMILY_DEMO || sessionPath.includes("sess-2"))
 		return {
 			path: cwd,
 			repository: repo(PROJECT),

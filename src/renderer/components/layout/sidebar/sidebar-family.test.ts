@@ -269,25 +269,14 @@ describe("openerOfSessions: opened sessions main closed", () => {
 });
 
 describe("openerOfSessions: legacy and stored provenance", () => {
-	const brief = (from: string) => wrapAgentMessage("Title: job\nDetails.", from);
 	const sessions = [
-		session("/s/boss", { title: "Boss", created: "2026-01-01T00:00:00Z" }),
-		session("/s/old-boss", { title: "Boss", created: "2025-12-01T00:00:00Z" }),
-		session("/s/legacy", { firstMessage: brief("Boss"), created: "2026-01-02T00:00:00Z" }),
-		session("/s/stranger", { firstMessage: brief("Nobody"), created: "2026-01-02T00:00:00Z" }),
-		session("/s/untitled", { firstMessage: brief(""), created: "2026-01-02T00:00:00Z" }),
-		session("/s/person", { firstMessage: "Boss", created: "2026-01-02T00:00:00Z" }),
-		session("/s/early", { firstMessage: brief("Boss"), created: "2025-11-01T00:00:00Z" }),
+		{ ...session("/s/boss"), title: "Boss" },
+		{ ...session("/s/old-boss"), title: "Boss" },
+		{ ...session("/s/legacy"), firstMessage: wrapAgentMessage("Title: job", "Boss") },
 	];
 
-	it("nests a session by the sender its first message's agent brief names: the newest session of that title before it", () => {
-		const roots = openerOfSessions([], sessions);
-		expect(roots.get("/s/legacy")).toBe("/s/boss");
-	});
-
-	it("leaves a brief whose sender is unknown, blank or newer, and a person's own prompt, unnested", () => {
-		const roots = openerOfSessions([], sessions);
-		for (const path of ["/s/stranger", "/s/untitled", "/s/person", "/s/early"]) expect(roots.has(path)).toBe(false);
+	it("does not use a sender label to pick either session of that name", () => {
+		expect(openerOfSessions([], sessions).has("/s/legacy")).toBe(false);
 	});
 
 	it("finds a stored opener (no tab) from the opener's session file a restored tab names", () => {

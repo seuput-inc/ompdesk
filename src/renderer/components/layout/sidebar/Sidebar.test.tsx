@@ -4210,9 +4210,11 @@ describe("Sidebar device sections", () => {
 			expect(landed()?.getAttribute("data-active")).toBe("true");
 		});
 
-		it("falls back to the brief only for rows the host says it knows no opener of", async () => {
+		it("does not attach a host child to a session with the same title as its sender", async () => {
 			await mountHost(hostRows(() => ({ openedBySession: null })));
 			expect(listed()).toEqual([BOSS]);
+			expect(device()?.querySelector(`[data-sidebar-family="${BOSS_KEY}"]`)).toBeNull();
+			expect(device()?.querySelector(`[data-sidebar-loose-children] [data-session-path="${ASKING}"]`)).not.toBeNull();
 		});
 
 		// 28 Oct 2026, the user's desktop viewing the Mac: eleven sessions the Mac's opener had closed itself listed as
