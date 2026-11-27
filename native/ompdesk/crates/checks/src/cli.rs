@@ -23,7 +23,7 @@ pub const EXIT_NOT_STARTED: i32 = 127;
 pub const HELP: &str = concat!(
     "  run       `run --heavy [--all] [--] CMD [ARG...]`: run CMD under this computer's heavy limit (all slots with --all).\n",
     "            Add --fresh-admission for a separate operation that must take its own lease.\n",
-    "            To reserve expected writes, set OMPDESK_WRITE_BYTES to a JSON object mapping absolute output paths to incremental bytes.\n",
+    "            For unknown writes, set OMPDESK_WRITE_BYTES to a JSON object mapping absolute output paths to incremental bytes.\n",
     "  heavy     `heavy limit off|auto` disables or restores this computer's slot and free-space checks before work starts.\n",
     "            `heavy status [--json]` shows the limit, slots and queue. `heavy hold [--all]` holds slots until stdin closes\n",
     "            or prints `unlimited` if no slot is required.\n",

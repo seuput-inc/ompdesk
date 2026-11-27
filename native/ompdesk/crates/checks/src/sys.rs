@@ -73,7 +73,7 @@ pub fn physical_memory() -> Option<u64> {
 
 #[cfg(target_os = "macos")]
 pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
-    use crate::heavy::Pressure;
+    use crate::heavy::{Cpu, Pressure};
     use std::ffi::CStr;
     use std::io::Error;
 
@@ -115,7 +115,7 @@ pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
     }
     let cpus = std::thread::available_parallelism()?.get();
     Ok(Pressure {
-        cpu: load >= cpus as f64,
+        cpu: Cpu::Saturated(load >= cpus as f64),
         critical: level == 4,
         warning: match level {
             1 => false,
@@ -128,7 +128,7 @@ pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
-    use crate::heavy::Pressure;
+    use crate::heavy::{Cpu, Pressure};
     use std::io::Error;
     let mem = std::fs::read_to_string("/proc/meminfo")?;
     let kb = |key: &str| -> std::io::Result<u64> {
@@ -148,7 +148,7 @@ pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| Error::other("CPU load unknown"))?;
     Ok(Pressure {
-        cpu: load >= std::thread::available_parallelism()?.get() as f64,
+        cpu: Cpu::Saturated(load >= std::thread::available_parallelism()?.get() as f64),
         critical: free < total / 20,
         warning: free < total / 10,
         swap,
@@ -212,7 +212,7 @@ pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
         return Err(Error::other("CPU time unknown"));
     }
     Ok(Pressure {
-        cpu: Cpu {
+        cpu: Cpu::Times {
             idle: idle.ticks(),
             total: kernel.ticks() + user.ticks(),
         },
