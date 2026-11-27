@@ -3177,6 +3177,24 @@ async fn a_bot_without_a_home_renames_its_seeded_title_and_signs_its_next_report
     assert_eq!(names, ["Ada", "Bea"]);
 }
 
+#[tokio::test]
+async fn retrying_the_saved_name_finishes_its_pending_soul_rename() {
+    let root = Scratch::new();
+    let (control, _, id) = ada(&root, Mails::default(), |_, _| None).await;
+    std::fs::write(root.0.join("ada/SOUL.md"), "# Ada\n\nAda's notes").unwrap();
+    let pending = control
+        .change_bot(&id, |bot| {
+            bot.renamed_from = Some(std::mem::replace(&mut bot.name, "Bea".into()));
+        })
+        .unwrap();
+    control.rename_bot(&pending, "Bea").await.unwrap();
+    assert_eq!(
+        std::fs::read(root.0.join("bea/SOUL.md")).unwrap(),
+        b"# Bea\n\nAda's notes"
+    );
+    assert_eq!(control.bot_named(&id).unwrap().renamed_from, None);
+}
+
 /// The owner renames a bot: its folder in the bots folder moves to the new name's slug with its files, its chats'
 /// sessions and its routines (their titles too), and its home chat is notified.
 #[tokio::test]

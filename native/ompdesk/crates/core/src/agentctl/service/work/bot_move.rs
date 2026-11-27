@@ -135,7 +135,7 @@ impl AgentControl {
         let name = name.trim();
         if name == bot.name {
             self.change_bot(&bot.id, |record| {
-                record.renamed_from = Some(bot.name.clone());
+                record.renamed_from.get_or_insert_with(|| bot.name.clone());
             })?;
             let folder = self.follow_name(&bot.id).await?;
             return Ok((self.bot_named(&bot.id)?, folder));
