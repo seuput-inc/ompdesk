@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { withoutGitSelectors } from "../src/shared/git-env.ts";
 
 const repo = "seuput-inc/ompdesk";
 const required = [
@@ -16,8 +17,9 @@ const required = [
 	"win-platform (2/3)",
 	"win-platform (3/3)",
 ];
-const cmd = (name, ...args) => execFileSync(name, args, { encoding: "utf8" }).trim();
-const git = (...args) => cmd("git", ...args);
+const cmd = (name, ...args) =>
+	execFileSync(name, args, { env: withoutGitSelectors(process.env), encoding: "utf8" }).trim();
+export const git = (...args) => cmd("git", ...args);
 const api = path => JSON.parse(cmd("gh", "api", `repos/${repo}/${path}`));
 
 // A successful workflow with skipped checks is not a verified batch. A dispatch on the same SHA is not its dev push.

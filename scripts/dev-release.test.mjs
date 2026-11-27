@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { onTestFinished, test } from "vitest";
-import { admission } from "./dev-release.mjs";
+import { onTestFinished, test, vi } from "vitest";
+import { admission, git as releaseGit } from "./dev-release.mjs";
 
 const jobs = [
 	"static",
@@ -78,6 +78,12 @@ test("an exact candidate stays pinned and a competing release cannot replace the
 	local("remote", "add", "origin", join(cwd, "remote.git"));
 	make("base");
 	local("push", "-q", "origin", "HEAD:main");
+	git("init", "-q", "--bare", "unrelated.git");
+	vi.stubEnv("GIT_DIR", join(cwd, "unrelated.git"));
+	onTestFinished(() => vi.unstubAllEnvs());
+	releaseGit("-C", join(cwd, "tree"), "fetch", "-q", join(cwd, "remote.git"), "main");
+	assert.ok(existsSync(join(cwd, "tree", ".git", "FETCH_HEAD")));
+	assert.equal(existsSync(join(cwd, "unrelated.git", "FETCH_HEAD")), false);
 	const green = make("feature batch");
 	local("push", "-q", "origin", "HEAD:dev");
 	const winner = make("release: v1.1.0");
