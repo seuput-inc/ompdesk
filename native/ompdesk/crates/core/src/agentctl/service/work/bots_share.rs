@@ -345,6 +345,18 @@ impl Copies {
         self.hosts.get(device)
     }
 
+    pub(crate) fn has_chat(&self, device: &str, session: &str, folder: &str) -> bool {
+        self.host(device).is_some_and(|host| {
+            host.rows.bots.iter().any(|(_, bot)| {
+                bot["folder"].as_str() == Some(folder)
+                    || bot["home"].as_str() == Some(session)
+                    || bot["sessions"].as_array().is_some_and(|chats| {
+                        chats.iter().any(|chat| chat.as_str() == Some(session))
+                    })
+            })
+        })
+    }
+
     /// A paired host's bot by its id, else its name (any case): its host and its row.
     pub(crate) fn bot(&self, key: &str) -> Option<(String, Value)> {
         let rows = || {

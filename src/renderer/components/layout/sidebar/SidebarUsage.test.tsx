@@ -140,6 +140,38 @@ describe("SidebarUsage", () => {
 		).toBe("0.24");
 	});
 
+	it("rounds only the row and names the full balance, cap or unlimited allowance", async () => {
+		const block = await mount([
+			report("openai-codex", 1, "balance", {
+				credits: { kind: "balance", limitId: "credits", remaining: 1_234_567.891, unit: "credits" },
+			}),
+			report("openai-codex", 2, "unlimited", { credits: { kind: "unlimited", limitId: "credits" } }),
+			report("openai-codex", 3, "no-balance"),
+			report("factory-droid", 4, "cap-only", {
+				limits: [],
+				credits: { kind: "monthlyCap", limitId: "spend", remaining: 123.45, limit: 500, unit: "usd" },
+			}),
+			report("other", 5, "quota-only", {
+				limits: [{ id: "requests", label: "Requests", used: 3, limit: 4 }],
+			}),
+			report("openai-codex", 6, "small-balance", {
+				credits: { kind: "balance", limitId: "credits", remaining: 99.75, unit: "credits" },
+			}),
+		]);
+		const figure = (id: number) => row(block, id)?.querySelector("[data-account-credits]");
+		expect(figure(1)?.textContent).toBe("Credits1,234,568");
+		expect(figure(1)?.getAttribute("aria-label")).toBe("Prepaid credits left: 1,234,567.891 credits");
+		expect(figure(2)?.textContent).toBe("CreditsUnlimited");
+		expect(figure(2)?.getAttribute("aria-label")).toBe("This account's credits are not limited.");
+		expect(row(block, 3)?.querySelector("[data-account-credits-slot]")?.childElementCount).toBe(0);
+		expect(figure(4)?.textContent).toBe("Credits$123");
+		expect(figure(4)?.getAttribute("aria-label")).toBe("Extra usage left this month: $123.45 USD of $500.00 USD");
+		expect(row(block, 4)?.querySelector("[role=progressbar]")).toBeNull();
+		expect(row(block, 5)?.querySelector("[data-account-credits-slot]")).toBeNull();
+		expect(row(block, 5)?.querySelector("[role=progressbar]")?.getAttribute("aria-valuenow")).toBe("75");
+		expect(figure(6)?.textContent).toBe("Credits99.75");
+	});
+
 	it("keeps five window names beside their own values when the provider needs several bands", async () => {
 		const block = await mount([
 			report("anthropic", 1, "five@example.com", {

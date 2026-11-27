@@ -331,6 +331,7 @@ impl AgentControl {
                         cwd: legacy.cwd.clone(),
                         opened_by_session: Some(legacy.opened_by_session.clone())
                             .filter(|opened| !opened.is_empty()),
+                        opened_by_device: legacy.opened_by_device.clone(),
                     },
                     state: FateState::Closed,
                     at: legacy.closed_at,
@@ -1022,23 +1023,27 @@ impl AgentControl {
             .mem()
             .closed_openers
             .get(&receiver_key(path, device))
-            .map(String::as_str)
-            == Some(caller.tab_id.as_str())
+            .is_some_and(|opener| opener == &caller.tab_id)
         {
             return true;
         }
-        let Some(session_path) = caller.session_path.as_deref() else {
+        let Some((session_path, opener_device)) = caller.saved_identity() else {
             return false;
         };
-        self.fates()
-            .of(path, device)
-            .and_then(|fate| fate.session.opened_by_session)
-            .as_deref()
-            == Some(session_path)
-            || state.closed_children.iter().any(|child| {
+        if let Some(fate) = self.fates().of(path, device)
+            && fate.session.opened_by_session.is_some()
+        {
+            return fate.session.opened_by_session.as_deref() == Some(session_path)
+                && fate.session.opened_by_device.as_deref() == Some(opener_device);
+        }
+        state
+            .closed_children
+            .iter()
+            .rev()
+            .find(|child| child.path == path && child.device.as_deref() == device)
+            .is_some_and(|child| {
                 child.opened_by_session == session_path
-                    && child.path == path
-                    && child.device.as_deref() == device
+                    && child.opened_by_device.as_deref() == Some(opener_device)
             })
     }
 

@@ -123,6 +123,9 @@ export interface BotLooks {
 export interface BotWorker {
 	/** Its session file, else its tab id until it has one. */
 	session: string;
+	device?: string;
+	/** Missing from older records. The opener alone does not prove who created the session. */
+	origin?: "opened" | "handed";
 	/** The opening chat's saved file on the bot's host; absent from older records. */
 	openedBySession?: string;
 	title: string;
@@ -266,6 +269,8 @@ export interface BotsState {
 	looks?: BotLooks[];
 	/** The owner's answer named a question the bot has since replaced: nothing was written. */
 	refused?: "question_changed";
+	/** This delete needs a new confirmation. Only the command reply carries it. */
+	deleteChanged?: BotDeletePreview;
 	/** The paired hosts' bots as this computer last heard them (absent while none is held). */
 	remote?: RemoteBots[];
 }
@@ -289,6 +294,7 @@ export interface SharedBots {
 	version: string;
 	state: Pick<BotsState, "bots" | "items">;
 	refused?: BotsState["refused"];
+	deleteChanged?: BotDeletePreview;
 }
 
 /** What changed of a computer's shared bots from `base` to `version`: rows new or different, and ids gone. */
@@ -353,6 +359,14 @@ export interface BotSeedSkill {
 	content: string;
 }
 
+export interface BotDeletePreview {
+	chats: number;
+	workers: number;
+	kept: number;
+	/** SHA-256 of this bot's device-qualified sessions and their deletion decisions. */
+	digest: string;
+}
+
 export type BotsRequest =
 	| { action: "get" }
 	| { action: "allowLegacyPeers"; ids: string[] }
@@ -387,7 +401,7 @@ export type BotsRequest =
 			tidy?: { on: boolean; time?: string };
 			quiet?: BotQuietKind[];
 	  }
-	| { action: "delete"; id: string }
+	| { action: "delete"; id: string; expected: BotDeletePreview }
 	/** The owner's change to an item (`id`), or one move of several (`ids`): each chat is mailed once. */
 	| {
 			action: "item";
@@ -475,6 +489,7 @@ export type BotCreateModels = { action: "createModels"; device?: string; callerT
 type BotFolderPreview = { folder: string };
 export type BotsCall =
 	| BotsRequest
+	| { action: "deletePreview"; id: string }
 	| BotFileRequest
 	| { action: "importSources" }
 	| BotExportRequest
@@ -490,12 +505,15 @@ export type BotsAnswer<C extends BotsCall> = C extends BotFileRequest
 				? BotFolderPreview
 				: C extends BotCreateModels
 					? ModelRolesResult
-					: BotsState;
+					: C extends { action: "deletePreview" }
+						? BotDeletePreview
+						: BotsState;
 
 export interface BotsApi {
 	command(request: BotsRequest): Promise<BotsState>;
 	createFolder(name: string, device?: string): Promise<BotFolderPreview>;
 	createModels(device?: string): Promise<ModelRolesResult>;
+	deletePreview(request: { id: string }): Promise<BotDeletePreview>;
 	file(request: Omit<BotFileRequest, "action">): Promise<BotFile>;
 	importSources(): Promise<{ sources: BotImportSource[] }>;
 	exportPackage(request: Omit<BotExportRequest, "action">): Promise<{ file: string }>;

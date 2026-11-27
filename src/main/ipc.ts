@@ -647,12 +647,26 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	};
 	const prefsStore = prefsFile<PrefsSchema>("prefs");
 	const remoteMachine = { request: remoteDevices.request.bind(remoteDevices), statsText: mainT };
+	const stopSessionTurns = async (sessionPath: string, device?: string, guardBotWorker = false) => {
+		if (device)
+			await remoteDevices.request(
+				device,
+				guardBotWorker ? "sessions.stopBotWorker" : "sessions.stop",
+				{ sessionPath },
+				90_000,
+			);
+		else await deps.hostedTabs.stopSessionTurns(sessionPath);
+	};
 	/**
 	 * Delete a stored session (the sidebar, `/delete`, the control tools): the tab holding it closes. On this computer
 	 * the paired devices' tabs on it here close too, as another window's tab would: refused only while one runs a turn
 	 * or compacts; the device drops its tab and remembers the delete. One line per delete in the runtime log.
 	 */
-	const deleteStoredSession = (sessionPath: string, device: string | undefined): Promise<void> =>
+	const deleteStoredSession = (
+		sessionPath: string,
+		device: string | undefined,
+		guardBotWorker = false,
+	): Promise<void> =>
 		recordSessionDelete({ sessionPath, ...(device ? { device } : {}) }, () =>
 			deleteSession(
 				sidecarPool,
@@ -663,7 +677,9 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 						await sessionIndex.deleteSession(sessionPath);
 						return;
 					}
-					await remoteDevices.request(device, "sessions.delete", { sessionPath });
+					await remoteDevices.request(device, guardBotWorker ? "sessions.deleteBotWorker" : "sessions.delete", {
+						sessionPath,
+					});
 					// The deleter reads the list next: from the host, not this computer's copy from before.
 					remoteDevices.hostSessionsStale(device);
 				},
@@ -1524,8 +1540,16 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// OMPdesk control tools (src/main/agent-control): the same pool, dispatcher, spawn path and notifications the GUI uses.
 	const agentControl: AgentControlRuntime = new AgentControlRuntime({
 		fileEdits: fileEditReports,
-		releaseTab: async (win, tabId, unlessDirty, expectedTurn) => {
-			const released = await closeWindowTab(tabRelease, win, tabId, win.webContents.id, unlessDirty, expectedTurn);
+		releaseTab: async (win, tabId, unlessDirty, expectedTurn, stillUnsaved) => {
+			const released = await closeWindowTab(
+				tabRelease,
+				win,
+				tabId,
+				win.webContents.id,
+				unlessDirty,
+				expectedTurn,
+				stillUnsaved,
+			);
 			if (released) sidecarPool.announceClosed(win, tabId);
 			return released;
 		},
@@ -1611,6 +1635,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			deps.webTabNotice.current?.(tabId, { kind: "completion", title, body });
 		},
 		deleteSession: deleteStoredSession,
+		stopSessionTurns,
 		// A bot's folder moved: its chats' saved sessions follow (the sidebar's Move, without the open-tab refusal: the core
 		// moves an open chat through its own omp instead).
 		moveSession: (sessionPath, cwd) => sessionIndex.moveSession(sessionPath, cwd),
@@ -1768,11 +1793,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			throw codedError("invalid_session_path", "Invalid session path");
 		}
 		const device = deviceOf(payload.device);
-		if (device) {
-			await remoteDevices.request(device, "sessions.stop", { sessionPath: payload.sessionPath }, 90_000);
-			return;
-		}
-		await deps.hostedTabs.stopSessionTurns(payload.sessionPath);
+		await stopSessionTurns(payload.sessionPath, device);
 	});
 
 	ipc.handle(IPC_COMMANDS.SESSIONS_DELETE, async (_caller, payload: IpcSessionsDeletePayload) => {

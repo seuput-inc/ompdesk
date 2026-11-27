@@ -34,6 +34,7 @@ export async function closeWindowTab(
 	senderId: number,
 	unlessDirty?: FileEditTarget,
 	expectedTurn?: AutoCloseTurn,
+	stillUnsaved?: () => boolean,
 ): Promise<boolean> {
 	const sidecar = deps.sidecarPool.sidecarForTab(win, tabId);
 	if (!sidecar) return false;
@@ -43,6 +44,7 @@ export async function closeWindowTab(
 	if (!deps.sidecarPool.isHostedView(tabId)) {
 		await deps.worktreeLifecycle.refreshExitPolicy(tabId, () => readLiveLifecycleSettings(sidecar));
 	}
+	if (stillUnsaved && !stillUnsaved()) return false;
 	if (expectedTurn !== undefined) {
 		if (sidecar.closeHostTurn) {
 			if (!deps.sidecarPool.canReleaseTab(tabId, expectedTurn)) return false;

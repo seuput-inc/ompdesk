@@ -11,9 +11,16 @@ impl Ctx {
     /// `stopSession`: the person's Stop of the turn the tab holding `path` runs, in any window. Settles once that
     /// tab's run has ended, never on a timer; at once when nothing runs there. Fails `session_running` if the run has
     /// not ended after `STOP_SESSION_WAIT_MS` (`stop_timeout`).
-    pub(super) async fn stop_session(&self, token: u64, path: &str, device: Option<&str>) -> R<()> {
+    pub(super) async fn stop_session(
+        &self,
+        token: u64,
+        path: Option<&str>,
+        device: Option<&str>,
+        tab: Option<&str>,
+    ) -> R<()> {
         let found = self.with(|pool| {
-            pool.owner_entry(device, path)
+            tab.and_then(|id| pool.entry(id))
+                .or_else(|| path.and_then(|path| pool.owner_entry(device, path)))
                 .filter(|entry| entry.busy())
                 .map(|entry| (entry.tab_id.clone(), entry.seq))
         });

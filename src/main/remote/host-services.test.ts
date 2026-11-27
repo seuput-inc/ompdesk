@@ -1317,6 +1317,49 @@ describe("LocalHostServices", () => {
 		expect(local.tab.creditSpendSyncs).toBe(0);
 	});
 
+	it("checks the host's own bot registry before stopping or deleting a paired worker", async () => {
+		const folder = join(workDir, "bot");
+		const bot = {
+			id: "b",
+			name: "Bot",
+			folder,
+			home: null,
+			sessions: [],
+			paused: false,
+			model: null,
+			autoApprove: false,
+			reach: [],
+			staleDays: null,
+			lookAround: null,
+			tidy: null,
+			quiet: [],
+			createdAt: "",
+		};
+		const { services, recordedCwd, local, deleteSession } = setup(60_000, {
+			bots: () => ({
+				share: async () => ({ version: "1", state: { bots: [bot], items: [] } }),
+				home: vi.fn(),
+				from: vi.fn(),
+				remote: vi.fn(),
+				roomPost: vi.fn(),
+			}),
+		});
+		const conn = new FakeConnection(peer("asking-device"));
+		const sessionPath = join(workDir, "sessions", "guarded.jsonl");
+		local.running.add(sessionPath);
+		recordedCwd.mockResolvedValue(folder);
+		for (const method of ["sessions.stopBotWorker", "sessions.deleteBotWorker"]) {
+			await expect(services.call(conn.peer, method, { sessionPath }, conn)).rejects.toThrow("belongs to a bot");
+		}
+		expect(local.stopped).toEqual([]);
+		expect(deleteSession).not.toHaveBeenCalled();
+		recordedCwd.mockResolvedValue(join(workDir, "worker"));
+		await services.call(conn.peer, "sessions.stopBotWorker", { sessionPath }, conn);
+		await services.call(conn.peer, "sessions.deleteBotWorker", { sessionPath }, conn);
+		expect(local.stopped).toEqual([sessionPath]);
+		expect(deleteSession).toHaveBeenCalledWith(sessionPath);
+	});
+
 	it("renames a session through this machine's own live tab; a delete closes that tab when idle and refuses only while it runs a turn", async () => {
 		// 21 Oct 2026: a device's delete of a session a host window had open, idle, was refused for good ("Session is
 		// open on the host"), while this computer's own delete closes another window's idle tab, and a device's idle one.

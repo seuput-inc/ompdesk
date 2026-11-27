@@ -345,6 +345,22 @@ impl SendOutbox {
         self.state().pending()
     }
 
+    /// Only a fresh open queues the worker command before its first prompt. A reopen or hand never does.
+    pub fn opened_worker(&self, from: &str, device: Option<&str>, path: &str) -> bool {
+        let state = self.state();
+        let oldest = (state.now)() - SEND_OUTBOX_TTL_MS;
+        state.entries.iter().any(|(_, entry)| {
+            entry.at >= oldest
+                && entry.from_device.is_none()
+                && entry.from == from
+                && entry.device.as_deref() == device
+                && entry.session_path == path
+                && entry.before.iter().any(|command| {
+                    command.get("type").and_then(Value::as_str) == Some("agent_control_worker")
+                })
+        })
+    }
+
     /// The messages still owed to one receiver session, oldest first.
     pub fn owed_to(&self, session_path: &str, device: Option<&str>) -> Vec<OutboxSend> {
         let key = receiver_key(session_path, device);

@@ -325,6 +325,7 @@ impl Runtime {
                     cwd: row.cwd.clone(),
                     opened_by_session: Some(row.opened_by_session.clone())
                         .filter(|opened| !opened.is_empty()),
+                    opened_by_device: row.opened_by_device.clone(),
                 },
                 fate_by::APP,
                 state.deleted_at_path(&row.path, row.device.as_deref()),

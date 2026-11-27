@@ -176,7 +176,7 @@ export function openedChildRows(input: {
 	for (const child of closed) {
 		if (
 			child.openedBySession !== parent.sessionPath ||
-			child.openedByDevice !== parent.device ||
+			(child.openedByDevice || undefined) !== parent.device ||
 			shown.has(reviewKey(child.device, child.path))
 		)
 			continue;

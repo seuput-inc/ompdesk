@@ -461,6 +461,7 @@ fn fated(value: &Value) -> FatedSession {
         hidden: value["hidden"] == json!(true),
         cwd: str_of(&value["cwd"]),
         opened_by_session: non_empty("openedBySession"),
+        opened_by_device: non_empty("openedByDevice"),
     }
 }
 

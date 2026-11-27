@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UsageReport } from "../../../../shared/rpc-types";
-import { usageAccountGroups } from "./usage-groups";
+import { usageAccountGroups, usageWindowLimits } from "./usage-groups";
 
 describe("usageAccountGroups", () => {
 	const windows = (provider: string) => [
@@ -15,7 +15,7 @@ describe("usageAccountGroups", () => {
 		...patch,
 	});
 
-	it("lists every account of every provider, API keys and window-less accounts left out", () => {
+	it("groups measured accounts and leaves out an account without windows or credits", () => {
 		const reports = [
 			report("openai-codex", "z@x.com"),
 			report("anthropic", "b@x.com"),
@@ -29,6 +29,26 @@ describe("usageAccountGroups", () => {
 			["a@x.com", "b@x.com"],
 			["y@x.com", "z@x.com"],
 		]);
+	});
+
+	it("lists a balance without windows in the detail, not the percentage summary", () => {
+		const balance = report("factory-droid", "lab@example.com", {
+			limits: [{ id: "factory-droid:extra-balance", label: "Balance", used: 0, limit: 12 }],
+			credits: { kind: "balance", limitId: "factory-droid:extra-balance", remaining: 12, unit: "usd" },
+		});
+		const empty = report("factory-droid", "empty@example.com", { limits: [] });
+		expect(usageAccountGroups([empty, balance], null)[0]?.accounts.map(entry => entry.report)).toEqual([balance]);
+		expect(usageAccountGroups([empty, balance], null, false)).toEqual([]);
+	});
+
+	it("keeps quota windows beside a reported credit limit", () => {
+		const quota = windows("anthropic");
+		const mixed = report("anthropic", "team@example.com", {
+			limits: [...quota, { id: "anthropic:extra", label: "Extra usage", used: 9, limit: 10 }],
+			credits: { kind: "monthlyCap", limitId: "anthropic:extra", remaining: 1, limit: 10, unit: "usd" },
+		});
+		expect(usageWindowLimits(mixed)).toEqual(quota);
+		expect(usageAccountGroups([mixed], null, false)[0]?.accounts[0]?.report).toBe(mixed);
 	});
 
 	it("keeps a fixed order by address and marks the session's own account without moving it", () => {

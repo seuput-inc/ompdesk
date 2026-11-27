@@ -920,6 +920,7 @@ impl Ctx {
                     "facts": self.tab_facts(&tab),
                     "formerIds": self.former_tab_ids(&tab),
                     "hasDraft": self.has_draft(&tab),
+                    "sessionMoved": self.with(|pool| pool.entry(&tab).is_none_or(|entry| entry.touched != 0)),
                     "owner": self.window_of_tab(&tab),
                 });
             }
@@ -1353,8 +1354,17 @@ impl Ctx {
     }
 
     /// Record that `opener`'s agent opened `tab`: the windows nest the session under its opener.
-    pub(super) async fn set_tab_opener(&self, tab: &str, opener: &str) -> R<()> {
-        let win = self.with(|pool| pool.bind_opener(tab, opener));
+    pub(super) async fn set_tab_opener(&self, tab: &str, opener: Option<&str>) -> R<()> {
+        let win = self.with(|pool| match opener {
+            Some(parent) => pool.bind_opener(tab, parent),
+            None => {
+                let child = pool.entry_mut(tab)?;
+                child.opened_by = None;
+                child.opened_by_session = None;
+                child.opened_by_device = None;
+                Some(child.win_id)
+            }
+        });
         let Some(win) = win else {
             return Ok(());
         };

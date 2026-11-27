@@ -117,7 +117,7 @@ import {
 import { SESSION_TREE } from "./fixture-sheets";
 import { statsAnswer } from "./fixture-stats";
 import { artworkFixture, targetsFixture } from "./fixture-targets";
-import { blockedAccountUsage, manyWindowUsage, usageFigureReports } from "./fixture-usage";
+import { blockedAccountUsage, creditAccountUsage, manyWindowUsage, usageFigureReports } from "./fixture-usage";
 import { diskCareState, orphanWorktrees, savedWorktreeRestore, savedWorktrees } from "./fixture-work-tree";
 import { createHarnessSummaries, type HarnessSummaries } from "./summaries";
 
@@ -200,6 +200,7 @@ const JOBS_TREE = new URLSearchParams(location.search).get("jobs") === "tree";
 /** Sample usage records, selected only by this harness page's query. */
 const USAGE_FIXTURES: Record<string, () => UsageReport[]> = {
 	blocked: blockedAccountUsage,
+	credits: creditAccountUsage,
 	similar: () => blockedAccountUsage(Date.now(), true),
 	windows: manyWindowUsage,
 	figures: usageFigureReports,
@@ -430,7 +431,9 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 			]
 		: ACCOUNTS
 			? ACCOUNT_PROVIDERS
-			: PROVIDERS;
+			: usageFixture === creditAccountUsage
+				? [...PROVIDERS, { ...PROVIDERS[0], id: "factory-droid", name: "Factory Droid" }]
+				: PROVIDERS;
 	const pickedModels = new Map<string, (typeof models)[number]>();
 	let activeTabId = "tab-1";
 	const stalePlan = new URLSearchParams(location.search).get("todos") === "drift";

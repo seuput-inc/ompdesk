@@ -18,25 +18,17 @@
 
 import { Copy, RefreshCw, Trash2, Users } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AccountCredits, ProviderAccount, ProviderAccountsResult, UsageLimit } from "../../../../shared/rpc-types";
+import type { ProviderAccount, ProviderAccountsResult, UsageLimit } from "../../../../shared/rpc-types";
 import { type InlineFailure, inlineFailure } from "../../../lib/error-detail";
-import { copyText, formatCredits } from "../../../lib/format";
+import { copyText } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { useNowTick } from "../../../lib/now-tick";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { gaugeColumns } from "../../../lib/usage-windows";
 import { toast, toastError } from "../../../stores/toast";
-import {
-	Badge,
-	Button,
-	ConfirmDialog,
-	type ContextMenuItem,
-	InlineNotice,
-	MAX_USAGE_COLUMNS,
-	Tooltip,
-} from "../../common";
+import { Button, ConfirmDialog, type ContextMenuItem, InlineNotice, MAX_USAGE_COLUMNS } from "../../common";
 import { useSettingsNavigate } from "../settings-navigation";
-import { AccountBadges, accountNames, QuotaCell, quotaLimits } from "./AccountQuota";
+import { AccountBadges, accountNames, CreditsFigure, QuotaCell, quotaLimits } from "./AccountQuota";
 import { ConnectedRow, ProviderGroupItem } from "./ConnectedRow";
 import type { ProviderGroup } from "./provider-groups";
 import { ResetPassControl } from "./ResetPasses";
@@ -133,32 +125,6 @@ export function useProviderAccounts(
 	}, [usagePolls, enabled, load]);
 
 	return { result, error, loading, load };
-}
-
-/**
- * What the account has left to spend, one quiet labelled figure ("Credits $35.20"); its tooltip says what it is: the
- * month's extra usage left of its cap, prepaid credits, or credits the provider does not count ("Credits Unlimited").
- */
-function CreditsFigure({ credits }: { credits: AccountCredits }) {
-	const t = useT();
-	const left =
-		credits.kind === "unlimited"
-			? t("providers.accounts.creditsUnlimited")
-			: formatCredits(credits.remaining, credits.unit);
-	const what =
-		credits.kind === "monthlyCap"
-			? t("providers.accounts.creditsMonthlyCap", { left, limit: formatCredits(credits.limit, credits.unit) })
-			: credits.kind === "unlimited"
-				? t("providers.accounts.creditsUnlimitedWhat")
-				: t("providers.accounts.creditsBalance", { left });
-	return (
-		<Tooltip content={what}>
-			<Badge data-account-credits={credits.kind} size="xs" variant="muted">
-				{t("providers.accounts.credits")}
-				<span className="text-(--sc-text-secondary) tabular-nums">{left}</span>
-			</Badge>
-		</Tooltip>
-	);
 }
 
 /**

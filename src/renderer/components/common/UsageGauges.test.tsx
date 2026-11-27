@@ -5,6 +5,7 @@ import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it } from "vitest";
 import type { UsageLimit } from "../../../shared/rpc-types";
 import { I18nProvider, setLanguageOverride } from "../../lib/i18n";
+import { accountGauges, gaugeColumns } from "../../lib/usage-windows";
 
 const { document, window, HTMLElement, Node } = parseHTML("<html><body></body></html>");
 Object.assign(globalThis as Record<string, unknown>, {
@@ -17,7 +18,6 @@ Object.assign(globalThis as Record<string, unknown>, {
 
 const { createRoot } = await import("react-dom/client");
 const { UsageGauges } = await import("./UsageGauges");
-const { accountGauges } = await import("../../lib/usage-windows");
 
 const limits: UsageLimit[] = [
 	{ id: "anthropic:5h", label: "5h", windowId: "5h", usedFraction: 0.64 },
@@ -27,18 +27,44 @@ const limits: UsageLimit[] = [
 let root: Root | undefined;
 let container: HTMLElement;
 
-async function mount(compact: boolean, shown: UsageLimit[] = limits): Promise<void> {
+async function mount(compact: boolean, shown: UsageLimit[] = limits, columns?: UsageLimit[]): Promise<void> {
 	container = document.createElement("div") as unknown as HTMLElement;
 	document.body.appendChild(container as never);
 	root = createRoot(container as unknown as Element);
 	await act(async () => {
 		root?.render(
 			<I18nProvider>
-				<UsageGauges compact={compact} limits={shown} />
+				<UsageGauges columns={columns} compact={compact} limits={shown} />
 			</I18nProvider>,
 		);
 	});
 }
+
+it.each([
+	["kiro:credits", "Kiro Pro credits", "Credits", "kiro:overage", "Overage credits", "Overage"],
+	["github-copilot:chat", "Chat Requests", "Chat", "github-copilot:premium", "Premium Requests", "Premium"],
+	["zai:credits:1mo", "Credit usage", "Credits", "zai:tokens:1mo", "Token usage", "Tokens"],
+])(
+	"keeps %s and the other monthly quota in distinct columns",
+	async (id, label, head, otherId, otherLabel, otherHead) => {
+		const first = { id, label, windowId: "monthly", usedFraction: 0.27 };
+		const second = { id: otherId, label: otherLabel, windowId: "monthly", usedFraction: 0.83 };
+		const columns = gaugeColumns([[first], [second, first]]);
+		await mount(true, [second, first], columns);
+		const gauges = [...container.querySelectorAll(".omp-usage-gauge-text")];
+		expect(gauges.map(cell => cell.querySelector("[data-usage-label]")?.textContent)).toEqual([head, otherHead]);
+		expect(gauges.map(cell => cell.querySelector("[data-usage-percent]")?.textContent)).toEqual(["27%", "83%"]);
+	},
+);
+
+it("keeps a stock limit ID's weekly and monthly readings in their own columns", async () => {
+	const monthly = { id: "cursor:usd:individual-auto", label: "Auto", windowId: "monthly", usedFraction: 0.8 };
+	const weekly = { ...monthly, windowId: "weekly", usedFraction: 0.4 };
+	await mount(true, [monthly, weekly], gaugeColumns([[weekly], [monthly, weekly]]));
+	const gauges = [...container.querySelectorAll(".omp-usage-gauge-text")];
+	expect(gauges.map(cell => cell.querySelector("[data-usage-label]")?.textContent)).toEqual(["Weekly", "Monthly"]);
+	expect(gauges.map(cell => cell.querySelector("[data-usage-percent]")?.textContent)).toEqual(["40%", "80%"]);
+});
 
 afterEach(async () => {
 	await act(async () => root?.unmount());

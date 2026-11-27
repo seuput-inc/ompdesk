@@ -167,7 +167,8 @@ export const DialogSurface = forwardRef<HTMLDivElement, DialogSurfaceProps>(func
 
 export interface ModalProps {
 	open: boolean;
-	onClose: () => void;
+	/** Null while a submitted action cannot be cancelled. */
+	onClose: (() => void) | null;
 	title?: ReactNode;
 	/** Short supporting copy below the title, associated with the dialog. */
 	description?: ReactNode;
@@ -243,7 +244,7 @@ export function Modal({
 	if (open) shownRef.current = { ariaLabel, body: children, description, footer, title };
 	const shown = shownRef.current;
 
-	useModalLayer(open, panelRef, onClose);
+	useModalLayer(open, panelRef, () => onClose?.());
 
 	// Render on the opening commit so the focus/layer effect sees a real panel.
 	// `mounted` only extends the closing phase for the exit animation.
@@ -276,7 +277,7 @@ export function Modal({
 			inert={closing}
 			onMouseDown={event => {
 				if (closing) return;
-				if (event.target === event.currentTarget) onClose();
+				if (event.target === event.currentTarget) onClose?.();
 			}}
 			role="presentation"
 		>
@@ -298,9 +299,9 @@ export function Modal({
 				)}
 				data-chromeless={chromeless ? "" : undefined}
 				data-presentation={sheet ? "sheet" : undefined}
-				handle={sheet ? <SheetHandle onClose={onClose} panelRef={panelRef} /> : undefined}
+				handle={sheet && onClose ? <SheetHandle onClose={onClose} panelRef={panelRef} /> : undefined}
 				footer={shown.footer}
-				onClose={onClose}
+				onClose={onClose ?? undefined}
 				onKeyDown={event => {
 					if (event.key === "Escape") event.stopPropagation();
 				}}

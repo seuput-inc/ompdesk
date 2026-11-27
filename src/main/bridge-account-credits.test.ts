@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { accountCredits, creditKind, creditsInRaw, rawCredits } from "../../resources/gui-bridge/account-credits";
+import {
+	accountCredits,
+	creditKind,
+	creditLimitId,
+	creditsInRaw,
+	rawCredits,
+} from "../../resources/gui-bridge/account-credits";
 
 const window5h = { id: "anthropic:5h", amount: { used: 20, limit: 100, remaining: 80, unit: "percent" } };
 
@@ -45,6 +51,53 @@ describe("account credits from stock's usage limits", () => {
 			limit: 50,
 			unit: "usd",
 		});
+	});
+
+	it("shows Cursor prepaid dollars without treating its monthly Other Models rail as money", () => {
+		const id = "cursor:usd:individual-api";
+		const amount = { used: 3, remaining: 7, limit: 10, unit: "usd" };
+		const monthly = { id, window: { id: "monthly" }, amount };
+		const prepaid = { id, window: { id: "prepaid" }, amount };
+		const cursor = { provider: "cursor" };
+		expect(accountCredits([monthly], cursor)).toBeUndefined();
+		expect(accountCredits([prepaid])).toBeUndefined();
+		const credits = accountCredits([monthly, prepaid], cursor);
+		expect(credits).toEqual({
+			kind: "balance",
+			limitId: "cursor:usd:individual-api:prepaid",
+			remaining: 7,
+			unit: "usd",
+		});
+		expect([monthly, prepaid].filter(limit => creditLimitId(limit) !== credits?.limitId)).toEqual([monthly]);
+	});
+
+	it("keeps Cursor's monthly on-demand cap as a gauge even without an included plan window", () => {
+		const window = { id: "monthly" };
+		const amount = { used: 1, remaining: 4, limit: 5, unit: "usd" };
+		const plan = { id: "cursor:usd:individual-plan", window, amount };
+		const extra = { id: "cursor:usd:individual-ondemand", window, amount };
+		expect(accountCredits([extra], { provider: "cursor" })).toBeUndefined();
+		expect(accountCredits([plan, extra], { provider: "cursor" })).toBeUndefined();
+	});
+
+	it("reads only Devin's positive numeric overage balance from subscription metadata", () => {
+		const metadata = { overageBalanceUsd: 2.75 };
+		expect(accountCredits([window5h], { provider: "devin", metadata })).toEqual({
+			kind: "balance",
+			limitId: "devin:overage-balance",
+			remaining: 2.75,
+			unit: "usd",
+		});
+		expect(accountCredits([], { provider: "cursor", metadata })).toBeUndefined();
+		for (const value of [0, -1, "2.75", Number.POSITIVE_INFINITY]) {
+			expect(accountCredits([], { provider: "devin", metadata: { overageBalanceUsd: value } })).toBeUndefined();
+		}
+	});
+
+	it("does not replace Kiro's independently measured grants and overage cap with one credit figure", () => {
+		const amount = { remaining: 2, limit: 5, unit: "credits" };
+		const limits = ["kiro:credits", "kiro:bonus:0", "kiro:add-on:0", "kiro:overage"].map(id => ({ id, amount }));
+		expect(accountCredits(limits, { provider: "kiro" })).toBeUndefined();
 	});
 
 	it("has nothing for zero, a spent cap, uncapped extra usage, an odd unit or no credit limit at all", () => {

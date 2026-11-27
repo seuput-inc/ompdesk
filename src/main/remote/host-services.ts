@@ -37,7 +37,7 @@
  * one research run per device, aborted when it drops.
  */
 import { randomUUID } from "node:crypto";
-import { isAbsolute } from "node:path";
+import { isAbsolute, relative } from "node:path";
 import { z } from "zod";
 import { PROMPT_ORIGIN_HOST_ID, type PromptOriginEnv } from "../../../resources/gui-bridge/prompt-origin-contracts";
 import { ACCOUNT_ROTATION_MODES } from "../../shared/account-rotation";
@@ -1487,6 +1487,29 @@ export class LocalHostServices implements HostServices {
 					sessionPath,
 					restore === true,
 				);
+			}
+			case "sessions.stopBotWorker":
+			case "sessions.deleteBotWorker": {
+				const { sessionPath } = parse(SessionPathParams, method, params);
+				if (deletedSessions().has(sessionPath)) return null;
+				const cwd = await this.#deps.sessionIndex.recordedCwd(sessionPath);
+				if (!cwd || !isAbsolute(cwd)) throw new Error(`Cannot verify the worker folder for ${sessionPath}.`);
+				const { state } = await this.#bots().share();
+				if (
+					state.bots.some(
+						bot =>
+							!isAbsolute(bot.folder) ||
+							!relative(bot.folder, cwd) ||
+							(bot.home && !relative(bot.home, sessionPath)) ||
+							bot.sessions.some(chat => !relative(chat, sessionPath)),
+					)
+				)
+					throw new Error(
+						`Session ${sessionPath} belongs to a bot on this computer or its folder cannot be verified.`,
+					);
+				if (method === "sessions.deleteBotWorker") return this.#deleteSession(peer, sessionPath);
+				await this.stopSessionTurns(sessionPath, peer.deviceId);
+				return null;
 			}
 			case "sessions.delete":
 				return this.#deleteSession(peer, parse(SessionPathParams, method, params).sessionPath);

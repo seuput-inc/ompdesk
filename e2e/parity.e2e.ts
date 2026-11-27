@@ -1424,7 +1424,11 @@ if (dir) {
 				}
 				if (surface.parity.session === "firstRun") {
 					const { botId } = await firstRunSession();
-					if (botId) await b.evaluate(id => window.omp.bots.command({ action: "delete", id }), botId);
+					if (botId)
+						await b.evaluate(async id => {
+							const expected = await window.omp.bots.deletePreview({ id });
+							return window.omp.bots.command({ action: "delete", id, expected });
+						}, botId);
 				}
 			}
 		} finally {

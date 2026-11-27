@@ -214,6 +214,8 @@ pub struct ControlTab {
     pub looked: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub user_touched: bool,
+    #[serde(default, skip_serializing)]
+    pub session_moved: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub drafting: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -278,6 +280,14 @@ pub struct ScheduledRetry {
 }
 
 impl ControlTab {
+    pub fn saved_identity(&self) -> Option<(&str, &str)> {
+        let path = self
+            .session_path
+            .as_deref()
+            .filter(|path| !path.is_empty())?;
+        Some((path, self.device.as_deref().unwrap_or_default()))
+    }
+
     /// `tab.task` and `tab.title` as a name: the title, else the task, else "".
     pub fn name(&self) -> &str {
         if self.title.is_empty() {
@@ -483,6 +493,8 @@ pub struct ReleasedSession {
     pub hidden: bool,
     #[serde(default)]
     pub opened_by_session: Option<String>,
+    #[serde(default)]
+    pub opened_by_device: Option<String>,
     /// Its opener hears that it was closed: an agent's own child, not an Autopilot run's (the run reads those itself).
     #[serde(default)]
     pub tell_opener: bool,

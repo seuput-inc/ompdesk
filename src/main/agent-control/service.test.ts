@@ -244,6 +244,9 @@ class FakeHost implements AgentControlHost {
 	deleteStored = async (row: StoredSession) => {
 		this.deletedStored.push({ path: row.path, device: row.device });
 	};
+	cleanupBotSession = async (session: string, device: string | undefined, release: boolean) => {
+		if (!release) this.deletedStored.push({ path: session, device });
+	};
 	releaseFolder = async (_folder: string): Promise<void> => {};
 	relocateBot = async (_from: string, _to: string, _sessions: string[]): Promise<Record<string, string>> => ({});
 	facts = new Map<string, BranchFacts>();
@@ -3180,6 +3183,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 			{
 				path: "/s/kid.jsonl",
 				openedBySession: "/s/boss.jsonl",
+				openedByDevice: "",
 				title: "Fix the parser",
 				cwd: "/repo",
 				tabIds: [child.tabId],
@@ -3716,6 +3720,7 @@ describe("autoClose: opened sessions whose work landed", () => {
 				{
 					path: "/s/kid.jsonl",
 					openedBySession: "/s/boss.jsonl",
+					openedByDevice: "",
 					title: "Fix the parser",
 					cwd: "/repo",
 					closedAt: 1,
@@ -4433,7 +4438,7 @@ describe("ompdesk_session_stop of a saved session", () => {
 			storedRow({ device: desktop.id, path: "C:/s/one.jsonl" }),
 			storedRow({ id: "66666666-ffff", device: desktop.id, path: "C:/s/six.jsonl" }),
 		];
-		const closed = { title: "Lookup", cwd: "C:/repo", device: desktop.id, closedAt: 1 };
+		const closed = { title: "Lookup", cwd: "C:/repo", device: desktop.id, closedAt: 1, openedByDevice: "" };
 		host.closed = [
 			{ ...closed, path: "C:/s/one.jsonl", openedBySession: "/s/boss.jsonl" },
 			{ ...closed, path: "C:/s/six.jsonl", openedBySession: "/s/other.jsonl" },
@@ -6272,6 +6277,39 @@ describe("an id keeps naming its session after its tab is gone, and says when th
 		host.storedTranscripts.set("/s/kid.jsonl", said);
 		return { host, service: control(host) };
 	};
+
+	it.each([
+		["fate", "studio"],
+		["fate", undefined],
+		["closed", "studio"],
+		["closed", undefined],
+	] as const)("requires confirmation for a same-path local caller (%s, opener device %s)", async (source, device) => {
+		const path = join(dir, "child.jsonl");
+		writeFileSync(path, "synthetic conversation");
+		const record = {
+			path,
+			title: "Child",
+			cwd: dir,
+			closedAt: 1,
+			openedBySession: "/s/boss.jsonl",
+			...(device ? { openedByDevice: device } : {}),
+		};
+		if (source === "fate") {
+			await launch().service.released("kid00002", { ...record, formerIds: [] });
+		}
+		const { host, service } = launch();
+		if (source === "closed") host.closed = [record];
+		host.storedRows = [storedRow({ path })];
+		host.cardAnswer = false;
+		host.deleteStored = async row => {
+			expect(row.path).toBe(path);
+			rmSync(path);
+		};
+		const result = await service.run("boss0001", T.stop, { session: "11111111-aaaa", delete: true });
+		expect(result.text).toContain("declined");
+		expect(host.cards).toHaveLength(1);
+		expect(readFileSync(path, "utf8")).toBe("synthetic conversation");
+	});
 
 	it("reads a session whose tab the person closed by the id it was opened with, in this launch and the next", async () => {
 		const first = launch(kid);

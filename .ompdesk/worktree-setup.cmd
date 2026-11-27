@@ -1,5 +1,4 @@
 @echo off
 cd /d "%~dp0.."
-bun install --frozen-lockfile || exit /b 1
-bun scripts/ensure-electron.ts
+bun scripts/worktree-install.ts || exit /b 1
 git config core.hooksPath .githooks
