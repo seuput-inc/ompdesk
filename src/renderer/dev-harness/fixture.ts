@@ -33,41 +33,67 @@ interface Seed {
 	status: SessionInfo["status"];
 }
 
-const SEEDS: Seed[] = [
-	{
-		tabId: "tab-1",
-		sessionId: "sess-1",
-		title: "Fix the flaky sidebar test",
-		cwd: PROJECT,
-		messageCount: 14,
-		status: "complete",
-	},
-	{
-		tabId: "tab-2",
-		sessionId: "sess-2",
-		title: "Add dark mode to the settings page",
-		cwd: PROJECT,
-		messageCount: 8,
-		status: "complete",
-	},
-	{
-		tabId: "tab-3",
-		sessionId: "sess-3",
-		title: "Migrate the blog to Astro",
-		cwd: OTHER_PROJECT,
-		messageCount: 22,
-		status: "complete",
-	},
-];
+export const FAMILY_DEMO = typeof location !== "undefined" && new URLSearchParams(location.search).has("families");
+const SEEDS: Seed[] = FAMILY_DEMO
+	? [
+			"Alpha",
+			"Bravo: review the updated build after all changes",
+			"Charlie",
+			"Alpha worker",
+			"Bravo worker",
+			"Unassigned worker",
+		].map((title, i) => ({
+			tabId: `tab-${i + 1}`,
+			sessionId: `sess-${i + 1}`,
+			title,
+			cwd: PROJECT,
+			messageCount: 4,
+			status: "complete",
+		}))
+	: [
+			{
+				tabId: "tab-1",
+				sessionId: "sess-1",
+				title: "Fix the flaky sidebar test",
+				cwd: PROJECT,
+				messageCount: 14,
+				status: "complete",
+			},
+			{
+				tabId: "tab-2",
+				sessionId: "sess-2",
+				title: "Add dark mode to the settings page",
+				cwd: PROJECT,
+				messageCount: 8,
+				status: "complete",
+			},
+			{
+				tabId: "tab-3",
+				sessionId: "sess-3",
+				title: "Migrate the blog to Astro",
+				cwd: OTHER_PROJECT,
+				messageCount: 22,
+				status: "complete",
+			},
+		];
 
 export const sessionPath = (seed: Pick<Seed, "sessionId" | "cwd">) =>
 	`${seed.cwd.replace(/\//g, "-")}/${seed.sessionId}.jsonl`;
+
+function familyOpener(index: number) {
+	if (!FAMILY_DEMO || (index !== 3 && index !== 4)) return {};
+	return {
+		openedBy: `tab-${index - 2}`,
+		openedBySession: sessionPath({ cwd: PROJECT, sessionId: `sess-${index - 2}` }),
+	};
+}
 
 export const tabsFixture = (): IpcTabInfo[] =>
 	SEEDS.map((seed, index) => ({
 		tabId: seed.tabId,
 		cwd: seed.cwd,
-		status: "ready",
+		...familyOpener(index),
+		status: FAMILY_DEMO && (index === 1 || index >= 3) ? "running" : "ready",
 		active: index === 0,
 		visible: index === 0,
 		kind: "agent" as IpcTabInfo["kind"],
@@ -85,12 +111,16 @@ export const sessionsFixture = (): SessionInfo[] => [
 		id: seed.sessionId,
 		title: seed.title,
 		cwd: seed.cwd,
-		created: new Date(NOW - (index + 1) * 60 * MINUTE).toISOString(),
+		created: new Date(FAMILY_DEMO ? NOW - (6 - index) * MINUTE : NOW - (index + 1) * 60 * MINUTE).toISOString(),
 		modified: new Date(NOW - index * 25 * MINUTE).toISOString(),
 		messageCount: seed.messageCount,
 		size: 4096 * (index + 2),
 		status: seed.status,
-		firstMessage: seed.title,
+		firstMessage:
+			FAMILY_DEMO && index === 5
+				? '<ompdesk-agent-message from="Charlie">\nCheck status\n</ompdesk-agent-message>'
+				: seed.title,
+		openedBySession: familyOpener(index).openedBySession,
 	})),
 	...Array.from({ length: Math.max(0, ROWS - SEEDS.length) }, (_, index) => ({
 		path: sessionPath({ sessionId: `sess-row-${index + 1}`, cwd: PROJECT }),

@@ -187,6 +187,7 @@ describe("sidebarRows over every combination of folder, holder and opener", () =
 					rule,
 				).toEqual(cell.folder === "old" ? [] : [`group:${ownProject}`]);
 			else expect(where.length, rule).toBeLessThanOrEqual(1);
+			if (cell.origin === "brief") expect(rows.rootOf.has(cell.path), rule).toBe(false);
 			// A chat is its Chats section's row whoever holds it: never nested, folded or in a project.
 			if (cell.folder === "chat") {
 				expect(where, rule).toEqual(["chat"]);

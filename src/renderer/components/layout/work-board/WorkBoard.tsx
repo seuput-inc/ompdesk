@@ -284,7 +284,6 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 	const phases = useTodoStore(state => state.phases);
 	const planVisible = useTodoStore(selectTodoCardVisible);
 	const plan = useMemo(() => (planVisible ? todoBoard(phases) : null), [phases, planVisible]);
-	// How current the list is (when it last changed, whether it is behind the work); nothing without a list.
 	const listFreshness = useTodoFreshness();
 	const freshness = plan ? listFreshness : null;
 
@@ -454,7 +453,6 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 			: (presentedJobs[0]?.item.label ??
 				(nowChildren[0] ? nowChildren[0].title || t("workBoard.review.untitled") : ""));
 	const nowFigure = counts.running + counts.childrenRunning;
-	// Instructions since the list changed, or a list behind the work, lead: its "now" row is the part in doubt.
 	const planLead =
 		freshness?.summary ??
 		plan?.active ??
@@ -717,7 +715,7 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 						/>
 					)}
 					{/* The instructions the agent worked past say why themselves: their lines stand for the reason's row. */}
-					{freshness?.reason && (freshness.stale !== "instruction" || freshness.receivedCount === 0) && (
+					{freshness?.reason && freshness.receivedCount === 0 && (
 						<BoardRow
 							data={{ "data-board-todo-stale": freshness.stale ?? "" }}
 							flipKey="plan-stale"

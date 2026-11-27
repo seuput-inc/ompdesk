@@ -219,36 +219,6 @@ export interface FamilySession {
 	path: string;
 	id: string;
 	liveTabId?: string;
-	/** What its row reads: the sender title of an agent's brief names it. */
-	title?: string;
-	/** The indexed first prompt: an `<ompdesk-agent-message>` brief marks a session an agent opened. */
-	firstMessage?: string;
-	/** Stock's `created`: an opener is older than what it opened. */
-	created?: string;
-}
-
-/**
- * The session a legacy child (opened before provenance was kept: no tab link, no closed record) names as its sender in
- * the brief its first message holds: the newest session titled so that existed when the child was made. Null for a
- * person's own prompt, a brief without a sender, or a sender nobody here is titled as.
- */
-function briefOpenerOf(child: FamilySession, sessions: readonly FamilySession[]): FamilySession | null {
-	const from = (agentMessageSender(child.firstMessage ?? "") ?? "").replaceAll(/\s+/g, " ").trim();
-	if (!from) return null;
-	const born = Date.parse(child.created ?? "");
-	let best: FamilySession | null = null;
-	let bestMade = Number.NEGATIVE_INFINITY;
-	for (const candidate of sessions) {
-		if (candidate.path === child.path || (candidate.title ?? "").replaceAll(/\s+/g, " ").trim() !== from) continue;
-		const made = Date.parse(candidate.created ?? "");
-		if (made > born) continue;
-		const rank = Number.isNaN(made) ? Number.NEGATIVE_INFINITY : made;
-		if (!best || rank > bestMade) {
-			best = candidate;
-			bestMade = rank;
-		}
-	}
-	return best;
 }
 
 /**
@@ -273,9 +243,8 @@ export function tabOfRow<T extends { id: string; sessionPath?: string; sessionId
  * A tab names its opener by tab id while both live, and by the opener's session file after a relaunch (every tab id is
  * new then, and the opener needs no tab: its stored session is enough). A session without a tab here is found by what
  * was recorded naming the opener's file (`recordedOpeners`: the closed-children record for one main closed after its
- * work landed, the review list for one another window holds, what a host says of its row), else, for one opened before
- * either was kept, by the sender its first message's agent brief names (a title, which may have changed since). Whatever
- * its folder or worktree, an opened session goes under its opener; one opened by an opened session goes under the first
+ * work landed, the review list for one another window holds, what a host says of its row). Whatever its folder or
+ * worktree, an opened session goes under its opener; one opened by an opened session goes under the first
  * of them, so the family is one level deep. A session whose opener is not in the list (deleted, or in another lane) is
  * not nested, and a cycle nests nothing.
  */
@@ -308,12 +277,7 @@ export function openerOfSessions(
 	for (const session of sessions) {
 		if (direct.has(session.path) || chosenParents.has(session.path)) continue;
 		const opener = recordedOpeners.get(session.path);
-		if (opener && opener !== session.path && known.has(opener)) {
-			direct.set(session.path, opener);
-			continue;
-		}
-		const sender = briefOpenerOf(session, sessions);
-		if (sender) direct.set(session.path, sender.path);
+		if (opener && opener !== session.path && known.has(opener)) direct.set(session.path, opener);
 	}
 	const roots = new Map<string, string>();
 	for (const child of direct.keys()) {
@@ -475,14 +439,7 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 	}
 	const rootOf = openerOfSessions(
 		facts.tabs,
-		code.map(session => ({
-			path: session.path,
-			id: session.id,
-			liveTabId: session.liveTabId,
-			title: facts.titleOf(session),
-			firstMessage: briefed.has(session.path) ? session.firstMessage : undefined,
-			created: session.created,
-		})),
+		code,
 		recorded,
 		new Map(Object.entries(facts.order.sessionParents ?? {})),
 	);

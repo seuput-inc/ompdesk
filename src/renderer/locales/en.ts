@@ -1153,6 +1153,7 @@ export const en: Record<string, string> = {
 	"sidebar.deleteGroupStreaming": "Stop the current turn before deleting project sessions.",
 	"sidebar.signal.running": "Running",
 	"sidebar.family.group": "Subagents and sessions opened from this session",
+	"sidebar.family.unassigned": "No parent in this list",
 	"sidebar.subagents.menu": "Subagent actions",
 	"sidebar.subagents.open": "View transcript",
 	"sidebar.subagents.stop": "Stop",
@@ -4089,8 +4090,6 @@ export const en: Record<string, string> = {
 	"todoPanel.dismissReminder": "Dismiss reminder",
 	"todoPanel.updated": "Updated {ago}",
 	"todoPanel.stale.instruction": "Instructions piling up since the list last changed",
-	"todoPanel.stale.drift": "Not updated while the agent kept working",
-	"todoPanel.stale.driftShort": "List out of date",
 	"todoPanel.received": "Since last list change: {count} instruction{plural}",
 	"todoPanel.receivedShort": "Since list change: {count}",
 	"todoPanel.receivedNote":

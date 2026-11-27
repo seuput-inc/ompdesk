@@ -171,12 +171,6 @@ html:not([data-shell]) .omp-session-sidebar {
 	opacity: 0.45;
 }
 
-/* A sidebar narrower than `LANE_MIN_SIDEBAR_WIDTH` (lib/sidebar-width.ts, 232 px) keeps the rows' width for their
-   words: there the lane would cut the branch below its eight characters. */
-.omp-session-sidebar[data-sidebar-narrow] .omp-status-lane {
-	display: none;
-}
-
 /* The nav cells (SidebarNav.tsx) sit two to a row in reading order at every width (the owner's request, 26 Nov 2026,
    restated 27 Nov 2026 for the narrowest sidebar); an odd last cell keeps a column's width, and All sessions takes a
    whole row (its label and two counts do not fit a half cell). Where a half cell is too narrow for its words (a 220 px

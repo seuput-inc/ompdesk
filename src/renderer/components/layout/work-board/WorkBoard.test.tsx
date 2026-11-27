@@ -470,7 +470,7 @@ describe("WorkBoard sections", () => {
 		expect(scroll).toHaveBeenCalled();
 	});
 
-	it("marks a todo list behind the work in its head and says why in its first row", async () => {
+	it("shows tasks without a freshness mark or extra row after work alone", async () => {
 		useTodoStore.getState().setPhases([
 			{
 				name: "Work",
@@ -484,12 +484,9 @@ describe("WorkBoard sections", () => {
 		useTodoStore.getState().setDrift({ changedAt, stale: "drift", received: [], receivedCount: 0 });
 		await mount();
 		const plan = section("plan");
-		const head = plan?.querySelector(".omp-work-board-aside");
-		// The head's words are for screen readers (the short ones); the first row says the full reason.
-		expect(head?.textContent).toBe("List out of date12m ago");
-		expect(head?.querySelector("svg")).not.toBeNull();
+		expect(plan?.querySelector("[data-todo-freshness]")).toBeNull();
 		const rows = [...(plan?.querySelectorAll(".omp-work-board-row") ?? [])].map(row => row.textContent);
-		expect(rows).toEqual(["Not updated while the agent kept working", "Write the board", "Test it"]);
+		expect(rows).toEqual(["Write the board", "Test it"]);
 
 		// A list that follows the work has no such row: its head only says when it last changed.
 		await act(async () =>

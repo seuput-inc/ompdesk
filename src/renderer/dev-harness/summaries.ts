@@ -164,7 +164,9 @@ export function createHarnessSummaries(options: HarnessSummariesOptions): Harnes
 			sessionPath: info.sessionPath ?? unsavedSessionKey(info.tabId),
 			...(info.sessionId ? { sessionId: info.sessionId } : {}),
 			...(info.title ? { title: info.title } : {}),
-			...(OPEN_TURN_RUNS && info.tabId === "tab-1" ? { status: "running" as const } : {}),
+			...(info.status === "running" || (OPEN_TURN_RUNS && info.tabId === "tab-1")
+				? { status: "running" as const }
+				: {}),
 		});
 	}
 

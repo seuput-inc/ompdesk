@@ -714,12 +714,13 @@ export function SidebarLooseChildren({ foldKey, opened }: { foldKey: string; ope
 	if (shown.length === 0) return null;
 	return (
 		<div
-			aria-label={t("sidebar.family.group")}
+			aria-label={t("sidebar.family.unassigned")}
 			className="space-y-px"
 			data-flip-key={`loose:${foldKey}`}
 			data-sidebar-loose-children={foldKey}
 			role="group"
 		>
+			<div className="px-2 pt-1 text-sc-xs text-(--sc-text-muted)">{t("sidebar.family.unassigned")}</div>
 			{shown.map(child => (
 				<OpenedRow child={child} key={child.key} />
 			))}

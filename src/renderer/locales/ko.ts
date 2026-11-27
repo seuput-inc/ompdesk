@@ -1140,6 +1140,7 @@ export const ko: Record<string, string> = {
 	"sidebar.deleteGroupStreaming": "프로젝트 세션을 삭제하기 전에 진행 중인 턴을 중단하세요.",
 	"sidebar.signal.running": "실행 중",
 	"sidebar.family.group": "이 세션에서 파생된 서브에이전트와 세션",
+	"sidebar.family.unassigned": "목록에 부모가 없는 세션",
 	"sidebar.subagents.menu": "서브에이전트 작업",
 	"sidebar.subagents.open": "기록 보기",
 	"sidebar.subagents.stop": "중단",
@@ -4078,8 +4079,6 @@ export const ko: Record<string, string> = {
 	"todoPanel.dismissReminder": "알림 닫기",
 	"todoPanel.updated": "{ago} 고침",
 	"todoPanel.stale.instruction": "목록을 고친 뒤 지시가 쌓임",
-	"todoPanel.stale.drift": "작업은 계속됐는데 목록은 오래됨",
-	"todoPanel.stale.driftShort": "목록 오래됨",
 	"todoPanel.received": "목록을 고친 뒤 받은 지시 {count}개",
 	"todoPanel.receivedShort": "고친 뒤 지시 {count}",
 	"todoPanel.receivedNote":
