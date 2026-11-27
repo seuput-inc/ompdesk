@@ -31,6 +31,7 @@ impl Case {
             .env("OMPDESK_HEAVY_DIR", self.dir.join("heavy"))
             .env("OMPDESK_CHECKS_DIR", self.dir.join("store"))
             .env("OMPDESK_HEAVY_SLOTS", "1")
+            .env_remove("OMPDESK_WRITE_BYTES")
             .env_remove("OMPDESK_HEAVY_HELD")
             .env_remove("OMPDESK_CHECK_RUN");
         for (k, v) in env {
@@ -55,6 +56,23 @@ impl Case {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap()
+    }
+
+    fn hold_only_slot(&self) -> Child {
+        let mut hold = self
+            .command(&["heavy", "hold"], &[])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut line = String::new();
+        std::io::BufRead::read_line(
+            &mut std::io::BufReader::new(hold.stdout.as_mut().unwrap()),
+            &mut line,
+        )
+        .unwrap();
+        assert!(line.starts_with("held"), "{line}");
+        hold
     }
 
     /// The newest run's journal.
@@ -180,6 +198,64 @@ fn a_running_check_is_followed_only_on_the_same_inputs_and_mode() {
         let _ = case.run(&["check", "cancel", &id], &[]);
     }
     let _ = follower.wait();
+}
+
+#[test]
+fn a_first_cargo_check_without_a_write_estimate_waits_then_runs() {
+    let case = Case::new("cargo-wait");
+    std::fs::write(
+        case.work().join("Cargo.toml"),
+        "[package]\nname='probe'\nversion='0.1.0'\nedition='2024'\n[lib]\npath='probe.rs'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        case.work().join("probe.rs"),
+        "#[test] fn runs() { std::fs::write(\"../ran\", \"yes\").unwrap(); }",
+    )
+    .unwrap();
+    let cargo = env!("CARGO");
+    assert!(
+        Command::new(cargo)
+            .args(["generate-lockfile", "--offline"])
+            .current_dir(case.work())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut hold = case.hold_only_slot();
+    let check = case
+        .command(&["check", "--", cargo, "test", "--offline", "--lib"], &[])
+        .env("CARGO_TARGET_DIR", case.dir.join("target"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    case.wait_for("the first cargo test to queue", |c| {
+        state(&c.latest()) == "waiting"
+    });
+    assert!(!case.dir.join("ran").exists());
+    drop(hold.stdin.take());
+    assert!(hold.wait().unwrap().success());
+    let result = check.wait_with_output().unwrap();
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(std::fs::read(case.dir.join("ran")).unwrap(), b"yes");
+}
+
+#[test]
+fn an_undeclared_shell_run_waits_behind_the_holder_then_runs() {
+    let case = Case::new("shell-wait");
+    let mut hold = case.hold_only_slot();
+    let run = case.spawn(&["run", "--heavy", "--", "sh", "-c", "echo yes > ../ran"]);
+    case.wait_for("the shell command to queue", |c| {
+        std::fs::read_dir(c.dir.join("heavy/queue"))
+            .is_ok_and(|mut entries| entries.next().is_some())
+    });
+    assert!(!case.dir.join("ran").exists());
+    drop(hold.stdin.take());
+    assert!(hold.wait().unwrap().success());
+    let result = run.wait_with_output().unwrap();
+    assert!(result.status.success(), "{result:?}");
+    assert_eq!(std::fs::read(case.dir.join("ran")).unwrap(), b"yes\n");
 }
 
 #[test]
