@@ -76,6 +76,8 @@ const ALLOW_IDENTICAL: Record<string, true> = {
 	"stats.overview.ttftSub": true, // TTFT {time} — acronym + placeholder
 	"stats.col.tps": true, // tok/s — unit symbol, the same in every language
 	"stats.overview.tokensPerSecond": true, // {rate} tok/s — placeholder + unit
+	"modelPicker.claudeApi": true, // Claude API — brand name + acronym
+	"modelPicker.apiModel": true, // API · {model} — acronym + model name placeholder
 	"modelPicker.speed": true, // ~{value} tok/s — placeholder + unit
 	"chat.meter.rate": true, // {rate} tok/s — placeholder + unit
 	"stats.requests.detail.api": true, // API — protocol acronym
