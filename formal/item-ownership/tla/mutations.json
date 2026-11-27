@@ -1,0 +1,10 @@
+{
+  "checker": {"kind":"tlc","config":"MC.cfg"},
+  "properties": ["DurableBeforeOpen", "AddressFence", "Prerequisites", "OneWorkerPerGeneration"],
+  "waive": {"OneWorkerPerGeneration":"Additional consequence of DurableBeforeOpen: saved has only one holder per epoch. The removed write barrier already fails at the first uncommitted open, before a second can occur."},
+  "mutations": [
+    {"name":"open-before-persist","why":"A volatile proposal can emit an open despite a failed disk write.","file":"ItemOwnership.tla","search":"/\\ saved[epoch] = p\n","replace":"/\\ TRUE\n","breaks":"DurableBeforeOpen"},
+    {"name":"deliver-to-new-holder","why":"A delayed envelope is delivered to the current holder of a later assignment.","file":"ItemOwnership.tla","search":"/\\ envelope[1] = epoch\n","replace":"/\\ TRUE\n","breaks":"AddressFence"},
+    {"name":"reserve-before-ready","why":"A dependent can open before its prerequisite is accepted and the owner permits it.","file":"ItemOwnership.tla","search":"/\\ Ready\n","replace":"/\\ TRUE\n","breaks":"Prerequisites"}
+  ]
+}
