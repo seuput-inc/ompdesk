@@ -6,6 +6,7 @@
  */
 import type { RemoteOpenedTab } from "../../../../shared/ipc-types";
 import type { SessionSummary } from "../../../../shared/session-summary";
+import type { RowActivity } from "../../../../shared/sidebar-rows";
 import { type RunFacts, type SessionRun, sessionRun } from "../../../lib/session-run";
 import type { SessionTab } from "../../../stores/tabs";
 import { type FoldSignal, type FoldSummary, foldSummary, sessionFoldSignal } from "./fold-summary";
@@ -17,6 +18,16 @@ export function summaryRowState(
 ): SessionRun & { fold: FoldSignal | null } {
 	const run = sessionRun(facts, unreadDone);
 	return { ...run, fold: sessionFoldSignal({ waiting: run.ask, running: run.running, done: run.done }) };
+}
+
+/**
+ * What the sort and the sleep rule (`sidebarRows`) read of a row: its own prompt waits on the person, it works (its
+ * run, else the index's `pending` for a session no tab of its computer runs), or neither.
+ */
+export function rowActivity(facts: RunFacts | undefined, indexStatus: string | undefined): RowActivity {
+	const run = sessionRun(facts);
+	if (run.ask) return "waiting";
+	return run.running || (!run.signal && indexStatus === "pending") ? "working" : null;
 }
 
 /**

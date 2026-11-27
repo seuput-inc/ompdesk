@@ -330,7 +330,12 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		mode: "web",
 		web: "Appearance and layout keys (shared/device-prefs.ts) are written by the page's shim to web:device.uiPrefs.set and never reach here; other keys write here and push PREFS_CHANGED, except `sidebar`, which only PREFS_UPDATE_SIDEBAR changes",
 	},
-	[C.PREFS_UPDATE_SIDEBAR]: { dir: "invoke", permission: "settings-write", mode: "pass" },
+	[C.PREFS_UPDATE_SIDEBAR]: {
+		dir: "invoke",
+		permission: "settings-write",
+		mode: "web",
+		web: "The page keeps session sort and Hide sleeping in this device's uiPrefs; manual order, pins and other sidebar changes still go to the host",
+	},
 	[C.PREFS_GET_LAUNCH_PROFILE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.DEFAULT_BROWSER_STATUS]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.DEFAULT_BROWSER_INSTALL_RELAY]: { dir: "invoke", permission: "desktop-control", mode: "pass" },

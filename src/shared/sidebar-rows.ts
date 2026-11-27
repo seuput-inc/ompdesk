@@ -8,7 +8,18 @@
 import { agentMessageSender } from "./agent-control";
 import type { SessionInfo, SessionKind } from "./ipc-types";
 import { isOmpdeskWorktreeFolder, type WorktreeKind } from "./project-origin";
+import type { SessionSort } from "./sidebar-prefs";
 import type { SidebarProject } from "./sidebar-projects";
+
+/**
+ * How long a row does nothing before it sleeps: Orca stops an idle chat's agent after 30 minutes
+ * (`DEFAULT_NATIVE_CHAT_IDLE_STOP_MINUTES`, shared/native-chat/settings/native-chat-idle-stop.ts:7) and Hide sleeping
+ * then sweeps it away (shared/workspace-view/workspace-row-filters.ts:118-125).
+ */
+export const SESSION_SLEEP_AFTER_MS = 30 * 60_000;
+
+/** What a row's run asks of the person now: it waits on them, it works, or neither (`null`). */
+export type RowActivity = "waiting" | "working" | null;
 
 /**
  * A row: a session the index lists, or one a tab holds before the index lists its file (`liveTabId`). `departed`: it
@@ -59,6 +70,10 @@ export interface RowOrder {
 	projectGroup?: (cwd: string) => string | undefined;
 	/** The parent the person gave a session (session file → parent's file, `""` = none), over the automatic opener. */
 	sessionParents?: Readonly<Record<string, string>>;
+	/** How each list's rows sort below its pins; absent is `manual`. */
+	sort?: SessionSort;
+	/** Fold a project's sleeping rows (`RowGroup.sleeping`). */
+	hideSleeping?: boolean;
 }
 
 export interface SidebarFacts {
@@ -91,6 +106,12 @@ export interface SidebarFacts {
 	order: RowOrder;
 	query: string;
 	nameOf: (group: string) => string;
+	/** What each row's run asks of the person now (its computer's summary): the Agent activity sort and the sleep rule. */
+	activity?: (session: RowSession) => RowActivity;
+	/** The session in front of the viewer (its focused tab): never asleep. */
+	current?: (session: RowSession) => boolean;
+	/** The clock the sleep rule reads, in ms; without it nothing sleeps. */
+	now?: number;
 }
 
 export interface RowGroup {
@@ -111,6 +132,11 @@ export interface RowGroup {
 	missing: boolean;
 	/** The project group it is filed under: the groups' projects list together, at the place of the group's first. */
 	section?: string;
+	/**
+	 * Paths of `sessions` that sleep (`hideSleeping`): idle past `SESSION_SLEEP_AFTER_MS`, and neither waiting, working,
+	 * pinned, in use by a tab nor in front of the viewer. Drawn folded under the project's "N sleeping" line.
+	 */
+	sleeping: readonly string[];
 }
 
 export interface SidebarRows {
@@ -423,11 +449,15 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 	const code = sessions.filter(session => !isChatSession(session, facts.workspace));
 
 	const runs = new Map<string, string>();
+	const runRows = new Set<string>();
 	const runChildren: Array<[path: string, run: string]> = [];
 	for (const session of code) {
 		const run = facts.runOf(session);
 		if (run?.child) runChildren.push([session.path, run.key]);
-		else if (run) runs.set(run.key, session.cwd);
+		else if (run) {
+			runs.set(run.key, session.cwd);
+			runRows.add(session.path);
+		}
 	}
 	const runParent = new Map<string, string>();
 	for (const [path, run] of runChildren) {
@@ -499,15 +529,53 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 	for (const siblings of children.values()) siblings.sort(byCreated);
 
 	// Every session list reads oldest first, so a new session lands at the bottom (the owner's decision, 24 Nov 2026).
-	// Pins stay on top; a row the person placed keeps its place, and one never placed follows the placed ones.
+	// Pins stay on top; a row the person placed keeps its place, and one never placed follows the placed ones. Another
+	// sort the person picked (Orca's Sort by, shared/workspace-view/workspace-row-sort.ts:50-70) orders below the pins.
 	const pinnedSessions = new Set(facts.order.pinnedSessions);
+	const activityOf = (session: RowSession): RowActivity => facts.activity?.(session) ?? null;
+	const lastActive = (session: RowSession) => {
+		const modified = Date.parse(session.modified);
+		return Number.isFinite(modified) ? modified : createdAt(session);
+	};
+	const attention = (session: RowSession) => {
+		const activity = activityOf(session);
+		return activity === "waiting" ? 0 : activity === "working" ? 1 : 2;
+	};
+	const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+	const bySort = (a: RowSession, b: RowSession): number => {
+		switch (facts.order.sort) {
+			case "smart":
+				return attention(a) - attention(b) || lastActive(b) - lastActive(a);
+			case "recent":
+				return lastActive(b) - lastActive(a);
+			case "name":
+				return collator.compare(facts.titleOf(a), facts.titleOf(b));
+			default:
+				return 0;
+		}
+	};
 	const inListOrder = (rows: readonly RowSession[], list: string): RowSession[] => {
 		const manual = facts.order.sessionOrder(list) ?? [];
 		const at = new Map(manual.map((path, index) => [path, index]));
 		const place = (session: RowSession) => at.get(session.path) ?? manual.length;
 		const pin = (session: RowSession) => (pinnedSessions.has(session.path) ? 0 : 1);
-		return rows.toSorted((a, b) => pin(a) - pin(b) || place(a) - place(b) || byCreated(a, b));
+		return rows.toSorted((a, b) => pin(a) - pin(b) || bySort(a, b) || place(a) - place(b) || byCreated(a, b));
 	};
+	// A row sleeps when it has done nothing for `SESSION_SLEEP_AFTER_MS` (Orca's Hide sleeping sweeps a workspace with
+	// no live terminal or agent, workspace-row-filters.ts:118-125). Never one that waits on the person or works (nor a
+	// child of it does), a pinned one, one a tab uses, the one in front of the viewer, or an Autopilot run's row.
+	const sleepBefore =
+		facts.order.hideSleeping === true && facts.now !== undefined ? facts.now - SESSION_SLEEP_AFTER_MS : null;
+	const asleep = (session: RowSession) =>
+		sleepBefore !== null &&
+		lastActive(session) < sleepBefore &&
+		activityOf(session) === null &&
+		!pinnedSessions.has(session.path) &&
+		!inUse(session) &&
+		facts.current?.(session) !== true &&
+		!runRows.has(session.path) &&
+		!runParent.has(session.path) &&
+		!(children.get(session.path) ?? []).some(child => activityOf(child) !== null);
 
 	const removed = new Set(facts.removed);
 	const drafts = new Map<string, { members: string[]; sessions: RowSession[]; folded: RowSession[] }>();
@@ -575,6 +643,7 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 				cwd: key,
 				members: draft.members,
 				sessions: rows,
+				sleeping: rows.filter(asleep).map(session => session.path),
 				folded: draft.folded.toSorted(byCreated),
 				listed: addedAt.has(key),
 				open: open.has(key),
@@ -618,11 +687,12 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 	const familyMatches = (session: RowSession) => matches(session) || (children.get(session.path) ?? []).some(matches);
 	const groups = query
 		? allGroups.flatMap(group => {
-				if (facts.nameOf(group.cwd).toLocaleLowerCase().includes(query)) return [group];
+				if (facts.nameOf(group.cwd).toLocaleLowerCase().includes(query)) return [{ ...group, sleeping: [] }];
 				const shown = {
 					...group,
 					sessions: group.sessions.filter(familyMatches),
 					folded: group.folded.filter(matches),
+					sleeping: [],
 				};
 				return shown.sessions.length + shown.folded.length > 0 ? [shown] : [];
 			})
@@ -689,6 +759,8 @@ export function holdRows(shown: SidebarRows, now: SidebarRows): SidebarRows {
 	const group = (seen: RowGroup, fresh: RowGroup): RowGroup => ({
 		...fresh,
 		sessions: holdPlaces(seen.sessions, fresh.sessions, path, departedRow),
+		// A row that fell asleep or woke under the pointer would fold away or unfold there: what sleeps holds too.
+		sleeping: seen.sleeping,
 	});
 	return {
 		...now,

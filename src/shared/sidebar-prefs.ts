@@ -1,7 +1,8 @@
 /**
  * What the sidebar remembers, saved as one JSON blob under the `sidebar` prefs key: pinned projects and sessions,
  * project names, the dragged project and session order, archived sessions, the footer shortcuts, the workspace MRU
- * clock, the sessions hidden from other agents and the projects whose notifications are muted.
+ * clock, the sessions hidden from other agents, the projects whose notifications are muted, and how session lists
+ * sort and whether their sleeping rows fold.
  *
  * The core is the only owner of the stored blob. A window or a paired page never writes the whole of it from its own
  * copy (a copy read earlier would put an older order back over a newer one): it sends one `SidebarChange`, the core
@@ -80,7 +81,20 @@ export interface SidebarPrefs {
 	 * `""` = no parent, even where an agent opened it.
 	 */
 	sessionParents: Record<string, string>;
+	/** How every session list's rows sort (the sidebar header's options; Orca's Sort by). `manual` is the person's order. */
+	sessionSort: SessionSort;
+	/** A project's rows idle past `SESSION_SLEEP_AFTER_MS` fold under its "N sleeping" line (Orca's Hide sleeping). */
+	hideSleeping: boolean;
 }
+
+/**
+ * The orders a session list can take, after Orca's `WORKSPACE_SORT_BY_CHOICES` (shared/workspace-view/
+ * workspace-view-options.ts:27-41) without its Project order (code sessions are always grouped by project):
+ * `manual` pins, then the person's order, then creation (the default), `smart` the ones that need the person, then
+ * working ones, then the most recent, `recent` the most recent activity, `name` the title.
+ */
+export const SESSION_SORTS = ["manual", "smart", "recent", "name"] as const;
+export type SessionSort = (typeof SESSION_SORTS)[number];
 
 /** The keyed text entries one `set-entry` change sets, each `Record<key, string>`. */
 export const SIDEBAR_ENTRY_FIELDS = [
@@ -117,7 +131,9 @@ export type SidebarChange =
 	 */
 	| { op: "set-entry"; field: SidebarEntryField; key: string; value: string | null }
 	/** Every project filed under group `from` moves to group `to`, or out of any group (`null`). */
-	| { op: "rename-project-group"; from: string; to: string | null };
+	| { op: "rename-project-group"; from: string; to: string | null }
+	| { op: "set-session-sort"; sort: SessionSort }
+	| { op: "set-hide-sleeping"; hide: boolean };
 
 const MAX_RECENT_WORKSPACES = 100;
 /** Lists whose session order is kept (the most recently ordered first), and sessions kept per list. */
@@ -186,6 +202,10 @@ export function readSidebarPrefs(value: unknown): SidebarPrefs {
 		projectEmoji: validAliases(blob.projectEmoji),
 		sessionEmoji: validAliases(blob.sessionEmoji),
 		sessionParents: validAliases(blob.sessionParents),
+		sessionSort: SESSION_SORTS.includes(blob.sessionSort as SessionSort)
+			? (blob.sessionSort as SessionSort)
+			: "manual",
+		hideSleeping: blob.hideSleeping === true,
 	};
 }
 
@@ -330,5 +350,9 @@ export function sidebarPatch(
 			}
 			return moved ? { projectGroups } : {};
 		}
+		case "set-session-sort":
+			return state.sessionSort === change.sort ? {} : { sessionSort: change.sort };
+		case "set-hide-sleeping":
+			return state.hideSleeping === change.hide ? {} : { hideSleeping: change.hide };
 	}
 }

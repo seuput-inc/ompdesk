@@ -41,7 +41,13 @@ runs:
         name: Stage the Preview browser
         run: bun scripts/stage-preview-browser.ts
         shell: bash
-      - run: bun run build
+      - name: Build the app bundles
+        run: |
+          # The 7 GiB macOS runner hit V8's old-space limit while rendering chunks (run 45942367692).
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            export NODE_OPTIONS="--max-old-space-size=2560${NODE_OPTIONS:+ $NODE_OPTIONS}"
+          fi
+          bun run build
         shell: bash
       # What the bundle packages besides the shell, as release.yml's mac job: the memory binary (cached), agent-desktop.
       - id: memory-cache
