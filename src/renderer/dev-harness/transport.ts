@@ -81,7 +81,6 @@ import {
 	transcriptFor,
 } from "./fixture";
 import { ACCOUNT_PROVIDERS, accountsFor } from "./fixture-accounts";
-import { quietBots } from "./fixture-quiet-bot";
 import {
 	BOARD_BUSY,
 	boardJobs,
@@ -94,6 +93,7 @@ import {
 import { JOB_TREE_SUBAGENTS, jobTreeRows } from "./fixture-jobs";
 import { MCP_SERVERS } from "./fixture-mcp";
 import { memoryAnswer } from "./fixture-memory";
+import { quietBots } from "./fixture-quiet-bot";
 import {
 	ACTIVE_TOOLS,
 	DIRECTORIES,
