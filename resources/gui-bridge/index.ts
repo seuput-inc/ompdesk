@@ -21,6 +21,7 @@ import { isMainThread } from "node:worker_threads";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { ALL_FEATURES, type AreaFailure, type FeatureId, mergeAreaFailures, UnsupportedOmpError } from "./capabilities";
 import { probe } from "./health";
+import { installItemToolFence, ITEM_WORK, ItemToolFence } from "./item-work";
 import { A2UI_ENABLED } from "./modes/a2ui-contracts";
 import { bindEnv } from "./modes/shared";
 import type { RoleSettings } from "./ompdesk-roles";
@@ -337,6 +338,7 @@ function isRequest(value: unknown): value is BridgeRequest {
  */
 interface ProcessBind {
 	bound?: Promise<LoadedMethods | undefined>;
+	fence?: ItemToolFence;
 	/** Starts loading the first bind's areas (`bound`) when nothing has yet; later calls do nothing. */
 	startLoading?: () => void;
 }
@@ -348,6 +350,10 @@ const processBind = holder[PROCESS_BIND] as ProcessBind;
 export default async function guiBridge(pi: ExtensionAPI): Promise<void> {
 	const address = process.env.OMP_GUI_BRIDGE;
 	if (!address) return;
+	const descriptor = process.env[ITEM_WORK];
+	if (descriptor !== undefined) processBind.fence ??= new ItemToolFence(descriptor);
+	const fence = processBind.fence;
+	installItemToolFence(pi, fence);
 	// Every bind (main, a subagent's rebind, a task worker) before stock builds that session: see waste-guards-wait.ts.
 	try {
 		registerWait(pi);
@@ -482,7 +488,13 @@ export default async function guiBridge(pi: ExtensionAPI): Promise<void> {
 		if (!isRequest(request)) return;
 		const { id, method, params } = request;
 		try {
-			write(socket, { id, ok: true, result: await respond(method, params) });
+			const result =
+				method === "item_work.attach"
+					? fence?.attach(socket, params) === true
+					: method === "item_work.verdict"
+						? fence?.answer(socket, params) === true
+						: await respond(method, params);
+			write(socket, { id, ok: true, result });
 		} catch (err) {
 			const error = err instanceof Error ? err.message : String(err);
 			write(socket, { id, ok: false, error, ...(err instanceof UnsupportedOmpError ? { code: err.code } : {}) });
@@ -505,7 +517,10 @@ export default async function guiBridge(pi: ExtensionAPI): Promise<void> {
 				newline = buffer.indexOf("\n");
 			}
 		});
-		socket.on("close", () => clients.delete(socket));
+		socket.on("close", () => {
+			fence?.disconnect(socket);
+			clients.delete(socket);
+		});
 		socket.on("error", () => clients.delete(socket));
 	});
 

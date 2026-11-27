@@ -353,6 +353,9 @@ export interface SidecarOptions {
 	 * Read on every spawn. Absent: nothing.
 	 */
 	controlEnv?: () => Record<string, string>;
+	/** Pool's tab id, not this process's private lane id. */
+	itemWorkerTab?: string;
+	itemsFile?: string;
 	/**
 	 * The delegation strength this tab starts with (prefs `delegationMode`, the
 	 * composer chip's last choice), passed as `OMP_GUI_DELEGATION` on every
@@ -901,6 +904,8 @@ export class SidecarManager extends EventEmitter {
 					isNew: this.#isNew,
 					sessionPath: this.#sessionPath,
 					eventFilter: Object.keys(AGENT_EVENT_TYPES),
+					itemWorkerTab: options.itemWorkerTab,
+					itemsFile: options.itemsFile,
 					bridge: Boolean(options.bridgeDir),
 					...(options.ledgerFile ? { ledgerFile: options.ledgerFile } : {}),
 					...(options.heldQueueFile ? { heldQueueFile: options.heldQueueFile } : {}),

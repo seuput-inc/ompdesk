@@ -180,6 +180,17 @@ impl OwedDeps for Owed<'_> {
         for command in &steps {
             let deadline = Deadline::Ms(self.ctl.tuning.prompt_ms);
             let refused = match self.ctl.host.command(tab_id, command, deadline).await {
+                Ok(answer)
+                    if command["managed"] == true
+                        && answer
+                            .data
+                            .as_ref()
+                            .and_then(|data| data.get("itemFence"))
+                            .and_then(Value::as_u64)
+                            != Some(1) =>
+                {
+                    return HandOver::Refused;
+                }
                 Ok(answer) if answer.success => continue,
                 // Not answered yet (its omp starting, a slow command): the next pass tries again, nothing to tell.
                 Ok(answer) if answer.unanswered() => return HandOver::Refused,

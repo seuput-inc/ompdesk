@@ -1173,6 +1173,7 @@ app.whenReady().then(async () => {
 		// asked of the core first when no state has arrived yet (a restored bot chat right after a relaunch).
 		botLaunchArgs: async cwd =>
 			(await botsStateNow()).bots.find(bot => !bot.device && bot.folder === cwd)?.launch ?? [],
+		itemsFile: join(app.getPath("userData"), "items.json"),
 		// ai-memory's `session-end` (the handoff) needs omp's own shutdown, which only a closed stdin triggers.
 		gracefulStopMs: () => (aiMemoryService?.state().phase === "ready" ? 4_000 : 0),
 		aiMemoryExtensionArgs: cwd => aiMemoryService?.extensionArgs(cwd) ?? Promise.resolve([]),
@@ -1247,7 +1248,7 @@ app.whenReady().then(async () => {
 		);
 	};
 	sidecarPool = new SidecarPool((cwd, kind, fresh, device, tabId, web, botChat) => {
-		if (!device) return createLocalSidecar(cwd, kind, fresh, undefined, web, botChat);
+		if (!device) return createLocalSidecar(cwd, kind, fresh, undefined, web, botChat, tabId);
 		// The host runs its own health check, session-kind record and bridge probe; only the probe's verdict comes
 		// back, for this machine's toast (no record and no repair here: the host keeps and repairs its own).
 		const sc = devices.createSidecar(device, tabId, cwd, kind, fresh);

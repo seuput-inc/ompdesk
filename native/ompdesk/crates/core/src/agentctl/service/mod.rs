@@ -1563,3 +1563,48 @@ pub fn register(registry: &mut Registry) {
 pub type Transcript = Vec<AgentMessage>;
 /// The closed children list main keeps (`closedChildren`).
 pub type ClosedChildren = Vec<ClosedChild>;
+
+pub(crate) fn launch_assignment(
+    file: &std::path::Path,
+    tab: Option<&str>,
+    session: Option<&str>,
+) -> Option<(String, u64)> {
+    let find = |store: &crate::agentctl::journal::items::Items| {
+        store
+            .bound_worker(tab, session)
+            .map(|(id, generation)| (id.to_owned(), generation))
+    };
+    for control in lock(&INSTANCES).values() {
+        let store = control.items();
+        if store.stored_at(file) {
+            return find(&store);
+        }
+    }
+    // A layout can restore its first tab before main has registered agent control.
+    find(&crate::agentctl::journal::items::Items::new(Some(
+        file.into(),
+    )))
+}
+
+impl AgentControl {
+    fn worker_lease(&self, pid: u32, item: &str, generation: u64, session: &str) -> Option<bool> {
+        let state = self.host.state();
+        let mut tabs = state.tabs.iter().filter(|tab| tab.omp_pid == Some(pid));
+        let tab = tabs.next()?;
+        Some(
+            state.enabled
+                && tabs.next().is_none()
+                && tab.session_path.as_deref() == Some(session)
+                && self.holds_item(tab, item, generation),
+        )
+    }
+}
+
+/// Only the core's live bridge lane supplies the process id. A copied path or a peer's tab is not a lease.
+pub(crate) fn permits_item_tool(pid: u32, item: &str, generation: u64, session: &str) -> bool {
+    let instances = lock(&INSTANCES);
+    let mut matches = instances
+        .values()
+        .filter_map(|ctl| ctl.worker_lease(pid, item, generation, session));
+    matches.next() == Some(true) && matches.next().is_none()
+}

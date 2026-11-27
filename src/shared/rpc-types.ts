@@ -168,7 +168,7 @@ export type RpcCommand =
 	// An OMPdesk control tool's confirmation card (main/agent-control, gui-bridge agent-control.ts); never from a renderer
 	| { id?: string; type: "agent_control_confirm"; title: string; message: string }
 	| { id?: string; type: "agent_control_note"; text: string }
-	| { id?: string; type: "agent_control_worker"; from: string }
+	| { id?: string; type: "agent_control_worker"; from: string; managed?: true }
 	// A bot chat's context (main/agent-control's core, gui-bridge modes/bots.ts `agent_control.bot`)
 	| { id?: string; type: "agent_control_bot"; context: BotContext; kickoff?: string }
 	| { id?: string; type: "agent_control_turn" }

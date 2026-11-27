@@ -349,6 +349,23 @@ impl Items {
         }
     }
 
+    pub(crate) fn stored_at(&self, file: &std::path::Path) -> bool {
+        self.file.as_deref() == Some(file)
+    }
+
+    pub(crate) fn bound_worker(
+        &self,
+        tab: Option<&str>,
+        session: Option<&str>,
+    ) -> Option<(&str, u64)> {
+        self.items.iter().find_map(|item| {
+            let work = item.work.as_ref()?;
+            let bound = session.is_some_and(|s| work.session.as_deref() == Some(s))
+                || tab.is_some_and(|t| work.accepted_tab.as_deref() == Some(t));
+            bound.then_some((item.id.as_str(), work.generation))
+        })
+    }
+
     /// Every item, closed ones past `CLOSED_KEPT_MS` dropped first.
     pub fn all(&mut self, now: f64) -> &[ItemRecord] {
         let before = self.items.len();

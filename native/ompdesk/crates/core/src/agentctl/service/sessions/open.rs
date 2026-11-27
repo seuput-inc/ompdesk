@@ -826,10 +826,11 @@ impl AgentControl {
             } else {
                 &caller.title
             };
-            setup.push((
-                "Marking the session as a worker",
-                json!({ "type": "agent_control_worker", "from": from }),
-            ));
+            let mut worker = json!({ "type": "agent_control_worker", "from": from });
+            if args.item.is_some() {
+                worker["managed"] = true.into();
+            }
+            setup.push(("Marking the session as a worker", worker));
         }
         if let Some(wanted) = args.model.as_deref().filter(|model| !model.is_empty()) {
             let model = self.resolve_model(&mut send, wanted).await?;
@@ -960,7 +961,10 @@ impl AgentControl {
             }
             for (what, command) in &setup {
                 let answer = send.send(command.clone()).await?;
-                response_data(&answer, what)?;
+                let result = response_data(&answer, what)?;
+                if command["managed"] == true && result["itemFence"] != 1 {
+                    return fail("The worker bridge does not support item fencing.");
+                }
             }
             self.host
                 .before_first_prompt(&OpenedChild {

@@ -12,7 +12,7 @@ import type { LocalHandler } from "./types";
 
 const confirmCommand = z.object({ title: z.string().min(1).max(200), message: z.string().min(1).max(2000) });
 const noteCommand = z.object({ text: z.string().min(1).max(500) });
-const workerCommand = z.object({ from: z.string().min(1).max(200) });
+const workerCommand = z.object({ from: z.string().min(1).max(200), managed: z.literal(true).optional() });
 const botItem = z.object({
 	number: z.number().int().min(1),
 	title: z.string().max(200),
@@ -94,9 +94,7 @@ export const handlers: Record<string, LocalHandler> = {
 	},
 	/** The session was opened by another session's agent: its bridge journals it and adds the worker contract. */
 	agent_control_worker: async (command, ctx) => {
-		const { from } = workerCommand.parse(command);
-		await ctx.bridge.request("agent_control.worker", { from });
-		return {};
+		return ctx.bridge.request("agent_control.worker", workerCommand.parse(command));
 	},
 	/** Whether the person's own typed message started this tab's current run (gui-bridge turn-origin.ts). */
 	agent_control_turn: async (_command, ctx) => {

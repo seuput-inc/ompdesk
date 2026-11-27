@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot, watch};
 
 use super::bot::BotChat;
@@ -300,6 +301,8 @@ pub struct OpenParams {
     #[serde(default)]
     pub bridge: bool,
     pub ledger_file: Option<String>,
+    pub item_worker_tab: Option<String>,
+    pub items_file: Option<String>,
     /// The journal of the person's queued messages (`held_queue.rs`); absent: kept in memory only (tests).
     pub held_queue_file: Option<String>,
     pub start_slow_ms: Option<u64>,
@@ -412,6 +415,7 @@ struct Running {
     chips: Chips,
     bridge: Bridge,
     bridge_address: Option<String>,
+    item_bridge_proof: Option<String>,
     /// True once the omp's stderr closed.
     drained: watch::Receiver<bool>,
 }
@@ -478,6 +482,8 @@ pub struct Lane {
     event_filter: Vec<String>,
     bridge_enabled: bool,
     ledger_file: Option<String>,
+    item_worker_tab: Option<String>,
+    items_file: Option<String>,
     held_queue_file: Option<std::path::PathBuf>,
     start_slow: Duration,
     entry_id_timeout: Duration,
@@ -602,6 +608,8 @@ impl Lane {
             event_filter: params.event_filter,
             bridge_enabled: params.bridge,
             ledger_file: params.ledger_file,
+            item_worker_tab: params.item_worker_tab,
+            items_file: params.items_file,
             held_queue_file: params.held_queue_file.map(Into::into),
             start_slow: params
                 .start_slow_ms
@@ -880,7 +888,11 @@ impl Lane {
                     .as_ref()
                     .is_some_and(|r| r.spawn_id == spawn_id)
                 {
-                    if matches!(
+                    if frame.ty.as_deref() == Some("item_work_check") {
+                        if bridge && !self.quiet {
+                            self.check_item_tool(&frame);
+                        }
+                    } else if matches!(
                         frame.ty.as_deref(),
                         Some(
                             "desktop_slot_acquire" | "desktop_slot_touch" | "desktop_slot_release"
@@ -1151,6 +1163,11 @@ impl Lane {
                     }
                 }
             }
+            Command::Bridge {
+                ref method, reply, ..
+            } if method.starts_with("item_work.") => {
+                let _ = reply.send(Err(no_bridge()));
+            }
             Command::TurnEdits { spawn_id, reply } => {
                 if let Some(running) = self.running.as_ref().filter(|r| r.spawn_id == spawn_id) {
                     let _ = reply.send((running.bridge.clone(), self.cwd.clone()));
@@ -1414,9 +1431,33 @@ impl Lane {
             return;
         }
         match (start, error) {
-            (Some(start), None) => {
+            (Some(mut start), None) => {
+                start.env.remove("OMP_GUI_ITEM_WORK");
+                let mut proof = None;
+                if let Some(file) = &self.items_file
+                    && let Some((item, generation)) = crate::agentctl::service::launch_assignment(
+                        file.as_ref(),
+                        self.item_worker_tab.as_deref(),
+                        self.session_path.as_deref(),
+                    )
+                {
+                    let mut random = [0u8; 32];
+                    if crate::sys::random(&mut random).is_ok() {
+                        let secret = crate::hex(&random);
+                        let core = crate::hex(&Sha256::digest(secret.as_bytes()));
+                        start.env.insert(
+                            "OMP_GUI_ITEM_WORK".into(),
+                            json!({"item":item,"generation":generation,"core":core}).to_string(),
+                        );
+                        proof = Some(secret);
+                    } else {
+                        start
+                            .env
+                            .insert("OMP_GUI_ITEM_WORK".into(), "invalid".into());
+                    }
+                }
                 self.host_tools = host_tools;
-                self.start_process(generation, &start, bridge_address)
+                self.start_process(generation, &start, bridge_address, proof)
             }
             (_, error) => {
                 // spawn() throws synchronously (EBADF/ENOENT) — surface it as a sidecar failure + retry, never an
@@ -1428,7 +1469,55 @@ impl Lane {
         }
     }
 
-    fn start_process(&mut self, generation: u64, start: &Start, bridge_address: Option<String>) {
+    fn check_item_tool(&self, frame: &Frame) {
+        #[derive(serde::Deserialize)]
+        struct Check {
+            request: String,
+            item: String,
+            generation: u64,
+            session: String,
+        }
+        let Some(run) = self
+            .running
+            .as_ref()
+            .filter(|run| run.item_bridge_proof.is_some())
+        else {
+            return;
+        };
+        let Ok(check) = serde_json::from_slice::<Check>(&frame.raw) else {
+            return;
+        };
+        if check.request.len() != 36 || check.item.len() > 200 {
+            return;
+        }
+        let granted = run.proc.pid.is_some_and(|pid| {
+            self.held_session().as_ref() == Some(&check.session)
+                && crate::agentctl::service::permits_item_tool(
+                    pid,
+                    &check.item,
+                    check.generation,
+                    &check.session,
+                )
+        });
+        let bridge = run.bridge.clone();
+        tokio::spawn(async move {
+            let params = serde_json::value::to_raw_value(
+                &json!({"request":check.request,"validMs":if granted { 2_000 } else { 0 }}),
+            )
+            .ok();
+            let _ = bridge
+                .request("item_work.verdict", params, Some(Duration::from_secs(2)))
+                .await;
+        });
+    }
+
+    fn start_process(
+        &mut self,
+        generation: u64,
+        start: &Start,
+        bridge_address: Option<String>,
+        item_bridge_proof: Option<String>,
+    ) {
         let bot = self.bot_launch.take().filter(|_| start.cwd == self.cwd);
         self.spawn_counter += 1;
         let spawn_id = self.spawn_counter;
@@ -1526,6 +1615,7 @@ impl Lane {
             chips: Chips::default(),
             bridge,
             bridge_address,
+            item_bridge_proof,
             drained: drain_wait,
         });
         self.arm_slow_timer(generation);
@@ -2155,6 +2245,17 @@ impl Lane {
         match result {
             Ok(()) => {
                 if self.is_live(generation) {
+                    if let Some(run) = &self.running
+                        && let Some(proof) = &run.item_bridge_proof
+                    {
+                        let bridge = run.bridge.clone();
+                        let params = serde_json::value::to_raw_value(proof).ok();
+                        tokio::spawn(async move {
+                            let _ = bridge
+                                .request("item_work.attach", params, Some(COMMAND_TIMEOUT))
+                                .await;
+                        });
+                    }
                     self.emit("sidecar.bridgeState", json!({ "connected": true }));
                 }
             }

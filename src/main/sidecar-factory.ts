@@ -101,6 +101,7 @@ export interface LocalSidecarDeps {
 	aiMemoryExtensionArgs?: (cwd: string) => Promise<string[]>;
 	/** The flags a bot's owner picked for its chats (`Bot.launch`) when `cwd` is a bot's folder, read at every spawn. */
 	botLaunchArgs?: (cwd: string) => Promise<string[]>;
+	itemsFile?: string;
 	/**
 	 * The file memory's address is kept in (written by the core's memory service), passed as `OMP_GUI_MEMORY` at every spawn
 	 * for the bridge's memory recall; absent: no recall (tests).
@@ -151,6 +152,7 @@ export type LocalSidecarFactory = (
 	origin?: PromptOriginEnv,
 	web?: boolean,
 	botChat?: BotChatSpawn,
+	itemWorkerTab?: string,
 ) => SidecarManager;
 
 /** What the factory hands the coordinator: the status to overlay, and the bridge's autopilot frames. */
@@ -167,7 +169,7 @@ export interface DesktopSlotFrameSink {
 export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory {
 	const { bridgeDir, bridgeHealth, sessionKinds } = deps;
 	let reportedPriorityFailure = false;
-	return (cwd, kind, fresh, origin, web, botChat) => {
+	return (cwd, kind, fresh, origin, web, botChat, itemWorkerTab) => {
 		if (botChat && (origin || web || kind !== "agent")) throw new Error("Bot chats require a local agent tab");
 		const trustedPath = botChat?.botChatSessionPath;
 		const sessionFree = trustedPath
@@ -177,6 +179,8 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 				}
 			: deps.sessionFree;
 		const sc: SidecarManager = new SidecarManager({
+			itemWorkerTab,
+			itemsFile: deps.itemsFile,
 			reportPriorityFailure: reason => {
 				if (reportedPriorityFailure) return;
 				reportedPriorityFailure = true;

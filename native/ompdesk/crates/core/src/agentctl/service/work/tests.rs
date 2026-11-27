@@ -2209,7 +2209,8 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
             Some(json!({"success": true}))
         }
         "command" if args["command"]["type"] == "agent_control_worker" => {
-            Some(json!({"success": true}))
+            assert_eq!(args["command"]["managed"], true);
+            Some(json!({"success": true, "data":{"itemFence":1}}))
         }
         _ => None,
     })
@@ -2276,12 +2277,23 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
         id: "same-call".into(),
         resent: false,
     };
-    let (a, b) = tokio::join!(
+    let mut world = bot_world(&control.bot_named("Ada").unwrap().folder);
+    world["tabs"][3]["ompPid"] = 45120.into();
+    let mut other = world["tabs"][1].clone();
+    other["tabId"] = "bot2".into();
+    other["sessionPath"] = "/s/other-bot.jsonl".into();
+    world["tabs"].as_array_mut().unwrap().push(other);
+    world["windowOf"]["bot2"] = "w".into();
+    crate::ports::apply_state(control.host.port(), 2, &world.to_string()).unwrap();
+    control.observe_bots();
+    let (a, b, contender) = tokio::join!(
+        biased;
         control.run("bot1", tool, open.clone(), Some(call.clone())),
-        control.run("bot1", tool, open.clone(), Some(call.clone()))
+        control.run("bot1", tool, open.clone(), Some(call.clone())),
+        control.run("bot2", tool, open.clone(), Some(super::super::CallId { id:"another-call".into(), resent:false }))
     );
     assert!(!a.is_error && !b.is_error, "{} / {}", a.text, b.text);
-    for receipt in [&a.text, &b.text] {
+    for receipt in [&a.text, &b.text, &contender.text] {
         assert!(
             receipt.contains(&format!("Item {id} generation 1")),
             "{receipt}"
@@ -2337,7 +2349,27 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
         .run("send1", "ompdesk_item", claim.clone(), None)
         .await;
     assert!(outsider.is_error && !outsider.text.contains("/s/work"));
+    assert_eq!(
+        control.worker_lease(45120, &id, 1, "/s/work.jsonl"),
+        Some(true)
+    );
+    assert_ne!(
+        control.worker_lease(45120, &id, 1, "/s/bot.jsonl"),
+        Some(true)
+    );
+    assert_ne!(
+        control.worker_lease(45120, &id, 2, "/s/work.jsonl"),
+        Some(true)
+    );
+    assert_ne!(
+        control.worker_lease(45121, &id, 1, "/s/work.jsonl"),
+        Some(true)
+    );
     control.bots().change(&bot, |board| board.paused = true);
+    assert_eq!(
+        control.worker_lease(45120, &id, 1, "/s/work.jsonl"),
+        Some(false)
+    );
     assert!(
         control
             .run("work1", "ompdesk_item", claim, None)

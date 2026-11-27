@@ -5,7 +5,7 @@
  * language is off or English, so those prompts stay stock.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { WORKER_ENTRY } from "../../resources/gui-bridge/agent-control";
+import { WORKER_ENTRY } from "../../resources/gui-bridge/item-work";
 import { AUTOPILOT_STATE_ENTRY } from "../../resources/gui-bridge/modes/autopilot-contracts";
 import {
 	currentReplyLanguage,

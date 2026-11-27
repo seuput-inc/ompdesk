@@ -4,7 +4,8 @@
  * the entry (the parent, anything the user opened) and a worker's own subagents never do.
  */
 import { describe, expect, it } from "vitest";
-import { install, methods, WORKER_CONTRACT, WORKER_ENTRY } from "../../resources/gui-bridge/agent-control";
+import { install, methods, WORKER_CONTRACT } from "../../resources/gui-bridge/agent-control";
+import { WORKER_ENTRY } from "../../resources/gui-bridge/item-work";
 import type { JournalEntry, PromptSectionContext, PromptSectionHost } from "../../resources/gui-bridge/prompt-sections";
 
 type BridgeEnv = Parameters<NonNullable<(typeof methods)[string]>>[1];

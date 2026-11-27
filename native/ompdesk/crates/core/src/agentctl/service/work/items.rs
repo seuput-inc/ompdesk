@@ -241,46 +241,46 @@ impl AgentControl {
             .find(|tab| {
                 state.enabled
                     && tab.tab_id == caller.tab_id
-                    && !tab.viewing
-                    && tab.device.is_none()
                     && tab.session_path == caller.session_path
             })
             .ok_or_else(denied)?;
-        let path = tab
-            .session_path
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(denied)?;
         let key = args.item.as_deref().ok_or_else(denied)?;
-        if args.session.is_some() {
-            return Err(denied());
-        }
-        let (board_id, generation) = {
-            let store = self.items();
-            let item = store
-                .get(key)
-                .filter(|item| item.is_open())
-                .ok_or_else(denied)?;
-            let work = item
-                .work
-                .as_ref()
-                .filter(|work| {
-                    Some(work.generation) == args.generation
-                        && work.session.as_deref() == Some(path)
-                })
-                .ok_or_else(denied)?;
-            (item.bot.clone(), work.generation)
-        };
-        if !self
-            .bots()
-            .find(&board_id)
-            .is_some_and(|bot| bot.id == board_id && !bot.paused)
-        {
+        let generation = args.generation.ok_or_else(denied)?;
+        if args.session.is_some() || !self.holds_item(tab, key, generation) {
             return Err(denied());
         }
         Ok(format!(
             "Item {key} generation {generation} held by this session."
         ))
+    }
+
+    pub(in crate::agentctl::service) fn holds_item(
+        &self,
+        tab: &ControlTab,
+        key: &str,
+        generation: u64,
+    ) -> bool {
+        let Some(path) = tab.session_path.as_deref().filter(|s| !s.is_empty()) else {
+            return false;
+        };
+        if tab.hidden || tab.viewing || tab.device.is_some() {
+            return false;
+        }
+        let board = {
+            let store = self.items();
+            let Some(item) = store.get(key).filter(|item| item.is_open()) else {
+                return false;
+            };
+            if !item.work.as_ref().is_some_and(|work| {
+                work.generation == generation && work.session.as_deref() == Some(path)
+            }) {
+                return false;
+            }
+            item.bot.clone()
+        };
+        self.bots()
+            .find(&board)
+            .is_some_and(|bot| bot.id == board && !bot.paused)
     }
 
     /// An item as listed now: its read-time `stale`, `limitUntil` and linked sessions' states.
