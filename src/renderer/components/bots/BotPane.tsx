@@ -5,14 +5,15 @@
  * person; FK-B35), Chats and Settings (FK-B12, B08).
  * A paused bot says so across the top with Resume (FK-B25).
  */
-import { House, MoreHorizontal, Settings2 } from "lucide-react";
+import { House, Settings2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { type Bot, itemsNeedingYou } from "../../../shared/bots";
 import { useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
 import { refreshBots, useBotsStore } from "../../stores/bots";
-import { toast, toastError } from "../../stores/toast";
-import { Banner, Button, IconButton, Input, LinkButton, MenuButton, Tabs } from "../common";
+import { toastError } from "../../stores/toast";
+import { Banner, Button, IconButton, Input, LinkButton, Tabs } from "../common";
+import { BotActionsMenu, setBotPaused } from "./BotActionsMenu";
 import { BotActivity } from "./BotActivity";
 import { BotAvatar } from "./BotAvatar";
 import { BotChats } from "./BotChats";
@@ -39,10 +40,6 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 		if (!bot.device && bot.firstRun && !bot.paused && bot.kickoffs?.length === 1)
 			void command({ action: "kickoff", id: bot.id }).catch(() => {});
 	}, [bot.id]);
-	const setPaused = (paused: boolean) =>
-		void command({ action: "update", id: bot.id, paused }).catch((error: unknown) =>
-			toastError({ title: t("bots.pause.failed"), error }),
-		);
 	const rename = () => {
 		setRenaming(false);
 		const name = draft.trim();
@@ -75,7 +72,7 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 			{bot.paused && (
 				<Banner
 					actions={
-						<Button onClick={() => setPaused(false)} size="sm" variant="secondary">
+						<Button onClick={() => setBotPaused(bot, false)} size="sm" variant="secondary">
 							{t("bots.settings.resume")}
 						</Button>
 					}
@@ -138,26 +135,7 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 					onClick={() => useBotPage.setState({ tab: "settings" })}
 					size="sm"
 				/>
-				<MenuButton
-					icon={<MoreHorizontal />}
-					items={[
-						bot.paused
-							? { id: "resume", label: t("bots.menu.resume"), onSelect: () => setPaused(false) }
-							: { id: "pause", label: t("bots.menu.pause"), onSelect: () => setPaused(true) },
-						{
-							id: "copy",
-							label: t("bots.menu.copyPath"),
-							separatorBefore: true,
-							onSelect: () =>
-								void navigator.clipboard
-									.writeText(bot.folder)
-									.then(() => toast({ variant: "success", message: t("bots.menu.pathCopied") }))
-									.catch(() => {}),
-						},
-					]}
-					label={t("bots.pane.more")}
-					size="sm"
-				/>
+				<BotActionsMenu bot={bot} />
 			</header>
 			<Tabs
 				activeId={tab}

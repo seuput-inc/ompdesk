@@ -70,6 +70,7 @@ import {
 	Spinner,
 	StatusDot,
 } from "../common";
+import { BotActionsMenu } from "./BotActionsMenu";
 import { BotAvatar } from "./BotAvatar";
 import { BotLineText } from "./BotLineText";
 import {
@@ -131,6 +132,7 @@ export function BotInspectorHome({ bot }: { bot: Bot }) {
 					onClick={() => openBotPage(bot.id, "settings")}
 					size="sm"
 				/>
+				<BotActionsMenu bot={bot} />
 			</header>
 			{open.length ? (
 				<ul aria-label={t("bots.pane.items")}>
@@ -146,7 +148,7 @@ export function BotInspectorHome({ bot }: { bot: Bot }) {
 				<EmptyState
 					className="min-h-52 gap-2 px-1 py-6 [&>span]:size-5 [&>span]:bg-transparent"
 					size="sm"
-					description={t("bots.items.empty.body")}
+					description={t("panel.inspector.emptyItems", { name: bot.name })}
 					icon={<ListChecks />}
 					title={t("bots.items.empty.title")}
 				/>

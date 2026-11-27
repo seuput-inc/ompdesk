@@ -4116,7 +4116,10 @@ export const en: Record<string, string> = {
 	"filesPanel.countMore": "{count}+ files",
 	"filesPanel.scanning": "Scanning project…",
 	"filesPanel.unavailable": "Project files are unavailable.",
-	"filesPanel.empty": "No files found in the project.",
+	"filesPanel.empty": "No files in this workspace",
+	"filesPanel.find": "Find files",
+	"panel.inspector.emptyItems":
+		"When {name} takes on a task for you, its progress and anything it needs from you appear here.",
 	"filesPanel.noMatch": "No files match your search.",
 	"filesPanel.readFailed": "Couldn't read the file.",
 	"filesPanel.back": "Back to files",

@@ -866,7 +866,7 @@ export function FilesPanel() {
 		return <FilePreview key={filePreviewPath} keepArm={keepArm} path={filePreviewPath} tabId={tabId ?? undefined} />;
 
 	return (
-		<div className="flex h-full min-h-0 min-w-0 flex-col">
+		<div className="omp-explorer flex h-full min-h-0 min-w-0 flex-col">
 			<PanelToolbar className="min-h-(--sc-control-md) gap-1 px-2 py-0.5">
 				<span className="min-w-0 flex-1 truncate text-sc-sm font-medium" title={cwd}>
 					{basename(cwd)}
@@ -918,7 +918,7 @@ export function FilesPanel() {
 						<SearchField
 							controlSize="sm"
 							label={t("filesPanel.search")}
-							placeholder={t("filesPanel.search")}
+							placeholder={t("filesPanel.find")}
 							value={query}
 							onValueChange={setQuery}
 						/>
@@ -948,7 +948,7 @@ export function FilesPanel() {
 						</div>
 					) : nodes.length === 0 ? (
 						<EmptyState
-							className="gap-1 px-2 py-2 [&_div]:text-sc-xs [&_div]:font-normal [&_div]:text-(--sc-text-muted)"
+							className="omp-explorer-empty"
 							size="sm"
 							title={t(query.trim() ? "filesPanel.noMatch" : "filesPanel.empty")}
 							actions={

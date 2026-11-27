@@ -396,6 +396,58 @@ html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-to
 	border-end-end-radius: 0;
 }
 
+.omp-inspector [data-view-header] {
+	border-bottom: 1px solid var(--sc-divider);
+}
+
+html:not([data-input="touch"]) .omp-inspector [data-panel-views]:not([data-bot-views]) > button {
+	width: var(--sc-topbar-h);
+	height: var(--sc-topbar-h);
+}
+
+.omp-inspector [data-bot-views] > button {
+	padding-inline: var(--sc-space-2);
+	font-size: var(--sc-font-xs);
+	font-weight: 400;
+}
+
+.omp-inspector [data-bot-views] > button[aria-pressed="true"] {
+	border-radius: var(--sc-radius-md);
+	background: var(--sc-hover);
+	box-shadow: none;
+}
+
+.omp-inspector .omp-explorer > :first-child {
+	min-height: var(--sc-control-md);
+	padding: 0 var(--sc-space-2);
+	font-size: var(--sc-font-xs);
+}
+
+.omp-inspector .omp-explorer [data-files-search-mode] {
+	font-size: var(--sc-font-xs);
+	font-weight: 400;
+}
+
+html:not([data-input="touch"]) .omp-inspector .omp-explorer [data-files-search-mode] {
+	height: var(--sc-space-6);
+}
+
+.omp-inspector .omp-explorer input[type="search"] {
+	height: var(--sc-control-md);
+	background: var(--sc-surface-3);
+	font-size: var(--sc-font-xs);
+}
+
+.omp-inspector .omp-explorer-empty {
+	padding: var(--sc-space-2);
+}
+
+.omp-inspector .omp-explorer-empty > div > div {
+	font-size: var(--sc-font-2xs);
+	font-weight: 400;
+	color: var(--sc-text-muted);
+}
+
 /* Side panel docked left (Settings › General › Window): it takes the
    top-left corner from the session view when the sidebar is hidden, and
    gives the top-right corner (Windows caption buttons) back to it. */

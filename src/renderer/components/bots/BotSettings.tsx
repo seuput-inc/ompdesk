@@ -37,7 +37,7 @@ import {
 	X,
 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
-import { BOT_PACKAGE_SUFFIX, BOT_SKILL_PROJECTS_MAX, LOOK_EVERY, LOOK_FOCUS_MAX } from "../../../shared/bot-limits";
+import { BOT_SKILL_PROJECTS_MAX, LOOK_EVERY, LOOK_FOCUS_MAX } from "../../../shared/bot-limits";
 import { BOT_QUIET_KINDS, type Bot, type BotFile, type BotQuietKind, type BotsRequest } from "../../../shared/bots";
 import { APPROVAL_MODES } from "../../../shared/tool-approval";
 import { useT } from "../../lib/i18n";
@@ -67,6 +67,7 @@ import {
 	TextEditor,
 } from "../common";
 import { ModelValueSelect } from "../settings/ModelValueSelect";
+import { exportBot } from "./BotActionsMenu";
 import { BotAvatar } from "./BotAvatar";
 import { BotConnectorsSection } from "./BotConnectors";
 import { openBotChat } from "./bot-launch";
@@ -399,7 +400,7 @@ function BotSettingsRoot({
 					<ListRow
 						description={t("bots.settings.exportHint")}
 						leading={<FileDown aria-hidden className="size-4 text-(--sc-text-muted)" />}
-						onClick={() => void exportBot(bot, t)}
+						onClick={() => void exportBot(bot)}
 						size="sm"
 						title={t("bots.settings.export")}
 					/>
@@ -438,25 +439,6 @@ function BotSettingsRoot({
 			/>
 		</div>
 	);
-}
-
-/** The bot as one package file where the owner picks (`bot_package.rs`); MEMORY.md and its chats stay home. */
-async function exportBot(bot: Bot, t: (key: string, params?: Record<string, string>) => string): Promise<void> {
-	try {
-		const name =
-			bot.name
-				.toLowerCase()
-				.replace(/[^a-z0-9]+/g, "-")
-				.replace(/^-|-$/g, "") || "bot";
-		const file: unknown = await window.omp.system.showSaveDialog(`${name}${BOT_PACKAGE_SUFFIX}`, [
-			{ name: t("bots.settings.packageType"), extensions: ["json"] },
-		]);
-		if (typeof file !== "string" || !file) return;
-		await window.omp.bots.exportPackage({ id: bot.id, file });
-		toast({ variant: "success", message: t("bots.settings.exported", { file }) });
-	} catch (error) {
-		toastError({ title: t("bots.settings.exportFailed"), error });
-	}
 }
 
 function PageHead({ title, onBack }: { title: string; onBack: () => void }) {

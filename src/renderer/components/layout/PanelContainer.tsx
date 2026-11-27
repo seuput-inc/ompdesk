@@ -134,20 +134,23 @@ function PanelHeader({ bare }: { bare?: boolean }) {
 				<div
 					aria-label={t("panel.primaryViews")}
 					className="no-drag flex shrink-0 items-center"
+					data-bot-views={bot ? true : undefined}
 					data-panel-views=""
 				>
 					{views.map(view =>
-						bot && view.id === panelTab ? (
+						bot ? (
 							<Button
 								key={view.id}
-								aria-pressed="true"
+								aria-label={t(view.labelKey)}
+								aria-pressed={view.id === panelTab}
+								title={t(view.labelKey)}
 								data-inspector-tab={view.id}
 								icon={<view.icon />}
 								onClick={() => setPanelTab(view.id)}
 								size="sm"
 								variant="ghost"
 							>
-								{t(view.labelKey)}
+								<span className={view.id === panelTab ? undefined : "sr-only"}>{t(view.labelKey)}</span>
 							</Button>
 						) : (
 							<IconButton

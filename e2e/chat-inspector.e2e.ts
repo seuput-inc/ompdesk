@@ -67,6 +67,15 @@ test("project and bot conversations keep their own inspector on reopen and on re
 		await selected("Home");
 		await expect(panel.locator('[data-inspector-bot="bot-courier"]')).toContainText("Courier");
 		await capture("bot-open");
+		const more = panel.locator("[data-inspector-bot] header").getByRole("button", { name: "More", exact: true });
+		await more.click();
+		const menu = page.getByRole("menu", { name: "More", exact: true });
+		await expect(menu.getByRole("menuitem", { name: "Copy path" })).toBeVisible();
+		await menu.getByRole("menuitem", { name: "Pause bot" }).click();
+		await expect(panel.locator("[data-inspector-bot] header")).toContainText("Paused");
+		await more.click();
+		await menu.getByRole("menuitem", { name: "Resume bot" }).click();
+		await expect(panel.locator("[data-inspector-bot] header")).not.toContainText("Paused");
 		await views.getByRole("button", { name: "Chats", exact: true }).click();
 		await panel.locator("[data-panel-close]").click();
 		await expect(panel).toHaveCount(0);
