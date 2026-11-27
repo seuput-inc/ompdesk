@@ -163,8 +163,17 @@ test("a paired device reopens an ordinary host's saved child under its exact par
 		await expect(childRow).toHaveAttribute("data-child-status", "running");
 
 		await test.step("the person stops and closes the saved child on the host", async () => {
+			const hostToggle = b.locator(`[data-sidebar-subagents-toggle=${cssString(openerSession)}]`);
+			if ((await hostToggle.getAttribute("aria-expanded")) === "false") await hostToggle.click();
+			await b
+				.locator(
+					`[data-sidebar-family=${cssString(openerSession)}] [data-roving-item=${cssString(`session:${childSession}`)}]`,
+				)
+				.click();
+			const pane = b.locator(`[data-tab-id=${cssString(child)}]`);
+			await expect(pane).toHaveAttribute("data-active", "true");
 			await expect.poll(async () => (await hostTabs()).find(tab => tab.active)?.sessionPath).toBe(childSession);
-			await b.getByRole("button", { name: "Stop", exact: true }).click();
+			await pane.getByRole("button", { name: "Stop", exact: true }).click();
 			await expect.poll(async () => (await hostTabs()).find(tab => tab.tabId === child)?.status).toBe("ready");
 			await b.keyboard.press("ControlOrMeta+w");
 			await expect.poll(async () => (await hostTabs()).some(tab => tab.sessionPath === childSession)).toBe(false);
