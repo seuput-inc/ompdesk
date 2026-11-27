@@ -63,6 +63,7 @@ function compareVersions(a: string, b: string): number {
 }
 
 export const WHATS_NEW_PREF = "whatsNewSeenVersion";
+export const WHATS_NEW_AUTO_HIDE_MS = 60_000;
 
 /**
  * A release section is Korean first; its English summary follows a line holding only this marker
