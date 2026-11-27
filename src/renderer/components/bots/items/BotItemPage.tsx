@@ -41,7 +41,7 @@ import {
 	Send,
 	X,
 } from "lucide-react";
-import { type KeyboardEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import type { Bot, Item, ItemEvent, ItemLink, ItemQuestion } from "../../../../shared/bots";
 import { cx, formatClock, formatTimeAgo } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
@@ -54,7 +54,6 @@ import { useUiStore } from "../../../stores/ui";
 import {
 	Button,
 	Card,
-	ChoiceList,
 	type ContextMenuItem,
 	IconButton,
 	LinkButton,
@@ -65,9 +64,11 @@ import {
 import { openBotChat } from "../bot-launch";
 import { formatSnooze } from "./BotItemDialogs";
 import { snoozeMenu, useItemMoves } from "./BotItems";
+import { ItemAnswerEditor } from "./ItemAnswerEditor";
 import { ItemStatusIcon, itemLive, statusName } from "./ItemStatusIcon";
 import {
 	answersText,
+	type DecisionAnswer,
 	decisionsOf,
 	isClosed,
 	isCommentEvent,
@@ -468,23 +469,22 @@ function Activity({
 
 function CommentCard({ bot, item, event, t }: { bot: Bot; item: Item; event: ItemEvent; t: T }) {
 	const who = event.actor === "owner" ? t("bots.items.activity.you") : bot.name;
-	// An answer names the question it answers.
-	const answered =
-		event.kind === "answered" && event.question !== undefined
-			? item.events.find(asked => asked.id === event.question && asked.kind === "asked")
-			: undefined;
+	const asked =
+		event.question === undefined ? undefined : item.events.find(e => e.id === event.question && e.kind === "asked");
 	return (
 		<Card data-bot-item-comment={event.id} padding="row">
 			<p className="flex items-center gap-1.5 text-sc-xs">
 				<span className="font-medium">{who}</span>
-				{event.kind === "asked" && <span className="text-(--sc-text-muted)">{t("bots.items.activity.asked")}</span>}
+				{(event.kind === "asked" || event.kind === "withdrawn" || event.kind === "self_decided") && (
+					<span className="text-(--sc-text-muted)">{t(`bots.items.activity.${event.kind}`)}</span>
+				)}
 				<span className="ml-auto text-(--sc-text-subtle)" title={formatClock(event.at)}>
 					{formatTimeAgo(event.at)}
 				</span>
 			</p>
-			{answered?.text && (
+			{asked?.text && (
 				<p className="mt-1 truncate border-l-2 border-(--sc-border-subtle) pl-2 text-sc-xs text-(--sc-text-muted)">
-					{questionLine(answered.text)}
+					{questionLine(asked.text)}
 				</p>
 			)}
 			<div className="mt-1 text-sc-sm">
@@ -637,31 +637,17 @@ function QuestionCard({
 	questionRef: React.RefObject<HTMLDivElement | null>;
 }) {
 	const t = useT();
-	const decisions = useMemo(() => decisionsOf(question), [question]);
+	const decisions = decisionsOf(question);
 	const qid = question.id ?? 0;
-	const [answers, setAnswers] = useState<(string | null)[]>(() => heldAnswers(item.id, qid, decisions.length));
-	const headId = useId();
+	const [answers, setAnswers] = useState<DecisionAnswer[]>(() => heldAnswers(item.id, qid, decisions));
 	const pending = useItemsUi(s => (s.pending[item.id] ?? []).some(entry => !entry.failed && entry.question === qid));
-	const hold = (next: (string | null)[]) => {
+	const hold = (next: DecisionAnswer[]) => {
 		setAnswers(next);
 		holdAnswers(item.id, qid, next);
 	};
-	const pick = (index: number, label: string, multi: boolean) => {
-		const next = [...answers];
-		if (multi) {
-			const picked = (next[index] ?? "").split(", ").filter(Boolean);
-			const at = picked.indexOf(label);
-			if (at >= 0) picked.splice(at, 1);
-			else picked.push(label);
-			next[index] = picked.length > 0 ? picked.join(", ") : null;
-		} else next[index] = next[index] === label ? null : label;
-		hold(next);
-		// One question with one pick answers at once, as a quick reply does.
-		if (decisions.length === 1 && !multi && next[0]) send(next);
-	};
 	const send = (picked = answers) => {
 		const text = answersText(question, picked);
-		if (!text) return;
+		if (!text || question.id === undefined || pending) return;
 		sendComment(item.id, text, question.id);
 		hold(decisions.map(() => null));
 	};
@@ -681,49 +667,16 @@ function QuestionCard({
 						{formatTimeAgo(event.at)}
 					</span>
 				</p>
-				{question.text && (
-					<div className="mt-1 text-sc-sm" id={headId}>
-						<MarkdownRenderer content={question.text} />
-					</div>
-				)}
-				{decisions.map((decision, index) => (
-					<div
-						className={cx("mt-2", index > 0 && "border-t border-(--sc-border-subtle) pt-2")}
-						key={decision.question}
-					>
-						{(several || !question.text) && (
-							<div className="text-sc-sm font-semibold" id={`${headId}-${index}`}>
-								<MarkdownRenderer content={decision.question} />
-							</div>
-						)}
-						{decision.options.length > 0 && (
-							<div className="mt-1.5">
-								<ChoiceList
-									choices={decision.options.map((option, at) => ({
-										key: option,
-										label: option,
-										aside:
-											decision.recommended === at ? (
-												<span className="text-sc-xs text-(--sc-text-muted)">
-													{t("bots.items.ask.recommended")}
-												</span>
-											) : undefined,
-									}))}
-									labelledBy={several || !question.text ? `${headId}-${index}` : headId}
-									mode={decision.multi ? "multi" : "single"}
-									onChoose={key => pick(index, key, decision.multi === true)}
-									selected={new Set((answers[index] ?? "").split(", ").filter(Boolean))}
-								/>
-							</div>
-						)}
-						{answers[index] && !decision.options.includes(answers[index] ?? "") && !decision.multi && (
-							<p className="mt-1 flex items-center gap-1.5 text-sc-xs text-(--sc-text-muted)">
-								<Pencil aria-hidden className="size-3" />
-								{answers[index]}
-							</p>
-						)}
-					</div>
-				))}
+				<ItemAnswerEditor
+					answers={answers}
+					commentBox
+					disabled={pending || question.id === undefined}
+					onChange={(next, quickPick) => {
+						if (quickPick) send(next);
+						else hold(next);
+					}}
+					question={question}
+				/>
 				{(several || decisions.some(decision => decision.multi)) && (
 					<div className="mt-3 flex justify-end">
 						<Button

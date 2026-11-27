@@ -9,6 +9,8 @@ export type WidgetPlacement = "aboveEditor" | "belowEditor";
 
 export interface ExtensionUiSnapshot {
 	pendingRequests: ExtensionUIRequest[];
+	/** A request the user opened from the inbox, among this tab's eligible dialogs. */
+	selectedRequestId?: string | null;
 	/**
 	 * When each pending request reached this window (ms). Stock starts a
 	 * dialog's timeout when it sends the request (rpc-mode `requestRpcDialog`),
@@ -175,11 +177,17 @@ export function applyExtensionUiRequest(
 function withoutRequest(snapshot: ExtensionUiSnapshot, id: string): ExtensionUiSnapshot {
 	const arrivedAt = { ...snapshot.arrivedAt };
 	delete arrivedAt[id];
-	return { ...snapshot, pendingRequests: snapshot.pendingRequests.filter(item => item.id !== id), arrivedAt };
+	return {
+		...snapshot,
+		pendingRequests: snapshot.pendingRequests.filter(item => item.id !== id),
+		arrivedAt,
+		...(snapshot.selectedRequestId === id ? { selectedRequestId: null } : {}),
+	};
 }
 
 const EMPTY_SNAPSHOT: ExtensionUiSnapshot = {
 	pendingRequests: [],
+	selectedRequestId: null,
 	arrivedAt: {},
 	statusWidgets: {},
 	widgetPanels: {},

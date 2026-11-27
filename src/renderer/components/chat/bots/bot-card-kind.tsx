@@ -33,7 +33,11 @@ export function botTarget(toolName: string, args: Record<string, unknown>): { na
 export function botCardOf(toolName: string, args: Record<string, unknown>): BotCardKind | null {
 	switch (toolName) {
 		case AGENT_CONTROL_TOOLS.item:
-			return ["add", "set", "comment", "done", "cancel", "link"].includes(text(args.action)) ? "itemNotes" : null;
+			return ["add", "set", "withdraw", "self_decide", "comment", "done", "cancel", "link"].includes(
+				text(args.action),
+			)
+				? "itemNotes"
+				: null;
 		case AGENT_CONTROL_TOOLS.bot:
 			return args.action === "offer" ? "botOffers" : null;
 		case AGENT_CONTROL_TOOLS.send:

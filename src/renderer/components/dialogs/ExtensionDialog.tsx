@@ -1036,6 +1036,7 @@ export function ExtensionDialog() {
 	const sendResponse = useExtensionUiResponder();
 	const tabId = useRuntimeTabId();
 	const pending = useExtensionUiStore(state => state.pendingRequests);
+	const selected = useExtensionUiStore(state => state.selectedRequestId);
 	const arrivals = useExtensionUiStore(state => state.arrivedAt);
 	const removeRequest = useExtensionUiStore(state => state.removeRequest);
 	const loginRequestIds = useExtensionUiStore(state => state.loginRequestIds);
@@ -1055,7 +1056,7 @@ export function ExtensionDialog() {
 			),
 		[pending, loginRequestIds, autopilot, arrivals, now],
 	);
-	const request = dialogs[0] ?? null;
+	const request = (selected && dialogs.find(dialog => dialog.id === selected)) || dialogs[0] || null;
 	const arrivedAt = request ? arrivals[request.id] : undefined;
 	const remaining = useCountdown(request, arrivedAt);
 
@@ -1108,7 +1109,7 @@ export function ExtensionDialog() {
 			<ExtensionSurfaces />
 			{request && (
 				<PromptQueueContext.Provider value={dialogs.length - 1}>
-					<ActiveDialog arrivedAt={arrivedAt} remaining={remaining} request={request} />
+					<ActiveDialog key={request.id} arrivedAt={arrivedAt} remaining={remaining} request={request} />
 				</PromptQueueContext.Provider>
 			)}
 		</>

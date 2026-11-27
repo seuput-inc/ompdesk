@@ -106,7 +106,7 @@ pub struct ItemEvent {
     pub at: String,
     /// `bot` or `owner`.
     pub actor: String,
-    /// `made`, `edited`, `status`, `commented`, `asked`, `answered`, `linked`, `snoozed`, `unsnoozed` or `worker`.
+    /// `made`, `edited`, `status`, `commented`, `asked`, `answered`, `withdrawn`, `self_decided`, `linked`, `snoozed`, `unsnoozed` or `worker`.
     pub kind: String,
     /// A comment's, an ask's or an answer's words; a status's new status; a link's ref; a snooze's time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -127,7 +127,7 @@ pub struct ItemEvent {
     /// An owner comment's request id: the same request again changes nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<String>,
-    /// `answered`: the question event it answers.
+    /// The original ask for an owner answer, withdrawal, or bot decision.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question: Option<u64>,
     /// `unsnoozed`: ended before its time by a question or a close, not by the owner.

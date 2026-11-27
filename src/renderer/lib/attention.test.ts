@@ -1,18 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ExtensionUIRequest } from "../../shared/rpc-types";
 import { boardCounts } from "../components/layout/work-board/work-board";
-import { type AttentionState, pendingAsks, sessionAttention } from "./attention";
-
-const approval: ExtensionUIRequest = {
-	type: "extension_ui_request",
-	id: "approval",
-	method: "select",
-	title: "Allow tool: bash\nrm -rf build",
-	options: ["Approve", "Deny"],
-};
-const ask: ExtensionUIRequest = { type: "extension_ui_request", id: "ask", method: "ask", questions: [] };
-const signIn: ExtensionUIRequest = { type: "extension_ui_request", id: "url", method: "open_url", url: "https://x" };
-const notice: ExtensionUIRequest = { type: "extension_ui_request", id: "n", method: "notify", message: "hi" };
+import { type AttentionState, sessionAttention } from "./attention";
 
 const none: AttentionState = { asks: [], childrenWaiting: 0 };
 
@@ -51,19 +39,5 @@ describe("sessionAttention", () => {
 			});
 			expect(sessionAttention(state)?.count ?? 0).toBe(counts.needs);
 		}
-	});
-});
-
-describe("pendingAsks", () => {
-	it("lists the blocking requests in order, a sign-in's own and notices left out", () => {
-		expect(pendingAsks({ pendingRequests: [ask, notice, approval], loginRequestIds: {} })).toEqual([
-			"question",
-			"approval",
-		]);
-		expect(pendingAsks({ pendingRequests: [signIn, ask], loginRequestIds: { url: true } })).toEqual(["question"]);
-		// A select that only looks like an approval (other options) is a question.
-		expect(pendingAsks({ pendingRequests: [{ ...approval, options: ["Yes", "No"] }], loginRequestIds: {} })).toEqual([
-			"question",
-		]);
 	});
 });

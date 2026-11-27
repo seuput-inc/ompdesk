@@ -215,6 +215,8 @@ impl Kinds {
 pub(super) struct Held {
     pub request: Value,
     pub kinds: Kinds,
+    pub label: String,
+    pub asked_at: i64,
 }
 
 /// The request a tab's run serves: the wrapped message of another session that started it, by that session's saved id

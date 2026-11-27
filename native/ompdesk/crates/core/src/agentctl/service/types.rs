@@ -1704,11 +1704,14 @@ pub struct BotArgs {
 /// `ompdesk_item`'s arguments (`ItemArgs` of `tools.ts`).
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct ItemArgs {
-    /// `add`, `set`, `comment`, `done`, `cancel`, `link`, `list` or `show`.
+    /// The `ompdesk_item` action.
     pub action: String,
     /// Its number or id.
     #[serde(default)]
     pub item: Option<String>,
+    /// `withdraw` and `self_decide` name the event that asked the question.
+    #[serde(default)]
+    pub question: Option<u64>,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]

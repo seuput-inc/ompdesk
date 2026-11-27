@@ -339,7 +339,7 @@ impl Ctx {
             // A question of a run another session started waits off the owner's windows while agentctl decides whose
             // it is (`route_ask`): the bot that asked for the work, or the owner.
             let origin = self.with(|pool| {
-                Ctx::hold_request(pool, seq, request, kinds);
+                Ctx::hold_request(pool, seq, request, kinds, &payload["kinds"]["label"]);
                 let origin = Ctx::routable_origin(pool, seq, request, kinds);
                 if let (Some(_), Some(id)) = (&origin, request["id"].as_str()) {
                     pool.routed.insert(id.to_string(), Routed::Deciding);
@@ -424,7 +424,9 @@ impl Ctx {
             }
             // Already this tab's before the link dropped: the window notified for it then.
             let resent = self.with(|pool| pool.request_owners.get(&id) == Some(&seq));
-            self.with(|pool| Ctx::hold_request(pool, seq, request, kind));
+            self.with(|pool| {
+                Ctx::hold_request(pool, seq, request, kind, &payload["kinds"][index]["label"])
+            });
             if !resent {
                 self.announce_ask(tab, request, kind, None).await?;
             }

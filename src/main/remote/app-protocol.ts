@@ -338,6 +338,19 @@ const SessionSummarySchema = z
 		cwd: z.string(),
 		kind: z.enum(["agent", "chat"]),
 		status: z.enum(["asleep", "starting", "ready", "running", "exited", "error", "restarting", "waiting"]),
+		title: z.string().optional(),
+		autoTitle: z.string().optional(),
+		ask: z.enum(["input", "approval"]).optional(),
+		requests: z
+			.array(
+				z.object({
+					id: z.string().min(1).max(512),
+					kind: z.enum(["input", "approval"]),
+					label: z.string().max(240),
+					askedAt: z.number().int().nonnegative(),
+				}),
+			)
+			.optional(),
 		agents: z.array(SummaryAgentSchema),
 	})
 	.passthrough();

@@ -55,6 +55,7 @@ import { WhatsNewCard } from "./WhatsNewCard";
 const AgentsPage = lazyChunk(() => import("../agents/AgentsPage").then(m => ({ default: m.AgentsPage })));
 const BoardPage = lazyChunk(() => import("../board/BoardPage").then(m => ({ default: m.BoardPage })));
 const BotsPage = lazyChunk(() => import("../bots/BotsPage").then(m => ({ default: m.BotsPage })));
+const QuestionInbox = lazyChunk(() => import("../bots/QuestionInbox").then(m => ({ default: m.QuestionInbox })));
 // A tip row decides once per launch; its own chunk keeps it off a phone's first screen.
 const FeatureTipCard = lazyChunk(() => import("./FeatureTipCard").then(m => ({ default: m.FeatureTipCard })));
 const InsightsPage = lazyChunk(() => import("../insights/InsightsPage").then(m => ({ default: m.InsightsPage })));
@@ -69,6 +70,7 @@ const PAGE_LOADERS: Record<PageDestination, () => Promise<ComponentType>> = {
 	agents: () => import("../agents/AgentsPage").then(m => m.AgentsPage),
 	board: () => import("../board/BoardPage").then(m => m.BoardPage),
 	bots: () => import("../bots/BotsPage").then(m => m.BotsPage),
+	questions: () => import("../bots/QuestionInbox").then(m => m.QuestionInbox),
 	insights: () => import("../insights/InsightsPage").then(m => m.InsightsPage),
 	settings: () => import("../settings/SettingsPage").then(m => m.SettingsPage),
 };
@@ -93,6 +95,7 @@ function preloadForIntent(target: EventTarget | null): void {
 		destination === "agents" ||
 		destination === "board" ||
 		destination === "bots" ||
+		destination === "questions" ||
 		destination === "insights" ||
 		destination === "settings"
 	) {
@@ -113,6 +116,7 @@ const PAGE_LABEL_KEY: Record<PageDestination, string> = {
 	agents: "destination.agents",
 	board: "destination.board",
 	bots: "destination.bots",
+	questions: "inbox.title",
 	insights: "destination.insights",
 	settings: "destination.settings",
 };
@@ -128,9 +132,14 @@ function DestinationPage({ destination }: { destination: PageDestination }): Rea
 	const [Page] = useState<ComponentType>(
 		() =>
 			loadedPages[destination] ??
-			{ agents: AgentsPage, board: BoardPage, bots: BotsPage, insights: InsightsPage, settings: SettingsPage }[
-				destination
-			],
+			{
+				agents: AgentsPage,
+				board: BoardPage,
+				bots: BotsPage,
+				questions: QuestionInbox,
+				insights: InsightsPage,
+				settings: SettingsPage,
+			}[destination],
 	);
 	return (
 		<div className="omp-page-in flex min-h-0 flex-1 flex-col">

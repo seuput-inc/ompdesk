@@ -24,6 +24,7 @@ import {
 	connectorOf,
 	GITHUB_ASK_EVENTS,
 	GMAIL_ACCOUNT,
+	isBotSchedule,
 	slackManifest,
 } from "../../../shared/bot-connectors";
 import type { Bot } from "../../../shared/bots";
@@ -51,7 +52,7 @@ import {
 	Select,
 	SwitchField,
 } from "../common";
-import { isBotSchedule, useSchedulesOf } from "./bot-automations";
+import { useSchedulesOf } from "./bot-automations";
 
 const SLACK_APPS_URL = "https://api.slack.com/apps?new_app=1";
 const GOOGLE_CLOUD_URL = "https://console.cloud.google.com/apis/credentials";

@@ -157,6 +157,17 @@ afterEach(async () => {
 });
 
 describe("ExtensionDialog select", () => {
+	it("opens the requested card without answering it or the earlier card", async () => {
+		await mount();
+		await push(
+			{ type: "extension_ui_request", id: "first", method: "confirm", title: "First?", message: "" },
+			{ type: "extension_ui_request", id: "second", method: "confirm", title: "Second?", message: "" },
+		);
+		await act(async () => useExtensionUiStore.setState({ selectedRequestId: "second" }));
+		expect(document.body.textContent).toContain("Second?");
+		expect(document.body.textContent).not.toContain("First?");
+		expect(useExtensionUiStore.getState().pendingRequests.map(request => request.id)).toEqual(["first", "second"]);
+	});
 	it("shows positional descriptions without including them in the returned choice", async () => {
 		await mount();
 		await act(async () => {

@@ -2171,6 +2171,13 @@ describe("LocalHostServices", () => {
 		);
 		// A new tab tells the device no sign-in runs on it: the device's state may date from a tab that is gone.
 		await vi.waitFor(() => expect(signIns(first)).toEqual([{ active: [] }, { active: ["anthropic"] }]));
+		sidecar.emit("extensionUi", {
+			type: "extension_ui_request",
+			id: "auth",
+			method: "input",
+			title: "Paste private key",
+		});
+		expect(services.summarySources()[0]?.facts()?.ask).toBeUndefined();
 
 		// The link drops mid-login; the sign-in runs on, and the device is told so when it is back.
 		services.disconnected(first.peer, first);
@@ -2189,6 +2196,7 @@ describe("LocalHostServices", () => {
 
 		finish.resolve({ type: "response", command: "login", success: false, error: "denied" });
 		await login;
+		expect(services.summarySources()[0]?.facts()?.requests).toBeUndefined();
 		expect(signIns(second)).toEqual([
 			{ active: ["anthropic"] },
 			{ active: [], ended: { providerId: "anthropic", error: "denied" } },
@@ -3803,6 +3811,30 @@ describe("LocalHostServices for this computer's own windows", () => {
 		view.on("openAsks", replayed);
 		await Promise.resolve();
 		expect(replayed).toHaveBeenCalledWith([ask("ask-1")]);
+	});
+
+	it("summarizes all hosted owner requests without forwarding a form or prefill, dropping only the withdrawn one", async () => {
+		const { services, sidecar } = await hosted();
+		sidecar.emit("extensionUi", {
+			type: "extension_ui_request",
+			id: "edit",
+			method: "editor",
+			title: "Message?",
+			prefill: "private",
+		});
+		sidecar.emit("extensionUi", {
+			type: "extension_ui_request",
+			id: "form",
+			method: "form",
+			html: "<input value='private'>",
+		});
+		const requests = () => services.summarySources()[0]?.facts()?.requests;
+		expect(requests()).toEqual([
+			{ id: "edit", kind: "input", label: "Message?", askedAt: expect.any(Number) },
+			{ id: "form", kind: "input", label: "", askedAt: expect.any(Number) },
+		]);
+		sidecar.emit("extensionUi", { type: "extension_ui_request", id: "cancel", method: "cancel", targetId: "edit" });
+		expect(requests()?.map(request => request.id)).toEqual(["form"]);
 	});
 
 	it("tells a window that joins mid-turn how the device's turn stands", async () => {

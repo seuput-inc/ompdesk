@@ -9,7 +9,16 @@
  * OS keystore and never sent back to a window, an agent or a log. Linear uses a Settings › Trackers account; GitHub
  * the person's own `gh`.
  */
+import type { Bot } from "./bots";
 import type { ConnectorAsker, Schedule, ScheduleEvent, SchedulesState } from "./schedules";
+
+/** A schedule of this bot: runs in its folder or wakes one of its chats. */
+export function isBotSchedule(bot: Bot, schedule: Schedule): boolean {
+	if (schedule.device) return false;
+	if (schedule.cwd === bot.folder) return true;
+	const wake = schedule.wakeSession;
+	return wake !== undefined && (wake === bot.home || bot.sessions.includes(wake));
+}
 
 export const BOT_CONNECTOR_SERVICES = ["slack", "github", "linear", "google"] as const;
 export type BotConnectorService = (typeof BOT_CONNECTOR_SERVICES)[number];

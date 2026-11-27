@@ -79,7 +79,7 @@ import {
 	type SubagentFrame,
 	type SubagentSubscriptionLevel,
 } from "../shared/rpc-types";
-import { failureOf, unsavedSessionKey } from "../shared/session-summary";
+import { failureOf, requestHeadline, type SummaryRequest, unsavedSessionKey } from "../shared/session-summary";
 import { isApprovalSelect } from "../shared/tool-approval";
 import { TargetAnswer } from "./agent-control/target-answer";
 import type { BackgroundWorkMember } from "./background-work";
@@ -405,11 +405,12 @@ function projectEvents(events: AgentSessionEvent[]): ProjectedEvent[] {
 }
 
 /** The facts main works out of a request with the helpers it shares with the page. */
-function kindsOf(request: ExtensionUIRequest): { blocking: boolean; signIn: boolean; approval: boolean } {
+function kindsOf(request: ExtensionUIRequest) {
 	return {
 		blocking: BLOCKING_UI_METHODS[request.method] === true,
 		signIn: isSignInRequest(request),
 		approval: isApprovalSelect(request),
+		label: requestHeadline(request),
 	};
 }
 
@@ -1907,9 +1908,12 @@ export class SidecarPool {
 	 * say those.
 	 */
 	summarySources(): SummarySource[] {
-		const sources = this.#call<Array<{ tabId: string; ask: "approval" | "input" | null }>>("summarySources");
+		const sources =
+			this.#call<Array<{ tabId: string; ask: "approval" | "input" | null; requests?: SummaryRequest[] }>>(
+				"summarySources",
+			);
 		const read = { sources, facts: null as Map<string, CoreSummaryFacts | null> | null };
-		return sources.flatMap(({ tabId }) => {
+		return sources.flatMap(({ tabId, requests }) => {
 			const sidecar = this.#live(tabId)?.sidecar;
 			if (!sidecar) return [];
 			return [
@@ -1917,7 +1921,13 @@ export class SidecarPool {
 					sidecar,
 					facts: (): SummaryFacts | null => {
 						const facts = this.#summaryFacts(read).get(tabId) ?? null;
-						return facts ? { ...facts, sessionPath: facts.sessionPath ?? unsavedSessionKey(tabId) } : null;
+						return facts
+							? {
+									...facts,
+									sessionPath: facts.sessionPath ?? unsavedSessionKey(tabId),
+									...(requests && { requests }),
+								}
+							: null;
 					},
 				},
 			];

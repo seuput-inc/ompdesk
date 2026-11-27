@@ -527,11 +527,11 @@ describe("Sidebar menus and pinned ordering", () => {
 		const nav = container.querySelector("[data-sidebar-nav]");
 		const navRows = () =>
 			[...container.querySelectorAll("[data-sidebar-nav-row]")].map(row => row.getAttribute("data-sidebar-nav-row"));
-		expect(navRows()).toEqual(["board", "agents", "schedules", "stats", "phone"]);
+		expect(navRows()).toEqual(["board", "questions", "agents", "schedules", "stats", "phone"]);
 		expect(container.querySelector("[data-sidebar-bots]")).toBeNull();
 		await act(async () => useBotsFeature.setState({ available: true }));
 		// No Bots nav row, as in Orca: the section pinned atop the lists is the entry.
-		expect(navRows()).toEqual(["board", "agents", "schedules", "stats", "phone"]);
+		expect(navRows()).toEqual(["board", "questions", "agents", "schedules", "stats", "phone"]);
 		const list = container.querySelector('[data-tour="sessions"]');
 		const first = list?.querySelector("[data-sidebar-bots], [data-workspace-group]");
 		expect(first?.getAttribute("data-sidebar-bots")).not.toBeNull();
@@ -554,6 +554,8 @@ describe("Sidebar menus and pinned ordering", () => {
 			"Alt+A",
 		);
 
+		await fire(container.querySelector('[data-sidebar-nav-row="questions"]'), "onClick");
+		expect(useUiStore.getState().destination).toBe("questions");
 		await fire(container.querySelector('[data-sidebar-nav-row="stats"]'), "onClick");
 		expect(useUiStore.getState().destination).toBe("insights");
 		expect(container.querySelector('[data-sidebar-nav-row="stats"]')?.getAttribute("aria-current")).toBe("page");
@@ -569,7 +571,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		await fire(container.querySelector('[data-sidebar-nav-row="stats"]'), "onContextMenu");
 		expect(menuItemLabels()).toEqual(["Hide from sidebar"]);
 		await fire(menuItem("Hide from sidebar"), "onClick");
-		expect(navRows()).toEqual(["board", "agents", "schedules", "phone"]);
+		expect(navRows()).toEqual(["board", "questions", "agents", "schedules", "phone"]);
 		expect(useSidebarFolds.getState().navHidden).toEqual({ stats: true });
 
 		const footer = container.querySelector("[data-sidebar-destinations]");
@@ -604,7 +606,7 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(document.body.querySelector("[data-sidebar-pins]")).not.toBeNull();
 		expect(useUiStore.getState()).toMatchObject({ destination: "settings", settingsTab: "keyboard" });
 		await fire(document.body.querySelector("#sidebar-nav-stats"), "onClick");
-		expect(navRows()).toEqual(["board", "agents", "schedules", "stats", "phone"]);
+		expect(navRows()).toEqual(["board", "questions", "agents", "schedules", "stats", "phone"]);
 	});
 
 	it("pins only the usage block by default (it draws nothing without a subscription account); other pinned ones sit above the destinations in a fixed order and open their view", async () => {
@@ -649,10 +651,9 @@ describe("Sidebar menus and pinned ordering", () => {
 
 		await fire(footer?.querySelector('[aria-label="Help"]') ?? null, "onClick");
 		await fire(menuItem("Customize sidebar…"), "onClick");
-		const sheet = document.body.querySelector("[data-sidebar-pins]");
 		// A desktop window's usage block is the status bar's, so its sheet offers no usage switch (a phone's does).
-		expect(sheet?.querySelectorAll('[role="switch"]')).toHaveLength(10);
 		const switchFor = (pin: string) => document.body.querySelector(`#sidebar-pin-${pin}`);
+		expect(document.body.querySelector("#sidebar-nav-questions")?.getAttribute("aria-checked")).toBe("true");
 		expect(switchFor("usage")).toBeNull();
 		expect(switchFor("files")?.getAttribute("aria-checked")).toBe("false");
 

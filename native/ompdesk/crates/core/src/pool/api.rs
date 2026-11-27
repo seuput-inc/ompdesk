@@ -1,6 +1,6 @@
 //! The pool's public methods: what main's windows, handlers and collaborators ask of it, and the changes they make.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{Map, Value, json};
 
@@ -622,35 +622,48 @@ impl Ctx {
     /// paired host and a view of a device's tab here are left out.
     pub(super) fn summary_sources(&self) -> Value {
         self.with(|pool| {
-            let mut asks: Vec<(u64, &'static str)> = Vec::new();
+            let mut asks: HashMap<u64, Vec<Value>> = HashMap::new();
             for (id, owner) in pool.request_owners.iter() {
-                // A question the bot that asked for the work holds is not the owner's to answer.
-                if pool.sign_in_requests.contains(id) || pool.routed.contains_key(id) {
+                if pool.sign_in_requests.contains(id) || pool.answering.contains(id) {
                     continue;
                 }
-                let approval = pool
-                    .request_bodies
-                    .get(id)
-                    .is_some_and(|held| held.kinds.approval);
-                let current = asks.iter().position(|(seq, _)| seq == owner);
-                if current.is_none_or(|at| asks[at].1 != "approval") {
-                    let value = if approval { "approval" } else { "input" };
-                    match current {
-                        Some(at) => asks[at].1 = value,
-                        None => asks.push((*owner, value)),
+                let Some(held) = pool.request_bodies.get(id) else {
+                    continue;
+                };
+                let (seq, visible_id) = match pool.routed.get(id) {
+                    None => (*owner, id.clone()),
+                    Some(super::state::Routed::Escalated(chat)) => {
+                        let Some(entry) = pool.entry(chat) else {
+                            continue;
+                        };
+                        (
+                            entry.seq,
+                            format!("{}{id}", super::routes::ESCALATED_PREFIX),
+                        )
                     }
-                }
+                    Some(_) => continue,
+                };
+                asks.entry(seq).or_default().push(json!({
+                    "id": visible_id,
+                    "kind": if held.kinds.approval { "approval" } else { "input" },
+                    "label": held.label,
+                    "askedAt": held.asked_at,
+                }));
             }
             let list: Vec<Value> = pool
                 .entries
                 .iter()
                 .filter(|entry| entry.device.is_none() && !entry.hosted_view)
                 .map(|entry| {
-                    let ask = asks
-                        .iter()
-                        .find(|(seq, _)| *seq == entry.seq)
-                        .map(|(_, ask)| *ask);
-                    json!({"tabId": entry.tab_id, "ask": ask})
+                    let Some(requests) = asks.remove(&entry.seq) else {
+                        return json!({"tabId": entry.tab_id, "ask": null});
+                    };
+                    let ask = if requests.iter().any(|row| row["kind"] == "approval") {
+                        "approval"
+                    } else {
+                        "input"
+                    };
+                    json!({"tabId": entry.tab_id, "ask": ask, "requests": requests})
                 })
                 .collect();
             Value::Array(list)

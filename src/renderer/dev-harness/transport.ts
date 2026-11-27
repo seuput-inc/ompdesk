@@ -15,7 +15,7 @@ import {
 	todoDrift,
 	todoDriftState,
 } from "../../../resources/gui-bridge/todo-drift-core";
-import { BOTS_COMMAND } from "../../shared/bots";
+import { BOTS_COMMAND, type BotsRequest, type BotsState } from "../../shared/bots";
 import { EMPTY_GITHUB_AUTH_STATE } from "../../shared/github-auth";
 import {
 	IPC_COMMANDS,
@@ -235,6 +235,8 @@ export interface Harness {
 	 * `sessions:changed` (with `device` for a host's section) and the list reads it as a session that just appeared.
 	 */
 	sessions: SessionInfo[];
+	/** A test host shared by several harness pages, for item reads, changes and their pushes. */
+	bots?: (request: BotsRequest) => Promise<BotsState>;
 	/**
 	 * This computer's session summaries, built by main's own builder over the fixture tabs (./summaries.ts): what a row
 	 * shows of a session's run, ask and subagents. Set a tab's facts, write a stock subagent frame, restart its omp.
@@ -864,6 +866,7 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				if (action === "file") return { exists: false, content: "", mtimeMs: 0, topics: [], history: [] };
 				if (action === "importSources") return { sources: [] };
 				if (action === "export") return { file: "" };
+				if (harness.bots) return harness.bots(payload as BotsRequest);
 				return { bots: quietBots(stateFixture("tab-1").sessionFile ?? ""), items: [] };
 			}
 			case SCHEDULES_COMMAND:

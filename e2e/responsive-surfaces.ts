@@ -2993,6 +2993,17 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work", after: closeOverlay },
 	},
 	{
+		id: "question-inbox",
+		area: "B",
+		title: "Questions waiting for an answer across projects and computers",
+		open: async (page, look) => {
+			await openDrawer(page, look);
+			await page.locator('[data-sidebar-nav-row="questions"]:visible').first().click();
+		},
+		ready: "[data-question-inbox]",
+		parity: { session: "work", after: closeOverlay },
+	},
+	{
 		id: "settings-computer-use",
 		area: "B",
 		title: "Settings › Agent behavior, scrolled to Computer use engine and the macOS permission rows under it",

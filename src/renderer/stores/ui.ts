@@ -85,7 +85,7 @@ export function withFileTab(tabs: FileTab[], path: string, keep: boolean): FileT
  * What fills the main area: the open session (transcript + composer) or one
  * of the destination pages. The sidebar stays visible for all of them.
  */
-export type Destination = "session" | "agents" | "board" | "bots" | "insights" | "settings";
+export type Destination = "session" | "agents" | "board" | "bots" | "questions" | "insights" | "settings";
 export type PageDestination = Exclude<Destination, "session">;
 export type AgentsTab = "live" | "definitions" | "prs" | "github";
 export type InsightsTab = "stats" | "usage";
@@ -631,6 +631,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 		else if (destination === "agents")
 			get().openAgents(section && AGENTS_TABS.includes(section) ? (section as AgentsTab) : undefined);
 		else if (destination === "bots") get().openBots();
+		else if (destination === "questions") transitionView(() => set({ destination }));
 		else if (destination === "board")
 			get().openBoard(section && BOARD_VIEWS.includes(section) ? (section as BoardView) : undefined);
 		else get().openInsights(section && INSIGHTS_TABS.includes(section) ? (section as InsightsTab) : undefined);

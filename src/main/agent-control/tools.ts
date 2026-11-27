@@ -844,9 +844,14 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 			properties: {
 				action: {
 					type: "string",
-					enum: ["add", "set", "comment", "done", "cancel", "link", "list", "show"],
+					enum: ["add", "set", "withdraw", "self_decide", "comment", "done", "cancel", "link", "list", "show"],
 				},
 				item: { type: "string", description: "Its number (3 or #3) or id." },
+				question: {
+					type: "integer",
+					minimum: 0,
+					description: "withdraw, self_decide: the question id shown on the item.",
+				},
 				title: { type: "string", maxLength: ITEM_TITLE_MAX, description: "add, set: a short title." },
 				description: { type: "string", maxLength: ITEM_DESCRIPTION_MAX, description: "add, set: the details." },
 				done_means: {
@@ -878,7 +883,11 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 				until: { type: "string", description: "set, with wait: until when (ISO 8601), if known." },
 				snooze_until: { type: "string", description: 'set: hide it until then (ISO 8601); "" wakes it.' },
 				text: { type: "string", maxLength: ITEM_TEXT_MAX, description: "comment: what to add." },
-				note: { type: "string", maxLength: ITEM_TEXT_MAX, description: "done, cancel: how it ended." },
+				note: {
+					type: "string",
+					maxLength: ITEM_TEXT_MAX,
+					description: "withdraw, self_decide: required reason or decision; done, cancel: how it ended.",
+				},
 				url: { type: "string", description: "link: a web address." },
 				file: { type: "string", description: "link: an absolute path." },
 				session: { type: "string", description: "link: a session (id or tab id)." },
@@ -1337,7 +1346,8 @@ export const ARGS = {
 		.strict(),
 	[T.item]: z
 		.object({
-			action: z.enum(["add", "set", "comment", "done", "cancel", "link", "list", "show"]),
+			action: z.enum(["add", "set", "withdraw", "self_decide", "comment", "done", "cancel", "link", "list", "show"]),
+			question: z.number().int().nonnegative().optional(),
 			item: z.string().trim().min(1).max(100).optional(),
 			title: z.string().trim().min(1).max(ITEM_TITLE_MAX).optional(),
 			description: z.string().max(ITEM_DESCRIPTION_MAX).optional(),

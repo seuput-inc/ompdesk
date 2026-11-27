@@ -199,6 +199,8 @@ export interface ItemEvent {
 		| "commented"
 		| "asked"
 		| "answered"
+		| "withdrawn"
+		| "self_decided"
 		| "linked"
 		| "snoozed"
 		| "unsnoozed"
@@ -214,7 +216,7 @@ export interface ItemEvent {
 	after?: string;
 	/** An owner comment's or answer's request id: the same request again changes nothing. */
 	request?: string;
-	/** `answered`: the question event it answers. */
+	/** The original ask for an owner answer, withdrawal, or bot decision. */
 	question?: number;
 	/** `unsnoozed`: a question or a close ended it before its time. */
 	early?: boolean;

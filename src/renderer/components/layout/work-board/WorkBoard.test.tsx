@@ -20,6 +20,7 @@ import { type ToolEntry, useToolsStore } from "../../../stores/tools";
 import { useUiStore } from "../../../stores/ui";
 import { useWorkBoardStore } from "../../../stores/work-board";
 import { bareEmail } from "../AccountLimit";
+import { showBoardRequests } from "./question-fixture";
 
 const { document, window, Element, Event, HTMLElement, Node } = parseHTML("<html><body></body></html>");
 Object.assign(globalThis as Record<string, unknown>, {
@@ -174,6 +175,7 @@ afterEach(async () => {
 	useWorkBoardStore.getState().reset();
 	useSubagentsStore.getState().reset();
 	useExtensionUiStore.getState().clearAll();
+	showBoardRequests();
 	useTodoStore.getState().reset();
 	useToolsStore.getState().reset();
 	useSessionStore.getState().reset();
@@ -242,9 +244,7 @@ describe("WorkBoard visibility", () => {
 describe("WorkBoard header", () => {
 	it("says what runs and waits in one sentence and shows the plan as one bar", async () => {
 		useSubagentsStore.getState().setSnapshots([agent("a1", "running", 0), agent("a2", "running", 1)]);
-		useExtensionUiStore
-			.getState()
-			.pushRequest({ type: "extension_ui_request", id: "c1", method: "confirm", title: "Go?", message: "" });
+		showBoardRequests({ id: "c1", kind: "input", label: "Go?" });
 		useTodoStore.getState().setPhases([
 			{
 				name: "Work",
@@ -286,12 +286,7 @@ describe("WorkBoard header", () => {
 	it("counts what needs the person once: the head, the section and its rows say the same figure", async () => {
 		useSubagentsStore.getState().setSnapshots([agent("a1", "running", 0), agent("a2", "parked", 1)]);
 		rows = [jobRow({ id: "j1", type: "bash", status: "running", label: "watch", startTime: Date.now() })];
-		useExtensionUiStore
-			.getState()
-			.pushRequest({ type: "extension_ui_request", id: "c1", method: "confirm", title: "Go?", message: "" });
-		useExtensionUiStore
-			.getState()
-			.pushRequest({ type: "extension_ui_request", id: "c2", method: "confirm", title: "Continue?", message: "" });
+		showBoardRequests({ id: "c1", kind: "input", label: "Go?" }, { id: "c2", kind: "input", label: "Continue?" });
 		useToolsStore.setState({
 			finishedTools: new Map([
 				[
@@ -791,13 +786,7 @@ describe("WorkBoard sections", () => {
 
 	it("puts what needs the person first, each row saying what kind it is, and announces them politely", async () => {
 		useSubagentsStore.getState().setSnapshots([agent("a1", "running", 0)]);
-		useExtensionUiStore.getState().pushRequest({
-			type: "extension_ui_request",
-			id: "ap1",
-			method: "select",
-			title: "Allow tool: bash\nls",
-			options: ["Approve", "Deny"],
-		});
+		showBoardRequests({ id: "ap1", kind: "approval", label: "Allow tool: bash" });
 		useExtensionUiStore
 			.getState()
 			.pushRequest({ type: "extension_ui_request", id: "n1", method: "notify", message: "fyi" });
@@ -820,13 +809,7 @@ describe("WorkBoard sections", () => {
 	});
 
 	it("focuses the docked card when a waiting row is clicked", async () => {
-		useExtensionUiStore.getState().pushRequest({
-			type: "extension_ui_request",
-			id: "c1",
-			method: "confirm",
-			title: "Overwrite the file?",
-			message: "",
-		});
+		showBoardRequests({ id: "c1", kind: "input", label: "Overwrite the file?" });
 		await mount();
 		const card = document.createElement("section") as unknown as HTMLElement;
 		card.setAttribute("data-prompt-card", "");
@@ -960,9 +943,7 @@ describe("the strip panel's summary", () => {
 	];
 	/** A question, two subagents at work and a plan, on a pane too narrow to dock: the strip with its panel open. */
 	async function openStrip(): Promise<void> {
-		useExtensionUiStore
-			.getState()
-			.pushRequest({ type: "extension_ui_request", id: "c1", method: "confirm", title: "Go?", message: "" });
+		showBoardRequests({ id: "c1", kind: "input", label: "Go?" });
 		useSubagentsStore.getState().setSnapshots([agent("a1", "running", 0), agent("a2", "running", 1)]);
 		useTodoStore.getState().setPhases(phases);
 		await mount(390);

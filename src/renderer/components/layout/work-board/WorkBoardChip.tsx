@@ -15,12 +15,13 @@ import { useBackLayer } from "../../../hooks/use-back-layer";
 import { useBackgroundJobs } from "../../../hooks/use-background-jobs";
 import { useOpenedChildren } from "../../../hooks/use-opened-children";
 import { useOverlayPresence } from "../../../hooks/use-overlay-presence";
-import { attentionClause, pendingAsks } from "../../../lib/attention";
+import { useSessionQuestions } from "../../../hooks/use-question-inbox";
+import { attentionClause } from "../../../lib/attention";
 import { useT } from "../../../lib/i18n";
 import { useModelWait } from "../../../lib/model-wait";
+import { questionAttentionKind } from "../../../lib/question-inbox";
 import { ensureAgentReviewSubscription, useAgentReviewStore } from "../../../stores/agent-review";
 import { isAutopilotTab, isLiveAutopilot, useAutopilotStore } from "../../../stores/autopilot";
-import { useExtensionUiStore } from "../../../stores/extension-ui";
 import { useSessionStore } from "../../../stores/session";
 import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useSubagentsStore } from "../../../stores/subagents";
@@ -177,8 +178,7 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 		if (hasOpened) void import("./WorkBoardOpened").catch(() => {});
 	}, [hasOpened]);
 	const goal = useSessionStore(state => state.goal);
-	const pending = useExtensionUiStore(state => state.pendingRequests);
-	const loginRequestIds = useExtensionUiStore(state => state.loginRequestIds);
+	const questions = useSessionQuestions(runtimeTabId ?? activeTabId);
 	// A run's own words (cycle and area, a pause reason, a quota wait, its end): in an Autopilot tab the strip is where
 	// the run is reached wherever the board cannot dock.
 	const runText = useAutopilotStateText();
@@ -186,7 +186,7 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 	const autopilotState = runText ?? (ended ? t("autopilot.state.ended") : null);
 	const autopilotRunning = useAutopilotStore(state => isLiveAutopilot(state) && state.status.state === "running");
 	const counts = boardCounts({
-		asks: pendingAsks({ pendingRequests: pending, loginRequestIds }),
+		asks: questions.map(questionAttentionKind),
 		childrenWaiting: opened.counts.waiting,
 		childrenRunning: opened.counts.running,
 		agents: agents.length,

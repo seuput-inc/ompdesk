@@ -8,10 +8,17 @@ globs:
   - "resources/gui-bridge/session-spend*"
   - "src/renderer/lib/attention.ts"
   - "src/renderer/hooks/use-session-attention.ts"
+  - "src/renderer/lib/question-inbox.ts"
+  - "src/renderer/hooks/use-question-inbox.ts"
+  - "src/renderer/components/bots/QuestionInbox.tsx"
   - "src/main/tray-labels.ts"
   - "src/renderer/web/chrome.ts"
 ---
 ## Panels, sidebar and work views
+
+### Question inbox
+
+The Questions destination and its badge use the same live question rows as the scoped bot and session views. This is a projection of shared bot items, session summaries and this host's access requests, not a second journal. Only item answers can be batched. Recommendations fill a review list; they never send an answer or approve a tool or access request. Each submission names the original asking event and reports its own result. A new question gets no selection from its predecessor. Ordinary sessions still use their blocking form. The two-viewer harness scenario is `e2e/question-inbox.e2e.ts`.
 
 ### Work board and work card
 

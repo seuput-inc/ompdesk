@@ -21,9 +21,10 @@ import type { RpcGoalState, SubagentSnapshot, TodoTask } from "../../../../share
 import { useBackgroundJobs } from "../../../hooks/use-background-jobs";
 import { useOpenedChildren } from "../../../hooks/use-opened-children";
 import { usePresence } from "../../../hooks/use-presence";
+import { openInboxRow, useSessionQuestions } from "../../../hooks/use-question-inbox";
 import { useSessionSpend } from "../../../hooks/use-session-spend";
 import { useShellMode } from "../../../hooks/use-shell-mode";
-import { attentionClause, pendingAsks } from "../../../lib/attention";
+import { attentionClause } from "../../../lib/attention";
 import { lazyChunk } from "../../../lib/chunk-load";
 import { cx, formatDuration, formatTokens } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
@@ -31,14 +32,15 @@ import { actionShortcut } from "../../../lib/keymap";
 import { useModelWait } from "../../../lib/model-wait";
 import { useNowTick } from "../../../lib/now-tick";
 import { useProjectNames, useWorktreeKindLabels } from "../../../lib/project-origin";
+import { questionAttentionKind } from "../../../lib/question-inbox";
 import { costKinds, costWords } from "../../../lib/spend";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { ensureAgentReviewSubscription, useAgentReviewStore } from "../../../stores/agent-review";
 import { isAutopilotTab, isLiveAutopilot, useAutopilotStore } from "../../../stores/autopilot";
-import { isApprovalRequest, isUserBlockingRequest, useExtensionUiStore } from "../../../stores/extension-ui";
+import { type ExtensionUiStore, useExtensionUiStore } from "../../../stores/extension-ui";
 import { useMessagesStore } from "../../../stores/messages";
 import { useSessionStore } from "../../../stores/session";
-import { useRuntimeTabId } from "../../../stores/session-runtime-context";
+import { sessionRuntimeStore, useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useSubagentsStore } from "../../../stores/subagents";
 import { useTabsStore } from "../../../stores/tabs";
 import { selectTodoCardVisible, useTodoStore } from "../../../stores/todo";
@@ -297,11 +299,7 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 	const runTotals = useAutopilotStore(state => isAutopilotTab(state) && state.status.totals !== undefined);
 	const autopilotRunning = useAutopilotStore(state => isLiveAutopilot(state) && state.status.state === "running");
 	const pending = useExtensionUiStore(state => state.pendingRequests);
-	const loginRequestIds = useExtensionUiStore(state => state.loginRequestIds);
-	const blocking = useMemo(
-		() => pending.filter(request => isUserBlockingRequest({ loginRequestIds }, request)),
-		[pending, loginRequestIds],
-	);
+	const questions = useSessionQuestions(tabId);
 
 	const lastTurn = useTodoStore(state => state.lastTurn);
 	const running = agents.length + jobs.length + opened.counts.running;
@@ -320,7 +318,7 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 	// What the last turn left (the session rows' lazy chunk tells it), for a quiet board's head.
 	const [outcome, setOutcome] = useState<string | null>(null);
 
-	const asks = pendingAsks({ pendingRequests: pending, loginRequestIds });
+	const asks = questions.map(questionAttentionKind);
 	const showsLast = !turnActive && lastTurn !== null;
 	const present =
 		turnActive ||
@@ -432,11 +430,26 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 	const jumpKey = actionShortcut("board.focus");
 
 	// Each row's tag is the same kind `sessionAttention` names on the head, so an approval never reads as a question.
-	const askItems = blocking.map(request => ({
-		id: request.id,
-		label: requestLabel(request, t),
-		kind: isApprovalRequest(request) ? ("approval" as const) : ("ask" as const),
-	}));
+	const askItems = questions.map(row => {
+		const sessionAsk = "session" in row;
+		const request = sessionAsk && pending.find(request => request.id === row.requestId);
+		const id = sessionAsk ? row.requestId : row.source === "item" ? row.item.id : undefined;
+		const label = request ? requestLabel(request, t) : row.source === "access" ? row.title : row.detail || row.title;
+		return {
+			id: id ?? row.key,
+			key: row.key,
+			label,
+			kind: questionAttentionKind(row) === "approval" ? "approval" : "ask",
+			open: () => {
+				if (!sessionAsk) return void openInboxRow(row);
+				const store = sessionRuntimeStore<ExtensionUiStore>(tabId, "extensionUi");
+				if (row.requestId && store && store.getState().selectedRequestId !== row.requestId) {
+					store.setState({ selectedRequestId: row.requestId });
+					requestAnimationFrame(() => focusPrompt(pane));
+				} else focusPrompt(pane);
+			},
+		};
+	});
 	const waitingChildren = opened.rows.filter(row => row.status === "waiting");
 	const nowChildren = opened.rows.filter(row => row.status !== "waiting");
 	// The presented lists, not the live ones: the last row of a finished agent or job fades out inside its section.
@@ -542,11 +555,11 @@ export function WorkBoard({ pane, inline = false }: { pane: HTMLElement; inline?
 						{item => (
 							<BoardRow
 								data={{ "data-board-waiting": item.id }}
-								flipKey={`ask:${item.id}`}
-								key={item.id}
+								flipKey={item.key}
+								key={item.key}
 								label={item.label}
 								lead={<StatusDot decorative tone="attention" />}
-								onClick={() => focusPrompt(pane)}
+								onClick={item.open}
 								tag={{ word: t(`workBoard.kind.${item.kind}`), tone: "attention" }}
 								title={item.label}
 							/>

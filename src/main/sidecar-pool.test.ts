@@ -3250,6 +3250,33 @@ describe("SidecarPool background tabs", () => {
 			expect(factsOf("tab-a")).not.toHaveProperty("settling");
 		});
 
+		it("summarizes every open request by id, age and headline, never input values, HTML or sign-in traffic", () => {
+			const { pool, sidecars } = fakePool();
+			pool.acquire("/a", fakeWindow(1).win, "tab-a", "/sessions/a.jsonl");
+			const a = sidecars[0];
+			a?.emitStatus("ready");
+			a?.emitUiRequest({ id: "i", method: "input", title: "Region?", placeholder: "private" });
+			a?.emitUiRequest({ id: "e", method: "editor", title: "Message?", prefill: "private" });
+			a?.emitUiRequest({ id: "f", method: "form", html: "<input value='private'>" });
+			a?.emitUiRequest({
+				id: "a",
+				method: "select",
+				title: "Allow tool: bash\nprivate",
+				options: ["Approve", "Deny"],
+			});
+			pool.noteSignIn("tab-a", true);
+			a?.emitUiRequest({ id: "login", method: "input", title: "Paste private code" });
+			pool.noteSignIn("tab-a", false);
+			const facts = pool.summarySources()[0]?.facts();
+			expect(facts?.ask).toBe("approval");
+			expect(facts?.requests).toEqual([
+				{ id: "i", kind: "input", askedAt: expect.any(Number), label: "Region?" },
+				{ id: "e", kind: "input", askedAt: expect.any(Number), label: "Message?" },
+				{ id: "f", kind: "input", askedAt: expect.any(Number), label: "" },
+				{ id: "a", kind: "approval", askedAt: expect.any(Number), label: "Allow tool: bash" },
+			]);
+		});
+
 		it("lists a tab its relaunch restored asleep in the summaries, running once the resume's continued turn runs, and announces it", () => {
 			const { pool, sidecars } = fakePool();
 			const fw = fakeWindow(1);

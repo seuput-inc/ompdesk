@@ -4,9 +4,9 @@
  * title, the tray, a split pane's header, the Work tree), on a desktop window, a paired computer's view and a phone
  * page alike. A surface never derives it from the tab events its own window happened to receive. Pure.
  */
-import type { SessionSummary } from "../../shared/session-summary";
+import { isSessionDown, type SessionSummary } from "../../shared/session-summary";
 import type { AskKind } from "./attention";
-import { isSessionDown, isTabFailed, type TabSignalPresentation, tabSignalPresentation } from "./tab-signal";
+import { isTabFailed, type TabSignalPresentation, tabSignalPresentation } from "./tab-signal";
 
 /** The facts of a summary the rule reads (a tab with no session file yet has these too). */
 export type RunFacts = Pick<

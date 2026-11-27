@@ -113,6 +113,7 @@ fn item_line(item: &ItemRecord) -> String {
                 .collect();
             line.push_str(&format!(" — asks: {}", asked.join("; ")));
         }
+        line.push_str(&format!(" [question {}]", question.id));
     }
     if let Some(wait) = &item.wait {
         line.push_str(&format!(" — waits on {}", wait.text));
@@ -436,6 +437,18 @@ impl AgentControl {
                     }
                 }
             }
+            "withdraw" | "self_decide" => {
+                if args.question.is_none() {
+                    return fail("Name the question id shown on the item.");
+                }
+                let note = args.note.as_deref().unwrap_or("").trim();
+                if note.is_empty() {
+                    return fail(
+                        "Give a note explaining why the question no longer needs an answer.",
+                    );
+                }
+                too_long("note", note, TEXT_MAX)?;
+            }
             "comment" => {
                 let text = args.text.as_deref().unwrap_or("");
                 if text.trim().is_empty() {
@@ -482,7 +495,17 @@ impl AgentControl {
             }
             _ => None,
         };
-        let Some(changed) = self.items().change(&found.id, |item| {
+        let mut store = self.items();
+        if matches!(action, "withdraw" | "self_decide")
+            && store
+                .get(&found.id)
+                .and_then(|i| i.question.as_ref())
+                .map(|q| q.id)
+                != args.question
+        {
+            return fail(QUESTION_CHANGED);
+        }
+        let Some(changed) = store.change(&found.id, |item| {
             let before = item.status.clone();
             let mut note: Option<String> = None;
             match action {
@@ -586,6 +609,16 @@ impl AgentControl {
                         }
                     }
                 }
+                "withdraw" | "self_decide" => {
+                    let kind = if action == "withdraw" {
+                        "withdrawn"
+                    } else {
+                        "self_decided"
+                    };
+                    item.event(&at, "bot", kind, args.note.as_deref().map(str::trim))
+                        .question = args.question;
+                    item.status = "working".to_owned();
+                }
                 "comment" => {
                     item.event(&at, "bot", "commented", args.text.as_deref());
                 }
@@ -626,6 +659,7 @@ impl AgentControl {
         }) else {
             return fail("That item is gone.");
         };
+        drop(store);
         if !changed.is_open() && is_open(&found.status) {
             journal_line(Path::new(&bot.folder), &changed, &at);
         }
@@ -745,13 +779,37 @@ impl AgentControl {
         let mut changed_any = false;
         for id in &ids {
             // A change to an item that is gone mails nothing and asks nothing.
-            let Some(found) = self.items().get(id).cloned() else {
+            let mut store = self.items();
+            let Some(found) = store.get(id).cloned() else {
                 continue;
             };
             if request_id
                 .as_deref()
                 .is_some_and(|request| found.has_request(request))
             {
+                continue;
+            }
+            if named.is_some() && found.question.as_ref().map(|question| question.id) != named {
+                refused = Some(QUESTION_CHANGED);
+                continue;
+            }
+            if request.get("answer").is_some()
+                && found.question.is_none()
+                && found
+                    .events
+                    .iter()
+                    .rev()
+                    .find(|event| {
+                        matches!(
+                            event.kind.as_str(),
+                            "asked" | "answered" | "withdrawn" | "self_decided"
+                        )
+                    })
+                    .is_some_and(|event| {
+                        matches!(event.kind.as_str(), "withdrawn" | "self_decided")
+                    })
+            {
+                refused = Some(QUESTION_CHANGED);
                 continue;
             }
             let answer: Option<String> = request.get("answer").and_then(|answer| {
@@ -778,16 +836,7 @@ impl AgentControl {
                 }
             });
             let (answer, comment) = match (answer, &found.question) {
-                (Some(answer), Some(question))
-                    if named.is_none_or(|named| named == question.id) =>
-                {
-                    (Some(answer), comment.clone())
-                }
-                // The bot asked another question since: nothing is written, the owner reads it first.
-                (Some(_), Some(_)) => {
-                    refused = Some(QUESTION_CHANGED);
-                    continue;
-                }
+                (Some(answer), Some(_)) => (Some(answer), comment.clone()),
                 // Nothing waits on an answer any more: the words stay as a comment.
                 (Some(answer), None) => (
                     None,
@@ -809,7 +858,7 @@ impl AgentControl {
             if status.is_none() && answer.is_none() && comment.is_none() && snooze.is_none() {
                 continue;
             }
-            let Some(changed) = self.items().change(id, |item| {
+            let Some(changed) = store.change(id, |item| {
                 let before = item.status.clone();
                 if let Some(answer) = &answer {
                     let question = item.question.as_ref().map(|question| question.id);
@@ -870,6 +919,7 @@ impl AgentControl {
             }) else {
                 continue;
             };
+            drop(store);
             changed_any = true;
             if !changed.is_open()
                 && is_open(&found.status)

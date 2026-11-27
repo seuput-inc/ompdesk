@@ -10,7 +10,7 @@
  * A cell's right click (long press, Shift+F10) hides it from this device's sidebar; Customize sidebar shows it again
  * (`navHidden`, device-local).
  */
-import { BarChart3, Bot, CalendarClock, Columns3, type LucideIcon, Smartphone } from "lucide-react";
+import { BarChart3, Bot, CalendarClock, Columns3, Inbox, type LucideIcon, Smartphone } from "lucide-react";
 import { type KeyboardEvent as ReactKeyboardEvent, Suspense, useState } from "react";
 import { useShellInput } from "../../../hooks/use-shell-mode";
 import { lazyChunk } from "../../../lib/chunk-load";
@@ -26,15 +26,16 @@ import { anchorFromEvent, Button, ContextMenu, type ContextMenuAnchor, Tooltip }
 const BoardNavCounts = lazyChunk(() =>
 	import("../../board/board-counts").then(module => ({ default: module.BoardNavCounts })),
 );
+const InboxCount = lazyChunk(() => import("./InboxCount").then(module => ({ default: module.InboxCount })));
 
-export const SIDEBAR_NAV = ["board", "agents", "schedules", "stats", "phone"] as const;
+export const SIDEBAR_NAV = ["board", "questions", "agents", "schedules", "stats", "phone"] as const;
 export type SidebarNavRow = (typeof SIDEBAR_NAV)[number];
 
 interface NavRowSpec {
 	labelKey: string;
 	icon: LucideIcon;
 	/** The `data-destination` a page row carries (AppShell preloads its page when a pointer reaches it). */
-	destination?: "agents" | "board" | "insights";
+	destination?: "agents" | "board" | "questions" | "insights";
 	open: () => void;
 }
 
@@ -44,6 +45,12 @@ export const SIDEBAR_NAV_ROWS: Record<SidebarNavRow, NavRowSpec> = {
 		icon: Columns3,
 		destination: "board",
 		open: () => useUiStore.getState().openBoard(),
+	},
+	questions: {
+		labelKey: "inbox.nav",
+		icon: Inbox,
+		destination: "questions",
+		open: () => useUiStore.getState().openDestination("questions"),
 	},
 	agents: {
 		labelKey: "destination.agents",
@@ -121,6 +128,11 @@ export function SidebarNav() {
 						{row === "board" && (
 							<Suspense fallback={null}>
 								<BoardNavCounts />
+							</Suspense>
+						)}
+						{row === "questions" && (
+							<Suspense fallback={null}>
+								<InboxCount />
 							</Suspense>
 						)}
 					</Button>

@@ -12,10 +12,12 @@
  * And the owner's moves: a status (Waiting with what it waits on) or a snooze for one item or several at once.
  */
 import { create } from "zustand";
-import type { BotsRequest, Item, ItemStatus } from "../../../../shared/bots";
+import type { Item, ItemDecision, ItemStatus } from "../../../../shared/bots";
 import { translate } from "../../../lib/i18n";
 import { useBotsStore } from "../../../stores/bots";
 import { toast, toastError } from "../../../stores/toast";
+import type { AnswerReview } from "../inbox-answers";
+import type { DecisionAnswer } from "./item-model";
 
 export interface PendingComment {
 	requestId: string;
@@ -26,7 +28,7 @@ export interface PendingComment {
 	failed: boolean;
 }
 
-interface ItemsUi {
+interface ItemsUi extends AnswerReview {
 	/** Per bot or group id: the item open on its Items tab. */
 	open: Record<string, string | null>;
 	/** Per item: the comment box's words. */
@@ -35,9 +37,18 @@ interface ItemsUi {
 	pending: Record<string, PendingComment[]>;
 	/** Per bot or group id: its Items list's order as last shown, which the item page steps through. */
 	order: Record<string, readonly string[]>;
+	inboxSending: boolean;
 }
 
-export const useItemsUi = create<ItemsUi>()(() => ({ open: {}, drafts: {}, pending: {}, order: {} }));
+export const useItemsUi = create<ItemsUi>()(() => ({
+	open: {},
+	drafts: {},
+	pending: {},
+	order: {},
+	inboxDrafts: [],
+	inboxReceipts: [],
+	inboxSending: false,
+}));
 
 export function setOrder(owner: string, order: readonly string[]): void {
 	useItemsUi.setState(state => ({ order: { ...state.order, [owner]: order } }));
@@ -55,18 +66,21 @@ function setPending(item: string, change: (list: PendingComment[]) => PendingCom
 	useItemsUi.setState(state => ({ pending: { ...state.pending, [item]: change(state.pending[item] ?? []) } }));
 }
 
+export function postItemAnswer(item: string, question: number, text: string, requestId: string) {
+	return useBotsStore.getState().command({ action: "item", id: item, answer: { text, question }, requestId });
+}
+
 async function post(item: string, entry: PendingComment): Promise<void> {
-	const request: BotsRequest =
-		entry.question === undefined
-			? { action: "item", id: item, comment: entry.text, requestId: entry.requestId }
-			: {
-					action: "item",
-					id: item,
-					answer: { text: entry.text, question: entry.question },
-					requestId: entry.requestId,
-				};
 	try {
-		const state = await useBotsStore.getState().command(request);
+		const state =
+			entry.question === undefined
+				? await useBotsStore.getState().command({
+						action: "item",
+						id: item,
+						comment: entry.text,
+						requestId: entry.requestId,
+					})
+				: await postItemAnswer(item, entry.question, entry.text, entry.requestId);
 		setPending(item, list => list.filter(known => known.requestId !== entry.requestId));
 		if (state.refused === "question_changed") {
 			toast({ variant: "warning", message: translate("bots.items.ask.replaced") });
@@ -132,19 +146,25 @@ export function snoozeItems(items: readonly Item[], until: number | null): void 
 const heldKey = (item: string, question: number) => `bot-item-answers:${item}:${question}`;
 
 /** The picks held on this device for `question` of `item`, one per question line (null: none). */
-export function heldAnswers(item: string, question: number, count: number): (string | null)[] {
+export function heldAnswers(item: string, question: number, decisions: readonly ItemDecision[]): DecisionAnswer[] {
 	try {
 		const raw: unknown = JSON.parse(localStorage.getItem(heldKey(item, question)) ?? "[]");
 		const held = Array.isArray(raw) ? raw : [];
-		return Array.from({ length: count }, (_, index) =>
-			typeof held[index] === "string" && held[index] ? (held[index] as string) : null,
-		);
+		return decisions.map((decision, index) => {
+			const answer: unknown = held[index];
+			if (Array.isArray(answer)) return answer.filter((pick): pick is string => decision.options.includes(pick));
+			if (typeof answer !== "string" || !answer) return null;
+			if (decision.options.includes(answer)) return [answer];
+			// Older versions held multiple picks as one comma-separated string.
+			const picks = answer.split(", ");
+			return decision.multi && picks.every(pick => decision.options.includes(pick)) ? picks : answer;
+		});
 	} catch {
-		return Array.from({ length: count }, () => null);
+		return decisions.map(() => null);
 	}
 }
 
-export function holdAnswers(item: string, question: number, answers: readonly (string | null)[]): void {
+export function holdAnswers(item: string, question: number, answers: readonly DecisionAnswer[]): void {
 	try {
 		if (answers.every(answer => !answer)) localStorage.removeItem(heldKey(item, question));
 		else localStorage.setItem(heldKey(item, question), JSON.stringify(answers));

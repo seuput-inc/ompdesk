@@ -4,7 +4,8 @@
  * one with no next start keeps its place, a paused one goes last. Its own Look around and memory upkeep are named
  * apart (they always show, outside the cap).
  */
-import { useEffect, useState } from "react";
+import { useMemo, useSyncExternalStore } from "react";
+import { isBotSchedule } from "../../../shared/bot-connectors";
 import type { Bot } from "../../../shared/bots";
 import type { Schedule, ScheduleRun, SchedulesState } from "../../../shared/schedules";
 
@@ -19,14 +20,6 @@ export interface BotAutomation {
 }
 
 const EMPTY: SchedulesState = { paused: false, schedules: [], runs: [], nextRuns: {} };
-
-/** Whether `schedule` is one of the bot's: it runs in the bot's folder or wakes one of its chats. */
-export function isBotSchedule(bot: Bot, schedule: Schedule): boolean {
-	if (schedule.device) return false;
-	if (schedule.cwd === bot.folder) return true;
-	const wake = schedule.wakeSession;
-	return wake !== undefined && (wake === bot.home || bot.sessions.includes(wake));
-}
 
 export function botAutomations(bot: Bot, state: SchedulesState): BotAutomation[] {
 	const rows = state.schedules
@@ -61,32 +54,63 @@ export function botAutomations(bot: Bot, state: SchedulesState): BotAutomation[]
 		.map(({ row }) => row);
 }
 
-/**
- * The schedules of the computer a bot lives on (`device`, absent = this one), read once and followed while a bot surface
- * is shown: a paired host's bot runs its automations there, and its changes go there (`host.schedules.*`).
- */
-export function useSchedulesOf(device: string | undefined): SchedulesState {
-	const [state, setState] = useState<SchedulesState>(EMPTY);
-	useEffect(() => {
-		if (typeof window.omp?.schedules?.command !== "function") return;
-		let live = true;
-		window.omp.schedules
-			.command({ action: "get" }, device)
-			.then(read => {
-				if (live) setState(read);
-			})
-			.catch(() => {});
-		const stop = device
-			? window.omp.schedules.onHostState((host, next) => {
-					if (host === device) setState(next);
-				})
-			: window.omp.schedules.onState(next => setState(next));
-		return () => {
-			live = false;
-			stop();
-		};
-	}, [device]);
-	return state;
+type Feed = { read: () => SchedulesState; subscribe: (changed: () => void) => () => void };
+const feeds = new Map<string | undefined, Feed>();
+const emptyFeed: Feed = { read: () => EMPTY, subscribe: () => () => {} };
+
+/** One schedules read and subscription per computer, shared by Activity, the board and the inbox badge. */
+function schedulesFeed(device?: string): Feed {
+	const known = feeds.get(device);
+	if (known) return known;
+	let state = EMPTY;
+	const listeners = new Set<() => void>();
+	let stop: (() => void) | undefined;
+	const feed: Feed = {
+		read: () => state,
+		subscribe: changed => {
+			listeners.add(changed);
+			if (listeners.size === 1 && typeof window.omp?.schedules?.command === "function") {
+				let pushed = false;
+				const receive = (next: SchedulesState) => {
+					state = next;
+					for (const listener of listeners) listener();
+				};
+				const push = (next: SchedulesState) => {
+					pushed = true;
+					receive(next);
+				};
+				const unsubscribe = device
+					? window.omp.schedules.onHostState((from, next) => {
+							if (from === device) push(next);
+						})
+					: window.omp.schedules.onState(push);
+				stop = () => {
+					pushed = true;
+					unsubscribe();
+				};
+				void window.omp.schedules
+					.command({ action: "get" }, device)
+					.then(next => {
+						if (!pushed) receive(next);
+					})
+					.catch(() => {});
+			}
+			return () => {
+				listeners.delete(changed);
+				if (listeners.size === 0) {
+					stop?.();
+					state = EMPTY;
+				}
+			};
+		},
+	};
+	feeds.set(device, feed);
+	return feed;
+}
+
+export function useSchedulesOf(device: string | undefined, enabled = true): SchedulesState {
+	const feed = useMemo(() => (enabled ? schedulesFeed(device) : emptyFeed), [device, enabled]);
+	return useSyncExternalStore(feed.subscribe, feed.read);
 }
 
 /**

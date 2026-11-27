@@ -2740,6 +2740,95 @@ async fn an_answer_names_its_question_and_a_resent_comment_posts_once() {
 }
 
 #[tokio::test]
+async fn bot_self_decision_closes_inbox_but_does_not_authorize_dependents() {
+    let root = Scratch::new();
+    let (control, _, bot_id) = ada(&root, Mails::default(), |_, _| None).await;
+    let tool = |args: Value| control.run("bot1", "ompdesk_item", args, None);
+    assert!(
+        !tool(json!({"action":"add","title":"Ship the fix"}))
+            .await
+            .is_error
+    );
+    let mut previous = None;
+    for (action, kind, reason) in [
+        ("withdraw", "withdrawn", "Upstream removed this target."),
+        (
+            "self_decide",
+            "self_decided",
+            "The release policy specifies Current.",
+        ),
+    ] {
+        let out =
+            tool(json!({"action":"set","item":"1","ask":"Proceed?","options":["proceed"]})).await;
+        let item = control.items().find(&bot_id, "1").cloned().unwrap();
+        let question = item.question.as_ref().unwrap().id;
+        assert!(out.text.contains(&format!("[question {question}]")));
+        if let Some(old) = previous {
+            let stale =
+                tool(json!({"action":action,"item":"1","question":old,"note":reason})).await;
+            assert!(stale.is_error);
+            let reply = control
+                .bots_command(json!({
+                    "action":"item","id":item.id,"answer":{"question":old,"text":"proceed"}
+                }))
+                .await
+                .unwrap();
+            assert_eq!(reply["refused"], "question_changed");
+        }
+        let empty = tool(json!({"action":action,"item":"1","question":question,"note":" "})).await;
+        assert!(empty.is_error);
+        assert_eq!(control.items().get(&item.id).unwrap().version, item.version);
+        let out = tool(json!({"action":action,"item":"1","question":question,"note":reason})).await;
+        assert!(!out.is_error, "{}", out.text);
+        let settled = control.items().get(&item.id).cloned().unwrap();
+        assert_eq!(settled.status, "working");
+        assert!(settled.question.is_none());
+        let event = settled
+            .events
+            .iter()
+            .find(|e| e.question == Some(question))
+            .unwrap();
+        assert_eq!(event.kind, kind);
+        assert_eq!(event.actor, "bot");
+        assert_eq!(event.text.as_deref(), Some(reason));
+        assert!(!settled.events.iter().any(|e| e.kind == "answered"));
+        let late = control
+            .bots_command(json!({
+                "action":"item","id":item.id,"answer":{"question":question,"text":"proceed"}
+            }))
+            .await
+            .unwrap();
+        assert_eq!(late["refused"], "question_changed");
+        assert_eq!(
+            control.items().get(&item.id).unwrap().version,
+            settled.version
+        );
+        previous = Some(question);
+    }
+    tool(json!({"action":"set","item":"1","ask":"Proceed?","options":["proceed"]})).await;
+    let item = control.items().find(&bot_id, "1").cloned().unwrap();
+    let question = item.question.unwrap().id;
+    let reply = control
+        .bots_command(json!({
+            "action":"item","id":item.id,"answer":{"question":question,"choice":0}
+        }))
+        .await
+        .unwrap();
+    assert!(reply.get("refused").is_none());
+    let stored = control.items().get(&item.id).cloned().unwrap();
+    assert!(stored.question.is_none());
+    let allowed = stored
+        .events
+        .iter()
+        .find(|event| event.kind == "answered")
+        .unwrap();
+    assert_eq!(allowed.actor, "owner");
+    assert_eq!(allowed.question, Some(question));
+    assert_ne!(allowed.question, previous);
+    assert_eq!(allowed.text.as_deref(), Some("proceed"));
+}
+
+#[tokio::test]
 async fn a_move_of_several_items_is_one_mail_and_waiting_says_what_it_waits_on() {
     let root = Scratch::new();
     let mails = Mails::default();

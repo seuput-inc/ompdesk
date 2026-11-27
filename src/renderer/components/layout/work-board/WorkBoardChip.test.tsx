@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "../../../lib/i18n";
 import { EMPTY_TURN_METER } from "../../../lib/turn-meter";
 import { useAutopilotStore } from "../../../stores/autopilot";
-import { useExtensionUiStore } from "../../../stores/extension-ui";
 import { useMessagesStore } from "../../../stores/messages";
 import { useModelWaitTogetherStore } from "../../../stores/model-wait-together";
 import { useSessionStore } from "../../../stores/session";
@@ -14,6 +13,7 @@ import { useSubagentsStore } from "../../../stores/subagents";
 import { useTabsStore } from "../../../stores/tabs";
 import { useTodoStore } from "../../../stores/todo";
 import { useToolsStore } from "../../../stores/tools";
+import { showBoardRequests } from "./question-fixture";
 
 // The back gesture itself is lib/back-layer's (its own test); here only what a layer's close does to the strip.
 const backLayer = vi.hoisted(() => ({ close: null as (() => void) | null }));
@@ -69,7 +69,7 @@ afterEach(async () => {
 	container.remove();
 	useTodoStore.getState().reset();
 	useSubagentsStore.getState().reset();
-	useExtensionUiStore.setState({ pendingRequests: [] });
+	showBoardRequests();
 	useToolsStore.getState().reset();
 });
 
@@ -229,15 +229,12 @@ describe("WorkBoardChip, the phone's work strip", () => {
 
 	it("says the figure Needs you counts, ahead of the plan's progress", async () => {
 		useTodoStore.getState().setPhases([{ name: "Fix", tasks: [{ content: "Reproduce", status: "in_progress" }] }]);
-		for (const id of ["c1", "c2"])
-			useExtensionUiStore
-				.getState()
-				.pushRequest({ type: "extension_ui_request", id, method: "confirm", title: "Go?", message: "" });
+		showBoardRequests({ id: "c1", kind: "input", label: "Go?" }, { id: "c2", kind: "input", label: "Continue?" });
 		await mount();
 		const strip = container.querySelector("[data-work-chip]");
 		expect(strip?.querySelector('[role="status"]')?.textContent).toBe("2 need you");
 		expect(strip?.getAttribute("data-state")).toBe("waiting");
-		await act(async () => useExtensionUiStore.setState({ pendingRequests: [] }));
+		await act(async () => showBoardRequests());
 		expect(strip?.querySelector('[role="status"] .sr-only')?.textContent).toBe("0 of 1 done");
 	});
 

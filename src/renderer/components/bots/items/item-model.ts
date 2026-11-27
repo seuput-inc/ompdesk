@@ -226,15 +226,29 @@ export function decisionsOf(question: ItemQuestion): ItemDecision[] {
 	return [{ question: question.text, options: question.options, recommended: question.recommended }];
 }
 
+/** A written answer or the option labels picked for one decision. Keep labels containing commas intact. */
+export type DecisionAnswer = string | string[] | null;
+
+export function withRecommendations(question: ItemQuestion, answers: readonly DecisionAnswer[]): DecisionAnswer[] {
+	return decisionsOf(question).map((decision, index) => {
+		const option = decision.recommended === undefined ? undefined : decision.options[decision.recommended];
+		if (!option) return answers[index] ?? null;
+		const prior = answers[index];
+		if (decision.multi && Array.isArray(prior)) return prior.includes(option) ? prior : [...prior, option];
+		return [option];
+	});
+}
+
 /**
  * The one comment several answers are sent as: with several questions a line `Question → answer` per answered one, in
  * the ask's order; with one, the answer alone. Null when nothing is answered.
  */
-export function answersText(question: ItemQuestion, answers: readonly (string | null)[]): string | null {
+export function answersText(question: ItemQuestion, answers: readonly DecisionAnswer[]): string | null {
 	const decisions = decisionsOf(question);
 	const several = decisions.length > 1;
 	const lines = decisions.flatMap((decision, index) => {
-		const words = answers[index]?.trim();
+		const answer = answers[index];
+		const words = (Array.isArray(answer) ? answer.join(", ") : answer)?.trim();
 		if (!words) return [];
 		return [several ? `${questionLine(decision.question)} → ${words}` : words];
 	});
@@ -245,7 +259,7 @@ export function answersText(question: ItemQuestion, answers: readonly (string | 
 
 /** Events that read as a card (words someone wrote); every other kind is one muted line between them. */
 export function isCommentEvent(event: ItemEvent): boolean {
-	return event.kind === "commented" || event.kind === "asked" || event.kind === "answered";
+	return ["commented", "asked", "answered", "withdrawn", "self_decided"].includes(event.kind);
 }
 
 /** A status event that moved a closed item back to an open one. */

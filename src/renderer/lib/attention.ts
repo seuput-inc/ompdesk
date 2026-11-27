@@ -5,8 +5,6 @@
  * is not here: the agent fixes it, and the work card's verdict carries it (the owner's call, 27 Oct 2026).
  */
 
-import { type ExtensionUiStore, isApprovalRequest, isUserBlockingRequest } from "../stores/extension-ui";
-
 /** A prompt of the session's own: a tool approval or a plan up for review, else a question. */
 export type AskKind = "question" | "approval";
 
@@ -47,13 +45,6 @@ export function sessionWorking(session: {
 	retryInfo: object | null;
 }): boolean {
 	return session.isStreaming || session.isCompacting || session.retryInfo !== null;
-}
-
-/** The session's own prompts: its blocking requests (a sign-in's own left out). */
-export function pendingAsks(extensionUi: Pick<ExtensionUiStore, "pendingRequests" | "loginRequestIds">): AskKind[] {
-	return extensionUi.pendingRequests
-		.filter(request => isUserBlockingRequest(extensionUi, request))
-		.map((request): AskKind => (isApprovalRequest(request) ? "approval" : "question"));
 }
 
 /** The locale key of each kind's one wording. */

@@ -388,6 +388,8 @@ impl Ctx {
                     self.send_view_question(chat, &frame["request"]);
                 }
                 self.send(wins, "EXTENSION_UI", frame);
+                // The request is now owner-visible on a different tab, even when that tab is not shown.
+                self.on_running_change().await?;
                 Ok(true)
             }
             Next::Owner(seq, request, kinds) => {
@@ -434,10 +436,21 @@ impl Ctx {
     // ---- requests -----------------------------------------------------------------------------------------------
 
     /// `#holdRequest`: route a blocking request back to the tab that raised it, keeping its body for a reloaded page.
-    pub(super) fn hold_request(pool: &mut Pool, seq: u64, request: &Value, kinds: Kinds) {
+    pub(super) fn hold_request(
+        pool: &mut Pool,
+        seq: u64,
+        request: &Value,
+        kinds: Kinds,
+        label: &Value,
+    ) {
         let Some(id) = request["id"].as_str().map(str::to_string) else {
             return;
         };
+        let asked_at = pool
+            .request_bodies
+            .get(&id)
+            .filter(|_| pool.request_owners.get(&id) == Some(&seq))
+            .map_or(pool.now, |held| held.asked_at);
         pool.request_owners.insert(id.clone(), seq);
         let stale: Vec<String> = pool
             .request_bodies
@@ -463,6 +476,8 @@ impl Ctx {
             Held {
                 request: request.clone(),
                 kinds,
+                label: label.as_str().unwrap_or_default().to_owned(),
+                asked_at,
             },
         );
         let active = pool.by_seq(seq).is_some_and(Entry::signin_active);

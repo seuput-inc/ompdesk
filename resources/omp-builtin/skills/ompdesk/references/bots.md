@@ -31,6 +31,10 @@ A bot by name: `ompdesk_session_send {"session":"bot:<name>"}` reaches its home 
 - `link` — `item` and one of `url`, `file`, `session`, `pr`.
 - `list` — `status` (open ones by default). `show` — `item`.
 
+Post the choice on the item, for example `{"action":"set","item":"3","ask":"Which release should get the fix?","options":["Current","Next"],"recommended":0}`. Continue unrelated work. A recommendation is not the owner's consent.
+
+If the question no longer applies, use `{"action":"withdraw","item":"3","question":17,"note":"The upstream fix removed the affected release."}`. If evidence or an existing owner instruction settles it, use `{"action":"self_decide","item":"3","question":17,"note":"Targeting Current because the release policy requires this fix before shipping."}`. Use the question id from `set`, `show`, or `list`. Both actions leave the item working and record your note under your name, not as an owner answer. If refused because the question changed, read the item again. Never guess an owner-only choice.
+
 Code work goes to sessions: `ompdesk_session_open {"message": …, "item": 3, "folder": <project>}` links each session it opens to the item and a planned item becomes working; a project folder in git opens in a worktree of its own unless you pass `worktree: false`. While every linked session waits for a usage limit the item says until when, and the item's Activity shows each linked session's done or blocked report. The owner's changes to an item reach you as quiet notes, once each; several items the owner moves at once are one note. A snooze alone is not sent.
 
 ## `ompdesk_room` (a bot's chat only)

@@ -59,6 +59,7 @@ import {
 	BLOCKING_UI_METHODS,
 	type ExtensionUIRequest,
 	type HostToolCallRequest,
+	isSignInRequest,
 	type PromptResultFrame,
 	type RpcCommand,
 	type RpcResponse,
@@ -68,7 +69,13 @@ import {
 	type SubagentFrame,
 } from "../../shared/rpc-types";
 import type { SchedulesState } from "../../shared/schedules";
-import { failureOf, type SummaryAsk, type SummaryDelta, unsavedSessionKey } from "../../shared/session-summary";
+import {
+	failureOf,
+	requestHeadline,
+	type SummaryDelta,
+	type SummaryRequest,
+	unsavedSessionKey,
+} from "../../shared/session-summary";
 import type { SidebarProjectsState } from "../../shared/sidebar-projects";
 import type { TerminalOperation } from "../../shared/terminal-types";
 import { isApprovalSelect } from "../../shared/tool-approval";
@@ -445,7 +452,7 @@ interface HostTab extends RunTracking {
 	 * Open asks and approvals the device has not answered, by request id, as the omp raised them:
 	 * every `tab.open` re-sends them (`openAsks`), since the device missed whatever changed while away.
 	 */
-	asks: Map<string, ExtensionUIRequest>;
+	asks: Map<string, { request: ExtensionUIRequest; summary?: SummaryRequest }>;
 	/**
 	 * Host tool calls and URI reads the omp waits on, by request id: stock never times one out, so a call that reached
 	 * no device (made while it was away, or held by a device process that quit) would hold the turn for good. `tab.open`
@@ -1094,9 +1101,8 @@ export class LocalHostServices implements HostServices {
 			const facts = (): SummaryFacts | null => {
 				const { sidecar } = tab;
 				const status = tab.run.running && sidecar.status === "ready" ? "running" : sidecar.status;
-				let ask: SummaryAsk | undefined;
-				for (const request of tab.asks.values())
-					if (ask !== "approval") ask = isApprovalSelect(request) ? "approval" : "input";
+				const requests = Array.from(tab.asks.values()).flatMap(held => held.summary ?? []);
+				const ask = requests.some(request => request.kind === "approval") ? "approval" : requests[0]?.kind;
 				const failure = sidecar.statusPayload ? failureOf(sidecar.statusPayload) : undefined;
 				return {
 					// A tab whose omp has named no file yet: under the device's own tab id, which its view looks it up by.
@@ -1108,7 +1114,7 @@ export class LocalHostServices implements HostServices {
 					...(status === "running" && runSettling(tab.run) ? { settling: true as const } : {}),
 					...(tab.run.compacting === true ? { compacting: true as const } : {}),
 					...(status === "running" && tab.run.since !== undefined ? { since: tab.run.since } : {}),
-					...(ask ? { ask } : {}),
+					...(ask ? { ask, requests } : {}),
 					...(tab.awaitingConnection ? { awaitingConnection: true as const } : {}),
 					...(tab.waitsForDevice ? { waitsForDevice: tab.origin.name } : {}),
 					...(status === "error" && sidecar.statusPayload?.sessionHeld ? { sessionHeld: true as const } : {}),
@@ -1222,7 +1228,7 @@ export class LocalHostServices implements HostServices {
 			// A device's tab here has no cut-off row: the resume offers only a window's own tab (interrupted-work.md).
 			cutOff: () => {},
 			snapshot: () => ({
-				asks: [...tab.asks.values()],
+				asks: Array.from(tab.asks.values(), held => held.request),
 				...(tab.sessionId === undefined ? {} : { sessionId: tab.sessionId }),
 				...(tab.title ? { title: tab.title } : {}),
 				...(tab.autoTitle ? { autoTitle: tab.autoTitle } : {}),
@@ -2332,7 +2338,11 @@ export class LocalHostServices implements HostServices {
 			this.#emit(existing, "signIn", { active: [...(existing.signIns ?? [])] } satisfies TabSignInArg);
 			// The asks the device still shows may be gone (the omp restarted or withdrew them meanwhile),
 			// and the omp may have raised others: the whole open list replaces the device's.
-			this.#emit(existing, "openAsks", [...existing.asks.values()]);
+			this.#emit(
+				existing,
+				"openAsks",
+				Array.from(existing.asks.values(), held => held.request),
+			);
 			// The device's waiting row and retry countdown may date from before it lost this computer.
 			this.#emit(existing, "awaitingConnection", existing.awaitingConnection === true);
 			this.#emit(existing, "scheduledRetry", scheduledRetryArg(existing.scheduledRetry));
@@ -2524,7 +2534,7 @@ export class LocalHostServices implements HostServices {
 			cancelWait: () => this.#resume?.cancelWait(tab.resumeId),
 			cutOff: () => {},
 			snapshot: () => ({
-				asks: [...tab.asks.values()],
+				asks: Array.from(tab.asks.values(), held => held.request),
 				...(tab.sessionId === undefined ? {} : { sessionId: tab.sessionId }),
 				...(tab.title ? { title: tab.title } : {}),
 				...(tab.autoTitle ? { autoTitle: tab.autoTitle } : {}),
@@ -2611,7 +2621,7 @@ export class LocalHostServices implements HostServices {
 			tab.viewing = view.of;
 			// The window's omp may hold asks already: the device's tab gets them as its open set.
 			sidecar.on("openAsks", (asks: ExtensionUIRequest[]) => {
-				for (const ask of asks) tab.asks.set(ask.id, ask);
+				for (const ask of asks) tab.asks.set(ask.id, { request: ask });
 				this.#emit(tab, "openAsks", asks);
 			});
 			// The connection wait and scheduled retry of the tab it views (a window's: the pool's
@@ -2801,7 +2811,19 @@ export class LocalHostServices implements HostServices {
 		});
 		sidecar.on("extensionUi", (request: ExtensionUIRequest) => {
 			const asks = BLOCKING_UI_METHODS[request.method] === true;
-			if (asks) tab.asks.set(request.id, request);
+			if (asks) {
+				// A sign-in's input stays on its tab: never publish its wording or id.
+				const summary: SummaryRequest | undefined =
+					!tab.viewing && !(tab.signIns?.length && isSignInRequest(request))
+						? {
+								id: request.id,
+								kind: isApprovalSelect(request) ? "approval" : "input",
+								label: requestHeadline(request),
+								askedAt: tab.asks.get(request.id)?.summary?.askedAt ?? Date.now(),
+							}
+						: undefined;
+				tab.asks.set(request.id, { request, summary });
+			}
 			// omp withdrew the request (timeout, abort): no answer will follow.
 			if (asks || (request.method === "cancel" && tab.asks.delete(request.targetId))) this.#resume?.sync();
 			// The browser page of a sign-in a device runs here: its callback is what that device's browser may bring back.

@@ -578,7 +578,16 @@ fn build_bot(p: &Parsed) -> Result<Built, String> {
 }
 
 const ITEM_ACTIONS: &[&str] = &[
-    "add", "set", "comment", "done", "cancel", "link", "list", "show",
+    "add",
+    "set",
+    "withdraw",
+    "self_decide",
+    "comment",
+    "done",
+    "cancel",
+    "link",
+    "list",
+    "show",
 ];
 const ITEM_STATUSES: &[&str] = &[
     "planned",
@@ -616,6 +625,7 @@ fn build_item(p: &Parsed) -> Result<Built, String> {
                 "snooze-until",
             ],
         ),
+        "withdraw" | "self_decide" => action_shape(p, "item", &["ITEM"], &["question", "note"]),
         "comment" => action_shape(p, "item", &["ITEM", "TEXT"], &[]),
         "done" | "cancel" => action_shape(p, "item", &["ITEM"], &["note"]),
         "link" => action_shape(p, "item", &["ITEM"], ITEM_LINKS),
@@ -649,6 +659,7 @@ fn build_item(p: &Parsed) -> Result<Built, String> {
         &mut a,
         &[
             "recommended",
+            "question",
             "wait",
             "until",
             "snooze-until",
@@ -936,7 +947,7 @@ pub static SPECS: &[Spec] = &[
     },
     Spec {
         name: "item",
-        usage: "item ACTION [ARGS]; ACTION is add TITLE [--description D|-] [--done-means D] [--status S] | set ITEM [--status S] [--title T] [--description D|-] [--ask Q] [--option O]... [--recommended N] [--wait W] [--until ISO] [--snooze-until ISO] | comment ITEM TEXT|- | done ITEM [--note N] | cancel ITEM [--note N] | link ITEM --url U|--file F|--session S|--pr P | list [--status S] | show ITEM",
+        usage: "item ACTION [ARGS]; ACTION is add TITLE [--description D|-] [--done-means D] [--status S] | set ITEM [--status S] [--title T] [--description D|-] [--ask Q] [--option O]... [--recommended N] [--wait W] [--until ISO] [--snooze-until ISO] | withdraw ITEM --question ID --note WHY | self_decide ITEM --question ID --note DECISION | comment ITEM TEXT|- | done ITEM [--note N] | cancel ITEM [--note N] | link ITEM --url U|--file F|--session S|--pr P | list [--status S] | show ITEM",
         summary: "A bot's work items (ompdesk_item); ITEM is its number or id, S planned, working, waiting, needs_you, done or canceled.",
         flags: &[
             ("description", S),
@@ -946,6 +957,7 @@ pub static SPECS: &[Spec] = &[
             ("ask", S),
             ("option", M),
             ("recommended", N),
+            ("question", N),
             ("wait", S),
             ("until", S),
             ("snooze-until", S),

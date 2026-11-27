@@ -39,7 +39,6 @@ import {
 	X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { type WaitingAsker, waitingAskers } from "../../../shared/bot-connectors";
 import {
 	type Bot,
 	type BotFile,
@@ -48,14 +47,13 @@ import {
 	type Item,
 	itemsNeedingYou,
 } from "../../../shared/bots";
-import type { AskKind } from "../../lib/attention";
+import { openInboxRow, useQuestionInbox } from "../../hooks/use-question-inbox";
 import { handToTab } from "../../lib/composer-handoff";
 import { formatClock } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { openExternal } from "../../lib/open-external";
-import { sessionRun } from "../../lib/session-run";
+import type { QuestionRow } from "../../lib/question-inbox";
 import { useBotsStore } from "../../stores/bots";
-import { tabSummary, useHostedSessionsStore } from "../../stores/hosted-sessions";
 import { useRuntimeTabId } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
 import { toast, toastError } from "../../stores/toast";
@@ -76,13 +74,7 @@ import {
 import { BotActionsMenu } from "./BotActionsMenu";
 import { BotAvatar } from "./BotAvatar";
 import { BotLineText } from "./BotLineText";
-import {
-	type BotAutomation,
-	botAutomations,
-	isBotSchedule,
-	turnedOffAfterFailures,
-	useSchedulesOf,
-} from "./bot-automations";
+import { type BotAutomation, botAutomations, turnedOffAfterFailures, useSchedulesOf } from "./bot-automations";
 import { type LaunchStep, openBotChat, retryKickoff, useBotLaunch } from "./bot-launch";
 import { openBotPage } from "./bot-page";
 import { openItem } from "./items/item-store";
@@ -222,7 +214,7 @@ function BotFirstScreen({ bot }: { bot: Bot }) {
 
 interface NeedRow {
 	key: string;
-	kind: AskKind | "item";
+	kind: QuestionRow["source"];
 	title: string;
 	detail: string;
 	open: () => void;
@@ -231,58 +223,42 @@ interface NeedRow {
 function NeedsYou({ bot }: { bot: Bot }) {
 	const t = useT();
 	const items = useBotsStore(s => s.state.items);
-	const tabs = useTabsStore(s => s.tabs);
-	const summaries = useHostedSessionsStore(s => s.summaries);
-	const schedules = useSchedulesOf(bot.device);
+	const inbox = useQuestionInbox().filter(row => row.bot?.id === bot.id && row.device === bot.device);
 	const [all, setAll] = useState(false);
-	const askers = bot.device
-		? []
-		: waitingAskers(
-				schedules.schedules.filter(schedule => isBotSchedule(bot, schedule)),
-				schedules.asking,
-			);
-	const chats = [bot.home, ...bot.sessions.filter(session => session !== bot.home)].filter(
-		(session): session is string => Boolean(session),
-	);
-	const asks: NeedRow[] = chats.flatMap(session => {
-		const tab = tabs.find(entry => entry.sessionPath === session && !entry.device);
-		const run = sessionRun(tabSummary({ summaries }, tab ?? { id: "", sessionPath: session }), tab?.unreadDone);
-		if (!run.ask) return [];
-		const title = session === bot.home ? t("bots.chats.home") : (tab?.title ?? t("bots.chats.untitled"));
-		return [
-			{
-				key: session,
-				kind: run.ask,
-				title,
-				detail: run.ask === "approval" ? t("bots.needs.approval") : t("bots.needs.question"),
-				open: () => void openBotChat(bot, session).catch(() => {}),
-			},
-		];
-	});
-	const rows: NeedRow[] = [
-		...asks.toSorted((a, b) => Number(b.kind === "approval") - Number(a.kind === "approval")),
-		...itemsNeedingYou(
-			items.filter(item => item.bot === bot.id),
-			null,
-			Date.now(),
-		).map(
-			(item): NeedRow => ({
+	const askers = inbox.filter(row => row.source === "access");
+	const rows: NeedRow[] = inbox
+		.filter(row => row.source !== "access")
+		.map(row => ({
+			key: row.key,
+			kind: row.source,
+			title: row.title,
+			detail: row.detail,
+			open: () => void openInboxRow(row),
+		}));
+	// An item can be marked Needs you without a question. Keep it here, not in the question inbox.
+	for (const item of itemsNeedingYou(items, null, Date.now())) {
+		if (!item.question && !item.closedAt && item.bot === bot.id && item.device === bot.device)
+			rows.push({
 				key: item.id,
 				kind: "item",
 				title: item.title,
-				detail: item.question?.text ?? t("bots.needs.item"),
+				detail: t("bots.needs.item"),
 				open: () => showItem(bot, item),
-			}),
-		),
-	];
+			});
+	}
+	rows.sort(
+		(a, b) =>
+			Number(b.kind === "approval") - Number(a.kind === "approval") ||
+			Number(a.kind === "item") - Number(b.kind === "item"),
+	);
 	// Approvals never fold away (Orca's BotNeedsYouSection).
 	const approvals = rows.filter(row => row.kind === "approval").length;
 	const shown = all ? rows : rows.slice(0, Math.max(ROWS, approvals));
 	return (
 		<section aria-label={t("bots.needs.title")} className="flex flex-col gap-1" data-bot-needs-you>
 			<SectionLabel count={rows.length + askers.length}>{t("bots.needs.title")}</SectionLabel>
-			{askers.map(waiting => (
-				<AccessAsk bot={bot} key={`${waiting.connector.schedule.id}:${waiting.asker.person}`} waiting={waiting} />
+			{askers.map(row => (
+				<AccessAsk key={row.key} row={row} />
 			))}
 			{rows.length === 0 ? (
 				askers.length === 0 && <EmptyState size="row" title={t("bots.needs.none")} />
@@ -319,15 +295,15 @@ function NeedsYou({ bot }: { bot: Bot }) {
 const SUGGESTIONS_SHOWN = 3;
 
 /** Someone who asked the bot through a connector without being on its list: Allow adds them, Decline stops asking. */
-function AccessAsk({ bot, waiting }: { bot: Bot; waiting: WaitingAsker }) {
+function AccessAsk({ row }: { row: Extract<QuestionRow, { source: "access" }> }) {
 	const t = useT();
 	const [busy, setBusy] = useState(false);
-	const { connector, asker } = waiting;
-	const service = t(`bots.connectors.service.${connector.service}`);
+	const { person: asker, scheduleId } = row;
+	const service = t(`bots.connectors.service.${row.service}`);
 	const answer = (allow: boolean) => {
 		setBusy(true);
 		window.omp.schedules
-			.command({ action: "answerAsker", id: connector.schedule.id, person: asker.person, allow })
+			.command({ action: "answerAsker", id: scheduleId, person: asker.person, allow })
 			.then(() => {
 				setBusy(false);
 				if (allow) toast({ variant: "success", message: t("bots.needs.accessAllowed", { name: asker.name }) });
@@ -357,11 +333,11 @@ function AccessAsk({ bot, waiting }: { bot: Bot; waiting: WaitingAsker }) {
 					</Button>
 				</>
 			}
-			description={t("bots.needs.accessDetail", { service, name: bot.name })}
+			description={row.detail}
 			leading={<StatusDot decorative tone="attention" />}
-			rowProps={{ "data-bot-access-ask": connector.service }}
+			rowProps={{ "data-bot-access-ask": row.service }}
 			size="sm"
-			title={t("bots.needs.access", { name: asker.name, service })}
+			title={row.title}
 		/>
 	);
 }

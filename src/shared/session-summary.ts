@@ -5,13 +5,41 @@
  * receive: it holds this computer's summaries at a version and applies the next change on it, or reads them whole
  * when it holds none or missed a change. Dependency-free: main, the renderer and the paired link share it.
  */
-import type { AgentSource, SidecarRestartProgress, SubagentSnapshot } from "./rpc-types";
+import type { AgentSource, ExtensionUIRequest, SidecarRestartProgress, SubagentSnapshot } from "./rpc-types";
 
 /** A tab's status as a row reads it: the sidecar's, `running` while a turn or its background work runs. */
 export type SummaryStatus = "asleep" | "starting" | "ready" | "running" | "exited" | "error" | "restarting" | "waiting";
 
+/** A connecting, restarting, failed or exited session has no actionable live request. */
+export function isSessionDown(tab: { status: string }): boolean {
+	return tab.status === "starting" || tab.status === "restarting" || tab.status === "error" || tab.status === "exited";
+}
+
 /** What the session waits on: a tool or plan approval, or any other answer (an ask, a confirmation, a text field). */
 export type SummaryAsk = "approval" | "input";
+
+/** The only request facts shared with every session list. Never forward form HTML, input defaults, URLs or tool arguments. */
+export interface SummaryRequest {
+	id: string;
+	kind: SummaryAsk;
+	label: string;
+	askedAt: number;
+}
+
+export function requestHeadline(request: ExtensionUIRequest): string {
+	let text: string | undefined;
+	switch (request.method) {
+		case "ask":
+			text = request.questions?.[0]?.question || request.questions?.[0]?.header;
+			break;
+		case "select":
+		case "confirm":
+		case "input":
+		case "editor":
+			text = request.title;
+	}
+	return typeof text === "string" ? (text.split("\n", 1)[0]?.trim().slice(0, 240) ?? "") : "";
+}
 
 /**
  * One subagent the row lists (running, waiting, failed): finished ones are never listed, so the summary leaves them
@@ -79,6 +107,8 @@ export interface SessionSummary {
 	/** When the running turn started (the building computer's clock). */
 	since?: number;
 	ask?: SummaryAsk;
+	/** All owner-facing requests, in the order raised. Older hosts supply only `ask`. */
+	requests?: SummaryRequest[];
 	/** The turn waits for the internet connection (turn-resume.ts). */
 	awaitingConnection?: true;
 	/**

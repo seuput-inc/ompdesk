@@ -1,3 +1,4 @@
+import { isSessionDown } from "../../shared/session-summary";
 import type { SessionTab } from "../stores/tabs";
 import { ATTENTION_LABEL_KEY } from "./attention";
 
@@ -19,14 +20,6 @@ export function isSessionHeld(tab: { status: string; sessionHeld?: boolean }): b
 /** The tab failed: an `error` that is no held session. */
 export function isTabFailed(tab: { status: string; sessionHeld?: boolean }): boolean {
 	return tab.status === "error" && !isSessionHeld(tab);
-}
-
-/**
- * The session is not up: connecting, restarting, failed, exited (a held session too). Its own state outranks what it
- * needs from the person on the title bar and the sidebar row, as the tray already says it.
- */
-export function isSessionDown(tab: { status: string }): boolean {
-	return tab.status === "starting" || tab.status === "restarting" || tab.status === "error" || tab.status === "exited";
 }
 
 /** A tab's signal; any tab-shaped state works (the sidebar's row of a paired device's tab on this computer too). */
