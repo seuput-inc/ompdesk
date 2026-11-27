@@ -264,8 +264,32 @@ test(renameOnReopen, { tag: "@smoke" }, async () => {
 
 	const sender = (await page.evaluate(cwd => window.omp.tabs.spawn({ cwd }), renamed.folder))?.tabId ?? "";
 	await expect.poll(async () => (await tabs()).find(tab => tab.tabId === sender)?.status).toBe("ready");
-	await prompt(sender, "Start the sender chat.");
-	await untilAnswered(page, sender, { after: "Start the sender chat." });
+	const start = "Start the sender chat.";
+	expect(await prompt(sender, start)).toMatchObject({ success: true });
+	// A first-run bot answers the owner's task, not necessarily with the generic fixture reply.
+	await expect
+		.poll(
+			async () => {
+				const tab = (await tabs()).find(tab => tab.tabId === sender);
+				if (tab?.status !== "ready" || !tab.sessionPath || !tab.lastRun) return tab?.status;
+				expect(tab.cwd).toBe(renamed.folder);
+				expect(path.dirname(tab.sessionPath)).toBe(path.dirname(session));
+				expect(tab.sessionPath).not.toBe(session);
+				return (await fs.readFile(tab.sessionPath, "utf8"))
+					.trimEnd()
+					.split("\n")
+					.map(line => JSON.parse(line))
+					.flatMap(entry =>
+						entry.type === "message" && ["user", "assistant"].includes(entry.message.role) ? [entry.message] : [],
+					)
+					.slice(-2);
+			},
+			{ timeout: 30_000 },
+		)
+		.toMatchObject([
+			{ role: "user", content: [{ type: "text", text: start }] },
+			{ role: "assistant", content: [{ type: "text", text: expect.stringMatching(/\S/) }] },
+		]);
 	const note = "The renamed bot sent this.";
 	const sent = await page.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
 		sender,
