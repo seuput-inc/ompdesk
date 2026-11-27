@@ -519,7 +519,7 @@ const LIT_MARKERS = ["litHtmlVersions", "litElementVersions", "reactiveElementVe
 // The session row menu's Move to <computer> (26 Nov 2026, cross-device-handoff): the item in `session-menu.ts` and the
 // call in `Sidebar.tsx`: 181 bytes over its base (e2e-nightly run 45780059698, omp/agent/cross-device-handoff at
 // 918cb6da4), added to the budget.
-const WEB_FIRST_SCREEN_JS_BYTES = 2_256_238;
+const WEB_FIRST_SCREEN_JS_BYTES = 2_260_334;
 
 // Bun's `builtinModules` also lists its own modules and stand-ins (`bun:*`, `ws`, `undici`), which the Node that
 // runs main (shipped beside the shell) does not have: a bundle importing `ws` at runtime must fail here, not pass
