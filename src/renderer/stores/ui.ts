@@ -45,7 +45,8 @@ export const CLOSED_FILE_VIEW: Pick<
  * What the side panel shows: a session view or one subagent's transcript (`panelSubagent`). The subagent view stays
  * out of `PANEL_TABS`, which feeds the default-view setting and the `panel.*` shortcuts.
  */
-export type PanelView = PanelTab | "subagent";
+export type InspectorTab = PanelTab | "agents" | "checks" | "bot-home" | "bot-connectors" | "bot-chats";
+export type PanelView = InspectorTab | "subagent";
 export type ChangesMode = "repository" | "commits" | "current" | "timeline" | "artifacts";
 /** The subagent the side panel shows: its owning tab (whose omp writes its session) and its id. */
 export interface PanelSubagent {
@@ -287,7 +288,7 @@ interface UiStore {
 	toggleSidebar: () => void;
 	togglePanel: () => void;
 	toggleToolsExpandAll: () => void;
-	setPanelTab: (tab: PanelTab) => void;
+	setPanelTab: (tab: InspectorTab) => void;
 	/** Show one subagent's transcript in the side panel (a dragged or menu-opened sidebar row). */
 	openSubagentPanel: (subagent: PanelSubagent) => void;
 	/** Show the work board of the pane holding `tabId` (the composer chip's and the dock's "show the run"). */
@@ -473,7 +474,7 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 	displayPreferences: {},
 	sidebarVisible: readSidebarVisible(),
 	panelVisible: false,
-	panelTab: "diff",
+	panelTab: "files",
 	panelSubagent: null,
 	changesMode: "repository",
 	setChangesMode: changesMode => set({ changesMode }),

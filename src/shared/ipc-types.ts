@@ -1512,6 +1512,11 @@ export interface IpcGetLaunchProfilePayload {
 // Workspace Filesystem Types
 // ============================================================================
 
+export interface ExplorerFilters {
+	hideDotfiles: boolean;
+	showIgnored: boolean;
+}
+
 export interface IpcFsListPayload {
 	/** Visible tab whose workspace roots this operation. */
 	tabId?: string;
@@ -1521,6 +1526,7 @@ export interface IpcFsListPayload {
 	maxDepth?: number;
 	/** Max number of files to include before truncating. */
 	maxEntries?: number;
+	filters?: ExplorerFilters;
 }
 
 /** The most files one fs:list walk returns; a larger `maxEntries` is cut to it. The `@` list asks for all of it. */
@@ -2958,7 +2964,13 @@ export interface OmpApi {
 		update(action: HostUpdateAction, device?: string): Promise<HostDesktopState>;
 	};
 	fs: {
-		list(path?: string, maxDepth?: number, maxEntries?: number, tabId?: string): Promise<IpcFsListResult>;
+		list(
+			path?: string,
+			maxDepth?: number,
+			maxEntries?: number,
+			tabId?: string,
+			filters?: ExplorerFilters,
+		): Promise<IpcFsListResult>;
 		read(path: string, maxBytes?: number, tabId?: string): Promise<IpcFsReadResult>;
 		stat(path: string, tabId?: string): Promise<IpcFsStatResult>;
 		mutate(mutation: IpcFsMutation, tabId?: string): Promise<IpcFsMutateResult>;

@@ -12,6 +12,7 @@ import {
 	installedVersion,
 } from "./fixture/version-summary-release";
 import { type Look, touchLook } from "./responsive-audit";
+import { selectInspectorView } from "./select-inspector-view";
 
 /** A control's words in the look's language, so a Korean look finds by name what an English one does. */
 const say = (look: Look, key: string): string => {
@@ -292,16 +293,12 @@ async function ui(page: Page, action: string, ...args: unknown[]): Promise<void>
  * panel button when the panel is closed, then the view's button (the panel's top bar; a phone's tab bar at its foot).
  */
 async function openPanelView(page: Page, look: Look, view: "diff" | "files" | "terminal" | "preview"): Promise<void> {
-	const button = page
-		.locator(".omp-panel-topbar:visible, [data-panel-tabbar]:visible")
-		.getByRole("button", { name: say(look, `panel.tabs.${view}`), exact: true })
-		.first();
-	if (!(await button.isVisible().catch(() => false)))
+	if (!(await page.locator("[data-panel-close]:visible").first().isVisible()))
 		await page
 			.getByRole("button", { name: say(look, "titlebar.sidePanel"), exact: true })
 			.first()
 			.click();
-	await button.click();
+	await selectInspectorView(page, view);
 }
 
 /**

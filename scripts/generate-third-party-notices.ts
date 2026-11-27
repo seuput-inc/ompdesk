@@ -402,6 +402,7 @@ function vendoredSections(): string {
 			"  src/shared/clipboard/clipboard-link-html.ts (links kept in a paste, a URL over a selection)",
 			"- src/renderer/components/chat/transcript-find.ts (`findScrollDelta`), from",
 			"  src/renderer/src/components/native-chat/viewport/find/native-chat-find-visibility.ts",
+			"- English bot inspector copy in src/renderer/locales/en.ts, from BotItemsSection.tsx and BotUpcomingSection.tsx",
 			"",
 			"Dictation code adapted from the same Orca commit, with changes:",
 			"",

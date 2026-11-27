@@ -16,6 +16,7 @@
 
 import { ArrowLeft, Menu, PanelLeft, X } from "lucide-react";
 import { type ComponentType, type ReactNode, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useChatInspector } from "../../hooks/use-chat-inspector";
 import { useOverlayPresence } from "../../hooks/use-overlay-presence";
 import { useCompactShell, useDrawerMode, useShellMode } from "../../hooks/use-shell-mode";
 import { lazyChunk } from "../../lib/chunk-load";
@@ -327,6 +328,7 @@ export function AppShell() {
 	useShellMode();
 	const drawer = useDrawerMode();
 	const compact = useCompactShell();
+	useChatInspector(compact);
 	const drawerReady = useDrawerSidebarSync(drawer);
 	const Sidebar = useSidebar();
 	// A list loaded before the first render (sidebar-chunk.ts) is drawn from the first frame on; otherwise a drawer's

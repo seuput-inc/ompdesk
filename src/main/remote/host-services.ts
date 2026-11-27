@@ -620,6 +620,7 @@ const FsListParams = z.object({
 	path: z.string().optional(),
 	maxDepth: z.number().optional(),
 	maxEntries: z.number().optional(),
+	filters: z.object({ hideDotfiles: z.boolean(), showIgnored: z.boolean() }).optional(),
 });
 const FsReadParams = z.object({ ...FsRoot, path: z.string(), maxBytes: z.number().optional() });
 const FsReadRangeParams = HostFsReadRangeParams.extend(FsRoot);

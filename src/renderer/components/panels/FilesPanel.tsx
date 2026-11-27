@@ -9,17 +9,19 @@ import {
 	ArrowLeft,
 	AtSign,
 	Copy,
+	Ellipsis,
 	ExternalLink as ExternalLinkIcon,
 	FilePlus,
 	Folder,
 	FolderOpen,
 	FolderPlus,
+	ListCollapse,
+	ListFilter,
 	Maximize2,
 	Minimize2,
 	Pencil,
 	Pin,
 	RefreshCw,
-	TextSearch,
 	Trash2,
 } from "lucide-react";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -29,10 +31,10 @@ import type { RpcGitChanges } from "../../../shared/rpc-types";
 import { useCompactShell } from "../../hooks/use-shell-mode";
 import { errorMessage } from "../../lib/error-detail";
 import { FILE_DRAG_TYPE } from "../../lib/file-drag";
-import { copyText, formatBytes } from "../../lib/format";
+import { basename, copyText, formatBytes } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
-import { actionKbd, PLATFORM } from "../../lib/keymap";
+import { PLATFORM } from "../../lib/keymap";
 import { lastRead, rememberRead } from "../../lib/last-read";
 import { useRuntimeTabId, useSessionRuntime } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
@@ -48,7 +50,9 @@ import {
 	EmptyState,
 	ErrorDetail,
 	IconButton,
+	MenuButton,
 	SearchField,
+	SegmentedChoice,
 	SkeletonRows,
 	Tabs,
 	Tooltip,
@@ -533,7 +537,6 @@ export function FilesPanel() {
 	const openFilePreview = useUiStore(s => s.openFilePreview);
 	const revealPath = useUiStore(s => s.filesRevealPath);
 	const searchSeq = useUiStore(s => s.filesSearchSeq);
-	const keymapOverrides = useUiStore(s => s.keymapOverrides);
 	/** The body searches file contents instead of showing the tree. */
 	const [contentSearch, setContentSearch] = useState(searchSeq > 0);
 	useEffect(() => {
@@ -543,7 +546,21 @@ export function FilesPanel() {
 	const listVersion = useRef(0);
 	const [query, setQuery] = useState("");
 	const device = useTabsStore(s => s.tabs.find(tab => tab.id === tabId)?.device);
-	const treeKey = `files:tree:${cwd}`;
+	const filterKey = `files:filters:${cwd}`;
+	const [choice, setChoice] = useState<{
+		device?: string;
+		cwd: string;
+		hideDotfiles: boolean;
+		showIgnored: boolean;
+	}>();
+	const { hideDotfiles = false, showIgnored = false } =
+		(choice?.cwd === cwd && choice.device === device ? choice : lastRead<typeof choice>(device, filterKey)) ?? {};
+	const changeFilters = (hideDotfiles: boolean, showIgnored: boolean) => {
+		const next = { device, cwd, hideDotfiles, showIgnored };
+		rememberRead(device, filterKey, next);
+		setChoice(next);
+	};
+	const treeKey = `files:tree:${Number(hideDotfiles)}:${Number(showIgnored)}:${cwd}`;
 	// The listing of this folder seen last time paints at the first frame; the read below replaces it in place.
 	const [tree, setTree] = useState<FsTreeEntry[]>(() => lastRead<FsTreeEntry[]>(device, treeKey) ?? []);
 	const [loading, setLoading] = useState(true);
@@ -574,9 +591,10 @@ export function FilesPanel() {
 		setLoading(true);
 		setError(null);
 		try {
-			const result = tabId
-				? await window.omp.fs.list(undefined, MAX_DEPTH, MAX_FILES, tabId)
-				: await window.omp.fs.list(undefined, MAX_DEPTH, MAX_FILES);
+			const result = await window.omp.fs.list(undefined, MAX_DEPTH, MAX_FILES, tabId ?? undefined, {
+				hideDotfiles,
+				showIgnored,
+			});
 			if (version !== listVersion.current) return;
 			if (!result.ok) {
 				setError(result);
@@ -586,7 +604,7 @@ export function FilesPanel() {
 			}
 			setTree(result.entries);
 			setTruncated(result.truncated);
-			rememberRead(device, treeKey, result.entries, result.entries.length <= TREE_PERSIST_MAX);
+			rememberRead(device, treeKey, result.entries, !showIgnored && result.entries.length <= TREE_PERSIST_MAX);
 		} catch (err) {
 			if (version !== listVersion.current) return;
 			setError(err);
@@ -595,7 +613,7 @@ export function FilesPanel() {
 		} finally {
 			if (version === listVersion.current) setLoading(false);
 		}
-	}, [tabId, device, treeKey]);
+	}, [tabId, device, treeKey, hideDotfiles, showIgnored]);
 
 	useEffect(() => {
 		setTree(lastRead<FsTreeEntry[]>(device, treeKey) ?? []);
@@ -665,23 +683,24 @@ export function FilesPanel() {
 	/** Folder new entries go into: the selected folder, else the project root. */
 	const createParent = selectedId?.startsWith("dir:") ? selectedId.slice(4) : "";
 
+	const createItems = (parent: string): ContextMenuItem[] => [
+		{
+			id: "new-file",
+			label: t("filesPanel.newFile"),
+			icon: FilePlus,
+			onSelect: () => startCreate("createFile", parent),
+		},
+		{
+			id: "new-folder",
+			label: t("filesPanel.newFolder"),
+			icon: FolderPlus,
+			onSelect: () => startCreate("createFolder", parent),
+		},
+	];
+
 	const menuItems = (entry: Entry): ContextMenuItem[] => {
 		const items: ContextMenuItem[] = [];
-		if (entry.kind === "dir")
-			items.push(
-				{
-					id: "new-file",
-					label: t("filesPanel.newFile"),
-					icon: FilePlus,
-					onSelect: () => startCreate("createFile", entry.path),
-				},
-				{
-					id: "new-folder",
-					label: t("filesPanel.newFolder"),
-					icon: FolderPlus,
-					onSelect: () => startCreate("createFolder", entry.path),
-				},
-			);
+		if (entry.kind === "dir") items.push(...createItems(entry.path));
 		else
 			items.push({
 				id: "mention",
@@ -863,16 +882,25 @@ export function FilesPanel() {
 		return <FilePreview key={filePreviewPath} keepArm={keepArm} path={filePreviewPath} tabId={tabId ?? undefined} />;
 
 	return (
-		<div className="flex h-full min-h-0 min-w-0 flex-col">
-			<PanelToolbar>
-				{/* The empty state already says there is nothing; a bare number never stands alone. */}
+		<div className="omp-explorer flex h-full min-h-0 min-w-0 flex-col">
+			<PanelToolbar className="min-h-(--sc-control-md) gap-1 px-2 py-0.5">
+				<span className="min-w-0 flex-1 truncate text-sc-xs leading-4 font-medium" title={cwd}>
+					{basename(cwd)}
+				</span>
 				{fileCount > 0 && (
-					<span className="px-1 text-sc-xs tabular-nums text-(--sc-text-subtle)" data-file-count>
+					<span className="sr-only" data-file-count>
 						{t(truncated ? "filesPanel.countMore" : "filesPanel.count", {
 							count: fileCount,
 						})}
 					</span>
 				)}
+				<IconButton
+					disabled={expanded.size === 0}
+					icon={<ListCollapse />}
+					label={t("prCenter.files.collapseAll")}
+					onClick={() => setExpanded(new Set())}
+					size="sm"
+				/>
 				<IconButton
 					disabled={loading}
 					icon={<RefreshCw />}
@@ -880,34 +908,66 @@ export function FilesPanel() {
 					onClick={refresh}
 					size="sm"
 				/>
-				<IconButton
+				<MenuButton
+					align="end"
 					disabled={error !== null}
-					icon={<FilePlus />}
-					label={t("filesPanel.newFile")}
-					onClick={() => startCreate("createFile", createParent)}
+					icon={<Ellipsis />}
+					items={[
+						{
+							id: "dotfiles",
+							label: t("filesPanel.dotfiles"),
+							checked: !hideDotfiles,
+							onSelect: () => changeFilters(!hideDotfiles, showIgnored),
+						},
+						{
+							id: "ignored",
+							label: t("filesPanel.ignored"),
+							checked: showIgnored,
+							onSelect: () => changeFilters(hideDotfiles, !showIgnored),
+						},
+						{
+							id: "open-workspace",
+							label: t("filesPanel.openFolder"),
+							icon: FolderOpen,
+							separatorBefore: true,
+							disabled: remote || !tabId || !cwd,
+							disabledReason: t("filesPanel.openOnOwner"),
+							onSelect: () => {
+								if (!tabId || remote || !cwd) return;
+								void window.omp.system.openPath(".", tabId).then(
+									result => {
+										if (result.ok) toast({ variant: "success", message: t("filesPanel.openRequested") });
+										else toastError({ title: t("markdown.link.nativeFailed"), error: result });
+									},
+									error => toastError({ title: t("markdown.link.nativeFailed"), error }),
+								);
+							},
+						},
+						...createItems(createParent),
+					]}
+					label={t("filesPanel.actions")}
 					size="sm"
 				/>
-				<IconButton
-					disabled={error !== null}
-					icon={<FolderPlus />}
-					label={t("filesPanel.newFolder")}
-					onClick={() => startCreate("createFolder", createParent)}
-					size="sm"
-				/>
-				<IconButton
-					icon={<TextSearch />}
-					label={t("filesPanel.contentSearch.toggle")}
-					onClick={() => setContentSearch(value => !value)}
-					pressed={contentSearch}
-					shortcut={actionKbd("files.search", keymapOverrides)}
-					size="sm"
+			</PanelToolbar>
+			<div className="flex shrink-0 flex-col gap-2 border-b border-(--sc-divider) p-2">
+				<SegmentedChoice
+					aria-label={t("filesPanel.search")}
+					fit="equal"
+					onChange={mode => setContentSearch(mode === "contents")}
+					optionAttr="data-files-search-mode"
+					options={[
+						{ value: "names", label: t("filesPanel.names") },
+						{ value: "contents", label: t("filesPanel.contents") },
+					]}
+					value={contentSearch ? "contents" : "names"}
 				/>
 				{!contentSearch && (
 					<div className="min-w-0 flex-1">
 						<SearchField
 							controlSize="sm"
 							label={t("filesPanel.search")}
-							placeholder={t("filesPanel.search")}
+							leadingIcon={<ListFilter />}
+							placeholder={t("filesPanel.find")}
 							value={query}
 							onValueChange={setQuery}
 						/>
@@ -918,7 +978,7 @@ export function FilesPanel() {
 						)}
 					</div>
 				)}
-			</PanelToolbar>
+			</div>
 			{contentSearch ? (
 				<FileContentSearch focusSeq={searchSeq} tabId={tabId ?? undefined} />
 			) : (
@@ -937,7 +997,7 @@ export function FilesPanel() {
 						</div>
 					) : nodes.length === 0 ? (
 						<EmptyState
-							icon={<Folder />}
+							className="omp-explorer-empty"
 							size="sm"
 							title={t(query.trim() ? "filesPanel.noMatch" : "filesPanel.empty")}
 							actions={

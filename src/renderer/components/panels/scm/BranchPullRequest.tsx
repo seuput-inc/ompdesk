@@ -25,6 +25,7 @@ import {
 	type BadgeVariant,
 	Collapse,
 	DisclosureButton,
+	EmptyState,
 	ErrorDetail,
 	LinkButton,
 	SkeletonRows,
@@ -102,18 +103,21 @@ function LinkedPullRequest({ sessionPath }: { sessionPath: string }) {
 	);
 }
 
-export function BranchPullRequest({ branch }: { branch: string }) {
+export function BranchPullRequest({ branch, standalone = false }: { branch: string; standalone?: boolean }) {
 	const t = useT();
 	const scope = useFocusedScope();
 	const sessionFile = useSessionStore(state => state.sessionFile);
 	const load = useGithubLoad({ op: "pr_for_branch", branch }, branch);
 	const pr = load.data;
-	const [open, setOpen] = useState(false);
+	const [open, setOpen] = useState(standalone);
 	const live = pr?.state === "OPEN";
 	const { refresh } = load;
 	useEffect(() => (live ? pollWhileVisible(refresh, ACTIVE_REFRESH_MS) : undefined), [live, refresh]);
 	// A read that answered "no PR"; a failed read (no GitHub remote, no gh) says nothing.
 	if (!pr) {
+		if (standalone && load.error) return <ErrorDetail error={load.error} />;
+		if (standalone && load.loading) return <SkeletonRows label={t("common.loading")} widths={[70, 56, 64]} />;
+		if (standalone && !sessionFile) return <EmptyState title={t("diffPanel.pr.none")} />;
 		return pr === null && !load.loading && !load.error && sessionFile ? (
 			<LinkedPullRequest sessionPath={sessionFile} />
 		) : null;
