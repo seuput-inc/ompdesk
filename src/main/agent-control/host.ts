@@ -928,6 +928,7 @@ export class AgentControlRuntime {
 			hidden: !info.device && typeof info.sessionPath === "string" && hidden.has(info.sessionPath),
 			...(info.worktree ? { worktree: info.worktree } : {}),
 			...(info.sessionPath ? { sessionPath: info.sessionPath } : {}),
+			...(info.openedBySession ? { openedBySession: info.openedBySession } : {}),
 			...(info.task ? { task: info.task } : {}),
 			...(info.lastRun ? { lastRun: info.lastRun } : {}),
 			...(info.closeTurn ? { closeTurn: info.closeTurn } : {}),

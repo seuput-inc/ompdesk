@@ -2005,16 +2005,25 @@ async fn a_session_a_bots_chat_opened_is_its_worker_with_its_branch() {
     let root = Scratch::new();
     let folder = root.0.join("ada").to_string_lossy().into_owned();
     let mut world = bot_world(&folder);
-    world["tabs"].as_array_mut().unwrap().push(tab(
-        "kid1",
-        json!({ "title": "Fix the build", "worktree": worktree("omp/agent/fix"), "busy": true }),
-    ));
-    world["parents"] =
-        json!({ "kid1": { "callerTabId": "bot1" }, "work1": { "callerTabId": "main0001" } });
+    world["tabs"].as_array_mut().unwrap().extend([
+        tab("kid1", json!({ "title": "Fix the build", "cwd": "/other-repo", "sessionPath": "/s/worker.jsonl", "openedBySession": "/s/chat2.jsonl", "worktree": worktree("omp/agent/fix"), "busy": true })),
+        tab("manual", json!({ "title": "Fix the build", "cwd": "/other-repo", "sessionPath": "/s/manual.jsonl" })),
+        tab("chat2", json!({ "cwd": folder, "sessionPath": "/s/now-in-this-tab.jsonl" })),
+        tab("reopened", json!({ "cwd": folder, "sessionPath": "/s/chat2.jsonl" })),
+        tab("peer", json!({ "device": "other-host", "cwd": folder, "sessionPath": "/s/chat2.jsonl" })),
+    ]);
+    world["parents"] = json!({
+        "kid1": { "callerTabId": "chat2" },
+        "work1": { "callerTabId": "peer" }
+    });
+    let files = Files {
+        bots: Some(root.0.join("bots.json")),
+        ..bot_files(&root)
+    };
     let (control, asked) = rig_files(
         world,
         Caps::default(),
-        &bot_files(&root),
+        &files,
         bots_main(Mails::default(), |_, _| None),
     );
     let (text, is_error) = run(
@@ -2027,10 +2036,22 @@ async fn a_session_a_bots_chat_opened_is_its_worker_with_its_branch() {
     control.observe_bots();
     let workers = control.bots_state()["bots"][0]["workers"].clone();
     assert_eq!(workers.as_array().unwrap().len(), 1, "{workers}");
-    assert_eq!(workers[0]["session"], "kid1");
+    assert_eq!(workers[0]["session"], "/s/worker.jsonl");
+    assert_eq!(workers[0]["openedBySession"], "/s/chat2.jsonl");
     assert_eq!(workers[0]["branch"], "omp/agent/fix");
     assert_eq!(workers[0]["state"], "working");
     assert_eq!(workers[0]["tabId"], "kid1");
+
+    let (restored, _) = rig_files(
+        json!({ "tabs": [] }),
+        Caps::default(),
+        &files,
+        bots_main(Mails::default(), |_, _| None),
+    );
+    let closed = restored.bots_state()["bots"][0]["workers"][0].clone();
+    assert_eq!(closed["session"], "/s/worker.jsonl");
+    assert_eq!(closed["openedBySession"], "/s/chat2.jsonl");
+    assert_eq!(closed["state"], "closed");
 
     let hand = control
         .run(
@@ -2138,7 +2159,28 @@ async fn a_bot_exported_to_a_package_file_comes_back_as_a_new_bot() {
 #[tokio::test]
 async fn a_session_handed_to_a_bot_gets_its_home_chat_as_opener_and_the_text_from_it() {
     let root = Scratch::new();
-    let (control, asked, id) = ada(&root, Mails::default(), |_, _| None).await;
+    let files = Files {
+        bots: Some(root.0.join("bots.json")),
+        ..bot_files(&root)
+    };
+    let (control, asked, id) = ada_in(&root, &files, Mails::default(), |_, _| None).await;
+    let mut world = bot_world(&root.0.join("ada").to_string_lossy());
+    let rex = root.0.join("rex").to_string_lossy().into_owned();
+    world["tabs"].as_array_mut().unwrap().push(tab(
+        "rex1",
+        json!({ "cwd": rex, "sessionPath": "/s/rex.jsonl" }),
+    ));
+    world["parents"] = json!({ "work1": { "callerTabId": "rex1" } });
+    crate::ports::apply_state(control.host.port(), 2, &world.to_string()).unwrap();
+    control
+        .bots_command(json!({ "action": "create", "name": "Rex" }))
+        .await
+        .unwrap();
+    control.observe_bots();
+    assert_eq!(
+        control.bot_named("Rex").unwrap().workers[0].session,
+        "/s/work.jsonl"
+    );
     control
         .bots_command(json!({ "action": "handTo", "id": id, "session": "work1", "text": "Finish the release notes" }))
         .await
@@ -2160,6 +2202,21 @@ async fn a_session_handed_to_a_bot_gets_its_home_chat_as_opener_and_the_text_fro
             .as_str()
             .unwrap()
             .contains("Finish the release notes")
+    );
+    // Restart before another tick can see the new opener. Neither tab is open.
+    let (restored, _) = rig_files(
+        json!({ "tabs": [] }),
+        Caps::default(),
+        &files,
+        bots_main(Mails::default(), |_, _| None),
+    );
+    assert!(restored.bot_named("Rex").unwrap().workers.is_empty());
+    let ada = restored.bot_named("Ada").unwrap();
+    assert_eq!(ada.workers.len(), 1);
+    assert_eq!(ada.workers[0].session, "/s/work.jsonl");
+    assert_eq!(
+        ada.workers[0].opened_by_session.as_deref(),
+        Some("/s/bot.jsonl")
     );
 }
 

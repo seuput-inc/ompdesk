@@ -120,6 +120,8 @@ export interface BotLooks {
 export interface BotWorker {
 	/** Its session file, else its tab id until it has one. */
 	session: string;
+	/** The opening chat's saved file on the bot's host; absent from older records. */
+	openedBySession?: string;
 	title: string;
 	cwd: string;
 	/** Its worktree's branch. */

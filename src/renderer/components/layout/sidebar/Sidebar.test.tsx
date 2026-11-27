@@ -12,9 +12,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { parseHTML } from "linkedom";
 import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, onTestFinished, vi } from "vitest";
 import { SidebarProjects } from "../../../../main/sidebar-projects";
 import { type AgentReviewItem, wrapAgentMessage } from "../../../../shared/agent-control";
+import type { Bot } from "../../../../shared/bots";
 import { codedError } from "../../../../shared/ipc-error-codes";
 import type { HostView, OmpApi, RemoteState, SessionInfo } from "../../../../shared/ipc-types";
 import { TAILSCALE_HINT_AFTER_MS } from "../../../../shared/link-notice";
@@ -37,6 +38,8 @@ import { I18nProvider, translate } from "../../../lib/i18n";
 import { resetLastReadForTest } from "../../../lib/last-read";
 import { cacheDeviceOrder, LOCAL_DEVICE, readCachedDeviceOrder } from "../../../lib/sidebar-memory";
 import { useAgentReviewStore } from "../../../stores/agent-review";
+import { useBotsStore } from "../../../stores/bots";
+import { useBotsView } from "../../../stores/bots-view";
 import { useClosedChildrenStore } from "../../../stores/closed-children";
 import { useComposerStore } from "../../../stores/composer";
 import { LOCAL_SUMMARIES, useHostedSessionsStore } from "../../../stores/hosted-sessions";
@@ -423,6 +426,8 @@ afterEach(async () => {
 	useSidebarFolds.getState().reset();
 	useAgentReviewStore.getState().reset();
 	useClosedChildrenStore.getState().reset();
+	useBotsView.getState().reset();
+	useBotsStore.getState().reset();
 	useProjectOrigins.getState().reset();
 	useRemoteStore.getState().reset();
 	useHostedSessionsStore.setState({
@@ -3816,6 +3821,123 @@ describe("Sidebar device sections", () => {
 			forgotten: [],
 		});
 	}
+
+	it.each([false, true])(
+		"opens only the bot chat's saved worker and keeps its project fallback (paired=%s)",
+		async paired => {
+			const device = paired ? "dev-studio" : undefined;
+			const opener = session("/s/second.jsonl", "/bots/ada", { device });
+			const worker = session("/s/worker.jsonl", "/repo", { device, title: "Review build" });
+			const manual = session("/s/manual.jsonl", worker.cwd, { device, title: worker.title });
+			const bot: Bot = {
+				id: "ada",
+				name: "Ada",
+				folder: opener.cwd,
+				device,
+				home: "/s/home.jsonl",
+				sessions: [opener.path],
+				workers: [
+					{
+						session: worker.path,
+						openedBySession: opener.path,
+						cwd: worker.cwd,
+						title: "Old title",
+						state: "closed",
+						branch: null,
+						since: worker.created,
+					},
+				],
+				paused: false,
+				model: null,
+				autoApprove: false,
+				reach: [],
+				staleDays: 7,
+				lookAround: null,
+				tidy: null,
+				quiet: [],
+				createdAt: worker.created,
+			};
+			const omp = installMockOmp([]);
+			omp.sessions.list.mockImplementation(async (_scope, host) =>
+				host === device ? [opener, worker, manual] : [session(worker.path, "/different-host")],
+			);
+			seedStores();
+			useSessionStore.setState({ isStreaming: true });
+			if (device) {
+				pairHost("online");
+				omp.sidebarProjects.lists[device] = { projects: [], removed: [], worktrees: {}, layout: emptyLayout };
+			}
+			const { available } = useBotsFeature.getState();
+			onTestFinished(() => useBotsFeature.setState({ available }));
+			useBotsFeature.setState({ available: true });
+			useBotsStore.setState({ state: { bots: [bot], items: [] } });
+			useBotsView.getState().setOpen(bot.id, true);
+			useSidebarFolds.getState().setGroupsFolded([worker.cwd], false, device);
+			useSidebarFolds.getState().setGroupsFolded(["/different-host"], false);
+			useSidebarPrefs.setState({ hydrated: true, groupAliases: { [worker.cwd]: "Project alias" } });
+			await mount(<Sidebar />);
+			const nested = () => container.querySelector(`[data-bot-entry="ada"] [data-bot-worker-rows="${opener.path}"]`);
+			const project = (row: SessionInfo) =>
+				container.querySelector(
+					paired
+						? `[data-device-session="${row.path}"]`
+						: `[data-session-group="/repo"] [data-session-path="${row.path}"]`,
+				);
+			expect(nested()?.textContent).toContain("Review build");
+			expect(project(manual)).not.toBeNull();
+			expect(project(worker)).toBeNull();
+			if (paired) expect(container.querySelector(`[data-session-path="${worker.path}"]`)).not.toBeNull();
+			await fire(nested()?.querySelector("button") ?? null, "onClick");
+			expect(omp.tabs.spawn).toHaveBeenCalledWith(
+				expect.objectContaining({ cwd: worker.cwd, sessionPath: worker.path, ...(device ? { device } : {}) }),
+			);
+			const filter = container.querySelector("[data-sidebar-filter]");
+			if (!filter) throw new Error("Missing sidebar filter");
+			const search = async (value: string) =>
+				act(async () =>
+					reactProps<{ onChange: (e: unknown) => void }>(filter).onChange({
+						target: { value },
+						currentTarget: { value },
+					}),
+				);
+			await search(paired ? "Review build" : "Project alias");
+			expect(nested()).toBeNull();
+			expect(project(worker)).not.toBeNull();
+			await search(bot.name);
+			expect(nested()?.textContent).toContain("Review build");
+			expect(project(worker)).toBeNull();
+			await search("");
+			await act(async () => useSidebarFolds.getState().setNavHidden("bots", true));
+			expect(nested()).toBeNull();
+			expect(project(worker)).not.toBeNull();
+			await act(async () => {
+				useSidebarFolds.getState().setNavHidden("bots", false);
+				useBotsStore.setState({ state: { bots: [{ ...bot, paused: true }], items: [] } });
+				useBotsView.getState().setHidePaused(true);
+			});
+			expect(nested()).toBeNull();
+			expect(project(worker)).not.toBeNull();
+			const archive = async (file: string) =>
+				act(async () => {
+					useBotsView.getState().setHidePaused(false);
+					if (device) {
+						omp.sidebarProjects.lists[device] = {
+							projects: [],
+							removed: [],
+							worktrees: {},
+							layout: { ...emptyLayout, archivedSessions: [file] },
+						};
+						useSidebarProjects.getState().load(device);
+					} else useSidebarPrefs.setState({ archivedSessions: [file] });
+				});
+			await archive(opener.id);
+			expect(nested()).toBeNull();
+			expect(project(worker)).not.toBeNull();
+			await archive(worker.id);
+			expect(nested()).toBeNull();
+			expect(project(worker)).toBeNull();
+		},
+	);
 
 	const emptyLayout: SidebarLayout = {
 		pinnedSessions: [],

@@ -1,8 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Bot } from "../../../shared/bots";
+import type { SessionInfo } from "../../../shared/ipc-types";
 import { botTemplateWords } from "../../locales/bot-templates";
 import { BOT_TEMPLATES } from "./bot-templates";
-import { type BotChatFacts, type BotFacts, botFacts, botMatches, freeBotName, sortBots } from "./bot-view";
+import {
+	type BotChatFacts,
+	type BotFacts,
+	botFacts,
+	botMatches,
+	botWorkerChildren,
+	freeBotName,
+	sortBots,
+} from "./bot-view";
 
 const bot = (id: string, over: Partial<Bot> = {}): Bot => ({
 	id,
@@ -111,6 +120,66 @@ describe("finding and naming bots", () => {
 		expect(freeBotName("Scout", [bot("a", { name: "scout" }), bot("b", { name: "Scout 2" })])).toBe("Scout 3");
 		expect(freeBotName("Rex", [bot("a", { name: "Scout" })])).toBe("Rex");
 	});
+});
+
+it("restores the last confirmed worker owner on the first frame without live tabs", async () => {
+	const saved = new Map<string, string>();
+	vi.stubGlobal("localStorage", {
+		getItem: (key: string) => saved.get(key) ?? null,
+		setItem: (key: string, value: string) => void saved.set(key, value),
+		removeItem: (key: string) => void saved.delete(key),
+	});
+	vi.useFakeTimers();
+	try {
+		// Each import boots a new store; a static import would reuse its in-memory copy.
+		vi.resetModules();
+		const { useBotsStore } = await import("../../stores/bots");
+		const a = bot("a");
+		const b = bot("b");
+		const row: SessionInfo = {
+			path: "/s/worker.jsonl",
+			cwd: "/repo",
+			title: "Same task",
+			id: "worker",
+			messageCount: 2,
+			created: a.createdAt,
+			modified: a.createdAt,
+			status: "complete",
+			firstMessage: "",
+			size: 100,
+		};
+		const worker = {
+			session: row.path,
+			cwd: row.cwd,
+			title: "Same task",
+			branch: null,
+			since: a.createdAt,
+			state: "closed" as const,
+		};
+		const state = (owner: Bot) =>
+			[a, b].map(bot => (bot !== owner ? bot : { ...bot, workers: [{ ...worker, openedBySession: bot.home! }] }));
+		useBotsStore.getState().receive({ bots: state(b), items: [] });
+		vi.runOnlyPendingTimers();
+		useBotsStore.getState().receive({ bots: state(a), items: [] });
+		vi.runOnlyPendingTimers();
+
+		vi.resetModules();
+		const { useBotsStore: restored } = await import("../../stores/bots");
+		const available = new Map([[row.path, row]]);
+		const owners = restored.getState().state.bots.flatMap(bot => {
+			const chats = [{ ...row, path: bot.home!, cwd: bot.folder }];
+			return (
+				botWorkerChildren(bot, chats, available, undefined)
+					.get(bot.home!)
+					?.map(worker => [bot.id, worker.path]) ?? []
+			);
+		});
+		expect(owners).toEqual([["a", row.path]]);
+	} finally {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+		vi.resetModules();
+	}
 });
 
 describe("template words", () => {

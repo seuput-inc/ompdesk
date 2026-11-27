@@ -200,6 +200,8 @@ pub struct ControlTab {
     pub worktree: Option<TabWorktree>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_path: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub opened_by_session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

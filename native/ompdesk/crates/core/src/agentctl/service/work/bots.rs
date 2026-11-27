@@ -581,26 +581,29 @@ impl AgentControl {
                 if let Some(path) = tab.session_path.as_deref().filter(|path| !path.is_empty()) {
                     changed |= bots.observe(&tab.cwd, path);
                 }
-                let opener = state
-                    .parent_of(&tab.tab_id)
-                    .and_then(|opener| state.tabs.iter().find(|entry| entry.tab_id == opener));
-                if let Some(opener) = opener.filter(|opener| opener.device.is_none()) {
-                    let seen = BotWorker {
-                        session: tab
-                            .session_path
-                            .clone()
-                            .filter(|path| !path.is_empty())
-                            .unwrap_or_else(|| tab.tab_id.clone()),
-                        title: tab.name().to_owned(),
-                        cwd: tab.cwd.clone(),
-                        branch: tab
-                            .worktree
-                            .as_ref()
-                            .map(|worktree| worktree.branch.clone()),
-                        since: since.clone(),
-                    };
-                    changed |= bots.observe_worker(&opener.cwd, &tab.tab_id, seen);
-                }
+            }
+            // After restore the tab id may have been resolved by file alone; keep the recorded host's link.
+            for tab in state
+                .tabs
+                .iter()
+                .filter(|tab| tab.device.is_none() && !tab.restored)
+            {
+                let Some(opener) = state.parent_of(&tab.tab_id).and_then(|id| {
+                    state
+                        .tabs
+                        .iter()
+                        .find(|entry| entry.tab_id == id && entry.device.is_none())
+                }) else {
+                    continue;
+                };
+                let Some(file) = tab
+                    .opened_by_session
+                    .as_ref()
+                    .or(opener.session_path.as_ref())
+                else {
+                    continue;
+                };
+                changed |= bots.observe_worker(&tab.tab_id, worker_seen(tab, file, &since));
             }
         }
         changed |= self.settle_item_links(&state);
@@ -1234,6 +1237,15 @@ impl AgentControl {
         self.host
             .set_opener(&target.tab_id, &home_tab.tab_id)
             .await?;
+        if target.device.is_none() {
+            let since = crate::aimemory::value::iso(self.now().max(0.0) as u64);
+            let changed = self
+                .bots()
+                .observe_worker(&target.tab_id, worker_seen(target, home, &since));
+            if changed {
+                self.bots_changed();
+            }
+        }
         let receipt = self
             .send(
                 &home_tab,
@@ -1901,6 +1913,25 @@ fn look_when(look: &LookSetting) -> String {
             "every day"
         }
     )
+}
+
+fn worker_seen(tab: &ControlTab, opener: &str, since: &str) -> BotWorker {
+    BotWorker {
+        session: tab
+            .session_path
+            .as_ref()
+            .filter(|file| !file.is_empty())
+            .unwrap_or(&tab.tab_id)
+            .clone(),
+        opened_by_session: Some(opener.to_owned()),
+        title: tab.name().to_owned(),
+        cwd: tab.cwd.clone(),
+        branch: tab
+            .worktree
+            .as_ref()
+            .map(|worktree| worktree.branch.clone()),
+        since: since.to_owned(),
+    }
 }
 
 /// One of a bot's workers as the state carries it (`BotWorker` of `src/shared/bots.ts`): the record, and what its tab on

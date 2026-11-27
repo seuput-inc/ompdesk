@@ -92,6 +92,8 @@ pub const WORKERS_KEPT: usize = 30;
 pub struct BotWorker {
     /// Its session file, else its tab id until it has one.
     pub session: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opened_by_session: Option<String>,
     pub title: String,
     pub cwd: String,
     /// Its worktree's branch.
@@ -204,16 +206,32 @@ impl Bots {
         changed
     }
 
-    /// A session a chat of the bot whose folder is `opener_cwd` opened (or was handed) was seen: it joins or updates
-    /// that bot's `workers`, matched by its session file or, until it has one, its tab id (`tab_id`). `since` is now
-    /// (ISO), kept from the first sighting. Whether anything changed.
-    pub fn observe_worker(&mut self, opener_cwd: &str, tab_id: &str, seen: BotWorker) -> bool {
-        let Some(bot) = self.bots.iter_mut().find(|bot| bot.folder == opener_cwd) else {
+    /// Keep the exact chat that opened the worker, even after either tab closes.
+    pub fn observe_worker(&mut self, tab_id: &str, seen: BotWorker) -> bool {
+        let Some(owner) = self.bots.iter().position(|bot| {
+            seen.opened_by_session
+                .as_deref()
+                .is_some_and(|file| bot.has_session(file))
+        }) else {
             return false;
         };
-        // A chat of the bot is its chat, never its worker.
+        let mut removed = false;
+        for (index, other) in self.bots.iter_mut().enumerate() {
+            if index == owner {
+                continue;
+            }
+            let before = other.workers.len();
+            other
+                .workers
+                .retain(|known| known.session != seen.session && known.session != tab_id);
+            removed |= before != other.workers.len();
+        }
+        let bot = &mut self.bots[owner];
         if seen.cwd == bot.folder {
-            return false;
+            if removed {
+                self.save();
+            }
+            return removed;
         }
         let at = bot
             .workers
@@ -232,7 +250,10 @@ impl Bots {
             None => seen,
         };
         if at.is_some_and(|at| bot.workers[at] == worker) {
-            return false;
+            if removed {
+                self.save();
+            }
+            return removed;
         }
         match at {
             Some(at) => bot.workers[at] = worker,

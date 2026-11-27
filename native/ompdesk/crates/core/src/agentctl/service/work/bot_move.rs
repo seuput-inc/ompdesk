@@ -364,6 +364,9 @@ impl AgentControl {
             for session in &mut record.sessions {
                 *session = map(session.as_str());
             }
+            for worker in &mut record.workers {
+                worker.opened_by_session = worker.opened_by_session.as_deref().map(map);
+            }
             record.moving = None;
             record.renamed_from = None;
         })?;
