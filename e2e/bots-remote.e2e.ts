@@ -152,3 +152,59 @@ test("a bot made on one computer is listed, chatted with and answered on its pai
 		await fs.rm(parent, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => undefined);
 	}
 });
+
+test("a legacy profile keeps its bot identities, template setup and original files across restart", async () => {
+	test.setTimeout(180_000);
+	const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-bot-face-upgrade-")));
+	const home = path.join(parent, "home");
+	const profile = await makeRemoteProfile(parent, "old", {
+		language: "en",
+		theme: "light",
+		env: { HOME: home, USERPROFILE: home },
+	});
+	const records = [
+		{ id: "bot-old-managed", name: "Courier", folder: path.join(home, ".omp", "bots", "courier") },
+		{ id: "bot-old-custom", name: "Scout", folder: path.join(parent, "my-artwork") },
+	];
+	let app: RemoteInstance | null = null;
+	try {
+		for (const bot of records) {
+			await fs.mkdir(bot.folder, { recursive: true });
+			await fs.writeFile(path.join(bot.folder, "picture.png"), `legacy:${bot.id}`);
+		}
+		await fs.writeFile(path.join(profile.desktop, "bots.json"), JSON.stringify(records));
+		let created = "";
+		for (const restart of [false, true]) {
+			app = await launchRemote(profile);
+			const page = app.page;
+			for (const bot of records) {
+				const row = page.locator(`[data-bot-entry="${bot.id}"]`);
+				await expect(row.locator(`[data-bot-face="${bot.id}"]`)).toBeVisible();
+				expect(await fs.readFile(path.join(bot.folder, "picture.png"), "utf8")).toBe(`legacy:${bot.id}`);
+			}
+			if (!restart) {
+				await page.locator('[data-sidebar-nav-row="bots"]').click();
+				await page.getByRole("button", { name: "New bot", exact: true }).last().click();
+				await page.getByText("Browse templates", { exact: true }).last().click();
+				await page.locator("[data-bot-template-use]").click();
+				const form = page.locator("[data-new-bot]");
+				await form.getByLabel("Name", { exact: true }).fill("Template courier");
+				await expect(form.locator('input[type="file"]')).toHaveCount(0);
+				await page.locator("[data-new-bot-create]").click();
+				await until(async () => {
+					const state = await page.evaluate(() => window.omp.bots.command({ action: "get" }));
+					created = state.bots.find(bot => bot.name === "Template courier")?.id ?? "";
+					return created !== "";
+				}, "the template did not create a bot");
+			}
+			await expect(page.locator(`[data-bot-entry="${created}"] [data-bot-face="${created}"]`)).toBeVisible();
+			const state = await page.evaluate(() => window.omp.bots.command({ action: "get" }));
+			expect(state.bots.every(bot => !("picture" in bot))).toBe(true);
+			await exitApp(app.app);
+			app = null;
+		}
+	} finally {
+		if (app) await exitApp(app.app).catch(() => undefined);
+		await fs.rm(parent, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+	}
+});

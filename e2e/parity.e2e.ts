@@ -229,6 +229,7 @@ async function seedAwayHostBots(userData: string): Promise<void> {
 	const bot = {
 		id: AWAY_HOST_BOT,
 		name: "Courier",
+		picture: "data:image/png;base64,AAAA",
 		folder: "/Users/someone/.omp/bots/courier",
 		home,
 		sessions: [home],
@@ -433,6 +434,20 @@ if (dir) {
 			client = await launchRemote(clientProfile);
 			const b = host.page;
 			const a = client.page;
+			if (surfaces.some(surface => surface.id === "bot-pane-offline")) {
+				for (const [page, profile] of [
+					[b, hostProfile],
+					[a, clientProfile],
+				] as const) {
+					const state = await page.evaluate(() => window.omp.bots.command({ action: "get" }));
+					const bot = state.remote?.flatMap(copy => copy.bots).find(bot => bot.id === AWAY_HOST_BOT);
+					expect(bot).toBeDefined();
+					expect(bot).not.toHaveProperty("picture");
+					expect(await fs.readFile(path.join(profile.desktop, "bots-remote.json"), "utf8")).not.toContain(
+						"data:image/",
+					);
+				}
+			}
 			await a.evaluate(() => window.omp.remote.setDeviceName("PC-A"));
 			const deviceId = await connectHost(b, a, "PC-B");
 			await expect

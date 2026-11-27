@@ -90,7 +90,7 @@ allow-list beside the marker.
 | A code a phone camera reads (pairing) | `QrCode` (drawn locally, never by an image service) | an image URL |
 | The app's mark | `BrandMark` | an inline copy of the π |
 | The picture of a repository a row works in (a session row's leading mark) | `ProjectArtwork` (`src`: the repository's image or its owner's avatar, a `data:` URI or a URL the app serves; with none, or one that fails, the name's letter on a hue from the name; decorative, the row says the name in words) | an `<img>` of your own, a letter in a coloured span |
-| A bot's face with no picture of its own | `BotFace` (`seed`: the bot's id, the same face on every device; `presence` what it acts out; drawn at rest, the rig loads after the page; still under reduced motion, off screen, in a hidden window and in test runs; decorative). Bots draw it through `bots/BotAvatar`, where an uploaded picture wins | a letter tile, an animation of your own |
+| A bot's face | `BotFace` (`seed`: the bot's id, the same face on every device; `presence` what it acts out; drawn at rest, the rig loads after the page; still under reduced motion, off screen, in a hidden window and in test runs; decorative). Bots draw it through `bots/BotAvatar`; legacy pictures are never read | a letter tile, an animation of your own |
 | The UI language switch | `LangSwitcher` | a language select of your own |
 
 ## Layer plumbing
