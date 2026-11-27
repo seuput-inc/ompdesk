@@ -37,7 +37,7 @@ const mocks = vi.hoisted(() => {
 		answer,
 		/** The core's release lookup and installer download. */
 		lookupRelease: vi.fn(),
-		downloadInstaller: vi.fn(async (_options: { file: string }) => {}),
+		downloadInstaller: vi.fn(async (_options: Parameters<typeof UpdateRelease.downloadInstaller>[0]) => {}),
 		/** The setup's start on a worker thread (a restart) and on this thread (a quit). */
 		startOffThread: vi.fn(async (_command: string, _args: string[]) => 4242),
 		spawn: vi.fn(),
@@ -117,22 +117,25 @@ const holds = { asking: false, planWaiting: false };
 let updater: Updater;
 let registry: IpcRegistry;
 
+const summary = { ko: "다운로드를 이어받습니다.", en: "Downloads can resume." };
+const bilingualNotes = `${summary.ko}\n\n${"추가 설명. ".repeat(90)}\n\n---\n\n${summary.en}`;
+
 /** The release a check finds. */
-function releaseOf(version: string): PlatformRelease {
+function releaseOf(version: string, notes = ""): PlatformRelease {
 	return {
 		version,
 		releaseDate: "2026-11-01T00:00:00.000Z",
 		releaseName: `v${version}`,
-		notes: "Notes.",
+		notes,
 		file: { name: "ompdesk-windows-setup.exe", size: 113_241_490, sha512: "x" },
 		assetUrl: "https://api.github.com/repos/example/example/releases/assets/1",
 	};
 }
 
 /** A check (the person's) that finds `version`; the download that follows is done when this settles. */
-async function check(found: string | Error | "nothing"): Promise<unknown> {
+async function check(found: string | Error | "nothing", notes = ""): Promise<unknown> {
 	if (found instanceof Error) mocks.lookupRelease.mockRejectedValueOnce(found);
-	else mocks.lookupRelease.mockResolvedValueOnce(releaseOf(found === "nothing" ? "0.44.0" : found));
+	else mocks.lookupRelease.mockResolvedValueOnce(releaseOf(found === "nothing" ? "0.44.0" : found, notes));
 	const status = await registry.invoke(IPC_COMMANDS.UPDATER_CHECK, caller, []);
 	await vi.waitFor(() => expect(mocks.sent.at(-1)?.state).not.toBe("downloading"));
 	return status;
@@ -190,7 +193,7 @@ beforeEach(async () => {
 		proxy: async () => undefined,
 	});
 	if (!deliver) return;
-	await check("0.45.0");
+	await check("0.45.0", bilingualNotes);
 	mocks.sent.length = 0;
 	mocks.runtimeLog.length = 0;
 });
@@ -235,6 +238,17 @@ describe("a check that finds a newer release", () => {
 		);
 		expect(mocks.sent.map(sent => sent.state)).toEqual(["checking", "available", "downloading", "downloaded"]);
 		expect(mocks.sent.at(-1)).toMatchObject({ version: "0.46.0", mode: "automatic" });
+	});
+
+	it("keeps both published sentences with their version through every download status", async () => {
+		mocks.downloadInstaller.mockImplementationOnce(async ({ size, onProgress }) => onProgress(size / 2));
+		await check("0.46.0", bilingualNotes);
+		expect(mocks.sent.slice(1)).toEqual([
+			{ state: "available", version: "0.46.0", mode: "automatic", summary },
+			{ state: "downloading", version: "0.46.0", mode: "automatic", summary, percent: 0 },
+			{ state: "downloading", version: "0.46.0", mode: "automatic", summary, percent: 50 },
+			{ state: "downloaded", version: "0.46.0", mode: "automatic", summary },
+		]);
 	});
 
 	it("drops the partial another release left, which could never pass this one's hash", async () => {
@@ -362,10 +376,10 @@ describe("Restart & install on Windows", () => {
 	it("keeps saying 'installing' when Later is pressed after Now", async () => {
 		autoInstallOn = true;
 		await updater.appAutoUpdatePrefChanged();
-		expect(mocks.sent.at(-1)).toMatchObject({ state: "downloaded", restartAt: expect.any(Number) });
+		expect(mocks.sent.at(-1)).toMatchObject({ state: "downloaded", restartAt: expect.any(Number), summary });
 		await restartAndInstall();
 		await registry.invoke(IPC_COMMANDS.UPDATER_POSTPONE, caller, []);
-		expect(mocks.sent.at(-1)).toMatchObject({ state: "downloaded", installing: true });
+		expect(mocks.sent.at(-1)).toMatchObject({ state: "downloaded", installing: true, summary });
 	});
 
 	it("an automatic install is not followed by a second countdown when the app stalls after it", async () => {
@@ -522,11 +536,15 @@ describe("the start mark and a start that failed", () => {
 
 	it("a check that finds the held version again keeps it downloaded, fetches nothing and shows no spinner", async () => {
 		const downloads = mocks.downloadInstaller.mock.calls.length;
-		expect(await check("0.45.0")).toMatchObject({ state: "downloaded", version: "0.45.0" });
+		expect(await check("0.45.0")).toMatchObject({ state: "downloaded", version: "0.45.0", summary });
 		expect(mocks.sent.map(sent => sent.state)).toEqual([]);
 		expect(mocks.downloadInstaller.mock.calls.length).toBe(downloads);
 		// Nothing newer: the held download is still the answer.
-		expect(await check("nothing")).toMatchObject({ state: "downloaded" });
+		expect(await check("nothing", "다른 버전입니다.\n\n---\n\nAnother version.")).toMatchObject({
+			state: "downloaded",
+			version: "0.45.0",
+			summary,
+		});
 		// And a failed look keeps it as well.
 		expect(await check(new Error("offline"))).toMatchObject({ state: "downloaded", version: "0.45.0" });
 	});
@@ -541,7 +559,7 @@ describe("the start mark and a start that failed", () => {
 		await updater.appAutoUpdatePrefChanged();
 		mocks.sent.length = 0;
 		await check("0.46.0");
-		expect(mocks.sent.at(-1)).toMatchObject({ state: "downloaded", version: "0.46.0" });
+		expect(mocks.sent.at(-1)).toEqual({ state: "downloaded", version: "0.46.0", mode: "automatic" });
 		expect(mocks.sent.map(sent => sent.state)).toEqual(["available", "downloading", "downloaded"]);
 		mocks.runtimeLog.length = 0;
 		await updater.appAutoUpdatePrefChanged();

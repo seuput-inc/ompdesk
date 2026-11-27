@@ -22,6 +22,7 @@ import { STRESS_PROMPT } from "../src/renderer/dev-harness/fixture";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
 import { writeShellBin, writeShellGh } from "./fixture/shell-gh";
 import { FIXTURE_NEWER_OMP_VERSION } from "./fixture/version";
+import { type VersionSummaryFeed, versionSummaryFeed } from "./fixture/version-summary-release";
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, REMOTE_LOGIN, type RemoteInstance } from "./remote-harness";
 import { crashed, type Look, panelCrash } from "./responsive-audit";
@@ -340,9 +341,19 @@ if (dir) {
 		const browser = await chromium.launch();
 		const pageErrors: string[] = [];
 		let android: { bin: string; close(): Promise<void> } | undefined;
+		let feed: VersionSummaryFeed | undefined;
 		try {
 			const ghBin = path.join(parent, "ghbin");
 			await writeParityGh(ghBin);
+			if (surfaces.some(surface => surface.id === "settings-version-summaries")) feed = await versionSummaryFeed();
+			const updateEnv = (device: string): Record<string, string> =>
+				feed
+					? {
+							OMP_DEV_UPDATE_CHECK: "1",
+							OMP_GUI_TEST_UPDATE_MIRROR: feed.url,
+							LOCALAPPDATA: path.join(parent, device, "local-app-data"),
+						}
+					: {};
 			// `settings-omp-tested`: the line naming the tested omp shows only beside another omp than the tested one, and the
 			// fake omp runs the floor, which is the tested omp (src/shared/omp-tested.json). B's omp runs the next release.
 			const hostOmpVersion = path.join(parent, "host-omp-version");
@@ -361,6 +372,7 @@ if (dir) {
 				// Only the host's omp starts under the hold: its slow-start bound is short, so the banner shows within seconds.
 				// B's `gh` is the stand-in above: every view's GitHub reads reach B's.
 				env: {
+					...updateEnv("host"),
 					OMP_GUI_START_SLOW_MS: "1500",
 					OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1",
 					PATH: `${devicePath}${ghBin}${path.delimiter}${process.env.PATH}`,
@@ -374,6 +386,7 @@ if (dir) {
 				port: hostProfile.port,
 				prefs: { displayPreferences: { showTokenUsage: true }, ...(BLOCKED_USAGE ? { sidebarWidth: 227 } : {}) },
 				env: {
+					...updateEnv("client"),
 					OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1",
 					...(devicePath ? { PATH: `${devicePath}${process.env.PATH}` } : {}),
 				},
@@ -448,9 +461,9 @@ if (dir) {
 			await phonePaired(phone);
 			// The phone's display switches are its own (device prefs), read when each view loads its page afresh.
 			await phone.evaluate(() => window.omp.prefs.set("displayPreferences.showTokenUsage", true));
+			if (PHONE.lang === "ko") await phone.evaluate(() => window.omp.prefs.set("language", "ko"));
 			if (BLOCKED_USAGE) {
 				await phone.evaluate(async () => {
-					await window.omp.prefs.set("language", "ko");
 					await window.omp.prefs.set("themeName", "dark");
 					await window.omp.prefs.set("sidebarWidth", 227);
 					localStorage.setItem("omp.sidebarWidth", "227");
@@ -1059,6 +1072,7 @@ if (dir) {
 
 			const records: SurfaceRecord[] = [];
 			for (const surface of surfaces) {
+				if (surface.id === "settings-version-summaries") feed?.publish(true);
 				if (surface.parity.pairedBack) await pairBack();
 				if (surface.parity.remoteChild && !remoteChildLeft) await leaveRemoteChild();
 				if (surface.parity.hiddenRoster && !hiddenRosterLeft) await leaveHiddenRoster();
@@ -1084,7 +1098,7 @@ if (dir) {
 						try {
 							await show[view](surface.parity.session);
 							await page.locator("[data-composer-input]").first().waitFor({ state: "visible", timeout: 60_000 });
-							await surface.open(page, VIEW_LOOK[view]);
+							await surface.open(page, VIEW_LOOK[view], view);
 							if (surface.ready)
 								await page.locator(surface.ready).first().waitFor({ state: "visible", timeout: 15_000 });
 							await page.waitForTimeout(surface.settle ?? 450);
@@ -1147,6 +1161,16 @@ if (dir) {
 						await writeSheet(browser, surface, { local, remote, phone: phoneShot }, record.sheet);
 					}
 				});
+				if (surface.id === "settings-version-summaries" && feed) {
+					feed.publish(false);
+					// Return both apps to the installed release before another surface reads the sidebar.
+					for (const page of [a, b])
+						await expect
+							.poll(() => page.evaluate(async () => (await window.omp.updater.check()).state), {
+								timeout: 30_000,
+							})
+							.toBe("not-available");
+				}
 			}
 			await fs.writeFile(
 				path.join(out, "parity.json"),
@@ -1155,6 +1179,7 @@ if (dir) {
 			const failed = records.flatMap(record => record.failures.map(failure => `${record.id} › ${failure}`));
 			expect(failed, "every surface reached in every view").toEqual([]);
 		} finally {
+			await feed?.close();
 			await browser.close().catch(() => undefined);
 			await proxy?.close().catch(() => undefined);
 			for (const instance of [client, host]) if (instance) await exitApp(instance.app);
