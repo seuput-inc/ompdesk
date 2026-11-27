@@ -34,6 +34,10 @@ pub struct ListParams {
     prefix: String,
     max_depth: Option<Value>,
     max_entries: Option<Value>,
+    #[serde(default)]
+    hide_dotfiles: bool,
+    #[serde(default)]
+    show_ignored: bool,
     caps: FileCaps,
     locale: String,
 }
@@ -94,7 +98,11 @@ struct Listing<'a> {
 
 /// The workspace tree under `dir`: gitignore-aware, depth- and file-capped.
 pub fn list(params: &ListParams) -> Result<Reply, Fault> {
-    let mut ignore = Ignore::load(std::path::Path::new(&params.root));
+    let mut ignore = if params.show_ignored {
+        Ignore::new(super::ignore::DEFAULTS.iter().copied())
+    } else {
+        Ignore::load(std::path::Path::new(&params.root))
+    };
     let max_depth = super::clamp_int(
         params.max_depth.as_ref(),
         1.0,
@@ -115,6 +123,7 @@ pub fn list(params: &ListParams) -> Result<Reply, Fault> {
     let mut walk = Walk {
         nodes: Vec::new(),
         max_files,
+        hide_dotfiles: params.hide_dotfiles,
         file_count: 0,
         truncated: false,
     };
@@ -131,6 +140,7 @@ pub fn list(params: &ListParams) -> Result<Reply, Fault> {
 struct Walk {
     nodes: Vec<Node>,
     max_files: usize,
+    hide_dotfiles: bool,
     file_count: usize,
     truncated: bool,
 }
@@ -175,6 +185,9 @@ impl Walk {
                 entries.sort_by(|a, b| order.compare(&a.name, &b.name));
                 let mut files = Vec::new();
                 for entry in entries {
+                    if self.hide_dotfiles && entry.name.starts_with('.') {
+                        continue;
+                    }
                     let is_dir = match entry.kind {
                         Kind::Dir => true,
                         Kind::File => false,

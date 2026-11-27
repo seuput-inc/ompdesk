@@ -867,8 +867,14 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 		},
 
 		fs: {
-			list: (path?: string, maxDepth?: number, maxEntries?: number, tabId?: string) =>
-				transport.invoke(IPC_COMMANDS.FS_LIST, { path, maxDepth, maxEntries, tabId }) as Promise<IpcFsListResult>,
+			list: (path, maxDepth, maxEntries, tabId, filters) =>
+				transport.invoke(IPC_COMMANDS.FS_LIST, {
+					path,
+					maxDepth,
+					maxEntries,
+					tabId,
+					filters,
+				}) as Promise<IpcFsListResult>,
 			read: (path: string, maxBytes?: number, tabId?: string) =>
 				transport.invoke(IPC_COMMANDS.FS_READ, { path, maxBytes, tabId }) as Promise<IpcFsReadResult>,
 			stat: (path, tabId) => transport.invoke(IPC_COMMANDS.FS_STAT, { path, tabId }),

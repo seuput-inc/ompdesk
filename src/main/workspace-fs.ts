@@ -111,6 +111,8 @@ export async function listWorkspace(
 		prefix,
 		maxDepth: payload?.maxDepth,
 		maxEntries: payload?.maxEntries,
+		hideDotfiles: payload?.filters?.hideDotfiles === true,
+		showIgnored: payload?.filters?.showIgnored === true,
 		caps: fileCaps,
 		locale: NAME_LOCALE,
 	});

@@ -546,7 +546,21 @@ export function FilesPanel() {
 	const listVersion = useRef(0);
 	const [query, setQuery] = useState("");
 	const device = useTabsStore(s => s.tabs.find(tab => tab.id === tabId)?.device);
-	const treeKey = `files:tree:${cwd}`;
+	const filterKey = `files:filters:${cwd}`;
+	const [choice, setChoice] = useState<{
+		device?: string;
+		cwd: string;
+		hideDotfiles: boolean;
+		showIgnored: boolean;
+	}>();
+	const { hideDotfiles = false, showIgnored = false } =
+		(choice?.cwd === cwd && choice.device === device ? choice : lastRead<typeof choice>(device, filterKey)) ?? {};
+	const changeFilters = (hideDotfiles: boolean, showIgnored: boolean) => {
+		const next = { device, cwd, hideDotfiles, showIgnored };
+		rememberRead(device, filterKey, next);
+		setChoice(next);
+	};
+	const treeKey = `files:tree:${Number(hideDotfiles)}:${Number(showIgnored)}:${cwd}`;
 	// The listing of this folder seen last time paints at the first frame; the read below replaces it in place.
 	const [tree, setTree] = useState<FsTreeEntry[]>(() => lastRead<FsTreeEntry[]>(device, treeKey) ?? []);
 	const [loading, setLoading] = useState(true);
@@ -577,9 +591,10 @@ export function FilesPanel() {
 		setLoading(true);
 		setError(null);
 		try {
-			const result = tabId
-				? await window.omp.fs.list(undefined, MAX_DEPTH, MAX_FILES, tabId)
-				: await window.omp.fs.list(undefined, MAX_DEPTH, MAX_FILES);
+			const result = await window.omp.fs.list(undefined, MAX_DEPTH, MAX_FILES, tabId ?? undefined, {
+				hideDotfiles,
+				showIgnored,
+			});
 			if (version !== listVersion.current) return;
 			if (!result.ok) {
 				setError(result);
@@ -589,7 +604,7 @@ export function FilesPanel() {
 			}
 			setTree(result.entries);
 			setTruncated(result.truncated);
-			rememberRead(device, treeKey, result.entries, result.entries.length <= TREE_PERSIST_MAX);
+			rememberRead(device, treeKey, result.entries, !showIgnored && result.entries.length <= TREE_PERSIST_MAX);
 		} catch (err) {
 			if (version !== listVersion.current) return;
 			setError(err);
@@ -598,7 +613,7 @@ export function FilesPanel() {
 		} finally {
 			if (version === listVersion.current) setLoading(false);
 		}
-	}, [tabId, device, treeKey]);
+	}, [tabId, device, treeKey, hideDotfiles, showIgnored]);
 
 	useEffect(() => {
 		setTree(lastRead<FsTreeEntry[]>(device, treeKey) ?? []);
@@ -897,7 +912,39 @@ export function FilesPanel() {
 					align="end"
 					disabled={error !== null}
 					icon={<Ellipsis />}
-					items={createItems(createParent)}
+					items={[
+						{
+							id: "dotfiles",
+							label: t("filesPanel.dotfiles"),
+							checked: !hideDotfiles,
+							onSelect: () => changeFilters(!hideDotfiles, showIgnored),
+						},
+						{
+							id: "ignored",
+							label: t("filesPanel.ignored"),
+							checked: showIgnored,
+							onSelect: () => changeFilters(hideDotfiles, !showIgnored),
+						},
+						{
+							id: "open-workspace",
+							label: t("filesPanel.openFolder"),
+							icon: FolderOpen,
+							separatorBefore: true,
+							disabled: remote || !tabId || !cwd,
+							disabledReason: t("filesPanel.openOnOwner"),
+							onSelect: () => {
+								if (!tabId || remote || !cwd) return;
+								void window.omp.system.openPath(".", tabId).then(
+									result => {
+										if (result.ok) toast({ variant: "success", message: t("filesPanel.openRequested") });
+										else toastError({ title: t("markdown.link.nativeFailed"), error: result });
+									},
+									error => toastError({ title: t("markdown.link.nativeFailed"), error }),
+								);
+							},
+						},
+						...createItems(createParent),
+					]}
 					label={t("filesPanel.actions")}
 					size="sm"
 				/>

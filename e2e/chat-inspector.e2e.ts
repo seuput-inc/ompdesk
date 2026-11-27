@@ -96,6 +96,39 @@ test("project and bot conversations keep their own inspector on reopen and on re
 		await panel.getByRole("button", { name: "File actions", exact: true }).click();
 		await expect(page.getByRole("menuitem", { name: "New file…", exact: true })).toBeVisible();
 		await page.keyboard.press("Escape");
+		const menuButton = panel.getByRole("button", { name: "File actions", exact: true });
+		const row = (name: string) => panel.locator(`[data-tree-id="file:${name}"]`);
+		const filter = async (name: string, checked: boolean) => {
+			await menuButton.click();
+			const item = page.getByRole("menuitemcheckbox", { name, exact: true });
+			await expect(item).toHaveAttribute("aria-checked", String(checked));
+			await item.click();
+		};
+		for (const [name, contents] of [
+			["ordinary.txt", "visible"],
+			[".dot.txt", "dot"],
+			[".gitignore", "ignored.txt\n.hidden-ignored.txt\n"],
+			["ignored.txt", "ignored"],
+			[".hidden-ignored.txt", "both"],
+		]) {
+			await fs.writeFile(path.join(profile.project, name), contents);
+		}
+		await panel.getByRole("button", { name: "Refresh file tree" }).click();
+		await expect(row(".dot.txt")).toBeVisible();
+		await expect(row("ignored.txt")).toHaveCount(0);
+		await filter("Show dotfiles", true);
+		await expect(row(".dot.txt")).toHaveCount(0);
+		await filter("Show Git ignored files", false);
+		await expect(row("ignored.txt")).toBeVisible();
+		await expect(row(".hidden-ignored.txt")).toHaveCount(0);
+		await filter("Show dotfiles", false);
+		await expect(row(".hidden-ignored.txt")).toBeVisible();
+		await filter("Show Git ignored files", true);
+		await expect(row(".hidden-ignored.txt")).toHaveCount(0);
+		await expect(row("ordinary.txt")).toBeVisible();
+		await menuButton.click();
+		await page.getByRole("menuitem", { name: "Open in file manager", exact: true }).click();
+		await expect(page.getByText("Sent the workspace folder to the file manager.", { exact: true })).toBeVisible();
 		await views.getByRole("button", { name: "Source Control" }).click();
 		await page.locator('[data-bot-row="bot-courier"]').click();
 		await expect.poll(async () => path.normalize((await active())?.cwd ?? "")).toBe(path.normalize(folder));
@@ -105,6 +138,15 @@ test("project and bot conversations keep their own inspector on reopen and on re
 		await expect(panel.getByRole("button", { name: "Look around", exact: true })).toBeVisible();
 		await expect(panel.getByRole("button", { name: /^Ask Courier in chat/ })).toBeVisible();
 		await capture("bot-open");
+		const botSession = (await active())?.sessionPath;
+		expect(botSession).toBeTruthy();
+		const draft = page.locator("textarea:visible").first();
+		await draft.fill("Keep my unfinished request.");
+		const add = panel.getByRole("button", { name: "New automation", exact: true });
+		await add.focus();
+		await page.keyboard.press("Enter");
+		await expect(draft).toHaveValue("Keep my unfinished request.\n\nSet up an automation that ");
+		expect((await active())?.sessionPath).toBe(botSession);
 		const more = panel.locator("[data-inspector-bot] header").getByRole("button", { name: "More", exact: true });
 		await more.click();
 		const menu = page.getByRole("menu", { name: "More", exact: true });

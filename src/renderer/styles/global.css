@@ -474,6 +474,11 @@ html:not([data-input="touch"]) .omp-inspector {
 	line-height: 1.333333;
 }
 
+.omp-inspector .omp-explorer [data-files-search-mode][aria-checked="true"] {
+	background: color-mix(in srgb, var(--sc-text) 13%, var(--sc-surface-3));
+	box-shadow: none;
+}
+
 html:not([data-input="touch"]) .omp-inspector .omp-explorer [data-files-search-mode] {
 	height: var(--sc-space-6);
 }
@@ -481,6 +486,7 @@ html:not([data-input="touch"]) .omp-inspector .omp-explorer [data-files-search-m
 .omp-inspector .omp-explorer input[type="search"] {
 	height: var(--sc-control-md);
 	background: var(--sc-surface-3);
+	border-color: var(--sc-border-subtle);
 	font-size: var(--sc-font-xs);
 }
 

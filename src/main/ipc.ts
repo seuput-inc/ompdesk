@@ -2767,7 +2767,12 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 
 	ipc.handle(IPC_COMMANDS.FS_LIST, async (caller, payload: IpcFsListPayload): Promise<IpcFsListResult> => {
 		const target = targetFor(deps, caller, payload?.tabId);
-		const request = { path: payload?.path, maxDepth: payload?.maxDepth, maxEntries: payload?.maxEntries };
+		const request = {
+			path: payload?.path,
+			maxDepth: payload?.maxDepth,
+			maxEntries: payload?.maxEntries,
+			filters: payload?.filters,
+		};
 		if (target?.device) {
 			return remoteFs({ ...target, device: target.device }, "fs.list", request, (error, code) => ({
 				ok: false,
