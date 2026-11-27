@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.152.0] - 2026-11-27
+
+페어링한 컴퓨터의 봇과 대화하고, 다시 연결해도 원래 채팅을 이어갈 수 있습니다.
+
+- 원격 봇의 채팅은 해당 봇 아래에 모입니다. 기존 봇의 기기 간 메시지 수신은 소유자가 켤 수 있습니다.
+- 페어링한 컴퓨터의 봇도 그룹에 넣어 그 봇에게 질문과 메시지를 보낼 수 있습니다.
+- 새 봇이 첫 대화를 시작합니다. 봇이 맡긴 작업에서 생긴 질문은 그 봇에게 돌아갑니다. 봇 이름을 바꾸면 폴더와 세션, 예약 작업도 따라갑니다.
+- 봇 설정에서 ‘둘러보기’를 예약하면, 정해진 시간에 나를 기다리는 일을 살펴보고 다음 할 일을 그 봇의 ‘제안’에 모읍니다.
+- 봇 채팅에서 워커를 열거나 이미 있는 워커를 맡을 수 있습니다. 봇마다 새 채팅의 권한과 사용할 프로젝트 스킬을 정할 수 있습니다. 봇 설정과 스킬은 파일로 내보내거나 가져올 수 있고, 채팅 기록은 내보내지 않습니다.
+- 봇에게는 항목 상태와 별도로 채팅의 할 일 목록을 갱신하라고 안내합니다. 끝낸 단계만 완료로 표시하고, 승인이 필요하거나 결과를 기다리는 단계는 열어 두도록 했습니다.
+- 봇에 Slack, GitHub, Linear, Google 캘린더와 Gmail을 연결할 수 있습니다. Slack 스레드마다 별도 채팅을 사용하며, 허용 목록 밖의 요청자는 소유자의 허가를 받아야 합니다.
+- 설정에서 설치 버전과 업데이트 버전 옆에 각각의 변경 요약을 표시합니다. Claude API 키는 전용 대화상자에 입력합니다. Claude의 부분 응답을 이미 받았다면 OMPdesk가 재연결 때 같은 요청을 자동 전송하지 않습니다.
+- Claude API 지출 한도와 크레딧 부족을 구분해 표시합니다. API 키로 확인할 수 없는 조직의 잔액은 추정하지 않습니다.
+- Auto·Plan 모드를 제거했습니다. 다음 입력 제안은 누군가 보고 있는 탭에서만 생성합니다. 내부 호출 하나가 시간 제한을 넘겨도 그것만으로 코어를 종료하지 않습니다.
+- 작업이 계속된다는 이유만으로 할 일 목록에 경고를 띄우지 않습니다. 사이드바를 가장 좁게 해도 세션 상태가 보이며, 부모 기록이 없는 자식 세션을 다른 세션 아래에 넣지 않습니다.
+
+<!-- en -->
+
+You can chat with a bot on a paired computer and return to the same conversation after reconnecting.
+
+- A remote bot’s chats appear under its row. Owners can opt existing bots into messages from paired computers.
+- Groups can include bots on paired computers. Group questions and messages reach those bots through their host.
+- New bots start their first conversation. A worker’s question goes back to the bot that assigned the work. Renaming a bot moves its folder, sessions, and routines with it.
+- Schedule Look around in a bot’s settings to have it check what is waiting on you and list next steps under that bot’s Suggestions.
+- Bot chats can open workers or take over existing ones. Each bot can have its own chat permissions and project skills. You can export and import its settings and skills without exporting its chats.
+- Bot instructions now distinguish updating an item from updating the chat’s todo list. They ask bots to mark finished steps done and leave steps open while waiting for approval or a result.
+- Bots can connect to Slack, GitHub, Linear, Google Calendar, and Gmail. Each Slack thread has its own chat. People outside a connector’s allowlist need the owner’s permission to ask.
+- Settings shows the changes for the installed version and the available update separately. Claude API keys have a dedicated dialog. After receiving a partial Claude reply, OMPdesk no longer resends the request automatically on reconnect.
+- Claude API errors distinguish a spending limit from insufficient credit. OMPdesk does not estimate an organization’s balance from an API key that cannot read it.
+- Removed Auto and Plan modes. Next-prompt suggestions run only for tabs someone is viewing. One timed-out internal call no longer stops the core on its own.
+- Continued work alone no longer marks a todo list as out of date. Session status stays visible at the narrowest sidebar width. A child with no recorded parent is no longer grouped under an unrelated session.
+
 ## [0.151.0] - 2026-11-27
 
 사이드바에서 세션을 정렬하고 오래 쉰 세션을 접을 수 있으며, ‘봇’ 제목을 누르면 봇 페이지가 열립니다.
