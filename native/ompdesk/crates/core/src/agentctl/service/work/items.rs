@@ -204,6 +204,8 @@ impl AgentControl {
         now: f64,
     ) -> ItemRecord {
         let mut read = item.clone();
+        // Shared board snapshots are not authority to address a worker.
+        read.work = None;
         let mut limits: Vec<f64> = Vec::new();
         let mut live = 0;
         let mut working = false;

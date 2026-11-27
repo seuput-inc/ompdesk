@@ -144,6 +144,7 @@ pub struct Mem {
     pub blocked: HashMap<String, usize>,
     /// Recorded calls still running in this process, by key: the same call made again joins it (`#calling`).
     pub calling: HashMap<String, Flight<ToolOutcome>>,
+    pub item_opens: HashMap<String, Flight<()>>,
     /// Sessions (`device\npath`) whose saved name `name_untitled` already looked up (`#namesSought`).
     pub names_sought: HashSet<String>,
     /// The turn in which each session (`sender\nreceiver`) sent its last mail: its `busySince` as main saw it then

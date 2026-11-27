@@ -10,10 +10,12 @@
 //! each linked session's `state`.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use super::{read_array, write_text};
+use super::read_array;
+use crate::disk::saves::{SAVES, Saves};
 
 /// `ITEM_STATUSES`.
 pub const STATUSES: [&str; 6] = [
@@ -140,6 +142,15 @@ pub struct ItemEvent {
     pub state: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemWork {
+    pub generation: u64,
+    pub requested_by: String,
+    /// None while the reserved open has not bound its new saved session.
+    pub session: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemRecord {
@@ -150,6 +161,8 @@ pub struct ItemRecord {
     pub number: u32,
     /// The bot chat it belongs to: the owner's changes are mailed there.
     pub session: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work: Option<ItemWork>,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -253,6 +266,7 @@ fn stamp(item: &mut ItemRecord, next: &mut u64) {
 /// The items.
 pub struct Items {
     file: Option<PathBuf>,
+    pub(crate) saves: Arc<Saves>,
     items: Vec<ItemRecord>,
     /// The newest event id given.
     last_event: u64,
@@ -281,6 +295,7 @@ impl Items {
             file,
             items,
             last_event,
+            saves: Arc::clone(&SAVES),
         }
     }
 
@@ -375,10 +390,25 @@ impl Items {
         }
     }
 
+    pub fn commit_work(&mut self, id: &str, work: ItemWork) -> Result<(), String> {
+        let file = self.file.as_ref().ok_or("No durable item journal.")?;
+        let index = self.items.iter().position(|item| item.id == id).ok_or("That item is gone.")?;
+        let old = self.items[index].work.replace(work);
+        let saved = serde_json::to_vec(&self.items)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| self.saves.commit(file, &bytes, 0o600).map_err(|error| error.message));
+        if saved.is_err() {
+            self.items[index].work = old;
+        }
+        saved
+    }
+
     fn save(&self) {
         let Some(file) = &self.file else { return };
-        let text = serde_json::to_string(&self.items).unwrap_or_else(|_| "[]".to_owned());
-        if let Err(error) = write_text(file, &text, Some(0o600)) {
+        let saved = serde_json::to_vec(&self.items)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| self.saves.write(file, &bytes, Some(0o600), 0o777).map_err(|error| error.message));
+        if let Err(error) = saved {
             eprintln!("[items] not saved: {error}");
         }
     }

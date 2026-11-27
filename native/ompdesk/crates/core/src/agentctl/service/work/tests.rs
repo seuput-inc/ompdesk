@@ -2087,6 +2087,68 @@ async fn an_item_reads_stale_snoozed_and_limited_from_what_it_links() {
 }
 
 #[tokio::test]
+async fn managed_item_open_commits_before_spawn_and_first_prompt() {
+    use std::sync::atomic::AtomicBool;
+    use crate::agentctl::journal::items::Items;
+    use crate::disk::saves::Saves;
+
+    let root = Scratch::new();
+    let file = root.0.join("items.json");
+    let disk = file.clone();
+    let (control, asked, bot) = ada(&root, Mails::default(), move |method, args| {
+        match method {
+            "spawn" => {
+                let mut stored = Items::new(Some(disk.clone()));
+                assert!(stored.all(0.0)[0].work.as_ref().unwrap().session.is_none());
+                assert!(args["request"]["worktree"].is_object());
+                Some(json!({"tabId": "work1", "worktree": worktree("managed")}))
+            }
+            "command" if args["command"]["type"] == "prompt" => {
+                let mut stored = Items::new(Some(disk.clone()));
+                assert_eq!(stored.all(0.0)[0].work.as_ref().unwrap().session.as_deref(), Some("/s/work.jsonl"));
+                Some(json!({"success": true}))
+            }
+            "command" if args["command"]["type"] == "agent_control_worker" => Some(json!({"success": true})),
+            _ => None,
+        }
+    }).await;
+    let full = Arc::new(AtomicBool::new(true));
+    let inject = full.clone();
+    let saves = Saves::manual(Box::new(move |file, bytes, mode, dir_mode| {
+        if inject.load(Ordering::SeqCst) {
+            return Err(crate::server::Fault::new("io", "ENOSPC: test disk is full"));
+        }
+        crate::disk::tree::write_atomic_if(file, bytes, mode, dir_mode, &|| true)
+    }));
+    control.items().saves = saves.clone();
+    control.run("bot1", "ompdesk_item", json!({"action":"add","title":"One worker"}), None).await;
+    let id = control.items().find(&bot, "1").unwrap().id.clone();
+    let open = json!({"item": id, "worktree": true, "message":"go"});
+    let tool = "ompdesk_session_open";
+    let failed = control.run("bot1", tool, open.clone(), None).await;
+    assert!(failed.is_error && failed.text.contains("ENOSPC"), "{}", failed.text);
+    full.store(false, Ordering::SeqCst);
+    assert!(saves.retry_once(&file));
+    assert!(Items::new(Some(file.clone())).get(&id).unwrap().work.is_none());
+    let batch = control.run("bot1", tool, json!({"sessions":[open,open]}), None).await;
+    assert!(batch.is_error);
+    assert!(!asked.lock().unwrap().iter().any(|(method, args)|
+        method == "spawn" || args["command"]["type"] == "prompt"));
+
+    let (a,b) = tokio::join!(control.run("bot1", tool, open.clone(), None), control.run("bot1", tool, open.clone(), None));
+    assert!(!a.is_error && !b.is_error, "{} / {}", a.text, b.text);
+    for receipt in [&a.text,&b.text] {
+        assert!(receipt.contains(&format!("Item {id} generation 1")), "{receipt}");
+        assert!(receipt.contains("held on this computer: /s/work.jsonl"), "{receipt}");
+    }
+    let retry = control.run("bot1", tool, open, None).await;
+    assert!(retry.text.contains("/s/work.jsonl"), "{}", retry.text);
+    let calls = asked.lock().unwrap();
+    assert_eq!(calls.iter().filter(|(method, _)| method == "spawn").count(), 1);
+    assert_eq!(calls.iter().filter(|(_, args)| args["command"]["type"] == "prompt").count(), 1);
+}
+
+#[tokio::test]
 async fn a_session_an_item_opened_is_linked_and_names_its_file_once_it_has_one() {
     let root = Scratch::new();
     let (control, _, _) = ada(&root, Mails::default(), |_, _| None).await;

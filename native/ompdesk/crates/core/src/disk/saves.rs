@@ -132,6 +132,21 @@ impl Saves {
         result
     }
 
+    /// A rejected proposal must never become a later save. Leave any older ordinary save owed
+    /// unless the new bytes actually replaced the file, under the same turn as its retry.
+    pub(crate) fn commit(&self, file: &Path, bytes: &[u8], mode: u32) -> Result<(), Fault> {
+        let turn = self.turn(file);
+        let _turn = turn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !(self.writer)(file, bytes, Some(mode), 0o777)? {
+            return Err(Fault::new("not_saved", "The file was not replaced."));
+        }
+        let mut state = self.lock();
+        if state.kept.remove(file).is_some() {
+            state.tell("store.saved", file);
+        }
+        Ok(())
+    }
+
     fn retry(self: &Arc<Self>, file: &Path) {
         #[cfg(test)]
         if self.delays.is_empty() {
@@ -215,7 +230,7 @@ impl Saves {
     }
 }
 
-static SAVES: LazyLock<Arc<Saves>> = LazyLock::new(|| {
+pub(crate) static SAVES: LazyLock<Arc<Saves>> = LazyLock::new(|| {
     Arc::new(Saves::new(
         Box::new(|file, bytes, mode, dir_mode| {
             write_atomic_if(file, bytes, mode, dir_mode, &|| true)
