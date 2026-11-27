@@ -25,12 +25,14 @@ export type BotImportPick = BotImportSource | { app: "other"; folder: string; na
 export interface BotHandOver {
 	/** The tab that holds it. */
 	tabId: string;
+	device?: string;
 	title: string;
 	text: string;
 }
 
 export interface NewBotDraft {
 	name: string;
+	device?: string;
 	purpose?: string;
 	model?: string | null;
 	template?: { template: BotTemplate; line: string };
@@ -40,7 +42,7 @@ export interface NewBotDraft {
 
 export type BotDialog =
 	| { kind: "new"; draft?: Partial<NewBotDraft> }
-	| { kind: "templates"; query?: string; selected?: string }
+	| { kind: "templates"; query?: string; selected?: string; draft?: Partial<NewBotDraft> }
 	| { kind: "import" }
 	| { kind: "delete"; bot: Bot; onDeleted?: () => void }
 	| { kind: "hand"; tabId: string; title: string }
@@ -94,9 +96,10 @@ export const IMPORT_EXPORT_PROMPT =
 	"Save who you are, what you remember and your skills as plain files in a new folder named <your name>-export in my Downloads folder: SOUL.md (who you are and how you work), MEMORY.md (one fact per line), and skills/<name>/SKILL.md for each skill. Leave out keys, tokens and passwords. Reply with the folder's path.";
 
 /** Resolves with the bot once `ready` says so of the state (60 s at most), else null. */
-function whenBot(id: string, ready: (bot: Bot) => boolean): Promise<Bot | null> {
+function whenBot(target: Bot, ready: (bot: Bot) => boolean): Promise<Bot | null> {
 	const { promise, resolve } = Promise.withResolvers<Bot | null>();
-	const check = () => useBotsStore.getState().state.bots.find(bot => bot.id === id);
+	const check = () =>
+		useBotsStore.getState().state.bots.find(bot => bot.id === target.id && bot.device === target.device);
 	const now = check();
 	if (!now) return Promise.resolve(null);
 	if (ready(now)) return Promise.resolve(now);
@@ -130,7 +133,7 @@ export function retryKickoff(botId: string): Promise<void> {
 /** Saves a template's routines, off, waking the bot's home chat (so they run as the bot, in its chat). */
 async function saveRoutines(bot: Bot, template: BotTemplate): Promise<void> {
 	if (template.routines.length === 0) return;
-	const homed = await whenBot(bot.id, known => known.home !== null);
+	const homed = await whenBot(bot, known => known.home !== null);
 	if (!homed?.home) return;
 	for (const routine of template.routines) {
 		const draft: ScheduleDraft = {
@@ -143,7 +146,7 @@ async function saveRoutines(bot: Bot, template: BotTemplate): Promise<void> {
 			enabled: false,
 			wakeSession: homed.home,
 		};
-		await window.omp.schedules.command({ action: "save", draft });
+		await window.omp.schedules.command({ action: "save", draft }, bot.device);
 	}
 }
 
@@ -164,37 +167,40 @@ export async function createBot(draft: NewBotDraft): Promise<Bot> {
 			: draft.importFrom
 				? importKickoff(draft.importFrom)
 				: null;
-	const state = await store.command({
+	const where = draft.device ? { device: draft.device } : {};
+	await store.command({
 		action: "create",
 		name,
+		...where,
+		...(draft.model ? { model: draft.model } : {}),
 		...(template && words
 			? {
 					soul: words.templateSoul(template.template, name, draft.purpose?.trim() || template.line),
 					skills: words.templateSkills(template.template),
+					...(draft.device && template.template.routines.length ? { routines: template.template.routines } : {}),
 				}
 			: draft.purpose?.trim()
 				? { purpose: draft.purpose.trim() }
 				: {}),
 		...(kickoff ? { kickoff } : {}),
 	});
-	const bot = state.bots.find(known => known.name === name);
+	const bot = useBotsStore.getState().state.bots.find(known => known.name === name && known.device === draft.device);
 	if (!bot) throw new Error(translate("bots.new.failed"));
 	noteLaunch(bot.id, { tabId: null, start: "running" });
-	if (draft.model !== undefined)
-		await store
-			.command({ action: "update", id: bot.id, model: draft.model })
-			.catch((error: unknown) => toastError({ title: translate("bots.settings.saveFailed"), error }));
 	useUiStore.getState().closeDestination();
-	const tabId = await useTabsStore.getState().openTab({ cwd: bot.folder, kind: "agent" });
+	const tabId = await useTabsStore.getState().openTab({ cwd: bot.folder, kind: "agent", ...where });
 	if (!tabId) {
 		noteLaunch(bot.id, { tabId: null, start: "failed", error: translate("bots.launch.notStarted") });
 		return bot;
 	}
 	noteLaunch(bot.id, { tabId, start: "done" });
-	if (template) void saveRoutines(bot, template.template).catch(() => {});
+	if (template && !draft.device)
+		void saveRoutines(bot, template.template).catch((error: unknown) =>
+			toastError({ title: translate("bots.settings.saveFailed"), error }),
+		);
 	const handOver = draft.handOver;
 	if (handOver)
-		void whenBot(bot.id, known => known.home !== null).then(homed =>
+		void whenBot(bot, known => known.home !== null).then(homed =>
 			homed
 				? useBotsStore
 						.getState()

@@ -4,6 +4,7 @@
 //! captured from the TypeScript (`captured.json`).
 
 mod bot_provenance;
+mod peer_create;
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,6 +22,26 @@ use crate::agentctl::journal::system_clock;
 use crate::ports::Port;
 
 type Asked = Arc<Mutex<Vec<(String, Value)>>>;
+
+#[tokio::test]
+async fn simultaneous_bot_creates_claim_one_name_and_folder() {
+    let root = Scratch::new();
+    let (host, _, _) = ada(&root, Mails::default(), |_, _| None).await;
+    let start = std::sync::Barrier::new(2);
+    let runtime = tokio::runtime::Handle::current();
+    let create = || {
+        let _entered = runtime.enter();
+        start.wait();
+        host.create_bot("Concurrent", None).is_ok()
+    };
+    let (a, b) = std::thread::scope(|scope| {
+        let other = scope.spawn(&create);
+        (create(), other.join().unwrap())
+    });
+    assert_ne!(a, b);
+    assert!(root.0.join("concurrent").is_dir());
+    assert!(!root.0.join("concurrent-2").exists());
+}
 
 /// A control over a fake main: `reply` answers every ask; what was asked and told is kept in order.
 fn rig(
@@ -977,6 +998,45 @@ async fn stored_edits_resolve_relative_paths_in_the_owner_not_the_session_index(
 }
 
 #[tokio::test]
+async fn create_models_reads_only_model_roles_on_the_selected_computer() {
+    let mut state = family();
+    state["devices"] = json!([{"id":"dev-studio","name":"Studio","state":"online"}]);
+    state["tabs"]
+        .as_array_mut()
+        .unwrap()
+        .push(tab("studio001", json!({"device":"dev-studio"})));
+    state["windowOf"]["studio001"] = json!("w");
+    let (control, _) = rig(
+        state,
+        Caps::default(),
+        main_of(|method, args| {
+            (method == "command").then(|| {
+                assert_eq!(args["command"], json!({"type":"get_model_roles"}));
+                json!({"success": true, "data": {"servedBy":args["tabId"]}})
+            })
+        }),
+    );
+    let mut request = json!({"action":"createModels","callerTabId":"main0001"});
+    assert_eq!(
+        control.bots_command(request.clone()).await.unwrap()["servedBy"],
+        "main0001"
+    );
+    request["device"] = json!("dev-studio");
+    assert_eq!(
+        control.bots_command(request.clone()).await.unwrap()["servedBy"],
+        "studio001"
+    );
+    request["device"] = json!("Studio");
+    assert!(control.bots_command(request.clone()).await.is_err());
+    assert!(
+        control
+            .bots_from(request, "dev-b", "MacBook", None)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn an_app_action_runs_a_command_on_another_computer_in_one_background_session() {
     let mut state = family();
     state["devices"] = json!([{ "id": "dev-studio", "name": "Studio", "state": "online" }]);
@@ -1655,7 +1715,7 @@ async fn bot_deletion_binds_each_workers_device_and_classification() {
     assert_ne!(current["digest"], first["digest"]);
     let request = json!({"action":"delete","id":"ada","expected":first});
     let reply = control
-        .bots_from(request.clone(), "viewer", "Viewer")
+        .bots_from(request.clone(), "viewer", "Viewer", None)
         .await
         .unwrap();
     let (viewer, _) = rig(bot_world("/repo"), Caps::default(), move |method, _| {
@@ -2994,6 +3054,180 @@ async fn a_room_asks_the_members_its_reply_mode_names_and_a_member_answers_with_
 }
 
 #[tokio::test]
+async fn paired_create_uses_the_hosts_folder_and_returns_its_copy() {
+    let root = Scratch::new();
+    let (host, _, _) = ada_in(&root, &kept_files(&root), Mails::default(), |_, _| None).await;
+    let original = host.bots_share();
+    let from = |request: Value| {
+        let key = super::bots::new_id("create");
+        let host = &host;
+        async move {
+            host.bots_from(request, "dev-b", "MacBook", Some(&key))
+                .await
+        }
+    };
+    let outside = Scratch::new();
+    let absolute = outside.0.join("forbidden");
+    let inside = root.0.join("forbidden");
+    for action in ["create", "createFolder"] {
+        for extra in [
+            json!({"folder": null}),
+            json!({"folder": absolute}),
+            json!({"folder": "../escape"}),
+            json!({"folder": inside}),
+            json!({"path": absolute}),
+            json!({"skillProjects":[absolute]}),
+            json!({"reach":[]}),
+            json!({"chatApproval":"yolo"}),
+            json!({"device":"dev-c"}),
+            json!({"skills":[{"name":"../bad","content":"text"}]}),
+            json!({"skills":[{"name":"ok","content":"text","path":absolute}]}),
+            json!({"requestId":"retry"}),
+        ] {
+            let mut request = extra;
+            request["action"] = json!(action);
+            request["name"] = json!("Blocked");
+            assert!(from(request).await.is_err());
+        }
+    }
+    assert_eq!(host.bots_share(), original);
+    assert!(!absolute.exists() && !inside.exists() && !root.0.join("blocked").exists());
+    let folder = root.0.join("ada-2");
+    let preview = json!({"action":"createFolder","name":"Ada!"});
+    let proposed = from(preview.clone()).await.unwrap();
+    assert_eq!(proposed, json!({"folder":folder,"peerCreate":true}));
+    assert_eq!(
+        host.bots_command(preview.clone()).await.unwrap(),
+        json!({"folder":folder})
+    );
+    assert_eq!(
+        from(json!({"action":"createFolder","name":""}))
+            .await
+            .unwrap(),
+        json!({"folder":root.0,"peerCreate":true})
+    );
+    assert!(!folder.exists());
+    let request = json!({"action":"create","name":"Ada!","soul":"# Ada!\n\nReview.",
+        "model":"host/review","purpose":"fallback","skills":[{"name":"audit","content":"Inspect."}],"kickoff":"Begin."});
+    let created = from(request.clone()).await.unwrap();
+    assert_eq!(created, host.bots_share());
+    let bot = host.bot_named("Ada!").unwrap();
+    assert_eq!(bot.kickoff.as_deref(), Some("Begin."));
+    assert!(!bot.first_run);
+    assert!(!bot.look_setting.as_ref().unwrap().on);
+    assert_eq!(bot.model.as_deref(), Some("host/review"));
+    assert_eq!(
+        std::fs::read_to_string(folder.join("SOUL.md")).unwrap(),
+        "# Ada!\n\nReview.\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(folder.join(".omp/skills/audit/SKILL.md")).unwrap(),
+        "Inspect."
+    );
+    assert!(from(request.clone()).await.is_err());
+    assert_eq!(host.bots_share(), created);
+    assert!(!root.0.join("ada-3").exists());
+
+    let carried = created.clone();
+    let expected = proposed.clone();
+    let (creator, _) = rig(
+        bot_world("/elsewhere"),
+        Caps::default(),
+        move |method, args| {
+            Ok(if method != "botsCommand" {
+                Value::Null
+            } else {
+                assert_eq!(args["device"], "dev-a");
+                assert!(args["request"].get("device").is_none());
+                if args["request"]["action"] == "createFolder" {
+                    expected.clone()
+                } else {
+                    carried.clone()
+                }
+            })
+        },
+    );
+    creator.bots_remote(&json!({"device":"dev-a","name":"Mini","online":true,"change":original}));
+    let mut preview = preview;
+    preview["device"] = json!("dev-a");
+    assert_eq!(creator.bots_command(preview).await.unwrap(), proposed);
+    let mut request = request;
+    request["device"] = json!("dev-a");
+    let copy = creator.bots_command(request).await.unwrap();
+    assert_eq!(copy["bots"], json!([]));
+    assert_eq!(copy["remote"][0]["bots"], created["state"]["bots"]);
+
+    let changed = from(json!({"action":"update","id":bot.id,"model":"host/other"}))
+        .await
+        .unwrap();
+    assert_eq!(changed, host.bots_share());
+    assert_eq!(
+        host.bot_named("Ada!").unwrap().model.as_deref(),
+        Some("host/other")
+    );
+    let expected = from(json!({"action":"deletePreview","id":bot.id}))
+        .await
+        .unwrap();
+    let deleted = from(json!({"action":"delete","id":bot.id,"expected":expected}))
+        .await
+        .unwrap();
+    assert_eq!(deleted, host.bots_share());
+    assert!(host.bot_named("Ada!").is_err());
+    from(json!({"action":"create","name":"Purpose","purpose":"Find regressions."}))
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(root.0.join("purpose/SOUL.md")).unwrap(),
+        "# Purpose\n\nFind regressions.\n"
+    );
+    assert!(!host.bot_named("Purpose").unwrap().first_run);
+    from(json!({"action":"create","name":"Blank","kickoff":" \t"}))
+        .await
+        .unwrap();
+    assert!(!host.bot_named("Blank").unwrap().first_run);
+    host.bots_command(json!({"action":"create","name":"Local"}))
+        .await
+        .unwrap();
+    assert!(host.bot_named("Local").unwrap().first_run);
+}
+
+#[tokio::test]
+async fn a_lost_peer_create_answer_is_settled_from_its_host_receipt() {
+    let root = Scratch::new();
+    let files = kept_files(&root);
+    let start = || {
+        rig_files(quiet_world(), Caps::default(), &files, |_, _| {
+            Ok(Value::Null)
+        })
+        .0
+    };
+    let host = start();
+    let request = json!({"action":"create","name":"Ada","kickoff":"Begin."});
+    assert!(
+        host.bots_from(request.clone(), "peer", "Peer", None)
+            .await
+            .is_err()
+    );
+    assert!(!host.bots().peer_created("peer", "host-key").unwrap());
+    let created = host
+        .bots_from(request.clone(), "peer", "Peer", Some("host-key"))
+        .await
+        .unwrap();
+    assert!(created["state"]["bots"][0].get("creationReceipt").is_none());
+    drop(host);
+    let host = start();
+    assert!(host.bots().peer_created("peer", "host-key").unwrap());
+    assert!(!host.bots().peer_created("other", "host-key").unwrap());
+    host.bots_from(request, "peer", "Peer", Some("host-key"))
+        .await
+        .unwrap();
+    assert_eq!(host.bots().all().len(), 1);
+    assert!(!root.0.join("ada-2").exists());
+    std::fs::write(files.bots.as_ref().unwrap(), "{").unwrap();
+    assert!(host.bots().peer_created("peer", "host-key").is_err());
+}
+
+#[tokio::test]
 async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_once() {
     // The host: Ada, whose item asks the owner.
     let root = Scratch::new();
@@ -3023,12 +3257,12 @@ async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_onc
     // The host makes a paired device's answer; sent again (a retry over the link), it changes nothing.
     let request = json!({ "action": "item", "id": item.id, "answer": { "choice": 0, "question": question }, "requestId": "r1" });
     let answer = host
-        .bots_from(request.clone(), "dev-b", "MacBook")
+        .bots_from(request.clone(), "dev-b", "MacBook", None)
         .await
         .unwrap();
     assert_eq!(answer["state"]["items"][0]["status"], "working");
     let again = host
-        .bots_from(request.clone(), "dev-b", "MacBook")
+        .bots_from(request.clone(), "dev-b", "MacBook", None)
         .await
         .unwrap();
     assert_eq!(again["version"], answer["version"]);
@@ -3061,28 +3295,17 @@ async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_onc
             .iter()
             .all(|change| change["set"]["bots"] == json!([]))
     );
-    // A bot is made where it is to live: a device cannot make one here.
-    let refused = host
-        .bots_from(
-            json!({ "action": "create", "name": "Cy" }),
-            "dev-b",
-            "MacBook",
-        )
-        .await
-        .unwrap_err();
-    assert!(
-        refused.message().contains("MacBook cannot create"),
-        "{}",
-        refused.message()
-    );
-    assert!(host.bot_named("Cy").is_err());
     for request in [
         json!({"action":"allowLegacyPeers", "ids":[ada_id]}),
         json!({"action":"update", "id":ada_id, "reach":["dev-b"]}),
         json!({"action":"update", "id":ada_id, "chatApproval":"always-ask"}),
         json!({"action":"update", "id":ada_id, "skillProjects":[]}),
     ] {
-        assert!(host.bots_from(request, "dev-b", "MacBook").await.is_err());
+        assert!(
+            host.bots_from(request, "dev-b", "MacBook", None)
+                .await
+                .is_err()
+        );
     }
 
     // The device: its main carries a change of the host's to it (`botsCommand`) and hands back the host's answer.
@@ -3265,7 +3488,7 @@ async fn a_bot_asked_by_a_paired_computers_group_answers_it_there() {
     .await;
     let ask = json!({ "action": "roomAsk", "id": ada_id, "room": "room-b1", "roomName": "Team", "mailId": "room-room-b1-1-x", "text": "In the group “Team” (room room-b1), Owner: Which day?" });
     for _ in 0..2 {
-        host.bots_from(ask.clone(), "dev-b", "MacBook")
+        host.bots_from(ask.clone(), "dev-b", "MacBook", None)
             .await
             .unwrap();
     }

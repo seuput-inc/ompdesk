@@ -628,6 +628,169 @@ fn an_old_routine_quota_answer_cannot_start_or_release_the_new_generations_run()
     assert_eq!(engine.state()["runs"][0]["detail"], "new");
 }
 
+#[test]
+fn peer_bot_routines_wait_for_this_hosts_window_and_replay_keeps_the_owners_choice() {
+    use serde_json::json;
+    let mut bot: crate::agentctl::journal::bots::BotRecord = serde_json::from_value(json!({
+        "id":"bot-ada", "name":"Ada", "folder":"/bots/ada",
+        "creationReceipt":{"device":"creator","key":"host-key"},
+        "peerCreate":{"sessionId":null,"mail":null,"routines":[
+            {"label":"Morning","frequency":{"kind":"daily","time":"09:00","days":[1,2,3,4,5]}},
+            {"label":"Review","frequency":{"kind":"interval","minutes":120}}
+        ]}
+    }))
+    .unwrap();
+    let mut play = Play::new(0);
+    assert!(play.engine.install_peer_routines(&bot, 0).is_err());
+    assert_eq!(play.engine.state()["schedules"], json!([]));
+    bot.home = Some("/sessions/home.jsonl".into());
+    bot.peer_create.as_mut().unwrap().session_id = Some("home".into());
+    play.engine.install_peer_routines(&bot, 0).unwrap();
+    play.settle();
+    play.relaunch(24 * HOUR);
+    let state = play.engine.state();
+    let rows = state["schedules"].as_array().unwrap();
+    assert_eq!(rows.len(), 2);
+    for row in rows {
+        assert_eq!(row["needsHostActivation"], true);
+        assert_eq!(row["enabled"], false);
+        assert_eq!(row["wakeSession"], "/sessions/home.jsonl");
+        assert!(row.get("peerBotRequester").is_none());
+        assert_eq!(state["nextRuns"][row["id"].as_str().unwrap()], Value::Null);
+    }
+    let id = &rows[0]["id"];
+    let enable = json!({"action":"setEnabled","id":id,"enabled":true});
+    for origin in [Some("creator"), Some("other"), None] {
+        for request in [
+            enable.clone(),
+            json!({"action":"runNow","id":id}),
+            json!({"action":"save","id":id,"draft":draft(json!({"kind":"interval","minutes":5}))}),
+        ] {
+            assert!(play.engine.command(&request, origin, play.now).is_err());
+        }
+    }
+    assert_eq!(play.engine.state(), state);
+    for (key, change) in [
+        ("name", json!("Other")),
+        ("frequency", json!({"kind":"interval","minutes":15})),
+        ("wakeSession", json!("/sessions/other.jsonl")),
+        ("prompt", json!("Other ask")),
+    ] {
+        let mut draft = rows[0].clone();
+        draft[key] = change;
+        assert!(
+            play.engine
+                .command(
+                    &json!({"action":"save","id":id,"draft":draft}),
+                    Some("creator"),
+                    play.now
+                )
+                .is_err()
+        );
+    }
+    let original = bot.home.clone().unwrap();
+    bot.moving = Some(crate::agentctl::journal::bots::FolderMove {
+        from: bot.folder.clone(),
+        to: "/bots/new".into(),
+    });
+    let moved = "/sessions/moved.jsonl";
+    let row_id = id.as_str().unwrap();
+    for _ in 0..2 {
+        assert!(
+            play.engine
+                .move_dormant_routine(&bot, row_id, Some("New: Morning"), Some(moved))
+                .unwrap()
+        );
+    }
+    let row = &play.engine.state()["schedules"][0];
+    assert_eq!(row["wakeSession"], moved);
+    assert_eq!(row["cwd"], "/bots/new");
+    assert_eq!(row["name"], "New: Morning");
+    assert_eq!(row["enabled"], false);
+    assert_eq!(row["needsHostActivation"], true);
+    assert!(
+        play.engine
+            .command(&enable, Some("creator"), play.now)
+            .is_err()
+    );
+    assert!(
+        play.engine
+            .move_dormant_routine(&bot, row_id, None, Some(&original))
+            .is_err()
+    );
+    assert!(play.launches.is_empty());
+    play.engine.host_window_command(&enable, play.now).unwrap();
+    play.engine.install_peer_routines(&bot, play.now).unwrap();
+    play.settle();
+    play.relaunch(0);
+    let rows = play.engine.state()["schedules"].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["enabled"], true);
+    assert!(rows[0].get("needsHostActivation").is_none());
+    assert_eq!(rows[1]["needsHostActivation"], true);
+    let mut stored: Value = serde_json::from_str(&play.engine.journal()).unwrap();
+    stored["schedules"][0]["peerBotRequester"] = json!({});
+    play.engine.load(Some(&stored.to_string()), 0);
+    assert!(play.engine.host_window_command(&enable, 0).is_err());
+    assert_eq!(play.engine.state()["schedules"][0]["enabled"], false);
+}
+
+#[tokio::test]
+async fn an_interrupted_routine_install_replays_from_both_real_journals() {
+    use crate::agentctl::journal::bots::{BotRecord, Bots};
+    use crate::server::{Call, Scope};
+    use serde_json::json;
+    let dir = crate::fs::disk::make_temp_dir("ompdesk-peer-bot-").unwrap();
+    let file = dir.join("schedules.json");
+    let registry = dir.join("bots.json");
+    let name = super::uuid();
+    let (frames, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let open = || {
+        super::open(&Call {
+            params: serde_json::value::to_raw_value(&json!({
+                "service":name,"file":file,"logDir":dir,"tickMs":30000,"minuteMs":60000,
+                "manual":true,"charges":true,"wakes":true,"now":0,
+                "limits":{"runsKept":200,"runsPerSchedule":20,"onceDoneKept":20,"chainLimit":10,"agentPrefix":"[agent] "}
+            })).unwrap(),
+            bin: None, scope: Scope::detached(), events: crate::server::test_events(&frames),
+        }).unwrap();
+    };
+    let close = || super::locked(&super::SERVICES).remove(&name).unwrap();
+    let bot: BotRecord = serde_json::from_value(json!({
+        "id":"bot","name":"Ada","folder":dir,"home":dir.join("home.jsonl"),
+        "creationReceipt":{"device":"peer","key":"made"},
+        "peerCreate":{"sessionId":"home","mail":null,"routines":[{"label":"Review","frequency":{"kind":"interval","minutes":120}}]}
+    })).unwrap();
+    let mut bots = Bots::new(Some(registry.clone()));
+    bots.add_peer(bot.clone()).unwrap();
+    assert!(bots.install_routines("bot").is_err());
+    open();
+    // Crash window: schedules are on disk, but the bot journal still carries the install intent.
+    super::install_bot_routines(&file, &bot).unwrap();
+    let read = |file: &std::path::Path| -> Value {
+        serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap()
+    };
+    assert_eq!(read(&file)["schedules"][0]["peerBotRequester"], "peer");
+    assert_eq!(
+        read(&registry)[0]["peerCreate"]["routines"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    close().close(Some(0.0)).await;
+    open();
+    let mut bots = Bots::new(Some(registry.clone()));
+    bots.install_routines("bot").unwrap();
+    let rows = read(&file)["schedules"].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], "bot-routine-0");
+    assert_eq!(rows[0]["enabled"], false);
+    assert_eq!(read(&registry)[0]["peerCreate"]["routines"], json!([]));
+    close().close(Some(0.0)).await;
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// The journal's writer thread can be holding an older state when the quit's close writes the last one; nothing of
 /// it may land after the close, not even its temp file, or the folder cannot be removed (`ENOTEMPTY` on Windows).
 #[test]

@@ -1,21 +1,16 @@
-/**
- * A new bot starts with its name and purpose (`BOT_PURPOSE_MAX` characters, the first
- * paragraph of its SOUL.md) and model; from a template, the template's skills it keeps. Where it runs is this computer:
- * a bot lives in its folder on this computer. ⌘/Ctrl+Enter creates.
- *
- * The first bot on a computer where another app's bots are found offers to bring one over (Orca's `BotImportNudge`).
- */
 import { LayoutTemplate } from "lucide-react";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { BOT_PURPOSE_MAX, type BotImportSource } from "../../../shared/bots";
 import { useCurrentLang, useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
 import { botTemplateWords } from "../../locales/bot-templates";
 import { useBotsStore } from "../../stores/bots";
-import { Banner, BotFace, Button, Checkbox, FieldLabel, Input, Modal, TextArea } from "../common";
+import { usePairedHosts, useRemoteStore } from "../../stores/remote";
+import { Banner, BotFace, Button, Checkbox, FieldLabel, Input, Modal, Select, TextArea } from "../common";
 import { ModelValueSelect } from "../settings/ModelValueSelect";
 import { createBot, type NewBotDraft, openBotDialog } from "./bot-launch";
 import { freeBotName } from "./bot-view";
+import { botCreateFailure, botHostRows, failedHostProbe, type HostState } from "./new-bot-hosts";
 
 const NUDGE_DISMISSED_KEY = "omp.bots.importNudgeDismissed";
 /** The counter shows from here (Orca's `NewBotPurposeField`). */
@@ -25,7 +20,71 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 	const t = useT();
 	const lang = useCurrentLang();
 	const formId = useId();
-	const bots = useBotsStore(s => s.state.bots).filter(bot => !bot.device);
+	const [device, setDevice] = useState(
+		draft?.importFrom ? undefined : draft?.handOver ? draft.handOver.device : draft?.device,
+	);
+	const allBots = useBotsStore(s => s.state.bots);
+	const bots = allBots.filter(bot => (bot.device ?? undefined) === device);
+	const hosts = usePairedHosts();
+	const localName = useRemoteStore(s => s.state?.host.name) || t("bots.new.local");
+	const disconnected = useRemoteStore(s => s.awaitingReconnectState);
+	const [platform, setPlatform] = useState<string>();
+	useEffect(() => {
+		void window.omp.system
+			.info()
+			.then(info => setPlatform(info.platform))
+			.catch(() => {});
+	}, []);
+	const origin = draft?.importFrom ? null : draft?.handOver ? (draft.handOver.device ?? null) : undefined;
+	const online = JSON.stringify(
+		disconnected
+			? []
+			: [
+					"",
+					...hosts
+						.filter(h => h.state === "online")
+						.map(h => h.deviceId)
+						.sort(),
+				].filter(id => origin === undefined || id === (origin ?? "")),
+	);
+	const [probe, setProbe] = useState({
+		online: "",
+		states: new Map<string, HostState>(),
+		roots: new Map<string, string>(),
+	});
+	useEffect(() => {
+		let active = true;
+		setProbe({ online, states: new Map(), roots: new Map() });
+		for (const id of JSON.parse(online) as string[]) {
+			const record = (state: HostState, root?: string) => {
+				if (active)
+					setProbe(prev => ({
+						online,
+						states: new Map(prev.states).set(id, state),
+						roots: root ? new Map(prev.roots).set(id, root) : prev.roots,
+					}));
+			};
+			void window.omp.bots.createFolder("", id || undefined).then(
+				result =>
+					record(id && result?.peerCreate !== true ? "update" : result?.folder ? "ready" : "busy", result?.folder),
+				err => record(failedHostProbe(err)),
+			);
+		}
+		return () => {
+			active = false;
+		};
+	}, [online]);
+	const rows = botHostRows(
+		{ name: localName, platform },
+		hosts,
+		probe.online === online ? probe.states : new Map(),
+		disconnected,
+		origin,
+		device,
+	);
+	const host = rows.find(row => row.device === (device ?? null));
+	const nameRef = useRef<HTMLInputElement>(null);
+	const purposeRef = useRef<HTMLTextAreaElement>(null);
 	const template = draft?.template;
 	const [name, setName] = useState(
 		() => draft?.name ?? (template ? freeBotName(botTemplateWords(lang, template.template.id).name, bots) : ""),
@@ -40,7 +99,12 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 
 	// Only for the first bot here, and until the person says not again.
 	const nudge =
-		bots.length === 0 && !draft?.importFrom && !template && localStorage.getItem(NUDGE_DISMISSED_KEY) !== "1";
+		!device &&
+		!draft?.handOver &&
+		bots.length === 0 &&
+		!draft?.importFrom &&
+		!template &&
+		localStorage.getItem(NUDGE_DISMISSED_KEY) !== "1";
 	useEffect(() => {
 		if (!nudge) return;
 		window.omp.bots
@@ -53,21 +117,58 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 		return app ? { app, count: sources.filter(source => source.app === app).length } : null;
 	}, [sources]);
 
-	const typed = name.trim().length > 0 || purpose.trim().length > 0;
+	const trimmed = name.trim();
+	const duplicate = !!trimmed && bots.some(bot => bot.name.toLocaleLowerCase() === trimmed.toLocaleLowerCase());
+	const duplicateError = duplicate
+		? t("bots.new.error.name", { host: host?.name ?? localName, name: trimmed })
+		: undefined;
+	const validName = !!trimmed && [...trimmed].length <= 80 && !duplicate;
+	const [preview, setPreview] = useState<{ device?: string; name: string; folder: string }>();
+	useEffect(() => {
+		setPreview(undefined);
+		if (host?.state !== "ready" || !validName) return;
+		let active = true;
+		const timer = setTimeout(() => {
+			void window.omp.bots
+				.createFolder(trimmed, device)
+				.then(({ folder }) => {
+					if (active) setPreview({ device, name: trimmed, folder });
+				})
+				.catch(() => {});
+		}, 120);
+		return () => {
+			active = false;
+			clearTimeout(timer);
+		};
+	}, [device, trimmed, validName, host?.state]);
+	const folder =
+		host?.state !== "ready"
+			? undefined
+			: !trimmed
+				? probe.roots.get(device ?? "")
+				: validName && preview?.device === device && preview?.name === trimmed
+					? preview.folder
+					: undefined;
 	const tooLong = purpose.trim().length > BOT_PURPOSE_MAX;
 
 	const submit = async () => {
 		if (busy) return;
-		if (!name.trim()) {
-			setNameError(t("bots.new.nameMissing"));
+		if (!validName) {
+			setNameError(duplicateError ?? t("bots.new.nameMissing"));
+			nameRef.current?.focus();
 			return;
 		}
-		if (tooLong) return;
+		if (tooLong) {
+			purposeRef.current?.focus();
+			return;
+		}
+		if (host?.state !== "ready") return;
 		setBusy(true);
 		setError(null);
 		try {
 			await createBot({
 				...draft,
+				device,
 				name,
 				purpose,
 				model,
@@ -85,7 +186,14 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 			});
 			onClose();
 		} catch (failure) {
-			setError(failure instanceof Error ? failure.message : String(failure));
+			if (device) {
+				const { kind, detail } = botCreateFailure(failure);
+				const message = t(`bots.new.error.${kind}`, { host: host.name, name: trimmed });
+				setError(kind === "refused" || kind === "unconfirmed" ? `${message} ${detail}` : message);
+				if (kind === "name") nameRef.current?.focus();
+			} else {
+				setError(failure instanceof Error ? failure.message : String(failure));
+			}
 		} finally {
 			setBusy(false);
 		}
@@ -96,11 +204,17 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 			description={draft?.handOver ? t("bots.new.forHandOver", { title: draft.handOver.title }) : undefined}
 			footer={
 				<>
-					{!template && !typed && !draft?.importFrom && (
+					{!template && !draft?.importFrom && (
 						<Button
 							className="mr-auto"
 							icon={<LayoutTemplate />}
-							onClick={() => openBotDialog({ kind: "templates" })}
+							disabled={busy}
+							onClick={() =>
+								openBotDialog({
+									kind: "templates",
+									draft: { ...draft, device, model, name: name || undefined, purpose: purpose || undefined },
+								})
+							}
 							type="button"
 							variant="ghost"
 						>
@@ -112,13 +226,13 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 					</Button>
 					<Button
 						data-new-bot-create
-						disabled={tooLong}
+						disabled={busy || host?.state !== "ready"}
 						form={formId}
 						loading={busy}
 						type="submit"
 						variant="primary"
 					>
-						{t("bots.new.create")}
+						{busy ? t("bots.new.creatingOn", { host: host?.name ?? device ?? localName }) : t("bots.new.create")}
 					</Button>
 				</>
 			}
@@ -128,7 +242,7 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 			title={t("bots.new.title")}
 		>
 			<form
-				className="flex flex-col gap-4"
+				className="flex flex-col gap-3"
 				data-new-bot
 				id={formId}
 				onKeyDown={event => {
@@ -165,20 +279,23 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 						})}
 					</Banner>
 				)}
-				<BotFace color="var(--sc-text-muted)" seed={formId} size={64} />
-				<Input
-					autoFocus
-					data-dialog-autofocus
-					error={nameError ?? undefined}
-					label={t("bots.new.name")}
-					maxLength={80}
-					onChange={event => {
-						setName(event.target.value);
-						setNameError(null);
-					}}
-					placeholder={t("bots.new.namePlaceholder")}
-					value={name}
-				/>
+				<div className="grid grid-cols-[40px_minmax(0,1fr)] items-center gap-3">
+					<BotFace color="var(--sc-text-muted)" seed={formId} size={40} />
+					<Input
+						autoFocus
+						data-dialog-autofocus
+						ref={nameRef}
+						error={duplicateError ?? nameError ?? undefined}
+						label={t("bots.new.name")}
+						maxLength={80}
+						onChange={event => {
+							setName(event.target.value);
+							setNameError(null);
+						}}
+						placeholder={t("bots.new.namePlaceholder")}
+						value={name}
+					/>
+				</div>
 				<TextArea
 					autoGrow
 					error={
@@ -194,22 +311,93 @@ export function NewBotDialog({ draft, onClose }: { draft?: Partial<NewBotDraft>;
 					label={t("bots.new.purpose")}
 					onChange={event => setPurpose(event.target.value)}
 					placeholder={t("bots.new.purposePlaceholder")}
-					rows={4}
+					ref={purposeRef}
+					rows={2}
 					value={purpose}
 				/>
-				<div className="flex flex-col gap-1.5">
-					<FieldLabel as="label" htmlFor={`${formId}-model`}>
-						{t("bots.new.model")}
-					</FieldLabel>
-					<ModelValueSelect
-						id={`${formId}-model`}
-						kind="model"
-						onCommit={value => setModel(value || null)}
-						placeholder={t("bots.new.modelDefault")}
-						value={model ?? ""}
-					/>
-					<span className="text-sc-xs text-(--sc-text-muted)">{t("bots.new.runsHere")}</span>
+				<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+					<Select
+						className="truncate"
+						label={t("bots.new.computer")}
+						disabled={busy || !!draft?.handOver || !!draft?.importFrom}
+						value={device ?? ""}
+						onChange={event => {
+							const next = event.target.value || undefined;
+							if (template && name === freeBotName(botTemplateWords(lang, template.template.id).name, bots)) {
+								setName(
+									freeBotName(
+										botTemplateWords(lang, template.template.id).name,
+										allBots.filter(bot => (bot.device ?? undefined) === next),
+									),
+								);
+							}
+							setDevice(next);
+							setModel(null);
+							setNameError(null);
+							setError(null);
+						}}
+					>
+						{(["ready", "unavailable"] as const).map(group => {
+							const choices = rows.filter(row => (row.state === "ready") === (group === "ready"));
+							return (
+								choices.length > 0 && (
+									<optgroup key={group} label={t(`bots.new.group.${group}`)}>
+										{choices.map(row => (
+											<option
+												key={row.device ?? ""}
+												value={row.device ?? ""}
+												disabled={row.state !== "ready"}
+											>
+												{[
+													row.name,
+													row.platform === "darwin"
+														? "macOS"
+														: row.platform === "win32"
+															? "Windows"
+															: row.platform === "linux"
+																? "Linux"
+																: row.platform,
+													t(`bots.new.host.${row.reason}`),
+												]
+													.filter(Boolean)
+													.join(" · ")}
+											</option>
+										))}
+									</optgroup>
+								)
+							);
+						})}
+					</Select>
+					<div className="min-w-0">
+						<FieldLabel as="label" htmlFor={`${formId}-model`}>
+							{t("bots.new.model")}
+						</FieldLabel>
+						<ModelValueSelect
+							key={device ?? ""}
+							device={device ?? null}
+							disabled={busy || host?.state !== "ready"}
+							id={`${formId}-model`}
+							kind="model"
+							onCommit={value => setModel(value || null)}
+							placeholder={t("bots.new.modelDefault")}
+							value={model ?? ""}
+						/>
+					</div>
 				</div>
+				{folder && host && (
+					<p
+						className="min-w-0 wrap-anywhere font-mono text-sc-xs text-(--sc-text-muted)"
+						data-new-bot-folder
+						title={folder}
+					>
+						{t("bots.new.folder", { host: host.name, folder })}
+					</p>
+				)}
+				{device && host && !!template?.template.routines.length && (
+					<p className="text-sc-xs text-(--sc-text-muted)">
+						{t("bots.new.activateRoutines", { host: host.name })}
+					</p>
+				)}
 				{template && template.template.skills.length > 0 && (
 					<fieldset className="flex flex-col gap-1.5">
 						<FieldLabel as="legend">{t("bots.new.skills")}</FieldLabel>
