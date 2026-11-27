@@ -54,7 +54,10 @@ export function useTurnCheck(mode: "hydrate" | "cached" | "off") {
 	return { outcome, check };
 }
 
-export function checkWords(t: (key: string, params?: Record<string, string | number>) => string, check: LastCheck): string {
+export function checkWords(
+	t: (key: string, params?: Record<string, string | number>) => string,
+	check: LastCheck,
+): string {
 	const verdict = check.state === "passed" ? "passed" : "failed";
 	const words =
 		check.state === "running"

@@ -2,8 +2,8 @@ import type { Bot } from "../../shared/bots";
 
 export const quietScenario = typeof location !== "undefined" ? new URLSearchParams(location.search).get("quiet") : null;
 
-export function quietBots(home: string): Bot[] {
-	return quietScenario === "bot"
+export function quietBots(home: string, dockWorkers = false): Bot[] {
+	return quietScenario === "bot" || dockWorkers
 		? [
 				{
 					id: "fixture-quiet",

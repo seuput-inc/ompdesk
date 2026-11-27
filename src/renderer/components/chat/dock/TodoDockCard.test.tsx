@@ -16,6 +16,7 @@ import { useTabsStore } from "../../../stores/tabs";
 import { useToastStore } from "../../../stores/toast";
 import { useTodoStore } from "../../../stores/todo";
 import { useUiStore } from "../../../stores/ui";
+import { buildDockModel } from "./dock-summary";
 
 const { document, window, Event, HTMLElement, Element, Node } = parseHTML("<html><body></body></html>");
 Object.assign(globalThis as Record<string, unknown>, {
@@ -38,8 +39,10 @@ const setTodos: Mock<() => Promise<RpcResponse>> = vi.fn(async () => ({
 }));
 (window as unknown as { omp: { rpc: { setTodos: typeof setTodos } } }).omp = { rpc: { setTodos } };
 
+// React DOM and the dock load after linkedom installs the window they use.
 const { createRoot } = await import("react-dom/client");
 const { TodoDockCard } = await import("./TodoDockCard");
+const { TodoListEditor } = await import("./TodoListEditor");
 const { WorkspaceDock } = await import("./WorkspaceDock");
 const { WorkspaceDockFocusProvider } = await import("./WorkspaceDockFocus");
 // The task list is a lazy chunk (it carries @dnd-kit): load it so the first act() can resolve it.
@@ -159,7 +162,7 @@ describe("TodoDockCard", () => {
 			expect(container.querySelector('[data-todo-freshness="received"] [data-status-dot="neutral"]')).not.toBeNull();
 			expect(container.querySelector('[data-todo-freshness="received"] svg')).toBeNull();
 			expect(container.querySelector("[data-todo-freshness]")?.getAttribute("title")).toContain(
-				"Whether the list already covers them is not checked",
+				translate("todoPanel.receivedNote"),
 			);
 
 			// The opened list says it too, above its rows.
@@ -210,8 +213,22 @@ describe("TodoDockCard", () => {
 			expect(peekText()).toBe("1/2Wire the peek into the header");
 		});
 
+		it("keeps the instructions and timestamp without showing a legacy stale warning", async () => {
+			const changedAt = twelveMinutesAgo();
+			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setDrift({ changedAt, stale: "instruction", ...twoReceived(changedAt) });
+			await mount();
+			expect(container.querySelector("[data-todo-received]")?.textContent).toContain("2 instructions");
+			expect(container.querySelector('[data-todo-freshness="received"]')).not.toBeNull();
+			expect(container.textContent).not.toContain(translate("todoPanel.stale.instruction"));
+			expect(container.querySelector("[data-todo-freshness]")?.getAttribute("title")).not.toContain(
+				translate("todoPanel.stale.instruction"),
+			);
+		});
+
 		it("clears the count the moment a person changes the list", async () => {
 			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setTurnActive(true);
 			const changedAt = twelveMinutesAgo();
 			useTodoStore.getState().setDrift({ changedAt, stale: null, ...twoReceived(changedAt) });
 			await mount();
@@ -288,6 +305,7 @@ describe("TodoDockCard", () => {
 		it("lists the instructions received since the list last changed over the opened list", async () => {
 			const changedAt = twelveMinutesAgo();
 			useTodoStore.getState().setPhases(open);
+			useTodoStore.getState().setTurnActive(true);
 			useTodoStore.getState().setDrift({ changedAt, stale: null, ...twoReceived(changedAt) });
 			await mount();
 
@@ -405,7 +423,39 @@ describe("TodoDockCard", () => {
 			expect(progress()?.getAttribute("aria-valuenow")).toBe("40");
 			expect(progress()?.getAttribute("aria-valuetext")).toBe("4/10");
 		}
-		await act(async () => useTodoStore.getState().setPhases(phases));
+		const other = ensureTabRuntime("other-plan");
+		try {
+			await act(async () =>
+				root.render(
+					<I18nProvider>
+						<SessionRuntimeProvider runtime={other}>
+							<TodoDockCard />
+						</SessionRuntimeProvider>
+					</I18nProvider>,
+				),
+			);
+			expect(progress()).toBeNull();
+			await act(async () =>
+				root.render(
+					<I18nProvider>
+						<TodoDockCard />
+					</I18nProvider>,
+				),
+			);
+			expect(progress()?.getAttribute("aria-valuenow")).toBe("40");
+		} finally {
+			deleteSessionRuntime("other-plan");
+		}
+		await act(async () => root.render(null));
+		useTodoStore.getState().reset();
+		useTodoStore.getState().setPhases(phases);
+		await act(async () =>
+			root.render(
+				<I18nProvider>
+					<TodoDockCard />
+				</I18nProvider>,
+			),
+		);
 		const disclosure = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b =>
 			b.textContent?.includes(translate("workTree.finished", { count: 4 })),
 		);
@@ -415,6 +465,42 @@ describe("TodoDockCard", () => {
 		expect(container.querySelector('[title="Row 10"]')?.className).toContain("line-through");
 		expect(progress()?.getAttribute("aria-valuetext")).toBe("4/10");
 		expect(setTodos).not.toHaveBeenCalled();
+	});
+
+	it("shows the session turn and each runner once, linking only the matching worker to a task", async () => {
+		useTodoStore.getState().setPhases([
+			{
+				name: "Run",
+				tasks: [
+					{ content: "Track work", status: "in_progress" },
+					{ content: "Issue #1", status: "pending" },
+				],
+			},
+		]);
+		const startedAt = Date.now() - 60_000;
+		const model = buildDockModel(useTodoStore.getState().phases, {
+			startedAt,
+			step: "Reading the session",
+			runners: [
+				{ id: "a", session: "owner", title: "Worker A", step: "Editing A", startedAt },
+				{ id: "b", title: "Worker B", step: "Editing B", startedAt },
+				{ id: "c", title: "Child C", step: "Reviewing C", startedAt },
+			],
+			links: [{ number: 1, session: "owner", title: "Item under review" }],
+		});
+		await mount(<TodoListEditor model={model} />);
+		expect(container.textContent).toContain(translate("dock.todo.turn"));
+		expect(container.textContent).toContain("Reading the session");
+		const rows = [...container.querySelectorAll("[data-dock-runner]")];
+		expect(rows).toHaveLength(3);
+		for (const [i, phrase] of ["Editing A", "Editing B", "Reviewing C"].entries()) {
+			expect(rows[i]?.textContent).toContain(phrase);
+			expect(rows[i]?.textContent).toContain(translate("todoPanel.status.inProgress"));
+			expect(rows[i]?.textContent).toMatch(/\d+m/);
+		}
+		expect(rows[0]?.textContent).toContain("Issue #1");
+		expect(rows[1]?.hasAttribute("data-task-id")).toBe(false);
+		expect(rows[2]?.hasAttribute("data-task-id")).toBe(false);
 	});
 
 	it("leaves the dock once the turn that finished every task ends", async () => {

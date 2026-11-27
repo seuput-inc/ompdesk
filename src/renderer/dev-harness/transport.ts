@@ -88,6 +88,7 @@ import {
 	boardReview,
 	boardSubagents,
 	boardUsage,
+	DOCK_WORKERS,
 	familyEdits,
 } from "./fixture-board";
 import { JOB_TREE_SUBAGENTS, jobTreeRows } from "./fixture-jobs";
@@ -864,7 +865,27 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				if (action === "file") return { exists: false, content: "", mtimeMs: 0, topics: [], history: [] };
 				if (action === "importSources") return { sources: [] };
 				if (action === "export") return { file: "" };
-				return { bots: quietBots(stateFixture("tab-1").sessionFile ?? ""), items: [] };
+				const session = stateFixture("tab-1").sessionFile ?? "";
+				const bots = quietBots(session, DOCK_WORKERS);
+				const at = "2026-11-27T00:00:00Z";
+				const items = DOCK_WORKERS
+					? [
+							{
+								bot: bots[0].id,
+								id: "dock-52",
+								number: 52,
+								session,
+								title: "행 높이 측정",
+								status: "working",
+								links: [{ kind: "session", ref: "child-1" }],
+								events: [],
+								createdAt: at,
+								updatedAt: at,
+								version: 1,
+							},
+						]
+					: [];
+				return { bots, items };
 			}
 			case SCHEDULES_COMMAND:
 				return SCHEDULES_STATE;

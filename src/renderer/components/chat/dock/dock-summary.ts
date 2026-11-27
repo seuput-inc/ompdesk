@@ -15,6 +15,7 @@ export interface DockFacts {
 	failure?: string;
 	step?: string;
 	startedAt?: number;
+	runState?: string;
 	finished?: string;
 	nextLabel?: (task: string) => string;
 }
@@ -30,7 +31,8 @@ export interface DockModel {
 	abandoned: number;
 	phaseCounts: Map<string, { done: number; total: number }>;
 	active?: UiTodoTask;
-	runners: (DockRunner & { taskId?: string })[];
+	next?: UiTodoTask;
+	runners: (DockRunner & { taskId?: string; taskTitle?: string })[];
 	lines: DockLine[];
 	step?: string;
 	startedAt?: number;
@@ -71,30 +73,45 @@ export function buildDockModel(source: readonly UiTodoPhase[], facts: DockFacts 
 		phaseCounts.set(phase.id, count);
 	}
 
-	const runners = (facts.runners ?? []).map((runner): DockRunner & { taskId?: string } => {
+	const runners: DockModel["runners"] = (facts.runners ?? []).map(runner => {
 		if (!runner.session) return runner;
-		const evidence = facts.links?.filter(link => link.session === runner.session).map(link => ({
-			title: link.title,
-			token: new RegExp(`(?:^|[^\\p{L}\\p{N}_#])#${link.number}(?![\\p{L}\\p{N}_])`, "u"),
-		}));
+		const evidence = facts.links
+			?.filter(link => link.session === runner.session)
+			.map(link => ({
+				title: link.title,
+				token: new RegExp(`(?:^|[^\\p{L}\\p{N}_#])#${link.number}(?![\\p{L}\\p{N}_])`, "u"),
+			}));
 		if (!evidence?.length) return runner;
 		let match: UiTodoTask | undefined;
 		for (const phase of source) {
 			for (const task of phase.tasks) {
-				if (!evidence.some(link => (link.title && task.content === link.title) || link.token.test(task.content))) continue;
+				if (!evidence.some(link => (link.title && task.content === link.title) || link.token.test(task.content)))
+					continue;
 				if (match) return runner;
 				match = task;
 			}
 		}
-		return match && match.status !== "completed" && match.status !== "abandoned" ? { ...runner, taskId: match.id } : runner;
+		return match && match.status !== "completed" && match.status !== "abandoned"
+			? { ...runner, taskId: match.id, taskTitle: match.content }
+			: runner;
 	});
 
 	const lines: DockLine[] = [];
 	if (facts.attention) lines.push({ kind: "attention", id: "attention", text: facts.attention });
 	if (facts.failure) lines.push({ kind: "failure", id: "failure", text: facts.failure });
-	if (active) lines.push({ kind: "active", id: `active:${active.id}`, text: [active.content, facts.step].filter(Boolean).join(" · ") });
+	if (active)
+		lines.push({
+			kind: "active",
+			id: `active:${active.id}`,
+			text: [active.content, facts.step].filter(Boolean).join(" · "),
+		});
+	if (facts.runState) lines.push({ kind: "running", id: "autopilot", text: facts.runState });
 	for (const runner of runners) {
-		lines.push({ kind: "running", id: `running:${runner.id}`, text: [runner.title, runner.step].filter(Boolean).join(" · ") });
+		lines.push({
+			kind: "running",
+			id: `running:${runner.id}`,
+			text: [runner.title, runner.step].filter(Boolean).join(" · "),
+		});
 	}
 	const linked = new Set(runners.map(runner => runner.taskId));
 	let next: UiTodoTask | undefined;
@@ -105,11 +122,25 @@ export function buildDockModel(source: readonly UiTodoPhase[], facts: DockFacts 
 	if (next) lines.push({ kind: "next", id: `next:${next.id}`, text: facts.nextLabel?.(next.content) ?? next.content });
 	if (facts.finished) lines.push({ kind: "finished", id: "finished", text: facts.finished });
 	lines.sort((a, b) => PRIORITY[a.kind] - PRIORITY[b.kind]);
-	return { phases, closed, done, total, abandoned, phaseCounts, active, runners, lines, step: facts.step, startedAt: facts.startedAt };
+	return {
+		phases,
+		closed,
+		done,
+		total,
+		abandoned,
+		phaseCounts,
+		active,
+		next,
+		runners,
+		lines,
+		step: facts.step,
+		startedAt: facts.startedAt,
+	};
 }
 
-export function buildTodoDockPeek(phases: readonly UiTodoPhase[], model = buildDockModel(phases)) {
-	return { done: model.done, total: model.total, current: model.phases[0]?.tasks[0] };
+export function buildTodoDockPeek(source: readonly UiTodoPhase[] | DockModel) {
+	const model = "phaseCounts" in source ? source : buildDockModel(source);
+	return { done: model.done, total: model.total, current: model.active ?? model.next };
 }
 
 export function reorderOpenTasks(tasks: UiTodoTask[], fromId: string, toId: string): UiTodoTask[] {
@@ -119,5 +150,5 @@ export function reorderOpenTasks(tasks: UiTodoTask[], fromId: string, toId: stri
 	if (from < 0 || to < 0 || from === to) return tasks;
 	movable.splice(to, 0, ...movable.splice(from, 1));
 	let slot = 0;
-	return tasks.map(task => task.status === "pending" || task.status === "blocked" ? movable[slot++]! : task);
+	return tasks.map(task => (task.status === "pending" || task.status === "blocked" ? movable[slot++]! : task));
 }
