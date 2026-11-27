@@ -808,6 +808,16 @@ if (dir) {
 			const show: Record<View, (session: ParitySession) => Promise<void>> = {
 				local: async session => {
 					const { path: sessionPath } = await hostSession(session);
+					if (session === "routing-bot") {
+						await b.getByRole("button", { name: "Badge bot", exact: true }).click();
+						await expect
+							.poll(
+								async () =>
+									(await b.evaluate(() => window.omp.tabs.list())).find(tab => tab.active)?.sessionPath,
+							)
+							.toBe(sessionPath);
+						return;
+					}
 					await openRow(
 						b,
 						b.locator(`.omp-sidebar-session-row[data-session-path=${cssString(sessionPath)}]`),
