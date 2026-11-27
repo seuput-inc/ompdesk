@@ -151,9 +151,6 @@ impl AgentControl {
                 if let Some(said) = specialty(Path::new(&bot.folder)) {
                     value["specialty"] = json!(said);
                 }
-                if let Some(picture) = bot_files::picture_of(Path::new(&bot.folder)) {
-                    value["picture"] = json!(picture);
-                }
                 value
             })
             .collect();
@@ -1061,7 +1058,7 @@ impl AgentControl {
     }
 
     /// `host.bots.list`: this computer's bots and items as its paired devices get them (`{version, state}`). A change
-    /// found while reading (a bot wrote its soul or picture since) goes to every device first.
+    /// found while reading (a bot edited its soul since) goes to every device first.
     pub fn bots_share(&self) -> Value {
         let own = self.own_bots_state();
         let (change, whole) = {
@@ -1236,16 +1233,6 @@ impl AgentControl {
                             .collect();
                     }
                 })?;
-                match request.get("picture") {
-                    Some(Value::Null) => bot_files::set_picture(Path::new(&bot.folder), None)?,
-                    Some(Value::String(uri)) => {
-                        bot_files::set_picture(Path::new(&bot.folder), Some(uri))?;
-                    }
-                    _ => {}
-                }
-                if request.get("picture").is_some() {
-                    self.bots_changed();
-                }
                 if let Some(look) = request.get("lookAround").filter(|look| look.is_object()) {
                     let on = look.get("on").and_then(Value::as_bool).unwrap_or(false);
                     self.look_around(&bot.id, on, look.get("time").and_then(Value::as_str))

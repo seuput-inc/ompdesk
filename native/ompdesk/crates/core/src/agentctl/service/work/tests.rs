@@ -2147,6 +2147,13 @@ async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_onc
     let root = Scratch::new();
     let mails = Mails::default();
     let (host, host_asked, ada_id) = ada(9_790, &root, mails.clone(), |_, _| None).await;
+    let old_picture = root.0.join("ada/picture.png");
+    std::fs::write(&old_picture, b"owner's file").unwrap();
+    host.bots_command(json!({"action":"update", "id":ada_id, "picture":null}))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(&old_picture).unwrap(), b"owner's file");
+    assert!(host.bots_state()["bots"][0].get("picture").is_none());
     let tool = |args: Value| host.run("bot1", "ompdesk_item", args, None);
     assert!(
         !tool(json!({ "action": "add", "title": "Pick a day" }))

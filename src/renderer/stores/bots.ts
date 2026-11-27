@@ -26,16 +26,6 @@ interface BotsStore {
 	reset: () => void;
 }
 
-/** The last read without pictures: they come with the first live read and are too big for the snapshot. */
-function remembered(state: BotsState): BotsState {
-	const faceless = (bots: readonly Bot[]) => bots.map(({ picture: _picture, ...bot }) => bot);
-	return {
-		...state,
-		bots: faceless(state.bots),
-		...(state.remote ? { remote: state.remote.map(host => ({ ...host, bots: faceless(host.bots) })) } : {}),
-	};
-}
-
 /** The state the views list: this computer's bots and items, then each paired host's, tagged with its device. */
 export function listedBots(state: BotsState): BotsState {
 	const remote = state.remote ?? [];
@@ -70,7 +60,7 @@ export const useBotsStore = create<BotsStore>()(set => ({
 		return state;
 	},
 	receive: state => {
-		rememberRead(undefined, READ_KEY, remembered(state));
+		rememberRead(undefined, READ_KEY, state);
 		set({ state: listedBots(state), live: true });
 	},
 	reset: () => set({ state: EMPTY, live: false }),
@@ -89,7 +79,7 @@ export function ensureBots(): void {
 		.catch(() => {});
 }
 
-/** Reads again (a bot may have written its picture or soul since: files are read when the state is listed). */
+/** The bot may have edited its soul since the last read. */
 export function refreshBots(): void {
 	void useBotsStore
 		.getState()

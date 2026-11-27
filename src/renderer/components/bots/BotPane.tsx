@@ -30,7 +30,7 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 	const command = useBotsStore(s => s.command);
 	const [renaming, setRenaming] = useState(false);
 	const [draft, setDraft] = useState(bot.name);
-	// A bot writes its picture and soul with its own tools: the page reads them again whenever it shows another bot.
+	// A bot may have edited its soul since its page last opened.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the read is per bot shown
 	useEffect(() => refreshBots(), [bot.id]);
 	const setPaused = (paused: boolean) =>

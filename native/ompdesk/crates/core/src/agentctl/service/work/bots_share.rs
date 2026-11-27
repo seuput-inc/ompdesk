@@ -30,11 +30,21 @@ pub(crate) struct Rows {
     items: Vec<(String, Value)>,
 }
 
-fn rows_of(list: Option<&Value>) -> Vec<(String, Value)> {
+fn copy_row(row: &Value, kind: Kind) -> Value {
+    let mut row = row.clone();
+    if kind == Kind::Bots
+        && let Some(fields) = row.as_object_mut()
+    {
+        fields.remove("picture");
+    }
+    row
+}
+
+fn rows_of(list: Option<&Value>, kind: Kind) -> Vec<(String, Value)> {
     list.and_then(Value::as_array)
         .map(|rows| {
             rows.iter()
-                .filter_map(|row| Some((row.get("id")?.as_str()?.to_owned(), row.clone())))
+                .filter_map(|row| Some((row.get("id")?.as_str()?.to_owned(), copy_row(row, kind))))
                 .collect()
         })
         .unwrap_or_default()
@@ -60,7 +70,7 @@ fn diff(before: &[(String, Value)], after: &[(String, Value)]) -> (Vec<Value>, V
 }
 
 /// `rows` with `remove` gone and `set` in place (a new id goes last, as a host lists a new row).
-fn apply(rows: &mut Vec<(String, Value)>, set: Option<&Value>, remove: Option<&Value>) {
+fn apply(rows: &mut Vec<(String, Value)>, kind: Kind, set: Option<&Value>, remove: Option<&Value>) {
     let gone: Vec<&str> = remove
         .and_then(Value::as_array)
         .map(|ids| ids.iter().filter_map(Value::as_str).collect())
@@ -71,8 +81,8 @@ fn apply(rows: &mut Vec<(String, Value)>, set: Option<&Value>, remove: Option<&V
             continue;
         };
         match rows.iter_mut().find(|(known, _)| known == id) {
-            Some(slot) => slot.1 = row.clone(),
-            None => rows.push((id.to_owned(), row.clone())),
+            Some(slot) => slot.1 = copy_row(row, kind),
+            None => rows.push((id.to_owned(), copy_row(row, kind))),
         }
     }
 }
@@ -81,8 +91,8 @@ impl Rows {
     /// The rows of a `BotsState` (its rooms stay on their computer).
     pub(crate) fn of(state: &Value) -> Rows {
         Rows {
-            bots: rows_of(state.get("bots")),
-            items: rows_of(state.get("items")),
+            bots: rows_of(state.get("bots"), Kind::Bots),
+            items: rows_of(state.get("items"), Kind::Items),
         }
     }
 
@@ -183,12 +193,16 @@ pub(crate) struct Copies {
 impl Copies {
     /// The copies kept in `file` (None: memory only); a damaged entry is left out.
     pub(crate) fn load(file: Option<PathBuf>) -> Copies {
+        let mut legacy = false;
         let hosts = file
             .as_deref()
             .map(read_array)
             .unwrap_or_default()
             .into_iter()
             .filter_map(|entry| {
+                legacy |= entry["state"]["bots"]
+                    .as_array()
+                    .is_some_and(|bots| bots.iter().any(|bot| bot.get("picture").is_some()));
                 let text = |key: &str| entry.get(key)?.as_str().map(str::to_owned);
                 Some((
                     text("device")?,
@@ -201,7 +215,11 @@ impl Copies {
                 ))
             })
             .collect();
-        Copies { file, hosts }
+        let copies = Copies { file, hosts };
+        if legacy {
+            copies.save();
+        }
+        copies
     }
 
     fn save(&self) {
@@ -271,11 +289,13 @@ impl Copies {
         let (set, remove) = (change.get("set"), change.get("remove"));
         apply(
             &mut copy.rows.bots,
+            Kind::Bots,
             set.and_then(|set| set.get("bots")),
             remove.and_then(|remove| remove.get("bots")),
         );
         apply(
             &mut copy.rows.items,
+            Kind::Items,
             set.and_then(|set| set.get("items")),
             remove.and_then(|remove| remove.get("items")),
         );
@@ -491,7 +511,16 @@ mod tests {
             .take(&state(&[("bot-a", "Ada")], &[("item-1", "working")]))
             .unwrap();
         copies.apply("dev-a", "Mini", true, Some(&change));
+        let mut old = read_array(&file);
+        old[0]["state"]["bots"][0]["picture"] = json!("data:image/png;base64,AAAA");
+        std::fs::write(&file, serde_json::to_vec(&old).unwrap()).unwrap();
         let again = Copies::load(Some(file.clone()));
+        assert!(again.json()[0]["bots"][0].get("picture").is_none());
+        assert!(
+            read_array(&file)[0]["state"]["bots"][0]
+                .get("picture")
+                .is_none()
+        );
         let held = again.json();
         assert_eq!(held[0]["online"], false);
         assert_eq!(held[0]["name"], "Mini");
