@@ -56,7 +56,7 @@ interface AgentView {
 	status: Locator;
 	address: Locator;
 	banner: Locator;
-	robot: Locator;
+	letAgentIn(): Promise<void>;
 	takeOver: Locator;
 	/** The paired phone's page when the panel is its streamed sheet: its layout commands size the host's page. */
 	phone?: Page;
@@ -67,7 +67,7 @@ function viewOf(panel: Locator): AgentView {
 		status: panel.locator("[data-preview-status]"),
 		address: panel.getByRole("combobox", { name: PREVIEW_URL }),
 		banner: panel.locator("[data-preview-agent]"),
-		robot: panel.getByRole("button", { name: ROBOT }),
+		letAgentIn: () => panel.getByRole("button", { name: ROBOT }).click(),
 		takeOver: panel.locator("[data-preview-agent]").getByRole("button", { name: TAKE_OVER }),
 	};
 }
@@ -103,7 +103,6 @@ async function takenOver(view: AgentView, browser: PuppeteerBrowser, driven: Pup
 	await expect(view.banner).toHaveCount(0);
 	await expect.poll(() => browser.connected, { timeout: 10_000 }).toBe(false);
 	await expect(driven.goto(site)).rejects.toThrow();
-	await expect(view.robot).toBeVisible();
 	await expect(view.status).toHaveText("Second page");
 }
 
@@ -125,7 +124,7 @@ async function driveTakeOverAndHandBack(
 	during?: (driven: PuppeteerPage) => Promise<void>,
 ) {
 	const letIn = async () => {
-		await view.robot.click();
+		await view.letAgentIn();
 		await expect(view.banner).toHaveAttribute("data-preview-agent", "waiting");
 		agent.current = await connectRelay(relayFile);
 		return { browser: agent.current, driven: await offeredPage(agent.current) };
@@ -177,7 +176,14 @@ async function phonePreview(phone: Page, address: string): Promise<AgentView> {
 	const sheet = phone.locator("[data-sheet-panel]");
 	await expect(sheet).toBeVisible();
 	await phone.locator("[data-panel-tabbar]").getByRole("button", { name: "Preview", exact: true }).click();
-	const view = { ...viewOf(sheet), phone };
+	const view = {
+		...viewOf(sheet),
+		phone,
+		letAgentIn: async () => {
+			await sheet.getByRole("button", { name: "Page options" }).click();
+			await phone.getByRole("menuitem", { name: ROBOT }).click();
+		},
+	};
 	await view.address.fill(address);
 	await view.address.press("Enter");
 	await expect(view.status).toHaveText("Agent fixture", { timeout: 30_000 });

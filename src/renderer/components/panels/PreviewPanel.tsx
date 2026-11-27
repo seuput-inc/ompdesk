@@ -44,6 +44,7 @@ import {
 	previewProblemCount,
 	reducePreviewState,
 } from "../../../shared/preview";
+import { useCompactShell } from "../../hooks/use-shell-mode";
 import { hostTabCannotOpen } from "../../lib/host-ports";
 import { useT } from "../../lib/i18n";
 import { openExternal } from "../../lib/open-external";
@@ -287,6 +288,11 @@ export function PreviewPanel() {
 		[],
 	);
 	const agentHere = state.agent !== null && state.agent.tabId === tabId;
+	const agentWebOnly = state.session === "visual" && !agentHere;
+	const agentDisabled = !runtime || agentStarting || agentWebOnly;
+	// A phone's or a narrow window's row keeps back, forward and reload beside the address; the agent and the
+	// browser go into ⋯, as Orca's browser row keeps one tool and ⋯ (browser-chrome-toolbar.tsx:35).
+	const compact = useCompactShell();
 	const pageReady = Boolean(state.url) && !state.crashed && !remoteBlocked;
 	const zoomTo = (zoom: number) => command({ action: "zoom", zoom: clampPreviewZoom(zoom) });
 	const percent = `${Math.round(state.zoom * 100)}%`;
@@ -298,12 +304,35 @@ export function PreviewPanel() {
 			toastError({ title: t("panel.preview.savePdfFailed"), error });
 		}
 	};
+	const rowItems: ContextMenuItem[] = compact
+		? [
+				{
+					id: "agent",
+					label: t(agentHere ? "panel.preview.agent.takeOver" : "panel.preview.agent.allow"),
+					icon: Bot,
+					disabled: agentDisabled,
+					disabledReason: agentWebOnly ? t("panel.preview.agent.webOnly") : undefined,
+					onSelect: () => (agentHere ? takeOver() : void letAgentIn()),
+				},
+				{
+					id: "external",
+					label: t("panel.preview.external"),
+					icon: ExternalLink,
+					disabled: !address || remoteBlocked,
+					onSelect: () => {
+						if (address) openExternal(address);
+					},
+				},
+			]
+		: [];
 	const pageItems: ContextMenuItem[] = [
+		...rowItems,
 		{
 			id: "new-tab",
 			label: t("panel.preview.newTab"),
 			icon: Plus,
 			disabled: state.tabs.length >= PREVIEW_TAB_LIMIT,
+			separatorBefore: true,
 			onSelect: () => command({ action: "newTab" }),
 		},
 		{
@@ -491,17 +520,17 @@ export function PreviewPanel() {
 							{previewProblemCount(state.problems.length)}
 						</Button>
 					)}
-					<IconButton
-						label={t(agentHere ? "panel.preview.agent.takeOver" : "panel.preview.agent.allow")}
-						disabledReason={
-							state.session === "visual" && !agentHere ? t("panel.preview.agent.webOnly") : undefined
-						}
-						icon={<Bot />}
-						size="sm"
-						pressed={agentHere}
-						disabled={!runtime || agentStarting || (state.session === "visual" && !agentHere)}
-						onClick={() => (agentHere ? takeOver() : void letAgentIn())}
-					/>
+					{!compact && (
+						<IconButton
+							label={t(agentHere ? "panel.preview.agent.takeOver" : "panel.preview.agent.allow")}
+							disabledReason={agentWebOnly ? t("panel.preview.agent.webOnly") : undefined}
+							icon={<Bot />}
+							size="sm"
+							pressed={agentHere}
+							disabled={agentDisabled}
+							onClick={() => (agentHere ? takeOver() : void letAgentIn())}
+						/>
+					)}
 					<MenuButton
 						align="end"
 						icon={<MoreHorizontal />}
@@ -509,15 +538,17 @@ export function PreviewPanel() {
 						label={t("panel.preview.more")}
 						size="sm"
 					/>
-					<IconButton
-						label={t("panel.preview.external")}
-						icon={<ExternalLink />}
-						size="sm"
-						disabled={!address || remoteBlocked}
-						onClick={() => {
-							if (address) openExternal(address);
-						}}
-					/>
+					{!compact && (
+						<IconButton
+							label={t("panel.preview.external")}
+							icon={<ExternalLink />}
+							size="sm"
+							disabled={!address || remoteBlocked}
+							onClick={() => {
+								if (address) openExternal(address);
+							}}
+						/>
+					)}
 				</div>
 			</form>
 			<PreviewSuggestions suggestions={suggestions} onOpen={openUrl} />
