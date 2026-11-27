@@ -26,6 +26,8 @@ A bot by name: `ompdesk_session_send {"session":"bot:<name>"}` reaches its home 
 `item` is its number (`3`, `#3`) or id. `action`:
 - `add` — `title`, `description`, `done_means`, `status` (default `planned`).
 - `set` — `item` and any of `status` (`planned`, `working`, `waiting`, `needs_you`, `done`, `canceled`), `title`, `description`, `done_means`, `ask` with `options` and `recommended` (a question only the owner can answer: the item becomes `needs_you`, and their answer reaches you as a message that starts a turn), `asks` (up to 5 questions at once, each `{question, options, recommended, multi}`; `ask` is then the words around them, and the owner answers them in one message, a line `Question → answer` each), `wait` with `until` (what it waits on outside you and the owner: the item becomes `waiting`), `snooze_until` (hidden until then; `""` wakes it). A new question or a close ends a snooze.
+- `withdraw` — close your question when it no longer applies. Give the `item`, the `question` id and a `note` explaining why.
+- `self_decide` — close your question only when the choice is yours to make. Give the same fields; in `note`, say what you chose and why.
 - `comment` — `item`, `text`.
 - `done` / `cancel` — `item`, `note`. A closed item adds `- YYYY-MM-DD | item #<n> | <status> | <title>` to `memory/journal/YYYY-MM.md` in the bot's folder and leaves the board 7 days later.
 - `link` — `item` and one of `url`, `file`, `session`, `pr`.
@@ -33,7 +35,7 @@ A bot by name: `ompdesk_session_send {"session":"bot:<name>"}` reaches its home 
 
 Post the choice on the item, for example `{"action":"set","item":"3","ask":"Which release should get the fix?","options":["Current","Next"],"recommended":0}`. Continue unrelated work. A recommendation is not the owner's consent.
 
-If the question no longer applies, use `{"action":"withdraw","item":"3","question":17,"note":"The upstream fix removed the affected release."}`. If evidence or an existing owner instruction settles it, use `{"action":"self_decide","item":"3","question":17,"note":"Targeting Current because the release policy requires this fix before shipping."}`. Use the question id from `set`, `show`, or `list`. Both actions leave the item working and record your note under your name, not as an owner answer. If refused because the question changed, read the item again. Never guess an owner-only choice.
+Use the current question id from `set`, `show`, or `list`. If the question changed, read it again. Closing a question removes it from the inbox, keeps the item working and records your note as the bot's, not the owner's. Leave work that requires the owner's answer blocked. Say whether you withdrew the question or decided it yourself, and that the owner did not answer.
 
 Code work goes to sessions: `ompdesk_session_open {"message": …, "item": 3, "folder": <project>}` links each session it opens to the item and a planned item becomes working; a project folder in git opens in a worktree of its own unless you pass `worktree: false`. While every linked session waits for a usage limit the item says until when, and the item's Activity shows each linked session's done or blocked report. The owner's changes to an item reach you as quiet notes, once each; several items the owner moves at once are one note. A snooze alone is not sent.
 
