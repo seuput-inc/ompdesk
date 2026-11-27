@@ -26,7 +26,6 @@ import {
 } from "../common";
 import { BotAvatar } from "./BotAvatar";
 import { openBotDialog } from "./bot-launch";
-import { mascotUri } from "./bot-mascots";
 import {
 	BOT_TEMPLATE_CATEGORIES,
 	BOT_TEMPLATES,
@@ -205,10 +204,7 @@ export function BotTemplatesDialog({
 													}}
 													onDoubleClick={() => use(template)}
 												>
-													<BotAvatar
-														bot={{ name: nameOf(template), picture: mascotUri(template.mascot) }}
-														size={28}
-													/>
+													<BotAvatar bot={{ name: nameOf(template), id: template.id }} size={28} />
 													<span className="flex min-w-0 flex-1 flex-col">
 														<span className="flex items-center gap-1.5 text-sc-sm">
 															<span className="truncate">{nameOf(template)}</span>
@@ -252,7 +248,7 @@ function TemplateDetail({ template, onUse, onBack }: { template: BotTemplate; on
 				{t("bots.templates.all")}
 			</Button>
 			<div className="flex items-center gap-3">
-				<BotAvatar bot={{ name, picture: mascotUri(template.mascot) }} size={56} />
+				<BotAvatar bot={{ name, id: template.id }} size={56} />
 				<div className="min-w-0">
 					<h3 className="text-sc-md font-semibold text-(--sc-text)">{name}</h3>
 					<p className="text-sc-xs text-(--sc-text-muted)">

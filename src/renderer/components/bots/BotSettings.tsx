@@ -3,7 +3,7 @@
  * page's Settings tab and Settings › Bots both show (FK-B49), with drill-in pages for its soul, its memory and who can
  * ask it. Escape on a page goes back.
  *
- * - Root: its picture (`BotPictureDialog`) and name; Agent (model, routines run without asking, where it runs and its
+ * - Root: its name; Agent (model, routines run without asking, where it runs and its
  *   folder, Active = not paused, with the paused banner's words: FK-B23, B24, B25); Schedule (Look around, Memory
  *   upkeep, each with its time); Items (stale after); Soul and memory; Access (who can ask, its skills); Notifications
  *   (needs permission, task complete, couldn't finish: FK-B26, FS77); Delete bot (its folder stays; its routines go,
@@ -17,7 +17,7 @@
  * Connectors (Slack, GitHub, Linear, Google) and sharing are not here: connectors come with orca-bots-connectors,
  * sharing is Orca Cloud's.
  */
-import { BookOpen, Brain, ChevronLeft, ChevronRight, Copy, ImageUp, Laptop, Smile, Trash2, Users } from "lucide-react";
+import { BookOpen, Brain, ChevronLeft, ChevronRight, Copy, Laptop, Smile, Trash2, Users } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { BOT_QUIET_KINDS, type Bot, type BotFile, type BotQuietKind, type BotsRequest } from "../../../shared/bots";
 import { useT } from "../../lib/i18n";
@@ -41,13 +41,11 @@ import {
 	SegmentedChoice,
 	Select,
 	SwitchField,
-	TextArea,
 	TextEditor,
 } from "../common";
 import { ModelValueSelect } from "../settings/ModelValueSelect";
 import { BotAvatar } from "./BotAvatar";
 import { openBotChat } from "./bot-launch";
-import { BOT_MASCOT_COUNT, mascotUri, rasterizePicture } from "./bot-mascots";
 
 type Page = "root" | "soul" | "memory" | "access";
 
@@ -85,7 +83,6 @@ function BotSettingsRoot({
 	const update = useUpdate(bot);
 	const command = useBotsStore(s => s.command);
 	const [name, setName] = useState(bot.name);
-	const [picturing, setPicturing] = useState(false);
 	const [deleting, setDeleting] = useState(false);
 	const [lookTime, setLookTime] = useState("09:00");
 	const [tidyTime, setTidyTime] = useState("03:00");
@@ -123,9 +120,6 @@ function BotSettingsRoot({
 					/>
 					{bot.specialty && <p className="truncate text-sc-xs text-(--sc-text-muted)">{bot.specialty}</p>}
 				</div>
-				<Button icon={<ImageUp />} onClick={() => setPicturing(true)} size="sm" variant="secondary">
-					{t("bots.picture.change")}
-				</Button>
 			</Card>
 
 			<section className="flex flex-col gap-2">
@@ -293,7 +287,6 @@ function BotSettingsRoot({
 				open={deleting}
 				title={t("bots.delete.title", { name: bot.name })}
 			/>
-			{picturing && <BotPictureDialog bot={bot} onClose={() => setPicturing(false)} />}
 		</div>
 	);
 }
@@ -517,115 +510,5 @@ function BotAccessPage({ bot, onBack }: { bot: Bot; onBack: () => void }) {
 				))
 			)}
 		</div>
-	);
-}
-
-/**
- * Its picture (Orca's `BotPictureButton.tsx:53-111`, `AvatarGenerateFace.tsx:176-356`): a face, an uploaded or
- * pasted image, its letter, or one its home chat makes with stock `generate_image` from a description and saves as
- * `picture.png` in its folder (the state reads it back when that turn ends).
- */
-function BotPictureDialog({ bot, onClose }: { bot: Bot; onClose: () => void }) {
-	const t = useT();
-	const command = useBotsStore(s => s.command);
-	const [face, setFace] = useState(0);
-	const [upload, setUpload] = useState<string | null>(null);
-	const [describe, setDescribe] = useState("");
-	const [busy, setBusy] = useState(false);
-	const picture = upload ?? mascotUri(face);
-	const save = async (uri: string | null) => {
-		setBusy(true);
-		try {
-			await command({ action: "update", id: bot.id, picture: uri ? await rasterizePicture(uri) : null });
-			onClose();
-		} catch (error) {
-			toastError({ title: t("bots.picture.failed"), error });
-		} finally {
-			setBusy(false);
-		}
-	};
-	const generate = () => {
-		const text = t("bots.picture.generatePrompt", { description: describe.trim(), folder: bot.folder });
-		onClose();
-		void openBotChat(bot, bot.home, text).catch(() => {});
-	};
-	return (
-		<Modal
-			footer={
-				<>
-					<Button disabled={busy} onClick={() => void save(null)} variant="ghost">
-						{t("bots.picture.none")}
-					</Button>
-					<Button onClick={onClose} variant="ghost">
-						{t("common.cancel")}
-					</Button>
-					<Button loading={busy} onClick={() => void save(picture)} variant="primary">
-						{t("common.save")}
-					</Button>
-				</>
-			}
-			onClose={onClose}
-			open
-			size="sm"
-			title={t("bots.picture.title")}
-		>
-			<div
-				className="flex flex-col items-center gap-3"
-				onPaste={event => {
-					const file = [...event.clipboardData.files].find(item => item.type.startsWith("image/"));
-					if (file)
-						void rasterizePicture(file)
-							.then(setUpload)
-							.catch(() => {});
-				}}
-			>
-				<div className="flex items-center gap-2">
-					<Button
-						onClick={() => {
-							setUpload(null);
-							setFace(current => (current <= 0 ? BOT_MASCOT_COUNT - 1 : current - 1));
-						}}
-						size="sm"
-						variant="ghost"
-					>
-						{t("bots.picture.previous")}
-					</Button>
-					<BotAvatar bot={{ name: bot.name, picture }} size={72} />
-					<Button
-						onClick={() => {
-							setUpload(null);
-							setFace(current => (current + 1) % BOT_MASCOT_COUNT);
-						}}
-						size="sm"
-						variant="ghost"
-					>
-						{t("bots.picture.next")}
-					</Button>
-				</div>
-				<p className="text-sc-xs text-(--sc-text-muted)">{t("bots.picture.hint")}</p>
-				<div className="flex w-full flex-col gap-2 border-t border-(--sc-border-subtle) pt-3">
-					<TextArea
-						autoGrow
-						label={t("bots.picture.describe")}
-						onChange={event => setDescribe(event.target.value)}
-						placeholder={t("bots.picture.describePlaceholder")}
-						rows={2}
-						value={describe}
-					/>
-					<Button
-						className="self-start"
-						disabled={!describe.trim() || !bot.home || bot.paused}
-						disabledReason={
-							!bot.home ? t("bots.settings.needsHome") : bot.paused ? t("bots.row.paused") : undefined
-						}
-						onClick={generate}
-						size="sm"
-						variant="secondary"
-					>
-						{t("bots.picture.generate")}
-					</Button>
-				</div>
-			</div>
-		</Modal>
 	);
 }
