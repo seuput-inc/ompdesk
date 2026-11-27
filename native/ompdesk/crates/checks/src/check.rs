@@ -1278,15 +1278,6 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
         let taken = heavy::Pool::new(heavy::pool_dir(&lookup), heavy::machine_size(&lookup))
             .and_then(|mut pool| {
                 pool.volumes = heavy::Volumes::of_work(&cwd, &argv, &lookup);
-                // Existing opaque checks keep their protection; a new shell command must name its writes.
-                if detected.kind == Kind::Command
-                    && rt.store.of_key(&rt.run.key).iter().any(|r| {
-                        r.id != rt.run.id && matches!(r.state, State::Passed | State::Failed)
-                    })
-                {
-                    pool.volumes.use_previous_command_guard();
-                }
-                pool.volumes.paths.push(rt.store.dir.clone());
                 pool.acquire_unless(
                     1,
                     owner,
@@ -1297,9 +1288,7 @@ fn execute(rt: &mut Runtime, forced_full: bool) -> i32 {
                             rt.run.milestones.get_or_insert_default().queued_at = Some(queued_at);
                             rt.save();
                         }
-                        let line = if let Some(reason) = w.pressure {
-                            format!("waiting before starting: {reason}")
-                        } else if w.low_disk.is_empty() {
+                        let line = if w.low_disk.is_empty() {
                             format!(
                                 "waiting for a heavy slot ({} ahead, {} in use)",
                                 w.ahead,
@@ -1594,10 +1583,8 @@ fn run_command(
     let _ = fs::write(rt.store.file(&rt.run.id, "child"), pid.to_string());
     rt.save();
     let said = std::sync::Mutex::new(said);
-    let mut volumes = heavy::Volumes::of_work(cwd, argv, &|k| env.get(k).cloned());
-    volumes.paths.push(rt.store.dir.clone());
     let watch = crate::watch::Watch::start(
-        volumes,
+        heavy::Volumes::of_work(cwd, argv, &|k| env.get(k).cloned()),
         None,
         move |line| {
             if let Ok(mut log) = said.lock() {

@@ -415,7 +415,6 @@ where
     let ending = Events {
         frames: frames.downgrade(),
     };
-    crate::git::admission::close_all(&ending);
     crate::logs::close_all(&ending);
     let mcp_hub_closed = crate::mcp_hub::close_all(&ending);
     crate::control::close_all(&ending).await;
