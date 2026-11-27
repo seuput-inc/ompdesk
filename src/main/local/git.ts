@@ -89,7 +89,7 @@ export const handlers: Record<string, LocalHandler> = {
 			{
 				name: str(command.name) ?? "",
 				baseCwd: str(command.baseCwd),
-				baseRef: str(command.baseRef) || "HEAD",
+				baseRef: command.baseRef === null ? null : str(command.baseRef) || "HEAD",
 				branchPrefix: str(command.branchPrefix),
 				branch: worktreeBranchSource(command.branch),
 				sparse: str(command.sparse) || undefined,

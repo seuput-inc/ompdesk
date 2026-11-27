@@ -7,22 +7,30 @@
 #
 #   scripts/agent-commit.sh -m "fix: …" path/a.ts path/b.ts
 #   scripts/agent-commit.sh -m "fix: …" --patch-file /tmp/mine.patch
-#   add --push to push to origin/main afterwards (rebases onto a moved origin/main by redoing the commit).
+#   add --push to publish to origin/dev, never the release branch.
+#   add --retire-work <finished omp/agent/branch> <accepted full sha> to clean only its remote copy after publication.
 set -euo pipefail
 
-msg="" patch="" push=0 paths=()
+msg="" patch="" push=0 retire="" accepted="" paths=()
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-m) msg="$2"; shift 2 ;;
 	--patch-file) patch="$2"; shift 2 ;;
 	--push) push=1; shift ;;
+	--retire-work) retire="$2"; accepted="$3"; shift 3 ;;
 	*) paths+=("$1"); shift ;;
 	esac
 done
 [ -n "$msg" ] || { echo "agent-commit: -m <message> is required" >&2; exit 2; }
+[ -z "$retire" ] || [ "$push" = 1 ] || { echo "agent-commit: --retire-work needs --push" >&2; exit 2; }
 [ -n "$patch" ] || [ ${#paths[@]} -gt 0 ] || { echo "agent-commit: name paths or --patch-file" >&2; exit 2; }
 root=$(git rev-parse --show-toplevel)
 cd "$root"
+if [ "$push" = 1 ] && [ "$(git symbolic-ref -q HEAD || true)" = refs/heads/main ]; then
+	echo "agent-commit: main is release-only; publish from a dev integration checkout" >&2
+	exit 1
+fi
 
 commit_once() {
 	local head index scratch tree new changed allowed
@@ -125,13 +133,13 @@ check_fresh() {
 # changed to disk and the shared index, unless one of them is dirty on disk (named, nothing moves).
 # Diverged histories fail: never move HEAD sideways, never merge, never force.
 check_origin() {
-	git fetch -q origin main
+	git fetch -q origin dev
 	local head origin st file old new cur mode dirty=""
-	head=$(git rev-parse HEAD) origin=$(git rev-parse origin/main)
+	head=$(git rev-parse HEAD) origin=$(git rev-parse origin/dev)
 	[ "$head" != "$origin" ] || return 0
-	git merge-base --is-ancestor origin/main HEAD && return 0
-	if ! git merge-base --is-ancestor HEAD origin/main; then
-		echo "agent-commit: HEAD and origin/main have diverged; HEAD left untouched. Integrate origin/main, then commit again." >&2
+	git merge-base --is-ancestor "$origin" HEAD && return 0
+	if ! git merge-base --is-ancestor HEAD "$origin"; then
+		echo "agent-commit: HEAD and origin/dev have diverged; HEAD left untouched. Integrate origin/dev, then commit again." >&2
 		return 1
 	fi
 	while IFS=$'\t' read -r st file; do
@@ -141,7 +149,7 @@ check_origin() {
 		[ "$cur" = "$old" ] || [ "$cur" = "$new" ] || dirty="$dirty $file"
 	done < <(git diff --no-renames --name-status "$head" "$origin")
 	if [ -n "$dirty" ]; then
-		echo "agent-commit: origin/main is ahead of HEAD and changed files that are dirty on disk:$dirty; HEAD left untouched. Commit or move your edits aside first." >&2
+		echo "agent-commit: origin/dev is ahead of HEAD and changed files that are dirty on disk:$dirty; HEAD left untouched. Commit or move your edits aside first." >&2
 		return 1
 	fi
 	git update-ref HEAD "$origin" "$head"
@@ -158,7 +166,7 @@ check_origin() {
 		[ "$mode" != 100755 ] || chmod +x "$file"
 		git update-index --add --cacheinfo "$mode,$new,$file"
 	done < <(git diff --no-renames --name-status "$head" "$origin")
-	echo "agent-commit: fast-forwarded HEAD to origin/main ($(git rev-parse --short "$origin"))" >&2
+	echo "agent-commit: fast-forwarded HEAD to origin/dev ($(git rev-parse --short "$origin"))" >&2
 }
 
 [ "$push" = 0 ] || check_origin
@@ -172,7 +180,12 @@ if [ "$push" = 1 ]; then
 	for attempt in 1 2 3; do
 		check_origin
 		rm -f "$refused"
-		git push origin HEAD:main && exit 0
+		if git push origin HEAD:refs/heads/dev; then
+			if [ -n "$retire" ]; then
+				bun "$script_dir/publish-work.ts" --published "$retire" "$accepted"
+			fi
+			exit 0
+		fi
 		if [ -e "$refused" ]; then
 			echo "agent-commit: the pre-push gate refused $(git rev-parse --short HEAD) (its output is above); the commit stays local: fix, commit again, push" >&2
 			exit 1

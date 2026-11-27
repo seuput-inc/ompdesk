@@ -328,7 +328,7 @@ function askOf(request: ControlAsk["request"]): boolean {
 }
 
 /** What a worktree for a new session is made from (`worktree_create`'s fields). */
-type WorktreeInput = { name: string; baseCwd: string; baseRef: string; branchPrefix: string };
+type WorktreeInput = { name: string; baseCwd: string; baseRef: string | null; branchPrefix: string };
 
 /** The binding `host.git.*` takes: exactly the checkout, its branch and its parent (never the tab's own name). */
 function gitRef(worktree: WorktreeRef): WorktreeRef {
@@ -980,7 +980,7 @@ export class AgentControlRuntime {
 		if (request.worktree && cwd !== undefined) {
 			const slug = `agent-${Math.random().toString(36).slice(2, 8)}`;
 			const { branchPrefix, name } = splitBranch(request.worktree.branch, slug);
-			const input = { name, baseCwd: cwd, baseRef: request.worktree.base ?? "HEAD", branchPrefix } as const;
+			const input = { name, baseCwd: cwd, baseRef: request.worktree.base ?? null, branchPrefix } as const;
 			// The worktree is made on the computer the new session runs on: the caller's own through its tab,
 			// another one without a tab of the caller there.
 			const made =

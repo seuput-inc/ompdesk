@@ -46,6 +46,26 @@ use crate::run::Runner;
 use crate::server::{Fault, Registry, Reply};
 use run::Git;
 
+async fn ompdesk_origin(git: &Git, cwd: &str) -> Result<bool, Fault> {
+    let url = git
+        .raw(cwd, &["config", "--get", "remote.origin.url"])
+        .await?;
+    if url.code == 1 {
+        return Ok(false);
+    }
+    if url.code != 0 {
+        return Err(run::failure(&["config"], &url));
+    }
+    Ok(
+        parse::remote_web_base(url.text().trim().trim_end_matches('/'))
+            .is_some_and(|url| url.eq_ignore_ascii_case("https://github.com/seuput-inc/ompdesk")),
+    )
+}
+
+async fn permanent_branch(git: &Git, cwd: &str, branch: &str) -> Result<bool, Fault> {
+    Ok(matches!(branch, "main" | "dev") && ompdesk_origin(git, cwd).await?)
+}
+
 #[derive(Deserialize)]
 struct At {
     git: Runner,
@@ -301,6 +321,14 @@ struct SessionRemoveParams {
 struct WorktreeParams {
     git: Runner,
     worktree: branches::WorktreeRef,
+}
+
+#[derive(Deserialize)]
+struct PublishedWork {
+    git: Runner,
+    cwd: String,
+    branch: String,
+    accepted: String,
 }
 
 /// `diffChars`: the diff's budget in UTF-16 units; 0 reads no diff.
@@ -1013,6 +1041,18 @@ pub fn register(registry: &mut Registry) {
             let WorktreeParams { git, worktree } = call.params()?;
             let git = Git::new(git, call.scope);
             Reply::json(&branches::landing_facts(&git, &worktree).await?)
+        })
+    });
+    registry.add("git.dropPublishedWork", |call| {
+        Box::pin(async move {
+            let PublishedWork {
+                git,
+                cwd,
+                branch,
+                accepted,
+            } = call.params()?;
+            let git = Git::new(git, call.scope);
+            Reply::json(&branches::drop_landed_remote(&git, &cwd, &branch, Some(&accepted)).await?)
         })
     });
     registry.add("git.mergeBranch", |call| {

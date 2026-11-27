@@ -401,7 +401,7 @@ describe("AgentControlRuntime", () => {
 		const outcome = await runtime.run(win, "main0001", T.open, { worktree: true });
 		expect(outcome.isError).toBe(true); // the fake pool never reports the new tab, so readiness fails: the spawn path is what is checked
 		const create = commands.find(entry => entry.command.type === "worktree_create");
-		expect(create?.command).toMatchObject({ baseCwd: "/repo", baseRef: "HEAD", branchPrefix: "omp/agent/" });
+		expect(create?.command).toMatchObject({ baseCwd: "/repo", baseRef: null, branchPrefix: "omp/agent/" });
 		expect(spawned[0]).toMatchObject({
 			cwd: "/wt/agent-1",
 			worktree: { path: "/wt/agent-1", branch: "omp/agent/agent-1" },

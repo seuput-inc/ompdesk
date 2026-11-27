@@ -678,7 +678,7 @@ const GitWorktreeCreateParams = z.object({
 	// createWorktree checks the name's and the prefix's own shape and says why it refuses one.
 	name: z.string().min(1).max(64),
 	branchPrefix: z.string().max(200).optional(),
-	baseRef: z.string().min(1).max(200),
+	baseRef: z.string().min(1).max(200).nullable(),
 	// The device's id for this one create: its retry gets the same worktree (createWorktree).
 	requestId: z.string().min(1).max(100).optional(),
 });

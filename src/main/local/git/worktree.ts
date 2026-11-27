@@ -121,7 +121,7 @@ export function worktreeBranchSource(value: unknown): WorktreeBranchSource | und
 interface CreateInput {
 	name: string;
 	baseCwd?: string;
-	baseRef?: string;
+	baseRef?: string | null;
 	branchPrefix?: string;
 	branch?: WorktreeBranchSource;
 	/** A preset of the repository's `.ompdesk/sparse` (core `git/sparse.rs`): only its folders are checked out. */
@@ -190,7 +190,7 @@ export function createWorktree(
 	const argsKey = JSON.stringify([
 		args.name,
 		args.baseCwd ?? sessionCwd,
-		args.baseRef,
+		args.baseRef === undefined ? "HEAD" : args.baseRef,
 		args.branchPrefix,
 		args.branch,
 		args.sparse,
@@ -274,7 +274,11 @@ async function planAndAdd(sessionCwd: string, input: CreateInput, bridge: Pick<B
 		base?: WorktreeBaseFetch;
 	}>(
 		"git.worktreePlan",
-		{ cwd: baseCwd, checkoutSpelling: path.resolve(baseCwd), baseRef: input.baseRef },
+		{
+			cwd: baseCwd,
+			checkoutSpelling: path.resolve(baseCwd),
+			baseRef: input.baseRef === undefined ? "HEAD" : input.baseRef,
+		},
 		PLAN_ROUNDS,
 		BASE_FETCH_TIMEOUT_MS,
 	);

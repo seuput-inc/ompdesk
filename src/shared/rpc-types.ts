@@ -543,8 +543,8 @@ export type RpcCommand =
 			type: "worktree_create";
 			name: string;
 			baseCwd?: string;
-			/** `HEAD` (default), `default` (the remote's default branch), or any branch, tag or commit the repository resolves. */
-			baseRef?: string;
+			/** null uses the target repository's worker base. Otherwise HEAD (default), default, or an explicit ref. */
+			baseRef?: string | null;
 			branchPrefix?: string;
 			/**
 			 * The exact branch the worktree gets instead of `<branchPrefix><name>` (Autopilot's picker, a Linear issue's
