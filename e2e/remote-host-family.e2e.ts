@@ -83,21 +83,17 @@ test("a paired device reopens an ordinary host's saved child under its exact par
 		const toggle = openerRow.locator("[data-sidebar-subagents-toggle]");
 		const family = section.locator(`[data-sidebar-family=${cssString(`device:${deviceId}:${openerSession}`)}]`);
 		const childRow = family.locator(`[data-sidebar-opened-session][data-session-path=${cssString(childSession)}]`);
-		const showWorkingChild = async (id: string) => {
+		const runWhileFolded = async (id: string) => {
 			await b.evaluate(
 				tab => window.omp.rpc.commandForTab(tab, { type: "prompt", message: "fixture steer work" }),
 				id,
 			);
 			await expect(openerRow.locator("[data-family-running]")).toHaveText("1", { timeout: 30_000 });
 			await expect(section.locator(`[data-device-session=${cssString(childSession)}]`)).toHaveCount(0);
-			if ((await toggle.getAttribute("aria-expanded")) === "false") {
-				await expect(childRow).toHaveCount(0);
-				await toggle.click();
-			}
-			await expect(childRow).toHaveAttribute("data-child-status", "running");
-			await expect(childRow).toContainText(title);
+			await expect(toggle).toHaveAttribute("aria-expanded", "false");
+			await expect(childRow).toHaveCount(0);
 		};
-		await showWorkingChild(originalChild);
+		await runWhileFolded(originalChild);
 		const firstStop = await openChild("ompdesk_session_stop", { session: originalChild });
 		expect(firstStop.isError, firstStop.text).toBe(false);
 		await expect.poll(async () => (await hostTabs()).find(t => t.tabId === originalChild)?.status).toBe("ready");
@@ -129,7 +125,11 @@ test("a paired device reopens an ordinary host's saved child under its exact par
 		}
 		const call = await controlToolCaller(b, hostProfile.record, opener);
 		expect((await a.evaluate(() => window.omp.tabs.list())).filter(tab => tab.device === deviceId)).toEqual([]);
-		await showWorkingChild(child);
+		await runWhileFolded(child);
+		await toggle.click();
+		await expect(toggle).toHaveAttribute("aria-expanded", "true");
+		await expect(childRow).toHaveAttribute("data-child-status", "running");
+		await expect(childRow).toContainText(title);
 		await expect(namesake).toContainText(title);
 		await expect(
 			section.locator(`[data-sidebar-opened-session][data-session-path=${cssString(independentSession)}]`),
@@ -147,6 +147,7 @@ test("a paired device reopens an ordinary host's saved child under its exact par
 				timeout: 60_000,
 			})
 			.toMatchObject({ success: true, data: { sessionFile: childSession } });
+		await expect(toggle).toHaveAttribute("aria-expanded", "true");
 		await a.evaluate(id => window.omp.tabs.close(id), view.tabId);
 
 		// 28 Oct 2026, the user's desktop viewing the Mac: the opener retitled itself, and the child's tab closed without a
