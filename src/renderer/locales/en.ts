@@ -1669,6 +1669,7 @@ export const en: Record<string, string> = {
 	"providers.claude.keyTitle": "Connect Claude with an Anthropic API key",
 	"providers.claude.keyHint":
 		"API use is billed separately from your Claude subscription. The key is stored in models.yml.",
+	"providers.claude.noCatalog": "omp has no Anthropic model catalog available. Your key hasn’t been saved.",
 	"providers.claude.keyRequired": "Enter your Anthropic API key.",
 	"providers.featured.signIn": "Sign in",
 	"providers.featured.connect": "Connect",

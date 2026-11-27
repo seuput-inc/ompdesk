@@ -1221,6 +1221,7 @@ export type CustomProviderApi =
 export type CustomModelEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface CustomProviderOptions {
+	anthropicModels?: CustomProviderModelInput[];
 	apis: string[];
 	auth: string[];
 	discovery: string[];

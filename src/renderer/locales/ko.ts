@@ -1656,6 +1656,7 @@ export const ko: Record<string, string> = {
 	"providers.claude.methods": "구독 계정 또는 API 키",
 	"providers.claude.keyTitle": "Anthropic API 키로 Claude 연결",
 	"providers.claude.keyHint": "API 사용료는 Claude 구독과 별도로 청구돼요. 키는 models.yml에 저장돼요.",
+	"providers.claude.noCatalog": "omp에서 Anthropic 모델 목록을 불러올 수 없어요. 키는 저장되지 않았어요.",
 	"providers.claude.keyRequired": "Anthropic API 키를 입력하세요.",
 	"providers.featured.signIn": "로그인",
 	"providers.featured.connect": "연결",

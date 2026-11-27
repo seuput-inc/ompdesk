@@ -116,7 +116,7 @@ function ConnectStep() {
 		},
 		[load],
 	);
-	const { login, claudePanel, retryLogin } = useProviderConnection(catalog, advance);
+	const { login, claudePanel, retryLogin } = useProviderConnection(advance, id => setPhase("model", id));
 
 	// A provider can serve now (just connected here, or somewhere else meanwhile: Settings, the CLI, env): pick
 	// its default model and end the setup. Only a pick that is missing or cannot be saved opens the model step.
@@ -175,8 +175,6 @@ function ConnectStep() {
 		if (login.state.since > 0) document.querySelector("[data-login-panel]")?.scrollIntoView?.({ block: "center" });
 	}, [login.state.since]);
 
-	if (claudePanel) return <div className="mt-6">{claudePanel}</div>;
-
 	// The form needs the provider options. Until they arrive (or when reading them failed) say so in place,
 	// instead of leaving the list as it was and popping the form in later.
 	if (customForm && !options) {
@@ -225,6 +223,7 @@ function ConnectStep() {
 
 	return (
 		<div className="mt-6 flex flex-col gap-3">
+			{claudePanel}
 			{catalog.error && (
 				<Banner
 					actions={

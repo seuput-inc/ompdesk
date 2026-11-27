@@ -17,6 +17,7 @@ const vocabulary: Record<string, string[]> = {
 	efforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
 };
 export const fixtureProviderOptions = {
+	anthropicModels: [{ id: "fixture-claude-from-catalog", name: "Fixture Claude" }],
 	apis: vocabulary.api,
 	auth: vocabulary.auth,
 	discovery: vocabulary.type,
@@ -34,6 +35,11 @@ function schema(keys: Array<string | number> = []) {
 export const ModelsConfigSchema = schema();
 export function providerEntries(): Record<string, { id: string }> {
 	return Object.fromEntries(["anthropic", "openai", "google", "openai-codex", "fixture"].map(id => [id, { id }]));
+}
+export function seedModels(provider: string) {
+	return provider === "anthropic"
+		? fixtureProviderOptions.anthropicModels.map(model => ({ ...model, api: "anthropic-messages" }))
+		: [];
 }
 export function authProviders(): Array<{ id: string }> {
 	return [{ id: "anthropic" }, { id: "openai-codex" }];

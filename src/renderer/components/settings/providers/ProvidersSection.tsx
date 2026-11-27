@@ -45,10 +45,10 @@ import {
 } from "../../common";
 import { SettingsAdvanced, SettingsSection } from "../SettingsLayout";
 import { AccountPoolsEditor } from "./AccountPoolsEditor";
-import { useProviderConnection } from "./ClaudeConnection";
+import { CLAUDE_API_URL, useProviderConnection } from "./ClaudeConnection";
 import { ProviderGroupItem } from "./ConnectedRow";
 import { CreditSpendRow } from "./CreditSpendRow";
-import { CLAUDE_API_URL, CustomProviderForm } from "./CustomProviderForm";
+import { CustomProviderForm } from "./CustomProviderForm";
 import { LocalEnginesRow } from "./LocalEnginesRow";
 import { ModelOverrides } from "./ModelOverrides";
 import { type AccountRowLayout, accountRowLayout, ProviderAccountRows, useProviderAccounts } from "./ProviderAccounts";
@@ -333,7 +333,7 @@ export function ProvidersSection({
 		},
 		[load, providers, t],
 	);
-	const { login, claudePanel, retryLogin } = useProviderConnection(catalog, onConnected);
+	const { login, claudePanel, retryLogin } = useProviderConnection(onConnected);
 	/**
 	 * The form stands in for the whole section, so closing it lands back at the
 	 * top. This is the endpoint it saved or edited ("" after cancelling an add):
@@ -439,8 +439,6 @@ export function ProvidersSection({
 		}
 	};
 
-	if (claudePanel) return <SettingsSection id="settings-models-accounts">{claudePanel}</SettingsSection>;
-
 	if (providerForm && catalog.options) {
 		return (
 			<SettingsSection id="settings-models-custom">
@@ -479,6 +477,7 @@ export function ProvidersSection({
 
 	return (
 		<>
+			{claudePanel}
 			<SettingsSection
 				actions={
 					<IconButton
