@@ -13,8 +13,7 @@
 # A push's macOS checks run separately in mac-main.yml so a runner wait does not delay the Linux and Windows verdict.
 #
 # Pull requests (including from forks) run only the Linux jobs with a read-only
-# token and no secrets; no job here uses `pull_request_target`. Every other job
-# is a manual dispatch.
+# token and no secrets; no job here uses `pull_request_target`.
 #
 # The full Playwright suite is manual here (`gh workflow run ci.yml -f e2e=true`):
 # it builds out/ on Linux and runs the Windows shards of e2e-shards.yml (Playwright
@@ -30,17 +29,13 @@
 # (`gh workflow run ci.yml -f installer_check=true`): silently, as a double-click,
 # and over an all-users install from the assisted installer.
 #
-# The Windows e2e is manual too (`gh workflow run ci.yml -f win_e2e=true`): the
-# same @smoke specs release.yml's `win` job runs (setup takeover, split select,
-# auto-resume after a kill and a quit, Model roles, the Changes commit, the
-# Files edit, Preview, Mica and close-to-tray, a new window's theme, steering a running
-# turn from the composer) with their captures uploaded,
-# plus the omp update while an omp runs.
+# A release batch requests the Windows app set with windows_candidate on dev. An ordinary
+# win_e2e dispatch keeps its own Playwright grep, captures and update-lock probe.
 name: ci
 
 # What a dispatch was asked to run, in the run's name: queue-gate.yml compares it to find the same commit already green.
 # Keep it, `concurrency.group` and the `with:` of `gate` in step (src/main/packaging-config.test.ts pins them).
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('ci [{0}]', format('{0}{1}{2}{3}{4}{5}{6}', inputs.batch && 'batch ' || '', inputs.mac && 'mac ' || '', inputs.e2e && 'e2e ' || '', inputs.install_check && 'install-check ' || '', inputs.win_platform && 'win-platform ' || '', inputs.win_e2e && format('win-e2e={0} ', inputs.win_e2e_grep) || '', inputs.installer_check && format('installer={0} ', inputs.legacy_tag) || '')) || '' }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('ci [{0}]', inputs.windows_candidate && format('release-windows={0}', inputs.windows_candidate) || format('{0}{1}{2}{3}{4}{5}{6}', inputs.batch && 'batch ' || '', inputs.mac && 'mac ' || '', inputs.e2e && 'e2e ' || '', inputs.install_check && 'install-check ' || '', inputs.win_platform && 'win-platform ' || '', inputs.win_e2e && format('win-e2e={0} ', inputs.win_e2e_grep) || '', inputs.installer_check && format('installer={0} ', inputs.legacy_tag) || '')) || '' }}
 
 on:
   push:
@@ -81,6 +76,9 @@ on:
         description: "Playwright --grep for the Windows e2e (default: every @smoke spec)"
         type: string
         default: "@smoke"
+      windows_candidate:
+        description: "Release batch only: run the required Windows app set alone on dev at this full commit SHA"
+        type: string
       installer_check:
         description: "Also package the Windows setup and install it (silent, double-click, over an all-users install)"
         type: boolean
@@ -99,10 +97,11 @@ on:
 # a verdict arrives every run-length however fast pushes come (with one group for the branch and cancel-in-progress
 # true, each push killed the run before it and no commit ever got a verdict). A release commit (its jobs are all
 # skipped, release.yml checks it) cancels what runs and waits, so the runners it needs are free.
-# Any other ref: the newest dispatch with the same inputs replaces the older one; other inputs run beside it.
+# A candidate waits for the same SHA's running proof, then the gate checks for its receipt.
+# Other dispatches keep the newest run with their inputs.
 concurrency:
-  group: ${{ github.event_name == 'push' && format('ci-{0}', github.ref_name) || format('ci-{0}-{1}', github.ref, format('{0}{1}{2}{3}{4}{5}{6}', inputs.batch && 'batch ' || '', inputs.mac && 'mac ' || '', inputs.e2e && 'e2e ' || '', inputs.install_check && 'install-check ' || '', inputs.win_platform && 'win-platform ' || '', inputs.win_e2e && format('win-e2e={0} ', inputs.win_e2e_grep) || '', inputs.installer_check && format('installer={0} ', inputs.legacy_tag) || '')) }}
-  cancel-in-progress: "${{ github.event_name != 'push' || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release: v')) }}"
+  group: ${{ github.event_name == 'push' && format('ci-{0}', github.ref_name) || format('ci-{0}-{1}', github.ref, inputs.windows_candidate && format('release-windows={0}', inputs.windows_candidate) || format('{0}{1}{2}{3}{4}{5}{6}', inputs.batch && 'batch ' || '', inputs.mac && 'mac ' || '', inputs.e2e && 'e2e ' || '', inputs.install_check && 'install-check ' || '', inputs.win_platform && 'win-platform ' || '', inputs.win_e2e && format('win-e2e={0} ', inputs.win_e2e_grep) || '', inputs.installer_check && format('installer={0} ', inputs.legacy_tag) || '')) }}
+  cancel-in-progress: "${{ !inputs.windows_candidate && (github.event_name != 'push' || (github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release: v'))) }}"
 
 permissions:
   contents: read
@@ -118,7 +117,14 @@ jobs:
     uses: ./.github/workflows/queue-gate.yml
     with:
       workflow: ci.yml
-      force: ${{ inputs.force }}
+      force: ${{ inputs.force && !inputs.windows_candidate }}
+
+  # An all-skipped run would look green to the queue gate on a later dispatch of this SHA.
+  reject-windows-candidate:
+    if: inputs.windows_candidate != '' && (github.ref != 'refs/heads/dev' || github.sha != inputs.windows_candidate)
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo '::error::windows_candidate must be the full commit SHA of this dev dispatch.' && exit 1
 
   # Pre-flight: the same blocking checks release.yml runs (types, biome, surface
   # policy, vitest, Windows `test:platform`, macOS @smoke, `native` and
@@ -132,7 +138,7 @@ jobs:
   # or pull request (scripts/lint-fix-tests.mjs; the full history without blobs).
   static:
     needs: gate
-    if: "!cancelled() && (github.event_name != 'push' || (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v')))"
+    if: "!cancelled() && !inputs.windows_candidate && (github.event_name != 'push' || (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v')))"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -182,7 +188,7 @@ jobs:
   check:
     name: check (${{ matrix.name }})
     needs: gate
-    if: "!cancelled() && (github.event_name != 'push' || (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v')))"
+    if: "!cancelled() && !inputs.windows_candidate && (github.event_name != 'push' || (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v')))"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -226,7 +232,7 @@ jobs:
   # `build` job.
   build:
     needs: gate
-    if: "!cancelled() && (github.event_name != 'push' || (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v')))"
+    if: "!cancelled() && !inputs.windows_candidate && (github.event_name != 'push' || (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v')))"
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -254,7 +260,7 @@ jobs:
   native:
     name: native (${{ matrix.name }})
     needs: gate
-    if: "!cancelled() && (github.event_name != 'push' || (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v')))"
+    if: "!cancelled() && !inputs.windows_candidate && (github.event_name != 'push' || (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v')))"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     permissions:
@@ -279,7 +285,7 @@ jobs:
   # at once (.github/actions/install), so every shard's install restores it and only checks it.
   win-native-bin:
     needs: gate
-    if: "!cancelled() && ((github.event_name == 'push' && (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v'))) || (github.event_name == 'workflow_dispatch' && (inputs.win_platform || inputs.batch)))"
+    if: "!cancelled() && !inputs.windows_candidate && ((github.event_name == 'push' && (github.ref != 'refs/heads/main' || !startsWith(github.event.head_commit.message, 'release: v'))) || (github.event_name == 'workflow_dispatch' && (inputs.win_platform || inputs.batch)))"
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
@@ -354,7 +360,7 @@ jobs:
   # mac-main.yml calls the same checks on a push to main.
   mac:
     needs: gate
-    if: "!cancelled() && github.event_name == 'workflow_dispatch' && inputs.mac"
+    if: "!cancelled() && !inputs.windows_candidate && github.event_name == 'workflow_dispatch' && inputs.mac"
     permissions:
       contents: read
       actions: read # the failure reports read this run's jobs
@@ -365,7 +371,7 @@ jobs:
   # uploaded first, on Linux (the bundle is byte-identical on every OS).
   build-out:
     needs: gate
-    if: "!cancelled() && inputs.e2e && needs.gate.result == 'success'"
+    if: "!cancelled() && !inputs.windows_candidate && inputs.e2e && needs.gate.result == 'success'"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -401,7 +407,7 @@ jobs:
   # Git Bash, not cmd.exe.
   install-check:
     needs: gate
-    if: "!cancelled() && inputs.install_check"
+    if: "!cancelled() && !inputs.windows_candidate && inputs.install_check"
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -414,7 +420,7 @@ jobs:
 
   installer-backup:
     needs: gate
-    if: "!cancelled() && inputs.installer_check"
+    if: "!cancelled() && !inputs.windows_candidate && inputs.installer_check"
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -431,7 +437,7 @@ jobs:
 
   installer-package:
     needs: gate
-    if: "!cancelled() && inputs.installer_check"
+    if: "!cancelled() && !inputs.windows_candidate && inputs.installer_check"
     runs-on: windows-latest
     outputs:
       attempt: ${{ github.run_attempt }}
@@ -559,7 +565,7 @@ jobs:
 
   installer-check:
     needs: [installer-package, installer-backup, installer-proof]
-    if: "!cancelled() && inputs.installer_check"
+    if: "!cancelled() && !inputs.windows_candidate && inputs.installer_check"
     runs-on: ubuntu-latest
     steps:
       - name: Require packaging, backup and every install mode to pass
@@ -571,25 +577,14 @@ jobs:
           printf 'Package: %s, backup: %s, install modes: %s\n' "$PACKAGE" "$BACKUP" "$PROOF"
           test "$PACKAGE" = success && test "$BACKUP" = success && test "$PROOF" = success
 
-  # Launches the built app on a real Windows desktop: the @smoke specs on the
-  # fake omp (e2e/*.e2e.ts titles tagged @smoke) and, before them, the real
-  # `bun install -g` update of an omp that is running
-  # (scripts/omp-update-lock-check.ts). Each spec writes its captures under
-  # captures/; they and Playwright's own results are uploaded on every run.
+  # Only the fixed release-batch step supplies evidence. A manual grep is a diagnostic run.
   win-e2e:
     needs: gate
-    if: "!cancelled() && inputs.win_e2e"
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      ((!inputs.windows_candidate && inputs.win_e2e) || (github.ref == 'refs/heads/dev' && github.sha == inputs.windows_candidate))
     runs-on: windows-latest
-    timeout-minutes: 40
-    env:
-      E2E_GREP: ${{ inputs.win_e2e_grep || '@smoke' }}
-      OMP_GUI_DESKTOP_CAPTURES: captures/desktop
-      OMP_GUI_SETUP_CAPTURES: captures/setup
-      OMP_GUI_SPLIT_SELECT_CAPTURES: captures/split-select
-      OMP_GUI_SCM_CAPTURES: captures/source-control
-      OMP_GUI_PREVIEW_SCREENSHOTS: captures/preview
-      # e2e/real-ai-memory-windows.e2e.ts: the real ai-memory.exe and its HKCU logon entry on this (throwaway) runner.
-      OMP_GUI_REAL_AI_MEMORY_SERVICE: "1"
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -601,6 +596,7 @@ jobs:
         run: echo "BUN_INSTALL_CACHE_DIR=$RUNNER_TEMP/bun-cache" >> "$GITHUB_ENV"
       - uses: ./.github/actions/install
         with:
+          native: "true"
           builder: "true"
       # The Tauri host (system WebView) and the pinned Node: the packaged app and every e2e launch them (the tauri-shell
       # action: a cached build). Built with test-automation: Playwright attaches to WebView2's DevTools port, which only
@@ -609,6 +605,8 @@ jobs:
       - uses: ./.github/actions/tauri-shell
         with:
           test-automation: "true"
+      - if: inputs.windows_candidate != ''
+        uses: ./.github/actions/install-omp
       # The pinned, signed Brave runtime Preview browses with; packaging verifies it, and the unpackaged host the e2e
       # launches finds it under resources/preview-browser/<platform>-<arch>.
       - name: Stage the Preview browser
@@ -658,18 +656,38 @@ jobs:
           }
           "OMP_GUI_HANDLE_EXE=$exe" >> $env:GITHUB_ENV
       - name: ai-memory, sidecar and packaging unit tests on Windows (staging, paths, the logon entry, the stop path)
+        if: inputs.windows_candidate == ''
         run: bunx vitest run src/main/ai-memory src/main/sidecar.test.ts src/main/packaging-config.test.ts
       # Real PowerShell, a real handle list and a real detached descendant (SpawnSpec.isolated); its own step, so its
       # C# compile does not load the timing-sensitive files above.
       - name: Setup runner unit tests on Windows (the supervisor, isolated commands)
+        if: inputs.windows_candidate == ''
         run: bunx vitest run src/main/setup/runner.test.ts
       - name: omp update while omp runs
+        if: inputs.windows_candidate == ''
         run: bun scripts/omp-update-lock-check.ts
       - name: Playwright browsers
         run: bunx playwright install chromium
       - name: Playwright e2e
+        if: inputs.windows_candidate == ''
+        env:
+          E2E_GREP: ${{ inputs.win_e2e_grep || '@smoke' }}
+          OMP_GUI_DESKTOP_CAPTURES: captures/desktop
+          OMP_GUI_SETUP_CAPTURES: captures/setup
+          OMP_GUI_SPLIT_SELECT_CAPTURES: captures/split-select
+          OMP_GUI_SCM_CAPTURES: captures/source-control
+          OMP_GUI_PREVIEW_SCREENSHOTS: captures/preview
+          OMP_GUI_REAL_AI_MEMORY_SERVICE: "1"
         run: bunx playwright test --grep "$env:E2E_GREP"
-      - if: always()
+      - name: Required Windows app set
+        if: inputs.windows_candidate != ''
+        shell: bash
+        env:
+          # Fail rather than falling back to the staged development app in the packaged first-launch tests.
+          OMP_GUI_E2E_EXE: ${{ github.workspace }}/dist/win-unpacked/OMPdesk.exe
+          OMP_GUI_REAL_AI_MEMORY_SERVICE: "1"
+        run: bunx playwright test --grep @smoke --forbid-only --reporter=list,./scripts/windows-release-reporter.mjs
+      - if: failure() || (always() && !inputs.windows_candidate)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-windows-captures

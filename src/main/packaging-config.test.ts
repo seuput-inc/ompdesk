@@ -1464,7 +1464,7 @@ describe("workflows", () => {
 		};
 		expect(ci.on.workflow_dispatch.inputs).toHaveProperty("installer_check");
 		const job = ci.jobs["installer-check"];
-		expect(job?.if).toBe("!cancelled() && inputs.installer_check");
+		expect(job?.if).toBe("!cancelled() && !inputs.windows_candidate && inputs.installer_check");
 		const backup = ci.jobs["installer-backup"];
 		const pkg = ci.jobs["installer-package"];
 		const proof = ci.jobs["installer-proof"];
@@ -1549,7 +1549,7 @@ describe("workflows", () => {
 		expect(publishRuns).not.toContain("rebase");
 	});
 
-	it("smokes the packaged app on every release, and offers the @smoke e2e by hand with captures and the omp update lock check", () => {
+	it("smokes the packaged releases and runs the fixed Windows app set alone for an exact dev release candidate", () => {
 		const release = parse(workflows.find(entry => entry.name === "release.yml")?.text ?? "") as ReleaseWorkflow;
 		// Playwright cannot drive WKWebView: both packaged apps run the native WebDriver smoke, on a copy whose host is built
 		// with the test-automation feature, after the shipped app proved it has no WebDriver server.
@@ -1571,15 +1571,38 @@ describe("workflows", () => {
 
 		const ci = parse(workflows.find(entry => entry.name === "ci.yml")?.text ?? "") as {
 			on: { workflow_dispatch: { inputs: Record<string, unknown> } };
-			jobs: Record<string, { "runs-on": string; if?: string; steps: { run?: string; with?: { path?: string } }[] }>;
+			jobs: Record<
+				string,
+				{
+					"runs-on": string;
+					if?: string;
+					steps: { name?: string; if?: string; run?: string; with?: { path?: string } }[];
+				}
+			>;
 		};
 		expect(ci.on.workflow_dispatch.inputs).toHaveProperty("win_e2e");
+		expect(ci.on.workflow_dispatch.inputs.windows_candidate).toMatchObject({ type: "string" });
+		for (const id of ["static", "check", "build", "native", "win-native-bin", "mac", "build-out", "install-check"]) {
+			expect(ci.jobs[id]?.if, id).toContain("!inputs.windows_candidate");
+		}
 		const job = ci.jobs["win-e2e"];
-		expect(job?.if).toBe("!cancelled() && inputs.win_e2e");
+		expect(job?.if).toBe(
+			"github.event_name == 'workflow_dispatch' && " +
+				"((!inputs.windows_candidate && inputs.win_e2e) || (github.ref == 'refs/heads/dev' && github.sha == inputs.windows_candidate))",
+		);
 		expect(job?.["runs-on"]).toBe("windows-latest");
-		const manual = job?.steps.map(step => step.run ?? "") ?? [];
+		const appRuns = job?.steps.filter(step => step.run?.includes("bunx playwright test")) ?? [];
+		expect(appRuns).toHaveLength(2);
+		expect(appRuns).toContainEqual(
+			expect.objectContaining({
+				name: "Required Windows app set",
+				if: "inputs.windows_candidate != ''",
+				run: "bunx playwright test --grep @smoke --forbid-only --reporter=list,./scripts/windows-release-reporter.mjs",
+			}),
+		);
+		const manual = job?.steps.filter(step => step.if === "inputs.windows_candidate == ''").map(step => step.run);
+		expect(manual).toContain('bunx playwright test --grep "$env:E2E_GREP"');
 		expect(manual).toContain("bun scripts/omp-update-lock-check.ts");
-		expect(manual.some(run => run.includes("bunx playwright test --grep"))).toBe(true);
 		expect(job?.steps.some(step => step.with?.path?.includes("captures/"))).toBe(true);
 	});
 
@@ -1615,7 +1638,7 @@ describe("workflows", () => {
 		expect(
 			runs.some(run => /gen:licenses|gen-crate-notices|generate-third-party-notices\.ts(?! --check)/.test(run)),
 		).toBe(false);
-		expect(ci.jobs.static?.if ?? "").not.toContain("inputs.");
+		expect(ci.jobs.static?.if?.match(/inputs\.\w+/g)).toEqual(["inputs.windows_candidate"]);
 	});
 });
 
