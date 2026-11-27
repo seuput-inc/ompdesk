@@ -7,6 +7,7 @@ import { _electron as electron } from "playwright";
 import { acceptLanguages } from "../src/main/system-languages";
 import { exitApp, fixtureOmp, pressShortcutUntilVisible } from "./harness";
 import { screenshotBitmap } from "./screenshot-bitmap";
+import { selectInspectorView } from "./select-inspector-view";
 
 test("@smoke isolated Preview loads a local HTTP page without shell privileges", async () => {
 	test.setTimeout(120_000);
@@ -68,9 +69,7 @@ test("@smoke isolated Preview loads a local HTTP page without shell privileges",
 			.poll(async () => (await page.evaluate(() => window.omp.sidecar.getStatus())).status, { timeout: 60_000 })
 			.toBe("ready");
 		const aside = page.locator("aside[data-docked]");
-		await pressShortcutUntilVisible(page, "ControlOrMeta+j", aside);
-		await aside.getByRole("button", { name: "Preview", exact: true }).click();
-		await expect(aside.locator(".omp-panel-topbar button")).toHaveCount(5);
+		await selectInspectorView(page, "preview");
 		await expect(aside.locator("form").getByRole("button", { name: "Open in browser", exact: true })).toBeVisible();
 		await page.getByRole("combobox", { name: "Preview URL" }).fill(url);
 		await page.getByRole("combobox", { name: "Preview URL" }).press("Enter");

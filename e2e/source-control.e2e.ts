@@ -6,6 +6,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { type ElectronApplication, _electron as electron } from "playwright";
 import { writeShellGh } from "./fixture/shell-gh";
 import { exitApp, fixtureOmp, openDestination } from "./harness";
+import { selectInspectorView } from "./select-inspector-view";
 import { capturer, type Finding, resize } from "./shell-capture";
 
 // Source control in the Changes panel and PR merge in the PR Center, on the
@@ -132,17 +133,8 @@ async function launch(
 }
 
 /** The side panel on Changes: docked when wide, a sheet in a narrow window. */
-async function openChanges(page: Page, language: "en" | "ko") {
-	const button = page
-		.locator(".omp-panel-topbar:visible")
-		.getByRole("button", { name: language === "ko" ? "변경 사항" : "Changes", exact: true })
-		.first();
-	// A resize swaps the docked panel for a sheet (or closes it); toggle until the view button shows.
-	await expect(async () => {
-		if (!(await button.isVisible())) await page.keyboard.press("ControlOrMeta+j");
-		await expect(button).toBeVisible({ timeout: 2_000 });
-	}).toPass({ timeout: 30_000 });
-	await button.click();
+async function openChanges(page: Page) {
+	await selectInspectorView(page, "diff");
 	const panel = page
 		.locator("aside[data-docked]:visible, [role=dialog]:visible")
 		.filter({ has: page.locator(".omp-panel-topbar") })
@@ -158,7 +150,7 @@ test("stage, commit, push, history and a squash merge", async () => {
 	const findings: Finding[] = [];
 	const shoot = capturer(page, directory, "scm-flow", findings);
 	try {
-		const aside = await openChanges(page, "en");
+		const aside = await openChanges(page);
 		await expect(aside.getByText("0 of 2 staged")).toBeVisible();
 		await aside.getByRole("checkbox", { name: "Stage app.ts" }).click();
 		await expect(aside.getByText("1 of 2 staged")).toBeVisible();
@@ -241,7 +233,7 @@ test("@smoke stage, commit and push from the Changes panel", async () => {
 	const seeded = await seed("smoke");
 	const { app, page, errors } = await launch(seeded, "en", "light", false);
 	try {
-		const aside = await openChanges(page, "en");
+		const aside = await openChanges(page);
 		await expect(aside.getByText("0 of 2 staged")).toBeVisible();
 		await aside.getByRole("checkbox", { name: "Stage app.ts" }).click();
 		await expect(aside.getByText("1 of 2 staged")).toBeVisible();
@@ -280,7 +272,7 @@ for (const [language, theme] of [
 		const findings: Finding[] = [];
 		const shoot = capturer(page, directory, `scm-${language}-${theme}`, findings);
 		try {
-			const aside = await openChanges(page, language);
+			const aside = await openChanges(page);
 			await expect(aside.locator('[data-staged="all"]')).toHaveCount(1);
 			await shoot("changes-1440");
 			await aside.locator("[data-scm-bar]").getByRole("button").first().click();
@@ -289,7 +281,7 @@ for (const [language, theme] of [
 			await page.keyboard.press("Escape");
 			await resize(app, 800, 640);
 			// The narrow window closes the docked panel; open Changes again.
-			const narrow = await openChanges(page, language);
+			const narrow = await openChanges(page);
 			await page.waitForTimeout(300);
 			await shoot("changes-800");
 			await narrow.locator("select").first().selectOption("commits");

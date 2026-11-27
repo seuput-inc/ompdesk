@@ -141,7 +141,7 @@ test("@smoke Files panel edits a file in place with Ctrl+S and keeps the edit wh
 		const aside = page.locator("aside[data-docked]");
 		await page.getByRole("button", { name: "Side panel", exact: true }).click();
 		await expect(aside).toBeVisible();
-		await aside.getByRole("button", { name: "Files", exact: true }).click();
+		await aside.getByRole("button", { name: "Explorer", exact: true }).click();
 		await aside.locator('[data-tree-id="file:notes.md"]').click();
 		await expect(aside.getByText("Notes", { exact: true }).first()).toBeVisible();
 
