@@ -59,7 +59,6 @@ import {
 	anchorFromEvent,
 	Button,
 	Collapse,
-	ConfirmDialog,
 	ContextMenu,
 	type ContextMenuItem,
 	EmptyState,
@@ -105,7 +104,6 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 	const [renaming, setRenaming] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
 	const [menu, setMenu] = useState<{ x: number; y: number; bot: Bot } | null>(null);
-	const [deleting, setDeleting] = useState<Bot | null>(null);
 	const facts = new Map(entries.map(entry => [entry.bot.id, entry.facts]));
 	const byBot = new Map(entries.map(entry => [entry.bot, entry]));
 	const sorted = sortBots(
@@ -194,7 +192,10 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 				icon: Trash2,
 				danger: true,
 				separatorBefore: true,
-				onSelect: () => setDeleting(bot),
+				onSelect: () => {
+					setMenu(null);
+					openBotDialog({ kind: "delete", bot });
+				},
 			},
 		];
 	};
@@ -501,21 +502,6 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 					y={menu.y}
 				/>
 			)}
-			<ConfirmDialog
-				confirmLabel={t("bots.delete.confirm")}
-				message={t("bots.delete.message", { folder: deleting?.folder ?? "" })}
-				onCancel={() => setDeleting(null)}
-				onConfirm={() => {
-					const bot = deleting;
-					setDeleting(null);
-					if (bot)
-						void command({ action: "delete", id: bot.id }).catch((error: unknown) =>
-							toastError({ title: t("bots.delete.failed"), error }),
-						);
-				}}
-				open={deleting !== null}
-				title={t("bots.delete.title", { name: deleting?.name ?? "" })}
-			/>
 		</section>
 	);
 }

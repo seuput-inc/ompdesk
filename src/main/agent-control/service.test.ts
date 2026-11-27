@@ -244,6 +244,9 @@ class FakeHost implements AgentControlHost {
 	deleteStored = async (row: StoredSession) => {
 		this.deletedStored.push({ path: row.path, device: row.device });
 	};
+	cleanupBotSession = async (session: string, device: string | undefined, release: boolean) => {
+		if (!release) this.deletedStored.push({ path: session, device });
+	};
 	releaseFolder = async (_folder: string): Promise<void> => {};
 	relocateBot = async (_from: string, _to: string, _sessions: string[]): Promise<Record<string, string>> => ({});
 	facts = new Map<string, BranchFacts>();

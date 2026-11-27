@@ -8210,7 +8210,19 @@ export const en: Record<string, string> = {
 	"bots.rename.failed": "Couldn't rename the bot",
 	"bots.pause.failed": "Couldn't change the bot",
 	"bots.delete.title": "Delete {name}?",
-	"bots.delete.message": "Its routines go with it. Its folder, memory and chats stay in {folder}.",
+	"bots.delete.message":
+		"This permanently deletes the bot, its routines and the transcripts of all chats and workers marked for deletion.",
+	"bots.delete.chats": "Bot chats to delete: {count}",
+	"bots.delete.workers": "Bot-created workers to delete: {count}",
+	"bots.delete.kept": "Sessions to keep: {count}",
+	"bots.delete.keptHint":
+		"Handed-over sessions stay. Outside bot folders they appear as ordinary sessions. Other bots keep their chats. Sessions of unknown origin also stay.",
+	"bots.delete.folder": "The folder and its memory files will stay at {folder}.",
+	"bots.delete.checking": "Checking chats and workers…",
+	"bots.delete.changed":
+		"The sessions affected by this deletion changed. Review what will be deleted or kept, then confirm again.",
+	"bots.delete.checkAgain": "Close this dialog and reopen it to check which sessions remain.",
+	"bots.delete.previewFailed": "Couldn't preview bot deletion",
 	"bots.delete.confirm": "Delete bot",
 	"bots.delete.failed": "Couldn't delete the bot",
 	"bots.hover.here": "This computer",

@@ -82,7 +82,8 @@ fn main_replies(method: &str, args: &Value) -> Result<Value, String> {
             Some("get_state") => Ok(json!({ "success": true, "data": { "isStreaming": false } })),
             _ => Ok(json!({ "success": true, "data": {} })),
         },
-        "mail" | "answer" | "markAnswered" => Ok(Value::Null),
+        "mail" | "answer" | "markAnswered" | "bots.cleanupSession" => Ok(Value::Null),
+        "stored" => Ok(json!([])),
         "escalateAsk" => Ok(json!(true)),
         other => Err(format!("fake main has no {other}")),
     }
@@ -303,7 +304,11 @@ async fn pausing_or_deleting_the_bot_returns_its_open_form_to_the_owner() {
             Some(CHAT)
         );
         if deleting {
-            control.delete_bot("bot-ada").await.unwrap();
+            let expected = control
+                .bots_command(json!({"action":"deletePreview","id":"bot-ada"}))
+                .await
+                .unwrap();
+            control.delete_bot("bot-ada", &expected).await.unwrap();
         } else {
             control.set_paused("bot-ada", true).await.unwrap();
         }

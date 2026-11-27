@@ -783,6 +783,19 @@ impl Host {
         .await
     }
 
+    pub async fn cleanup_bot_session(
+        &self,
+        session: &str,
+        device: Option<&str>,
+        release: bool,
+    ) -> R<()> {
+        self.ask(
+            "bots.cleanupSession",
+            json!({ "session": session, "device": device, "release": release }),
+        )
+        .await
+    }
+
     /// `deleteStored(session)`.
     pub async fn delete_stored(&self, session: &StoredSession) -> R<()> {
         self.ask("deleteStored", json!({ "session": session }))

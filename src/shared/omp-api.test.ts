@@ -3,6 +3,7 @@
  * default RPC timeout, isolating a throwing listener) hold for any transport.
  */
 import { describe, expect, it } from "vitest";
+import { BOTS_COMMAND } from "./bots";
 import { IPC_COMMANDS, IPC_EVENTS } from "./ipc-types";
 import { createOmpApi, type OmpTransport } from "./omp-api";
 import { timeoutForCommand } from "./rpc-client";
@@ -32,6 +33,61 @@ function recording() {
 }
 
 describe("createOmpApi", () => {
+	const preview = { chats: 1, workers: 0, kept: 2, digest: "a".repeat(64) };
+
+	it("sends only the confirmed counts and membership digest on delete", async () => {
+		const { api, invoked, answers } = recording();
+		answers.set(BOTS_COMMAND, { ...preview, paths: ["/private/session"] });
+		const expected = await api.bots.deletePreview({ id: "b" });
+		expect(expected).toEqual(preview);
+		answers.set(BOTS_COMMAND, { bots: [], items: [] });
+		await api.bots.command({ action: "delete", id: "b", expected });
+		expect(invoked).toEqual([
+			{ channel: BOTS_COMMAND, args: [{ action: "deletePreview", id: "b" }] },
+			{ channel: BOTS_COMMAND, args: [{ action: "delete", id: "b", expected: preview }] },
+		]);
+	});
+
+	it.each([
+		{ version: "old.1", state: { bots: [], items: [] } },
+		{ ...preview, workers: -1 },
+		{ chats: 1, workers: 0, kept: 2 },
+		{ ...preview, digest: "A".repeat(64) },
+		{ ...preview, digest: "f".repeat(63) },
+		{ ...preview, digest: ["a".repeat(64)] },
+	])("rejects a preview without valid counts and a lowercase SHA-256 digest", async answer => {
+		const { api, answers } = recording();
+		answers.set(BOTS_COMMAND, answer);
+		await expect(api.bots.deletePreview({ id: "b" })).rejects.toThrow("deletion preview");
+	});
+
+	it("refuses to send an unconfirmed plan and returns a host's replacement preview without paths", async () => {
+		const { api, answers, invoked } = recording();
+		await expect(
+			api.bots.command({ action: "delete", id: "b", expected: { ...preview, digest: "" } }),
+		).rejects.toThrow();
+		expect(invoked).toEqual([]);
+		const replacement = { ...preview, digest: "b".repeat(64) };
+		answers.set(BOTS_COMMAND, { bots: [{ id: "b" }], items: [], deleteChanged: { ...replacement, paths: [] } });
+		const answer = await api.bots.command({ action: "delete", id: "b", expected: preview });
+		expect(answer.deleteChanged).toEqual(replacement);
+	});
+
+	it.each([
+		undefined,
+		{ version: "old.1", state: { bots: [], items: [] } },
+		{ bots: [], items: [], deleteChanged: null },
+		{ bots: [], items: [], deleteChanged: { chats: 1, workers: 0, kept: 2 } },
+		{ bots: [{ id: "b" }], items: [] },
+		{ bots: [{}], items: [] },
+		{ bots: [], items: [], remote: null },
+		{ bots: [], items: [], remote: [{ bots: [{ id: "b" }], items: [] }] },
+	])("rejects a malformed or unconfirmed delete reply", async answer => {
+		const { api, answers } = recording();
+		answers.set(BOTS_COMMAND, answer);
+		await expect(api.bots.command({ action: "delete", id: "b", expected: preview })).rejects.toThrow();
+	});
+
 	it("sends a focused-tab command with its default timeout", async () => {
 		const { api, invoked } = recording();
 		const command = { type: "get_state" } as const;

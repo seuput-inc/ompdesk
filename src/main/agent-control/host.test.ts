@@ -205,6 +205,7 @@ function setup(
 			startTab: vi.fn(() => null),
 			setTabTask: vi.fn(),
 			setTabOpener: openers,
+			stopTabTurns: vi.fn(async () => undefined),
 			windowOfTab,
 			windowsShowingTab: tabId => {
 				const owner = windowOfTab(tabId);
@@ -246,6 +247,7 @@ function setup(
 		deviceName: id => `device ${id}`,
 		notify: vi.fn(),
 		deleteSession: vi.fn(async () => undefined),
+		stopSessionTurns: vi.fn(async () => undefined),
 		text: (key, params) => `${key}|${JSON.stringify(params)}`,
 		schedules: options.schedules,
 		autopilot: options.autopilot,
@@ -257,11 +259,12 @@ function setup(
 		uploads: options.uploads,
 		sessionFatesFile: options.sessionFatesFile,
 		fileEdits: fileEdits.reports,
-		releaseTab: async (target, tabId, unlessDirty) => {
+		releaseTab: async (target, tabId, unlessDirty, _expectedTurn, stillUnsaved) => {
 			const at = webTabs.findIndex(tab => tab.tabId === tabId);
 			if (at < 0) return false;
 			await Promise.resolve();
 			options.duringRelease?.(fileEdits);
+			if (stillUnsaved && !stillUnsaved()) return false;
 			// The core's check in the step that removes the tab (`releaseTab`'s `unlessDirty`).
 			if (unlessDirty && fileEdits.read(unlessDirty, tabId) === "dirty") return false;
 			webTabs.splice(at, 1);
@@ -295,6 +298,54 @@ function setup(
 }
 
 describe("AgentControlRuntime", () => {
+	it("does not delete a bot worker when stopping its turn fails", async () => {
+		const { runtime, deps } = setup();
+		vi.mocked(deps.stopSessionTurns).mockRejectedValue(new Error("still running"));
+		await expect(runtime.cleanupBotSession("/sessions/worker.jsonl", undefined, false)).rejects.toThrow(
+			"still running",
+		);
+		expect(deps.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("releasing an open worker clears its opener without stopping or deleting it", async () => {
+		const { runtime, deps, openers } = setup({
+			tabs: [{ tabId: "worker01", sessionPath: "/sessions/worker.jsonl" }],
+		});
+		await runtime.cleanupBotSession("worker01", undefined, true);
+		expect(openers).toHaveBeenCalledWith("worker01", null);
+		expect(deps.stopSessionTurns).not.toHaveBeenCalled();
+		expect(deps.pool.stopTabTurns).not.toHaveBeenCalled();
+		expect(deps.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("refuses an unrecorded file that arrives while closing a transient worker", async () => {
+		const { runtime, deps, webTabs, released } = setup({
+			webTabs: [{ tabId: "newchild" }],
+			duringRelease: () => {
+				webTabs[0]!.sessionPath = "/sessions/first.jsonl";
+			},
+		});
+		await expect(runtime.cleanupBotSession("newchild", undefined, false)).rejects.toThrow("saved identity");
+		expect(released).toHaveLength(0);
+		expect(deps.stopSessionTurns).not.toHaveBeenCalled();
+		expect(deps.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("requires guarded stop and delete on the named peer, and propagates an offline peer", async () => {
+		const remote: NonNullable<AgentControlHostDeps["remote"]> = {
+			hosts: () => [{ deviceId: "studio", name: "Studio", state: "online" }],
+			request: vi.fn(),
+		};
+		const { runtime, deps } = setup({ remote });
+		const session = "/sessions/paired.jsonl";
+		await runtime.cleanupBotSession(session, "studio", false);
+		expect(deps.stopSessionTurns).toHaveBeenCalledWith(session, "studio", true);
+		expect(deps.deleteSession).toHaveBeenCalledWith(session, "studio", true);
+		remote.hosts = () => [];
+		await expect(runtime.cleanupBotSession(session, "studio", false)).rejects.toThrow("studio");
+		expect(deps.deleteSession).toHaveBeenCalledTimes(1);
+	});
+
 	it("splits an agent-chosen branch into prefix and name, defaulting to omp/agent/", () => {
 		expect(splitBranch(undefined, "agent-1")).toEqual({ branchPrefix: "omp/agent/", name: "agent-1" });
 		expect(splitBranch("feat/login/part-a", "x")).toEqual({ branchPrefix: "feat/login/", name: "part-a" });
@@ -1305,6 +1356,29 @@ describe("AgentControlRuntime", () => {
 			await fs.rm(root, { recursive: true, force: true });
 		}
 	}, 30_000);
+
+	it("releasing a closed worker removes only its own device's family row", async () => {
+		const { runtime, deps } = setup();
+		const child = {
+			path: "/s/worker.jsonl",
+			openedBySession: "/s/chat.jsonl",
+			tabIds: ["oldtab"],
+			title: "Worker",
+			cwd: "/repo",
+			closedAt: 1,
+		};
+		const peerChild = { ...child, device: "peer" };
+		let rows: unknown = [child, peerChild];
+		deps.prefs = {
+			get: key => (key === AGENT_CLOSED_CHILDREN_PREF ? rows : undefined),
+			set: (_key, value) => {
+				rows = value;
+			},
+		};
+		await runtime.cleanupBotSession("oldtab", undefined, true);
+		expect(rows).toEqual([peerChild]);
+		expect(deps.deleteSession).not.toHaveBeenCalled();
+	});
 
 	it("forgets the closed record of every deleted session, on the device it was deleted on only", async () => {
 		const { runtime, deps } = setup();

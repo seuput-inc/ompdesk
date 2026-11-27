@@ -68,10 +68,10 @@
  *   → SidebarProjectsState (get, add/remove a folder, or change the host's pins, order or archive).
  *   Changes made here or on a paired device push the host's current arrangement as `host.projects.changed`.
  * - The host's bots (the core's `bots_share.rs`; a bot lives and runs on the computer that made it): `host.bots.list {}`
- *   → SharedBots (its bots and items at one version), `host.bots.command {request: BotsCall}` → SharedBots after the
- *   change (a `file` request answers the BotFile), made by the host's core, which refuses making, importing, handing
- *   over and the host's groups; an item answer counts one of the device's model requests. Each change comes as the
- *   `host.bots.changed` event (a SharedBotsDelta on the version the device holds). The device's own group asks a
+ *   → SharedBots (its bots and items at one version). `host.bots.command {request: BotsCall}` answers SharedBots after
+ *   a change, BotFile for `file`, or the counts for `deletePreview`. The host's core refuses making, importing,
+ *   handing over and the host's groups; an item answer counts one of the device's model requests. Each change comes
+ *   as the `host.bots.changed` event (a SharedBotsDelta on the version the device holds). The device's own group asks a
  *   host's bot with `host.bots.command` `roomAsk {id, room, roomName, mailId, text}` (one model request; `roomAskStop
  *   {id}` stops its turn), and the bot's post to that group comes back as the `host.bots.roomPost` event (BotsRoomPost),
  *   to that device only. `host.bots.home {name}` → the home chat of a bot a device's agent may reach. An older host
@@ -128,6 +128,8 @@
  *   → RemoteOpenedReply; every change comes as the `host.remoteOpened` event. An older host answers `unsupported`.
  * - Sessions the host deleted: `sessions.deleted {paths}` → SessionsDeletedReply (which of the paths a device's tabs
  *   hold are deleted); each delete is pushed as the `host.sessionsDeleted` event. An older host answers `unsupported`.
+ * - `sessions.stopBotWorker` and `sessions.deleteBotWorker` take `{sessionPath}`. The host checks its own bot
+ *   chats and recorded folder before each operation. Never fall back to unguarded stop or delete on an older host.
  *
  * Events (B → A): `tab.event` (TabEventMessage), `sessions.changed` (no data), `host.ompUpdate.changed`,
  * `host.schedules.changed`, `host.projects.changed`, `host.models.changed`, `host.previewRelay`, `host.portTunnel`,
@@ -953,8 +955,8 @@ export const SchedulesCreateParams = z.object({ draft: ScheduleDraftSchema });
 /** `host.bots.home {name}` → `{path, name}`: one of the host's bots by name, refused unless the asking device is in its reach. */
 export const BotsHomeParams = z.object({ name: z.string().trim().min(1).max(200) });
 /**
- * `host.bots.command {request}` → SharedBots (or a BotFile for `file`): the owner's change to one of the host's bots,
- * made by the host's core, which refuses what a device may not do (make, import, hand over, groups).
+ * `host.bots.command {request}`: the host's core returns deletion counts for `deletePreview`, a BotFile for `file`,
+ * or SharedBots after a change. It refuses what a device may not do (make, import, hand over, groups).
  */
 export const BotsCommandParams = z.object({
 	request: z.looseObject({ action: z.string().min(1).max(64), answer: z.unknown().optional() }),
