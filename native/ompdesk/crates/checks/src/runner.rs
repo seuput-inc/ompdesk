@@ -136,7 +136,7 @@ fn plain_script(text: &str) -> Option<Vec<String>> {
     Some(text.split_whitespace().map(str::to_string).collect())
 }
 
-pub(crate) fn script_text(cwd: &Path, name: &str) -> Option<String> {
+fn script_text(cwd: &Path, name: &str) -> Option<String> {
     let text = fs::read_to_string(cwd.join("package.json")).ok()?;
     let json: Value = serde_json::from_str(&text).ok()?;
     json.get("scripts")?.get(name)?.as_str().map(str::to_string)
@@ -178,10 +178,7 @@ pub fn detect(argv: &[String], cwd: &Path) -> Detected {
             needs_dashdash: pm == "npm" && !argv.iter().any(|a| a == "--"),
             script: Some(name.to_string()),
         },
-        _ => Detected {
-            script: Some(name.to_owned()),
-            ..plain(Kind::Command)
-        },
+        _ => plain(Kind::Command),
     }
 }
 

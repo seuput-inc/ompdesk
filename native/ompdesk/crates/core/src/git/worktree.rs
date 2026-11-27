@@ -315,10 +315,10 @@ pub async fn plan(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct AddParams {
-    pub(super) git: Runner,
-    pub(super) primary: String,
-    pub(super) base_cwd: String,
-    pub(super) root: String,
+    git: Runner,
+    primary: String,
+    base_cwd: String,
+    root: String,
     hash: String,
     slug: String,
     branch_prefix: String,
@@ -331,28 +331,6 @@ pub(super) struct AddParams {
     /// Folders saved sessions recorded as their working folder: never a new worktree's (`taken`).
     #[serde(default)]
     taken: Vec<String>,
-}
-
-impl AddParams {
-    pub(super) async fn source_ref(&self, git: &Git) -> Result<String, Fault> {
-        if let Some(source) = &self.source {
-            match source.mode {
-                Mode::Remote => {
-                    return Ok(format!(
-                        "refs/remotes/{}/{}",
-                        source.remote.as_deref().unwrap_or_default(),
-                        source.name
-                    ));
-                }
-                Mode::Local => return Ok(format!("refs/heads/{}", source.name)),
-                Mode::Reuse if branch_exists(git, &self.primary, &source.name).await? => {
-                    return Ok(format!("refs/heads/{}", source.name));
-                }
-                _ => return Ok(source.from.as_ref().unwrap_or(&self.start_point).clone()),
-            }
-        }
-        Ok(self.start_point.clone())
-    }
 }
 
 /// How a worktree is checked out: the sparse folders (none: the whole tree) and `worktree add`'s timeout.
@@ -378,7 +356,7 @@ fn taken(taken: &[String], path: &Path) -> bool {
 
 #[derive(Serialize)]
 pub(super) struct Added {
-    pub(super) path: String,
+    path: String,
     branch: String,
 }
 

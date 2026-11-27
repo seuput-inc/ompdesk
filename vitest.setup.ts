@@ -1,7 +1,5 @@
 // A write under the real ~/.omp, ~/.pi, ~/.config/omp or OMPdesk's userData fails the test.
 import "./scripts/vitest-real-home-guard";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { beforeEach, expect } from "vitest";
 import { watchBlockedThread, watchedTest } from "./scripts/vitest-block-watch";
 import { exitWhenParentGone } from "./scripts/vitest-orphan-guard";
@@ -12,9 +10,6 @@ import { dropGitSelectors } from "./src/shared/git-env";
 // Each worker too: a leaked GIT_DIR or its kin would send a test's temp-repo git to another repository
 // (src/shared/git-env.ts).
 dropGitSelectors();
-
-// Fixture checkouts must not contend with the real check that already owns this test worker's slot.
-process.env.OMPDESK_HEAVY_DIR ??= join(tmpdir(), `worktree-test-pool-${process.pid}`);
 
 // Nor the plumbing of the OMPdesk session a run is launched from (its bridge socket, computer-use engine, memory file,
 // ...): a stock test's omp inherits `process.env`, and one left on that session's agent-desktop engine without the

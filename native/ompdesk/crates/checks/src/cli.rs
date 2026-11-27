@@ -22,8 +22,6 @@ pub const EXIT_NOT_STARTED: i32 = 127;
 
 pub const HELP: &str = concat!(
     "  run       `run --heavy [--all] [--] CMD [ARG...]`: run CMD under this computer's heavy limit (all slots with --all).\n",
-    "            Add --fresh-admission for a separate operation that must take its own lease.\n",
-    "            To reserve expected writes, set OMPDESK_WRITE_BYTES to a JSON object mapping absolute output paths to incremental bytes.\n",
     "  heavy     `heavy limit off|auto` disables or restores this computer's slot and free-space checks before work starts.\n",
     "            `heavy status [--json]` shows the limit, slots and queue. `heavy hold [--all]` holds slots until stdin closes\n",
     "            or prints `unlimited` if no slot is required.\n",
@@ -174,11 +172,7 @@ fn usage(message: &str) -> i32 {
 fn pool(command: &[String]) -> io::Result<Pool> {
     let mut pool = Pool::new(heavy::pool_dir(&env), heavy::machine_size(&env))?;
     let here = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
-    pool.volumes = if command.is_empty() {
-        heavy::Volumes::of_hold(&here, &env)?
-    } else {
-        heavy::Volumes::of_work(&here, command, &env)
-    };
+    pool.volumes = heavy::Volumes::of_work(&here, command, &env);
     Ok(pool)
 }
 
@@ -198,9 +192,6 @@ fn minutes(ms: u64) -> String {
 }
 
 fn wait_line(w: &Waiting) -> String {
-    if let Some(reason) = w.pressure {
-        return format!("ompdesk: waiting before starting heavy work: {reason}\n");
-    }
     if !w.low_disk.is_empty() {
         let disks: Vec<String> = w
             .low_disk
@@ -278,13 +269,11 @@ fn held_by_ancestor() -> bool {
 
 fn run(rest: &[String]) -> i32 {
     let mut heavy = false;
-    let mut fresh = false;
     let mut all = false;
     let mut at = 0;
     while at < rest.len() {
         match rest[at].as_str() {
             "--heavy" => heavy = true,
-            "--fresh-admission" => fresh = true,
             "--all" => all = true,
             "--" => {
                 at += 1;
@@ -303,8 +292,7 @@ fn run(rest: &[String]) -> i32 {
         return usage("run --heavy needs a command");
     }
     let line = command.join(" ");
-    // A managed install starts after checkout admission ended; never reuse the invoking session's lease.
-    let lease = if !fresh && held_by_ancestor() {
+    let lease = if held_by_ancestor() {
         None
     } else {
         match take(if all { 0 } else { 1 }, command, &line) {
@@ -617,14 +605,13 @@ fn heavy_command(rest: &[String]) -> i32 {
             }
             // The hold does not know its holder's command, so it can only warn (its holder shows stderr).
             let here = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
-            let _watch = lease.as_ref().and_then(|_| {
-                let volumes = heavy::Volumes::of_hold(&here, &env).ok()?;
-                Some(crate::watch::Watch::start(
-                    volumes,
+            let _watch = lease.is_some().then(|| {
+                crate::watch::Watch::start(
+                    heavy::Volumes::of_work(&here, &[], &env),
                     None,
                     |line| eprintln!("ompdesk: {line}"),
                     None,
-                ))
+                )
             });
             // Holds until stdin ends: the holder closed it, or died.
             let mut sink = Vec::new();

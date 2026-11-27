@@ -252,8 +252,7 @@ export async function superviseWorktreeHook(
 		logDir: dirname(logPath),
 		deadlineMs: started + (timeoutMs >= 1 && timeoutMs <= 2_147_483_647 ? Math.trunc(timeoutMs) : 1),
 	};
-	const env = kind === "setup" ? { ...process.env, OMPDESK_SETUP_CLI: nativeBinPath("ompdesk") } : process.env;
-	const child = startSupervisor({ worktreeHook: spec }, env, cwd);
+	const child = startSupervisor({ worktreeHook: spec }, process.env, cwd);
 	const stop = () => child.stdin.end();
 	signal?.addEventListener("abort", stop, { once: true });
 	const chunks: Buffer[] = [];
