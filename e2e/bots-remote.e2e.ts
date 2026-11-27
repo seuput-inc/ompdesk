@@ -13,7 +13,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { exitApp } from "./harness";
+import { exitApp, untilAnswered } from "./harness";
 import {
 	connectHost,
 	freePort,
@@ -21,6 +21,7 @@ import {
 	linkProxy,
 	makeRemoteProfile,
 	type RemoteInstance,
+	type RemoteProfile,
 } from "./remote-harness";
 
 /** Checks `ready` until it holds (30 s); throws `what` when it never does. */
@@ -61,6 +62,42 @@ async function botWithQuestion(a: Page): Promise<{ id: string; home: string; fol
 	return { id: bot.id, home, folder: bot.folder };
 }
 
+async function seedStoredBot(
+	profile: RemoteProfile,
+	bot: { id: string; name: string; folder: string },
+	sessionId: string,
+	text: string,
+) {
+	const journal = path.join(
+		profile.env.PI_CODING_AGENT_DIR,
+		"sessions",
+		"fixture",
+		`1761955200000_${sessionId}.jsonl`,
+	);
+	const timestamp = "2025-11-01T00:00:00.000Z";
+	await fs.mkdir(path.dirname(journal), { recursive: true });
+	await fs.writeFile(
+		journal,
+		[
+			{ type: "session", version: 3, id: sessionId, timestamp, cwd: bot.folder },
+			{
+				type: "message",
+				id: "handover",
+				parentId: null,
+				timestamp,
+				message: { role: "user", content: text, timestamp: Date.parse(timestamp) },
+			},
+		]
+			.map(entry => `${JSON.stringify(entry)}\n`)
+			.join(""),
+	);
+	await fs.writeFile(
+		path.join(profile.desktop, "bots.json"),
+		JSON.stringify([{ ...bot, home: journal, sessions: [journal] }]),
+	);
+	return journal;
+}
+
 test("a bot made on one computer is listed, chatted with and answered on its paired computer, and reads offline", async () => {
 	test.setTimeout(240_000);
 	const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-bots-remote-")));
@@ -82,33 +119,8 @@ test("a bot made on one computer is listed, chatted with and answered on its pai
 			env: { HOME: home, USERPROFILE: home },
 			prefs: { sidebar: { groupAliases: { [folder]: alias } } },
 		});
-		const journal = path.join(
-			hostProfile.env.PI_CODING_AGENT_DIR,
-			"sessions",
-			"fixture",
-			`1761955200000_${oldId}.jsonl`,
-		);
-		const timestamp = "2025-11-01T00:00:00.000Z";
-		await Promise.all([fs.mkdir(folder), fs.mkdir(home), fs.mkdir(path.dirname(journal), { recursive: true })]);
-		await fs.writeFile(
-			journal,
-			[
-				{ type: "session", version: 3, id: oldId, timestamp, cwd: folder },
-				{
-					type: "message",
-					id: "handover",
-					parentId: null,
-					timestamp,
-					message: { role: "user", content: text, timestamp: Date.parse(timestamp) },
-				},
-			]
-				.map(entry => `${JSON.stringify(entry)}\n`)
-				.join(""),
-		);
-		await fs.writeFile(
-			path.join(hostProfile.desktop, "bots.json"),
-			JSON.stringify([{ ...old, home: journal, sessions: [journal] }]),
-		);
+		await Promise.all([fs.mkdir(folder), fs.mkdir(home)]);
+		const journal = await seedStoredBot(hostProfile, old, oldId, text);
 		const clientProfile = await makeRemoteProfile(parent, "b", {
 			language: "en",
 			theme: "light",
@@ -243,5 +255,78 @@ test("a bot made on one computer is listed, chatted with and answered on its pai
 		if (host) await exitApp(host.app).catch(() => undefined);
 		await proxy.close();
 		await fs.rm(parent, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }).catch(() => undefined);
+	}
+});
+
+test("paired bot chat omits quiet lookups live and after reopening, without hiding results, errors or questions", async () => {
+	test.setTimeout(150_000);
+	const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "paired-quiet-bot-")));
+	let host: RemoteInstance | null = null;
+	let client: RemoteInstance | null = null;
+	try {
+		const port = await freePort();
+		const options = { language: "en", theme: "light", port } as const;
+		const home = path.join(parent, "home");
+		await fs.mkdir(home);
+		const profile = await makeRemoteProfile(parent, "a", { ...options, env: { HOME: home, USERPROFILE: home } });
+		const bot = { id: "quiet-courier", name: "Courier", folder: path.join(home, "courier") };
+		await fs.mkdir(bot.folder);
+		const journal = await seedStoredBot(profile, bot, "quiet-home", "Morning handover");
+		host = await launchRemote(profile);
+		const clientProfile = await makeRemoteProfile(parent, "b", options);
+		client = await launchRemote(clientProfile);
+		let b = client.page;
+		const device = await connectHost(host.page, b, "Studio");
+		const open = async () => {
+			await b.locator(`[data-bot-row="${bot.id}"]`).click();
+			const active = () => b.evaluate(async () => (await window.omp.tabs.list()).find(tab => tab.active));
+			await expect.poll(active).toMatchObject({ sessionPath: journal, device, status: "ready" });
+			const tab = await active();
+			if (!tab) throw new Error("No active remote bot chat");
+			return tab.tabId;
+		};
+		let id = await open();
+		const prompt = (message: string) =>
+			b.evaluate(([tab, text]) => window.omp.rpc.commandForTab(tab, { type: "prompt", message: text }), [
+				id,
+				message,
+			] as const);
+		const quote = "I am quoting NO_REPLY.";
+		await prompt(quote);
+		await untilAnswered(b, id, { after: quote });
+		await expect(b.getByText(quote, { exact: true }).first()).toBeVisible();
+		const before = await b.locator("[data-work-card]").count();
+		for (const suffix of ["one", "two"]) {
+			const text = `fixture quiet lookup ${suffix}`;
+			await prompt(text);
+			await untilAnswered(b, id, { after: text, text: "NO_REPLY" });
+			await expect(b.getByText(text, { exact: true }).first()).toBeVisible();
+		}
+		const quiet = async () => {
+			await expect(b.getByText("NO_REPLY", { exact: true })).toHaveCount(0);
+			await expect(b.locator("[data-bot-quiet-reply]")).toHaveCount(0);
+			await expect(b.locator("[data-work-card]")).toHaveCount(before);
+			await expect(b.getByText("Local fixture reply", { exact: true }).last()).toBeVisible();
+		};
+		await quiet();
+		await test.info().attach("paired-live", { body: await b.screenshot(), contentType: "image/png" });
+		await exitApp(client.app);
+		client = await launchRemote(clientProfile, { project: false });
+		b = client.page;
+		id = await open();
+		await untilAnswered(b, id, { after: "fixture quiet lookup two", text: "NO_REPLY" });
+		await expect(b.getByText(quote, { exact: true }).first()).toBeVisible();
+		await quiet();
+		await prompt("fixture transcript");
+		const error = b.locator(".omp-message-error").last();
+		await error.getByRole("button", { name: "Details" }).click();
+		await expect(error.locator("pre")).toContainText("503 Service unavailable");
+		await prompt("fixture ask");
+		await expect(b.locator("[data-prompt-card]").filter({ hasText: "Where should this deploy?" })).toBeVisible();
+		await test.info().attach("paired-reopened-controls", { body: await b.screenshot(), contentType: "image/png" });
+	} finally {
+		if (client) await exitApp(client.app).catch(() => undefined);
+		if (host) await exitApp(host.app).catch(() => undefined);
+		await fs.rm(parent, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 	}
 });

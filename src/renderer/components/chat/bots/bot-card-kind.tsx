@@ -7,7 +7,7 @@ import { AGENT_CONTROL_TOOLS } from "../../../../shared/agent-control";
 import type { AgentMessage } from "../../../../shared/rpc-types";
 import { lazyChunk } from "../../../lib/chunk-load";
 import { resultDetails } from "../../../lib/format";
-import { botOfFolder, useBotsStore } from "../../../stores/bots";
+import { botOfFolder, botOfSession, useBotsStore } from "../../../stores/bots";
 import { useTabsStore } from "../../../stores/tabs";
 import { selectToolEntry, toolEntryKey, useToolsStore } from "../../../stores/tools";
 import { type ChatCardKind, ensureHiddenCards, useHiddenCards } from "./hidden-cards";
@@ -63,11 +63,17 @@ export function useCardHidden(kind: BotCardKind | null): boolean {
 	return useHiddenCards(s => kind !== null && s.hidden.includes(kind));
 }
 
-/** Whether the tab runs in a bot's folder (on the computer it runs on): its NO_REPLY turns fold (`QuietReply`). */
+/** A recorded chat remains the bot's after a folder rename. */
 export function useBotChat(tabId: string | null): boolean {
-	const cwd = useTabsStore(s => (tabId ? s.tabs.find(tab => tab.id === tabId)?.cwd : undefined));
-	const device = useTabsStore(s => (tabId ? s.tabs.find(tab => tab.id === tabId)?.device : undefined));
-	return useBotsStore(s => botOfFolder(s.state.bots, cwd, device) !== undefined);
+	const tab = useTabsStore(s => s.tabs.find(entry => entry.id === tabId));
+	return useBotsStore(
+		s =>
+			!!tab &&
+			!!(
+				botOfSession(s.state.bots, tab.sessionPath ?? tab.pendingSessionPath, tab.device) ??
+				botOfFolder(s.state.bots, tab.cwd, tab.device)
+			),
+	);
 }
 
 const LazyBotToolCard = lazyChunk(() => import("./BotCards").then(module => ({ default: module.BotToolCard })));

@@ -65,6 +65,7 @@ import { FirstRunSetupSlot, useFirstRunActive } from "../onboarding/FirstRunSlot
 import { ReadGroupCard } from "../tools/renderers/ReadGroupCard";
 import { ToolCard } from "../tools/ToolCard";
 import { BotCardsInRun, RunBotCards, useBotChat } from "./bots/bot-card-kind";
+import { compactBotHistory } from "./bots/quiet-turns";
 import { ConversationNavigator } from "./ConversationNavigator";
 import {
 	buildConversationAnchors,
@@ -252,8 +253,9 @@ function SessionTranscript() {
 	// object so the memoized row components skip them (see reuseTranscriptRows).
 	const builtRowsRef = useRef<ReadonlyMap<string, HistoryRow>>(new Map());
 	const historyRows = useMemo<HistoryRow[]>(() => {
+		const visible = hiddenCount > 0 ? displayMessages.slice(hiddenCount) : displayMessages;
 		const built = buildHistoryRows(
-			hiddenCount > 0 ? displayMessages.slice(hiddenCount) : displayMessages,
+			botChat && transcriptDetail === "compact" ? compactBotHistory(visible) : visible,
 			transcriptDetail,
 			expandedProcessKeys,
 		);
@@ -267,7 +269,7 @@ function SessionTranscript() {
 		const reused = reuseTranscriptRows(builtRowsRef.current, merged, keys);
 		builtRowsRef.current = new Map(reused.map((row, index) => [keys[index] ?? "", row]));
 		return reused;
-	}, [displayMessages, hiddenCount, transcriptDetail, todoHistory, expandedProcessKeys, readTargets]);
+	}, [botChat, displayMessages, hiddenCount, transcriptDetail, todoHistory, expandedProcessKeys, readTargets]);
 	// Each work card's turn: which of a card's failures the work ended on is its whole turn's to say (`TurnScope`).
 	const workTurnsRef = useRef<ReadonlyMap<HistoryRow, WorkTurnRow>>(new Map());
 	const turnOfRow = useMemo(() => {

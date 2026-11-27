@@ -7,7 +7,6 @@ import { CI_MESSAGE_TYPE } from "../../../../resources/gui-bridge/modes/ci-watch
 import { COMPUTER_USE_NOTICE_TYPE } from "../../../../resources/gui-bridge/modes/computer-use-contracts";
 import { MEMORY_RECALL_MESSAGE_TYPE } from "../../../../resources/gui-bridge/modes/memory-recall-contracts";
 import { parseAgentMessage } from "../../../shared/agent-control";
-import { isQuietResult } from "../../../shared/bots";
 import { extractFileMentions, replaceFileMentions, splitAttachedMentions } from "../../../shared/file-mentions";
 import type { AgentMessage, ImageContent, MessageContent, ToolCallContent } from "../../../shared/rpc-types";
 import { useShellInput } from "../../hooks/use-shell-mode";
@@ -42,6 +41,7 @@ import { isAbsoluteChatPath, referencedFiles } from "../tools/media/chat-media";
 import { ToolImage } from "../tools/media/ToolImage";
 import { type RunningIndicator, ToolCard } from "../tools/ToolCard";
 import { ItemNote, isBotMail, QuietReply, useBotChat } from "./bots/bot-card-kind";
+import { quietMarker } from "./bots/quiet-turns";
 import { CiNote } from "./CiNote";
 import { ComputerUseNote } from "./ComputerUseNote";
 import { CustomMessageCard, isCustomMessageCardType, MailNote, MemoryRecallNote, RecapCard } from "./CustomMessageCard";
@@ -630,15 +630,7 @@ export const MessageBubble = memo(function MessageBubble({
 		}
 	};
 
-	// A bot chat's turn that ended in NO_REPLY had nothing to say: one quiet line (Orca hides such a turn).
-	if (
-		isAssistant &&
-		botChat &&
-		!stopped &&
-		!content.some(block => block.type === "toolCall") &&
-		isQuietResult(messageText())
-	)
-		return <QuietReply text={messageText()} />;
+	if (botChat && !stopped && quietMarker(message)) return <QuietReply text={messageText()} />;
 
 	if (isUser) {
 		return (
