@@ -102,9 +102,7 @@ describe("WorkBoardChip, the phone's work strip", () => {
 					],
 				},
 			]);
-			useExtensionUiStore
-				.getState()
-				.pushRequest({ type: "extension_ui_request", id: "q", method: "confirm", title: "Proceed?", message: "" });
+			showBoardRequests({ id: "q", kind: "input", label: "Proceed?" });
 			useSubagentsStore.getState().setSnapshots(
 				["Alpha", "Beta"].map((id, index) => ({
 					id,

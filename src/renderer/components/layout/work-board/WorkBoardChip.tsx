@@ -194,6 +194,7 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 	}, [hasOpened]);
 	const goal = useSessionStore(state => state.goal);
 	const questions = useSessionQuestions(runtimeTabId ?? activeTabId);
+	const question = questions[0]?.detail;
 	// A run's own words (cycle and area, a pause reason, a quota wait, its end): in an Autopilot tab the strip is where
 	// the run is reached wherever the board cannot dock.
 	const runText = useAutopilotStateText();
@@ -201,8 +202,15 @@ export function WorkBoardChip({ children, reveal = 0 }: { children: ReactNode; r
 	const autopilotState = runText ?? (ended ? t("autopilot.state.ended") : null);
 	const autopilotRunning = useAutopilotStore(state => isLiveAutopilot(state) && state.status.state === "running");
 	const model = useMemo(
-		() => (phone ? buildDockModel(phases, { ...facts, runState: autopilotState ?? undefined }) : null),
-		[phone, phases, facts, autopilotState],
+		() =>
+			phone
+				? buildDockModel(phases, {
+						...facts,
+						attention: question ?? facts.attention,
+						runState: autopilotState ?? undefined,
+					})
+				: null,
+		[phone, phases, facts, question, autopilotState],
 	);
 	const lines = model?.lines;
 	const slots = useSyncExternalStore(onViewportHeightChange, stripSlots, () => 3);
