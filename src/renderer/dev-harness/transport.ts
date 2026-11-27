@@ -11,8 +11,8 @@
 import { fixtureProviderOptions } from "../../../e2e/models-config-fixture";
 import {
 	DRIFT_CALLS,
-	todoDrift,
 	type TodoDriftEvent,
+	todoDrift,
 	todoDriftState,
 } from "../../../resources/gui-bridge/todo-drift-core";
 import { BOTS_COMMAND } from "../../shared/bots";
