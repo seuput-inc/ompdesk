@@ -2319,23 +2319,29 @@ export const SURFACES: readonly Surface[] = [
 		when: () => false,
 		parity: { session: "work", after: closeOverlay },
 	},
-	{
-		id: "settings-claude-connection",
-		area: "B",
-		title: "Settings › Models & accounts, choosing a Claude subscription or an official API key",
-		open: async (page, look) => {
-			await openSettingsModels(page, look);
-			await page.locator('[data-settings-page] [data-provider-add="anthropic"]').click();
-			await page.getByRole("button", { name: say(look, "providers.featured.apiKey"), exact: true }).waitFor();
-		},
-		ready: "[data-claude-connect]",
-		when: () => false,
-		parity: {
-			session: "work",
-			after: closeOverlay,
-			available: () => process.env.OMP_GUI_TEST_LOGIN === "1" && process.env.OMP_GUI_TEST_MODELS === "1",
-		},
-	},
+	...(["connection", "key"] as const).map(
+		(step): Surface => ({
+			id: `settings-claude-${step}`,
+			area: "B",
+			title: step === "key" ? "Claude API key entry" : "Choose a Claude subscription or an official API key",
+			open: async (page, look) => {
+				await openSettingsModels(page, look);
+				await page.locator('[data-settings-page] [data-provider-add="anthropic"]').click();
+				const key = page
+					.getByRole("dialog")
+					.getByRole("button", { name: say(look, "providers.featured.apiKey"), exact: true });
+				if (step === "key") await key.click();
+				else await key.waitFor();
+			},
+			ready: step === "key" ? '[data-claude-key] input[type="password"]' : "[data-claude-connect]",
+			when: () => false,
+			parity: {
+				session: "work",
+				after: closeOverlay,
+				available: () => process.env.OMP_GUI_TEST_LOGIN === "1" && process.env.OMP_GUI_TEST_MODELS === "1",
+			},
+		}),
+	),
 	{
 		id: "settings-reset-tickets",
 		area: "B",
