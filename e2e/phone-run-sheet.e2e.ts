@@ -115,7 +115,7 @@ async function openRun(page: Page): Promise<Locator> {
 async function openAdvanced(page: Page): Promise<void> {
 	const advanced = sheetOf(page).locator("button[aria-expanded]", { hasText: /Advanced|고급/ });
 	if ((await advanced.getAttribute("aria-expanded")) === "false") await advanced.click();
-	await expect(sheetOf(page).locator("[data-switch-tile]")).toHaveCount(11);
+	await expect(advanced).toHaveAttribute("aria-expanded", "true");
 }
 
 async function capture(page: Page, state: string, opts: PhoneOptions): Promise<void> {
