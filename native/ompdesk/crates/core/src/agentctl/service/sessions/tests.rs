@@ -811,6 +811,56 @@ async fn a_delete_of_an_own_idle_child_removes_it_journals_it_and_remembers_the_
     control.host.port().close();
 }
 
+#[tokio::test]
+async fn a_saved_child_delete_requires_the_same_verified_opener_device() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("child.jsonl");
+    let parent = "/s/boss.jsonl";
+    for (port, device) in [(18_710, Some("peer")), (18_711, None), (18_712, Some(""))] {
+        std::fs::write(&path, b"synthetic child").unwrap();
+        let mut child = json!({ "path": path, "openedBySession": parent, "closedAt": 1 });
+        if let Some(device) = device {
+            child["openedByDevice"] = json!(device);
+        }
+        let saved = path.clone();
+        let (control, asked) = rig(
+            port,
+            vec![tab("parent", parent)],
+            json!({ "closedChildren": [child], "fullEnabled": false }),
+            move |method, args| match method {
+                "stored" => Ok(json!([{ "id": "kid22222", "path": saved, "title": "Child" }])),
+                "confirm" => Ok(json!(false)),
+                "deleteStored" => {
+                    assert_eq!(args["session"]["path"], json!(saved));
+                    std::fs::remove_file(&saved).unwrap();
+                    Ok(Value::Null)
+                }
+                other => main_of(other, args),
+            },
+        );
+        let result = control
+            .run(
+                "parent",
+                "ompdesk_session_stop",
+                json!({ "session": "kid22222", "delete": true }),
+                None,
+            )
+            .await;
+        assert!(!result.is_error, "{}", result.text);
+        if device == Some("") {
+            assert!(names(&asked, "confirm").is_empty());
+            assert_eq!(names(&asked, "deleteStored").len(), 1);
+            assert!(!path.exists());
+        } else {
+            assert_eq!(names(&asked, "confirm").len(), 1);
+            assert!(result.text.contains("declined"), "{}", result.text);
+            assert!(names(&asked, "deleteStored").is_empty());
+            assert_eq!(std::fs::read(&path).unwrap(), b"synthetic child");
+        }
+        control.host.port().close();
+    }
+}
+
 const DESK_ID: &str = "01a1ed95-53b0-752a-a272-9c911a8499c4";
 const DESK_PATH: &str = "C:/s/z_01a1ed95-53b0-752a-a272-9c911a8499c4.jsonl";
 
