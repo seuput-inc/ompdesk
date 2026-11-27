@@ -137,9 +137,6 @@ test("project and bot conversations keep their own inspector on reopen and on re
 		await filter("Show Git ignored files", true);
 		await expect(row(".hidden-ignored.txt")).toHaveCount(0);
 		await expect(row("ordinary.txt")).toBeVisible();
-		await menuButton.click();
-		await page.getByRole("menuitem", { name: "Open in file manager", exact: true }).click();
-		await expect(page.getByText("Sent the workspace folder to the file manager.", { exact: true })).toBeVisible();
 		await views.getByRole("button", { name: "Source Control" }).click();
 		await page.locator('[data-bot-row="bot-courier"]').click();
 		await expect.poll(async () => path.normalize((await active())?.cwd ?? "")).toBe(path.normalize(folder));
@@ -192,6 +189,11 @@ test("project and bot conversations keep their own inspector on reopen and on re
 		const note = path.join(profile.project, "notes.md");
 		await fs.writeFile(note, "# Original\n");
 		await views.getByRole("button", { name: "Explorer", exact: true }).click();
+		await menuButton.click();
+		await page.getByRole("menuitem", { name: "Open in file manager", exact: true }).click();
+		const opened = page.getByText("Sent the workspace folder to the file manager.", { exact: true });
+		await expect(opened).toBeVisible();
+		await expect(opened).toBeHidden({ timeout: 15_000 });
 		await panel.getByRole("button", { name: "Refresh file tree", exact: true }).click();
 		await panel.locator('[data-tree-id="file:notes.md"]').click();
 		await panel.getByRole("button", { name: "Edit", exact: true }).click();
