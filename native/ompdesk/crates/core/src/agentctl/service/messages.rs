@@ -34,6 +34,7 @@ use super::types::{
 use super::util::{Flight, join};
 use super::wrap::{dispatch_mark, request_mark, wrap_agent_message};
 use crate::agentctl::journal::attachments::{Resolved, image_block, shas_sig, with_attached};
+use crate::agentctl::journal::bots::Bots;
 use crate::agentctl::journal::pending_cleanups::CleanupAction;
 use crate::agentctl::journal::send_outbox::{
     HandOver, OutboxSend, OwedDeps, SendOutbox, SentAnswer, deliver_owed, receiver_key,
@@ -44,6 +45,16 @@ use crate::agentctl::rules::custody::custody_of;
 use crate::agentctl::rules::mail::{
     Mail, MailCheck, MailKind, Posted, delivery_for, mail_details, mail_text,
 };
+
+fn sender<'a>(bots: &'a Bots, caller: &'a ControlTab) -> (&'a str, Option<&'a str>) {
+    if caller.device.is_none()
+        && caller.session_path.is_some()
+        && let Some(bot) = bots.of_folder(&caller.cwd)
+    {
+        return (&bot.name, Some(&bot.id));
+    }
+    (&caller.title, None)
+}
 
 /// The plain prompt of a message, for a receiver idle or too old to know the aside: a card of the person's open there
 /// stays open only behind stock's follow-up (a steer closes it: "Ask interrupted by message").
@@ -672,7 +683,7 @@ impl AgentControl {
                 dispatch.as_deref(),
                 request_id.as_deref(),
             ),
-            &caller.title,
+            sender(&self.bots(), caller).0,
             saved_id_of_path(caller.session_path.as_deref()).as_deref(),
         );
         let dispatch_number = dispatch.as_deref().and_then(|d| d[1..].parse::<i64>().ok());
@@ -1095,23 +1106,14 @@ impl AgentControl {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
-        let mut mail = Mail::new(
-            &id,
-            &caller.tab_id,
-            &caller.title,
-            &to,
-            kind,
-            &text,
-            self.now(),
-        );
+        let mut mail = {
+            let bots = self.bots();
+            let (title, bot) = sender(&bots, caller);
+            let mut mail = Mail::new(&id, &caller.tab_id, title, &to, kind, &text, self.now());
+            mail.from_bot = bot.map(str::to_owned);
+            mail
+        };
         mail.files = args.files.clone();
-        // A bot's chat writes as its bot: the receiver reads the bot's name now, a rename included.
-        mail.from_bot = caller
-            .device
-            .is_none()
-            .then(|| self.bot_of_folder(&caller.cwd))
-            .flatten()
-            .map(|bot| bot.id);
         mail.attachments = attached
             .as_ref()
             .filter(|carried| carried.count > 0)

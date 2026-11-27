@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -5,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../../shared/rpc-types";
 import { I18nProvider } from "../../lib/i18n";
 import { resetMailOpenForTest } from "../../lib/mail-open";
+import { useBotsStore } from "../../stores/bots";
+import { BotNote } from "./bots/BotCards";
 import { MailNote } from "./CustomMessageCard";
 
 const { document, window, Event, HTMLElement, Element, Node } = parseHTML("<html><body></body></html>");
@@ -45,14 +50,14 @@ const done: AgentMessage = {
 let container: TestElement;
 let root: Root;
 
-async function mount(message: AgentMessage): Promise<void> {
+async function mount(message: AgentMessage, Card = MailNote): Promise<void> {
 	container = document.createElement("div") as unknown as TestElement;
 	document.body.appendChild(container as never);
 	root = createRoot(container as unknown as Element);
 	await act(async () => {
 		root.render(
 			<I18nProvider>
-				<MailNote message={message} />
+				<Card message={message} />
 			</I18nProvider>,
 		);
 	});
@@ -99,6 +104,44 @@ describe("session report disclosure", () => {
 		await mount(done);
 		expect(toggle()?.getAttribute("aria-expanded")).toBe("true");
 		expect(container.querySelector("[data-agent-mail-body]")?.textContent).toContain("A finished");
+	});
+
+	it("reopens bot mail with the name on each saved report, not the bot's latest name", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "bot-sender-"));
+		try {
+			const file = join(dir, "synthetic.jsonl");
+			const reports = ["Ada", "Bea"].map((name, i) => ({
+				...done,
+				details: { id: `report-${i}`, kind: "note", from: "tab", fromBot: "bot-id", fromTitle: name, text: name },
+			}));
+			writeFileSync(file, reports.map(message => JSON.stringify(message)).join("\n"));
+			const bot = {
+				id: "bot-id",
+				name: "Bea",
+				folder: "/fixture/bea",
+				home: null,
+				sessions: [],
+				paused: false,
+				model: null,
+				autoApprove: false,
+				reach: [],
+				staleDays: null,
+				lookAround: null,
+				tidy: null,
+				quiet: [],
+				createdAt: "",
+			};
+			useBotsStore.setState({ state: { bots: [bot], items: [] } });
+			const [first, next] = readFileSync(file, "utf8").split("\n");
+			await mount(JSON.parse(first), BotNote);
+			expect(toggle()?.textContent).toContain("Ada");
+			await unmount();
+			await mount(JSON.parse(next), BotNote);
+			expect(toggle()?.textContent).toContain("Bea");
+		} finally {
+			useBotsStore.getState().reset();
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it("lets the person close a question that started open", async () => {

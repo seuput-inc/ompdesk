@@ -95,7 +95,7 @@ pub struct Mail {
     pub instruction: Option<String>,
     /// What it carries besides text: pictures sent inline (by reference, bytes in the attachment store), files landed.
     pub attachments: Option<AttachedSet>,
-    /// The bot whose chat sent it: a reader shows that bot's name now, not `from_title` as it was then.
+    /// The sending bot's stable id; `from_title` holds its name when it sent the message.
     pub from_bot: Option<String>,
     pub at: f64,
 }

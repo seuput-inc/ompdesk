@@ -130,9 +130,7 @@ impl AgentControl {
             .map(|tab| tab.name().to_owned())
     }
 
-    /// Renames `bot` to `name`, leaving a rename record: its own routines take the new name, its home chat is told so
-    /// it fixes its own files, and its folder follows (`follow_name`). The same name only records the rename and moves
-    /// the folder. The bot, and a sentence on where its folder is.
+    /// Renames `bot`, retitles its routines, notifies an existing home, and follows its name on disk.
     pub(crate) async fn rename_bot(&self, bot: &BotRecord, name: &str) -> R<(BotRecord, String)> {
         let name = name.trim();
         if name == bot.name {
@@ -193,10 +191,7 @@ impl AgentControl {
         if let Some(home) = bot.home.as_deref() {
             self.note_session(
                 home,
-                &format!(
-                    "You were renamed from {} to {name}: update SOUL.md and MEMORY.md self-references.",
-                    bot.name
-                ),
+                &format!("You were renamed from {} to {name}.", bot.name),
             )
             .await;
         }
@@ -222,16 +217,23 @@ impl AgentControl {
             other.id != bot.id
                 && (within(&other.folder, &bot.folder) || within(&bot.folder, &other.folder))
         });
-        let refused = match &self.bots_root {
-            _ if target == bot.folder => Some(String::new()),
+        let unmanaged = match &self.bots_root {
             None => Some("this app has no bots folder".to_owned()),
             Some(root) => unmovable(root, &bot.folder),
         }
-        .or_else(|| shared.then(|| "another bot's folder is it, holds it or sits in it".to_owned()))
         .or_else(|| {
-            (Path::new(&target).exists() || self.bots().of_folder(&target).is_some())
-                .then(|| format!("{target} is taken"))
+            shared.then(|| "another bot's folder is it, holds it or sits in it".to_owned())
         });
+        if unmanaged.is_none() && old != bot.name {
+            super::bot_files::rename_soul_title(Path::new(&bot.folder), &old, &bot.name)?;
+        }
+        let refused = (target == bot.folder)
+            .then(String::new)
+            .or(unmanaged)
+            .or_else(|| {
+                (Path::new(&target).exists() || self.bots().of_folder(&target).is_some())
+                    .then(|| format!("{target} is taken"))
+            });
         if let Some(why) = refused {
             self.change_bot(&bot.id, |record| record.renamed_from = None)?;
             if why.is_empty() {

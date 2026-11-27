@@ -48,7 +48,7 @@ export function botCardOf(toolName: string, args: Record<string, unknown>): BotC
 
 /**
  * Mail the cards' chunk draws: the owner's item changes the core mailed into a bot chat (`item-<id>-v<version>`), and
- * whatever a bot's chat sent (`fromBot`), whose sender reads as the bot's name now.
+ * whatever a bot's chat sent (`fromBot`).
  */
 export function isBotMail(message: AgentMessage): boolean {
 	const details = resultDetails(message);

@@ -110,6 +110,52 @@ pub fn seed(
     Ok(())
 }
 
+/// Update only the title that `seed` generates. The caller has checked the folder belongs to this bot.
+pub(super) fn rename_soul_title(folder: &Path, old: &str, new: &str) -> R<()> {
+    let path = folder.join("SOUL.md");
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return fail(format!("Could not inspect {}: {error}", path.display())),
+    };
+    if !meta.is_file() || crate::fs::disk::linked(&meta) || meta.len() > FILE_MAX as u64 {
+        return Ok(());
+    }
+    let original = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => return fail(format!("Could not read {}: {error}", path.display())),
+    };
+    let Some(rest) = original
+        .strip_prefix(b"# ")
+        .and_then(|v| v.strip_prefix(old.as_bytes()))
+    else {
+        return Ok(());
+    };
+    if !(rest.is_empty() || rest.starts_with(b"\n") || rest.starts_with(b"\r\n"))
+        || old.contains(['\r', '\n'])
+        || new.contains(['\r', '\n'])
+    {
+        return Ok(());
+    }
+    let changed = [b"# ", new.as_bytes(), rest].concat();
+    #[cfg(unix)]
+    let mode = Some(std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o777);
+    #[cfg(not(unix))]
+    let mode = None;
+    match write_atomic_if(&path, &changed, mode, 0o777, &|| {
+        std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && !crate::fs::disk::linked(&m))
+            && std::fs::read(&path).is_ok_and(|bytes| bytes == original)
+    }) {
+        Ok(true) => Ok(()),
+        Ok(false) => fail("SOUL.md changed during the rename."),
+        Err(error) => fail(format!(
+            "Could not write {}: {}",
+            path.display(),
+            error.message
+        )),
+    }
+}
+
 /// The file a `file` request names, inside `folder`: `SOUL.md`, `MEMORY.md`, `memory/<name>.md` or
 /// `memory/history/<name>.md` (a name of letters, digits, `.`, `_` and `-`).
 fn bot_file(folder: &Path, file: &str) -> R<PathBuf> {
@@ -308,6 +354,36 @@ mod tests {
     }
     fn scratch() -> Scratch {
         Scratch(crate::fs::disk::make_temp_dir("ompdesk-bot-files-").unwrap())
+    }
+
+    #[test]
+    fn a_rename_keeps_custom_titles_body_bytes_and_link_targets() {
+        let scratch = scratch();
+        let dir = &scratch.0;
+        let path = dir.join("SOUL.md");
+        for (before, after) in [
+            (
+                &b"# Ada\r\n# Ada\r\n\xff"[..],
+                &b"# Bea\r\n# Ada\r\n\xff"[..],
+            ),
+            (b"# Ada's notes\n# Ada", b"# Ada's notes\n# Ada"),
+            (b"Notes\n# Ada", b"Notes\n# Ada"),
+            (b"# Ada", b"# Bea"),
+        ] {
+            std::fs::write(&path, before).unwrap();
+            rename_soul_title(dir, "Ada", "Bea").unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), after);
+        }
+        #[cfg(unix)]
+        {
+            let external = dir.join("external.md");
+            std::fs::write(&external, b"# Ada").unwrap();
+            std::fs::remove_file(&path).unwrap();
+            std::os::unix::fs::symlink(&external, &path).unwrap();
+            rename_soul_title(dir, "Ada", "Bea").unwrap();
+            assert!(path.is_symlink());
+            assert_eq!(std::fs::read(&external).unwrap(), b"# Ada");
+        }
     }
 
     #[test]

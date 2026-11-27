@@ -3131,8 +3131,54 @@ async fn a_kickoff_that_ended_silent_is_sent_again_once_by_itself_and_on_each_tr
     }
 }
 
+#[tokio::test]
+async fn a_bot_without_a_home_renames_its_seeded_title_and_signs_its_next_report() {
+    let root = Scratch::new();
+    let folder = |name: &str| root.0.join(name).to_string_lossy().into_owned();
+    let world = |name: &str| {
+        let mut world = bot_world(&folder(name));
+        world["parents"] = json!({ "bot1": { "callerTabId": "main0001" } });
+        world
+    };
+    let (control, asked) = rig_files(
+        world("ada"),
+        Caps::default(),
+        &bot_files(&root),
+        bots_main(Mails::default(), |_, _| None),
+    );
+    control
+        .bots_command(json!({ "action": "create", "name": "Ada", "purpose": "Ask Ada." }))
+        .await
+        .unwrap();
+    let bot = control.bot_named("Ada").unwrap();
+    assert!(bot.home.is_none());
+    let report = |text: &str| {
+        control.run(
+            "bot1",
+            "ompdesk_report",
+            json!({ "kind": "note", "text": text }),
+            None,
+        )
+    };
+    assert!(!report("first").await.is_error);
+    control.rename_bot(&bot, "Bea").await.unwrap();
+    assert_eq!(
+        std::fs::read(root.0.join("bea/SOUL.md")).unwrap(),
+        b"# Bea\n\nAsk Ada.\n"
+    );
+    crate::ports::apply_state(control.host.port(), 1, &world("bea").to_string()).unwrap();
+    assert!(!report("second").await.is_error);
+    let asked = asked.lock().unwrap();
+    let names: Vec<_> = asked
+        .iter()
+        .filter(|(method, args)| method == "mail" && args["details"]["fromBot"] == bot.id)
+        .map(|(_, args)| args["details"]["fromTitle"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Ada", "Bea"]);
+}
+
 /// The owner renames a bot: its folder in the bots folder moves to the new name's slug with its files, its chats'
-/// sessions and its routines (their titles too), and its home chat is told to fix its own files.
+/// sessions and its routines (their titles too), and its home chat is notified.
 #[tokio::test]
 async fn a_rename_moves_the_bots_folder_its_sessions_and_routines_and_tells_its_home_chat() {
     let root = Scratch::new();
