@@ -72,7 +72,23 @@ impl Permit {
                 session: None,
             };
             let lease = pool
-                .acquire_unless(1, owner, false, |_| {}, &|| scope.cancelled())
+                .acquire_unless(
+                    1,
+                    owner,
+                    false,
+                    |wait| {
+                        eprintln!(
+                            "{label}: waiting ({} ahead, {} holders, pressure: {})",
+                            wait.ahead,
+                            wait.holders.len(),
+                            wait.pressure.unwrap_or("none")
+                        );
+                        for disk in &wait.low_disk {
+                            eprintln!("{label}: free {} bytes, need {}", disk.free, disk.need);
+                        }
+                    },
+                    &|| scope.cancelled(),
+                )
                 .map_err(refused)?;
             Ok(Self {
                 lease,
