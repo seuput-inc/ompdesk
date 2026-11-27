@@ -211,7 +211,12 @@ export async function acquireLock(command: readonly string[], options: AcquireOp
 	const kind = options.kind ?? slotKindOf(text) ?? "other";
 	if (covered(kind) || (heavyInherited() && kind !== "build")) return { release() {} };
 	const time = new Date().toISOString();
-	const lease = await acquireHold(locks, kind, { owner: ownerId(), command: text }, { heavyHeld: heavyInherited() });
+	const lease = await acquireHold(
+		locks,
+		kind,
+		{ owner: ownerId(), command: text, argv: command },
+		{ heavyHeld: heavyInherited() },
+	);
 	if (!lease) return { release() {} };
 	const hold: Hold = {
 		lease,

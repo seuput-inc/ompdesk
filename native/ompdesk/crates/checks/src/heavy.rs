@@ -17,10 +17,11 @@
 //! Nesting: a holder puts `OMPDESK_HEAVY_HELD` (its own pid) in its command's environment; a heavy command started
 //! under it (a check script that wraps each step) runs inside its holder's place instead of waiting on itself.
 //!
-//! With admission limits on, a new heavy command also waits for the free space specified by `min_free`.
-//! An `admission-off` marker in the pool folder disables both start checks. Running commands retain their
-//! emergency disk watcher in either mode.
+//! Known writes reserve incremental bytes by volume. Recognized supervised jobs with no estimate reserve their
+//! enrolled volumes exclusively. Detached holders retain the legacy free-space floor. `admission-off` disables
+//! start checks, not the running command's emergency disk watcher.
 
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -32,6 +33,7 @@ pub const DIR_ENV: &str = "OMPDESK_HEAVY_DIR";
 pub const SLOTS_ENV: &str = "OMPDESK_HEAVY_SLOTS";
 pub const HELD_ENV: &str = "OMPDESK_HEAVY_HELD";
 pub const MIN_FREE_ENV: &str = "OMPDESK_HEAVY_MIN_FREE_GB";
+pub const WRITES_ENV: &str = "OMPDESK_WRITE_BYTES";
 /// Free space under which a running heavy command is stopped, in GB (default `watch::DANGER`); for tests.
 pub const DANGER_ENV: &str = "OMPDESK_HEAVY_DANGER_GB";
 
@@ -102,6 +104,77 @@ pub struct Owner {
     pub session: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+enum Claim {
+    Bytes(u64),
+    Exclusive,
+    Unmetered,
+}
+
+impl Claim {
+    fn conflicts(self, other: Self) -> bool {
+        !matches!(
+            (self, other),
+            (Self::Bytes(_), Self::Bytes(_)) | (Self::Unmetered, Self::Unmetered)
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum Cpu {
+    #[cfg(any(unix, test))]
+    Saturated(bool),
+    #[cfg(windows)]
+    Times { idle: u64, total: u64 },
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Pressure {
+    pub cpu: Cpu,
+    pub critical: bool,
+    pub warning: bool,
+    pub swap: u64,
+}
+
+impl Pressure {
+    fn hold(self, before: Self) -> Option<&'static str> {
+        let busy = match self.cpu {
+            #[cfg(any(unix, test))]
+            Cpu::Saturated(busy) => busy,
+            #[cfg(windows)]
+            Cpu::Times { idle, total } => match before.cpu {
+                Cpu::Times {
+                    idle: prev,
+                    total: started,
+                } => total > started && idle == prev,
+                #[cfg(test)]
+                _ => false,
+            },
+        };
+        if self.critical {
+            Some("critical memory pressure")
+        } else if self.warning && self.swap > before.swap {
+            Some("memory pressure with growing swap")
+        } else if busy {
+            Some("CPU saturated")
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SlotRecord<'a> {
+    #[serde(flatten)]
+    owner: &'a Owner,
+    remaining: &'a BTreeMap<u64, Claim>,
+}
+
+#[derive(Deserialize)]
+struct Reservations {
+    remaining: BTreeMap<u64, Claim>,
+}
+
 pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -119,6 +192,7 @@ pub fn min_free(total: u64) -> u64 {
 /// Free and total bytes of the volume holding a path.
 #[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct Disk {
+    pub volume: Option<u64>,
     pub path: String,
     pub free: u64,
     pub total: u64,
@@ -132,7 +206,7 @@ impl Disk {
     }
 }
 
-pub type Probe = std::sync::Arc<dyn Fn(&Path) -> Option<(u64, u64)> + Send + Sync>;
+pub type Probe = std::sync::Arc<dyn Fn(&Path) -> Option<(Option<u64>, u64, u64)> + Send + Sync>;
 
 /// The volumes a heavy command writes to: its own folder, the temp folder it is given (`TMPDIR`, Windows `TEMP`/`TMP`)
 /// and every folder its arguments name (`--output test-results`, `--outputFile=/Volumes/BACKUP/r.json`), each read on
@@ -145,11 +219,31 @@ pub struct Volumes {
     /// Free bytes under which a running command is stopped.
     pub danger: u64,
     probe: Probe,
+    claims: Result<Option<BTreeMap<PathBuf, u64>>, String>,
+    opaque: Option<Claim>,
+    pressure: fn() -> io::Result<Pressure>,
 }
 
 /// The nearest folder of `path` that exists (an output folder is often made by the command itself).
 fn existing(path: &Path) -> Option<PathBuf> {
-    path.ancestors().find(|p| p.is_dir()).map(Path::to_path_buf)
+    for parent in path.ancestors() {
+        match fs::metadata(parent) {
+            Ok(meta) if meta.is_dir() => return Some(parent.to_owned()),
+            Ok(_) => {
+                let actual = fs::canonicalize(parent).ok()?;
+                return actual.parent().map(Path::to_owned);
+            }
+            // The volume of a blocked mkdir is known; let the operation report the non-directory.
+            Err(e) if e.kind() == io::ErrorKind::NotADirectory => continue,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                if fs::symlink_metadata(parent).is_ok() {
+                    return None;
+                }
+            }
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 impl Volumes {
@@ -174,6 +268,64 @@ impl Volumes {
                 paths.push(cwd.join(value));
             }
         }
+        let home = env("HOME")
+            .or_else(|| env("USERPROFILE"))
+            .map(PathBuf::from);
+        let exe = argv
+            .first()
+            .and_then(|s| Path::new(s).file_stem())
+            .and_then(|s| s.to_str());
+        let detected = crate::runner::detect(argv, cwd);
+        let kind = detected.kind;
+        let cargo = exe == Some("cargo") || kind == crate::runner::Kind::Cargo;
+        let bun = matches!(exe, Some("bun" | "bunx"));
+        if cargo {
+            if let Some(cache) = env("CARGO_HOME")
+                .map(PathBuf::from)
+                .or_else(|| home.as_ref().map(|p| p.join(".cargo")))
+            {
+                paths.push(cwd.join(cache));
+            }
+            if let Some(target) = env("CARGO_TARGET_DIR") {
+                paths.push(cwd.join(target));
+            }
+        }
+        if bun {
+            if let Some(cache) = env("electron_config_cache") {
+                paths.push(cwd.join(cache));
+            }
+            let cache = env("BUN_INSTALL_CACHE_DIR").map(PathBuf::from).or_else(|| {
+                env("BUN_INSTALL")
+                    .map(PathBuf::from)
+                    .or_else(|| home.as_ref().map(|p| p.join(".bun")))
+                    .map(|p| p.join("install/cache"))
+            });
+            if let Some(cache) = cache {
+                paths.push(cwd.join(cache));
+            }
+        }
+        let bootstrap = kind != crate::runner::Kind::Command
+            || cargo
+                && matches!(
+                    argv.get(1).map(String::as_str),
+                    Some("build" | "check" | "clippy")
+                )
+            || bun
+                && matches!(
+                    argv.get(1).map(String::as_str),
+                    Some("install" | "build" | "test")
+                );
+        let claims = env(WRITES_ENV)
+            .map(|s| serde_json::from_str::<BTreeMap<PathBuf, u64>>(&s))
+            .transpose()
+            .map_err(|e| format!("{WRITES_ENV}: {e}"));
+        if let Ok(Some(writes)) = &claims {
+            for path in writes.keys() {
+                if !paths.contains(path) {
+                    paths.push(path.clone());
+                }
+            }
+        }
         let gb_of = |name: &str| {
             env(name)
                 .and_then(|v| v.trim().parse::<f64>().ok())
@@ -183,37 +335,153 @@ impl Volumes {
         let need = gb_of(MIN_FREE_ENV);
         let danger = gb_of(DANGER_ENV).unwrap_or(crate::watch::DANGER);
         Volumes {
-            paths: paths.iter().filter_map(|p| existing(p)).collect(),
+            paths,
             need,
+            claims,
+            opaque: if bootstrap || detected.script.is_some() {
+                Some(Claim::Exclusive)
+            } else if argv.is_empty() {
+                Some(Claim::Unmetered)
+            } else {
+                None
+            },
+            pressure: crate::sys::pressure,
             danger,
-            probe: std::sync::Arc::new(crate::sys::disk_space),
+            probe: std::sync::Arc::new(|path| {
+                let dir = existing(path)?;
+                let (free, total) = crate::sys::disk_space(&dir)?;
+                Some((crate::sys::volume_id(&dir), free, total))
+            }),
         }
     }
 
     /// The same volumes read another way (tests).
+    #[cfg(test)]
     pub fn with_probe(mut self, probe: Probe) -> Volumes {
         self.probe = probe;
+        self.pressure = || {
+            Ok(Pressure {
+                cpu: Cpu::Saturated(false),
+                critical: false,
+                warning: false,
+                swap: 0,
+            })
+        };
         self
     }
 
-    /// Each distinct volume (two paths on one volume are listed once).
-    pub fn read(&self) -> Vec<Disk> {
+    fn measure(&self, for_admission: bool) -> io::Result<Vec<Disk>> {
         let mut out: Vec<Disk> = Vec::new();
         for path in &self.paths {
-            let Some((free, total)) = (self.probe)(path) else {
+            let Some((volume, free, total)) = (self.probe)(path) else {
+                if for_admission {
+                    return Err(io::Error::other(format!(
+                        "free space unknown for {}",
+                        path.display()
+                    )));
+                }
                 continue;
             };
-            if out.iter().any(|d| d.free == free && d.total == total) {
+            if for_admission && volume.is_none() {
+                return Err(io::Error::other(format!(
+                    "volume identity unknown for {}",
+                    path.display()
+                )));
+            }
+            if volume.is_some() && out.iter().any(|d| d.volume == volume) {
                 continue;
             }
             out.push(Disk {
+                volume,
                 path: path.display().to_string(),
                 free,
                 total,
                 need: self.need.unwrap_or_else(|| min_free(total)),
             });
         }
-        out
+        Ok(out)
+    }
+
+    /// A detached holder cannot stop the workload. Its enrolled paths retain the legacy floor.
+    pub(crate) fn of_hold(cwd: &Path, env: &dyn Fn(&str) -> Option<String>) -> io::Result<Self> {
+        let argv: Vec<String> = env("OMPDESK_HEAVY_ARGV")
+            .map(|text| serde_json::from_str(&text))
+            .transpose()?
+            .unwrap_or_default();
+        let mut volumes = Self::of_work(cwd, &argv, env);
+        volumes.opaque = Some(Claim::Unmetered);
+        Ok(volumes)
+    }
+
+    pub fn with_writes(mut self, writes: BTreeMap<PathBuf, u64>) -> Self {
+        self.paths.extend(writes.keys().cloned());
+        self.claims = Ok(Some(writes));
+        self
+    }
+
+    pub(crate) fn use_previous_command_guard(&mut self) {
+        self.opaque.get_or_insert(Claim::Unmetered);
+    }
+
+    /// Native work that owns the write targets, not paths guessed from a command line.
+    pub fn for_targets(paths: Vec<PathBuf>, writes: Option<BTreeMap<PathBuf, u64>>) -> Self {
+        let mut volumes = Self::of_work(&paths[0], &[], &|k| std::env::var(k).ok());
+        volumes.paths = paths;
+        volumes.claims = Ok(writes);
+        volumes.opaque = Some(Claim::Exclusive);
+        volumes
+    }
+
+    fn demand(&self, disks: &[Disk]) -> io::Result<BTreeMap<u64, Claim>> {
+        let claims = self
+            .claims
+            .as_ref()
+            .map_err(|e| io::Error::other(e.clone()))?;
+        if claims.is_none()
+            && let Some(claim) = self.opaque
+        {
+            return Ok(disks
+                .iter()
+                .filter_map(|d| d.volume.map(|id| (id, claim)))
+                .collect());
+        }
+        let paths = claims.as_ref().ok_or_else(|| {
+            io::Error::other(format!(
+                "write demand unknown for {}: set {WRITES_ENV} to a JSON map of absolute write paths to incremental bytes",
+                self.paths.first().map_or_else(String::new, |p| p.display().to_string())
+            ))
+        })?;
+        let mut claims = BTreeMap::<u64, u64>::new();
+        for (path, bytes) in paths {
+            if !path.is_absolute() {
+                return Err(io::Error::other(format!(
+                    "expected absolute write path: {}",
+                    path.display()
+                )));
+            }
+            let (Some(id), _, _) = (self.probe)(path).ok_or_else(|| {
+                io::Error::other(format!("free space unknown for {}", path.display()))
+            })?
+            else {
+                return Err(io::Error::other(format!(
+                    "volume identity unknown for {}",
+                    path.display()
+                )));
+            };
+            let total = claims.entry(id).or_default();
+            *total = total
+                .checked_add(*bytes)
+                .ok_or_else(|| io::Error::other("write demand overflow"))?;
+        }
+        Ok(claims
+            .into_iter()
+            .map(|(id, n)| (id, Claim::Bytes(n)))
+            .collect())
+    }
+
+    /// Status and the emergency watcher keep observing the remaining disks even if one disappears.
+    pub fn read(&self) -> Vec<Disk> {
+        self.measure(false).expect("best-effort disk reading")
     }
 }
 
@@ -240,6 +508,37 @@ impl Lease {
     pub fn slots(&self) -> Vec<usize> {
         self.slots.iter().map(|(i, _)| *i).collect()
     }
+
+    /// A completed phase no longer competes for future bytes. Only shrink a claim already owned by this lease.
+    pub fn remaining_on(&self, path: &Path, bytes: u64) -> io::Result<()> {
+        let Some((first, _)) = self.slots.first() else {
+            return Ok(());
+        };
+        let id = existing(path)
+            .and_then(|p| crate::sys::volume_id(&p))
+            .ok_or_else(|| {
+                io::Error::other(format!("volume identity unknown for {}", path.display()))
+            })?;
+        let gate = open_rw(&self.dir.join("counter"))?;
+        gate.lock()?;
+        let path = self.dir.join(format!("slot.{first}.owner"));
+        let record = fs::read(&path)?;
+        let owner: Owner = serde_json::from_slice(&record)?;
+        let held: Reservations = serde_json::from_slice(&record)?;
+        if !matches!(held.remaining.get(&id), Some(Claim::Exclusive))
+            && !matches!(held.remaining.get(&id), Some(Claim::Bytes(n)) if *n >= bytes)
+        {
+            return Err(io::Error::other("next phase exceeds checkout reservation"));
+        }
+        let remaining = BTreeMap::from([(id, Claim::Bytes(bytes))]);
+        fs::write(
+            path,
+            serde_json::to_vec(&SlotRecord {
+                owner: &owner,
+                remaining: &remaining,
+            })?,
+        )
+    }
 }
 
 impl Drop for Lease {
@@ -258,6 +557,7 @@ pub struct Waiting {
     pub holders: Vec<Owner>,
     /// The volumes too full to start: waiting is for disk space, not (only) for a slot.
     pub low_disk: Vec<Disk>,
+    pub pressure: Option<&'static str>,
 }
 
 /// A slot of the pool, as `status` shows it.
@@ -324,6 +624,7 @@ struct Ticket {
 
 impl Drop for Ticket {
     fn drop(&mut self) {
+        let _ = fs::remove_file(self.path.with_added_extension("blocked"));
         let _ = fs::remove_file(&self.path);
     }
 }
@@ -475,6 +776,7 @@ impl Pool {
                 Err(e) => return Err(e),
             };
             if Some(path.as_path()) != own && try_lock(&file)? {
+                let _ = fs::remove_file(path.with_added_extension("blocked"));
                 let _ = fs::remove_file(&path);
                 continue;
             }
@@ -495,6 +797,38 @@ impl Pool {
     fn read_owner(&self, i: usize) -> Option<Owner> {
         let text = fs::read_to_string(self.owner_path(i)).ok()?;
         serde_json::from_str(&text).ok()
+    }
+
+    fn reservations(&self) -> io::Result<Option<BTreeMap<u64, Claim>>> {
+        let mut totals = BTreeMap::<u64, Claim>::new();
+        for i in 0..self.size {
+            let slot = open_rw(&self.slot_path(i))?;
+            if try_lock(&slot)? {
+                continue;
+            }
+            let record = fs::read(self.owner_path(i)).and_then(|bytes| {
+                serde_json::from_slice::<Reservations>(&bytes).map_err(io::Error::other)
+            });
+            let record = match record {
+                Ok(record) => record,
+                Err(_) if try_lock(&slot)? => continue,
+                // A legacy holder, or a lease between unlink and unlock. Both stop competing on unlock.
+                Err(_) => return Ok(None),
+            };
+            for (id, claim) in record.remaining {
+                let combined = match (totals.get(&id).copied(), claim) {
+                    (None, c) => c,
+                    (Some(Claim::Bytes(a)), Claim::Bytes(b)) => Claim::Bytes(
+                        a.checked_add(b)
+                            .ok_or_else(|| io::Error::other("reserved bytes overflow"))?,
+                    ),
+                    (Some(Claim::Unmetered), Claim::Unmetered) => Claim::Unmetered,
+                    _ => Claim::Exclusive,
+                };
+                totals.insert(id, combined);
+            }
+        }
+        Ok(Some(totals))
     }
 
     /// Attempts one all-or-nothing claim under the queue lock.
@@ -550,10 +884,30 @@ impl Pool {
         if !self.admission_limited()? {
             return unrestricted();
         }
+        let demand = self.volumes.demand(&self.volumes.measure(true)?)?;
+        let measure = || -> io::Result<Vec<Disk>> {
+            let disks = self.volumes.measure(true)?;
+            for disk in &disks {
+                if !disk.volume.is_some_and(|id| demand.contains_key(&id)) {
+                    return Err(io::Error::other(format!(
+                        "write demand unknown on {} (volume {:?}); include this volume in {WRITES_ENV}",
+                        disk.path, disk.volume
+                    )));
+                }
+            }
+            Ok(disks)
+        };
+        let mut before = (self.volumes.pressure)()?;
+        measure()?;
         let ticket = self.enqueue(release)?;
         let mut held = Vec::new();
-        let mut told: Option<(bool, usize)> = None;
+        let mut told = None;
+        std::thread::sleep(POLL);
+        let mut published_block = false;
         loop {
+            let now = (self.volumes.pressure)()?;
+            let mut pressure = now.hold(before);
+            before = now;
             let gate = self.queue_lock()?;
             if !self.admission_limited()? {
                 return unrestricted();
@@ -569,25 +923,105 @@ impl Pool {
                 .position(|t| t.number == ticket.number && t.pid == std::process::id())
                 .ok_or_else(|| io::Error::other("heavy queue ticket disappeared"))?;
             let mut low_disk = Vec::new();
-            if ahead == 0 {
-                low_disk = self.disks().into_iter().filter(Disk::low).collect();
-                if low_disk.is_empty() {
+            let reserved = self.reservations()?;
+            // FIFO except for an older request still blocked by a live, disjoint volume reservation.
+            let can_try = tickets[..ahead].iter().all(|t| {
+                if t.class == Class::Legacy {
+                    return false;
+                }
+                let path = self
+                    .dir
+                    .join("queue")
+                    .join(format!("{:020}.{}.blocked", t.number, t.pid));
+                fs::read(path)
+                    .ok()
+                    .and_then(|b| serde_json::from_slice::<BTreeMap<u64, Claim>>(&b).ok())
+                    .is_some_and(|older| {
+                        older.keys().all(|id| !demand.contains_key(id))
+                            && older.iter().any(|(id, c)| {
+                                reserved
+                                    .as_ref()
+                                    .and_then(|r| r.get(id))
+                                    .is_some_and(|other| c.conflicts(*other))
+                            })
+                    })
+            });
+            if can_try {
+                if reserved.is_none() {
+                    pressure = Some("waiting for a holder with unknown reservations to finish");
+                }
+                for mut disk in measure()? {
+                    let id = disk
+                        .volume
+                        .expect("admission requires an identified volume");
+                    let floor = if matches!(demand.get(&id), Some(Claim::Unmetered)) {
+                        disk.need
+                    } else {
+                        0
+                    };
+                    let headroom = self
+                        .volumes
+                        .need
+                        .unwrap_or(self.volumes.danger)
+                        .max(self.volumes.danger)
+                        .max(floor);
+                    let need = match (
+                        demand[&id],
+                        reserved.as_ref().and_then(|r| r.get(&id)).copied(),
+                    ) {
+                        (Claim::Bytes(n), None) => headroom.checked_add(n),
+                        (Claim::Bytes(n), Some(Claim::Bytes(r))) => {
+                            headroom.checked_add(n).and_then(|v| v.checked_add(r))
+                        }
+                        (Claim::Exclusive, None) => Some(headroom),
+                        (Claim::Unmetered, None | Some(Claim::Unmetered)) => {
+                            Some(disk.need.max(headroom))
+                        }
+                        _ => {
+                            pressure = Some("write volume reserved by another job");
+                            if !published_block {
+                                fs::write(
+                                    ticket.path.with_added_extension("blocked"),
+                                    serde_json::to_vec(&demand)?,
+                                )?;
+                                published_block = true;
+                            }
+                            continue;
+                        }
+                    };
+                    if need.is_none_or(|bytes| disk.free < bytes) {
+                        disk.need = need.unwrap_or(u64::MAX);
+                        low_disk.push(disk);
+                    }
+                }
+                if low_disk.is_empty() && pressure.is_none() {
                     if self.take_free(&mut held, want)? {
                         if cancelled() {
                             return Err(cancelled_wait());
                         }
-                        let overtook = tickets.get(1).is_some_and(|t| t.number < ticket.number);
+                        let overtook = release
+                            && tickets
+                                .iter()
+                                .skip(ahead + 1)
+                                .any(|t| t.number < ticket.number);
                         owner.since = now_ms();
                         owner.weight = want;
-                        let text = serde_json::to_vec(&owner)?;
+                        let empty = BTreeMap::new();
                         let lease = Lease {
                             slots: held,
                             dir: self.dir.clone(),
                             waited: started.elapsed(),
                             acquired_at: owner.since,
                         };
-                        for (i, _) in &lease.slots {
-                            fs::write(self.owner_path(*i), &text)?;
+                        for (index, (i, _)) in lease.slots.iter().enumerate() {
+                            let remaining = if index == 0 { &demand } else { &empty };
+                            fs::write(
+                                self.owner_path(*i),
+                                serde_json::to_vec(&SlotRecord {
+                                    owner: &owner,
+                                    remaining,
+                                })?,
+                            )?;
                         }
                         if overtook {
                             self.protect(ticket.number)?;
@@ -602,13 +1036,14 @@ impl Pool {
             }
             drop(gate);
             // Told again when the reason changes (the disk filled or freed, the queue moved).
-            let reason = (!low_disk.is_empty(), ahead);
+            let reason = (!low_disk.is_empty(), ahead, pressure);
             if told != Some(reason) {
                 told = Some(reason);
                 on_wait(&Waiting {
                     ahead,
                     holders: self.slots().into_iter().filter_map(|s| s.owner).collect(),
                     low_disk,
+                    pressure,
                 });
             }
             std::thread::sleep(POLL);
@@ -890,12 +1325,29 @@ mod tests {
         });
         assert_eq!(v.paths[0], cwd);
         assert_eq!(v.paths[1], PathBuf::from("/"));
-        assert!(
-            v.paths.contains(&outside),
-            "the output folder's nearest existing folder"
-        );
+        assert!(v.paths.contains(&outside.join("results")));
+        assert_eq!(existing(&outside.join("results")), Some(outside.clone()));
         assert!(!v.paths.iter().any(|p| p.ends_with("x")));
         let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn equal_space_is_not_volume_identity() {
+        let mut volumes = Volumes::of_work(&std::env::temp_dir(), &[], &|_| None);
+        volumes.paths = ["work", "temp", "cache"].map(PathBuf::from).to_vec();
+        let volumes = volumes.with_probe(Arc::new(|path| {
+            Some(match path.to_str()? {
+                "work" => (Some(1), 100, 200),
+                "temp" => (Some(2), 100, 200),
+                "cache" => (Some(1), 99, 200),
+                _ => return None,
+            })
+        }));
+        let disks = volumes.read();
+        assert_eq!(
+            disks.iter().map(|d| d.path.as_str()).collect::<Vec<_>>(),
+            ["work", "temp"]
+        );
     }
 
     #[test]
@@ -906,7 +1358,7 @@ mod tests {
         let probe_free = free.clone();
         let pool = Pool {
             volumes: pool.volumes.with_probe(Arc::new(move |_| {
-                Some((probe_free.load(Ordering::Relaxed), 100 * GIB))
+                Some((Some(1), probe_free.load(Ordering::Relaxed), 100 * GIB))
             })),
             ..pool
         };
@@ -933,15 +1385,118 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn small_writes_fit_below_the_old_floor_and_competing_reservations_wait_for_release() {
+        let (dir, mut pool) = temp_pool(2);
+        pool.volumes.need = None;
+        pool.volumes = pool
+            .volumes
+            .with_probe(Arc::new(|_| Some((Some(1), 14 * GIB, 500 * GIB))));
+        pool.volumes = pool
+            .volumes
+            .with_writes(BTreeMap::from([(dir.clone(), 8 * GIB)]));
+        let mut holder = Some(
+            pool.acquire(1, owner("first"), |_| panic!("first should fit"))
+                .unwrap(),
+        );
+        pool.volumes = pool
+            .volumes
+            .with_writes(BTreeMap::from([(dir.clone(), 4 * GIB)]));
+        let next = pool
+            .acquire(1, owner("second"), |w| {
+                assert_eq!(w.low_disk[0].need, 15 * GIB);
+                drop(holder.take().expect("one wait before release"));
+            })
+            .unwrap();
+        assert!(holder.is_none());
+        drop(next);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn first_use_bootstrap_excludes_a_writer_and_opaque_commands_fail_before_queue() {
+        let (dir, mut pool) = temp_pool(2);
+        let probe = pool.volumes.probe.clone();
+        pool.volumes =
+            Volumes::of_work(&dir, &["opaque-tool".into()], &|_| None).with_probe(probe.clone());
+        let error = pool
+            .acquire(1, owner("opaque"), |_| panic!("enqueued"))
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains(WRITES_ENV));
+        assert!(!dir.join("counter").exists());
+        pool.volumes = Volumes::of_work(&dir, &["bun".into(), "install".into()], &|k| {
+            (k == "BUN_INSTALL_CACHE_DIR").then(|| dir.join("cache").display().to_string())
+        })
+        .with_probe(probe);
+        assert!(pool.volumes.paths.contains(&dir.join("cache")));
+        let mut holder = Some(pool.acquire(1, owner("bootstrap"), |_| panic!()).unwrap());
+        pool.volumes = pool
+            .volumes
+            .with_writes(BTreeMap::from([(dir.clone(), 1024)]));
+        let next = pool
+            .acquire(1, owner("small"), |w| {
+                assert_eq!(w.pressure, Some("write volume reserved by another job"));
+                let mut other = synthetic_pool(&dir, 2);
+                other.volumes = other
+                    .volumes
+                    .with_probe(Arc::new(|_| Some((Some(2), 50 * GIB, 100 * GIB))));
+                let independent = other
+                    .acquire(1, owner("other volume"), |_| {
+                        panic!("blocked by a different volume")
+                    })
+                    .unwrap();
+                drop(independent);
+                drop(holder.take().unwrap());
+            })
+            .unwrap();
+        assert!(holder.is_none());
+        drop(next);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn warning_alone_does_not_hold_work_but_growing_swap_or_saturation_does() {
+        let base = Pressure {
+            cpu: Cpu::Saturated(false),
+            critical: false,
+            warning: true,
+            swap: 9,
+        };
+        assert_eq!(base.hold(base), None);
+        assert_eq!(
+            Pressure { swap: 10, ..base }.hold(base),
+            Some("memory pressure with growing swap")
+        );
+        assert_eq!(
+            Pressure {
+                cpu: Cpu::Saturated(true),
+                ..base
+            }
+            .hold(base),
+            Some("CPU saturated")
+        );
+        assert_eq!(
+            Pressure {
+                critical: true,
+                ..base
+            }
+            .hold(base),
+            Some("critical memory pressure")
+        );
+    }
+
     const WORKER_DIR: &str = "OMPDESK_TEST_QUEUE_WORKER_DIR";
 
     fn synthetic_pool(dir: &Path, size: usize) -> Pool {
         let mut pool = Pool::new(dir.to_owned(), size).unwrap();
         pool.volumes.paths = vec![dir.to_owned()];
         pool.volumes.need = Some(10 * GIB);
+        pool.volumes.opaque = None;
+        pool.volumes.claims = Ok(Some(BTreeMap::from([(dir.to_owned(), 0)])));
         pool.volumes = pool
             .volumes
-            .with_probe(Arc::new(|_| Some((50 * GIB, 100 * GIB))));
+            .with_probe(Arc::new(|_| Some((Some(1), 50 * GIB, 100 * GIB))));
         pool
     }
 
