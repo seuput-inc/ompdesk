@@ -273,8 +273,9 @@ test("paired bot chat omits quiet lookups live and after reopening, without hidi
 		await fs.mkdir(bot.folder);
 		const journal = await seedStoredBot(profile, bot, "quiet-home", "Morning handover");
 		host = await launchRemote(profile);
-		client = await launchRemote(await makeRemoteProfile(parent, "b", options));
-		const b = client.page;
+		const clientProfile = await makeRemoteProfile(parent, "b", options);
+		client = await launchRemote(clientProfile);
+		let b = client.page;
 		const device = await connectHost(host.page, b, "Studio");
 		const open = async () => {
 			await b.locator(`[data-bot-row="${bot.id}"]`).click();
@@ -293,9 +294,8 @@ test("paired bot chat omits quiet lookups live and after reopening, without hidi
 		const quote = "I am quoting NO_REPLY.";
 		await prompt(quote);
 		await untilAnswered(b, id, { after: quote });
-		const cards = b.locator("[data-work-card]");
 		await expect(b.getByText(quote, { exact: true }).first()).toBeVisible();
-		const before = await cards.count();
+		const before = await b.locator("[data-work-card]").count();
 		for (const suffix of ["one", "two"]) {
 			const text = `fixture quiet lookup ${suffix}`;
 			await prompt(text);
@@ -305,12 +305,14 @@ test("paired bot chat omits quiet lookups live and after reopening, without hidi
 		const quiet = async () => {
 			await expect(b.getByText("NO_REPLY", { exact: true })).toHaveCount(0);
 			await expect(b.locator("[data-bot-quiet-reply]")).toHaveCount(0);
-			await expect(cards).toHaveCount(before);
+			await expect(b.locator("[data-work-card]")).toHaveCount(before);
 			await expect(b.getByText("Local fixture reply", { exact: true }).last()).toBeVisible();
 		};
 		await quiet();
 		await test.info().attach("paired-live", { body: await b.screenshot(), contentType: "image/png" });
-		await b.evaluate(tab => window.omp.tabs.close(tab), id);
+		await exitApp(client.app);
+		client = await launchRemote(clientProfile, { project: false });
+		b = client.page;
 		id = await open();
 		await untilAnswered(b, id, { after: "fixture quiet lookup two", text: "NO_REPLY" });
 		await expect(b.getByText(quote, { exact: true }).first()).toBeVisible();
