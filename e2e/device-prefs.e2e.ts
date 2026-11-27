@@ -8,6 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { chromium, devices, expect, type Page, test } from "@playwright/test";
 import { type ElectronApplication, _electron as electron } from "playwright";
+import { readSidebarPrefs } from "../src/shared/sidebar-prefs";
 import { type FixtureTailscale, fixtureTailscale } from "./fixture/fake-tailscale-install";
 import { ServeProxy, serveSites } from "./fixture/phone-serve";
 import { exitApp, fixtureOmp } from "./harness";
@@ -68,6 +69,13 @@ async function waitReady(page: Page) {
 
 const scheme = (page: Page) => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
 const hostTheme = (page: Page) => page.evaluate(() => window.omp.prefs.get("themeName"));
+
+async function sidebarChoices(page: Page) {
+	const { sessionSort, hideSleeping, sessionOrder } = readSidebarPrefs(
+		await page.evaluate(() => window.omp.prefs.get("sidebar")),
+	);
+	return [sessionSort, hideSleeping, sessionOrder.chats];
+}
 
 async function shot(page: Page, name: string) {
 	await fs.mkdir(CAPTURES, { recursive: true });
@@ -147,6 +155,17 @@ test("The phone sets dark while the computer stays light, across a reload and a 
 		await phone.goto(`${proxy.url}/`);
 		await phoneReady(phone);
 
+		await first.page.evaluate(async () => {
+			await window.omp.prefs.updateSidebar({ op: "set-session-sort", sort: "name" });
+			await window.omp.prefs.updateSidebar({ op: "set-hide-sleeping", hide: true });
+			await window.omp.prefs.updateSidebar({ op: "set-session-order", list: "chats", order: ["b", "a"] });
+		});
+		expect(await sidebarChoices(phone)).toEqual(["manual", false, ["b", "a"]]);
+		await phone.evaluate(async () => {
+			await window.omp.prefs.updateSidebar({ op: "set-session-sort", sort: "recent" });
+			await window.omp.prefs.updateSidebar({ op: "set-hide-sleeping", hide: false });
+		});
+		expect(await sidebarChoices(first.page)).toEqual(["name", true, ["b", "a"]]);
 		// Nothing set on the phone: it follows the system, not the computer's own choice.
 		expect(await phone.evaluate(() => window.omp.prefs.get("themeName"))).toBeUndefined();
 		await shot(phone, "01-phone-default-system");
@@ -180,6 +199,14 @@ test("The phone sets dark while the computer stays light, across a reload and a 
 		await phoneReady(phone);
 		await expect.poll(() => scheme(phone)).toBe("dark");
 		expect(await scheme(second.page)).toBe("light");
+		expect(await sidebarChoices(phone)).toEqual(["recent", false, ["b", "a"]]);
+		expect(await sidebarChoices(second.page)).toEqual(["name", true, ["b", "a"]]);
+		await second.page.evaluate(async () => {
+			await window.omp.prefs.updateSidebar({ op: "set-session-sort", sort: "smart" });
+			await window.omp.prefs.updateSidebar({ op: "set-hide-sleeping", hide: false });
+		});
+		await phone.evaluate(() => window.omp.prefs.updateSidebar({ op: "set-hide-sleeping", hide: true }));
+		expect(await sidebarChoices(second.page)).toEqual(["smart", false, ["b", "a"]]);
 		await shot(phone, "05-phone-dark-after-relaunch");
 		await shot(second.page, "06-desktop-light-after-relaunch");
 
@@ -191,6 +218,7 @@ test("The phone sets dark while the computer stays light, across a reload and a 
 		await phoneReady(phone);
 		await expect.poll(() => scheme(phone)).toBe("light");
 		expect(await hostTheme(second.page)).toBe("dark");
+		expect(await sidebarChoices(phone)).toEqual(["recent", true, ["b", "a"]]);
 		await shot(phone, "07-phone-light-computer-dark");
 	} finally {
 		await browser.close();

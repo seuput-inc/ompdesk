@@ -22,6 +22,7 @@ import { STRESS_PROMPT } from "../src/renderer/dev-harness/fixture";
 import { phonePaired, ServeProxy, serveSites } from "./fixture/phone-serve";
 import { writeShellBin, writeShellGh } from "./fixture/shell-gh";
 import { FIXTURE_NEWER_OMP_VERSION } from "./fixture/version";
+import { type VersionSummaryFeed, versionSummaryFeed } from "./fixture/version-summary-release";
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, REMOTE_LOGIN, type RemoteInstance } from "./remote-harness";
 import { crashed, type Look, panelCrash } from "./responsive-audit";
@@ -340,9 +341,19 @@ if (dir) {
 		const browser = await chromium.launch();
 		const pageErrors: string[] = [];
 		let android: { bin: string; close(): Promise<void> } | undefined;
+		let feed: VersionSummaryFeed | undefined;
 		try {
 			const ghBin = path.join(parent, "ghbin");
 			await writeParityGh(ghBin);
+			if (surfaces.some(surface => surface.id === "settings-version-summaries")) feed = await versionSummaryFeed();
+			const updateEnv = (device: string): Record<string, string> =>
+				feed
+					? {
+							OMP_DEV_UPDATE_CHECK: "1",
+							OMP_GUI_TEST_UPDATE_MIRROR: feed.url,
+							LOCALAPPDATA: path.join(parent, device, "local-app-data"),
+						}
+					: {};
 			// `settings-omp-tested`: the line naming the tested omp shows only beside another omp than the tested one, and the
 			// fake omp runs the floor, which is the tested omp (src/shared/omp-tested.json). B's omp runs the next release.
 			const hostOmpVersion = path.join(parent, "host-omp-version");
@@ -361,6 +372,7 @@ if (dir) {
 				// Only the host's omp starts under the hold: its slow-start bound is short, so the banner shows within seconds.
 				// B's `gh` is the stand-in above: every view's GitHub reads reach B's.
 				env: {
+					...updateEnv("host"),
 					OMP_GUI_START_SLOW_MS: "1500",
 					OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1",
 					PATH: `${devicePath}${ghBin}${path.delimiter}${process.env.PATH}`,
@@ -374,6 +386,7 @@ if (dir) {
 				port: hostProfile.port,
 				prefs: { displayPreferences: { showTokenUsage: true }, ...(BLOCKED_USAGE ? { sidebarWidth: 227 } : {}) },
 				env: {
+					...updateEnv("client"),
 					OMP_GUI_TEST_KEYCHAIN_WOULD_ASK: "1",
 					...(devicePath ? { PATH: `${devicePath}${process.env.PATH}` } : {}),
 				},
@@ -448,9 +461,9 @@ if (dir) {
 			await phonePaired(phone);
 			// The phone's display switches are its own (device prefs), read when each view loads its page afresh.
 			await phone.evaluate(() => window.omp.prefs.set("displayPreferences.showTokenUsage", true));
+			if (PHONE.lang === "ko") await phone.evaluate(() => window.omp.prefs.set("language", "ko"));
 			if (BLOCKED_USAGE) {
 				await phone.evaluate(async () => {
-					await window.omp.prefs.set("language", "ko");
 					await window.omp.prefs.set("themeName", "dark");
 					await window.omp.prefs.set("sidebarWidth", 227);
 					localStorage.setItem("omp.sidebarWidth", "227");
@@ -968,13 +981,104 @@ if (dir) {
 				await untilAnswered(b, start, { after: "hello" });
 			};
 
+			/**
+			 * What a `sleepingRow` surface shows, set up once before the first: B's project `parity-sleep` holds "Parity
+			 * older" and "Parity newer" (each one answered turn, in that order, made from B's phone page, which every view
+			 * loads afresh, so no window of B keeps a tab of them) and "Parity sleeping", a session no omp ever opened
+			 * whose file arrives two hours untouched (`modified` is the file's mtime). So Recent lists the newer first and
+			 * Hide sleeping folds the third under the project's line.
+			 */
+			let sleepingLeft = false;
+			const leaveSleeping = async () => {
+				sleepingLeft = true;
+				const folder = path.join(parent, "parity-sleep");
+				await fs.mkdir(folder, { recursive: true });
+				let sessions = "";
+				for (const title of ["Parity older", "Parity newer"]) {
+					const tabId = (await phone.evaluate(cwd => window.omp.tabs.spawn({ cwd }), folder))?.tabId ?? "";
+					if (!tabId) throw new Error(`the phone opened no tab for ${title}`);
+					const made = async () =>
+						(await phone.evaluate(() => window.omp.tabs.list())).find(tab => tab.tabId === tabId);
+					await expect.poll(async () => (await made())?.status, { timeout: 60_000 }).toBe("ready");
+					await phone.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
+						tabId,
+						`fixture:title:${title}`,
+					] as const);
+					await phone.evaluate(
+						id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "hello" }),
+						tabId,
+					);
+					let file = "";
+					await expect
+						.poll(async () => (file = (await made())?.sessionPath ?? ""), { timeout: 30_000 })
+						.not.toBe("");
+					await untilAnswered(phone, tabId);
+					expect(await phone.evaluate(id => window.omp.tabs.close(id), tabId)).toBe(true);
+					sessions = path.dirname(file);
+				}
+				// An omp that had a file open writes it again as it exits, so the sleeping one is written here, its time
+				// set before it is moved in: the index sees it arrive already old.
+				const asleepSince = new Date(Date.now() - 2 * 60 * 60_000);
+				const at = (seconds: number) => new Date(asleepSince.getTime() - 60_000 + seconds * 1000).toISOString();
+				const id = "parity-sleeping-1";
+				const lines = [
+					{ type: "title", v: 1, title: "Parity sleeping", updatedAt: at(0) },
+					{ type: "session", version: 3, id, timestamp: at(0), cwd: folder },
+					{
+						type: "message",
+						id: "entry-1",
+						parentId: null,
+						timestamp: at(1),
+						message: { role: "user", content: "hello", timestamp: Date.parse(at(1)) },
+					},
+					{
+						type: "message",
+						id: "entry-2",
+						parentId: "entry-1",
+						timestamp: at(2),
+						message: {
+							role: "assistant",
+							content: [{ type: "text", text: "Local fixture reply" }],
+							timestamp: Date.parse(at(2)),
+						},
+					},
+				];
+				const staged = path.join(parent, `${id}.jsonl`);
+				await fs.writeFile(staged, `${lines.map(line => JSON.stringify(line)).join("\n")}\n`);
+				await fs.utimes(staged, asleepSince, asleepSince);
+				await fs.rename(staged, path.join(sessions, `${id}.jsonl`));
+				let seen = "";
+				await expect
+					.poll(
+						async () => {
+							const rows = await b.evaluate(() => window.omp.sessions.list("global"));
+							const row = rows.find(item => item.title === "Parity sleeping");
+							seen = row ? `${row.path} modified ${row.modified}` : `no row among ${rows.length}`;
+							return row !== undefined && Date.parse(row.modified) < Date.now() - 60 * 60_000;
+						},
+						{ timeout: 60_000, intervals: [1_000], message: `"Parity sleeping" is listed old (${sessions})` },
+					)
+					.toBe(true)
+					.catch(async error => {
+						const disk = await fs.stat(path.join(sessions, `${id}.jsonl`)).then(
+							stat => stat.mtime.toISOString(),
+							() => "missing",
+						);
+						throw new Error(
+							`${error instanceof Error ? error.message : error}\nlast read: ${seen}; on disk: ${disk}`,
+						);
+					});
+			};
+
 			const records: SurfaceRecord[] = [];
 			for (const surface of surfaces) {
+				if (surface.id === "settings-version-summaries") feed?.publish(true);
 				if (surface.parity.pairedBack) await pairBack();
 				if (surface.parity.remoteChild && !remoteChildLeft) await leaveRemoteChild();
 				if (surface.parity.hiddenRoster && !hiddenRosterLeft) await leaveHiddenRoster();
 				if (surface.parity.crossProject && !crossProjectLeft) await leaveCrossProject();
 				if (surface.parity.folderMissing && !folderMissingLeft) await leaveFolderMissing();
+				if (surface.parity.sleepingRow && !sleepingLeft) await leaveSleeping();
 				const record: SurfaceRecord = {
 					id: surface.id,
 					title: surface.title,
@@ -994,7 +1098,7 @@ if (dir) {
 						try {
 							await show[view](surface.parity.session);
 							await page.locator("[data-composer-input]").first().waitFor({ state: "visible", timeout: 60_000 });
-							await surface.open(page, VIEW_LOOK[view]);
+							await surface.open(page, VIEW_LOOK[view], view);
 							if (surface.ready)
 								await page.locator(surface.ready).first().waitFor({ state: "visible", timeout: 15_000 });
 							await page.waitForTimeout(surface.settle ?? 450);
@@ -1057,6 +1161,16 @@ if (dir) {
 						await writeSheet(browser, surface, { local, remote, phone: phoneShot }, record.sheet);
 					}
 				});
+				if (surface.id === "settings-version-summaries" && feed) {
+					feed.publish(false);
+					// Return both apps to the installed release before another surface reads the sidebar.
+					for (const page of [a, b])
+						await expect
+							.poll(() => page.evaluate(async () => (await window.omp.updater.check()).state), {
+								timeout: 30_000,
+							})
+							.toBe("not-available");
+				}
 			}
 			await fs.writeFile(
 				path.join(out, "parity.json"),
@@ -1065,6 +1179,7 @@ if (dir) {
 			const failed = records.flatMap(record => record.failures.map(failure => `${record.id} › ${failure}`));
 			expect(failed, "every surface reached in every view").toEqual([]);
 		} finally {
+			await feed?.close();
 			await browser.close().catch(() => undefined);
 			await proxy?.close().catch(() => undefined);
 			for (const instance of [client, host]) if (instance) await exitApp(instance.app);

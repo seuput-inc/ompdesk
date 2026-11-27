@@ -46,6 +46,7 @@ import { DEVICE_COLORS, type DeviceColorChoice, deviceColorOf } from "../../../l
 import { saveDiagnosticBundle } from "../../../lib/diagnostic-bundle";
 import { basename, copyText, formatClock } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
+import { useMinuteTick } from "../../../lib/now-tick";
 import { openExternal } from "../../../lib/open-external";
 import { moveInOrder, reorderProjects } from "../../../lib/project-order";
 import { laneState } from "../../../lib/session-lane";
@@ -71,6 +72,7 @@ import { sessionRuntimeStore } from "../../../stores/session-runtime-context";
 import { ensureSessionTargetsOnFocus, requestSessionTargets, useSessionTargets } from "../../../stores/session-targets";
 import { setSidebarEntry } from "../../../stores/sidebar-entries";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
+import { useSidebarPrefs } from "../../../stores/sidebar-prefs";
 import { useProjectList, useSidebarProjects } from "../../../stores/sidebar-projects";
 import { openProjectDialog } from "../../../stores/sidebar-request";
 import { useSidebarSubagentsStore } from "../../../stores/sidebar-subagents";
@@ -98,7 +100,7 @@ import {
 import { workingAgentCount } from "../live-work";
 import { SessionLiveTitle, sessionLive } from "../SessionLiveTitle";
 import { childFoldSignal, type FoldSignal, type FoldSummary, foldSummary } from "./fold-summary";
-import { hostSectionSummary, remoteOpenedTab, summaryRowState } from "./host-row-state";
+import { hostSectionSummary, remoteOpenedTab, rowActivity, summaryRowState } from "./host-row-state";
 import { useHostWorkspace } from "./host-workspace";
 import { NewTaskRows } from "./NewTaskRows";
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
@@ -113,9 +115,9 @@ import { SidebarFoldButton } from "./SidebarFoldButton";
 import { SidebarFolderMissingMark } from "./SidebarFolderMissingMark";
 import { SidebarFoldSummary } from "./SidebarFoldSummary";
 import { projectSectionFold, SidebarProjectSection } from "./SidebarProjectSection";
-import { SidebarRemovedProjects } from "./SidebarRemovedProjects";
 import { SidebarRenameField } from "./SidebarRenameField";
 import { SessionLinksDialog, sessionLinksWords } from "./SidebarSessionLinks";
+import { SidebarSleeping } from "./SidebarSleeping";
 import { type FamilyOpened, SidebarLooseChildren, SidebarSubagents, SidebarSubagentsToggle } from "./SidebarSubagents";
 import { SortableProject } from "./SortableProject";
 import { sessionMenuItems } from "./session-menu";
@@ -557,6 +559,11 @@ function DeviceSessions({
 	const editable = read && layout !== undefined && layout === liveLayout;
 	const hostPins = layout?.pinnedSessions ?? NO_KEYS;
 	const hostArchived = useMemo(() => new Set(layout?.archivedSessions), [layout?.archivedSessions]);
+	// How this view sorts every computer's lists and folds their sleeping rows: its own choice (the sidebar header's).
+	const sessionSort = useSidebarPrefs(s => s.sessionSort);
+	const hideSleeping = useSidebarPrefs(s => s.hideSleeping);
+	const minute = useMinuteTick(hideSleeping);
+	const [wokenGroups, setWokenGroups] = useState<ReadonlySet<string>>(() => new Set());
 	const changeLayout = async (change: SidebarLayoutChange): Promise<boolean> => {
 		try {
 			if (!editable) return false;
@@ -630,9 +637,22 @@ function DeviceSessions({
 					sessionOrder: list => layout?.sessionOrder[list],
 					sessionParents: layout?.sessionParents,
 					projectGroup: cwd => layout?.projectGroups?.[cwd],
+					sort: sessionSort,
+					hideSleeping,
 				},
 				query,
 				nameOf: cwd => basename(cwd) || cwd,
+				// The host's summary of each row, as the row reads it.
+				activity: session =>
+					rowActivity(
+						hostSummaries.get(session.path) ??
+							(session.liveTabId === undefined
+								? undefined
+								: hostSummaries.get(unsavedSessionKey(session.liveTabId))),
+						session.status,
+					),
+				current: session => tabOfRow(deviceTabs, session)?.id === activeTabId,
+				now: minute,
 			},
 			remoteTabs,
 		);
@@ -647,6 +667,10 @@ function DeviceSessions({
 		hostPins,
 		hostArchived,
 		query,
+		sessionSort,
+		hideSleeping,
+		activeTabId,
+		minute,
 	]);
 	// What each of the host's sessions works in (picture, branch), asked of the host, as this computer's rows ask it.
 	const sessionTargets = useSessionTargets();
@@ -662,7 +686,10 @@ function DeviceSessions({
 		requestSessionTargets(host.deviceId, [...rows.values()]);
 	}, [sessions, deviceTabs, host.deviceId]);
 	// While the pointer is on the sidebar the host's rows keep their places (`sidebar-hold.ts`), as this computer's do.
-	const ownOrder = useMemo(() => JSON.stringify([layout, query]), [layout, query]);
+	const ownOrder = useMemo(
+		() => JSON.stringify([layout, query, sessionSort, hideSleeping]),
+		[layout, query, sessionSort, hideSleeping],
+	);
 	const rows = useHeld(tree.rows, holdRows, ownOrder);
 	const { chats, groups, children: familyChildrenOf, archived: archivedRows, folderMissing: missingFolders } = rows;
 	// The host's tabs on paired devices its sessions opened, by the row they nest under.
@@ -701,15 +728,18 @@ function DeviceSessions({
 	};
 	/** The list a session row sits in (its project, or the Chats section) and that list's visible order. */
 	const listOf = (session: DeviceSession): SessionList | null => {
-		// A filtered list shows only some rows: a move there would forget where the hidden ones were.
-		if (!editable || query || session.liveTabId !== undefined) return null;
+		// A filtered list, or one sorted other than by the person's order, shows the rows in another order: a move there
+		// would forget where the hidden ones were.
+		if (!editable || query || sessionSort !== "manual" || session.liveTabId !== undefined) return null;
 		// A row the host has no file for yet (a new tab's) has no place to keep.
 		const stored = (list: readonly DeviceSession[]) =>
 			list.filter(row => row.liveTabId === undefined && !row.departed).map(row => row.path);
 		if (chats.some(item => item.path === session.path))
 			return { key: CHATS_ORDER_KEY, paths: stored(chats), pinned: hostPins };
 		const group = groups.find(item => item.sessions.some(row => row.path === session.path));
-		return group ? { key: group.cwd, paths: stored(group.sessions), pinned: hostPins } : null;
+		return group && group.sleeping.length === 0
+			? { key: group.cwd, paths: stored(group.sessions), pinned: hostPins }
+			: null;
 	};
 	const reorder = useSessionReorder({
 		titleOf: path => {
@@ -1629,7 +1659,25 @@ function DeviceSessions({
 											<Collapse open={!groupCollapsed}>
 												<div className="space-y-px">
 													<NewTaskRows cwd={group.cwd} device={host.deviceId} />
-													{group.sessions.map(session => renderRow(session))}
+													{group.sessions
+														.filter(session => !group.sleeping.includes(session.path))
+														.map(session => renderRow(session))}
+													<SidebarSleeping
+														count={group.sleeping.length}
+														onToggle={() =>
+															setWokenGroups(open => {
+																const next = new Set(open);
+																if (!next.delete(group.cwd)) next.add(group.cwd);
+																return next;
+															})
+														}
+														open={wokenGroups.has(group.cwd)}
+														rovingKey={`device-sleeping:${host.deviceId}:${group.cwd}`}
+													>
+														{group.sessions
+															.filter(session => group.sleeping.includes(session.path))
+															.map(session => renderRow(session))}
+													</SidebarSleeping>
 													<SidebarLooseChildren
 														foldKey={`device-group:${host.deviceId}:${group.cwd}`}
 														opened={group.folded.map(child => ({
@@ -1691,7 +1739,6 @@ function DeviceSessions({
 					)}
 				</section>
 			)}
-			<SidebarRemovedProjects device={host.deviceId} query={query} />
 		</div>
 	);
 }

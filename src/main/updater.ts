@@ -35,8 +35,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { app, BrowserWindow, shell } from "electron";
-import type { UpdateAuthTestResult, UpdateInstallMode, UpdateStatus } from "../shared/ipc-types";
+import type { UpdateAuthTestResult, UpdateInstallMode, UpdateReleaseInfo, UpdateStatus } from "../shared/ipc-types";
 import { IPC_COMMANDS, IPC_EVENTS } from "../shared/ipc-types";
+import { publishedReleaseSummary } from "../shared/release-summary";
 import { compareVersions } from "../shared/version";
 import { AutoInstallScheduler, type InstallTrigger } from "./app-auto-update";
 import { confirmUpdateRestart, logQuitAsked, onQuitForcedExit, requestQuit } from "./app-quit";
@@ -130,8 +131,9 @@ export function appVersion(): string {
 /** Current status, replayed to any window that asks (renderer boot/refresh). */
 let current: UpdateStatus = { state: "idle" };
 let installMode: UpdateInstallMode = "automatic";
+type OfferedRelease = { readonly installer: PlatformRelease; readonly info: UpdateReleaseInfo };
 /** The update the last check found (its installer is what a download fetches). */
-let release: PlatformRelease | undefined;
+let release: OfferedRelease | undefined;
 /** The verified installer: the Windows setup in electron-updater's old cache folder, or the manual DMG in Downloads. */
 let downloadedInstallerPath: string | undefined;
 /** Running bundle the relaunch mode replaces (`/Applications/OMPdesk.app`). */
@@ -279,7 +281,8 @@ function beginInstall(trigger: InstallTrigger): void {
 	presenceAtInstall = currentWindowPresence();
 	autoInstall?.installStarted(trigger);
 	if (current.state === "downloaded") {
-		broadcast({ state: "downloaded", version: current.version, mode: current.mode, installing: true });
+		const { restartAt: _restartAt, ...download } = current;
+		broadcast({ ...download, installing: true });
 	}
 }
 
@@ -581,16 +584,13 @@ async function installerDestination(update: PlatformRelease, mode: UpdateInstall
 	return destination;
 }
 
-async function downloadAsset(
-	update: PlatformRelease,
-	token: string | undefined,
-	mode: UpdateInstallMode,
-): Promise<void> {
-	const { version, file: asset } = update;
-	const destination = await installerDestination(update, mode);
+async function downloadAsset({ installer, info }: OfferedRelease, token: string | undefined): Promise<void> {
+	const { version, mode } = info;
+	const asset = installer.file;
+	const destination = await installerDestination(installer, mode);
 	try {
 		await downloadInstaller({
-			url: update.assetUrl,
+			url: installer.assetUrl,
 			...(token ? { token } : {}),
 			file: destination,
 			size: asset.size,
@@ -598,8 +598,7 @@ async function downloadAsset(
 			onProgress: received =>
 				broadcast({
 					state: "downloading",
-					version,
-					mode,
+					...info,
 					percent: asset.size > 0 ? Math.min(100, Math.round((received / asset.size) * 100)) : 0,
 				}),
 		});
@@ -609,36 +608,27 @@ async function downloadAsset(
 	if (mode === "relaunch") {
 		staged = { app: await stageBundle(destination, version), version };
 		await fs.promises.rm(destination, { force: true });
-		broadcast({ state: "downloaded", version, mode });
+		broadcast({ state: "downloaded", ...info });
 		return;
 	}
 	downloadedInstallerPath = destination;
 	// e2e/headless runs verify the download but never put Finder on screen.
 	if (mode === "manual" && process.env.OMP_GUI_HEADLESS !== "1") await openManualInstaller(destination);
-	broadcast({ state: "downloaded", version, mode });
-}
-
-/** A download nobody clicked for (the automatic and relaunch modes); failures stay out of the banner like any passive check. */
-async function downloadInBackground(): Promise<void> {
-	if (!release) return;
-	try {
-		await startDownload(release, updateToken, installMode);
-	} catch (error) {
-		broadcast(failureStatus(error, "updates.downloadFailed", false));
-	}
+	broadcast({ state: "downloaded", ...info });
 }
 
 /** The one installer download; callers return early while `transfer.running`. */
-function startDownload(update: PlatformRelease, token: string | undefined, mode: UpdateInstallMode): Promise<void> {
-	const { version, file } = update;
+function startDownload(update: OfferedRelease, token: string | undefined): Promise<void> {
+	const { version, mode } = update.info;
+	const { file } = update.installer;
 	// The update log names the Windows path as electron-updater's NSIS flow, as before.
 	const logMode = mode === "automatic" ? "nsis" : mode;
 	return transfer.start(async () => {
-		broadcast({ state: "downloading", version, mode, percent: 0 });
+		broadcast({ state: "downloading", ...update.info, percent: 0 });
 		const startedAt = Date.now();
 		logUpdate("download", { event: "started", version, mode: logMode, bytes: file.size });
 		try {
-			await downloadAsset(update, token, mode);
+			await downloadAsset(update, token);
 		} catch (error) {
 			logUpdate("download", { event: "failed", version, mode: logMode, reason: failureReason(error) });
 			throw error;
@@ -853,15 +843,19 @@ async function attemptCheck(token: string | undefined): Promise<{ error: unknown
 /** A check found a newer release: say so, and fetch its installer unless only a click may (the manual DMG). */
 function foundUpdate(found: PlatformRelease): void {
 	logUpdate("check", { event: "found", version: found.version, current: appVersion(), mode: installMode });
-	// The held version again (it is the latest): it stays downloaded and held, nothing is fetched twice.
-	if (heldStartFailed() && current.state === "downloaded" && current.version === found.version) return;
-	// The transfer in flight keeps its release and version; restarting it would append a second stream to the same
-	// partial.
-	if (transfer.running) return;
-	// A manual re-check of the release already staged must not fetch it again.
-	if (installMode === "relaunch" && staged?.version === found.version) {
-		release = found;
-		broadcast({ state: "downloaded", version: found.version, mode: "relaunch" });
+	// A transfer keeps its own offer. A held installer from this run already has its verified notes.
+	const sameHeld = heldStartFailed() && current.state === "downloaded" && current.version === found.version;
+	if (transfer.running || (sameHeld && release?.info.version === found.version)) return;
+	const summary = publishedReleaseSummary(found.notes);
+	const info: UpdateReleaseInfo = {
+		version: found.version,
+		mode: installMode,
+		...(summary.en || summary.ko ? { summary } : {}),
+	};
+	const offer = { installer: found, info };
+	if (sameHeld || (installMode === "relaunch" && staged?.version === found.version)) {
+		release = offer;
+		broadcast({ state: "downloaded", ...info });
 		return;
 	}
 	release = undefined;
@@ -872,9 +866,13 @@ function foundUpdate(found: PlatformRelease): void {
 		broadcast({ state: "error", message: mainT("updates.unsupportedArchitecture") });
 		return;
 	}
-	release = found;
-	broadcast({ state: "available", version: found.version, notes: found.notes.slice(0, 500), mode: installMode });
-	if (installMode !== "manual") void downloadInBackground();
+	release = offer;
+	broadcast({ state: "available", ...info });
+	if (installMode !== "manual") {
+		void startDownload(offer, updateToken).catch(error =>
+			broadcast(failureStatus(error, "updates.downloadFailed", false)),
+		);
+	}
 }
 
 async function testAuth(token: string | undefined): Promise<UpdateAuthTestResult> {
@@ -909,7 +907,7 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
 	if (current.state !== "available" || transfer.running) return current;
 	try {
 		if (!release) throw new Error(mainT("updates.installerMissing"));
-		await startDownload(release, updateToken, current.mode);
+		await startDownload(release, updateToken);
 	} catch (error) {
 		broadcast(failureStatus(error, "updates.downloadFailed", true));
 	}

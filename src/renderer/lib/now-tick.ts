@@ -57,6 +57,17 @@ export function useNowTick(active: boolean | undefined): number {
 	return now;
 }
 
+/** `useNowTick` floored to the minute: the caller re-renders once a minute, not once a second. */
+export function useMinuteTick(active: boolean): number {
+	const [minute, setMinute] = useState(() => Math.floor(Date.now() / 60_000));
+	useEffect(() => {
+		if (!active) return;
+		setMinute(Math.floor(Date.now() / 60_000));
+		return subscribe(now => setMinute(Math.floor(now / 60_000)));
+	}, [active]);
+	return minute * 60_000;
+}
+
 type AgeValue = string | number | null | undefined;
 
 function sameLabels(a: readonly string[], b: readonly string[]): boolean {

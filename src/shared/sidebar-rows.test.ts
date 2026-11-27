@@ -13,10 +13,13 @@ import {
 	CHATS_ORDER_KEY,
 	holdRows,
 	openerOfSessions,
+	type RowActivity,
+	type RowOrder,
 	type RowSession,
 	type RowTab,
 	remoteOpenedChildren,
 	rowsWaiting,
+	SESSION_SLEEP_AFTER_MS,
 	type SidebarFacts,
 	type SidebarRows,
 	sidebarRows,
@@ -613,6 +616,75 @@ describe("every session list reads oldest first", () => {
 						: null,
 		});
 		expect(app(rows)).toEqual(["/s/earlier", "/s/run", "/s/child-1", "/s/child-2", "/s/later"]);
+	});
+});
+
+describe("the person's sort and Hide sleeping", () => {
+	const DAY = Date.UTC(2026, 10, 24);
+	// Made at `made` minutes, last active at `active` minutes past midnight.
+	const row = (path: string, title: string, made: number, active: number): SessionInfo => ({
+		path,
+		id: path,
+		title,
+		cwd: APP,
+		created: new Date(DAY + made * 60_000).toISOString(),
+		modified: new Date(DAY + active * 60_000).toISOString(),
+		messageCount: 3,
+		size: 1,
+		status: "complete",
+		firstMessage: "hello",
+		openedBySession: null,
+	});
+	const sessions = [
+		row("/s/old", "Bravo", 0, 10),
+		row("/s/busy", "Charlie", 1, 20),
+		row("/s/asks", "alpha", 2, 30),
+		row("/s/fresh", "Delta", 3, 240),
+	];
+	const activity: Record<string, RowActivity> = { "/s/busy": "working", "/s/asks": "waiting" };
+	const app = (rows: SidebarRows) => rows.groups.find(group => group.cwd === APP);
+	const rowsWith = (order: Partial<RowOrder>, facts: Partial<SidebarFacts> = {}) => {
+		const base = world([]);
+		return sidebarRows({
+			...base,
+			sessions,
+			activity: session => activity[session.path] ?? null,
+			order: { ...base.order, pinnedSessions: [], ...order },
+			...facts,
+		});
+	};
+
+	it("keeps the person's order by default and sorts below the pins otherwise", () => {
+		const sorted = (order: Partial<RowOrder>) => app(rowsWith(order))?.sessions.map(session => session.path);
+		expect(sorted({})).toEqual(["/s/old", "/s/busy", "/s/asks", "/s/fresh"]);
+		expect(sorted({ sort: "recent" })).toEqual(["/s/fresh", "/s/asks", "/s/busy", "/s/old"]);
+		expect(sorted({ sort: "name" })).toEqual(["/s/asks", "/s/old", "/s/busy", "/s/fresh"]);
+		expect(sorted({ sort: "smart" })).toEqual(["/s/asks", "/s/busy", "/s/fresh", "/s/old"]);
+		expect(sorted({ sort: "recent", pinnedSessions: ["/s/old"] })).toEqual([
+			"/s/old",
+			"/s/fresh",
+			"/s/asks",
+			"/s/busy",
+		]);
+	});
+
+	it("folds only rows idle past the threshold that nothing keeps awake, and none under a filter", () => {
+		const now = DAY + 240 * 60_000;
+		const sleeping = (order: Partial<RowOrder>, facts: Partial<SidebarFacts> = {}) =>
+			app(rowsWith(order, { now, ...facts }))?.sleeping;
+		expect(sleeping({})).toEqual([]);
+		// Waiting and working rows stay; so does the fresh one.
+		expect(sleeping({ hideSleeping: true })).toEqual(["/s/old"]);
+		expect(sleeping({ hideSleeping: true, pinnedSessions: ["/s/old"] })).toEqual([]);
+		expect(sleeping({ hideSleeping: true }, { current: session => session.path === "/s/old" })).toEqual([]);
+		const base = world([]);
+		const tab = { id: "t", sessionPath: "/s/old", cwd: APP, kind: "agent" as const, title: null, status: "ready" };
+		expect(
+			sleeping({ hideSleeping: true }, { tabs: [...base.tabs, { ...tab, seenAt: new Date(DAY).toISOString() }] }),
+		).toEqual([]);
+		// Just inside the threshold it is still awake.
+		expect(sleeping({ hideSleeping: true }, { now: DAY + 10 * 60_000 + SESSION_SLEEP_AFTER_MS })).toEqual([]);
+		expect(sleeping({ hideSleeping: true }, { query: "a" })).toEqual([]);
 	});
 });
 

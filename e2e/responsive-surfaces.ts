@@ -1,10 +1,16 @@
 import * as fs from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Locator, Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { STRESS_PROMPT } from "../src/renderer/dev-harness/fixture";
 import { en } from "../src/renderer/locales/en";
 import { ko } from "../src/renderer/locales/ko";
 import type { RpcCommand } from "../src/shared/rpc-types";
+import {
+	availableSummary,
+	availableVersion,
+	installedSummary,
+	installedVersion,
+} from "./fixture/version-summary-release";
 import { type Look, touchLook } from "./responsive-audit";
 
 /** A control's words in the look's language, so a Korean look finds by name what an English one does. */
@@ -24,7 +30,7 @@ export interface Surface {
 	area: "A" | "B";
 	/** What it is, for the report. */
 	title: string;
-	open(page: Page, look: Look): Promise<void>;
+	open(page: Page, look: Look, parityView?: "local" | "remote" | "phone"): Promise<void>;
 	/** A selector that must be visible before measuring (the surface failed to open when it never is). */
 	ready?: string;
 	/** Extra query for the harness page (`&pwa=push`); surfaces sharing a page need the same query. */
@@ -67,6 +73,11 @@ export interface Surface {
 		 * its one answered turn (e2e/parity.e2e.ts).
 		 */
 		folderMissing?: boolean;
+		/**
+		 * Before it is captured, B's project `parity-sleep` holds "Parity older", "Parity newer" and "Parity sleeping",
+		 * the last untouched for two hours (e2e/parity.e2e.ts).
+		 */
+		sleepingRow?: boolean;
 		/**
 		 * Runs in each view after its capture (also when the capture failed): puts back what `open` changed beyond the
 		 * page (the host's settings, a take waiting on the fake omp) or left open in the window beyond what Escape and
@@ -462,7 +473,7 @@ const keyboardLook = (look: Look): boolean => (look.device ?? "touch") === "touc
 const sidebarDocked = (look: Look): boolean => look.width >= 800 && look.height >= 500;
 
 async function openDrawer(page: Page, look: Look): Promise<void> {
-	if (sidebarDocked(look)) return;
+	if (sidebarDocked(look) || (await page.locator("[data-drawer]").isVisible())) return;
 	await page.locator("button:visible:has(svg.lucide-menu)").first().click();
 	await page.locator("[data-drawer]").waitFor({ state: "visible", timeout: 10_000 });
 }
@@ -536,7 +547,7 @@ async function ensureParityItems(page: Page): Promise<void> {
 async function openParityItems(page: Page, look: Look): Promise<void> {
 	await ensureParityItems(page);
 	await openDrawer(page, look);
-	await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+	await page.locator("[data-sidebar-bots-open]:visible").first().click();
 	// A phone shows the list first, and a group's room may be the page: the bot's row opens its page.
 	if ((await page.locator("[data-bot-pane]:visible").count()) === 0)
 		await page.locator("[data-bots-page-row]:visible").first().click();
@@ -715,6 +726,37 @@ async function openFolderMissing(page: Page, look: Look): Promise<void> {
 		"moda-office",
 		':is(.omp-sidebar-session-row, [data-device-session])[data-folder-missing]:has-text("Parity folder gone")',
 	);
+}
+
+/** One item of the sidebar header's options, chosen unless it already is (a mouse's menu, a finger's sheet). */
+async function pickSidebarOption(page: Page, name: RegExp, on: boolean): Promise<void> {
+	await page.locator("[data-sidebar-options] button:visible").first().click();
+	const item = page.getByRole("menuitemcheckbox", { name }).first();
+	await item.waitFor({ state: "visible", timeout: 10_000 });
+	if ((await item.getAttribute("aria-checked")) === String(on)) await page.keyboard.press("Escape");
+	else await item.click();
+	await page.locator('[role="menu"]').first().waitFor({ state: "hidden", timeout: 10_000 });
+}
+
+/** The `parity-sleep` project sorted by Recent with Hide sleeping on: the newer session first, the old one folded. */
+async function openSidebarSorted(page: Page, look: Look): Promise<void> {
+	await openDrawer(page, look);
+	await pickSidebarOption(page, /^Recent$/, true);
+	await pickSidebarOption(page, /^Hide sleeping/, true);
+	await showProjectRows(
+		page,
+		look,
+		"parity-sleep",
+		':is([data-session-group$="parity-sleep"], [data-device-group$="parity-sleep"]) [data-sidebar-sleeping]',
+	);
+}
+
+/** The options back to the default: Manual, sleeping rows shown (a phone's drawer opened again if it closed). */
+async function resetSidebarOptions(page: Page): Promise<void> {
+	if ((await page.locator("[data-sidebar-options] button:visible").count()) === 0)
+		await page.locator("button:visible:has(svg.lucide-menu)").first().click();
+	await pickSidebarOption(page, /^Manual/, true);
+	await pickSidebarOption(page, /^Hide sleeping/, false);
 }
 
 /** Settings › Models & accounts through the sidebar's Settings row and the section's own nav entry, as a person does; the local engine switch under Custom endpoints in view. */
@@ -1770,6 +1812,15 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work", folderMissing: true },
 	},
 	{
+		id: "sidebar-sorted",
+		area: "A",
+		title: "Session list sorted by Recent with Hide sleeping: a project's newer session first, its idle one folded under the sleeping line",
+		open: openSidebarSorted,
+		ready: ':is([data-session-group$="parity-sleep"], [data-device-group$="parity-sleep"]) [data-sidebar-sleeping="1"]',
+		when: () => false,
+		parity: { session: "work", sleepingRow: true, after: resetSidebarOptions },
+	},
+	{
 		id: "missing-folder-sheet",
 		area: "A",
 		title: "A session whose folder was deleted, selected: its transcript read-only, with Archive (nothing saved to restore)",
@@ -2399,6 +2450,37 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work" },
 	},
 	{
+		id: "settings-version-summaries",
+		area: "B",
+		title: "Settings › Updates & about with the changes for the installed release and the newer release",
+		open: async (page, look, parityView) => {
+			await openSettingsUpdates(page, look);
+			const installed = page.locator("[data-about-brand] [data-version-summary='installed']");
+			const available = page.locator("[data-settings-page] [data-version-summary='available']").first();
+			const installedSentence = await installedSummary(look.lang);
+			const rows: [Locator, string, string][] = [
+				[installed, `v${installedVersion}`, installedSentence],
+				[available, availableVersion, availableSummary[look.lang]],
+			];
+			if (parityView === "remote") {
+				const host = page.locator("[data-host-desktop-version]");
+				rows.push(
+					[host.locator("[data-version-summary='host-installed']"), installedVersion, installedSentence],
+					[host.locator("[data-version-summary='host-latest']"), availableVersion, availableSummary[look.lang]],
+				);
+			}
+			for (const [summary, version, sentence] of rows) {
+				await expect(summary).toHaveText(`· ${sentence}`, { timeout: 30_000 });
+				await expect(summary.locator("..").getByText(version, { exact: true })).toBeVisible();
+			}
+			await page.locator("[data-about-brand]").evaluate(brand => brand.scrollIntoView({ block: "start" }));
+			for (const [summary] of rows) await expect(summary).toBeInViewport({ ratio: 1 });
+		},
+		ready: "[data-settings-page] [data-version-summary='available']",
+		when: () => false,
+		parity: { session: "work" },
+	},
+	{
 		id: "settings-omp-tested",
 		area: "B",
 		title: "Settings › Updates & about, the omp row (This computer's, or a paired host's) naming the omp its release was tested with",
@@ -2474,7 +2556,7 @@ export const SURFACES: readonly Surface[] = [
 		open: async (page, look) => {
 			await ensureParityBot(page);
 			await openDrawer(page, look);
-			await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+			await page.locator("[data-sidebar-bots-open]:visible").first().click();
 			// A phone shows the list first: the bot's row opens its page.
 			const row = page.locator("[data-bots-page-row]:visible").first();
 			if ((await page.locator("[data-bot-pane]:visible").count()) === 0) await row.click();
@@ -2521,7 +2603,7 @@ export const SURFACES: readonly Surface[] = [
 					await window.omp.bots.command({ action: "roomCreate", name: "Parity group", bots: [state.bots[0].id] });
 			});
 			await openDrawer(page, look);
-			await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+			await page.locator("[data-sidebar-bots-open]:visible").first().click();
 			await page.locator("[data-bots-page-room]:visible").first().click();
 		},
 		ready: "[data-bot-room] [data-bot-room-box]",
