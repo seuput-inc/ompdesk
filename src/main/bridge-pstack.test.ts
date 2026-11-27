@@ -64,10 +64,11 @@ describe("pstackText", () => {
 		);
 	});
 
-	it("has the playbook's steps written into `todo` in the todo language the reply-language section sets", () => {
+	it("keeps internal steps out of the localized task list", () => {
 		for (const text of [PSTACK_SECTION, PSTACK_SECTION_SOLO]) {
 			const gate = text.slice(text.indexOf("## Routing gate"));
 			expect(gate.slice(0, gate.indexOf("\n## ", 3))).toContain("`<reply-language>`");
+			expect(gate).toContain("List each user-requested outcome once");
 			expect(text).not.toMatch(/steps[^.\n]*verbatim|verbatim[^.\n]*steps|Copy its steps in verbatim/);
 		}
 	});

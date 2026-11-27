@@ -6,7 +6,7 @@
  * owner's rule); a first run with no default is settled by `ensureServingDefault`.
  */
 
-import { Check, RefreshCw, Settings2, TriangleAlert } from "lucide-react";
+import { Check, KeyRound, RefreshCw, Settings2, TriangleAlert } from "lucide-react";
 import {
 	type KeyboardEvent as ReactKeyboardEvent,
 	useCallback,
@@ -17,7 +17,7 @@ import {
 	useRef,
 	useState,
 } from "react";
-import type { LoginProvider, ModelInfo, ModelReleaseDatesResult } from "../../../shared/rpc-types";
+import type { ModelInfo, ModelReleaseDatesResult } from "../../../shared/rpc-types";
 import { applyModelInfo, hydrateSession } from "../../hooks/use-rpc-events";
 import { compactionPointValue, useCompactionPoints } from "../../lib/compaction-limits";
 import { type InlineFailure, inlineFailure } from "../../lib/error-detail";
@@ -26,6 +26,7 @@ import { useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
 import { listboxTarget } from "../../lib/listbox-nav";
 import { runManualMaintenance } from "../../lib/messages";
+import { modelProviderGroup } from "../../lib/model-provider-group";
 import { useTabRpc } from "../../lib/tab-rpc";
 import { chosenModelOf, useModelStore } from "../../stores/model";
 import { useSessionStore } from "../../stores/session";
@@ -49,6 +50,7 @@ import {
 	SettingInfo,
 	SkeletonRows,
 	Spinner,
+	Tabs,
 } from "../common";
 import { ThinkingLevelField } from "../layout/composer/ThinkingControl";
 import { ProviderMark } from "../settings/providers/ProviderMark";
@@ -91,7 +93,7 @@ export function ModelPicker() {
 	// The person's model is checked, also while a fallback answers in its place.
 	const current = useModelStore(chosenModelOf);
 	const supportsThinking = useModelStore(state => state.availableThinkingLevels.length > 0);
-	const refreshAvailableModels = useModelStore(state => state.refreshAvailableModels);
+	const refreshProviders = useModelStore(state => state.refreshProviders);
 	// Live session usage: models whose window is smaller render with an
 	// over-context warning and compact-first on pick (TUI markOverContext parity).
 	const contextUsage = useSessionStore(state => state.contextUsage);
@@ -100,9 +102,9 @@ export function ModelPicker() {
 	const compactionPoints = useCompactionPoints(open);
 
 	const [query, setQuery] = useState("");
+	const [pickedGroup, setPickedGroup] = useState<string | null>(null);
 	const [openRouterExpanded, setOpenRouterExpanded] = useState(false);
 	const [releaseDates, setReleaseDates] = useState<ReadonlyMap<string, number>>(() => new Map());
-	const [loginProviders, setLoginProviders] = useState<LoginProvider[]>([]);
 	const [switching, setSwitching] = useState<string | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [refreshing, setRefreshing] = useState(false);
@@ -114,11 +116,6 @@ export function ModelPicker() {
 	const requestVersion = useRef(0);
 	const [recentSelectors, setRecentSelectors] = useState<readonly string[]>([]);
 
-	/** Login flows are the picker's own concern, but the model list is shared
-	 * catalog state: it commits through the store's generation guard, so a
-	 * `model_catalog_update` that lands mid-read can never be reverted by this
-	 * response. `forceRefresh` belongs to the retry path, where the user is
-	 * disputing what the list shows. */
 	const load = useCallback(
 		async (forceRefresh: boolean, failedCopy?: string): Promise<void> => {
 			const version = ++requestVersion.current;
@@ -132,25 +129,19 @@ export function ModelPicker() {
 				setLoading(false);
 				return;
 			}
-			const [providersResult, modelsResult] = await Promise.allSettled([
-				tabRpc.getLoginProviders(),
-				refreshAvailableModels(forceRefresh),
-			]);
-			if (version !== requestVersion.current) return;
-			if (modelsResult.status === "fulfilled") setReadSince(null);
-			setLoading(false);
-			const providersOk = providersResult.status === "fulfilled" && providersResult.value.success;
-			if (providersOk) {
-				const data = providersResult.value.data as { providers?: LoginProvider[] } | undefined;
-				setLoginProviders(data?.providers ?? []);
-				return;
+			try {
+				await refreshProviders(forceRefresh);
+				if (version === requestVersion.current) setReadSince(null);
+			} catch (cause) {
+				if (version === requestVersion.current)
+					setError(
+						failedCopy ? { message: failedCopy, cause } : inlineFailure(cause, t("modelPicker.notResponding")),
+					);
+			} finally {
+				if (version === requestVersion.current) setLoading(false);
 			}
-			if (modelsResult.status === "fulfilled") return;
-			// Models rejected too; the login-providers failure carries the cause.
-			const cause = providersResult.status === "rejected" ? providersResult.reason : providersResult.value;
-			setError(failedCopy ? { message: failedCopy, cause } : inlineFailure(cause, t("modelPicker.notResponding")));
 		},
-		[refreshAvailableModels, sidecarReady, t, tabRpc],
+		[refreshProviders, sidecarReady, t],
 	);
 
 	useEffect(() => {
@@ -160,6 +151,7 @@ export function ModelPicker() {
 	useEffect(() => {
 		if (!open) return undefined;
 		setQuery("");
+		setPickedGroup(null);
 		setOpenRouterExpanded(false);
 		setActiveIndex(0);
 		requestAnimationFrame(() => inputRef.current?.focus());
@@ -223,30 +215,65 @@ export function ModelPicker() {
 		};
 	}, [open, sidecarReady, tabRpc]);
 
-	const authByProvider = useMemo(
-		() => new Map(loginProviders.map(provider => [provider.id, provider])),
-		[loginProviders],
-	);
-	// The login list's names win: it names the accounts the person signs in to.
-	const namedProviders = useMemo(() => [...catalogProviders, ...loginProviders], [catalogProviders, loginProviders]);
 	const nameByProvider = useMemo(
-		() => new Map(namedProviders.map(provider => [provider.id, provider.name])),
-		[namedProviders],
+		() =>
+			new Map(
+				catalogProviders.map(({ id, name }) => {
+					if (modelProviderGroup(id) !== "anthropic-api-key" || (name.trim() && name !== id)) return [id, name];
+					return [id, t("modelPicker.apiKeyNumber", { number: id.split("-")[3] ?? "1" })];
+				}),
+			),
+		[catalogProviders, t],
 	);
+	const connected = useMemo(
+		() => new Set(catalogProviders.filter(p => p.authenticated && !p.disabled).map(p => p.id)),
+		[catalogProviders],
+	);
+	const providerTabs = useMemo(
+		() =>
+			[...new Set(Array.from(connected, modelProviderGroup))].map(id => {
+				const api = id === "anthropic-api-key";
+				const auth = catalogProviders.find(p => p.id === id)?.authKind;
+				const label = api
+					? t("modelPicker.claudeApi")
+					: id === "anthropic" && auth === "oauth"
+						? t("modelPicker.claudeSubscription")
+						: (nameByProvider.get(id) ?? id);
+				return {
+					id,
+					label,
+					tooltip: label,
+					className: "w-9 justify-center [&>.truncate]:sr-only",
+					leading: (
+						<span aria-hidden className="relative">
+							<ProviderMark className="size-4" provider={{ id: api ? "anthropic" : id, name: label }} />
+							{(api || auth === "apikey") && (
+								<KeyRound className="absolute -right-1.5 -bottom-1 size-3 rounded-sm bg-(--sc-elevated)" />
+							)}
+						</span>
+					),
+				};
+			}),
+		[catalogProviders, connected, nameByProvider, t],
+	);
+	const preferredGroup = pickedGroup ?? (current && modelProviderGroup(current.provider));
+	const activeGroup = providerTabs.find(tab => tab.id === preferredGroup)?.id ?? providerTabs[0]?.id;
 	const labels = useMemo(() => compactModelLabels(availableModels), [availableModels]);
 
 	const groups = useMemo((): PickerGroup[] => {
 		const q = query.trim().toLowerCase();
 		const filtered = availableModels.filter(
 			model =>
-				q.length === 0 ||
-				model.id.toLowerCase().includes(q) ||
-				model.provider.toLowerCase().includes(q) ||
-				(nameByProvider.get(model.provider)?.toLowerCase().includes(q) ?? false) ||
-				model.name?.toLowerCase().includes(q) ||
-				model.description?.toLowerCase().includes(q),
+				connected.has(model.provider) &&
+				modelProviderGroup(model.provider) === activeGroup &&
+				(q.length === 0 ||
+					model.id.toLowerCase().includes(q) ||
+					model.provider.toLowerCase().includes(q) ||
+					(nameByProvider.get(model.provider)?.toLowerCase().includes(q) ?? false) ||
+					model.name?.toLowerCase().includes(q) ||
+					model.description?.toLowerCase().includes(q)),
 		);
-		const byProvider = groupModelsByProvider(filtered, namedProviders).map(
+		const byProvider = groupModelsByProvider(filtered, catalogProviders).map(
 			({ provider, models }): PickerGroup => ({
 				id: provider,
 				provider,
@@ -275,9 +302,11 @@ export function ModelPicker() {
 		];
 	}, [
 		availableModels,
+		activeGroup,
+		connected,
 		current,
 		nameByProvider,
-		namedProviders,
+		catalogProviders,
 		openRouterExpanded,
 		query,
 		recentSelectors,
@@ -440,6 +469,20 @@ export function ModelPicker() {
 			size="picker-compact"
 		>
 			<div className="flex h-full min-h-0 flex-col">
+				{activeGroup && (
+					<Tabs
+						ariaLabel={t("modelCompare.providerFilter")}
+						className="shrink-0 px-1.5"
+						activeId={activeGroup}
+						tabs={providerTabs}
+						onChange={(id, via) => {
+							setPickedGroup(id);
+							setQuery("");
+							setActiveIndex(0);
+							if (via === "click") inputRef.current?.focus();
+						}}
+					/>
+				)}
 				<div className="flex items-center gap-1 border-b border-(--sc-divider) p-1.5">
 					<div className="min-w-0 flex-1">
 						<SearchField
@@ -522,7 +565,7 @@ export function ModelPicker() {
 						/>
 					) : unconfirmed && availableModels.length === 0 ? null : waitingForModels ? (
 						<SkeletonRows className="py-2" label={t("modelPicker.loading")} widths={[60, 44, 70, 52]} />
-					) : availableModels.length === 0 ? (
+					) : !activeGroup || availableModels.length === 0 ? (
 						<EmptyState
 							actions={
 								<Button onClick={manageProviders} size="sm" variant="primary">
@@ -533,14 +576,16 @@ export function ModelPicker() {
 							title={t("modelPicker.empty")}
 						/>
 					) : groups.length === 0 ? (
-						<EmptyState size="sm" title={t("modelPicker.noMatch", { query })} />
+						<EmptyState
+							size="sm"
+							title={query.trim() ? t("modelPicker.noMatch", { query }) : t("modelPicker.empty")}
+						/>
 					) : (
 						<>
 							{!sidecarReady && (
 								<InlineNotice className="px-2" title={t("modelPicker.notConnected")} tone="warning" />
 							)}
 							{groups.map(({ id: groupId, provider, models, collapsed }) => {
-								const auth = provider === null ? undefined : authByProvider.get(provider);
 								const groupName =
 									provider === null
 										? t(groupId === CURRENT_GROUP ? "modelPicker.current" : "modelPicker.recent")
@@ -548,37 +593,22 @@ export function ModelPicker() {
 								return (
 									<OptionGroup
 										action={
-											<>
-												{provider === "openrouter" && !query.trim() && (
-													<DisclosureButton
-														aria-label={groupName}
-														inline
-														onToggle={() => setOpenRouterExpanded(value => !value)}
-														open={!collapsed}
-													>
-														{models.length}
-													</DisclosureButton>
-												)}
-												{auth && !auth.authenticated && (
-													<>
-														<Badge variant={auth.available ? "warning" : "muted"}>
-															{auth.available
-																? t("modelPicker.auth.notSignedIn")
-																: t("modelPicker.auth.unavailable")}
-														</Badge>
-														{auth.available && (
-															<Button
-																className="ml-auto"
-																onClick={manageProviders}
-																size="sm"
-																variant="ghost"
-															>
-																{t("providerList.connect")}
-															</Button>
-														)}
-													</>
-												)}
-											</>
+											provider === "openrouter" &&
+											!query.trim() && (
+												<DisclosureButton
+													aria-label={groupName}
+													inline
+													onToggle={() => setOpenRouterExpanded(value => !value)}
+													open={!collapsed}
+												>
+													{models.length}
+												</DisclosureButton>
+											)
+										}
+										className={
+											groups.length === 1 && provider !== "openrouter" && activeGroup !== "anthropic-api-key"
+												? "[&>[data-option-group-header]]:hidden"
+												: undefined
 										}
 										data-model-group={groupId}
 										key={groupId}
@@ -594,6 +624,12 @@ export function ModelPicker() {
 												const small =
 													model.contextWindow != null && model.contextWindow < MIN_SERVING_CONTEXT;
 												const label = labels.get(key) ?? { name: modelDisplayName(model) };
+												const apiKey = modelProviderGroup(model.provider) === "anthropic-api-key";
+												const suffix = apiKey
+													? provider === null
+														? nameByProvider.get(model.provider)
+														: label.suffix?.replace(model.provider, "").trim()
+													: label.suffix;
 												return (
 													<OptionRow
 														active={isActive}
@@ -617,7 +653,7 @@ export function ModelPicker() {
 														<ProviderMark
 															className="size-4"
 															provider={{
-																id: model.provider,
+																id: apiKey ? "anthropic" : model.provider,
 																name: nameByProvider.get(model.provider) ?? model.provider,
 															}}
 														/>
@@ -629,9 +665,9 @@ export function ModelPicker() {
 															)}
 														>
 															<span className="min-w-0 truncate">{label.name}</span>
-															{label.suffix && (
+															{suffix && (
 																<span className="shrink-0 text-sc-2xs font-normal text-(--sc-text-muted) tabular-nums">
-																	{label.suffix}
+																	{suffix}
 																</span>
 															)}
 														</span>

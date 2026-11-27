@@ -3143,6 +3143,10 @@ export const ko: Record<string, string> = {
 
 	// Model picker dialog
 	"modelPicker.failed": "모델을 전환하지 못했어요",
+	"modelPicker.claudeApi": "Claude API",
+	"modelPicker.apiKeyNumber": "API 키 {number}",
+	"modelPicker.claudeSubscription": "Claude 구독",
+	"modelPicker.apiModel": "API · {model}",
 	"modelPicker.searchLabel": "모델 검색",
 	"modelPicker.recent": "최근 사용",
 	"modelPicker.placeholder": "모델 검색…",

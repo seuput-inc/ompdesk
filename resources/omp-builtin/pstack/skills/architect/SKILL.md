@@ -12,7 +12,7 @@ Sketch types, function signatures, class shapes, and module boundaries with `not
 
 ## Start
 
-Add one `todo` item per new phase before starting.
+Follow the phases below before completing the requested outcome.
 
 1. Ground
 2. Sketch

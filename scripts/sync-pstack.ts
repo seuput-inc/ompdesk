@@ -65,7 +65,7 @@ interface Rule {
 const MODEL_ROLES =
 	"Model roles: `@task` for code delegates, `@slow` for judgment, prose and the hardest change, `@smol` for light research, and a judge or cross-check on a model family different from the parent's (the `advisor` role, or another configured provider).";
 const PLAYBOOK_TODOS =
-	"Use `todo` `init` only for a fresh plan. If any item is unfinished, `append` only new items, one call per phase. Copy one item per new numbered step in order, before task-specific items. Use the todo language from `<reply-language>` (word for word without one). Keep skill, tool and file names unchanged.";
+	"Use `todo` `init` only for a fresh plan. If any item is unfinished, `append` only new items, one call per phase. List each user-requested outcome once. Follow playbook steps internally; do not add them as todo items. Use the todo language from `<reply-language>` (word for word without one). Keep skill, tool and file names unchanged.";
 
 const ANY = /.*/;
 const rule = (id: string, files: RegExp, from: string | RegExp, to: string): Rule => ({ id, files, from, to });
@@ -134,7 +134,18 @@ const RULES: Rule[] = [
 		"Open a todolist whose first items are the matched playbook's steps, copied in verbatim, before any task-specific todos.",
 		PLAYBOOK_TODOS,
 	),
-	rule("mode-todolist-copy", /^poteto-mode\/SKILL\.md$/, "Copy its steps in verbatim.", "Copy its steps in that way."),
+	rule(
+		"mode-internal-skips",
+		/^poteto-mode\/SKILL\.md$/,
+		"A step you choose not to do stays in the list with a one-line `skip: <reason>`. ",
+		"",
+	),
+	rule(
+		"mode-todolist-copy",
+		/^poteto-mode\/SKILL\.md$/,
+		"Copy its steps in verbatim.",
+		"Follow its steps internally.",
+	),
 	rule(
 		"mode-playbooks-file",
 		/^poteto-mode\/SKILL\.md$/,
@@ -607,16 +618,40 @@ const RULES: Rule[] = [
 	rule("askquestion", ANY, /`AskQuestion`/g, "`ask`"),
 	rule("todolist", ANY, /todolist/g, "`todo` list"),
 	rule(
-		"workflow-phase-todos",
-		/^(architect|arena|swarm)\/SKILL\.md$/,
-		"Open a `todo` list with one entry per phase",
-		"Add one `todo` item per new phase",
+		"internal-architect",
+		/^architect\/SKILL\.md$/,
+		"Open a `todo` list with one entry per phase before starting.",
+		"Follow the phases below before completing the requested outcome.",
 	),
 	rule(
-		"figure-it-out-todos",
+		"internal-swarm",
+		/^swarm\/SKILL\.md$/,
+		"Open a `todo` list with one entry per phase before launching anything.",
+		"Plan the phases below before launching anything.",
+	),
+	rule(
+		"internal-arena",
+		/^arena\/SKILL\.md$/,
+		"Open a `todo` list with one entry per phase (Frame, Fan out, Cross-judge, Pick, Graft, Verify) before launching anything.",
+		"Plan the phases below before launching anything.",
+	),
+	rule(
+		"internal-figure-it-out",
 		/^figure-it-out\/SKILL\.md$/,
-		"Open a `todo` list whose first item is to read",
-		"Add a `todo` item to read",
+		"Open a `todo` list whose first item is to read the Principles section of the **poteto-mode** skill. Then add the phases below as todos.",
+		"Read the Principles section of the **poteto-mode** skill. Use the phases below internally.",
+	),
+	rule(
+		"internal-poteto-mode",
+		/^poteto-mode\/playbooks\/feature\.md$/,
+		"Write the throughput checkpoint as four todo items. A dimension that genuinely does not apply (single file, no fan-out) keeps its item with `n/a: <reason>` rather than being dropped:",
+		"Use these four questions to plan the work. Record non-applicable dimensions in the checkpoint, not the user’s task list:",
+	),
+	rule(
+		"internal-design-steps",
+		/^figure-it-out\/SKILL\.md$/,
+		"Add its steps to the `todo` list as concrete items between the Phase C and Phase D entries.",
+		"Track execution against the requested outcomes.",
 	),
 	rule("bugbot-generic", ANY, /\bBugbot\b/g, "review-bot"),
 ];
@@ -766,7 +801,7 @@ function insertNote(text: string): string {
 
 /** Under the title of a playbook: the `todo` instruction, where the model is looking when it has just read the steps. */
 function insertPlaybookNote(text: string): string {
-	const note = `> OMPdesk: before step 1, update the plan. ${PLAYBOOK_TODOS} Keep earlier work going unless the user explicitly cancels or replaces it. Keep skipped steps with \`skip: <reason>\`.`;
+	const note = `> OMPdesk: before step 1, update the plan. ${PLAYBOOK_TODOS} Keep earlier work going unless the user explicitly cancels or replaces it.`;
 	const newline = text.indexOf("\n");
 	if (!text.startsWith("### ") || newline < 0) throw new Error("a playbook does not start with its ### title");
 	return `${text.slice(0, newline + 1)}\n${note}\n${text.slice(newline + 1)}`;

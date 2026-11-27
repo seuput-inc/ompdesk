@@ -8,8 +8,8 @@ import { field, realOmpProfile, spentIn } from "./real-omp";
 
 // Explicit opt-in (OMP_GUI_REAL_WORK=1): a few turns on the user's `smol` model in a private disposable profile, real
 // stock omp with the built-in pstack pack (on by default). What it measures, with the spend of each case recorded:
-//  1. A bug-fix prompt follows the bug-fix playbook: the agent reads `playbooks/bug-fix.md` and its `todo` list is the
-//     playbook's steps copied in, then the bug is fixed (the repo's check passes).
+//  1. A bug-fix prompt follows the bug-fix playbook: the agent reads `playbooks/bug-fix.md` and the visible list describes the requested
+//     fix rather than the playbook, and the repo's check passes.
 //  2. A trivial greeting gets a plain answer: no `todo`, no `skill://` read (the routing gate).
 //  3. The same bug prompt with the switch off (pref `pstack`): no playbook read, the control for case 1.
 const RESULT_FILE = "/tmp/real-pstack.json";
@@ -48,7 +48,7 @@ async function toolCalls(agent: string): Promise<Call[]> {
 	return calls;
 }
 
-/** The first five words of each numbered step of the bug-fix playbook, lower-cased: what a copied todo item starts with. */
+/** The first four words of each numbered step of the bug-fix playbook, lower-cased: what a copied todo item starts with. */
 async function playbookStarts(): Promise<string[]> {
 	const text = await fs.readFile(PLAYBOOK, "utf8");
 	return [...text.matchAll(/^\d+\. (.+)$/gm)].map(match =>
@@ -66,8 +66,7 @@ function normalized(text: string): string {
 }
 
 async function launch(prompt: string, prefs: Record<string, unknown> = {}) {
-	// Reply language off: the copied steps are then the playbook's own English words, which `playbookStarts` matches
-	// (with a reply language they are translated into it; bridge-pstack.test.ts pins that rule).
+	// The fixture prompt and the playbook prefixes are both English.
 	const real = await realOmpProfile({ launchProfiles: {}, replyLanguage: "off", ...prefs });
 	execFileSync("git", ["config", "user.email", "t@example.com"], { cwd: real.project });
 	execFileSync("git", ["config", "user.name", "t"], { cwd: real.project });
@@ -128,8 +127,17 @@ async function bugCase(name: string, prefs: Record<string, unknown>) {
 		const reads = calls.filter(call => call.name === "read" && call.text.includes("playbooks/bug-fix.md"));
 		const todos = calls.filter(call => call.name === "todo");
 		const starts = await playbookStarts();
-		const firstTodo = normalized(todos[0]?.text ?? "");
-		const copied = starts.filter(start => start.length > 0 && firstTodo.includes(start));
+		const items: string[] = [];
+		const snapshot = page.locator("[data-todo-snapshot]").last();
+		if (prefs.pstack !== false && (todos.length > 0 || (await snapshot.count()) > 0)) {
+			await expect(snapshot).toBeVisible();
+			const toggle = snapshot.getByRole("button", { expanded: false });
+			if (await toggle.count()) await toggle.click();
+			const rows = snapshot.getByRole("listitem");
+			await expect(rows.first()).toBeVisible();
+			items.push(...(await rows.allInnerTexts()));
+		}
+		const copied = items.filter(item => starts.some(prefix => normalized(item.trim()).startsWith(prefix)));
 		let checkPasses = true;
 		try {
 			execFileSync("node", ["test.js"], { cwd: real.project, stdio: "ignore" });
@@ -141,38 +149,49 @@ async function bugCase(name: string, prefs: Record<string, unknown>) {
 			case: name,
 			playbookRead: reads.length > 0,
 			todoCalls: todos.length,
-			playbookStepsCopied: `${copied.length}/${starts.length}`,
+			visibleItems: items,
+			playbookStepsCopied: copied.length,
 			checkPasses,
 			toolCalls: calls.map(call => `${call.name} ${call.text.slice(0, 120)}`),
 			cost,
 			summary: await lastAnswer(page, main),
 		});
 		console.log(
-			`[real-pstack] ${name}: playbook read ${reads.length > 0}, ${copied.length}/${starts.length} steps in the first todo, check ${checkPasses}, $${cost.usd.toFixed(4)}, ${cost.tokens} tokens`,
+			`[real-pstack] ${name}: playbook read ${reads.length > 0}, ${copied.length} copied steps among ${items.length} visible items, check ${checkPasses}, $${cost.usd.toFixed(4)}, ${cost.tokens} tokens`,
 		);
-		return { reads, todos, copied, checkPasses };
+		return { reads, items, copied, checkPasses };
 	} finally {
 		await exitApp(app);
 		await fs.rm(real.profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 	}
 }
 
-test("a bug-fix prompt follows the bug-fix playbook: it is read and its steps are the todo items", async () => {
+test("an ordinary bug report lists its outcome, not internal playbook steps", async () => {
 	test.skip(process.env.OMP_GUI_REAL_WORK !== "1", "Opt-in model audit");
 	test.setTimeout(900_000);
-	// The model decides whether to follow the playbook (a small model skips it on a one-line bug now and then), so the
-	// case runs three times, every run's outcome is recorded, and one full follow is the pass (measured 3 of 5 on the
-	// first single runs of the final wording; each attempt also has to leave the repo's check green).
-	const attempts = [];
+	let reads = 0;
+	let readsWithList = 0;
 	for (let attempt = 1; attempt <= 3; attempt++) {
 		const outcome = await bugCase(`bug fix, pstack on, attempt ${attempt}`, {});
+		const read = outcome.reads.length > 0;
+		if (read) reads++;
 		expect(outcome.checkPasses).toBe(true);
-		attempts.push(outcome.reads.length > 0 && outcome.todos.length > 0 && outcome.copied.length >= 2);
+		if (!outcome.items.length) continue;
+		if (read) readsWithList++;
+		expect(outcome.copied).toEqual([]);
+		expect(outcome.items.length).toBeLessThanOrEqual(2);
+		for (const item of outcome.items) {
+			expect(item).toMatch(
+				/\b(sum(?:ming|mation)?|add(?:ition|ing)?|total|reduce[rd]?|accumulator|test(?:\.js|s)?|assertion|off.by.one|bug|incorrect result)\b/i,
+			);
+		}
 	}
-	const followed = attempts.filter(Boolean).length;
-	console.log(`[real-pstack] bug fix followed the playbook in ${followed} of ${attempts.length} runs`);
-	results.push({ case: "bug fix follow rate", followed, attempts: attempts.length });
-	expect(followed).toBeGreaterThanOrEqual(1);
+	console.log(
+		`[real-pstack] bug-fix playbook read ${reads}/3; read with visible list ${readsWithList}/3; earlier full-follow baseline 3/5`,
+	);
+	results.push({ case: "bug fix adherence", reads, readsWithList, attempts: 3, earlierFullFollow: "3/5" });
+	expect(reads).toBeGreaterThanOrEqual(1);
+	expect(readsWithList).toBeGreaterThanOrEqual(1);
 });
 
 test("a greeting gets a plain answer: no todo, no skill read", async () => {

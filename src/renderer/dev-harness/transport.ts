@@ -413,6 +413,25 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 	const listeners = new Map<string, Set<Listener>>();
 	const unhandled: string[] = [];
 	const calls: Harness["calls"] = [];
+	const pickerFixture = new URLSearchParams(location.search).get("picker") === "providers";
+	const keyIds = ["anthropic-api-key", "anthropic-api-key-2"];
+	const models = pickerFixture
+		? [
+				...MODELS.filter(m => m.provider === "anthropic"),
+				...keyIds.map(provider => ({ ...MODELS[0], provider })),
+				{ ...MODELS[2], provider: "openai-codex" },
+			]
+		: MODELS;
+	const providers = pickerFixture
+		? [
+				{ ...PROVIDERS[0], authKind: "oauth" },
+				...keyIds.map((id, i) => ({ ...PROVIDERS[0], id, name: i === 0 ? "Studio" : id, modelCount: 1 })),
+				{ ...PROVIDERS[1], id: "openai-codex", name: "Codex" },
+			]
+		: ACCOUNTS
+			? ACCOUNT_PROVIDERS
+			: PROVIDERS;
+	const pickedModels = new Map<string, (typeof models)[number]>();
 	let activeTabId = "tab-1";
 	const stalePlan = new URLSearchParams(location.search).get("todos") === "drift";
 	const phases = stalePlan
@@ -488,7 +507,16 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 		}
 		switch (command.type) {
 			case "get_state":
-				return respond(command, stateFixture(tabId));
+				return respond(command, {
+					...stateFixture(tabId),
+					...(pickedModels.has(tabId) && { model: pickedModels.get(tabId) }),
+				});
+			case "set_model": {
+				const model = models.find(row => row.provider === command.provider && row.id === command.modelId);
+				if (!model) return { ...respond(command), success: false, error: "Unknown fixture model" };
+				pickedModels.set(tabId, model);
+				return respond(command, model);
+			}
 			case "get_transcript_page": {
 				const messages = FIRST_RUN ? [] : transcriptFor(tabId);
 				return respond(command, { messages, totalMessages: messages.length });
@@ -506,8 +534,8 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 			case "get_available_models":
 			case "get_providers":
 				return respond(command, {
-					models: FIRST_RUN ? [] : MODELS,
-					providers: FIRST_RUN ? FIRST_RUN_PROVIDERS : ACCOUNTS ? ACCOUNT_PROVIDERS : PROVIDERS,
+					models: FIRST_RUN ? [] : models,
+					providers: FIRST_RUN ? FIRST_RUN_PROVIDERS : providers,
 					discoveryStates: [],
 					refreshPending: false,
 					generation: 1,

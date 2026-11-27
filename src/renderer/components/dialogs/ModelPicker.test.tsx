@@ -24,13 +24,12 @@ if (typeof elementPrototype.scrollIntoView !== "function") elementPrototype.scro
 
 const ok = (data: unknown) => ({ type: "response", command: "x", success: true, data });
 let recent: unknown = { selectors: ["openai/gpt-5", "gone/model", "anthropic/claude"] };
-const setModel = vi.fn(async () => ok({}));
+const setModel = vi.fn(async (provider: string, id: string) => ok({ provider, id }));
 const setModelRole = vi.fn(async () => ok({}));
 const setThinkingLevel = vi.fn(async (level: string) => ok({ thinkingLevel: level, thinkingConfigured: level }));
 const getModelReleaseDates = vi.fn(async () => ok({ dates: { old: 100, "new-a": 200, "new-b": 200 } }));
 Reflect.set(window, "omp", {
 	rpc: {
-		getLoginProviders: vi.fn(async () => ok({ providers: [] })),
 		getRecentModels: vi.fn(async () => ok(recent)),
 		getModelReleaseDates,
 		getSettings: vi.fn(async () => ok({ values: {} })),
@@ -54,17 +53,28 @@ const MODELS = [
 let container: HTMLElement;
 let root: Root;
 
+function connectedRows(models: ModelInfo[]) {
+	return [...new Set(models.map(model => model.provider))].map(id => ({
+		id,
+		name: id,
+		authenticated: true,
+		disabled: false,
+		loginAvailable: false,
+		modelCount: models.filter(m => m.provider === id).length,
+	}));
+}
+
 async function mount(models: ModelInfo[] = MODELS, catalogRead?: Promise<AvailableModelsResult>): Promise<void> {
 	useSessionStore.setState({ status: "ready" });
+	const existing = useModelStore.getState().providers;
+	const providers = existing.length ? existing : connectedRows(models);
 	useModelStore.setState({
 		availableModels: models,
-		refreshAvailableModels: async () =>
-			catalogRead ?? {
-				models,
-				discoveryStates: [],
-				refreshPending: false,
-				generation: 1,
-			},
+		providers,
+		refreshProviders: async () => ({
+			...((await catalogRead) ?? { models, discoveryStates: [], refreshPending: false, generation: 1 }),
+			providers,
+		}),
 	});
 	useUiStore.setState({ modelPickerOpen: true });
 	container = document.createElement("div") as unknown as HTMLElement;
@@ -84,6 +94,12 @@ function groupNames(): string[] {
 	return Array.from(document.querySelectorAll("[data-model-group]")).map(group =>
 		String(group.getAttribute("aria-label")),
 	);
+}
+
+async function switchProvider(id: string) {
+	const tab = document.querySelector(`[role="tab"][data-tab-id="${id}"]`);
+	if (!(tab instanceof HTMLElement)) throw new Error(`Missing provider tab ${id}`);
+	await act(async () => tab.click());
 }
 
 function rows(groupId: string): string[] {
@@ -121,13 +137,14 @@ describe("ModelPicker Recent group", () => {
 	it("puts stock's recently used models on top, skipping ones no longer available", async () => {
 		await mount();
 		expect(groupNames()[0]).toBe("Recent");
-		expect(rows("recent")).toEqual([expect.stringContaining("GPT-5"), expect.stringContaining("Claude")]);
-		// Each model still sits under its provider too.
+		expect(rows("recent")).toEqual([expect.stringContaining("Claude")]);
+		await switchProvider("openai");
+		expect(rows("recent")).toEqual([expect.stringContaining("GPT-5")]);
 		expect(rows("openai")).toHaveLength(2);
 
 		const options = Array.from(document.querySelectorAll('[data-model-group="recent"] [role="option"]'));
-		await act(async () => (options[1] as unknown as { click(): void }).click());
-		expect(setModel).toHaveBeenCalledWith("anthropic", "claude");
+		await act(async () => (options[0] as unknown as { click(): void }).click());
+		expect(setModel).toHaveBeenCalledWith("openai", "gpt-5");
 	});
 
 	it("shows no Recent group without a usage history", async () => {
@@ -158,19 +175,22 @@ describe("ModelPicker account availability", () => {
 		const alternate = { provider: "openai", id: "fixture-private", name: "API route" };
 		recent = { selectors: ["openai-codex/fixture-private", "openai/fixture-private"] };
 		await mount([...states.a, alternate]);
-		expect(rows("recent")).toEqual([expect.stringContaining("fixture-private"), "API route"]);
+		await switchProvider("openai-codex");
+		expect(rows("recent")).toEqual([expect.stringContaining("fixture-private")]);
 		const show = async (models: ModelInfo[]) =>
 			act(async () => useModelStore.setState({ availableModels: [...models, alternate] }));
 		await show(states.firstFailure);
 		expect(rows("openai-codex")).toEqual([]);
+		await switchProvider("openai");
 		expect(rows("recent")).toEqual(["API route"]);
 		expect(document.body.textContent).toContain(notice);
 		await show(states.mixed);
-		expect(rows("recent")).toEqual([expect.stringContaining("fixture-private"), "API route"]);
+		await switchProvider("openai-codex");
+		expect(rows("recent")).toEqual([expect.stringContaining("fixture-private")]);
 		for (const models of [states.b, states.limited]) {
 			await show(models);
 			expect(rows("openai-codex")).toEqual([expect.stringContaining("fixture-common")]);
-			expect(rows("recent")).toEqual(["API route"]);
+			expect(rows("recent")).toEqual([]);
 			expect(document.body.textContent).not.toContain(notice);
 		}
 		expect(states.extraReads).toBe(0);
@@ -194,11 +214,13 @@ describe("ModelPicker account availability", () => {
 		const read = Promise.withResolvers<AvailableModelsResult>();
 		recent = { selectors: ["openai-codex/supported", "openai/shared"] };
 		await mount([supported, api], read.promise);
+		await switchProvider("openai");
 		expect(rows("recent")).toEqual(["API route"]);
 		expect(rows("openai-codex")).toEqual([]);
 		await act(async () =>
 			read.resolve({ models: [supported, api], generation: 1, discoveryStates: [], refreshPending: false }),
 		);
+		await switchProvider("openai-codex");
 		expect(rows("openai-codex")).toEqual(["Supported"]);
 	});
 
@@ -206,11 +228,13 @@ describe("ModelPicker account availability", () => {
 		recent = { selectors: ["openai-codex/shared", "openai/shared"] };
 		await mount([supported, withheld, api]);
 		expect(rows("openai-codex")).toEqual(["Supported"]);
+		expect(rows("recent")).toEqual([]);
+		await switchProvider("openai");
 		expect(rows("recent")).toEqual(["API route"]);
 		expect(rows("openai")).toEqual(["API route"]);
 		expect(document.body.textContent).toContain(notice);
-		const refresh = vi.fn(useModelStore.getState().refreshAvailableModels);
-		await act(async () => useModelStore.setState({ refreshAvailableModels: refresh }));
+		const refresh = vi.fn(useModelStore.getState().refreshProviders);
+		await act(async () => useModelStore.setState({ refreshProviders: refresh }));
 		const retry = Array.from(document.querySelectorAll("button")).find(
 			button => button.textContent === translate("common.retry"),
 		);
@@ -222,7 +246,8 @@ describe("ModelPicker account availability", () => {
 				availableModels: [supported, { ...withheld, pickerAvailability: "account-verified" }, api],
 			}),
 		);
-		expect(rows("recent")).toEqual(["Withheld", "API route"]);
+		await switchProvider("openai-codex");
+		expect(rows("recent")).toEqual(["Withheld"]);
 		expect(document.body.textContent).not.toContain(notice);
 	});
 
@@ -235,10 +260,58 @@ describe("ModelPicker account availability", () => {
 });
 
 describe("ModelPicker pick", () => {
+	it("keeps connected routes distinct for the same model and reopens on the saved route", async () => {
+		const ids = ["anthropic", "anthropic-api-key", "anthropic-api-key-2", "openai-codex", "signed-out"];
+		const models = ids.map(provider => ({ provider, id: "same", name: "Same" }));
+		useModelStore.setState({
+			model: models[3],
+			providers: ids.map(id => ({
+				id,
+				name: id === "anthropic-api-key" ? "Studio" : id,
+				authenticated: id !== "signed-out",
+				disabled: false,
+				loginAvailable: false,
+				modelCount: 1,
+			})),
+		});
+		await mount(models);
+		const tabs = () => Array.from(document.querySelectorAll('[role="tab"]'));
+		expect(tabs().map(tab => tab.getAttribute("data-tab-id"))).toEqual(
+			ids.filter(id => id !== "anthropic-api-key-2" && id !== "signed-out"),
+		);
+		const active = () =>
+			tabs()
+				.find(tab => tab.getAttribute("aria-selected") === "true")
+				?.getAttribute("data-tab-id");
+		expect(active()).toBe("openai-codex");
+		for (const route of [models[0], models[2]]) {
+			const group = route === models[0] ? "anthropic" : "anthropic-api-key";
+			await switchProvider(group);
+			if (group === "anthropic-api-key") {
+				const list = document.querySelector('[role="listbox"]');
+				expect(list?.textContent).toContain("Studio");
+				expect(list?.textContent).toContain("API key 2");
+				expect(list?.textContent).not.toContain("anthropic-api-key");
+			}
+			const row = document.querySelector(`[data-model-group="${route.provider}"] [role="option"]`);
+			if (!(row instanceof HTMLElement)) throw new Error(`Missing model ${route.provider}/same`);
+			await act(async () => row.click());
+			expect(setModel).toHaveBeenLastCalledWith(route.provider, "same");
+			// Reopening hydrates the session's qualified selection, not the last browsed tab.
+			const saved = setModel.mock.lastCall;
+			if (!saved) throw new Error("No session selection");
+			const [provider, id] = saved;
+			await act(async () => useModelStore.setState({ model: { provider, id } }));
+			await act(async () => useUiStore.setState({ modelPickerOpen: true }));
+			expect(active()).toBe(group);
+		}
+		expect(setModelRole).not.toHaveBeenCalled();
+	});
 	// The owner's rule (14 Nov 2026): switching one session's model never changes the default model new sessions open
 	// on; only Settings › Models & accounts › Model roles writes `modelRoles.default`.
 	it("switches this session only and writes no model role", async () => {
 		await mount();
+		await switchProvider("openai");
 		// A rendered option row (linkedom's element, typed as the DOM's).
 		const option = document.querySelector('[data-model-group="openai"] [role="option"]') as unknown as HTMLElement;
 		await act(async () => option.click());
@@ -248,8 +321,8 @@ describe("ModelPicker pick", () => {
 
 	it("asks the providers again from its Refresh models button", async () => {
 		await mount();
-		const refresh = vi.fn(useModelStore.getState().refreshAvailableModels);
-		await act(async () => useModelStore.setState({ refreshAvailableModels: refresh }));
+		const refresh = vi.fn(useModelStore.getState().refreshProviders);
+		await act(async () => useModelStore.setState({ refreshProviders: refresh }));
 		const button = document.querySelector("[data-model-refresh]") as unknown as HTMLElement;
 		expect(button.getAttribute("aria-label")).toBe("Refresh models");
 		await act(async () => button.click());
@@ -260,6 +333,7 @@ describe("ModelPicker pick", () => {
 describe("ModelPicker compact layout", () => {
 	it("renders one-line rows: provider mark and name, secondary info off the row", async () => {
 		await mount();
+		await switchProvider("openai");
 		const option = document.querySelector('[data-model-group="openai"] [role="option"]') as unknown as HTMLElement;
 		expect(option.querySelector("[data-provider-mark]")).not.toBeNull();
 		expect(option.textContent).toBe("GPT-5");
@@ -269,6 +343,7 @@ describe("ModelPicker compact layout", () => {
 
 	it("filters while typing and Enter picks the highlighted row", async () => {
 		await mount();
+		await switchProvider("openai");
 		const input = document.querySelector("input") as unknown as HTMLInputElement;
 		const record = input as unknown as Record<string, unknown>;
 		const propsKey = Object.getOwnPropertyNames(record).find(key => key.startsWith("__reactProps$"));
@@ -290,7 +365,9 @@ describe("ModelPicker compact layout", () => {
 
 describe("ModelPicker highlighted row's details", () => {
 	it("says the highlighted model's facts as the field's description, following the arrow keys", async () => {
+		recent = { selectors: [] };
 		await mount();
+		await switchProvider("openai");
 		const input = document.querySelector("input") as unknown as HTMLInputElement;
 		const detail = () => {
 			const id = input.getAttribute("aria-describedby");
@@ -303,7 +380,7 @@ describe("ModelPicker highlighted row's details", () => {
 		await act(async () =>
 			props.onKeyDown({ key: "ArrowDown", preventDefault() {}, nativeEvent: { isComposing: false, keyCode: 40 } }),
 		);
-		expect(detail()).toContain("Careful writer");
+		expect(detail()).toContain("GPT mini");
 	});
 });
 
@@ -367,7 +444,9 @@ describe("ModelPicker OpenRouter group", () => {
 		await mount([], response.promise);
 		await key("Enter");
 		expect(setModel).not.toHaveBeenCalled();
-		await act(async () => useModelStore.setState({ availableModels: routerModels }));
+		await act(async () =>
+			useModelStore.setState({ availableModels: routerModels, providers: connectedRows(routerModels) }),
+		);
 		const { input, props } = inputProps();
 		input.value = "new b";
 		await act(async () => props.onChange({ target: input, currentTarget: input }));
@@ -410,6 +489,7 @@ describe("ModelPicker OpenRouter group", () => {
 		const response = Promise.withResolvers<ModelReleaseDatesResult>();
 		getModelReleaseDates.mockImplementationOnce(async () => ok(await response.promise));
 		await mount([...MODELS, ...routerModels]);
+		await switchProvider("openrouter");
 		await act(async () => disclosure().click());
 		expect(rows("openrouter")).toEqual(routerModels.map(model => model.name));
 		await act(async () =>
@@ -427,30 +507,34 @@ describe("ModelPicker OpenRouter group", () => {
 			}),
 		);
 		expect(rows("openrouter")).toEqual(["New B", "Old"]);
+		await switchProvider("anthropic");
 		expect(rows("anthropic")).toEqual(["Other provider"]);
 	});
 
 	it("folds initially, sorts only OpenRouter, and resets on reopening", async () => {
 		recent = { selectors: [] };
 		await mount([...MODELS, ...routerModels]);
+		await switchProvider("openrouter");
 		expect(disclosure().getAttribute("aria-expanded")).toBe("false");
 		expect(disclosure().textContent).toContain("5");
 		expect(rows("openrouter")).toEqual([]);
 		await act(async () => disclosure().click());
 		expect(disclosure().getAttribute("aria-expanded")).toBe("true");
 		expect(rows("openrouter")).toEqual(["New A", "New B", "Old", "Unknown A", "Unknown B"]);
-		expect(rows("openai")).toEqual(["GPT-5", "GPT mini"]);
+		expect(rows("openai")).toEqual([]);
 		await act(async () => disclosure().click());
 		expect(rows("openrouter")).toEqual([]);
 		await act(async () => disclosure().click());
 		await act(async () => useUiStore.setState({ modelPickerOpen: false }));
 		await act(async () => useUiStore.setState({ modelPickerOpen: true }));
+		await switchProvider("openrouter");
 		expect(disclosure().getAttribute("aria-expanded")).toBe("false");
 		expect(rows("openrouter")).toEqual([]);
 	});
 
 	it("reveals search results and Enter switches only this session", async () => {
 		await mount([...MODELS, ...routerModels]);
+		await switchProvider("openrouter");
 		const { input, props } = inputProps();
 		input.value = "new b";
 		await act(async () => props.onChange({ target: input, currentTarget: input }));
@@ -463,6 +547,7 @@ describe("ModelPicker OpenRouter group", () => {
 
 	it("restores the previous fold state when search is cleared", async () => {
 		await mount([...MODELS, ...routerModels]);
+		await switchProvider("openrouter");
 		const search = async (value: string) => {
 			const { input, props } = inputProps();
 			input.value = value;
@@ -482,6 +567,7 @@ describe("ModelPicker OpenRouter group", () => {
 
 	it("leaves Enter and arrows to an active IME composition", async () => {
 		await mount([...MODELS, ...routerModels]);
+		await switchProvider("openrouter");
 		const { input, props } = inputProps();
 		input.value = "new b";
 		await act(async () => props.onChange({ target: input, currentTarget: input }));
@@ -519,10 +605,11 @@ describe("ModelPicker OpenRouter group", () => {
 	it("keeps arrow navigation within visible rows when the provider is folded", async () => {
 		recent = { selectors: [] };
 		await mount([...MODELS, ...routerModels]);
+		await switchProvider("openai");
 		const visible = Array.from(document.querySelectorAll('[role="option"]'));
 		for (let i = 0; i < 10; i++) await key("ArrowDown");
 		expect(inputProps().input.getAttribute("aria-activedescendant")).toBe(visible.at(-1)?.getAttribute("id"));
-		expect(visible).toHaveLength(MODELS.length);
+		expect(visible.map(row => row.textContent)).toEqual(["GPT-5", "GPT mini"]);
 	});
 
 	it("allows picking the current OpenRouter model while folded", async () => {
