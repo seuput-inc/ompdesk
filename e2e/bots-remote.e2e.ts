@@ -13,7 +13,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { exitApp, untilAnswered } from "./harness";
+import { initRepo } from "../src/main/local/git/test-repos";
+import { controlToolCaller, exitApp, openedSessions, untilAnswered } from "./harness";
 import {
 	connectHost,
 	freePort,
@@ -324,6 +325,93 @@ test("paired bot chat omits quiet lookups live and after reopening, without hidi
 		await prompt("fixture ask");
 		await expect(b.locator("[data-prompt-card]").filter({ hasText: "Where should this deploy?" })).toBeVisible();
 		await test.info().attach("paired-reopened-controls", { body: await b.screenshot(), contentType: "image/png" });
+	} finally {
+		if (client) await exitApp(client.app).catch(() => undefined);
+		if (host) await exitApp(host.app).catch(() => undefined);
+		await fs.rm(parent, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+	}
+});
+
+test("a paired bot chat reopens its delegated worker in another repository without taking the human sibling", async () => {
+	test.setTimeout(180_000);
+	const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "paired-bot-worker-")));
+	let host: RemoteInstance | null = null;
+	let client: RemoteInstance | null = null;
+	try {
+		const options = { language: "en", theme: "light", port: await freePort() } as const;
+		const home = path.join(parent, "home");
+		await fs.mkdir(home);
+		const profile = await makeRemoteProfile(parent, "a", { ...options, env: { HOME: home, USERPROFILE: home } });
+		const peer = await makeRemoteProfile(parent, "b", options);
+		const bot = { id: "courier", name: "Courier", folder: path.join(home, "courier") };
+		await Promise.all([initRepo(profile.project), initRepo(bot.folder)]);
+		const opener = await seedStoredBot(profile, bot, "dispatch-home", "Dispatch desk");
+		host = await launchRemote(profile);
+		const a = host.page;
+		const tabs = () => a.evaluate(() => window.omp.tabs.list());
+		const human = (await tabs()).find(tab => tab.active);
+		if (!human) throw new Error("No project tab");
+		const message = "Review the build";
+		await a.evaluate(([id, text]) => window.omp.rpc.commandForTab(id, { type: "prompt", message: text }), [
+			human.tabId,
+			message,
+		] as const);
+		await untilAnswered(a, human.tabId);
+		const humanFile = (await tabs()).find(tab => tab.tabId === human.tabId)?.sessionPath;
+		if (!humanFile) throw new Error("The human session was not saved");
+		await a.locator(`[data-bot-row="${bot.id}"]`).click();
+		const origin = () => tabs().then(rows => rows.find(tab => tab.active && tab.sessionPath === opener));
+		await expect.poll(origin).toMatchObject({ status: "ready" });
+		const source = await origin();
+		if (!source) throw new Error("The bot's chat closed");
+		const call = await controlToolCaller(a, profile.record, source.tabId);
+		const result = await call("ompdesk_session_open", { folder: profile.project, message });
+		expect(result.isError, result.text).toBe(false);
+		const [child] = openedSessions(result.text);
+		if (!child) throw new Error("The dispatch did not return a child");
+		await untilAnswered(a, child, { after: message });
+		const worker = (await tabs()).find(tab => tab.tabId === child)?.sessionPath;
+		if (!worker) throw new Error("The child has no saved journal");
+		expect(worker).not.toBe(humanFile);
+		const branch = await a.evaluate(id => window.omp.rpc.commandForTab(id, { type: "get_state" }), child);
+		expect(branch).toMatchObject({ success: true, data: { sessionFile: worker } });
+		const localRow = a.locator(
+			`[data-bot-worker-rows=${JSON.stringify(opener)}] [data-session-path=${JSON.stringify(worker)}]`,
+		);
+		const fold = a.locator(`[data-bot-fold="${bot.id}"]`);
+		if ((await fold.getAttribute("aria-expanded")) === "false") await fold.click();
+		await expect(localRow).toBeVisible();
+		const stopped = await call("ompdesk_session_stop", { session: child, close: true });
+		expect(stopped.isError, stopped.text).toBe(false);
+		await expect.poll(async () => (await tabs()).some(tab => tab.tabId === child)).toBe(false);
+		client = await launchRemote(peer);
+		const device = await connectHost(a, client.page, "Studio");
+		await exitApp(client.app);
+		client = await launchRemote(peer, { project: false });
+		const b = client.page;
+		const botRow = b.locator(`[data-bot-entry="${bot.id}"]`);
+		await expect(botRow.locator(`[data-bot-owner="${device}"]`)).toHaveText("Studio", { timeout: 60_000 });
+		const open = botRow.locator(`[data-bot-fold="${bot.id}"]`);
+		if ((await open.getAttribute("aria-expanded")) === "false") await open.click();
+		const childRow = botRow.locator(`[data-bot-worker-rows=${JSON.stringify(opener)}] button`);
+		await expect(childRow).toHaveCount(1);
+		for (const toggle of [
+			b.locator(`[data-sidebar-device-toggle="${device}"]`),
+			b.locator(`[data-roving-item=${JSON.stringify(`device-group:${device}:${profile.project}`)}]`),
+		]) {
+			if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+		}
+		await expect(b.locator(`[data-device-session=${JSON.stringify(humanFile)}]`)).toBeVisible();
+		await expect(b.locator(`[data-device-session=${JSON.stringify(worker)}]`)).toHaveCount(0);
+		await childRow.click();
+		const resumed = () => b.evaluate(async () => (await window.omp.tabs.list()).find(tab => tab.active));
+		await expect.poll(resumed).toMatchObject({ device, sessionPath: worker, status: "ready" });
+		const tab = await resumed();
+		if (!tab) throw new Error("The reopened child closed");
+		await untilAnswered(b, tab.tabId, { after: message });
+		const state = await b.evaluate(id => window.omp.rpc.commandForTab(id, { type: "get_state" }), tab.tabId);
+		expect(state).toMatchObject({ success: true, data: { sessionFile: worker } });
+		await test.info().attach("paired-saved-worker", { body: await b.screenshot(), contentType: "image/png" });
 	} finally {
 		if (client) await exitApp(client.app).catch(() => undefined);
 		if (host) await exitApp(host.app).catch(() => undefined);

@@ -3887,7 +3887,7 @@ describe("Sidebar device sections", () => {
 				);
 			expect(nested()?.textContent).toContain("Review build");
 			expect(container.querySelectorAll("[data-bot-worker-rows]")).toHaveLength(1);
-			expect(nested()?.children).toHaveLength(1);
+			expect(nested()?.querySelectorAll(":scope > *")).toHaveLength(1);
 			expect(project(manual)).not.toBeNull();
 			expect(project(worker)).toBeNull();
 			if (paired) expect(container.querySelector(`[data-session-path="${worker.path}"]`)).not.toBeNull();
