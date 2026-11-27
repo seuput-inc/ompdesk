@@ -184,9 +184,10 @@ export function runRpcUi(): void {
 	 * created with the first entry and reported by get_state, so the GUI's
 	 * session index lists it the way it lists real omp sessions.
 	 */
+	const journalName = (id: string) => `${Date.now()}_${id}.jsonl`;
 	const sessionFile =
 		process.env.OMP_GUI_TEST_SESSION_FILES === "1" && process.env.PI_CODING_AGENT_DIR
-			? nodePath.join(process.env.PI_CODING_AGENT_DIR, "sessions", "fixture", `${sessionId}.jsonl`)
+			? nodePath.join(process.env.PI_CODING_AGENT_DIR, "sessions", "fixture", journalName(sessionId))
 			: undefined;
 	const sessionCreated = new Date().toISOString();
 	let sessionTitle = "";
@@ -2751,7 +2752,7 @@ export function runRpcUi(): void {
 			const dir = sessionFile
 				? nodePath.dirname(sessionFile)
 				: fs.mkdtempSync(nodePath.join(os.tmpdir(), "omp-fork-"));
-			const sessionPath = nodePath.join(dir, `${forkId}.jsonl`);
+			const sessionPath = nodePath.join(dir, journalName(forkId));
 			// Stock `createBranchedSession` gives the fork the source's title (the fixture's title line, as `persistSession`).
 			const title = sessionTitle
 				? [{ type: "title", v: 1, title: sessionTitle, updatedAt: new Date().toISOString() }]
@@ -7744,7 +7745,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 				titleSource = undefined;
 				autoBeside = "";
 				const id = `fixture-new-${process.pid}-${++freshCount}`;
-				const file = sessionFile ? nodePath.join(nodePath.dirname(sessionFile), `${id}.jsonl`) : undefined;
+				const file = sessionFile ? nodePath.join(nodePath.dirname(sessionFile), journalName(id)) : undefined;
 				fresh = { id, file, created: new Date().toISOString() };
 				if (file) {
 					fs.mkdirSync(nodePath.dirname(file), { recursive: true });
