@@ -204,7 +204,7 @@ For this repository, `origin/dev` integrates ordinary work; `main` is release-on
 ## Release
 
 - Semver `X.Y.Z`; tag `vX.Y.Z`; commit `release: vX.Y.Z`. No AI attribution trailers in commit messages.
-- After an exact dev SHA qualifies as a release batch, `scripts/dev-release.mjs` requests one Windows app run for it, not one per push. Promotion waits for the Windows-applicable `@smoke` cases, including pre-chat bot rename/reopen and the paired delegated worker, to pass. A missing, failed, cancelled or skipped required case holds the cut. No ancestor or custom grep substitutes. The full nightly suite remains informational.
+- `scripts/dev-release.mjs` pins one Windows candidate per release batch. Promote only its returned `candidate` after its own push and Windows-applicable `@smoke` tests pass, including bot rename/reopen, the paired delegated worker and ordinary-parent reconnect/close/fold. Newer `dev` commits wait for the next batch. Only a failed or cancelled set plus a changed tip permits a replacement. Missing, skipped or uncertain evidence holds the cut. The full nightly suite remains informational.
 
 ### Steps
 

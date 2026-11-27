@@ -14,7 +14,9 @@ import { parseAgentMessage } from "../src/shared/agent-control";
 import { controlToolCaller, cssString, exitApp, openedSessions, untilAnswered } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, type RemoteInstance } from "./remote-harness";
 
-test("a paired device reopens an ordinary host's saved child under its exact parent after reconnect, not its namesake", async () => {
+const reopenChild =
+	"a paired device reopens an ordinary host's saved child under its exact parent after reconnect, not its namesake";
+test(reopenChild, { tag: "@smoke" }, async () => {
 	test.setTimeout(240_000);
 	const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-host-family-")));
 	let host: RemoteInstance | undefined;
