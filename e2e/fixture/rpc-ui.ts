@@ -717,7 +717,11 @@ export function runRpcUi(): void {
 	 */
 	const loginProvider = process.env.OMP_GUI_TEST_LOGIN === "1";
 	const modelsData = loginProvider && process.env.OMP_GUI_TEST_MODELS === "1";
-	let anthropicSignedIn = modelsData;
+	const firstRunSignIn = process.env.OMP_GUI_TEST_SIGNED_OUT === "1";
+	const firstRunDir = firstRunSignIn ? process.env.PI_CODING_AGENT_DIR : undefined;
+	// Only the fact of a successful fixture login survives a relaunch, never its paste or callback.
+	const loginMarker = firstRunDir && nodePath.join(firstRunDir, "fixture-claude-signed-in");
+	let anthropicSignedIn = modelsData || Boolean(loginMarker && fs.existsSync(loginMarker));
 	let anthropicAccounts = modelsData
 		? [
 				{ credentialId: 1, label: "work@example.com", detail: "Claude Max · Work", type: "oauth", active: true },
@@ -1369,8 +1373,22 @@ export function runRpcUi(): void {
 		provider: "anthropic",
 		contextWindow: 1000000,
 	};
-	// A first-time user (`OMP_GUI_TEST_SIGNED_OUT`) who signs in to Anthropic gets its models, as stock lists them.
-	const firstRunSignIn = process.env.OMP_GUI_TEST_SIGNED_OUT === "1";
+	// Report the manual models actually written by the first-run form. No provider is contacted.
+	const firstRunKeys = () => {
+		const file = firstRunDir && nodePath.join(firstRunDir, "models.yml");
+		if (!file || !fs.existsSync(file)) return [];
+		const config: unknown = Bun.YAML.parse(fs.readFileSync(file, "utf8"));
+		if (!isTree(config) || !isTree(config.providers)) return [];
+		return Object.entries(config.providers).flatMap(([id, entry]) => {
+			if (!isTree(entry) || !entry.apiKey || !Array.isArray(entry.models)) return [];
+			const models = entry.models.flatMap((row: unknown) =>
+				isTree(row) && typeof row.id === "string"
+					? [{ ...model, provider: id, id: row.id, name: typeof row.name === "string" ? row.name : row.id }]
+					: [],
+			);
+			return [{ id, name: id, authenticated: true, authKind: "apikey", modelCount: models.length, models }];
+		});
+	};
 	const fallbackModels = fallbackData
 		? [
 				{
@@ -1384,10 +1402,11 @@ export function runRpcUi(): void {
 				{ ...model, id: "gpt-6.1-sol", name: "GPT-6.1 SOL", provider: "openai-codex", contextWindow: 400000 },
 			]
 		: [];
-	const catalogModels = () => {
+	const catalogModels = (keys = firstRunKeys()) => {
 		const claude = (modelsData || firstRunSignIn) && anthropicSignedIn ? claudeModels : [];
 		// While a fallback stands in, the person's own model is still one the picker lists.
 		const own = standIn ? [{ ...model, ...standIn }, model] : [model];
+		for (const entry of keys) own.push(...entry.models);
 		if (!openRouterModels || !apiKeyProviders.has("openrouter")) return [...own, ...claude, ...fallbackModels];
 		return [...own, ...claude, ...routerModels, ...(claude.length > 0 ? [discoveredClaude] : [])];
 	};
@@ -1638,6 +1657,7 @@ export function runRpcUi(): void {
 			if (params.providerId === "anthropic") {
 				anthropicAccounts = [];
 				anthropicSignedIn = false;
+				if (loginMarker) fs.rmSync(loginMarker, { force: true });
 			}
 			apiKeyProviders.delete(String(params.providerId));
 			return { providerId: params.providerId };
@@ -2535,38 +2555,48 @@ export function runRpcUi(): void {
 			};
 		},
 		models_catalog: () => ({ models: catalogModels(), discoveryStates: [], refreshPending: false, generation: 1 }),
-		providers: () => ({
-			providers: [
-				// `OMP_GUI_TEST_SIGNED_OUT=1`: a first-time user, nothing can serve yet (the first-run provider step shows).
-				process.env.OMP_GUI_TEST_SIGNED_OUT === "1"
-					? { id: "fixture", name: "Local fixture", hasAuth: false, authenticated: false, modelCount: 1 }
-					: { id: "fixture", name: "Local fixture", hasAuth: true, authenticated: true, modelCount: 1 },
-				...(loginProvider
-					? [
-							{
-								id: "anthropic",
-								name: "Anthropic",
-								authenticated: anthropicSignedIn,
-								authKind: anthropicSignedIn ? "oauth" : undefined,
-								loginAvailable: true,
-								disabled: false,
-								modelCount: (modelsData || firstRunSignIn) && anthropicSignedIn ? 2 : 0,
-							},
-							...(modelsData
-								? MODELS_PAGE_PROVIDERS.map(row =>
-										apiKeyProviders.has(row.id) ? { ...row, authenticated: true, authKind: "apikey" } : row,
-									)
-								: process.env.OMP_GUI_TEST_FEATURED === "1"
-									? FEATURED_PAGE_PROVIDERS
-									: []),
-						]
-					: []),
-			],
-			models: catalogModels(),
-			discoveryStates: [],
-			refreshPending: false,
-			generation: 1,
-		}),
+		providers: () => {
+			const keys = firstRunKeys();
+			return {
+				providers: [
+					// A first-time user has no provider until a fixture sign-in or a saved custom key.
+					{
+						id: "fixture",
+						name: "Local fixture",
+						hasAuth: !firstRunSignIn,
+						authenticated: !firstRunSignIn,
+						modelCount: 1,
+					},
+					...keys.map(({ models: _models, ...provider }) => provider),
+					...(loginProvider
+						? [
+								{
+									id: "anthropic",
+									name: "Anthropic",
+									authenticated: anthropicSignedIn,
+									authKind: anthropicSignedIn ? "oauth" : undefined,
+									loginAvailable: true,
+									disabled: false,
+									modelCount: (modelsData || firstRunSignIn) && anthropicSignedIn ? 2 : 0,
+								},
+								...(modelsData
+									? MODELS_PAGE_PROVIDERS.map(row =>
+											apiKeyProviders.has(row.id)
+												? { ...row, authenticated: true, authKind: "apikey" }
+												: row,
+										)
+									: process.env.OMP_GUI_TEST_FEATURED === "1"
+										? FEATURED_PAGE_PROVIDERS
+										: []),
+							]
+						: []),
+				],
+				models: catalogModels(keys),
+				discoveryStates: [],
+				refreshPending: false,
+				generation: 1,
+			};
+		},
 		security_dashboard: securityDashboard,
 		ssh_hosts: () => ({ hosts: [], warnings: [], openSshAvailable: true }),
 		// No Claude Code or Codex sessions to import (ImportForeignDialog.test.tsx covers the dialog).
@@ -6534,6 +6564,7 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 						};
 					}
 					anthropicSignedIn = true;
+					if (loginMarker) fs.writeFileSync(loginMarker, "");
 				};
 				// Stock's callback server (callback-server.ts): `/launch` redirects to the
 				// authorization URL, `/callback` with the flow's state signs in, and one

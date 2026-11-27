@@ -229,6 +229,7 @@ test("@smoke connects two computers over the tailnet with no code, runs a prompt
 		await settings.getByRole("button", { name: "Add a provider" }).click();
 		const anthropic = settings.locator("[data-login-panel]");
 		await settings.locator('button[data-provider-connect="anthropic"]').click();
+		await settings.getByRole("button", { name: "Sign in with your subscription", exact: true }).click();
 		await expect(anthropic.locator("[data-remote-login-hint]")).toContainText(
 			`Port ${takenPort} is in use on this computer, so the browser can't come back by itself.`,
 		);

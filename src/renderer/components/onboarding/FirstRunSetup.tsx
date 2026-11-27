@@ -37,9 +37,10 @@ import {
 	SettingInfo,
 	SkeletonRows,
 } from "../common";
+import { useProviderConnection } from "../settings/providers/ClaudeConnection";
 import { CustomProviderForm } from "../settings/providers/CustomProviderForm";
 import { type ProviderCatalog, useProviderCatalog } from "../settings/providers/ProviderList";
-import { ProviderLoginPanel, useProviderLogin } from "../settings/providers/ProviderLogin";
+import { ProviderLoginPanel } from "../settings/providers/ProviderLogin";
 import { ProviderPicker } from "../settings/providers/ProviderPicker";
 import {
 	canServe,
@@ -115,14 +116,14 @@ function ConnectStep() {
 		},
 		[load],
 	);
-	const login = useProviderLogin(advance);
+	const { login, claudePanel, retryLogin } = useProviderConnection(catalog, advance);
 
 	// A provider can serve now (just connected here, or somewhere else meanwhile: Settings, the CLI, env): pick
 	// its default model and end the setup. Only a pick that is missing or cannot be saved opens the model step.
 	// A step opened ahead of the gate's check waits for it (a serving provider there means no setup at all).
 	const provisional = useFirstRunStore(state => state.provisional);
 	useEffect(() => {
-		if (provisional || customForm || login.state.running || settling.current) return;
+		if (provisional || customForm || claudePanel || login.state.running || settling.current) return;
 		const serving = servingProviderIds(providers, customConfigs);
 		const [arrived] = [...serving].filter(id => !servingAtOpen.current?.has(id));
 		if (arrived === undefined && connected === null) return;
@@ -150,6 +151,7 @@ function ConnectStep() {
 		})();
 	}, [
 		connected,
+		claudePanel,
 		customConfigs,
 		customForm,
 		login.state.running,
@@ -172,6 +174,8 @@ function ConnectStep() {
 	useEffect(() => {
 		if (login.state.since > 0) document.querySelector("[data-login-panel]")?.scrollIntoView?.({ block: "center" });
 	}, [login.state.since]);
+
+	if (claudePanel) return <div className="mt-6">{claudePanel}</div>;
 
 	// The form needs the provider options. Until they arrive (or when reading them failed) say so in place,
 	// instead of leaving the list as it was and popping the form in later.
@@ -252,7 +256,7 @@ function ConnectStep() {
 				<div data-login-panel>
 					<ProviderLoginPanel
 						login={login}
-						onRetry={() => void login.start(login.state.providerId ?? "")}
+						onRetry={retryLogin}
 						providerName={
 							providers.find(row => row.id === login.state.providerId)?.name ?? login.state.providerId
 						}

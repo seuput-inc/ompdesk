@@ -59,7 +59,10 @@ function isValidHttpUrl(value: string): boolean {
 	}
 }
 
+export const CLAUDE_API_URL = "https://api.anthropic.com";
+
 export interface CustomProviderFormProps {
+	claudeKey?: boolean;
 	/** null = adding a new provider. */
 	editing: CustomProviderView | null;
 	/** Already-configured providers (id collision check when adding). */
@@ -69,23 +72,39 @@ export interface CustomProviderFormProps {
 	onCancel: () => void;
 }
 
-export function CustomProviderForm({ editing, existing, options, onSaved, onCancel }: CustomProviderFormProps) {
+export function CustomProviderForm({
+	claudeKey = false,
+	editing,
+	existing,
+	options,
+	onSaved,
+	onCancel,
+}: CustomProviderFormProps) {
 	const t = useT();
 	const device = useFocusedTabDevice();
 	const refreshProviders = useModelStore(state => state.refreshProviders);
 	const nextKey = useRef(1);
 	const readonly = editing?.builtin ?? false;
 
-	const [id, setId] = useState(editing?.id ?? "");
+	const [id, setId] = useState(() => {
+		if (!claudeKey) return editing?.id ?? "";
+		let candidate = "anthropic-api-key";
+		for (let n = 2; existing.some(provider => provider.id === candidate); n++) candidate = `anthropic-api-key-${n}`;
+		return candidate;
+	});
 	const [api, setApi] = useState<CustomProviderApi>(
-		(editing?.api ??
-			(options.apis.includes("openai-completions") ? "openai-completions" : options.apis[0])) as CustomProviderApi,
+		claudeKey
+			? "anthropic-messages"
+			: ((editing?.api ??
+					(options.apis.includes("openai-completions")
+						? "openai-completions"
+						: options.apis[0])) as CustomProviderApi),
 	);
-	const [baseUrl, setBaseUrl] = useState(editing?.baseUrl ?? "");
+	const [baseUrl, setBaseUrl] = useState(claudeKey ? CLAUDE_API_URL : (editing?.baseUrl ?? ""));
 	const [apiKey, setApiKey] = useState("");
 	const [clearKey, setClearKey] = useState(false);
 	const [showKey, setShowKey] = useState(false);
-	const [auth, setAuth] = useState<"apiKey" | "none" | "oauth" | undefined>(editing?.auth);
+	const [auth, setAuth] = useState<"apiKey" | "none" | "oauth" | undefined>(claudeKey ? "apiKey" : editing?.auth);
 	const [authHeader, setAuthHeader] = useState(editing?.authHeader ?? false);
 	const [discoveryType, setDiscoveryType] = useState<CustomProviderDiscoveryType | undefined>(() =>
 		editing ? editing.discovery?.type : defaultProviderDiscovery(),
@@ -99,7 +118,7 @@ export function CustomProviderForm({ editing, existing, options, onSaved, onCanc
 	const [models, setModels] = useState<ModelRow[]>(() =>
 		editing?.models.length
 			? editing.models.map(model => ({ key: nextKey.current++, ...model }))
-			: [{ key: nextKey.current++, id: "", name: "" }],
+			: [{ key: nextKey.current++, id: claudeKey ? "claude-sonnet-4-6" : "", name: "" }],
 	);
 	const [headers, setHeaders] = useState<HeaderRow[]>(() =>
 		Object.entries(editing?.headers ?? {}).map(([name, value]) => ({
@@ -136,6 +155,7 @@ export function CustomProviderForm({ editing, existing, options, onSaved, onCanc
 
 	const validate = (): Record<string, string> => {
 		const errs: Record<string, string> = {};
+		if (claudeKey && !apiKey.trim()) errs.apiKey = t("providers.claude.keyRequired");
 		if (!editing) {
 			const candidate = id.trim();
 			if (!candidate) errs.id = t("providerCfg.form.idRequired");
@@ -210,6 +230,7 @@ export function CustomProviderForm({ editing, existing, options, onSaved, onCanc
 		const headerEntries = headers.filter(row => row.name.trim().length > 0);
 		const input: CustomProviderInput = {
 			id: editing ? editing.id : id.trim(),
+			...(claudeKey ? { onlyIfAbsent: true } : {}),
 			api,
 			baseUrl: baseUrl.trim(),
 			...(apiKey.trim().length > 0 ? { apiKey: apiKey.trim() } : {}),
@@ -250,23 +271,33 @@ export function CustomProviderForm({ editing, existing, options, onSaved, onCanc
 					toast({
 						variant: "warning",
 						message: t("providerCfg.toast.refreshFailed"),
-						detail: errorDetail(discoveryError.error),
+						...(claudeKey ? {} : { detail: errorDetail(discoveryError.error) }),
 					});
 				}
 			} catch (cause) {
-				toast({ variant: "warning", message: t("providerCfg.toast.refreshFailed"), detail: errorDetail(cause) });
+				toast({
+					variant: "warning",
+					message: t("providerCfg.toast.refreshFailed"),
+					...(claudeKey ? {} : { detail: errorDetail(cause) }),
+				});
 			}
 			onSaved(input.id);
 		} catch (cause) {
-			setSubmitError(inlineFailure(cause, t("providerCfg.toast.saveFailed")));
+			const failure = inlineFailure(cause, t("providerCfg.toast.saveFailed"));
+			setSubmitError(claudeKey ? { message: failure.message } : failure);
 		} finally {
 			setSubmitting(false);
 		}
 	};
+	const title = claudeKey
+		? t("providers.claude.keyTitle")
+		: editing
+			? t("providerCfg.title.edit", { id: editing.id })
+			: t("providerCfg.title.add");
 
 	return (
 		<form
-			aria-label={editing ? t("providerCfg.title.edit", { id: editing.id }) : t("providerCfg.title.add")}
+			aria-label={title}
 			className="flex flex-col gap-4"
 			noValidate
 			onSubmit={event => {
@@ -275,18 +306,18 @@ export function CustomProviderForm({ editing, existing, options, onSaved, onCanc
 			}}
 		>
 			<div>
-				<h3 className="text-sc-xl font-semibold text-(--sc-text)">
-					{editing ? t("providerCfg.title.edit", { id: editing.id }) : t("providerCfg.title.add")}
-				</h3>
-				<p className="mt-1 text-sc-sm text-(--sc-text-muted)">{t("providerCfg.subtitle")}</p>
+				<h3 className="text-sc-xl font-semibold text-(--sc-text)">{title}</h3>
+				<p className="mt-1 text-sc-sm text-(--sc-text-muted)">
+					{t(claudeKey ? "providers.claude.keyHint" : "providerCfg.subtitle")}
+				</p>
 			</div>
 
 			{readonly && <Banner variant="info">{t("providerCfg.form.builtinReadonly")}</Banner>}
 
 			<div className="grid gap-4 sm:grid-cols-2">
 				<Input
-					autoFocus={!editing}
-					disabled={editing !== null || submitting}
+					autoFocus={!editing && !claudeKey}
+					disabled={editing !== null || submitting || claudeKey}
 					error={errors.id}
 					hint={editing ? undefined : t("providerCfg.form.idHint")}
 					label={t("providerCfg.form.id")}
@@ -299,7 +330,7 @@ export function CustomProviderForm({ editing, existing, options, onSaved, onCanc
 					value={id}
 				/>
 				<Select
-					disabled={locked}
+					disabled={locked || claudeKey}
 					hint={t("providerCfg.form.apiHint")}
 					label={t("providerCfg.form.api")}
 					onChange={event => setApi(event.target.value as CustomProviderApi)}
@@ -312,7 +343,7 @@ export function CustomProviderForm({ editing, existing, options, onSaved, onCanc
 			</div>
 
 			<Input
-				disabled={locked}
+				disabled={locked || claudeKey}
 				error={errors.baseUrl}
 				label={t("providerCfg.form.baseUrl")}
 				mono
@@ -327,19 +358,24 @@ export function CustomProviderForm({ editing, existing, options, onSaved, onCanc
 			<div>
 				<Input
 					autoComplete="off"
+					autoFocus={claudeKey}
+					error={errors.apiKey}
 					disabled={locked || clearKey}
 					hint={
 						clearKey
 							? t("providerCfg.form.apiKeyRemovingHint")
 							: editing?.hasApiKey
 								? t("providerCfg.form.apiKeyKeep")
-								: t("providerCfg.form.apiKeyOptional")
+								: claudeKey
+									? undefined
+									: t("providerCfg.form.apiKeyOptional")
 					}
 					label={t("providerCfg.form.apiKey")}
 					mono
 					onChange={event => {
 						setApiKey(event.target.value);
 						setClearKey(false);
+						setErrors(prev => dropKey(prev, "apiKey"));
 					}}
 					placeholder={
 						clearKey
@@ -374,224 +410,239 @@ export function CustomProviderForm({ editing, existing, options, onSaved, onCanc
 				)}
 			</div>
 
-			<div>
-				<FieldLabel>{t("providerCfg.form.models")}</FieldLabel>
-				<div className="flex flex-col gap-2">
-					{models.map(row => (
-						<ModelEditor
-							canRemove={models.length > 1}
+			{claudeKey ? (
+				<Input
+					disabled={submitting}
+					error={errors.models}
+					label={t("providerCfg.form.modelId")}
+					mono
+					onChange={event => updateModel(models[0].key, { id: event.target.value })}
+					value={models[0].id}
+				/>
+			) : (
+				<div>
+					<FieldLabel>{t("providerCfg.form.models")}</FieldLabel>
+					<div className="flex flex-col gap-2">
+						{models.map(row => (
+							<ModelEditor
+								canRemove={models.length > 1}
+								disabled={submitting}
+								key={row.key}
+								model={row}
+								onRemove={removeModel}
+								onUpdate={updateModel}
+								readonly={readonly}
+								options={options}
+							/>
+						))}
+					</div>
+					{!readonly && (
+						<Button
+							className="mt-2"
 							disabled={submitting}
-							key={row.key}
-							model={row}
-							onRemove={removeModel}
-							onUpdate={updateModel}
-							readonly={readonly}
-							options={options}
-						/>
-					))}
+							icon={<Plus />}
+							onClick={() => setModels(prev => [...prev, { key: nextKey.current++, id: "", name: "" }])}
+							size="sm"
+							variant="ghost"
+						>
+							{t("providerCfg.form.modelAdd")}
+						</Button>
+					)}
+					<FieldError message={errors.models} />
+					{discoveryType && (
+						<span className="mt-1.5 block text-sc-sm text-(--sc-text-muted)">
+							{t("providerCfg.form.modelsDiscoveryOptional")}
+						</span>
+					)}
 				</div>
-				{!readonly && (
+			)}
+
+			{!claudeKey && (
+				<div className="border-t border-(--sc-divider) pt-3">
 					<Button
-						className="mt-2"
-						disabled={submitting}
-						icon={<Plus />}
-						onClick={() => setModels(prev => [...prev, { key: nextKey.current++, id: "", name: "" }])}
+						aria-expanded={advancedOpen}
+						icon={advancedOpen ? <ChevronDown /> : <ChevronRight />}
+						onClick={() => setAdvancedOpen(prev => !prev)}
 						size="sm"
 						variant="ghost"
 					>
-						{t("providerCfg.form.modelAdd")}
+						{t("providerCfg.form.advanced")}
 					</Button>
-				)}
-				<FieldError message={errors.models} />
-				{discoveryType && (
-					<span className="mt-1.5 block text-sc-sm text-(--sc-text-muted)">
-						{t("providerCfg.form.modelsDiscoveryOptional")}
-					</span>
-				)}
-			</div>
-
-			<div className="border-t border-(--sc-divider) pt-3">
-				<Button
-					aria-expanded={advancedOpen}
-					icon={advancedOpen ? <ChevronDown /> : <ChevronRight />}
-					onClick={() => setAdvancedOpen(prev => !prev)}
-					size="sm"
-					variant="ghost"
-				>
-					{t("providerCfg.form.advanced")}
-				</Button>
-				{advancedOpen && (
-					<div className="mt-3 flex flex-col gap-4">
-						<Select
-							disabled={locked}
-							hint={t("providerCfg.form.authHint")}
-							label={t("providerCfg.form.auth")}
-							onChange={event =>
-								setAuth((event.target.value || undefined) as "apiKey" | "none" | "oauth" | undefined)
-							}
-							options={[
-								{ value: "", label: t("providerCfg.form.authApiKeyDefault") },
-								...options.auth.map(value => ({
-									value,
-									label:
-										value === "apiKey"
-											? t("providerCfg.form.authApiKey")
-											: value === "none"
-												? t("common.none")
-												: value,
-								})),
-							]}
-							value={auth ?? ""}
-						/>
-
-						<label className="flex items-start gap-2.5">
-							<Checkbox
-								checked={authHeader}
-								className="mt-0.5"
-								disabled={locked}
-								onChange={event => setAuthHeader(event.target.checked)}
-							/>
-							<span>
-								<span className="block text-sc-md text-(--sc-text)">{t("providerCfg.form.authHeader")}</span>
-								<span className="block text-sc-sm text-(--sc-text-muted)">
-									{t("providerCfg.form.authHeaderHint")}
-								</span>
-							</span>
-						</label>
-
-						<div className="grid gap-4 sm:grid-cols-[2fr_1fr]">
+					{advancedOpen && (
+						<div className="mt-3 flex flex-col gap-4">
 							<Select
 								disabled={locked}
-								hint={t("providerCfg.form.discoveryHint")}
-								label={t("providerCfg.form.discovery")}
+								hint={t("providerCfg.form.authHint")}
+								label={t("providerCfg.form.auth")}
 								onChange={event =>
-									setDiscoveryType(
-										(event.target.value || undefined) as CustomProviderDiscoveryType | undefined,
-									)
+									setAuth((event.target.value || undefined) as "apiKey" | "none" | "oauth" | undefined)
 								}
 								options={[
-									{ value: "", label: t("providerCfg.form.discoveryNone") },
-									...options.discovery.map(type => ({
-										value: type,
-										label: t(`providerCfg.discovery.${type}`),
+									{ value: "", label: t("providerCfg.form.authApiKeyDefault") },
+									...options.auth.map(value => ({
+										value,
+										label:
+											value === "apiKey"
+												? t("providerCfg.form.authApiKey")
+												: value === "none"
+													? t("common.none")
+													: value,
 									})),
 								]}
-								value={discoveryType ?? ""}
+								value={auth ?? ""}
 							/>
-							<Input
-								disabled={locked || !discoveryType}
-								label={t("providerCfg.form.discoveryTimeout")}
-								min={0}
-								onChange={event =>
-									setDiscoveryTimeout(event.target.value ? Number.parseInt(event.target.value, 10) : undefined)
-								}
-								type="number"
-								value={discoveryTimeout ?? ""}
-							/>
-						</div>
 
-						<label className="flex items-start gap-2.5">
-							<Checkbox
-								checked={disableStrictTools}
-								className="mt-0.5"
-								disabled={locked}
-								onChange={event => setDisableStrictTools(event.target.checked)}
-							/>
-							<span>
-								<span className="block text-sc-md text-(--sc-text)">
-									{t("providerCfg.form.disableStrictTools")}
+							<label className="flex items-start gap-2.5">
+								<Checkbox
+									checked={authHeader}
+									className="mt-0.5"
+									disabled={locked}
+									onChange={event => setAuthHeader(event.target.checked)}
+								/>
+								<span>
+									<span className="block text-sc-md text-(--sc-text)">{t("providerCfg.form.authHeader")}</span>
+									<span className="block text-sc-sm text-(--sc-text-muted)">
+										{t("providerCfg.form.authHeaderHint")}
+									</span>
 								</span>
-								<span className="block text-sc-sm text-(--sc-text-muted)">
-									{t("providerCfg.form.disableStrictToolsHint")}
-								</span>
-							</span>
-						</label>
+							</label>
 
-						<Select
-							disabled={locked}
-							hint={t("providerCfg.form.transportHint")}
-							label={t("providerCfg.form.transport")}
-							onChange={event => setTransport((event.target.value || undefined) as "pi-native" | undefined)}
-							options={[
-								{ value: "", label: t("common.defaultParenthesized") },
-								{ value: "pi-native", label: "pi-native" },
-							]}
-							value={transport ?? ""}
-						/>
-
-						<TextArea
-							disabled={locked}
-							error={errors.extraBody}
-							hint={t("providerCfg.form.extraBodyHint")}
-							label={t("providerCfg.form.extraBody")}
-							mono
-							onChange={event => {
-								setExtraBody(event.target.value);
-								setErrors(prev => dropKey(prev, "extraBody"));
-							}}
-							placeholder={t("providerCfg.form.extraBodyPlaceholder")}
-							rows={3}
-							value={extraBody}
-						/>
-
-						<div>
-							<FieldLabel>{t("providerCfg.form.headers")}</FieldLabel>
-							<div className="flex flex-col gap-2">
-								{headers.map(row => (
-									<div className="flex items-center gap-2" key={row.key}>
-										<div className="min-w-0 flex-1">
-											<Input
-												aria-label={t("providerCfg.form.headerName")}
-												disabled={locked}
-												mono
-												onChange={event => updateHeader(row.key, { name: event.target.value })}
-												placeholder={t("providerCfg.form.headerName")}
-												value={row.name}
-											/>
-										</div>
-										<div className="min-w-0 flex-1">
-											<Input
-												aria-label={t("providerCfg.form.headerValue")}
-												disabled={locked}
-												mono
-												onChange={event => updateHeader(row.key, { value: event.target.value })}
-												placeholder={t("providerCfg.form.headerValue")}
-												value={row.value}
-											/>
-										</div>
-										<IconButton
-											disabled={locked}
-											icon={<Trash2 />}
-											label={
-												row.name.trim()
-													? t("providerCfg.form.headerRemoveFor", { header: row.name.trim() })
-													: t("providerCfg.form.headerRemove")
-											}
-											onClick={() => setHeaders(prev => prev.filter(item => item.key !== row.key))}
-											size="sm"
-										/>
-									</div>
-								))}
-							</div>
-							{!readonly && (
-								<Button
-									className="mt-2"
-									disabled={submitting}
-									icon={<Plus />}
-									onClick={() =>
-										setHeaders(prev => [...prev, { key: nextKey.current++, name: "", value: "" }])
+							<div className="grid gap-4 sm:grid-cols-[2fr_1fr]">
+								<Select
+									disabled={locked}
+									hint={t("providerCfg.form.discoveryHint")}
+									label={t("providerCfg.form.discovery")}
+									onChange={event =>
+										setDiscoveryType(
+											(event.target.value || undefined) as CustomProviderDiscoveryType | undefined,
+										)
 									}
-									size="sm"
-									variant="ghost"
-								>
-									{t("providerCfg.form.headerAdd")}
-								</Button>
-							)}
-							<FieldError message={errors.headers} />
+									options={[
+										{ value: "", label: t("providerCfg.form.discoveryNone") },
+										...options.discovery.map(type => ({
+											value: type,
+											label: t(`providerCfg.discovery.${type}`),
+										})),
+									]}
+									value={discoveryType ?? ""}
+								/>
+								<Input
+									disabled={locked || !discoveryType}
+									label={t("providerCfg.form.discoveryTimeout")}
+									min={0}
+									onChange={event =>
+										setDiscoveryTimeout(
+											event.target.value ? Number.parseInt(event.target.value, 10) : undefined,
+										)
+									}
+									type="number"
+									value={discoveryTimeout ?? ""}
+								/>
+							</div>
+
+							<label className="flex items-start gap-2.5">
+								<Checkbox
+									checked={disableStrictTools}
+									className="mt-0.5"
+									disabled={locked}
+									onChange={event => setDisableStrictTools(event.target.checked)}
+								/>
+								<span>
+									<span className="block text-sc-md text-(--sc-text)">
+										{t("providerCfg.form.disableStrictTools")}
+									</span>
+									<span className="block text-sc-sm text-(--sc-text-muted)">
+										{t("providerCfg.form.disableStrictToolsHint")}
+									</span>
+								</span>
+							</label>
+
+							<Select
+								disabled={locked}
+								hint={t("providerCfg.form.transportHint")}
+								label={t("providerCfg.form.transport")}
+								onChange={event => setTransport((event.target.value || undefined) as "pi-native" | undefined)}
+								options={[
+									{ value: "", label: t("common.defaultParenthesized") },
+									{ value: "pi-native", label: "pi-native" },
+								]}
+								value={transport ?? ""}
+							/>
+
+							<TextArea
+								disabled={locked}
+								error={errors.extraBody}
+								hint={t("providerCfg.form.extraBodyHint")}
+								label={t("providerCfg.form.extraBody")}
+								mono
+								onChange={event => {
+									setExtraBody(event.target.value);
+									setErrors(prev => dropKey(prev, "extraBody"));
+								}}
+								placeholder={t("providerCfg.form.extraBodyPlaceholder")}
+								rows={3}
+								value={extraBody}
+							/>
+
+							<div>
+								<FieldLabel>{t("providerCfg.form.headers")}</FieldLabel>
+								<div className="flex flex-col gap-2">
+									{headers.map(row => (
+										<div className="flex items-center gap-2" key={row.key}>
+											<div className="min-w-0 flex-1">
+												<Input
+													aria-label={t("providerCfg.form.headerName")}
+													disabled={locked}
+													mono
+													onChange={event => updateHeader(row.key, { name: event.target.value })}
+													placeholder={t("providerCfg.form.headerName")}
+													value={row.name}
+												/>
+											</div>
+											<div className="min-w-0 flex-1">
+												<Input
+													aria-label={t("providerCfg.form.headerValue")}
+													disabled={locked}
+													mono
+													onChange={event => updateHeader(row.key, { value: event.target.value })}
+													placeholder={t("providerCfg.form.headerValue")}
+													value={row.value}
+												/>
+											</div>
+											<IconButton
+												disabled={locked}
+												icon={<Trash2 />}
+												label={
+													row.name.trim()
+														? t("providerCfg.form.headerRemoveFor", { header: row.name.trim() })
+														: t("providerCfg.form.headerRemove")
+												}
+												onClick={() => setHeaders(prev => prev.filter(item => item.key !== row.key))}
+												size="sm"
+											/>
+										</div>
+									))}
+								</div>
+								{!readonly && (
+									<Button
+										className="mt-2"
+										disabled={submitting}
+										icon={<Plus />}
+										onClick={() =>
+											setHeaders(prev => [...prev, { key: nextKey.current++, name: "", value: "" }])
+										}
+										size="sm"
+										variant="ghost"
+									>
+										{t("providerCfg.form.headerAdd")}
+									</Button>
+								)}
+								<FieldError message={errors.headers} />
+							</div>
 						</div>
-					</div>
-				)}
-			</div>
+					)}
+				</div>
+			)}
 
 			{submitError && (
 				<Banner live title={submitError.message} variant="danger">
@@ -605,7 +656,7 @@ export function CustomProviderForm({ editing, existing, options, onSaved, onCanc
 				</Button>
 				{!readonly && (
 					<Button loading={submitting} type="submit" variant="primary">
-						{editing ? t("providerCfg.form.save") : t("providerCfg.form.add")}
+						{editing || claudeKey ? t("providerCfg.form.save") : t("providerCfg.form.add")}
 					</Button>
 				)}
 			</div>

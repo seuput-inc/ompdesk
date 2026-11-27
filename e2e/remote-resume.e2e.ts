@@ -600,6 +600,7 @@ test("a sign-in open on a host's tab when the link drops and returns never becom
 		await settings.getByRole("button", { name: "Add a provider" }).click();
 		const anthropic = settings.locator("[data-login-panel]");
 		await settings.locator('button[data-provider-connect="anthropic"]').click();
+		await settings.getByRole("button", { name: en["providers.featured.subscription"], exact: true }).click();
 		await expect(anthropic.locator("[data-login-progress]")).toBeVisible({ timeout: 30_000 });
 		await expect
 			.poll(async () => (await readRecords(hostProfile.record)).some(frame => frame.type === "login"), {

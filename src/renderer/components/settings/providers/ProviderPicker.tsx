@@ -245,14 +245,20 @@ function FeaturedCard({
 					<span className="flex min-w-0 flex-1 flex-col">
 						<span className="line-clamp-2 text-sc-md font-medium break-words">{card.label}</span>
 						<span className="truncate text-sc-sm text-(--sc-text-muted)">
-							{subscription ? t("providers.featured.subscription") : t("providers.featured.apiKey")}
+							{def.id === "anthropic"
+								? t("providers.claude.methods")
+								: t(subscription ? "providers.featured.subscription" : "providers.featured.apiKey")}
 						</span>
 					</span>
 					{busy ? (
 						<Spinner size="sm" spin />
 					) : (
 						<span className="shrink-0 text-sc-sm font-medium text-(--sc-accent)">
-							{subscription ? t("providers.featured.signIn") : t("providers.featured.connect")}
+							{t(
+								subscription && def.id !== "anthropic"
+									? "providers.featured.signIn"
+									: "providers.featured.connect",
+							)}
 						</span>
 					)}
 				</Card>

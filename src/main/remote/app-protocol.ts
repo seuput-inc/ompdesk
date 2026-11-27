@@ -763,6 +763,7 @@ const CustomProviderModelInputSchema = z.object({
 /** `host.models.upsert` input: the Settings form's provider, checked before it touches the host's models.yml. */
 export const CustomProviderInputSchema: z.ZodType<CustomProviderInput> = z.object({
 	id: z.string().min(1).max(200),
+	onlyIfAbsent: z.literal(true).optional(),
 	api: ProviderApi,
 	baseUrl: z.string(),
 	apiKey: z.string().optional(),

@@ -1664,6 +1664,12 @@ export const en: Record<string, string> = {
 	"providers.featured.title": "Popular providers",
 	"providers.featured.subscription": "Sign in with your subscription",
 	"providers.featured.apiKey": "Use an API key",
+	"providers.claude.choose": "How would you like to connect Claude?",
+	"providers.claude.methods": "Subscription or API key",
+	"providers.claude.keyTitle": "Connect Claude with an Anthropic API key",
+	"providers.claude.keyHint":
+		"API use is billed separately from your Claude subscription. The key is stored in models.yml.",
+	"providers.claude.keyRequired": "Enter your Anthropic API key.",
 	"providers.featured.signIn": "Sign in",
 	"providers.featured.connect": "Connect",
 	"providers.featured.apiKeyAction": "Use an API key instead",

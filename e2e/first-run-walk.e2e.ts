@@ -15,6 +15,8 @@ import { chromium, devices, expect, type Locator, type Page, test } from "@playw
 import { createServer } from "vite";
 import { baseTemp } from "../scripts/run-temp";
 import { writeFakeOmp } from "../src/main/test-fake-omp";
+import { en } from "../src/renderer/locales/en";
+import { ko } from "../src/renderer/locales/ko";
 import { exitApp, fixtureOmp, launchApp } from "./harness";
 
 const directory = process.env.OMP_GUI_FIRST_RUN_WALK;
@@ -137,12 +139,19 @@ for (const language of ["en", "ko"] as const) {
 			await shot("connect");
 
 			await click(connect.locator('button[data-provider-connect="anthropic"]'));
+			await shot("choose-claude-connection");
+			await click(
+				connect.getByRole("button", {
+					name: (language === "ko" ? ko : en)["providers.featured.subscription"],
+					exact: true,
+				}),
+			);
 			const opened = async () =>
 				((await app.evaluate(() => Reflect.get(globalThis, "openedUrls"))) as string[]).length;
 			await expect(page.locator("[data-login-progress]")).toBeVisible();
 			await page.waitForTimeout(1_000);
 			await shot("signing-in");
-			// The person's browser page opens by itself, with no second click.
+			// Choosing the subscription opens the person's browser.
 			await expect.poll(opened).toBe(1);
 			const [launchUrl] = (await app.evaluate(() => Reflect.get(globalThis, "openedUrls"))) as string[];
 			const launch = await fetch(launchUrl ?? "", { redirect: "manual" });
@@ -222,6 +231,12 @@ for (const language of ["en", "ko"] as const) {
 			await page.waitForTimeout(400);
 			await page.screenshot({ path: path.join(out, `${language}-real-01-connect.png`), animations: "disabled" });
 			await connect.locator('button[data-provider-connect="anthropic"]').click();
+			await connect
+				.getByRole("button", {
+					name: (language === "ko" ? ko : en)["providers.featured.subscription"],
+					exact: true,
+				})
+				.click();
 			await expect(page.locator("[data-login-panel]")).toBeVisible({ timeout: 30_000 });
 			await page.waitForTimeout(1_000);
 			timings.signInShown = (Date.now() - started) / 1000;

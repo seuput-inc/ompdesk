@@ -45,8 +45,9 @@ export async function listModelsProviders(): Promise<CustomProviderView[]> {
 }
 
 /** Insert or update a custom provider. Keeps the stored apiKey unless the input re-supplies one or sets `clearApiKey`. */
-export async function upsertModelsProvider(input: CustomProviderInput): Promise<void> {
-	await call("models.upsert", { input });
+export async function upsertModelsProvider({ onlyIfAbsent, ...input }: CustomProviderInput): Promise<void> {
+	const wrote = await call<boolean>("models.upsert", { input, onlyIfAbsent });
+	if (!wrote && onlyIfAbsent) throw codedError("changed_on_disk", "Provider already exists");
 }
 
 /** Delete a custom provider entry (built-ins cannot be removed here). */

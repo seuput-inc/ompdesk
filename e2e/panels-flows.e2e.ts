@@ -308,7 +308,7 @@ test("provider and account flows", async () => {
 		await expect(settings.getByText("Claude", { exact: true }).first()).toBeVisible();
 		await rec.shoot("models");
 
-		// Claude's two accounts are rows under one group header; its "Add account" button signs in a third.
+		// Claude's two accounts are rows under one group header.
 		const accounts = settings.locator("[data-provider-list]");
 		const anthropic = settings.locator("[data-login-panel]");
 		const claudeAccounts = accounts.locator('[data-provider-row="anthropic"] [data-provider-account]');
@@ -318,6 +318,7 @@ test("provider and account flows", async () => {
 		await expect(accounts).toContainText("home@example.com");
 		await rec.shoot("accounts");
 		await accounts.getByRole("button", { name: "Add account to Anthropic" }).click();
+		await settings.getByRole("button", { name: "Sign in with your subscription", exact: true }).click();
 		await expect(anthropic.getByRole("button", { name: "Sign in with browser" })).toBeVisible();
 		await rec.shoot("add-account-sign-in");
 		await anthropic.getByRole("button", { name: "Sign in with browser" }).click();

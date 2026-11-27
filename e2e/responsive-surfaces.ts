@@ -2269,6 +2269,23 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work", after: closeOverlay },
 	},
 	{
+		id: "settings-claude-connection",
+		area: "B",
+		title: "Settings › Models & accounts, choosing a Claude subscription or an official API key",
+		open: async (page, look) => {
+			await openSettingsModels(page, look);
+			await page.locator('[data-settings-page] [data-provider-add="anthropic"]').click();
+			await page.getByRole("button", { name: say(look, "providers.featured.apiKey"), exact: true }).waitFor();
+		},
+		ready: "[data-claude-connect]",
+		when: () => false,
+		parity: {
+			session: "work",
+			after: closeOverlay,
+			available: () => process.env.OMP_GUI_TEST_LOGIN === "1" && process.env.OMP_GUI_TEST_MODELS === "1",
+		},
+	},
+	{
 		id: "settings-reset-tickets",
 		area: "B",
 		title: "Settings › Models & accounts, the reset pass dialog of an account that holds two kinds of pass",

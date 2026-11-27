@@ -8,6 +8,7 @@
  * `window.__harness.emit(channel, payload)` plays a main→renderer push (a tab status, a streaming batch, an ask).
  */
 
+import { fixtureProviderOptions } from "../../../e2e/models-config-fixture";
 import { BOTS_COMMAND } from "../../shared/bots";
 import { EMPTY_GITHUB_AUTH_STATE } from "../../shared/github-auth";
 import {
@@ -655,7 +656,7 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 	let creditSpend = false;
 	let remoteState = REMOTE_STATE;
 	const invoke = async (channel: string, ...args: unknown[]): Promise<unknown> => {
-		calls.push({ channel, args });
+		calls.push({ channel, args: channel === IPC_COMMANDS.MODELS_PROVIDER_UPSERT ? [] : args });
 		// Each case reads the one payload shape its channel carries.
 		const payload: unknown = args[0];
 		const memory = memoryAnswer(channel, args);
@@ -760,7 +761,9 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 			case IPC_COMMANDS.GITHUB_AUTH_REFRESH:
 				return EMPTY_GITHUB_AUTH_STATE;
 			case IPC_COMMANDS.MODELS_PROVIDERS_LIST:
-				return { providers: [] };
+				return { providers: [], options: fixtureProviderOptions };
+			case IPC_COMMANDS.MODELS_PROVIDER_UPSERT:
+				throw new Error("The layout harness does not store provider credentials");
 			case IPC_COMMANDS.LOCAL_ENGINES_GET:
 				return { enabled: true };
 			case IPC_COMMANDS.LOCAL_ENGINES_SET:

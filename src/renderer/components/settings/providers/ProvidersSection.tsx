@@ -45,9 +45,10 @@ import {
 } from "../../common";
 import { SettingsAdvanced, SettingsSection } from "../SettingsLayout";
 import { AccountPoolsEditor } from "./AccountPoolsEditor";
+import { useProviderConnection } from "./ClaudeConnection";
 import { ProviderGroupItem } from "./ConnectedRow";
 import { CreditSpendRow } from "./CreditSpendRow";
-import { CustomProviderForm } from "./CustomProviderForm";
+import { CLAUDE_API_URL, CustomProviderForm } from "./CustomProviderForm";
 import { LocalEnginesRow } from "./LocalEnginesRow";
 import { ModelOverrides } from "./ModelOverrides";
 import { type AccountRowLayout, accountRowLayout, ProviderAccountRows, useProviderAccounts } from "./ProviderAccounts";
@@ -58,7 +59,7 @@ import {
 	unlistedCustomReason,
 	useProviderCatalog,
 } from "./ProviderList";
-import { type ProviderLogin, ProviderLoginPanel, useProviderLogin } from "./ProviderLogin";
+import { type ProviderLogin, ProviderLoginPanel } from "./ProviderLogin";
 import { ProviderMark } from "./ProviderMark";
 import { ProviderPicker } from "./ProviderPicker";
 import { providerDiscoveryErrors } from "./provider-catalog";
@@ -144,6 +145,12 @@ function ConnectedProviderRows({
 	];
 	return (
 		<ProviderGroupItem
+			addDisabled={!sidecarReady || login.busy}
+			onAdd={
+				config?.baseUrl === CLAUDE_API_URL && config.api === "anthropic-messages"
+					? () => void login.start("anthropic")
+					: undefined
+			}
 			badges={provider.disabled && <Badge variant="warning">{t("providers.badge.disabled")}</Badge>}
 			busy={busyProvider === provider.id || (login.state.running && login.state.providerId === provider.id)}
 			detail={[
@@ -326,7 +333,7 @@ export function ProvidersSection({
 		},
 		[load, providers, t],
 	);
-	const login = useProviderLogin(onConnected);
+	const { login, claudePanel, retryLogin } = useProviderConnection(catalog, onConnected);
 	/**
 	 * The form stands in for the whole section, so closing it lands back at the
 	 * top. This is the endpoint it saved or edited ("" after cancelling an add):
@@ -431,6 +438,8 @@ export function ProvidersSection({
 			setBusyProvider(null);
 		}
 	};
+
+	if (claudePanel) return <SettingsSection id="settings-models-accounts">{claudePanel}</SettingsSection>;
 
 	if (providerForm && catalog.options) {
 		return (
@@ -538,11 +547,7 @@ export function ProvidersSection({
 				)}
 				{login.state.providerId !== null && (
 					<div className="px-2.5 pt-1 pb-2" data-login-panel>
-						<ProviderLoginPanel
-							login={login}
-							onRetry={() => void login.start(login.state.providerId ?? "")}
-							providerName={loginName}
-						/>
+						<ProviderLoginPanel login={login} onRetry={retryLogin} providerName={loginName} />
 					</div>
 				)}
 
