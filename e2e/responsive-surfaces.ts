@@ -30,7 +30,7 @@ export interface Surface {
 	area: "A" | "B";
 	/** What it is, for the report. */
 	title: string;
-	open(page: Page, look: Look): Promise<void>;
+	open(page: Page, look: Look, parityView?: "local" | "remote" | "phone"): Promise<void>;
 	/** A selector that must be visible before measuring (the surface failed to open when it never is). */
 	ready?: string;
 	/** Extra query for the harness page (`&pwa=push`); surfaces sharing a page need the same query. */
@@ -2408,20 +2408,28 @@ export const SURFACES: readonly Surface[] = [
 		id: "settings-version-summaries",
 		area: "B",
 		title: "Settings › Updates & about with the changes for the installed release and the newer release",
-		open: async (page, look) => {
+		open: async (page, look, parityView) => {
 			await openSettingsUpdates(page, look);
 			const installed = page.locator("[data-about-brand] [data-version-summary='installed']");
 			const available = page.locator("[data-settings-page] [data-version-summary='available']").first();
-			for (const [summary, version, sentence] of [
-				[installed, `v${installedVersion}`, await installedSummary(look.lang)],
+			const installedSentence = await installedSummary(look.lang);
+			const rows: [Locator, string, string][] = [
+				[installed, `v${installedVersion}`, installedSentence],
 				[available, availableVersion, availableSummary[look.lang]],
-			] as const) {
+			];
+			if (parityView === "remote") {
+				const host = page.locator("[data-host-desktop-version]");
+				rows.push(
+					[host.locator("[data-version-summary='host-installed']"), installedVersion, installedSentence],
+					[host.locator("[data-version-summary='host-latest']"), availableVersion, availableSummary[look.lang]],
+				);
+			}
+			for (const [summary, version, sentence] of rows) {
 				await expect(summary).toHaveText(`· ${sentence}`, { timeout: 30_000 });
 				await expect(summary.locator("..").getByText(version, { exact: true })).toBeVisible();
 			}
 			await page.locator("[data-about-brand]").evaluate(brand => brand.scrollIntoView({ block: "start" }));
-			await expect(installed).toBeInViewport({ ratio: 1 });
-			await expect(available).toBeInViewport({ ratio: 1 });
+			for (const [summary] of rows) await expect(summary).toBeInViewport({ ratio: 1 });
 		},
 		ready: "[data-settings-page] [data-version-summary='available']",
 		when: () => false,

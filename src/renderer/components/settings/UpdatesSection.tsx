@@ -503,6 +503,8 @@ const HOST_UPDATE_POLL_MS = 1500;
 export function HostDesktopRow({ deviceId }: { deviceId: string }) {
 	const t = useT();
 	const [state, setState] = useState<HostDesktopState>();
+	const { lang } = useLang();
+	const installedSummary = useInstalledReleaseSummary(state?.version, lang);
 	const [failure, setFailure] = useState<InlineFailure>();
 	const [pending, setPending] = useState<HostUpdateAction>();
 	const updateState = state?.update.state;
@@ -543,6 +545,12 @@ export function HostDesktopRow({ deviceId }: { deviceId: string }) {
 	};
 
 	const status = state?.update;
+	const latestSummary =
+		status && "summary" in status
+			? status.summary?.[lang]
+			: status?.state === "not-available" && status.version === state?.version
+				? installedSummary
+				: undefined;
 	const control = failure ? (
 		<Button icon={<RefreshCw />} onClick={() => void read()} size="sm" variant="secondary">
 			{t("common.retry")}
@@ -598,14 +606,19 @@ export function HostDesktopRow({ deviceId }: { deviceId: string }) {
 			tipOnly
 			footer={
 				<>
-					<p className="mt-1 text-sc-xs text-(--sc-text-muted)" data-host-desktop-version>
-						{t("updates.current")} <span className="font-mono text-(--sc-text)">{state?.version ?? "—"}</span>
-						{" · "}
-						{t("updates.latest")}{" "}
-						<span className="font-mono text-(--sc-text)">
-							{status && "version" in status ? status.version : "—"}
-						</span>
-					</p>
+					<div className="mt-1 text-sc-xs text-(--sc-text-muted)" data-host-desktop-version>
+						<p>
+							{t("updates.current")} <span className="font-mono text-(--sc-text)">{state?.version ?? "—"}</span>
+							{installedSummary && <span data-version-summary="host-installed"> · {installedSummary}</span>}
+						</p>
+						<p>
+							{t("updates.latest")}{" "}
+							<span className="font-mono text-(--sc-text)">
+								{status && "version" in status ? status.version : "—"}
+							</span>
+							{latestSummary && <span data-version-summary="host-latest"> · {latestSummary}</span>}
+						</p>
+					</div>
 					{failure ? (
 						<p className="mt-1 text-sc-xs text-(--sc-danger)" role="alert">
 							{failure.message}

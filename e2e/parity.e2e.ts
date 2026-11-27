@@ -1008,7 +1008,7 @@ if (dir) {
 						try {
 							await show[view](surface.parity.session);
 							await page.locator("[data-composer-input]").first().waitFor({ state: "visible", timeout: 60_000 });
-							await surface.open(page, VIEW_LOOK[view]);
+							await surface.open(page, VIEW_LOOK[view], view);
 							if (surface.ready)
 								await page.locator(surface.ready).first().waitFor({ state: "visible", timeout: 15_000 });
 							await page.waitForTimeout(surface.settle ?? 450);

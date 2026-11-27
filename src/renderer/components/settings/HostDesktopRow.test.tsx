@@ -9,7 +9,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HostDesktopState, HostUpdateAction, UpdateStatus } from "../../../shared/ipc-types";
-import { I18nProvider, translate } from "../../lib/i18n";
+import { I18nProvider, loadLocale, setLanguageOverride, translate } from "../../lib/i18n";
+import { loadChangelog } from "../../lib/whats-new";
 import { useToastStore } from "../../stores/toast";
 import { HostDesktopRow } from "./UpdatesSection";
 
@@ -68,6 +69,7 @@ afterEach(async () => {
 		root?.unmount();
 	});
 	root = null;
+	setLanguageOverride(null);
 	while (document.body.firstChild) document.body.removeChild(document.body.firstChild);
 	useToastStore.setState({ toasts: [] });
 	hostDesktop.get.mockClear();
@@ -76,6 +78,32 @@ afterEach(async () => {
 });
 
 describe("HostDesktopRow", () => {
+	it.each(["en", "ko"] as const)("pairs each host version with its own %s sentence", async lang => {
+		await Promise.all([loadLocale(lang), loadChangelog()]);
+		setLanguageOverride(lang);
+		const installed = {
+			en: "You can answer A2UI cards in the conversation and move a saved session to a paired computer.",
+			ko: "대화 속 A2UI 카드에 바로 답하고, 저장된 세션을 연결된 컴퓨터로 옮길 수 있습니다.",
+		};
+		const offered = { en: "The host can export a chat.", ko: "호스트에서 대화를 내보낼 수 있습니다." };
+		current = {
+			...hostState({ state: "available", version: "3.2.1", mode: "relaunch", summary: offered }),
+			version: "0.149.0",
+		};
+		await mount();
+		const lines = () =>
+			Array.from(document.body.querySelectorAll("[data-host-desktop-version] p"), p => p.textContent);
+		expect(lines()).toEqual([
+			`${translate("updates.current")} 0.149.0 · ${installed[lang]}`,
+			`${translate("updates.latest")} 3.2.1 · ${offered[lang]}`,
+		]);
+
+		current = hostState({ state: "available", version: "3.2.2", mode: "relaunch" });
+		await act(async () => root?.unmount());
+		await mount();
+		expect(lines()).toEqual([`${translate("updates.current")} 1.2.3`, `${translate("updates.latest")} 3.2.2`]);
+	});
+
 	it("downloads and installs the host's update there, and toasts the host's refusal", async () => {
 		await mount();
 		expect(hostDesktop.get).toHaveBeenCalledWith("dev-studio");
