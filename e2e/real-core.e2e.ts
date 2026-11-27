@@ -467,7 +467,8 @@ test("system omp's browser sign-in: loopback callback, default browser, cancel t
 		// The picker is a grid of mark + name buttons (stock names it "Anthropic (Claude Pro/Max)"); the sign-in
 		// panel is one block under it.
 		await setup.locator('[data-provider-connect="anthropic"]').click();
-		await setup.getByRole("button", { name: "Sign in with your subscription", exact: true }).click();
+		const methods = page.getByRole("dialog", { name: "How would you like to connect Claude?", exact: true });
+		await methods.getByRole("button", { name: "Sign in with your subscription", exact: true }).click();
 		const anthropic = setup.locator("[data-login-panel]");
 		await expect(anthropic.locator("[data-login-progress]")).toHaveText("Waiting for you to finish in the browser…");
 		await expect(
