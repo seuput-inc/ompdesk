@@ -34,6 +34,8 @@ pub struct FatedSession {
     pub cwd: String,
     /// The session file of the session that opened it, when known.
     pub opened_by_session: Option<String>,
+    /// Missing in legacy records; an empty string explicitly identifies this computer.
+    pub opened_by_device: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +84,9 @@ impl SessionFate {
         map.insert("cwd".into(), session.cwd.clone().into());
         if let Some(opened) = &session.opened_by_session {
             map.insert("openedBySession".into(), opened.clone().into());
+            if let Some(device) = &session.opened_by_device {
+                map.insert("openedByDevice".into(), device.clone().into());
+            }
         }
         map.insert("state".into(), self.state.as_str().into());
         map.insert("at".into(), js_number(self.at));
@@ -121,6 +126,7 @@ pub(crate) fn parse_fate(value: &Value) -> Option<SessionFate> {
             hidden: fields.get("hidden") == Some(&Value::Bool(true)),
             cwd: string(fields, "cwd").unwrap_or("").to_owned(),
             opened_by_session: non_empty("openedBySession"),
+            opened_by_device: string(fields, "openedByDevice").map(str::to_owned),
         },
         state,
         at: number(fields, "at").unwrap_or(0.0),
@@ -213,15 +219,15 @@ impl SessionFates {
             }
         }
         ids.truncate(FATE_IDS_MAX);
-        let opened_by_session = session
-            .opened_by_session
-            .clone()
-            .or_else(|| {
-                earlier
-                    .as_ref()
-                    .and_then(|earlier| earlier.opened_by_session.clone())
-            })
-            .filter(|opened| !opened.is_empty());
+        let opener = if session.opened_by_session.is_some() {
+            Some(&session)
+        } else {
+            earlier.as_ref()
+        };
+        let opened_by_session = opener
+            .and_then(|row| row.opened_by_session.clone())
+            .filter(|path| !path.is_empty());
+        let opened_by_device = opener.and_then(|row| row.opened_by_device.clone());
         // A delete that knows less than the close before it (a saved id alone) keeps what the close recorded.
         let title = if session.title.is_empty() {
             earlier
@@ -245,6 +251,7 @@ impl SessionFates {
                 title,
                 cwd,
                 opened_by_session,
+                opened_by_device,
                 ..session
             },
             state,

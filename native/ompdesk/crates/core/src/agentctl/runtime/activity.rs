@@ -153,7 +153,11 @@ impl Runtime {
             if let Some(session) = &activity.session
                 && !orphans.is_empty()
             {
-                let (control, opener) = (self.control.clone(), session.path.clone());
+                let control = self.control.clone();
+                let opener = (
+                    session.path.clone(),
+                    session.device.clone().unwrap_or_default(),
+                );
                 tokio::spawn(async move { control.close_orphans(orphans, Some(opener)).await });
             }
         }

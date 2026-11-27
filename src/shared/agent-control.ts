@@ -252,7 +252,7 @@ export interface ClosedChild {
 	path: string;
 	/** The opener's session file (a tab id does not survive a relaunch). */
 	openedBySession: string;
-	/** The opener's computer, independently of where the child ran. */
+	/** Empty = known local opener; absent = an older record without proof of its device. */
 	openedByDevice?: string;
 	/** What its row reads. */
 	title: string;
@@ -292,7 +292,7 @@ export function parseClosedChildren(value: unknown): ClosedChild[] {
 		rows.push({
 			path,
 			openedBySession,
-			...(typeof openedByDevice === "string" && openedByDevice ? { openedByDevice } : {}),
+			...(typeof openedByDevice === "string" ? { openedByDevice } : {}),
 			title: typeof title === "string" ? title : "",
 			cwd: typeof cwd === "string" ? cwd : "",
 			closedAt: typeof closedAt === "number" ? closedAt : 0,

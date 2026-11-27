@@ -225,7 +225,7 @@ async fn mine_lists_the_sessions_the_caller_opened_whose_tabs_closed_and_open_on
         json!({
             "windowOf": { "boss": "w", "far": "w2" },
             "parents": { "far": { "callerTabId": "boss" } },
-            "closedChildren": [{ "path": "/s/y_kid22222.jsonl", "openedBySession": "/s/x_boss1111.jsonl", "title": "kid22222", "cwd": "/w", "closedAt": 5.0 }],
+            "closedChildren": [{ "path": "/s/y_kid22222.jsonl", "openedBySession": "/s/x_boss1111.jsonl", "openedByDevice": "", "title": "kid22222", "cwd": "/w", "closedAt": 5.0 }],
         }),
         main_with_saved,
     );
