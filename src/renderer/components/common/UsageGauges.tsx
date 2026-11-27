@@ -12,7 +12,15 @@ import type { UsageLimit, UsageReport } from "../../../shared/rpc-types";
 import { formatSpan, formatSpanCompact } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { usageLimitLabel } from "../../lib/usage-labels";
-import { accountGauges, accountWindows, gaugeColumn, shortWindowLabel, usedShare } from "../../lib/usage-windows";
+import {
+	accountGauges,
+	accountWindows,
+	gaugeColumn,
+	gaugeKey,
+	sameGauge,
+	shortWindowLabel,
+	usedShare,
+} from "../../lib/usage-windows";
 
 /** Columns drawn on one line; a provider with more wraps the rest under them. */
 export const MAX_USAGE_COLUMNS = 4;
@@ -56,7 +64,7 @@ export function usageTooltip(
 						: "↻";
 			const share = limitShare(limit);
 			const head = drawn.has(limit)
-				? [shortWindowLabel(limit), share].filter(Boolean).join(" ")
+				? [shortWindowLabel(limit, report.limits), share].filter(Boolean).join(" ")
 				: [usageLimitLabel(limit, t), share].filter(Boolean).join(" · ");
 			return [head, reset].filter(Boolean).join(" · ");
 		}),
@@ -88,7 +96,7 @@ export function UsageGauges({
 	/** Window names are in the provider's shared header; reset units omit spaces. */
 	sharedLabels?: boolean;
 	/** `gaugeColumns` of the provider's accounts: every window, each in its column. */
-	columns?: readonly string[];
+	columns?: readonly UsageLimit[];
 	/** With `columns`: the grid's column count, when a list of several providers shares one wider than this one's. */
 	tracks?: number;
 	/** The work board's session: its model's scoped window joins the compact gauges (`accountWindows`). */
@@ -100,7 +108,7 @@ export function UsageGauges({
 	const stackedLabels = sharedLabels && (columns?.length ?? 0) > MAX_USAGE_COLUMNS;
 	const now = Date.now();
 	const slots = columns
-		? columns.map(column => windows.find(entry => gaugeColumn(entry.limit) === column) ?? column)
+		? columns.map(column => windows.find(entry => sameGauge(entry.limit, column)) ?? column)
 		: windows;
 	return (
 		<span
@@ -121,8 +129,16 @@ export function UsageGauges({
 			}
 		>
 			{slots.map(slot => {
-				if (typeof slot === "string") {
-					return <span aria-hidden className="omp-usage-gauge" data-empty="" data-window={slot} key={slot} />;
+				if (!("fraction" in slot)) {
+					return (
+						<span
+							aria-hidden
+							className="omp-usage-gauge"
+							data-empty=""
+							data-window={gaugeColumn(slot)}
+							key={gaugeKey(slot)}
+						/>
+					);
 				}
 				const { limit, fraction } = slot;
 				const percent = Math.round(Math.min(1, fraction) * 100);
@@ -133,7 +149,7 @@ export function UsageGauges({
 						className="omp-usage-gauge"
 						data-state={fraction >= 1 ? "limit" : fraction >= NEAR_FRACTION ? "near" : "ok"}
 						data-window={gaugeColumn(limit)}
-						key={limit.id}
+						key={gaugeKey(limit)}
 					>
 						<span
 							// The name read with its value ("5시간 64%"), not the glyphs "5H" and "64%".
@@ -147,7 +163,9 @@ export function UsageGauges({
 						>
 							<span className="omp-usage-gauge-fill" style={{ transform: `scaleX(${percent / 100})` }} />
 							<span aria-hidden className="omp-usage-gauge-text">
-								{(!sharedLabels || stackedLabels) && <span data-usage-label>{shortWindowLabel(limit)}</span>}
+								{(!sharedLabels || stackedLabels) && (
+									<span data-usage-label>{shortWindowLabel(limit, columns ?? limits)}</span>
+								)}
 								<span data-usage-percent>{percent}%</span>
 							</span>
 						</span>

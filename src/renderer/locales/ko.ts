@@ -1560,6 +1560,7 @@ export const ko: Record<string, string> = {
 	"providers.accounts.limited": "한도 도달",
 	"providers.accounts.low": "한도 얼마 안 남음",
 	"providers.accounts.credits": "크레딧",
+	"providers.accounts.creditsAmount": "{value}크레딧",
 	"providers.accounts.creditsBalance": "남은 선불 크레딧: {left}",
 	"providers.accounts.creditsMonthlyCap": "이번 달 남은 추가 사용량: {limit} 중 {left}",
 	"providers.accounts.creditsUnlimited": "무제한",

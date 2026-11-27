@@ -1572,6 +1572,7 @@ export const en: Record<string, string> = {
 	"providers.accounts.limited": "Limit reached",
 	"providers.accounts.low": "Low quota",
 	"providers.accounts.credits": "Credits",
+	"providers.accounts.creditsAmount": "{value} credits",
 	"providers.accounts.creditsBalance": "Prepaid credits left: {left}",
 	"providers.accounts.creditsMonthlyCap": "Extra usage left this month: {left} of {limit}",
 	"providers.accounts.creditsUnlimited": "Unlimited",
