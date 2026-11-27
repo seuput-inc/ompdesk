@@ -981,6 +981,95 @@ if (dir) {
 				await untilAnswered(b, start, { after: "hello" });
 			};
 
+			/**
+			 * What a `sleepingRow` surface shows, set up once before the first: B's project `parity-sleep` holds "Parity
+			 * older" and "Parity newer" (each one answered turn, in that order, made from B's phone page, which every view
+			 * loads afresh, so no window of B keeps a tab of them) and "Parity sleeping", a session no omp ever opened
+			 * whose file arrives two hours untouched (`modified` is the file's mtime). So Recent lists the newer first and
+			 * Hide sleeping folds the third under the project's line.
+			 */
+			let sleepingLeft = false;
+			const leaveSleeping = async () => {
+				sleepingLeft = true;
+				const folder = path.join(parent, "parity-sleep");
+				await fs.mkdir(folder, { recursive: true });
+				let sessions = "";
+				for (const title of ["Parity older", "Parity newer"]) {
+					const tabId = (await phone.evaluate(cwd => window.omp.tabs.spawn({ cwd }), folder))?.tabId ?? "";
+					if (!tabId) throw new Error(`the phone opened no tab for ${title}`);
+					const made = async () =>
+						(await phone.evaluate(() => window.omp.tabs.list())).find(tab => tab.tabId === tabId);
+					await expect.poll(async () => (await made())?.status, { timeout: 60_000 }).toBe("ready");
+					await phone.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
+						tabId,
+						`fixture:title:${title}`,
+					] as const);
+					await phone.evaluate(
+						id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "hello" }),
+						tabId,
+					);
+					let file = "";
+					await expect
+						.poll(async () => (file = (await made())?.sessionPath ?? ""), { timeout: 30_000 })
+						.not.toBe("");
+					await untilAnswered(phone, tabId);
+					expect(await phone.evaluate(id => window.omp.tabs.close(id), tabId)).toBe(true);
+					sessions = path.dirname(file);
+				}
+				// An omp that had a file open writes it again as it exits, so the sleeping one is written here, its time
+				// set before it is moved in: the index sees it arrive already old.
+				const asleepSince = new Date(Date.now() - 2 * 60 * 60_000);
+				const at = (seconds: number) => new Date(asleepSince.getTime() - 60_000 + seconds * 1000).toISOString();
+				const id = "parity-sleeping-1";
+				const lines = [
+					{ type: "title", v: 1, title: "Parity sleeping", updatedAt: at(0) },
+					{ type: "session", version: 3, id, timestamp: at(0), cwd: folder },
+					{
+						type: "message",
+						id: "entry-1",
+						parentId: null,
+						timestamp: at(1),
+						message: { role: "user", content: "hello", timestamp: Date.parse(at(1)) },
+					},
+					{
+						type: "message",
+						id: "entry-2",
+						parentId: "entry-1",
+						timestamp: at(2),
+						message: {
+							role: "assistant",
+							content: [{ type: "text", text: "Local fixture reply" }],
+							timestamp: Date.parse(at(2)),
+						},
+					},
+				];
+				const staged = path.join(parent, `${id}.jsonl`);
+				await fs.writeFile(staged, `${lines.map(line => JSON.stringify(line)).join("\n")}\n`);
+				await fs.utimes(staged, asleepSince, asleepSince);
+				await fs.rename(staged, path.join(sessions, `${id}.jsonl`));
+				let seen = "";
+				await expect
+					.poll(
+						async () => {
+							const rows = await b.evaluate(() => window.omp.sessions.list("global"));
+							const row = rows.find(item => item.title === "Parity sleeping");
+							seen = row ? `${row.path} modified ${row.modified}` : `no row among ${rows.length}`;
+							return row !== undefined && Date.parse(row.modified) < Date.now() - 60 * 60_000;
+						},
+						{ timeout: 60_000, intervals: [1_000], message: `"Parity sleeping" is listed old (${sessions})` },
+					)
+					.toBe(true)
+					.catch(async error => {
+						const disk = await fs.stat(path.join(sessions, `${id}.jsonl`)).then(
+							stat => stat.mtime.toISOString(),
+							() => "missing",
+						);
+						throw new Error(
+							`${error instanceof Error ? error.message : error}\nlast read: ${seen}; on disk: ${disk}`,
+						);
+					});
+			};
+
 			const records: SurfaceRecord[] = [];
 			for (const surface of surfaces) {
 				if (surface.id === "settings-version-summaries") feed?.publish(true);
@@ -989,6 +1078,7 @@ if (dir) {
 				if (surface.parity.hiddenRoster && !hiddenRosterLeft) await leaveHiddenRoster();
 				if (surface.parity.crossProject && !crossProjectLeft) await leaveCrossProject();
 				if (surface.parity.folderMissing && !folderMissingLeft) await leaveFolderMissing();
+				if (surface.parity.sleepingRow && !sleepingLeft) await leaveSleeping();
 				const record: SurfaceRecord = {
 					id: surface.id,
 					title: surface.title,

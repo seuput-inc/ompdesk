@@ -31,6 +31,8 @@ export const DEVICE_LOCAL_PREF_KEYS: readonly string[] = [
 	"sidebarVisible",
 	"sidebarFolds",
 	"sidebarFamilies",
+	"sidebar.sessionSort",
+	"sidebar.hideSleeping",
 	"gui.panelWidth",
 	"panelSide",
 	"defaultPanelTab",

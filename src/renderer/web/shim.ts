@@ -246,6 +246,13 @@ export function createWebOmp(env: ShimEnv): WebOmp {
 
 	async function getPrefs(payload: unknown, ...rest: unknown[]): Promise<unknown> {
 		const key = payloadField(payload, "key");
+		if (key === "sidebar") {
+			const [sidebar, device] = await Promise.all([
+				transport.invoke(C.PREFS_GET, payload, ...rest),
+				devicePrefs ?? loadDevicePrefs(),
+			]);
+			return overlayDevicePrefs({ sidebar }, device).sidebar;
+		}
 		if (typeof key === "string" && key !== "" && !isDeviceLocalPref(key)) {
 			return transport.invoke(C.PREFS_GET, payload, ...rest);
 		}
@@ -468,6 +475,12 @@ export function createWebOmp(env: ShimEnv): WebOmp {
 	};
 
 	const shared = createOmpApi(shimTransport);
+	const { updateSidebar } = shared.prefs;
+	shared.prefs.updateSidebar = change => {
+		if (change.op === "set-session-sort") return shared.prefs.set("sidebar.sessionSort", change.sort);
+		if (change.op === "set-hide-sleeping") return shared.prefs.set("sidebar.hideSleeping", change.hide);
+		return updateSidebar(change);
+	};
 	/**
 	 * `fs.uploadToHost`: a frame holds 1 MB, so the file goes to this computer by `POST /upload` first and the
 	 * call names that upload; the computer sends its bytes on to the paired host.

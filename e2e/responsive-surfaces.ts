@@ -74,6 +74,11 @@ export interface Surface {
 		 */
 		folderMissing?: boolean;
 		/**
+		 * Before it is captured, B's project `parity-sleep` holds "Parity older", "Parity newer" and "Parity sleeping",
+		 * the last untouched for two hours (e2e/parity.e2e.ts).
+		 */
+		sleepingRow?: boolean;
+		/**
 		 * Runs in each view after its capture (also when the capture failed): puts back what `open` changed beyond the
 		 * page (the host's settings, a take waiting on the fake omp) or left open in the window beyond what Escape and
 		 * opening the next session close (the side panel), so the next surface starts from the same host and window.
@@ -468,7 +473,7 @@ const keyboardLook = (look: Look): boolean => (look.device ?? "touch") === "touc
 const sidebarDocked = (look: Look): boolean => look.width >= 800 && look.height >= 500;
 
 async function openDrawer(page: Page, look: Look): Promise<void> {
-	if (sidebarDocked(look)) return;
+	if (sidebarDocked(look) || (await page.locator("[data-drawer]").isVisible())) return;
 	await page.locator("button:visible:has(svg.lucide-menu)").first().click();
 	await page.locator("[data-drawer]").waitFor({ state: "visible", timeout: 10_000 });
 }
@@ -542,7 +547,7 @@ async function ensureParityItems(page: Page): Promise<void> {
 async function openParityItems(page: Page, look: Look): Promise<void> {
 	await ensureParityItems(page);
 	await openDrawer(page, look);
-	await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+	await page.locator("[data-sidebar-bots-open]:visible").first().click();
 	// A phone shows the list first, and a group's room may be the page: the bot's row opens its page.
 	if ((await page.locator("[data-bot-pane]:visible").count()) === 0)
 		await page.locator("[data-bots-page-row]:visible").first().click();
@@ -721,6 +726,37 @@ async function openFolderMissing(page: Page, look: Look): Promise<void> {
 		"moda-office",
 		':is(.omp-sidebar-session-row, [data-device-session])[data-folder-missing]:has-text("Parity folder gone")',
 	);
+}
+
+/** One item of the sidebar header's options, chosen unless it already is (a mouse's menu, a finger's sheet). */
+async function pickSidebarOption(page: Page, name: RegExp, on: boolean): Promise<void> {
+	await page.locator("[data-sidebar-options] button:visible").first().click();
+	const item = page.getByRole("menuitemcheckbox", { name }).first();
+	await item.waitFor({ state: "visible", timeout: 10_000 });
+	if ((await item.getAttribute("aria-checked")) === String(on)) await page.keyboard.press("Escape");
+	else await item.click();
+	await page.locator('[role="menu"]').first().waitFor({ state: "hidden", timeout: 10_000 });
+}
+
+/** The `parity-sleep` project sorted by Recent with Hide sleeping on: the newer session first, the old one folded. */
+async function openSidebarSorted(page: Page, look: Look): Promise<void> {
+	await openDrawer(page, look);
+	await pickSidebarOption(page, /^Recent$/, true);
+	await pickSidebarOption(page, /^Hide sleeping/, true);
+	await showProjectRows(
+		page,
+		look,
+		"parity-sleep",
+		':is([data-session-group$="parity-sleep"], [data-device-group$="parity-sleep"]) [data-sidebar-sleeping]',
+	);
+}
+
+/** The options back to the default: Manual, sleeping rows shown (a phone's drawer opened again if it closed). */
+async function resetSidebarOptions(page: Page): Promise<void> {
+	if ((await page.locator("[data-sidebar-options] button:visible").count()) === 0)
+		await page.locator("button:visible:has(svg.lucide-menu)").first().click();
+	await pickSidebarOption(page, /^Manual/, true);
+	await pickSidebarOption(page, /^Hide sleeping/, false);
 }
 
 /** Settings › Models & accounts through the sidebar's Settings row and the section's own nav entry, as a person does; the local engine switch under Custom endpoints in view. */
@@ -1776,6 +1812,15 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work", folderMissing: true },
 	},
 	{
+		id: "sidebar-sorted",
+		area: "A",
+		title: "Session list sorted by Recent with Hide sleeping: a project's newer session first, its idle one folded under the sleeping line",
+		open: openSidebarSorted,
+		ready: ':is([data-session-group$="parity-sleep"], [data-device-group$="parity-sleep"]) [data-sidebar-sleeping="1"]',
+		when: () => false,
+		parity: { session: "work", sleepingRow: true, after: resetSidebarOptions },
+	},
+	{
 		id: "missing-folder-sheet",
 		area: "A",
 		title: "A session whose folder was deleted, selected: its transcript read-only, with Archive (nothing saved to restore)",
@@ -2511,7 +2556,7 @@ export const SURFACES: readonly Surface[] = [
 		open: async (page, look) => {
 			await ensureParityBot(page);
 			await openDrawer(page, look);
-			await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+			await page.locator("[data-sidebar-bots-open]:visible").first().click();
 			// A phone shows the list first: the bot's row opens its page.
 			const row = page.locator("[data-bots-page-row]:visible").first();
 			if ((await page.locator("[data-bot-pane]:visible").count()) === 0) await row.click();
@@ -2558,7 +2603,7 @@ export const SURFACES: readonly Surface[] = [
 					await window.omp.bots.command({ action: "roomCreate", name: "Parity group", bots: [state.bots[0].id] });
 			});
 			await openDrawer(page, look);
-			await page.locator('[data-sidebar-nav-row="bots"]:visible').first().click();
+			await page.locator("[data-sidebar-bots-open]:visible").first().click();
 			await page.locator("[data-bots-page-room]:visible").first().click();
 		},
 		ready: "[data-bot-room] [data-bot-room-box]",

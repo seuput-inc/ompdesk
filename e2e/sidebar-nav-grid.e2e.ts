@@ -1,8 +1,9 @@
 /**
- * The sidebar's nav rows (Agents, Schedules, Bots, Stats, Phone; settings-layout-look.md › Nav rows) sit two to a row
- * (the owner's request, 26 Nov 2026), on the dev harness (`vite.harness.config.ts`): at the default 280 px sidebar and
- * at the grid's narrowest, 260 px, every label reads whole in English and Korean, an odd count leaves its last cell at a
- * column's width, a narrower sidebar puts one per row, and a phone's drawer keeps 44 px cells.
+ * The sidebar's nav rows (Agents, Schedules, Stats, Phone; settings-layout-look.md › Nav rows) sit two to a row at
+ * every width (the owner's request, 26 Nov 2026, restated 27 Nov 2026), on the dev harness (`vite.harness.config.ts`):
+ * at the default 280 px sidebar and at 260 px every label reads whole in English and Korean, at the 220 px minimum a
+ * cut label keeps its icon and is named whole in its tooltip, an odd count leaves its last cell at a column's width,
+ * and a phone's drawer keeps 44 px cells.
  * `OMP_GUI_SIDEBAR_NAV_SHOTS=<dir>` also writes captures.
  */
 import * as fs from "node:fs/promises";
@@ -10,11 +11,14 @@ import { createServer as createNetServer } from "node:net";
 import * as path from "node:path";
 import { type Browser, chromium, devices, expect, type Page, test } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
+import { SIDEBAR_WIDTH } from "../src/shared/boot-shell-geometry";
 import { reassertTouch } from "./fixture/touch-emulation";
 import { animationsDone } from "./harness";
 
-/** The narrowest docked sidebar that keeps two cells to a row (sidebar.css `.omp-sidebar-nav`). */
+/** The narrowest sidebar whose labels all read whole in both languages. */
 const GRID_MIN_SIDEBAR_WIDTH = 260;
+/** The narrowest docked sidebar (boot-shell-geometry.json). */
+const SIDEBAR_MIN_WIDTH = SIDEBAR_WIDTH.min;
 
 const SHOTS = process.env.OMP_GUI_SIDEBAR_NAV_SHOTS;
 
@@ -159,7 +163,7 @@ for (const lang of ["en", "ko"] as const)
 test("an odd count leaves the last cell a column wide", async () => {
 	const page = await openHarness("en", {});
 	const besideBoard = (list: Cell[]) => list.filter(cell => cell.row !== "board").length;
-	// Hide a cell, and one more when that leaves an even count (the Bots cell shows while the bots feature does).
+	// Hide a cell, and one more when that leaves an even count.
 	let list = await cells(page);
 	do {
 		const hide = list[list.length - 2]?.row ?? "";
@@ -174,18 +178,33 @@ test("an odd count leaves the last cell a column wide", async () => {
 	await page.context().close();
 });
 
-test("a sidebar narrower than the grid's minimum puts one cell per row", async () => {
-	const page = await openHarness("en", { sidebarWidth: GRID_MIN_SIDEBAR_WIDTH - 1 });
-	await shoot(page, "desktop-en-narrow");
-	const list = await cells(page);
-	list.forEach((cell, index) => {
-		expect(cell.left, `${cell.row} starts its row`).toBe(list[0]?.left);
-		if (index > 0)
-			expect(cell.top, `${cell.row} sits under ${list[index - 1]?.row}`).toBeGreaterThan(list[index - 1]?.top ?? 0);
-		expect(cell.cut, `${cell.row}'s label is cut`).toBe(false);
+for (const lang of ["en", "ko"] as const)
+	test(`the narrowest sidebar keeps two per row, each icon shown and a cut label named in its tooltip (${lang})`, async () => {
+		const page = await openHarness(lang, { sidebarWidth: SIDEBAR_MIN_WIDTH });
+		await shoot(page, `desktop-${lang}-min`);
+		const sidebar = await page.locator(".omp-session-sidebar:visible").first().boundingBox();
+		expect(Math.round(sidebar?.width ?? 0), "the sidebar is at its minimum").toBeLessThanOrEqual(
+			SIDEBAR_MIN_WIDTH + 1,
+		);
+		const list = await cells(page);
+		expectTwoPerRow(list);
+		const icons = await page.locator("[data-sidebar-nav-row]:visible").evaluateAll(rows =>
+			rows.map(row => {
+				const icon = row.querySelector("svg")?.getBoundingClientRect();
+				const box = row.getBoundingClientRect();
+				return icon !== undefined && icon.width > 0 && icon.left >= box.left && icon.right <= box.right;
+			}),
+		);
+		expect(icons.every(Boolean), "every cell shows its icon whole").toBe(true);
+		const cut = list.find(cell => cell.cut && cell.row !== "board");
+		if (cut) {
+			const cell = page.locator(`[data-sidebar-nav-row="${cut.row}"]`);
+			const label = (await cell.locator("span").first().textContent())?.trim() ?? "";
+			await cell.hover();
+			await expect(page.getByRole("tooltip")).toContainText(label);
+		}
+		await page.context().close();
 	});
-	await page.context().close();
-});
 
 for (const lang of ["en", "ko"] as const)
 	test(`a phone's drawer: two per row, 44 px cells (${lang})`, async () => {
