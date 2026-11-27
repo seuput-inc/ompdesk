@@ -9,9 +9,8 @@
  *
  * Dependency-free (types aside).
  */
-import type { ScheduleEvent } from "./schedules";
-
 import type { LOOK_EVERY } from "./bot-limits";
+import type { ScheduleEvent } from "./schedules";
 import type { ApprovalMode } from "./tool-approval";
 
 /**
