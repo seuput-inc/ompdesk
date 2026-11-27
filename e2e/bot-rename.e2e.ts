@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { expect, test } from "@playwright/test";
 import type { ElectronApplication, Page } from "playwright";
 import { BOTS_FOLDER } from "../src/shared/bots";
-import { exitApp, launchApp } from "./harness";
+import { exitApp, launchApp, untilAnswered } from "./harness";
 
 // A bot's rename reaches more than its prompt (the owner's report, Nov 2026: the folder stayed under the old name, its
 // routines kept the old title). Renamed in the bot's page header, the bot's folder in ~/.omp/bots follows the new
@@ -227,4 +227,62 @@ test("a renamed bot's folder, files, routine and open chat follow its new name w
 		afterSha256: await digest(original),
 		recoveredSecond: path.basename(String(second)),
 	});
+});
+
+test("a bot renamed before its first chat updates its soul and signs a message on reopen", async () => {
+	test.setTimeout(120_000);
+	const tabs = () => page.evaluate(() => window.omp.tabs.list());
+	const prompt = (id: string, message: string) =>
+		page.evaluate(([tab, text]) => window.omp.rpc.commandForTab(tab, { type: "prompt", message: text }), [
+			id,
+			message,
+		] as const);
+	await expect.poll(async () => (await tabs()).find(tab => tab.active)?.status).toBe("ready");
+	const recipient = (await tabs()).find(tab => tab.active)?.tabId ?? "";
+	const history = "Keep this earlier message about Ada.";
+	await prompt(recipient, history);
+	await untilAnswered(page, recipient, { after: history });
+	const session = (await tabs()).find(tab => tab.tabId === recipient)?.sessionPath;
+	if (!session) throw new Error("The recipient has no saved session.");
+
+	const bot = await page.evaluate(async () =>
+		(await window.omp.bots.command({ action: "create", name: "Ada", purpose: "Ask Ada." })).bots.find(
+			b => b.name === "Ada",
+		),
+	);
+	if (!bot) throw new Error("The new bot is not listed.");
+	expect(bot.home).toBeNull();
+	expect(await fs.readFile(path.join(bot.folder, "SOUL.md"), "utf8")).toBe("# Ada\n\nAsk Ada.\n");
+	const renamed = await page.evaluate(
+		async id => (await window.omp.bots.command({ action: "update", id, name: "Bea" })).bots.find(b => b.id === id),
+		bot.id,
+	);
+	if (!renamed) throw new Error("The renamed bot is not listed.");
+	expect(renamed.home).toBeNull();
+	expect(await fs.readFile(path.join(renamed.folder, "SOUL.md"), "utf8")).toBe("# Bea\n\nAsk Ada.\n");
+
+	const sender = (await page.evaluate(cwd => window.omp.tabs.spawn({ cwd }), renamed.folder))?.tabId ?? "";
+	await expect.poll(async () => (await tabs()).find(tab => tab.tabId === sender)?.status).toBe("ready");
+	await prompt(sender, "Start the sender chat.");
+	await untilAnswered(page, sender, { after: "Start the sender chat." });
+	const note = "The renamed bot sent this.";
+	const sent = await page.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
+		sender,
+		`fixture:host-tool:ompdesk_session_send ${JSON.stringify({ session: recipient, message: note })}`,
+	] as const);
+	expect(sent.success).toBe(true);
+	await untilAnswered(page, recipient, { after: note });
+	await expect.poll(() => fs.readFile(session, "utf8")).toContain(note);
+	expect(await page.evaluate(id => window.omp.tabs.close(id), recipient)).toBe(true);
+	expect(await page.evaluate(file => window.omp.sessions.openInNewWindow({ sessionPath: file }), session)).toBe(true);
+	await expect.poll(() => app.windows().length).toBe(2);
+	const reopened = app.windows().find(win => win !== page);
+	if (!reopened) throw new Error("The saved recipient did not reopen.");
+	await expect
+		.poll(() => reopened.evaluate(async () => (await window.omp?.tabs.list())?.find(tab => tab.active)?.sessionPath))
+		.toBe(session);
+	await expect(reopened.getByText(history, { exact: true })).toBeVisible();
+	await expect(reopened.locator(".omp-user-bubble").filter({ hasText: note }).locator("[data-agent-sent]")).toHaveText(
+		"Sent by an agent · Bea",
+	);
 });
