@@ -54,8 +54,8 @@ public static class Probe {
 }"#,
     )
     .unwrap();
-    let powershell = Path::new(&std::env::var_os("SystemRoot").unwrap())
-        .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    let system32 = Path::new(&std::env::var_os("SystemRoot").unwrap()).join("System32");
+    let powershell = system32.join(r"WindowsPowerShell\v1.0\powershell.exe");
     let result = Command::new(env!("CARGO_BIN_EXE_ompdesk"))
         .creation_flags(0x0800_0000) // CREATE_NO_WINDOW for the test's foreground CLI.
         .args(["check", "--light", "--"])
@@ -67,6 +67,8 @@ public static class Probe {
             "$ErrorActionPreference = 'Stop'; Add-Type -Path ./Probe.cs; [Probe]::Report()",
         ])
         .current_dir(&work)
+        // This PowerShell probe does not depend on the runner's Node or Bun installation.
+        .env("PATH", system32)
         .env("OMPDESK_CHECKS_DIR", dir.join("store"))
         .env("OMPDESK_HEAVY_DIR", dir.join("heavy"))
         .env("TMP", &dir)
