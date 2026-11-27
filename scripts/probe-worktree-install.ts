@@ -26,7 +26,10 @@ try {
 	const installer = pathToFileURL(join(source, "scripts/worktree-install.ts")).href;
 	writeFileSync(join(root, "scripts/worktree-install.ts"), `import ${JSON.stringify(installer)};`);
 	writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: { "worktree:install": "bun marker.ts" } }));
-	writeFileSync(join(root, "marker.ts"), 'import {appendFileSync} from "node:fs"; appendFileSync("writer", "one\\n");');
+	writeFileSync(
+		join(root, "marker.ts"),
+		'import {appendFileSync} from "node:fs"; appendFileSync("writer", "one\\n");',
+	);
 	dropGitSelectors();
 	execFileSync("git", ["init", "-q"], { cwd: root });
 	Object.assign(process.env, {
