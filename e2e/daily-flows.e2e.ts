@@ -1278,6 +1278,7 @@ test("daily flow f: settings, model, diagnostics bundle and autopilot chain with
 		await test.step("the composer model picker changes the model: chip and get_state follow", async () => {
 			await page.locator("[data-model-chip]").click();
 			const dialog = page.getByRole("dialog");
+			await dialog.locator('[data-tab-id="anthropic"]').click();
 			await dialog.getByRole("option", { name: /Sonnet 4\.5/ }).click();
 			await expect(dialog).toBeHidden();
 			// Beside the provider's mark the chip drops the brand word the mark draws (`chipModelName`).

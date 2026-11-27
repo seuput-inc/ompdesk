@@ -85,7 +85,9 @@ for (const [language, theme] of variants(RUNS)) {
 		await expect(search).toBeFocused();
 
 		const options = dialog.getByRole("option");
-		expect(await options.count()).toBeGreaterThan(2);
+		await expect(dialog.getByRole("tab", { selected: true })).toHaveAttribute("data-tab-id", "fixture");
+		await dialog.locator('[data-tab-id="anthropic"]').click();
+		await expect(options).toHaveCount(2);
 		// One line per row, at the small control height at most.
 		for (const box of await options.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height))) {
 			expect(box).toBeLessThanOrEqual(29);
@@ -100,6 +102,7 @@ for (const [language, theme] of variants(RUNS)) {
 		await search.press("ArrowDown");
 		await expect(search).toHaveAttribute("aria-activedescendant", /option-1$/);
 		await search.press("ArrowUp");
+		await dialog.locator('[data-tab-id="fixture"]').click();
 		await search.fill("local");
 		await expect(options).toHaveCount(1);
 		await search.press("Enter");

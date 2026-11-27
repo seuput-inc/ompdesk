@@ -22,6 +22,7 @@ import {
 	ChevronDown,
 	Cpu,
 	History,
+	KeyRound,
 	Mic,
 	MicOff,
 	Paperclip,
@@ -44,6 +45,7 @@ import { useShellMode } from "../../../hooks/use-shell-mode";
 import { useT } from "../../../lib/i18n";
 import type { ComposerInputMode } from "../../../lib/input-modes";
 import { actionKbd } from "../../../lib/keymap";
+import { modelProviderGroup } from "../../../lib/model-provider-group";
 import { useComposerStore } from "../../../stores/composer";
 import { useFirstRunStore } from "../../../stores/first-run";
 import { chosenModelOf, useModelStore } from "../../../stores/model";
@@ -211,7 +213,11 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 	// The chip beside the provider's mark leaves the brand word out ("Claude Opus 5.5" → "Opus 5.5") and names Auto
 	// alone, not the effort Auto picked; the tooltip, the accessible name and the picker keep both in full.
 	const chipProvider = model && !settingUp ? { id: model.provider, name: model.provider } : null;
-	const chipLabel = chipProvider ? chipModelName(chipProvider, modelLabel) : modelLabel;
+	const apiKeyRoute = chipProvider && modelProviderGroup(chipProvider.id) === "anthropic-api-key";
+	const chipLabel = chipProvider
+		? chipModelName(apiKeyRoute ? { id: "anthropic", name: "Claude" } : chipProvider, modelLabel)
+		: modelLabel;
+	const routeLabel = apiKeyRoute ? t("modelPicker.apiModel", { model: modelLabel }) : modelLabel;
 	const thinking = useThinkingSelector();
 	const chipThinking = thinking === "auto" && supportsThinking ? t("input.thinking.name.auto") : thinkingName;
 	/** Said in the chip's tooltip and name while a fallback answers: the turn runs on it, the person's model stays. */
@@ -448,7 +454,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 							? settingUp
 								? t("input.modelTooltip", { id: model.id })
 								: [
-										t("input.modelTooltipThinking", { name: modelLabel, id: model.id, level: thinkingName }),
+										t("input.modelTooltipThinking", { name: routeLabel, id: model.id, level: thinkingName }),
 										standInLine,
 									]
 										.filter(Boolean)
@@ -464,7 +470,11 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 						icon={
 							chipProvider ? (
 								<span className="omp-model-mark">
-									<ProviderMark className="size-(--sc-icon-md)" provider={chipProvider} />
+									{apiKeyRoute ? (
+										<KeyRound aria-hidden className="size-(--sc-icon-md)" />
+									) : (
+										<ProviderMark className="size-(--sc-icon-md)" provider={chipProvider} />
+									)}
 								</span>
 							) : (
 								<Cpu aria-hidden />
@@ -476,7 +486,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 						variant="ghost"
 					>
 						<span aria-hidden className="omp-composer-model-label truncate">
-							{chipLabel}
+							{apiKeyRoute ? t("modelPicker.apiModel", { model: chipLabel }) : chipLabel}
 						</span>
 						{model && !settingUp && (
 							<span aria-hidden className="omp-composer-effort shrink-0 font-normal text-(--sc-text-muted)">
@@ -485,7 +495,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 						)}
 						<span className="sr-only">
 							{model && !settingUp
-								? [t("input.modelLabelThinking", { model: modelLabel, level: thinkingName }), standInLine]
+								? [t("input.modelLabelThinking", { model: routeLabel, level: thinkingName }), standInLine]
 										.filter(Boolean)
 										.join(". ")
 								: t("input.modelLabel", { model: modelLabel })}

@@ -3154,6 +3154,10 @@ export const en: Record<string, string> = {
 
 	// Model picker dialog
 	"modelPicker.failed": "Couldn't switch model",
+	"modelPicker.claudeApi": "Claude API",
+	"modelPicker.apiKeyNumber": "API key {number}",
+	"modelPicker.claudeSubscription": "Claude subscription",
+	"modelPicker.apiModel": "API · {model}",
 	"modelPicker.searchLabel": "Search models",
 	"modelPicker.recent": "Recent",
 	"modelPicker.placeholder": "Search models…",
