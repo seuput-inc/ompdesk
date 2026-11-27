@@ -204,6 +204,13 @@ async fn a_form_raised_for_a_bot_s_request_goes_to_that_bot_which_alone_answers_
     )
     .await;
     assert!(is_error && text.starts_with("Name the card"), "{text}");
+    let (text, is_error) = answer(
+        &control,
+        "chat",
+        json!({ "session": "work", "request": "r1", "answers": [{ "id": "wrong-field", "selected": ["A"] }] }),
+    )
+    .await;
+    assert!(is_error && text.contains("Missing answer for field"), "{text}");
     assert!(asked_with(&asked, "answer").is_empty());
     let (text, is_error) = answer(
         &control,
@@ -262,6 +269,39 @@ async fn a_late_bot_answer_is_refused_and_never_answers_the_owner_s_next_card_or
     .await;
     assert!(!is_error, "{text}");
     control.host.port().close();
+}
+
+#[tokio::test]
+async fn an_attributed_first_goal_prompt_needs_no_dispatch_number() {
+    let (control, asked) = rig(9_909, world(json!([form("goal-form")])), main_replies);
+    ada(&control, false);
+    let sender = AskOrigin { mark: None, ..origin() };
+    assert_eq!(control.route_ask("work", "goal-form", &sender).await.as_deref(), Some(CHAT));
+    assert_eq!(asked_with(&asked, "mail")[0]["tabId"], "chat");
+    control.host.port().close();
+}
+
+#[tokio::test]
+async fn pausing_or_deleting_the_bot_returns_its_open_form_to_the_owner() {
+    for (id, deleting) in [(9_910, false), (9_911, true)] {
+        let (control, asked) = rig(id, world(json!([form("r1")])), main_replies);
+        ada(&control, false);
+        assert_eq!(control.route_ask("work", "r1", &origin()).await.as_deref(), Some(CHAT));
+        if deleting {
+            control.delete_bot("bot-ada").await.unwrap();
+        } else {
+            control.set_paused("bot-ada", true).await.unwrap();
+        }
+        let returned = asked_with(&asked, "escalateAsk");
+        assert_eq!(returned.len(), 1);
+        assert_eq!(returned[0]["tabId"], "work");
+        assert!(returned[0]["chatTabId"].is_null());
+        let (_, refused) = answer(
+            &control, "chat", json!({ "session": "work", "request": "r1", "choice": "A" })
+        ).await;
+        assert!(refused && asked_with(&asked, "answer").is_empty());
+        control.host.port().close();
+    }
 }
 
 #[tokio::test]

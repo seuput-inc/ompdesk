@@ -1292,13 +1292,21 @@ export class AgentControlRuntime {
 						success: false,
 						error: "That session is gone.",
 					} as RpcResponse);
-				const delegated = command.type === "prompt" ? command.message : undefined;
+				const delegated = command.type === "prompt" || command.type === "set_goal" ? command.message : undefined;
 				if (delegated) deps.pool.delegatedPrompt(tabId, delegated);
 				const sent = deps.dispatch(win, sidecar, tabId, command, timeoutMs);
 				if (delegated) {
 					const revoke = () => deps.pool.delegatedPrompt(tabId, delegated, true);
 					void sent.then(response => {
-						if (!response.success) revoke();
+						if (
+							!response.success ||
+							(command.type === "set_goal" &&
+								response.data &&
+								typeof response.data === "object" &&
+								"promptSkipped" in response.data &&
+								response.data.promptSkipped === true)
+						)
+							revoke();
 					}, revoke);
 				}
 				const opening = this.#opening.get(tabId);

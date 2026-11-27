@@ -37,7 +37,7 @@ fn run_origin(text: &str) -> Option<RunOrigin> {
     let wrapped = parse_agent_message(text.trim())?;
     Some(RunOrigin {
         session: wrapped.session?,
-        mark: Some(message_request(&wrapped.body)?),
+        mark: message_request(&wrapped.body),
     })
 }
 

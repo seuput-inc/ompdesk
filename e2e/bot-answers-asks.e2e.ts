@@ -75,11 +75,12 @@ async function botCalls(name: string, args: Record<string, unknown>): Promise<{ 
 }
 
 /** The bot hands work to a session whose run raises the form; resolves with the session's tab id. */
-async function handOutForm(): Promise<string> {
+async function handOutForm(item?: string): Promise<string> {
 	const opened = await botCalls("ompdesk_session_open", {
 		folder: path.join(profile, "project"),
 		message: "Pick the badge color fixture:bot-form",
 		show: "background",
+		...(item ? { item, mode: "goal" } : {}),
 	});
 	expect(opened.isError, opened.text).toBe(false);
 	const [worker] = openedSessions(opened.text);
@@ -149,7 +150,9 @@ test("the bot answers the form a session raised for its request; the owner gets 
 
 test("the bot passes a form on; the owner answers it in the bot's chat and the session goes on with it", async () => {
 	test.setTimeout(180_000);
-	const worker = await handOutForm();
+	const item = await botCalls("ompdesk_item", { action: "add", title: "Pick a badge color" });
+	expect(item.isError, item.text).toBe(false);
+	const worker = await handOutForm("1");
 	await expect.poll(botCards, { timeout: 60_000 }).toHaveLength(1);
 	const passed = await botCalls("ompdesk_session_answer", { session: worker, request: "bot-form-1", escalate: true });
 	expect(passed.isError, passed.text).toBe(false);
