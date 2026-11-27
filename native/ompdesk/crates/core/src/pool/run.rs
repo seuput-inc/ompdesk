@@ -242,7 +242,7 @@ pub(crate) struct Tracking {
     pub stopped: bool,
     /// Stock's auto-retry waiting for its next attempt: `errorMessage`, and the serial of its `auto_retry_start`.
     pub retry: Option<Retry>,
-    retry_blocked: bool,
+    pub(super) retry_blocked: bool,
     /// The session's goal is active (stock's last `goal_updated`): between its turns a relaunch must resume it, since
     /// stock pauses an active goal when the session loads.
     pub goal_active: bool,
@@ -364,6 +364,9 @@ impl Tracking {
                 self.retry = None;
                 self.retry_blocked = false;
             }
+            Some("message_end") if event["message"]["retryBlocked"] == true => {
+                self.retry_blocked = true;
+            }
             Some("auto_retry_start") => {
                 *serial += 1;
                 self.retry = Some(Retry {
@@ -374,7 +377,12 @@ impl Tracking {
             Some("agent_end")
                 if ended && event.get("isTerminal").and_then(Value::as_bool) != Some(false) =>
             {
-                self.finish(run_outcome(event.get("messages")), host(), serial);
+                let mut outcome = run_outcome(event.get("messages"));
+                if self.retry_blocked && outcome["stopReason"] == "error" {
+                    outcome["retryBlocked"] = Value::Bool(true);
+                }
+                self.retry_blocked = false;
+                self.finish(outcome, host(), serial);
             }
             Some("agent_end") if self.run.saga.is_some() => {
                 self.retry_blocked |= last_assistant(event.get("messages"))
@@ -396,8 +404,8 @@ impl Tracking {
                         outcome.insert("errorMessage".into(), error.clone());
                     }
                     self.finish(Value::Object(outcome), host(), serial);
+                    self.retry_blocked = false;
                 }
-                self.retry_blocked = false;
             }
             _ => {}
         }

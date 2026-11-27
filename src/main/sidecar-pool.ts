@@ -391,6 +391,8 @@ function projectEvents(events: AgentSessionEvent[]): ProjectedEvent[] {
 					message: {
 						role: event.message.role,
 						...(event.message.role === "user" ? { text: messageText(event.message) } : {}),
+						...(event.message.role === "assistant" &&
+							claudeRetryBlocked(event.message) && { retryBlocked: true }),
 					},
 				});
 				break;

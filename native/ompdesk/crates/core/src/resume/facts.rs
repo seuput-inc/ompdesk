@@ -45,6 +45,7 @@ pub struct Fact {
     pub awaiting_connection: bool,
     pub last_run: Option<RunOutcome>,
     pub retry: Option<RetryRef>,
+    pub retry_blocked: bool,
     pub touched: Option<i64>,
     pub prompted: Option<i64>,
     pub unsaved_prompt: Option<String>,
@@ -71,6 +72,10 @@ pub fn truthy(value: &Option<String>) -> bool {
 }
 
 impl Fact {
+    pub fn blocks_retry(&self) -> bool {
+        self.retry_blocked || self.last_run.as_ref().is_some_and(|run| run.retry_blocked)
+    }
+
     pub fn touched(&self) -> i64 {
         self.touched.unwrap_or(0)
     }
@@ -137,6 +142,9 @@ pub fn derive_markers(
 ) -> Vec<MarkerData> {
     let mut markers = Vec::new();
     for fact in facts {
+        if fact.blocks_retry() {
+            continue;
+        }
         let Some(session_file) = fact.session_file.as_ref().filter(|file| !file.is_empty()) else {
             continue;
         };

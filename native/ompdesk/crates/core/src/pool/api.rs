@@ -571,6 +571,9 @@ impl Ctx {
                     if let Some(last) = entry.tracking.numbered_outcome() {
                         fact.insert("lastRun".into(), last);
                     }
+                    if entry.tracking.retry_blocked {
+                        fact.insert("retryBlocked".into(), Value::Bool(true));
+                    }
                     if let Some(retry) = &entry.tracking.retry {
                         // One object per `auto_retry_start`: main hands the same object out while this id stands.
                         fact.insert(

@@ -1844,6 +1844,39 @@ describe("TurnResume connection wait", () => {
 		expect(h.awaiting.at(-1)).toEqual(["t1", false]);
 	});
 
+	it.each(["before takeover", "while held", "at turn end"])(
+		"does not replay a partial reply reported %s",
+		async when => {
+			h = setup({ online: false, answers: { retry: RETRIED } });
+			h.resume.launch();
+			h.facts.push(
+				fact({
+					running: true,
+					retry: { errorMessage: "socket hang up" },
+					retryBlocked: when === "before takeover",
+				}),
+			);
+			h.resume.sync();
+			await settle();
+			if (when === "while held") {
+				h.facts[0] = { ...h.facts[0], retryBlocked: true, awaitingConnection: true };
+				h.resume.sync();
+			} else if (when === "at turn end") {
+				h.facts[0] = fact({
+					running: false,
+					awaitingConnection: true,
+					lastRun: { ...networkFailure, retryBlocked: true },
+				});
+				h.resume.sync();
+			}
+			h.net.online = true;
+			h.resume.connectivityChanged();
+			await settle();
+			expect(h.commands.map(cmd => cmd.type)).toEqual(when === "before takeover" ? [] : ["abort_retry"]);
+			expect(h.store.read()).toEqual([]);
+		},
+	);
+
 	it("leaves stock's auto-retry alone while online (a wake's window included) and for a non-transport failure", async () => {
 		h = setup({ online: true, waitAfterWake: true });
 		h.resume.launch();

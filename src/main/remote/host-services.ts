@@ -1012,6 +1012,7 @@ export class LocalHostServices implements HostServices {
 			if (tab.exits) fact.exits = tab.exits;
 			if (runSettling(tab.run)) fact.settling = true;
 			if (tab.lastRun) fact.lastRun = tab.lastRun;
+			if (tab.retryBlocked) fact.retryBlocked = true;
 			if (tab.retry) fact.retry = tab.retry;
 			return [fact];
 		});
@@ -2751,8 +2752,9 @@ export class LocalHostServices implements HostServices {
 						// Several prompts sent while idle may coalesce into this one start.
 						tab.awaitingStarts = undefined;
 					}
+					const wasBlocked = tab.retryBlocked;
 					const ended = trackRunEvent(tab, event);
-					if (ended || event.type === "auto_retry_start") news = true;
+					if (ended || event.type === "auto_retry_start" || wasBlocked !== tab.retryBlocked) news = true;
 					if (!ended) continue;
 					tab.finishedTurn =
 						!tab.awaitingStarts?.size && !(event.type === "agent_end" && event.isTerminal === false);
