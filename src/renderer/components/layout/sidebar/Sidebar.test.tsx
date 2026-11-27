@@ -3837,17 +3837,21 @@ describe("Sidebar device sections", () => {
 				device,
 				home: home.path,
 				sessions: [opener.path],
-				workers: [
-					{
-						session: worker.path,
-						openedBySession: opener.path,
-						cwd: worker.cwd,
-						title: "Old title",
-						state: "closed",
-						branch: null,
-						since: worker.created,
-					},
-				],
+				...(paired
+					? { workerLinks: [{ session: worker.path, openedBySession: opener.path }] }
+					: {
+							workers: [
+								{
+									session: worker.path,
+									openedBySession: opener.path,
+									cwd: worker.cwd,
+									title: "Old title",
+									state: "closed" as const,
+									branch: null,
+									since: worker.created,
+								},
+							],
+						}),
 				paused: false,
 				model: null,
 				autoApprove: false,

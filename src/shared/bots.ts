@@ -59,6 +59,8 @@ export interface Bot {
 	lookSetting?: BotLookSetting;
 	/** Sessions its chats opened or were handed, oldest first (absent in a state from before them). */
 	workers?: BotWorker[];
+	/** Saved worker and opener files on a paired host; its worker activity and launch details stay there. */
+	workerLinks?: { session: string; openedBySession: string }[];
 	/** Project folders whose skills its chats load besides its own. */
 	skillProjects?: string[];
 	/** The flags its chats start with (`--approval-mode`, a `--config` overlay); main adds them to every spawn. */

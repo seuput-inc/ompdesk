@@ -159,7 +159,7 @@ export function botWorkerChildren<T extends SessionInfo>(
 ): Map<string, T[]> {
 	const shown = new Set(chats.map(chat => chat.path));
 	const children = new Map<string, T[]>();
-	for (const worker of bot.workers ?? []) {
+	for (const worker of (bot.device ? bot.workerLinks : bot.workers) ?? []) {
 		const row = sessions.get(worker.session);
 		const opener = row?.openedBySession ?? worker.openedBySession;
 		if (

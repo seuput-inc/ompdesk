@@ -35,7 +35,22 @@ fn copy_row(row: &Value, kind: Kind) -> Value {
     if kind == Kind::Bots
         && let Some(fields) = row.as_object_mut()
     {
-        for key in ["picture", "launch", "workers", "skillProjects"] {
+        let workers = fields
+            .remove("workers")
+            .or_else(|| fields.remove("workerLinks"));
+        if let Some(Value::Array(workers)) = workers {
+            let links: Vec<Value> = workers
+                .iter()
+                .filter_map(|worker| {
+                    let session = worker["session"].as_str()?;
+                    let opener = worker["openedBySession"].as_str()?;
+                    (session.ends_with(".jsonl") && opener.ends_with(".jsonl"))
+                        .then(|| json!({"session": session, "openedBySession": opener}))
+                })
+                .collect();
+            fields.insert("workerLinks".into(), Value::Array(links));
+        }
+        for key in ["picture", "launch", "skillProjects"] {
             fields.remove(key);
         }
     }
@@ -421,6 +436,29 @@ mod tests {
             "items": items.iter().map(|(id, status)| json!({ "id": id, "status": status })).collect::<Vec<_>>(),
             "rooms": [{ "id": "room-1" }],
         })
+    }
+
+    #[test]
+    fn paired_copies_keep_saved_worker_links_but_not_worker_activity() {
+        let mut share = Share::new("epoch".into());
+        let mut host = state(&[("bot", "Courier")], &[]);
+        host["bots"][0]["workers"] = json!([
+            {"session": "/child.jsonl", "openedBySession": "/parent.jsonl", "title": "local", "cwd": "/repo"},
+            {"session": "closed-before-save", "openedBySession": "/parent.jsonl"},
+            {"session": "/legacy.jsonl"}
+        ]);
+        share.take(&host);
+        let mut copies = Copies::default();
+        assert!(copies.apply("host", "Studio", true, Some(&share.whole())));
+        let row = &copies.json()[0]["bots"][0];
+        assert_eq!(
+            row["workerLinks"],
+            json!([{"session": "/child.jsonl", "openedBySession": "/parent.jsonl"}])
+        );
+        assert!(row.get("workers").is_none());
+        host["bots"][0]["workers"] = json!([]);
+        assert!(copies.apply("host", "Studio", true, share.take(&host).as_ref()));
+        assert_eq!(copies.json()[0]["bots"][0]["workerLinks"], json!([]));
     }
 
     #[test]

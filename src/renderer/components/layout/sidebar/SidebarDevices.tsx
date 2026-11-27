@@ -613,7 +613,7 @@ function DeviceSessions({
 				closed: new Set(
 					sessions.flatMap(session => (typeof session.openedBySession === "string" ? [session.path] : [])),
 				),
-				botWorkers: new Set(hostBots.flatMap(bot => bot.workers?.map(worker => worker.session) ?? [])),
+				botWorkers: new Set(hostBots.flatMap(bot => bot.workerLinks?.map(worker => worker.session) ?? [])),
 				projects: projectList.projects,
 				removed: projectList.removed,
 				folder: cwd => {
@@ -719,7 +719,7 @@ function DeviceSessions({
 		for (const bot of hostBots) {
 			if ((hidePausedBots && bot.paused && !query) || !botMatches(bot, query)) continue;
 			folders.add(bot.folder);
-			if (!bot.workers?.length || !bot.sessions.length) continue;
+			if (!bot.workerLinks?.length) continue;
 			for (const workers of remoteBotTree(bot, sessions, projectList).children.values())
 				for (const worker of workers) nested.add(worker.path);
 		}
