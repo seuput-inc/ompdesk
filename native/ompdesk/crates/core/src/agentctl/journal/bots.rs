@@ -47,7 +47,7 @@ pub struct BotRecord {
     pub look_setting: Option<LookSetting>,
     /// The approval mode (`tools.approvalMode`) its chats start in; None starts them as any chat.
     pub chat_approval: Option<String>,
-    /// Sessions its chats opened or were handed (its workers), oldest first, `WORKERS_KEPT` at most.
+    /// Every linked worker, oldest first. The page shows only the newest `WORKERS_KEPT`.
     pub workers: Vec<BotWorker>,
     /// Project folders whose skills its chats load besides its own.
     pub skill_projects: Vec<String>,
@@ -82,8 +82,15 @@ pub struct FolderMove {
     pub to: String,
 }
 
-/// Workers a bot keeps.
+/// Workers shown in the bot's state.
 pub const WORKERS_KEPT: usize = 30;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkerOrigin {
+    Opened,
+    Handed,
+}
 
 /// One session a bot's chat opened or was handed (Orca's `bot-work-store.ts` link from a bot's chat to its worker):
 /// a link only; what it does now is read from the live tabs.
@@ -92,6 +99,11 @@ pub const WORKERS_KEPT: usize = 30;
 pub struct BotWorker {
     /// Its session file, else its tab id until it has one.
     pub session: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    /// Only a fresh spawn or an explicit hand sets this; a parent link proves neither.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<WorkerOrigin>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opened_by_session: Option<String>,
     pub title: String,
@@ -206,39 +218,74 @@ impl Bots {
         changed
     }
 
-    /// Keep the exact chat that opened the worker, even after either tab closes.
-    pub fn observe_worker(&mut self, tab_id: &str, seen: BotWorker) -> bool {
-        let Some(owner) = self.bots.iter().position(|bot| {
-            seen.opened_by_session
+    /// `owner` identifies an explicit spawn or hand. A passive observation names only an opener.
+    pub fn observe_worker(&mut self, owner: Option<&str>, tab_id: &str, seen: BotWorker) -> bool {
+        let changed = self.update_worker(owner, tab_id, seen);
+        if changed {
+            self.save();
+        }
+        changed
+    }
+
+    /// Drop any former bot's authority durably before changing the opener, even on a retry of a failed write.
+    pub fn hand_worker(&mut self, id: &str, tab_id: &str, seen: BotWorker) -> Result<bool, String> {
+        let changed = self.update_worker(Some(id), tab_id, seen);
+        self.save_checked()?;
+        Ok(changed)
+    }
+
+    fn update_worker(&mut self, owner: Option<&str>, tab_id: &str, seen: BotWorker) -> bool {
+        let Some(owner) = self.bots.iter().position(|bot| match owner {
+            Some(id) => bot.id == id,
+            None => seen
+                .opened_by_session
                 .as_deref()
-                .is_some_and(|file| bot.has_session(file))
+                .is_some_and(|file| bot.has_session(file)),
         }) else {
             return false;
         };
+        let same = |known: &BotWorker| {
+            known.device == seen.device
+                && (known.session == seen.session || known.session == tab_id)
+        };
+        // A stale parent snapshot must never transfer a worker away from its recorded bot.
+        if seen.origin.is_none()
+            && self
+                .bots
+                .iter()
+                .enumerate()
+                .any(|(i, bot)| i != owner && bot.workers.iter().any(&same))
+        {
+            return false;
+        }
         let mut removed = false;
         for (index, other) in self.bots.iter_mut().enumerate() {
             if index == owner {
                 continue;
             }
             let before = other.workers.len();
-            other
-                .workers
-                .retain(|known| known.session != seen.session && known.session != tab_id);
+            other.workers.retain(|known| !same(known));
             removed |= before != other.workers.len();
         }
         let bot = &mut self.bots[owner];
-        if seen.cwd == bot.folder {
-            if removed {
-                self.save();
-            }
+        if seen.device.is_none() && seen.cwd == bot.folder {
             return removed;
         }
-        let at = bot
-            .workers
-            .iter()
-            .position(|known| known.session == seen.session || known.session == tab_id);
+        let at = bot.workers.iter().position(same);
+        // Only the opening operation may turn its pending tab into a deletion authority for a file.
+        if seen.origin.is_none()
+            && at.is_some_and(|at| {
+                let known = &bot.workers[at];
+                known.origin == Some(WorkerOrigin::Opened)
+                    && known.session == tab_id
+                    && seen.session != tab_id
+            })
+        {
+            return false;
+        }
         let worker = match at {
             Some(at) => BotWorker {
+                origin: seen.origin.or(bot.workers[at].origin),
                 since: bot.workers[at].since.clone(),
                 title: if seen.title.is_empty() {
                     bot.workers[at].title.clone()
@@ -250,18 +297,12 @@ impl Bots {
             None => seen,
         };
         if at.is_some_and(|at| bot.workers[at] == worker) {
-            if removed {
-                self.save();
-            }
             return removed;
         }
         match at {
             Some(at) => bot.workers[at] = worker,
             None => bot.workers.push(worker),
         }
-        let extra = bot.workers.len().saturating_sub(WORKERS_KEPT);
-        bot.workers.drain(..extra);
-        self.save();
         true
     }
 
@@ -300,11 +341,17 @@ impl Bots {
     }
 
     fn save(&self) {
-        let Some(file) = &self.file else { return };
-        let text = serde_json::to_string(&self.bots).unwrap_or_else(|_| "[]".to_owned());
-        if let Err(error) = write_text(file, &text, Some(0o600)) {
+        if let Err(error) = self.save_checked() {
             eprintln!("[bots] not saved: {error}");
         }
+    }
+
+    fn save_checked(&self) -> Result<(), String> {
+        let Some(file) = &self.file else {
+            return Ok(());
+        };
+        let text = serde_json::to_string(&self.bots).map_err(|error| error.to_string())?;
+        write_text(file, &text, Some(0o600))
     }
 }
 

@@ -196,6 +196,7 @@ export interface AgentControlHostDeps {
 		| "startTab"
 		| "setTabTask"
 		| "setTabOpener"
+		| "stopTabTurns"
 		| "windowOfTab"
 		| "windowsShowingTab"
 		| "sessionOwner"
@@ -236,7 +237,8 @@ export interface AgentControlHostDeps {
 	/** An OS notification; a click opens the tab. */
 	notify: (win: ClientWindow, tabId: string, title: string, body: string) => void;
 	/** Close a session's tab and delete its saved file (the sidebar's delete). */
-	deleteSession: (sessionPath: string, device: string | undefined) => Promise<void>;
+	deleteSession: (sessionPath: string, device: string | undefined, guardBotWorker?: boolean) => Promise<void>;
+	stopSessionTurns: (path: string, device?: string, guardBotWorker?: boolean) => Promise<void>;
 	/** Move a saved session of this computer to `cwd` (stock `SessionManager.moveTo`); its file after. Absent: none move. */
 	moveSession?: (sessionPath: string, cwd: string) => Promise<string>;
 	text: AgentControlHost["text"];
@@ -304,6 +306,7 @@ export interface AgentControlHostDeps {
 		tabId: string,
 		unlessDirty: FileEditTarget | undefined,
 		expectedTurn?: AutoCloseTurn,
+		stillUnsaved?: () => boolean,
 	) => Promise<boolean>;
 	/** Settings › Schedules (`ScheduleService`); absent or null where there is none. */
 	schedules?: () => Pick<ScheduleService, "command" | "create"> | null;
@@ -507,14 +510,16 @@ export class AgentControlRuntime {
 			const openerWin = parent ? this.#win(parent) : undefined;
 			const opener =
 				parent && openerWin && !openerWin.isDestroyed()
-					? pool.tabsForWindow(openerWin).find(tab => tab.tabId === parent)?.sessionPath
+					? pool.tabsForWindow(openerWin).find(tab => tab.tabId === parent)
 					: undefined;
 			if (held)
 				session = {
 					...held,
 					...(!held.device && this.#hiddenPaths().has(held.path) ? { hidden: true } : {}),
-					...(opener ? { openedBySession: opener } : {}),
-					...(opener && ownChild ? { tellOpener: true as const } : {}),
+					...(opener?.sessionPath
+						? { openedBySession: opener.sessionPath, openedByDevice: opener.device ?? "" }
+						: {}),
+					...(opener?.sessionPath && ownChild ? { tellOpener: true as const } : {}),
 				};
 		}
 		void this.control.runtime
@@ -938,6 +943,7 @@ export class AgentControlRuntime {
 			...(autoClosable && !this.#parents.has(info.tabId) ? { restored: true } : {}),
 			looked: info.active === true || info.visible === true || (info.viewerCount ?? 0) > 0,
 			userTouched: this.#userPrompted.has(info.tabId) || hasDraft,
+			...(row.sessionMoved ? { sessionMoved: true } : {}),
 			...(hasDraft ? { drafting: true } : {}),
 			...(facts?.runningSince !== undefined ? { busySince: facts.runningSince } : {}),
 			...(formerIds.length > 0 ? { formerIds: [...formerIds] } : {}),
@@ -1198,6 +1204,65 @@ export class AgentControlRuntime {
 		);
 	}
 
+	async cleanupBotSession(session: string, device: string | undefined, release: boolean): Promise<void> {
+		const deps = this.#deps;
+		const closed = parseClosedChildren(deps.prefs.get(AGENT_CLOSED_CHILDREN_PREF));
+		const saved = closed.find(
+			row => row.device === device && (row.path === session || row.tabIds?.includes(session)),
+		);
+		const path = session.endsWith(".jsonl") ? session : release ? saved?.path : undefined;
+		const matches = () =>
+			deps.pool
+				.controlTabs()
+				.flatMap(group => group.tabs)
+				.filter(
+					row =>
+						row.device === device &&
+						(path
+							? row.sessionPath === path
+							: row.tabId === session || (release && row.formerIds.includes(session))),
+				);
+		const rows = matches();
+		if (!release && path && deletedSessions().has(path, device)) return;
+		if (device && !deps.remote?.hosts().some(host => host.deviceId === device && host.state === "online"))
+			throw new Error(`Paired computer ${deps.deviceName(device)} (${device}) is offline.`);
+		if (!path && !rows.length)
+			throw new Error(`Cannot identify session ${session}${device ? ` on ${deps.deviceName(device)}` : ""}.`);
+		if (release) {
+			for (const id of new Set(rows.map(row => row.tabId))) {
+				deps.pool.setTabOpener(id, null);
+				this.#parents.delete(id);
+			}
+			const files = new Set(rows.map(row => row.sessionPath));
+			const kept = closed.filter(row => row !== saved && !(row.device === device && files.has(row.path)));
+			if (kept.length !== closed.length) {
+				if (!deps.prefs.set) throw new Error("Cannot save the released session's sidebar family.");
+				this.#setClosedChildren(kept);
+			} else if (rows.length) this.control.changed();
+			return;
+		}
+		if (path) {
+			await deps.stopSessionTurns(path, device, !!device);
+			await deps.deleteSession(path, device, !!device);
+			return;
+		}
+		if (device || rows.some(row => row.sessionPath))
+			throw new Error(`Cannot verify worker ${session} without its saved session path.`);
+		await deps.pool.stopTabTurns(session);
+		const win = deps.pool.windowOfTab(session);
+		if (!win) throw new Error(`Session ${session} no longer has an identifiable tab.`);
+		// Its first file can arrive during the worktree-policy read. Only its recorded path may delete that file.
+		const removed = await deps.releaseTab(
+			win,
+			session,
+			deps.fileEdits.target(win.webContents.id) ?? undefined,
+			undefined,
+			() => matches().some(row => !row.sessionPath && !row.facts?.busy && !row.compacting),
+		);
+		if (!removed) throw new Error(`Could not close unsaved session ${session}; refresh its saved identity.`);
+		await deps.pool.whenTabExited(session);
+	}
+
 	#host(): AgentControlHost {
 		const deps = this.#deps;
 		return {
@@ -1434,6 +1499,7 @@ export class AgentControlRuntime {
 				await deps.deleteSession(info.sessionPath, info.device);
 			},
 			deleteStored: session => deps.deleteSession(session.path, session.device),
+			cleanupBotSession: (session, device, release) => this.cleanupBotSession(session, device, release),
 			releaseFolder: async folder => {
 				const rows = tabsIn(deps.pool, folder);
 				for (const row of rows) {

@@ -225,7 +225,7 @@ async fn mine_lists_the_sessions_the_caller_opened_whose_tabs_closed_and_open_on
         json!({
             "windowOf": { "boss": "w", "far": "w2" },
             "parents": { "far": { "callerTabId": "boss" } },
-            "closedChildren": [{ "path": "/s/y_kid22222.jsonl", "openedBySession": "/s/x_boss1111.jsonl", "title": "kid22222", "cwd": "/w", "closedAt": 5.0 }],
+            "closedChildren": [{ "path": "/s/y_kid22222.jsonl", "openedBySession": "/s/x_boss1111.jsonl", "openedByDevice": "", "title": "kid22222", "cwd": "/w", "closedAt": 5.0 }],
         }),
         main_with_saved,
     );
@@ -809,6 +809,56 @@ async fn a_delete_of_an_own_idle_child_removes_it_journals_it_and_remembers_the_
     );
     assert!(!control.mem().closing.contains("c1"));
     control.host.port().close();
+}
+
+#[tokio::test]
+async fn a_saved_child_delete_requires_the_same_verified_opener_device() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("child.jsonl");
+    let parent = "/s/boss.jsonl";
+    for (port, device) in [(18_710, Some("peer")), (18_711, None), (18_712, Some(""))] {
+        std::fs::write(&path, b"synthetic child").unwrap();
+        let mut child = json!({ "path": path, "openedBySession": parent, "closedAt": 1 });
+        if let Some(device) = device {
+            child["openedByDevice"] = json!(device);
+        }
+        let saved = path.clone();
+        let (control, asked) = rig(
+            port,
+            vec![tab("parent", parent)],
+            json!({ "closedChildren": [child], "fullEnabled": false }),
+            move |method, args| match method {
+                "stored" => Ok(json!([{ "id": "kid22222", "path": saved, "title": "Child" }])),
+                "confirm" => Ok(json!(false)),
+                "deleteStored" => {
+                    assert_eq!(args["session"]["path"], json!(saved));
+                    std::fs::remove_file(&saved).unwrap();
+                    Ok(Value::Null)
+                }
+                other => main_of(other, args),
+            },
+        );
+        let result = control
+            .run(
+                "parent",
+                "ompdesk_session_stop",
+                json!({ "session": "kid22222", "delete": true }),
+                None,
+            )
+            .await;
+        assert!(!result.is_error, "{}", result.text);
+        if device == Some("") {
+            assert!(names(&asked, "confirm").is_empty());
+            assert_eq!(names(&asked, "deleteStored").len(), 1);
+            assert!(!path.exists());
+        } else {
+            assert_eq!(names(&asked, "confirm").len(), 1);
+            assert!(result.text.contains("declined"), "{}", result.text);
+            assert!(names(&asked, "deleteStored").is_empty());
+            assert_eq!(std::fs::read(&path).unwrap(), b"synthetic child");
+        }
+        control.host.port().close();
+    }
 }
 
 const DESK_ID: &str = "01a1ed95-53b0-752a-a272-9c911a8499c4";

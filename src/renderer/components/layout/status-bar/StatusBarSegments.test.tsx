@@ -112,6 +112,22 @@ describe("the desktop status bar", () => {
 		expect(container.querySelector("[data-status-link]")).toBeNull();
 	});
 
+	it("opens a balance-only account without announcing a made-up usage percentage", async () => {
+		reports = [
+			{
+				...report("factory-droid", 0, 0, false),
+				limits: [],
+				credits: { kind: "balance", limitId: "factory-droid:extra-balance", remaining: 17, unit: "usd" },
+			},
+		];
+		await mount();
+		const usage = container.querySelector<HTMLButtonElement>("[data-status-usage]");
+		expect(usage?.getAttribute("aria-label")).toBeTruthy();
+		expect(usage?.textContent).not.toContain("%");
+		await act(async () => usage?.click());
+		expect(document.body.querySelector("[data-usage-popover] [data-account-credits]")?.textContent).toContain("17");
+	});
+
 	it("opens the usage block over the bar, every account listed, and a second click closes it", async () => {
 		reports = [report("anthropic", 0.42, 0.1, true), report("openai-codex", 0.05, 0.9, false)];
 		useModelStore.setState({ providers: [] });

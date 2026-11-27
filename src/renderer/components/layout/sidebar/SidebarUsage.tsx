@@ -11,22 +11,22 @@ import { FOOTER_PINS, type FooterPin } from "../../../../shared/sidebar-prefs";
 import { useShellMode } from "../../../hooks/use-shell-mode";
 import { useUsageReports } from "../../../hooks/use-usage-reports";
 import { useT } from "../../../lib/i18n";
-import { accountGauges, gaugeColumn, gaugeColumns, shortWindowLabel } from "../../../lib/usage-windows";
+import { accountGauges, gaugeColumns, gaugeKey, shortWindowLabel } from "../../../lib/usage-windows";
 import { useModelStore } from "../../../stores/model";
 import { useSidebarFolds } from "../../../stores/sidebar-folds";
 import { useUiStore } from "../../../stores/ui";
 import { DisclosureButton, IconButton, MAX_USAGE_COLUMNS, NEAR_FRACTION } from "../../common";
-import { type AccountQuotaSource, QuotaCell, quotaLimits } from "../../settings/providers/AccountQuota";
+import { type AccountQuotaSource, CreditsFigure, QuotaCell, quotaLimits } from "../../settings/providers/AccountQuota";
 import { ConnectedRow, ProviderGroupItem } from "../../settings/providers/ConnectedRow";
 import { type ProviderGroup, providerPlan, shortProviderName } from "../../settings/providers/provider-groups";
 import { bareEmail } from "../AccountLimit";
-import { type UsageAccountGroup, usageAccountGroups } from "./usage-groups";
+import { type UsageAccountGroup, usageAccountGroups, usageWindowLimits } from "./usage-groups";
 
 /** What a row says of a usage report: the account's quota, and its state while omp skips it after a limit. */
 export function sourceOf(report: UsageReport, inUse: boolean): AccountQuotaSource {
 	const limited = report.resetAt !== undefined;
 	return {
-		limits: report.limits,
+		limits: usageWindowLimits(report),
 		fetchedAt: report.fetchedAt,
 		inUse,
 		...(limited ? { state: "depleted" as const, limitedUntil: report.resetAt } : {}),
@@ -67,7 +67,15 @@ export function accountStanding(account: AccountQuotaSource): "limited" | "low" 
 	return "ok";
 }
 
-function UsageGroup({ group, providers }: { group: UsageAccountGroup; providers: readonly ProviderInfo[] }) {
+function UsageGroup({
+	group,
+	providers,
+	popover,
+}: {
+	group: UsageAccountGroup;
+	providers: readonly ProviderInfo[];
+	popover: boolean;
+}) {
 	const t = useT();
 	const folded = useSidebarFolds(s => s.usageGroups[group.provider] === true);
 	const sources = group.accounts.map(({ report, inUse }) => sourceOf(report, inUse));
@@ -75,7 +83,8 @@ function UsageGroup({ group, providers }: { group: UsageAccountGroup; providers:
 	const names = shortAccountNames(labels);
 	const limits = sources.map(quotaLimits);
 	const columns = gaugeColumns(limits);
-	const headings = accountGauges(limits.flat());
+	const hasCredits = group.accounts.some(({ report }) => report.credits !== undefined);
+	const sharedHeadings = columns.length > 0 && columns.length <= MAX_USAGE_COLUMNS;
 	const now = Date.now();
 	return (
 		<ProviderGroupItem
@@ -87,16 +96,17 @@ function UsageGroup({ group, providers }: { group: UsageAccountGroup; providers:
 			}}
 			group={groupOf(group.provider, providers)}
 		>
-			{columns.length <= MAX_USAGE_COLUMNS && (
+			{(sharedHeadings || (popover && hasCredits)) && (
 				<li aria-hidden className="omp-sidebar-usage-columns">
 					<span />
-					<div style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
-						{columns.map(column => (
-							<span key={column}>
-								{shortWindowLabel(headings.find(entry => gaugeColumn(entry.limit) === column)!.limit)}
-							</span>
-						))}
-					</div>
+					{sharedHeadings && (
+						<div style={{ gridTemplateColumns: `repeat(${columns.length}, minmax(0, 1fr))` }}>
+							{columns.map(column => (
+								<span key={gaugeKey(column)}>{shortWindowLabel(column, columns)}</span>
+							))}
+						</div>
+					)}
+					{popover && hasCredits && <span data-usage-credits-heading>{t("providers.accounts.credits")}</span>}
 				</li>
 			)}
 			{group.accounts.map(({ report, inUse }, index) => {
@@ -118,6 +128,11 @@ function UsageGroup({ group, providers }: { group: UsageAccountGroup; providers:
 							)
 						}
 						compact
+						credits={
+							report.credits ? (
+								<CreditsFigure compact={popover ? "column" : "line"} credits={report.credits} />
+							) : hasCredits ? null : undefined
+						}
 						key={`${report.provider}:${report.credentialId ?? labels[index]}`}
 						quota={<QuotaCell account={source} columns={columns} compact now={now} tracks={0} />}
 						quotaColumns={columns.length}
@@ -200,7 +215,7 @@ export function SidebarUsage({
 			{!collapsed && (
 				<ul aria-label={t("sidebar.pin.usage")} className="omp-sidebar-usage-groups" data-sidebar-usage-scroll>
 					{groups.map(group => (
-						<UsageGroup group={group} key={group.provider} providers={providers} />
+						<UsageGroup group={group} key={group.provider} popover={popover} providers={providers} />
 					))}
 				</ul>
 			)}

@@ -132,11 +132,11 @@ impl AgentControl {
             .ok()
     }
 
-    /// `#fated`: a tab's session as a fate records it; `opened_by_session`: its opener's session file, when known.
+    /// What a close remembers about a tab and the parent that opened it.
     pub(in crate::agentctl::service) fn fated(
         &self,
         tab: &ControlTab,
-        opened_by_session: Option<&str>,
+        opener: Option<(&str, &str)>,
     ) -> FatedSession {
         FatedSession {
             ids: ids_of(tab),
@@ -151,9 +151,8 @@ impl AgentControl {
             },
             hidden: tab.hidden,
             cwd: tab.cwd.clone(),
-            opened_by_session: opened_by_session
-                .filter(|opened| !opened.is_empty())
-                .map(str::to_owned),
+            opened_by_session: opener.map(|(path, _)| path.to_owned()),
+            opened_by_device: opener.map(|(_, device)| device.to_owned()),
         }
     }
 
@@ -168,10 +167,7 @@ impl AgentControl {
         let Some(path) = tab.session_path.as_deref().filter(|path| !path.is_empty()) else {
             return;
         };
-        let fated = self.fated(
-            tab,
-            opener.and_then(|opener| opener.session_path.as_deref()),
-        );
+        let fated = self.fated(tab, opener.and_then(ControlTab::saved_identity));
         self.fates().closed(fated, by);
         if let Some(opener) = opener {
             self.mem().closed_openers.insert(
@@ -667,10 +663,7 @@ impl AgentControl {
                     return self.refuse_in_use::<()>(caller, tabs, target, flags);
                 }
                 self.delete_when_idle(caller, target).await?;
-                let fated = self.fated(
-                    target,
-                    own.then_some(caller.session_path.as_deref()).flatten(),
-                );
+                let fated = self.fated(target, own.then(|| caller.saved_identity()).flatten());
                 self.fates().deleted(fated, &by_caller(caller), None);
             } else if flags.close {
                 let now = self.live(&caller.tab_id, &target.tab_id);
@@ -836,6 +829,7 @@ impl AgentControl {
                 hidden: false,
                 cwd: row.cwd.clone(),
                 opened_by_session: None,
+                opened_by_device: None,
             },
             &by_caller(caller),
             None,

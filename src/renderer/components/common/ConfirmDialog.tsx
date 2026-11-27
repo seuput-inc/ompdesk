@@ -5,7 +5,7 @@
  * quiet `ghost` every dialog footer uses; the danger button is the one filled action.
  */
 
-import type { ReactNode } from "react";
+import type { MouseEventHandler, ReactNode } from "react";
 import { useT } from "../../lib/i18n";
 import { Button } from "./Button";
 import { Modal } from "./Modal";
@@ -19,8 +19,8 @@ export interface ConfirmDialogProps {
 	confirmLabel?: string;
 	cancelLabel?: string;
 	busy?: boolean;
-	onConfirm: () => void;
-	onCancel: () => void;
+	onConfirm: MouseEventHandler<HTMLButtonElement> | undefined;
+	onCancel: (() => void) | null;
 }
 
 export function ConfirmDialog({
@@ -39,10 +39,10 @@ export function ConfirmDialog({
 		<Modal
 			footer={
 				<>
-					<Button autoFocus onClick={onCancel} variant="ghost">
+					<Button autoFocus disabled={!onCancel} onClick={onCancel ?? undefined} variant="ghost">
 						{cancelLabel ?? t("common.cancel")}
 					</Button>
-					<Button disabled={busy} loading={busy} onClick={onConfirm} variant="danger">
+					<Button disabled={busy || !onConfirm} loading={busy} onClick={onConfirm} variant="danger">
 						{confirmLabel ?? t("common.delete")}
 					</Button>
 				</>

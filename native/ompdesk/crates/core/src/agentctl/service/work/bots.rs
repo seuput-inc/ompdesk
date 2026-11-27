@@ -24,7 +24,9 @@ use super::bot_package;
 use super::bots_share::Kind;
 use super::schedule::is_absolute;
 use crate::agentctl::journal::attachments::sha256_hex;
-use crate::agentctl::journal::bots::{BotRecord, BotWorker, STALE_DAYS, slug, specialty};
+use crate::agentctl::journal::bots::{
+    BotRecord, BotWorker, STALE_DAYS, WORKERS_KEPT, WorkerOrigin, slug, specialty,
+};
 use crate::agentctl::journal::items::ItemRecord;
 use crate::agentctl::journal::looks::{EVERY_CHOICES, FOCUS_MAX, LookSetting, PER_LOOK, TITLE_MAX};
 use crate::agentctl::journal::mail_outbox::{
@@ -49,7 +51,15 @@ const TIDY_PROMPT: &str = "Tidy your memory: MEMORY.md in your folder. First cop
 /// Notification kinds a bot's chats can be quiet about (`Bot.quiet`).
 const QUIET_KINDS: [&str; 3] = ["permission", "done", "failed"];
 /// What a paired device may ask of this computer's bots (`bots_from`).
-const FROM_DEVICE: [&str; 6] = ["get", "update", "delete", "item", "itemsOpened", "file"];
+const FROM_DEVICE: [&str; 7] = [
+    "get",
+    "update",
+    "deletePreview",
+    "delete",
+    "item",
+    "itemsOpened",
+    "file",
+];
 /// The longest first message a create may carry (a template's or an import's kickoff).
 const KICKOFF_MAX: usize = 8_000;
 
@@ -122,6 +132,15 @@ impl RedeliverDeps for OutboxTabs<'_> {
     async fn send(&self, tab_id: &str, mail: &OutboxMail) -> Option<MailAnswer> {
         self.host.redeliver_mail(tab_id, mail).await
     }
+}
+
+fn with_command_outcome(mut state: Value, mut answer: Value) -> Value {
+    for field in ["refused", "deleteChanged"] {
+        if let Some(value) = answer.get_mut(field) {
+            state[field] = value.take();
+        }
+    }
+    state
 }
 
 impl AgentControl {
@@ -199,6 +218,7 @@ impl AgentControl {
                 value["workers"] = json!(
                     bot.workers
                         .iter()
+                        .skip(bot.workers.len().saturating_sub(WORKERS_KEPT))
                         .map(|worker| worker_json(worker, &state.tabs))
                         .collect::<Vec<Value>>()
                 );
@@ -401,29 +421,54 @@ impl AgentControl {
         }
     }
 
-    /// Deletes a bot (the owner's only): its record and items go, its folder and session files stay. Its held mail
-    /// is dropped with one quiet note to each session that sent some, and its Look around and every schedule that
-    /// wakes one of its chats are deleted.
-    pub(crate) async fn delete_bot(&self, id: &str) -> R<()> {
-        let Some(bot) = self.bots().remove(id) else {
-            return fail("That bot is gone.");
-        };
-        self.items().remove_bot(&bot.id);
-        self.rooms().remove_bot(&bot.id);
-        let returned = self.return_bot_asks(id).await;
-        self.looks().remove_bot(&bot.id);
-        if let Some(dir) = &self.bot_config_dir {
-            let _ = std::fs::remove_file(dir.join(format!("{}.yml", bot.id)));
+    pub(crate) async fn delete_bot(&self, id: &str, expected: &Value) -> R<Option<Value>> {
+        let _guard = self.bot_moves.lock().await;
+        let bot = self.bot_named(id)?;
+        let plan = self.bot_delete_plan(&bot).await?;
+        if bot.id != id || !expected["digest"].is_string() {
+            return fail("Open the bot's delete confirmation again.");
         }
-        let chats: Vec<String> = bot
+        let actual = plan.preview(id);
+        if &actual != expected {
+            return Ok(Some(actual));
+        }
+        self.return_bot_asks(id).await?;
+        // A stored chat first discovered here must still identify its wakes and held mail after a partial delete.
+        for path in plan
+            .chats()
+            .filter(|path| is_absolute(path) && !bot.has_session(path))
+        {
+            self.bots().observe(&bot.folder, path);
+        }
+        plan.apply(self, id).await?;
+        let chats: HashSet<&String> = bot
             .home
             .iter()
-            .chain(bot.sessions.iter())
-            .cloned()
+            .chain(&bot.sessions)
+            .chain(plan.chats())
             .collect();
+        if let Some(source) = self.schedule_source(None) {
+            for schedule in source.schedules().await? {
+                let wakes_it = schedule
+                    .draft
+                    .wake_session
+                    .as_ref()
+                    .is_some_and(|session| chats.contains(session));
+                let own = [bot.look_around.as_deref(), bot.tidy.as_deref()]
+                    .contains(&Some(schedule.id.as_str()));
+                if wakes_it || own {
+                    source.remove(&schedule.id).await?;
+                }
+            }
+        }
+        // A chat may have appeared in another window while its siblings were closing.
+        let remaining = self.bot_delete_plan(&self.bot_named(id)?).await?;
+        if !plan.covers(&remaining) {
+            return Ok(Some(remaining.preview(id)));
+        }
         if let Some(outbox) = self.host.outbox().cloned() {
             let mut senders: Vec<String> = Vec::new();
-            for chat in &chats {
+            for &chat in &chats {
                 for mail in outbox.kept_for(chat) {
                     outbox.settle(&mail.id);
                     // A sender is a session file on this computer (a paired device's or a tab-only one is not told).
@@ -445,22 +490,15 @@ impl AgentControl {
                 self.note_session(&sender, &text).await;
             }
         }
-        if let Some(source) = self.schedule_source(None) {
-            for schedule in source.schedules().await? {
-                let wakes_it = schedule
-                    .draft
-                    .wake_session
-                    .as_ref()
-                    .is_some_and(|session| chats.contains(session));
-                let own = [bot.look_around.as_deref(), bot.tidy.as_deref()]
-                    .contains(&Some(schedule.id.as_str()));
-                if wakes_it || own {
-                    source.remove(&schedule.id).await?;
-                }
-            }
+        self.items().remove_bot(id);
+        self.rooms().remove_bot(id);
+        self.looks().remove_bot(id);
+        if let Some(dir) = &self.bot_config_dir {
+            let _ = std::fs::remove_file(dir.join(format!("{id}.yml")));
         }
+        self.bots().remove(id);
         self.bots_changed();
-        returned
+        Ok(None)
     }
 
     /// One quiet note (no turn) into the session file `session_path` on this computer: handed to the tab that holds it
@@ -583,11 +621,7 @@ impl AgentControl {
                 }
             }
             // After restore the tab id may have been resolved by file alone; keep the recorded host's link.
-            for tab in state
-                .tabs
-                .iter()
-                .filter(|tab| tab.device.is_none() && !tab.restored)
-            {
+            for tab in state.tabs.iter().filter(|tab| !tab.restored) {
                 let Some(opener) = state.parent_of(&tab.tab_id).and_then(|id| {
                     state
                         .tabs
@@ -603,7 +637,11 @@ impl AgentControl {
                 else {
                     continue;
                 };
-                changed |= bots.observe_worker(&tab.tab_id, worker_seen(tab, file, &since));
+                changed |= bots.observe_worker(
+                    None,
+                    &tab.tab_id,
+                    worker_seen(tab, Some(file), &since, None),
+                );
             }
         }
         changed |= self.settle_item_links(&state);
@@ -1190,6 +1228,8 @@ impl AgentControl {
         target: &ControlTab,
         text: &str,
     ) -> R<String> {
+        let assignment = self.bot_moves.lock().await;
+        let bot = self.bot_named(&bot.id)?;
         let Some(home) = bot.home.as_deref() else {
             return fail(format!(
                 "The bot {} has no home chat yet: open a session in {} first.",
@@ -1199,13 +1239,7 @@ impl AgentControl {
         if bot.paused {
             return fail(format!("The bot {} is paused", bot.name));
         }
-        if target.drafting {
-            return fail(format!(
-                "The user is typing in \"{}\": nothing was handed. Try again once they sent or cleared it.",
-                target.name()
-            ));
-        }
-        if target.session_path.as_deref() == Some(home) {
+        if target.device.is_none() && target.session_path.as_deref() == Some(home) {
             return fail("A bot's home chat cannot be handed to it.");
         }
         let holder = |state: &super::super::host::HostState| {
@@ -1234,18 +1268,36 @@ impl AgentControl {
                 }
             }
         };
+        let state = self.host.state();
+        let Some(target) = state.tabs.iter().find(|tab| {
+            tab.tab_id == target.tab_id
+                && tab.device == target.device
+                && tab.session_path == target.session_path
+        }) else {
+            return fail("That session is no longer in the selected tab.");
+        };
+        if target.drafting {
+            return fail(format!(
+                "The user is typing in \"{}\": nothing was handed. Try again once they sent or cleared it.",
+                target.name()
+            ));
+        }
+        let since = crate::aimemory::value::iso(self.now().max(0.0) as u64);
+        let changed = self
+            .bots()
+            .hand_worker(
+                &bot.id,
+                &target.tab_id,
+                worker_seen(target, Some(home), &since, Some(WorkerOrigin::Handed)),
+            )
+            .map_err(super::super::fail::Fail::other)?;
+        if changed {
+            self.bots_changed();
+        }
         self.host
             .set_opener(&target.tab_id, &home_tab.tab_id)
             .await?;
-        if target.device.is_none() {
-            let since = crate::aimemory::value::iso(self.now().max(0.0) as u64);
-            let changed = self
-                .bots()
-                .observe_worker(&target.tab_id, worker_seen(target, home, &since));
-            if changed {
-                self.bots_changed();
-            }
-        }
+        drop(assignment);
         let receipt = self
             .send(
                 &home_tab,
@@ -1384,7 +1436,7 @@ impl AgentControl {
     /// it is not this computer's.
     fn bots_owner(&self, request: &Value) -> Option<String> {
         let kind = match request.get("action").and_then(Value::as_str)? {
-            "update" | "delete" | "itemsOpened" | "file" => Kind::Bots,
+            "update" | "deletePreview" | "delete" | "itemsOpened" | "file" => Kind::Bots,
             "item" => Kind::Items,
             _ => return None,
         };
@@ -1414,10 +1466,19 @@ impl AgentControl {
                 "{name} is offline: its bots change only while it is connected."
             ));
         }
-        let file = request.get("action").and_then(Value::as_str) == Some("file");
+        let direct = matches!(request["action"].as_str(), Some("file" | "deletePreview"));
         let answer = self.host.bots_on(device, &request).await?;
-        if file {
+        if direct {
             return Ok(answer);
+        }
+        if request["action"] == "delete"
+            && answer.get("deleteChanged").is_none()
+            && !answer["state"]["bots"].as_array().is_some_and(|bots| {
+                bots.iter()
+                    .all(|bot| bot["id"].is_string() && bot["id"] != request["id"])
+            })
+        {
+            return fail(format!("{name} did not confirm that the bot was deleted."));
         }
         let applied = self
             .across()
@@ -1426,11 +1487,7 @@ impl AgentControl {
         if applied {
             self.bots_changed();
         }
-        let mut state = self.bots_state();
-        if let Some(refused) = answer.get("refused") {
-            state["refused"] = refused.clone();
-        }
-        Ok(state)
+        Ok(with_command_outcome(self.bots_state(), answer))
     }
 
     /// `host.bots.list`: this computer's bots and items as its paired devices get them (`{version, state}`). A change
@@ -1453,7 +1510,7 @@ impl AgentControl {
     /// A paired device's change to one of this computer's bots (`host.bots.command`): what the owner does on the bot
     /// page, apart from making a bot (it is made where it is to live), importing, handing over a session (R91) and
     /// this computer's groups; and its own group's question to one of them (`roomAsk`, `roomAskStop`). Answers this
-    /// computer's copy after it (`{version, state, refused?}`), or a file.
+    /// computer's copy after it with the command outcome, or the requested file or delete preview.
     pub async fn bots_from(&self, request: Value, device: &str, device_name: &str) -> R<Value> {
         let action = request
             .get("action")
@@ -1476,14 +1533,10 @@ impl AgentControl {
             ));
         }
         let answer = self.own_bots_command(request).await?;
-        if action == "file" {
+        if matches!(action.as_str(), "file" | "deletePreview") {
             return Ok(answer);
         }
-        let mut shared = self.bots_share();
-        if let Some(refused) = answer.get("refused") {
-            shared["refused"] = refused.clone();
-        }
-        Ok(shared)
+        Ok(with_command_outcome(self.bots_share(), answer))
     }
 
     /// What main heard of paired host `device` (`botsRemote`): its whole copy or a change of it (`change`), its link up
@@ -1723,7 +1776,17 @@ impl AgentControl {
                         .await?;
                 }
             }
-            "delete" => self.delete_bot(&id).await?,
+            "deletePreview" => {
+                let bot = self.bot_named(&id)?;
+                return Ok(self.bot_delete_plan(&bot).await?.preview(&bot.id));
+            }
+            "delete" => {
+                if let Some(preview) = self.delete_bot(&id, &request["expected"]).await? {
+                    let mut state = self.bots_state();
+                    state["deleteChanged"] = preview;
+                    return Ok(state);
+                }
+            }
             "item" => refused = self.owner_item(&request).await?,
             "itemsOpened" => self.items_opened(&id)?,
             // The bot's page opened (its one retry, in the background) or the owner's Try again (`asked`).
@@ -1915,7 +1978,12 @@ fn look_when(look: &LookSetting) -> String {
     )
 }
 
-fn worker_seen(tab: &ControlTab, opener: &str, since: &str) -> BotWorker {
+pub(in crate::agentctl::service) fn worker_seen(
+    tab: &ControlTab,
+    opener: Option<&str>,
+    since: &str,
+    origin: Option<WorkerOrigin>,
+) -> BotWorker {
     BotWorker {
         session: tab
             .session_path
@@ -1923,7 +1991,9 @@ fn worker_seen(tab: &ControlTab, opener: &str, since: &str) -> BotWorker {
             .filter(|file| !file.is_empty())
             .unwrap_or(&tab.tab_id)
             .clone(),
-        opened_by_session: Some(opener.to_owned()),
+        device: tab.device.clone(),
+        origin,
+        opened_by_session: opener.map(str::to_owned),
         title: tab.name().to_owned(),
         cwd: tab.cwd.clone(),
         branch: tab
@@ -1938,7 +2008,7 @@ fn worker_seen(tab: &ControlTab, opener: &str, since: &str) -> BotWorker {
 /// this computer does now (`working`, `idle`, or `closed` when no tab holds it).
 fn worker_json(worker: &BotWorker, tabs: &[ControlTab]) -> Value {
     let tab = tabs.iter().find(|tab| {
-        tab.device.is_none()
+        tab.device == worker.device
             && (tab.session_path.as_deref() == Some(worker.session.as_str())
                 || tab.tab_id == worker.session)
     });

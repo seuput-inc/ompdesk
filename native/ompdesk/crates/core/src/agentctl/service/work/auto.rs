@@ -135,7 +135,7 @@ impl AgentControl {
     /// An opener's tab closed: each child it opened that rests (no turn, nothing waiting, not the person's, not in
     /// view) closes too, its session saved. Nobody is left to read it, and a test tab would otherwise stay open for
     /// good (no answer, no verdict line). A child still working is left to finish.
-    pub async fn close_orphans(&self, children: Vec<String>, opener_session: Option<String>) {
+    pub async fn close_orphans(&self, children: Vec<String>, opener: Option<(String, String)>) {
         for child in children {
             let Some(tab) = self
                 .host
@@ -162,7 +162,8 @@ impl AgentControl {
             let closed = self.close_resting_child(&child, &tab).await;
             self.mem().closing.remove(&child);
             if matches!(closed, Ok(TabClose::Closed)) {
-                let fated = self.fated(&tab, opener_session.as_deref());
+                let fated =
+                    self.fated(&tab, opener.as_ref().map(|(p, d)| (p.as_str(), d.as_str())));
                 self.fates().closed(fated, fate_by::ORPHAN);
             }
         }
@@ -584,7 +585,7 @@ impl AgentControl {
             return false;
         }
         self.fates().deleted(
-            self.fated(tab, caller.session_path.as_deref()),
+            self.fated(tab, caller.saved_identity()),
             fate_by::THROWAWAY,
             None,
         );
@@ -695,7 +696,7 @@ impl AgentControl {
         self.host.record_closed(&ClosedChild {
             path,
             opened_by_session: caller.session_path.clone().unwrap_or_default(),
-            opened_by_device: caller.device.clone(),
+            opened_by_device: Some(caller.device.clone().unwrap_or_default()),
             title: tab.name().to_owned(),
             cwd: match (&tab.worktree, removed) {
                 (Some(worktree), true) => worktree.base_cwd.clone(),

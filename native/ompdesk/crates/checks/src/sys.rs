@@ -36,7 +36,7 @@ pub fn physical_memory() -> Option<u64> {
 }
 
 #[cfg(windows)]
-pub fn physical_memory() -> Option<u64> {
+fn physical_and_available() -> Option<(u64, u64)> {
     /// `MEMORYSTATUSEX`.
     #[repr(C)]
     #[derive(Default)]
@@ -62,7 +62,164 @@ pub fn physical_memory() -> Option<u64> {
     };
     // SAFETY: `status` is a `MEMORYSTATUSEX` laid out as C lays it out (size checked above) with `dwLength` set,
     // written only during the call.
-    (unsafe { GlobalMemoryStatusEx(&raw mut status) } != 0).then_some(status.total_phys)
+    (unsafe { GlobalMemoryStatusEx(&raw mut status) } != 0)
+        .then_some((status.total_phys, status.avail_phys))
+}
+
+#[cfg(windows)]
+pub fn physical_memory() -> Option<u64> {
+    physical_and_available().map(|(total, _)| total)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
+    use crate::heavy::{Cpu, Pressure};
+    use std::ffi::CStr;
+    use std::io::Error;
+
+    #[repr(C)]
+    #[derive(Default)]
+    struct Swap {
+        total: u64,
+        available: u64,
+        used: u64,
+        page_size: u32,
+        encrypted: i32,
+    }
+
+    fn read<T>(name: &CStr, value: &mut T) -> std::io::Result<()> {
+        let mut size = size_of::<T>();
+        // SAFETY: the two callers pass the kernel's corresponding integer or xsw_usage layout.
+        let rc = unsafe {
+            libc::sysctlbyname(
+                name.as_ptr(),
+                (value as *mut T).cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if rc != 0 || size != size_of::<T>() {
+            return Err(Error::other(format!("{} unknown", name.to_string_lossy())));
+        }
+        Ok(())
+    }
+    let mut level = 0u32;
+    read(c"kern.memorystatus_vm_pressure_level", &mut level)?;
+    let mut swap = Swap::default();
+    read(c"vm.swapusage", &mut swap)?;
+    let mut load = 0.0;
+    // SAFETY: the output points to one double and the requested count is one.
+    if unsafe { libc::getloadavg(&mut load, 1) } != 1 {
+        return Err(Error::other("CPU load unknown"));
+    }
+    let cpus = std::thread::available_parallelism()?.get();
+    Ok(Pressure {
+        cpu: Cpu::Saturated(load >= cpus as f64),
+        critical: level == 4,
+        warning: match level {
+            1 => false,
+            2 | 4 => true,
+            _ => return Err(Error::other("memory pressure unknown")),
+        },
+        swap: swap.used,
+    })
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
+    use crate::heavy::{Cpu, Pressure};
+    use std::io::Error;
+    let mem = std::fs::read_to_string("/proc/meminfo")?;
+    let kb = |key: &str| -> std::io::Result<u64> {
+        mem.lines()
+            .find_map(|l| l.strip_prefix(key))
+            .and_then(|s| s.split_whitespace().next()?.parse().ok())
+            .ok_or_else(|| Error::other(format!("{key} unknown")))
+    };
+    let free = kb("MemAvailable:")?;
+    let total = kb("MemTotal:")?;
+    let swap = kb("SwapTotal:")?
+        .checked_sub(kb("SwapFree:")?)
+        .ok_or_else(|| Error::other("swap usage unknown"))?;
+    let load: f64 = std::fs::read_to_string("/proc/loadavg")?
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| Error::other("CPU load unknown"))?;
+    Ok(Pressure {
+        cpu: Cpu::Saturated(load >= std::thread::available_parallelism()?.get() as f64),
+        critical: free < total / 20,
+        warning: free < total / 10,
+        swap,
+    })
+}
+
+#[cfg(windows)]
+pub(crate) fn pressure() -> std::io::Result<crate::heavy::Pressure> {
+    use crate::heavy::{Cpu, Pressure};
+    use std::ffi::c_void;
+    use std::io::Error;
+    #[repr(C)]
+    struct PageFile {
+        size: u32,
+        reserved: u32,
+        total: usize,
+        used: usize,
+        peak: usize,
+    }
+    #[repr(C)]
+    #[derive(Default)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+    impl FileTime {
+        fn ticks(&self) -> u64 {
+            (u64::from(self.high) << 32) | u64::from(self.low)
+        }
+    }
+    #[link(name = "psapi")]
+    unsafe extern "system" {
+        fn EnumPageFilesW(
+            callback: unsafe extern "system" fn(*mut c_void, *const PageFile, *const u16) -> i32,
+            context: *mut c_void,
+        ) -> i32;
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetSystemTimes(idle: *mut FileTime, kernel: *mut FileTime, user: *mut FileTime) -> i32;
+    }
+    unsafe extern "system" fn count(ctx: *mut c_void, page: *const PageFile, _: *const u16) -> i32 {
+        // SAFETY: EnumPageFilesW passes our live counter and the current ENUM_PAGE_FILE_INFORMATION.
+        unsafe { *ctx.cast::<u64>() += (*page).used as u64 };
+        1
+    }
+    let mut swap = 0u64;
+    // SAFETY: enumeration is synchronous; both the counter and the callback live throughout it.
+    if unsafe { EnumPageFilesW(count, (&raw mut swap).cast()) } == 0 {
+        return Err(Error::other("page file use unknown"));
+    }
+    let (total, free) =
+        physical_and_available().ok_or_else(|| Error::other("memory pressure unknown"))?;
+    let (mut idle, mut kernel, mut user) = (
+        FileTime::default(),
+        FileTime::default(),
+        FileTime::default(),
+    );
+    // SAFETY: each output points to a live FILETIME.
+    if unsafe { GetSystemTimes(&mut idle, &mut kernel, &mut user) } == 0 {
+        return Err(Error::other("CPU time unknown"));
+    }
+    Ok(Pressure {
+        cpu: Cpu::Times {
+            idle: idle.ticks(),
+            total: kernel.ticks() + user.ticks(),
+        },
+        critical: free < total / 20,
+        warning: free < total / 10,
+        swap,
+    })
 }
 
 /// Whether a process with this id runs (a zombie counts; a process of another user too).
@@ -148,6 +305,50 @@ pub fn signal(pid: u32, signal: i32) {
             libc::kill(pid, signal);
         }
     }
+}
+
+#[cfg(unix)]
+pub(crate) fn volume_id(path: &std::path::Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(std::fs::metadata(path).ok()?.dev())
+}
+
+#[cfg(windows)]
+pub(crate) fn volume_id(path: &std::path::Path) -> Option<u64> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    #[repr(C)]
+    struct FileIdInfo {
+        volume: u64,
+        file_id: [u8; 16],
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFileInformationByHandleEx(
+            handle: *mut std::ffi::c_void,
+            class: i32,
+            info: *mut FileIdInfo,
+            size: u32,
+        ) -> i32;
+    }
+    let dir = std::fs::OpenOptions::new()
+        .access_mode(0)
+        .custom_flags(0x02000000) // FILE_FLAG_BACKUP_SEMANTICS opens a directory.
+        .open(path)
+        .ok()?;
+    let mut info = FileIdInfo {
+        volume: 0,
+        file_id: [0; 16],
+    };
+    // SAFETY: the directory handle is live and class FileIdInfo (18) writes exactly FILE_ID_INFO.
+    let ok = unsafe {
+        GetFileInformationByHandleEx(
+            dir.as_raw_handle(),
+            18,
+            &raw mut info,
+            std::mem::size_of::<FileIdInfo>() as u32,
+        )
+    };
+    (ok != 0).then_some(info.volume)
 }
 
 /// Free bytes (what this user may still write) and total bytes of the volume holding `path`.

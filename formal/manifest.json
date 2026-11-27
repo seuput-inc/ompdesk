@@ -3,6 +3,17 @@
 	"codeRoot": "..",
 	"models": [
 		{
+			"id": "item-ownership",
+			"title": "Item ownership: durable reservation, generation-addressed mail and owner-only prerequisites",
+			"kind": "tla",
+			"dir": "item-ownership/tla",
+			"spec": "ItemOwnership.tla",
+			"configs": ["MC.cfg"],
+			"mutations": "mutations.json",
+			"covers": [],
+			"syncCommit": null
+		},
+		{
 			"id": "shell-stream-recovery",
 			"title": "CEF stream loss: partial frames, reader incarnation and current successful read before ACK",
 			"kind": "tla",

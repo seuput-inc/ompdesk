@@ -499,6 +499,7 @@ impl AgentControl {
                         .opened_by_session
                         .clone()
                         .filter(|opened| !opened.is_empty()),
+                    opened_by_device: session.opened_by_device.clone(),
                 },
                 fate_by::PERSON,
             );

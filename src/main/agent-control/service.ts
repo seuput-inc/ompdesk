@@ -124,6 +124,8 @@ export interface ControlTab {
 	looked?: boolean;
 	/** The person typed a draft into it or sent it a prompt of their own. */
 	userTouched?: boolean;
+	/** A session or branch change invalidated the initial session identity of this tab. */
+	sessionMoved?: boolean;
 	/** The person has a draft in its composer now (any window or device showing it). */
 	drafting?: boolean;
 	/**
@@ -437,6 +439,7 @@ export interface AgentControlHost {
 	markAnswered(tabId: string, byTitle: string): Promise<void>;
 	/** Close a session's tab and delete its saved file (the sidebar's delete). */
 	deleteSession(callerTabId: string, tabId: string): Promise<void>;
+	cleanupBotSession(session: string, device: string | undefined, release: boolean): Promise<void>;
 	/** Delete a saved session no tab of this app holds, on the device it is saved on (the sidebar's delete). */
 	deleteStored(session: StoredSession): Promise<void>;
 	/**
@@ -556,6 +559,7 @@ export interface ReleasedSession {
 	hidden?: boolean;
 	/** The session file of the session whose agent opened it, when one did. */
 	openedBySession?: string;
+	openedByDevice?: string;
 	/** Its opener hears that it was closed: an agent's own child, not an Autopilot run's (the run reads those itself). */
 	tellOpener?: true;
 }
@@ -1226,6 +1230,15 @@ export class AgentControl {
 				coded(async () => (await host.deleteSession(callerTabId, tabId)) ?? null),
 			deleteStored: ({ session }: { session: StoredSession }) =>
 				coded(async () => (await host.deleteStored(session)) ?? null),
+			"bots.cleanupSession": ({
+				session,
+				device,
+				release,
+			}: {
+				session: string;
+				device?: string | null;
+				release: boolean;
+			}) => coded(async () => (await host.cleanupBotSession(session, device ?? undefined, release)) ?? null),
 			"bots.release": ({ folder }: { folder: string }) =>
 				coded(async () => (await host.releaseFolder(folder)) ?? null),
 			"bots.relocate": ({ from, to, sessions }: { from: string; to: string; sessions: string[] }) =>

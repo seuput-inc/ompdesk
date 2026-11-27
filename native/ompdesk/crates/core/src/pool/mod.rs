@@ -288,8 +288,13 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
         )),
         "stopSession" => later(async move {
             done(
-                ctx.stop_session(token(&p)?, &p.s("path")?, p.os("device").as_deref())
-                    .await,
+                ctx.stop_session(
+                    token(&p)?,
+                    p.os("path").as_deref(),
+                    p.os("device").as_deref(),
+                    p.os("tab").as_deref(),
+                )
+                .await,
             )
         }),
         "closeSessionTab" => later(async move {
@@ -534,9 +539,12 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
             later(async move { done(ctx.set_tab_task(&p.s("tab")?, &p.s("task")?).await) })
         }
         "formerTabIds" => now(json!(ctx.former_tab_ids(&p.s("tab").unwrap_or_default()))),
-        "setTabOpener" => {
-            later(async move { done(ctx.set_tab_opener(&p.s("tab")?, &p.s("opener")?).await) })
-        }
+        "setTabOpener" => later(async move {
+            done(
+                ctx.set_tab_opener(&p.s("tab")?, p.os("opener").as_deref())
+                    .await,
+            )
+        }),
         // ---- what other parts of main read ----
         "resumeFacts" => later(async move { ctx.resume_facts().await }),
         "summarySources" => now(ctx.summary_sources()),

@@ -59,7 +59,7 @@ export const useBotsStore = create<BotsStore>()(set => ({
 		useBotsStore.getState().receive(state);
 		return state;
 	},
-	receive: state => {
+	receive: ({ deleteChanged: _deleteChanged, refused: _refused, ...state }) => {
 		rememberRead(undefined, READ_KEY, state);
 		set({ state: listedBots(state), live: true });
 	},

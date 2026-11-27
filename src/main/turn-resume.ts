@@ -222,6 +222,10 @@ export function movesTabUnknown(type: string, error: unknown): boolean {
 export class MovesInFlight {
 	readonly #pending = new Map<string, Set<Promise<void>>>();
 
+	has(tabId: string): boolean {
+		return this.#pending.has(tabId);
+	}
+
 	/** A move's command goes out; call the result once it has answered (after `touched` counted it). */
 	begin(tabId: string): () => void {
 		const { promise, resolve } = Promise.withResolvers<void>();

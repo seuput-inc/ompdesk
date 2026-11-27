@@ -38,7 +38,7 @@ use crate::fs::order::js_trim;
 use crate::server::{Fault, Scope};
 
 const INCLUDE_FILE: &str = ".worktreeinclude";
-const SEED_MAX_BYTES: u64 = 50 * 1024 * 1024;
+pub(super) const SEED_MAX_BYTES: u64 = 50 * 1024 * 1024;
 const SEED_MAX_FILES: u32 = 10_000;
 const MAX_INCLUDE_BYTES: u64 = 64 * 1024;
 const MAX_PATTERNS: usize = 200;
