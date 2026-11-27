@@ -4,9 +4,10 @@
 
 use serde_json::{Map, Value, json};
 
+use super::routes::note_run_message;
 use super::run::RunState;
 use super::state::{
-    Ctx, Entry, Kinds, LevelKey, Pool, R, StartWait, fault, highest_subagent_level,
+    Ctx, Entry, Kinds, LevelKey, Opening, Pool, R, Routed, StartWait, fault, highest_subagent_level,
 };
 
 impl Ctx {
@@ -333,10 +334,22 @@ impl Ctx {
         let Some(seq) = seq else {
             return Ok(());
         };
+        let mut held_for_routing = false;
         if kinds.blocking {
-            self.with(|pool| Ctx::hold_request(pool, seq, request, kinds));
+            // A question of a run another session started waits off the owner's windows while agentctl decides whose
+            // it is (`route_ask`): the bot that asked for the work, or the owner.
+            let origin = self.with(|pool| {
+                Ctx::hold_request(pool, seq, request, kinds);
+                let origin = Ctx::routable_origin(pool, seq, request, kinds);
+                if let (Some(_), Some(id)) = (&origin, request["id"].as_str()) {
+                    pool.routed.insert(id.to_string(), Routed::Deciding);
+                }
+                origin
+            });
+            held_for_routing = origin.is_some();
             self.on_running_change().await?;
-            self.announce_ask(tab, request, kinds).await?;
+            self.announce_ask(tab, request, kinds, origin.as_ref())
+                .await?;
         } else if request["method"] == "cancel" {
             // omp withdrew the request (timeout, abort): no response will follow.
             let target = request["targetId"].as_str().unwrap_or("").to_string();
@@ -351,10 +364,18 @@ impl Ctx {
             if let Some(entry) = pool.by_seq_mut(seq) {
                 Ctx::keep_ui_state(entry, request);
             }
+            let held = held_for_routing;
             let frame = Ctx::ui_frame(pool, seq, request, kinds);
-            let wins = pool.by_seq(seq).map(Pool::windows_of).unwrap_or_default();
+            let wins = if held {
+                Vec::new()
+            } else {
+                pool.by_seq(seq).map(Pool::windows_of).unwrap_or_default()
+            };
             (frame, wins)
         });
+        if !held_for_routing && matches!(request["method"].as_str(), Some("ask" | "form")) {
+            self.send_view_question(tab, request);
+        }
         self.send(wins, "EXTENSION_UI", Value::Object(frame));
         Ok(())
     }
@@ -405,7 +426,7 @@ impl Ctx {
             let resent = self.with(|pool| pool.request_owners.get(&id) == Some(&seq));
             self.with(|pool| Ctx::hold_request(pool, seq, request, kind));
             if !resent {
-                self.announce_ask(tab, request, kind).await?;
+                self.announce_ask(tab, request, kind, None).await?;
             }
             let (mut frame, wins) = self.with(|pool| {
                 let frame = Ctx::ui_frame(pool, seq, request, kind);
@@ -542,10 +563,12 @@ impl Ctx {
                     Some("agent_start") => {
                         entry.placeholder = false;
                         entry.unstarted = false;
+                        entry.opening = Opening::First;
                     }
                     Some("tool_execution_start" | "tool_execution_end") => stepped = true,
                     Some("auto_retry_start") => retry_started = true,
                     Some("message_end") => {
+                        note_run_message(entry, &event["message"]);
                         // Stock writes a new session's file with its first assistant message: until then the prompt
                         // lives nowhere else, and a relaunch sends it again.
                         match event["message"]["role"].as_str() {

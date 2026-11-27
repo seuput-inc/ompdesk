@@ -1355,7 +1355,12 @@ export class SidecarManager extends EventEmitter {
 		} else if (type === "available_commands_update") {
 			this.emit("commandsUpdate", obj.commands);
 		} else if (Object.hasOwn(FRAME_EVENTS, type)) {
-			if (RUN_SETTLE_FRAMES[type] === true) this.#batcher?.flushNow();
+			// A fast ask must see the user message that started its turn before the pool decides who answers it.
+			if (
+				RUN_SETTLE_FRAMES[type] === true ||
+				(type === "extension_ui_request" && (obj.method === "ask" || obj.method === "form"))
+			)
+				this.#batcher?.flushNow();
 			this.emit(FRAME_EVENTS[type], obj);
 		}
 		this.emit("frame", obj);

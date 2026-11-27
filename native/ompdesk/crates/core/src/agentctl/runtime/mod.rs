@@ -379,6 +379,38 @@ struct TabParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct RouteAskParams {
+    port: u64,
+    tab_id: String,
+    request_id: String,
+    origin: crate::agentctl::service::route::AskOrigin,
+}
+
+/// `agentRuntime.routeAsk {port, tabId, requestId, origin}`: whose a question of a run another session started is: the
+/// bot chat's session file it went to as a card, or null when it stays with the owner (`service/route.rs`).
+async fn route_ask_call(call: Call) -> Result<Reply, Fault> {
+    let params: RouteAskParams = call.params()?;
+    let runtime = runtime_of(params.port)?;
+    let control = &runtime.control;
+    let chat = match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        control.route_ask(&params.tab_id, &params.request_id, &params.origin),
+    )
+    .await
+    {
+        Ok(chat) => chat,
+        Err(_) => {
+            control
+                .routed_ask_closed(&params.tab_id, &params.request_id, None)
+                .await;
+            None
+        }
+    };
+    Reply::json(&json!({ "chat": chat }))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AcknowledgeParams {
     port: u64,
     call_id: String,
@@ -476,6 +508,9 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("agentRuntime.liveReview", |call| {
         Box::pin(live_review_call(call))
+    });
+    registry.add("agentRuntime.routeAsk", |call| {
+        Box::pin(route_ask_call(call))
     });
     registry.add("agentRuntime.forgetDeleted", |call| {
         at_once(forget_deleted(&call))
