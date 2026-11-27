@@ -218,6 +218,8 @@ window.__stores = {
 	todo,
 };
 
+if (query.get("dock") === "open") ui.getState().focusDockCard("todo");
+
 // `?board=busy` (./fixture-board.ts): the running turn, the waiting question and the goal come from events and
 // cards, not from a transport answer, so they are put into the stores once the session has hydrated.
 if (BOARD_BUSY) {

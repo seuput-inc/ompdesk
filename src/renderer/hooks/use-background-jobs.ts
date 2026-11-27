@@ -140,8 +140,8 @@ const jobsPoll = new TabPoll<JobsFeed>(NO_FEED, (rpc, publish, tabId) => {
  * show them (the dock's island, the composer, the work board, the Background tasks view); a surface re-renders
  * only when what it selects changes.
  */
-export function useJobs<S>(select: (feed: JobsFeed) => S): S {
-	return useTabPoll(jobsPoll, true, select);
+export function useJobs<S>(select: (feed: JobsFeed) => S, active = true): S {
+	return useTabPoll(jobsPoll, active, select);
 }
 
 /** This session's running background shells and evals ({@link JobsFeed.running}). */

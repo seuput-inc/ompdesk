@@ -1,21 +1,15 @@
-/**
- * Todo dock card: the session's todo list above the composer while no running
- * work card carries it (idle sessions, a turn that is only writing text). It
- * starts collapsed to one line (progress, the current task, and how current
- * the list is: TodoFreshness); expanding shows the shared TodoListEditor under
- * the same freshness line and the instructions received since the list last
- * changed. Renders nothing when the session has no open todos and no reminder
- * pending.
- */
+/** The dock's disclosure and its expanded header use the same session counts. */
 
 import { ListTodo } from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { useT } from "../../../lib/i18n";
 import { selectTodoCardVisible, useTodoStore } from "../../../stores/todo";
+import { ProgressBar } from "../../common";
 import { DockCard } from "./DockCard";
-import { buildTodoDockPeek } from "./dock-summary";
+import { buildDockModel, buildTodoDockPeek } from "./dock-summary";
 import { TodoFreshnessMark, TodoReceived, useTodoFreshness } from "./TodoFreshness";
-import { TodoListEditor, useTodoTaskSummary } from "./TodoListEditor";
+import { TodoListEditor } from "./TodoListEditor";
+import { useDockFacts } from "./use-dock-facts";
 import { useWorkspaceDockFocus } from "./WorkspaceDockFocus";
 
 export function TodoDockCard({ exiting = false }: { exiting?: boolean }) {
@@ -24,8 +18,9 @@ export function TodoDockCard({ exiting = false }: { exiting?: boolean }) {
 	const focused = focusedCard === "todo";
 	const phases = useTodoStore(state => state.phases) ?? [];
 	const visible = useTodoStore(selectTodoCardVisible);
-	const taskSummary = useTodoTaskSummary();
-	const peek = useMemo(() => buildTodoDockPeek(phases), [phases]);
+	const facts = useDockFacts();
+	const model = useMemo(() => buildDockModel(phases, facts), [phases, facts]);
+	const peek = buildTodoDockPeek(phases, model);
 	const freshness = useTodoFreshness();
 
 	useEffect(() => {
@@ -34,28 +29,28 @@ export function TodoDockCard({ exiting = false }: { exiting?: boolean }) {
 
 	if (!visible && !exiting) return null;
 
+	const progress = peek.total > 0 && (
+		<ProgressBar
+			ariaLabel={t("dock.todo")}
+			ariaValueText={`${peek.done}/${peek.total}`}
+			className="w-24 shrink-0"
+			height={4}
+			tone="progress"
+			value={peek.done / peek.total}
+			valueText={`${peek.done}/${peek.total}`}
+		/>
+	);
 	return (
 		<DockCard
 			exiting={exiting}
 			badge={<span className="min-w-0 truncate tabular-nums">{taskSummary}</span>}
-			icon={ListTodo}
+			badge={progress}
 			id="todo"
 			peek={
 				peek.total > 0 ? (
 					<>
 						<span
-							aria-hidden="true"
-							className="relative h-1.5 w-16 shrink-0 overflow-hidden rounded-(--sc-radius-full) bg-(--sc-border)"
-						>
-							<span
-								className="absolute inset-0 origin-left rounded-(--sc-radius-full) bg-(--sc-accent) transition-transform duration-(--sc-duration-med) ease-(--sc-ease-standard)"
-								style={{ transform: `scaleX(${peek.done / peek.total})` }}
-							/>
-						</span>
-						<span className="shrink-0 tabular-nums">
-							{peek.done}/{peek.total}
-						</span>
-						{peek.current && (
+						{progress}
 							<span className="min-w-0 truncate text-(--sc-text-secondary)" title={peek.current.content}>
 								{peek.current.status === "in_progress"
 									? peek.current.content
@@ -71,7 +66,7 @@ export function TodoDockCard({ exiting = false }: { exiting?: boolean }) {
 			<div className="px-2 py-1.5">
 				<TodoFreshnessMark className="mb-1 px-1 text-sc-xs text-(--sc-text-subtle)" freshness={freshness} />
 				<TodoReceived freshness={freshness} list />
-				<TodoListEditor />
+				<TodoListEditor key={useKey} model={model} />
 			</div>
 		</DockCard>
 	);

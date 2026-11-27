@@ -34,18 +34,9 @@ import { useTabsStore } from "../../../stores/tabs";
 import { useTodoStore } from "../../../stores/todo";
 import { transcriptToolEntries, useToolsStore } from "../../../stores/tools";
 import { useUiStore } from "../../../stores/ui";
-import { callStops } from "../../chat/chat-stream-utils";
-import { backgroundJobVerdicts } from "../../chat/completion-events";
 import { requestRevealStep } from "../../chat/work/reveal-step";
-import { useRunOutcome, useRunStores } from "../../chat/work/use-work-run";
-import { turnScope } from "../../chat/work/work-findings";
-import {
-	mergeSkills,
-	type WorkOutcomes,
-	type WorkProtection,
-	type WorkSkillOutcome,
-	workOutcomes,
-} from "../../chat/work/work-view";
+import { useRunStores } from "../../chat/work/use-work-run";
+import { mergeSkills, type WorkProtection, type WorkSkillOutcome, workOutcomes } from "../../chat/work/work-view";
 import { headWords, resolveRowTarget, type SessionHead, targetFromOrigin } from "../sidebar/session-row-target";
 import { BoardRow, BoardSection, elapsedLabel, KindMark } from "./board-parts";
 import { openPeer, peerOpen } from "./open-peer";
@@ -59,7 +50,6 @@ import {
 	type KeyedFileChange,
 	keyedFiles,
 	type LastCheck,
-	lastCheck,
 	type PeersSummary,
 	recallTitles,
 	type ScopedPeer,
@@ -68,6 +58,7 @@ import {
 	turnSkills,
 	type UnlandedSummary,
 } from "./session-board";
+import { checkWords, TURN_CLOCK_SLACK_MS, useTurnCheck } from "./use-turn-check";
 
 export type SessionRowModel =
 	| ({ kind: "changes" } & FamilyChangesSummary)
@@ -91,9 +82,6 @@ export interface TurnWindow {
 	start: number;
 	end: number | null;
 }
-
-/** Calls may be stamped a little before the turn's own start (one clock, two events). */
-const TURN_CLOCK_SLACK_MS = 500;
 
 /** The tab the board belongs to: its runtime's, else the window's active one. */
 function useBoardTabId(): string | null {
@@ -291,62 +279,6 @@ function useUnlanded(): UnlandedSummary | null {
 }
 
 /**
- * The finished calls of the newest turn (the running one, else the last that ended, else, in a reloaded tab, everything
- * since the last prompt): a card's verdict needs its calls settled, and a stream that finishes no call reads nothing.
- */
-function useNewestTurnCalls(): readonly string[] {
-	const { tools } = useRunStores();
-	const start = useTodoStore(state => (state.turnActive ? state.turnStartedAt : (state.lastTurn?.start ?? null)));
-	const prompted = useMessagesStore(state => {
-		const at = state.messages.findLast(message => message.role === "user")?.timestamp;
-		return typeof at === "number" ? at : null;
-	});
-	const finishedVersion = useToolsStore(state => state.finishedVersion);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: finishedVersion marks the finished map changing in place.
-	return useMemo(() => {
-		const from = (start ?? prompted ?? 0) - TURN_CLOCK_SLACK_MS;
-		const keys: string[] = [];
-		for (const [key, entry] of tools.getState().finishedTools) if (entry.startTime >= from) keys.push(key);
-		return keys;
-	}, [start, prompted, tools, finishedVersion]);
-}
-
-/** The newest turn's calls and outcome as its work card reads it (`useRunOutcome`, subagents' calls included). */
-function useNewestTurn(): { keys: readonly string[]; outcome: WorkOutcomes } {
-	const messages = useMessagesStore(state => state.messages);
-	const keys = useNewestTurnCalls();
-	return { keys, outcome: useRunOutcome(keys, undefined, callStops(messages)).outcome };
-}
-
-/**
- * The check the board names, as the newest work card reads it; the session's finished and live calls give the newest
- * run, the newest turn's scope (`turnScope`) which failure the work ended on.
- */
-function useLastCheck({ keys, outcome }: { keys: readonly string[]; outcome: WorkOutcomes }): LastCheck | null {
-	const { tools } = useRunStores();
-	const cwd = useSessionStore(state => state.cwd);
-	const live = useToolsStore(state => state.liveTools);
-	const finishedVersion = useToolsStore(state => state.finishedVersion);
-	const messages = useMessagesStore(state => state.messages);
-	const running = useTodoStore(state => state.turnActive);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: finishedVersion marks the finished map changing in place.
-	return useMemo(() => {
-		const entries = keys.flatMap(key => {
-			const entry = tools.getState().finishedTools.get(key);
-			return entry ? [[key, entry] as const] : [];
-		});
-		return lastCheck(
-			[...tools.getState().finishedTools, ...live],
-			outcome.commands,
-			cwd,
-			backgroundJobVerdicts(messages),
-			callStops(messages),
-			turnScope(entries, outcome.commands, { running, failedEnd: false }),
-		);
-	}, [tools, live, finishedVersion, cwd, messages, outcome, keys, running]);
-}
-
-/**
  * The checkout's HEAD the session's sidebar row shows (`resolveRowTarget`, the same target, asked of the computer
  * that runs the session): the board names the branch the session works on, or the commit a detached HEAD is at.
  */
@@ -372,10 +304,8 @@ export function useSessionBoard(turn: TurnWindow | null = null): SessionBoard {
 	const family = useFamilyParts(turn);
 	const changes = useMemo(() => familyChanges([{ title: null, files: own }, ...family]), [own, family]);
 	const unlanded = useUnlanded();
-	const newest = useNewestTurn();
+	const { outcome, check } = useTurnCheck("hydrate");
 	const head = useSessionHead();
-	const { outcome } = newest;
-	const check = useLastCheck(newest);
 	const jobs = useBackgroundJobs();
 	const peers = useSessionStore(state => state.checkoutPeers);
 	const messages = useMessagesStore(state => state.messages);
@@ -408,17 +338,6 @@ export function useSessionBoard(turn: TurnWindow | null = null): SessionBoard {
 }
 
 const plural = (count: number) => (count === 1 ? "" : "s");
-
-function checkWords(t: (key: string, params?: Record<string, string | number>) => string, check: LastCheck): string {
-	const verdict = check.state === "passed" ? "passed" : "failed";
-	const words =
-		check.state === "running"
-			? t(`workBoard.session.check.${check.kind}.running`)
-			: check.count !== undefined
-				? t(`chat.work.check.${check.kind}.${verdict}Count`, { count: check.count })
-				: t(`chat.work.check.${check.kind}.${verdict}`);
-	return check.release ? `${words} · ${t("workBoard.session.check.release")}` : words;
-}
 
 function rowWords(t: (key: string, params?: Record<string, string | number>) => string, row: SessionRowModel): string {
 	switch (row.kind) {
