@@ -112,7 +112,7 @@ impl AgentControl {
         origin: &AskOrigin,
     ) -> Option<String> {
         let state = self.host.state();
-        if !state.enabled || origin.session.is_empty() || origin.mark.is_none() {
+        if !state.enabled || origin.session.is_empty() {
             return None;
         }
         let target = state.tabs.iter().find(|tab| tab.tab_id == tab_id)?.clone();
@@ -375,10 +375,13 @@ impl AgentControl {
                 }
             }
         }
+        let mut result = Ok(());
         for (tab, id) in returned {
-            self.host.escalate_ask(&tab, &id, None).await?;
+            if let Err(error) = self.host.escalate_ask(&tab, &id, None).await {
+                result = result.and(Err(error));
+            }
         }
-        Ok(())
+        result
     }
 
     /// A routed form's answer: the bot's answers checked by the asking session's bridge with stock's own form rules.
@@ -393,16 +396,20 @@ impl AgentControl {
         let questions: Vec<FormQuestion> =
             serde_json::from_value(view["questions"].clone()).unwrap_or_default();
         let one = questions.len() == 1;
-        let given: Vec<AnswerItem> = match &args.answers {
-            Some(answers) => answers.clone(),
-            None if one && (args.choice.is_some() || args.text.is_some()) => vec![AnswerItem {
-                id: None,
-                selected: args.choice.clone().map(|choice| vec![choice]),
-                text: args.text.clone(),
-            }],
-            None => Vec::new(),
+        let shorthand;
+        let given: &[AnswerItem] = match args.answers.as_deref() {
+            Some(answers) => answers,
+            None if one && (args.choice.is_some() || args.text.is_some()) => {
+                shorthand = [AnswerItem {
+                    id: None,
+                    selected: args.choice.clone().map(|choice| vec![choice]),
+                    text: args.text.clone(),
+                }];
+                &shorthand
+            }
+            None => &[],
         };
-        if given.is_empty() {
+        if given.is_empty() || given.len() != questions.len() {
             return fail(format!(
                 "This card is a form: pass `answers` with one entry per field: [{}].",
                 questions
@@ -420,32 +427,31 @@ impl AgentControl {
                     .join(", ")
             ));
         }
-        let mut answers = Vec::new();
+        let mut answers = Vec::with_capacity(questions.len());
         for question in &questions {
-            let mine = given
-                .iter()
-                .find(|entry| entry.id.as_deref() == Some(question.id.as_str()))
-                .or(if one { given.first() } else { None });
+            let Some(mine) = given.iter().find(|entry| match entry.id.as_deref() {
+                Some(id) => id == question.id,
+                None => one,
+            }) else {
+                return fail(format!(
+                    "Missing answer for field \"{}\". Nothing was answered.",
+                    question.id
+                ));
+            };
             let labels: Vec<String> = question
                 .options
                 .iter()
                 .map(|option| option.label.clone())
                 .collect();
             let mut selected = Vec::new();
-            for name in mine
-                .and_then(|entry| entry.selected.as_deref())
-                .unwrap_or(&[])
-            {
+            for name in mine.selected.as_deref().unwrap_or(&[]) {
                 selected.push(pick_option(&labels, name)?);
             }
             if selected.len() > 1 && !question.multi {
                 return fail(format!("Field \"{}\" takes one option.", question.id));
             }
             let mut entry = json!({ "id": question.id, "selectedOptions": selected });
-            if let Some(text) = mine
-                .and_then(|entry| entry.text.as_deref())
-                .filter(|text| !text.is_empty())
-            {
+            if let Some(text) = mine.text.as_deref().filter(|text| !text.is_empty()) {
                 entry["customInput"] = json!(text);
             }
             answers.push(entry);

@@ -591,7 +591,12 @@ impl AgentControl {
         // objective turn itself; anything else as a prompt carrying its dispatch.
         let first = message.map(|message| {
             if args.mode.as_deref() == Some("goal") {
-                return (None, json!({ "type": "set_goal", "objective": message }));
+                let prompt = wrap_agent_message(
+                    message,
+                    &caller.title,
+                    saved_id_of_path(caller.session_path.as_deref()).as_deref(),
+                );
+                return (None, json!({ "type": "set_goal", "objective": message, "message": prompt }));
             }
             let dispatch = self.mailbox.dispatch(tab_id);
             let command = json!({
