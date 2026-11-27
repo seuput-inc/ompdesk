@@ -237,10 +237,24 @@ describe("sidebarRows over every combination of folder, holder and opener", () =
 		// No gone OMPdesk worktree and no removed project is a group of its own unless a held session keeps it.
 		expect(rows.groups.map(group => group.cwd)).not.toContain(FOLDERS.wtg);
 		const old = rows.groups.find(group => group.cwd === FOLDERS.old);
-		if (old) expect(old.sessions.length).toBeGreaterThan(0);
+		const retained = cells.filter(cell => cell.folder === "old" && heldBy(cell.holder) && cell.origin !== "record");
+		expect(Boolean(old)).toBe(retained.length > 0);
+		const loose = (cell: Cell) => cell.origin === "brief" || cell.origin === "lost";
+		expect(old?.sessions.map(row => row.path) ?? []).toEqual(
+			retained.filter(cell => !loose(cell)).map(cell => cell.path),
+		);
+		expect(old?.folded.map(row => row.path) ?? []).toEqual(retained.filter(loose).map(cell => cell.path));
 		// A project of the list is a group with or without sessions; a gone one reads missing.
 		expect(rows.groups.find(group => group.cwd === APP)?.listed).toBe(true);
 		expect(rows.groups.find(group => group.cwd === FOLDERS.scr)?.missing).toBe(true);
+	});
+
+	it("drops a removed project after its last unassigned child is no longer held", () => {
+		const cell: Cell = { folder: "old", holder: "used", origin: "lost", path: "/s/child" };
+		const oldGroup = (holder: Holder) =>
+			sidebarRows(world([{ ...cell, holder }])).groups.find(group => group.cwd === FOLDERS.old);
+		expect(oldGroup("used")).toMatchObject({ sessions: [], folded: [{ path: cell.path }] });
+		expect(oldGroup("none")).toBeUndefined();
 	});
 
 	it.each(WORLDS.slice(0, 40).map((cells, index) => [index, cells] as const))(
