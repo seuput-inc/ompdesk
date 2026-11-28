@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { _electron as electron } from "playwright";
 import { en } from "../src/renderer/locales/en";
-import type { RpcSessionState } from "../src/shared/rpc-types";
+import type { RpcSessionState, RpcSkillsResult } from "../src/shared/rpc-types";
 import { appLaunchOptions, exitApp, pressShortcutUntilVisible } from "./harness";
 
 const keys = ["offline-probe-key-a", "offline-probe-key-b"];
@@ -62,7 +62,7 @@ async function provider() {
 	const posts: number[] = [];
 	const guards = new Set<string>();
 	const turns: { prompt: string; account: number }[] = [];
-	const inputs = new Map<string, number>();
+	const hints: { skill: string; account: number; model: string; process: string }[] = [];
 	const server = createServer(async (req, res) => {
 		if (req.method === "GET" && /^\/guard\/\d+$/.test(req.url ?? "")) {
 			guards.add(String(req.url));
@@ -93,29 +93,16 @@ async function provider() {
 		for await (const chunk of req) body += chunk;
 		const prompt = /test-key-turn-[12]/.exec(body)?.[0];
 		if (prompt) turns.push({ prompt, account });
-		const { messages }: { messages: { role: string; content: string | { text?: string }[] }[] } = JSON.parse(body);
+		const {
+			messages,
+			model,
+		}: { messages: { role: string; content: string | { text?: string }[] }[]; model: string } = JSON.parse(body);
 		const content = messages.length === 1 && messages[0]?.role === "user" ? messages[0].content : "";
 		const text = typeof content === "string" ? content : (content[0]?.text ?? "");
-		const hint =
-			text.startsWith("Compress into one routing hint of at most 12 words:") && text.includes("\nSkill: ")
-				? "skill-description"
-				: text.startsWith("Write one routing hint of at most 15 words:") && text.includes("\nNamespace: ")
-					? "mcp-namespace-hint"
-					: undefined;
-		const input = JSON.stringify(messages);
-		if (!inputs.has(input)) inputs.set(input, inputs.size + 1);
-		console.log("#42 loopback /v1/messages 200", {
-			account,
-			caller: req.headers["x-fixture-caller"] ?? "direct loopback",
-			inputOrdinal: inputs.get(input),
-			kind:
-				prompt ??
-				hint ??
-				(body.includes("What is 17 times 23?") ? "thinking probe" : body.includes('"ping"') ? "ping" : "other"),
-			model: offered.flat().find(id => body.includes(`"model":"${id}"`)) ?? "other",
-			maxTokens: /"max_tokens"\s*:\s*(\d+)/.exec(body)?.[1],
-			stream: /"stream"\s*:\s*true/.test(body),
-		});
+		if (!prompt && text.startsWith("Compress into one routing hint of at most 12 words:")) {
+			const skill = /^Skill: ([^\r\n]+)\r?$/m.exec(text)?.[1];
+			if (skill) hints.push({ skill, account, model, process: String(req.headers["x-fixture-pid"]) });
+		}
 		res.writeHead(200, { "content-type": "text/event-stream" });
 		const event = (type: string, data: object) =>
 			res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
@@ -143,7 +130,15 @@ async function provider() {
 	await once(server, "listening");
 	const address = server.address();
 	if (!address || typeof address === "string") throw new Error("missing loopback port");
-	return { origin: `http://127.0.0.1:${address.port}`, guards, lists, posts, turns, close: () => server.close() };
+	return {
+		origin: `http://127.0.0.1:${address.port}`,
+		guards,
+		lists,
+		posts,
+		turns,
+		hints,
+		close: () => server.close(),
+	};
 }
 
 async function guardProvider(project: string, env: NodeJS.ProcessEnv, origin: string) {
@@ -171,12 +166,7 @@ globalThis.fetch = Object.assign(async (input, init) => {
 	if (!allowed.includes(request.headers.get("x-api-key"))) {
 		throw new Error("expected a dummy fixture key in x-api-key");
 	}
-	if (request.method === "POST") {
-		// Only function names, never full stacks or request contents, reach the loopback test log.
-		const frames = (new Error().stack || "").split("\\n").flatMap(line =>
-			line.match(/^\\s*at (?:async )?([\\w.$<>]+) \\(/)?.slice(1) ?? []);
-		request.headers.set("x-fixture-caller", [process.pid, ...frames].join(":"));
-	}
+	if (request.method === "POST") request.headers.set("x-fixture-pid", String(process.pid));
 	return send(origin + url.pathname + url.search, {
 		method: request.method, headers: request.headers,
 		body: request.method === "POST" ? await request.arrayBuffer() : undefined,
@@ -308,7 +298,22 @@ test("new auto picks on a shared model pin different keys and show the key that 
 				.screenshot({ path: test.info().outputPath(`served-${n}.png`) });
 		}
 		expect(fake.turns.map(turn => turn.prompt)).toEqual(["test-key-turn-1", "test-key-turn-2"]);
-		expect(fake.posts).toEqual(fake.turns.map(turn => turn.account));
+		expect(fake.posts.length, "Every POST is a user turn or a stock skill description").toBe(2 + fake.hints.length);
+		const eligibleSkills = await page.evaluate(async () => {
+			const response = await window.omp.rpc.getSkills();
+			if (!response.success) throw new Error(response.error);
+			return (response.data as RpcSkillsResult).skills
+				.filter(s => s.enabled && !s.hidden && s.description.replace(/\s+/g, " ").trim().length > 100)
+				.map(s => s.name);
+		});
+		const coldProcess = [...fake.guards][0];
+		expect(fake.hints.length, "Cold profile requests stock routing hints").toBeGreaterThan(0);
+		expect(new Set(fake.hints.map(h => h.skill)).size, "No skill is compressed twice").toBe(fake.hints.length);
+		for (const hint of fake.hints) {
+			expect(eligibleSkills).toContain(hint.skill);
+			expect(hint).toMatchObject({ account: 0, model: shared });
+			expect(`/guard/${hint.process}`, "Warm session sends no compression requests").toBe(coldProcess);
+		}
 		expect(new Set(fake.turns.map(turn => turn.account)), "Eligible keys actually sent a fresh session").toEqual(
 			new Set([0, 1]),
 		);
@@ -317,6 +322,7 @@ test("new auto picks on a shared model pin different keys and show the key that 
 			verifiedKeys: fake.lists,
 			postedKeys: fake.posts,
 			sent: fake.turns,
+			skillDescriptions: fake.hints,
 		});
 		await exitApp(app);
 		fake.close();
