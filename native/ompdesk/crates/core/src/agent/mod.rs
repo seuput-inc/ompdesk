@@ -9,11 +9,17 @@
 //! capability matrix, and Stage 2 wiring checklist.
 
 pub mod adapter;
+pub mod omp_contract;
 pub mod parsers;
 pub mod registry;
 pub mod types;
 
 pub use adapter::{AgentAdapter, AgentSession, BoxFuture};
+pub use omp_contract::{
+    OMP_FRAME_MAPPINGS, OmpAdapterContract, OmpContractState, OmpFrameMappingSpec,
+    OmpFrameTranslation, OmpPassthroughKind, map_sidecar_status, translate_omp_frame,
+    translate_omp_raw_line,
+};
 pub use parsers::claude_stream::ClaudeStreamParser;
 pub use parsers::codex_stream::CodexStreamParser;
 pub use parsers::direct_sse::{DirectSseParser, SseFrame, SseFrameDecoder};
