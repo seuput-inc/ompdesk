@@ -133,7 +133,7 @@ const FILE_PREVIEW_CHARS = 12_000;
 
 /** Calm hairline card shared by `!`/`$` executions and context summaries. */
 const CONTEXT_CARD_CLASS =
-	"omp-transcript-content min-w-0 overflow-hidden rounded-(--sc-radius-lg) border border-(--sc-border-subtle)";
+	"omp-transcript-content min-w-0 overflow-hidden rounded-(--sc-radius-lg) border border-(--sc-code-border)";
 
 function ExecutionBubble({ message }: { message: AgentMessage }) {
 	const t = useT();
@@ -157,7 +157,7 @@ function ExecutionBubble({ message }: { message: AgentMessage }) {
 	return (
 		<div className="omp-execution-turn px-6 py-4">
 			<div className={CONTEXT_CARD_CLASS}>
-				<div className="flex min-h-10 items-center gap-2 border-b border-(--sc-divider) px-3 py-1.5">
+				<div className="flex min-h-8 items-center gap-2 border-b border-(--sc-divider) px-3 py-1">
 					<Terminal aria-hidden className="size-(--sc-icon-sm) shrink-0 text-(--sc-text-muted)" />
 					<span className="text-sc-sm font-medium text-(--sc-text)">
 						{python ? t("chat.exec.python") : t("chat.exec.shell")}
@@ -182,7 +182,7 @@ function ExecutionBubble({ message }: { message: AgentMessage }) {
 					</span>
 				</div>
 				{input && (
-					<pre className="border-b border-(--sc-divider) bg-(--sc-surface-1) px-3 py-2.5 font-mono text-sc-sm break-words whitespace-pre-wrap text-(--sc-text)">
+					<pre className="border-b border-(--sc-divider) bg-(--sc-code-bg) px-3 py-2 font-mono text-sc-sm break-words whitespace-pre-wrap text-(--sc-text)">
 						{python ? input : `$ ${input}`}
 					</pre>
 				)}
@@ -340,8 +340,8 @@ function ContextBubble({ message }: { message: AgentMessage }) {
 
 	return (
 		<div className="omp-context-turn px-6 py-3">
-			<div className={cx(CONTEXT_CARD_CLASS, "px-3.5 py-3")}>
-				<div className="mb-2 flex items-center gap-1.5 text-sc-sm font-medium text-(--sc-text-muted)">
+			<div className={cx(CONTEXT_CARD_CLASS, "px-3 py-2.5")}>
+				<div className="mb-1.5 flex items-center gap-1.5 text-sc-sm font-medium text-(--sc-text-muted)">
 					<Icon aria-hidden className="size-(--sc-icon-sm) shrink-0" />
 					{label}
 				</div>
@@ -420,15 +420,8 @@ function MessageActions({
 	const touch = useShellInput() === "touch";
 	return (
 		// select-none: a selection through the turn copies the message, never its clock.
-		<div className={cx("omp-message-actions flex select-none items-center gap-0.5", className)}>
-			{timestamp && (
-				<time
-					className="px-1 text-sc-xs tabular-nums text-(--sc-text-subtle)"
-					data-clock-repeats={clockRepeats || undefined}
-				>
-					{timestamp}
-				</time>
-			)}
+		<div className={cx("omp-message-actions", className)}>
+			{timestamp && <time data-clock-repeats={clockRepeats || undefined}>{timestamp}</time>}
 			<CopyButton label={t("chat.copyMessage")} text={copyText} />
 			{onBranch &&
 				(touch ? (
@@ -788,7 +781,7 @@ export const MessageBubble = memo(function MessageBubble({
 					(route?.provider === message.provider ||
 						(!failure && message.stopReason !== "error" && message.stopReason !== "aborted")) &&
 					modelProviderGroup(message.provider) === "anthropic-api-key" && (
-						<div data-claude-key-used={message.provider} className="mt-1 text-sc-xs text-(--sc-text-muted)">
+						<div data-claude-key-used={message.provider} className="mt-1 text-sc-xs text-(--sc-text-subtle)">
 							{t("chat.claudeApi.used", { key: claudeApiKeyLabel(message.provider, undefined, t) })}
 							{route?.provider === message.provider &&
 								route.skipped.map(({ provider, reason }) => (

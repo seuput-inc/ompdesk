@@ -489,7 +489,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 							{apiKeyRoute ? t("modelPicker.apiModel", { model: chipLabel }) : chipLabel}
 						</span>
 						{model && !settingUp && (
-							<span aria-hidden className="omp-composer-effort shrink-0 font-normal text-(--sc-text-muted)">
+							<span aria-hidden className="omp-composer-effort shrink-0 font-normal text-(--sc-text-subtle)">
 								· {chipThinking}
 							</span>
 						)}
@@ -535,7 +535,7 @@ export const ComposerToolbar = memo(function ComposerToolbar({
 		<div
 			aria-busy={!routeReady}
 			aria-label={t("input.toolbar")}
-			className="omp-composer-toolbar flex min-h-11 flex-nowrap items-center gap-1 pr-2.5 pb-2.5 pl-2"
+			className="omp-composer-toolbar flex min-h-10 flex-nowrap items-center gap-1 px-2 pb-2"
 			data-turn-running={isStreaming || undefined}
 			inert={!routeReady}
 			role="toolbar"
