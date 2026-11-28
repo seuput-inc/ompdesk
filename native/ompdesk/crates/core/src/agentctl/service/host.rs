@@ -744,10 +744,16 @@ impl Host {
     }
 
     /// `answer(tabId, requestId, response)`.
-    pub async fn answer(&self, tab_id: &str, request_id: &str, response: &Value) -> R<()> {
+    pub async fn answer(
+        &self,
+        tab_id: &str,
+        request_id: &str,
+        response: &Value,
+        bot_id: Option<&str>,
+    ) -> R<()> {
         self.ask(
             "answer",
-            json!({ "tabId": tab_id, "requestId": request_id, "response": response }),
+            json!({ "tabId": tab_id, "requestId": request_id, "response": response, "answerBot": bot_id }),
         )
         .await
     }

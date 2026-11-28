@@ -327,6 +327,7 @@ impl Host {
         tab_id: &str,
         what: Value,
         companion: &Companion,
+        bot_id: Option<&str>,
     ) -> R<()> {
         let mut command = json!({
             "type": "agent_control_answer",
@@ -345,7 +346,15 @@ impl Host {
                 "The answer may or may not have arrived: its session did not say. Check it with ompdesk_session_result; sending the same answer again is safe (its attachments are never added twice, and an answer to a question no longer open is refused).".into(),
             )
         };
-        match self.command(tab_id, &command, Deadline::Ms(60_000)).await {
+        match self
+            .ask::<RpcResponse>(
+                "command",
+                json!({
+                    "tabId": tab_id, "command": command, "timeoutMs": 60_000, "answerBot": bot_id
+                }),
+            )
+            .await
+        {
             Ok(response) if response.success => Ok(()),
             Ok(response) if response.unanswered() => Err(lost()),
             Ok(response) => Err(Fail::Tool(format!(

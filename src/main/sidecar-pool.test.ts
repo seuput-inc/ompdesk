@@ -14,6 +14,7 @@ import type {
 	SidecarStatus,
 } from "../shared/rpc-types";
 import { unsavedSessionKey } from "../shared/session-summary";
+import { answeringBot } from "./agent-control/target-answer";
 import { core } from "./core/process";
 import { deletedSessions, initDeletedSessions } from "./deleted-sessions";
 import { RemoteSidecar } from "./remote/remote-sidecar";
@@ -39,6 +40,7 @@ class FakeSidecar extends EventEmitter {
 	reloads: Array<{ reload: boolean; reconnect: string[] }> = [];
 	/** Side-channel frames written via sendSideChannel (F-UI-ORIGIN assertions). */
 	sentFrames: object[] = [];
+	bridgeRequest?: SidecarLike["bridgeRequest"];
 	/** What the next sendSideChannel throws (a paired host's tab with its link down). */
 	sideChannelError: Error | undefined;
 	/** What the next sendSideChannel's promise rejects with (the link dropped while the answer was on its way). */
@@ -4227,6 +4229,44 @@ describe("SidecarPool tab activity (the observer Web Push listens to)", () => {
 			answered: { title: "Deploy?", choice: "yes" },
 		});
 		expect(seen).toHaveLength(2);
+	});
+
+	it("journals only submitted work decisions, with an exact request, host actor and no body", async () => {
+		const { a, pool, fw } = observed();
+		a.processAlive = true;
+		const journal = vi.fn<NonNullable<SidecarLike["bridgeRequest"]>>(async () => ({}));
+		a.bridgeRequest = journal;
+		const ask = (id: string, title = "Work question") =>
+			a.emitUiRequest({ id, method: "select", title, options: ["private answer"] });
+		const frame = (id: string) => ({
+			id,
+			type: "extension_ui_response",
+			value: "private answer",
+			actor: "bot:forged",
+		});
+		ask("r1");
+		await pool.routeSideChannel("r1", frame("r1"), "tab-a", fw.win, undefined, true);
+		ask("r2");
+		await pool.routeSideChannel("r2", frame("r2"), "tab-a", fw.win);
+		ask("r3");
+		await pool.routeSideChannel("r3", { ...frame("r3"), cancelled: true }, "tab-a");
+		ask("r4", "[OMPdesk] Confirm action");
+		expect(await pool.routeSideChannel("r4", frame("r4"), "tab-a", fw.win, undefined, true)).toBe(false);
+		ask("r-bot");
+		const verified = frame("r-bot");
+		answeringBot.set(verified, "registered");
+		await pool.routeSideChannel("r-bot", verified, "tab-a");
+		ask("r5");
+		a.sideChannelRejection = new Error("not submitted");
+		await expect(pool.routeSideChannel("r5", frame("r5"), "tab-a", fw.win, undefined, true)).rejects.toThrow();
+		expect(journal.mock.calls).toEqual([
+			["agent_control.workAnswer", { target: "tab-a", requestId: "r1", actor: "person", at: expect.any(Number) }],
+			["agent_control.workAnswer", { target: "tab-a", requestId: "r2", actor: "unknown", at: expect.any(Number) }],
+			[
+				"agent_control.workAnswer",
+				{ target: "tab-a", requestId: "r-bot", actor: "bot:registered", at: expect.any(Number) },
+			],
+		]);
 	});
 
 	it("says which option an approval was answered with, and that a dismissed card chose nothing", async () => {

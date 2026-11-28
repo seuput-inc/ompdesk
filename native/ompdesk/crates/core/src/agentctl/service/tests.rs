@@ -231,6 +231,27 @@ fn wrapped_messages_and_titles() {
 }
 
 #[test]
+fn host_route_in_a_transcript_is_descriptive_and_answer_followups_are_not_bot_sends() {
+    let mut chat = tab(&json!({ "tabId": "a", "status": "ready", "sessionPath": "/s/t_s1.jsonl" }));
+    chat.host_bot_call = Some(HostBotCall::Message("bot&17".into()));
+    let message = chat.wrap_message("Title: Work", "Ada", Some("d3"));
+    let user = from(&json!({ "role": "user", "content": message }));
+    assert_eq!(
+        render_message(&user).as_deref(),
+        Some(
+            "[user, host-routed bot message (Ada, saved id s1, bot id bot&17, dispatch d3)] Title: Work"
+        )
+    );
+    assert_eq!(agent_task_title(&message).as_deref(), Some("Work"));
+
+    chat.host_bot_call = Some(HostBotCall::Answer("bot&17".into()));
+    let followup = chat.wrap_message(&message, "Ada", Some("d4"));
+    let parsed = parse_agent_message(&followup).unwrap();
+    assert_eq!(parsed.route, None);
+    assert!(!parsed.body.contains("<ompdesk-agent-message"));
+}
+
+#[test]
 fn schedules_and_autopilot() {
     replay("describeFrequency", |a| {
         text(describe_frequency(&from(&a[0])))
@@ -770,6 +791,7 @@ async fn a_call_that_changes_something_runs_once_under_its_id() {
         Some(super::CallId {
             id: "call-1".into(),
             resent: false,
+            local_session: None,
         })
     };
     let first = control
@@ -834,6 +856,7 @@ async fn a_resent_call_with_no_record_is_reconciled_never_run() {
     let call = Some(super::CallId {
         id: "call-9".into(),
         resent: true,
+        local_session: None,
     });
     let outcome = control
         .run(

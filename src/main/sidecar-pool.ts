@@ -81,7 +81,7 @@ import {
 } from "../shared/rpc-types";
 import { failureOf, requestHeadline, type SummaryRequest, unsavedSessionKey } from "../shared/session-summary";
 import { isApprovalSelect } from "../shared/tool-approval";
-import { TargetAnswer } from "./agent-control/target-answer";
+import { answeringBot, hostedAnswerActor, recordWorkAnswer, TargetAnswer } from "./agent-control/target-answer";
 import type { BackgroundWorkMember } from "./background-work";
 import { canonicalCwd } from "./canonical-cwd";
 import { type Hub, type HubItem, hub } from "./core/hub";
@@ -643,6 +643,11 @@ export class SidecarPool {
 	#item(item: HubItem): void {
 		this.#summaryRead = null;
 		switch (item.k) {
+			case "workAnswer": {
+				const tab = item.tab as string;
+				recordWorkAnswer(this.#handles.get(tab)?.sidecar, tab, item.requestId as string, item.actor as string);
+				return;
+			}
 			case "send": {
 				const channel = IPC_EVENTS[item.channel as keyof typeof IPC_EVENTS];
 				for (const id of item.wins as number[]) {
@@ -866,13 +871,16 @@ export class SidecarPool {
 				return null;
 			case "adoptCwd":
 				return this.#handles.get(tab)?.sidecar.adoptCwd(item.cwd as string) ?? false;
-			case "sideChannel": {
-				// The answer is nobody's here: a failure of a paired host's tab surfaces to the caller that asked.
+			case "sideChannel":
 				void this.#handles.get(tab)?.sidecar.sendSideChannel(item.frame as object);
 				return null;
+			case "sideChannelLater": {
+				const handle = this.#handles.get(tab);
+				if (!handle) throw new Error("The answering session is gone.");
+				const frame = item.frame as object;
+				if (handle.hosted && typeof item.actor === "string") hostedAnswerActor.set(frame, item.actor);
+				return handle.sidecar.sendSideChannel(frame) ?? null;
 			}
-			case "sideChannelLater":
-				return this.#handles.get(tab)?.sidecar.sendSideChannel(item.frame as object) ?? null;
 			case "rpc":
 				return this.#handles.get(tab)?.sidecar.rpcClient?.command(item.command as RpcCommand) ?? null;
 			case "endViews": {
@@ -1756,12 +1764,15 @@ export class SidecarPool {
 		tabId?: string,
 		responder?: ClientWindow,
 		claim?: number,
+		submitted = false,
 	): Promise<boolean> {
 		return this.#later("routeSideChannel", {
 			id,
 			frame,
 			tab: tabId,
 			responder: responder ? this.#windowId(responder) : undefined,
+			answerBot: answeringBot.get(frame),
+			submitted,
 			choice: describeAnswer(frame),
 			...(claim === undefined ? {} : { claim }),
 		});

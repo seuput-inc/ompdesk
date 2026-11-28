@@ -14,6 +14,25 @@
  *   cancelling the question while the note goes in (a turn aborted), outside main's control: it is said explicitly.
  */
 import type { ExtensionUIResponse, RpcCommand } from "../../shared/rpc-types";
+import type { SidecarLike } from "../sidecar-types";
+
+/** Only the core's answer callbacks tag a frame. A renderer, paired device or serialized frame cannot carry this tag. */
+export const answeringBot = new WeakMap<object, string>();
+
+/** A local HostedTabView hands a frame to its actual host without putting this principal on the wire. */
+export const hostedAnswerActor = new WeakMap<object, string>();
+
+export function recordWorkAnswer(
+	sidecar: SidecarLike | undefined,
+	target: string,
+	requestId: string,
+	actor: string,
+): void {
+	if (!sidecar?.processAlive) return;
+	void sidecar
+		.bridgeRequest?.("agent_control.workAnswer", { target, requestId, actor, at: Date.now() })
+		.catch(() => console.warn("Could not journal a submitted work answer."));
+}
 
 export interface AnswerCompanion {
 	content: string | { type: string; [key: string]: unknown }[];

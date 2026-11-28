@@ -219,6 +219,34 @@ pub(super) struct Held {
     pub asked_at: i64,
 }
 
+impl Held {
+    pub(super) fn is_work_answer(&self, frame: &Value) -> bool {
+        let title = if self.request["method"] == "ask" {
+            self.request["questions"]
+                .get(0)
+                .and_then(|q| q["question"].as_str())
+        } else {
+            self.request["title"].as_str()
+        };
+        if self.kinds.approval
+            || title.is_some_and(|title| {
+                title.starts_with(crate::agentctl::service::wrap::AGENT_CARD_PREFIX)
+            })
+            || frame["type"] != "extension_ui_response"
+            || frame["cancelled"] == true
+            || frame["timedOut"] == true
+        {
+            return false;
+        }
+        match self.request["method"].as_str() {
+            Some("ask") => frame["answers"].is_array(),
+            Some("form") => frame["data"].is_object(),
+            Some("input" | "select" | "editor") => frame["value"].is_string(),
+            _ => false,
+        }
+    }
+}
+
 /// The request a tab's run serves: the wrapped message of another session that started it, by that session's saved id
 /// and the dispatch or request id its message carried (`[ompdesk dispatch d3:`, `[ompdesk request m-…]`).
 #[derive(Clone, Debug, PartialEq)]

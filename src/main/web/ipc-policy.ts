@@ -160,6 +160,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[C.RPC_COMMAND]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.RPC_COMMAND_FOR_TAB]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.EXTENSION_UI_RESPOND]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.WORK_QUESTION_SUBMIT]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.EXTENSION_UI_OPEN]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.EXTENSION_UI_STATE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.SESSIONS_LIST]: { dir: "invoke", permission: "workspace", mode: "pass" },

@@ -52,8 +52,8 @@ use self::host::{Caps, Deadline, Host, HostState};
 use self::text::{call_intent, mutates, saved_id_of_path, stored_title};
 use self::tuning::Tuning;
 use self::types::{
-    AgentMessage, ClosedChild, ControlTab, CostSplit, OpenOne, ReleasedSession, StoredSession,
-    Target, Tool, ToolOutcome,
+    AgentMessage, ClosedChild, ControlTab, CostSplit, HostBotCall, OpenOne, ReleasedSession,
+    StoredSession, Target, Tool, ToolOutcome,
 };
 use self::util::{Flight, OrderedMap};
 use crate::agentctl::journal::attachments::AttachmentStore;
@@ -594,6 +594,33 @@ impl AgentControl {
                 Err(error) => return outcome_of(tool, &error),
             }
         };
+        // Only the calling tab on this host-tool event gets provenance, never an outside caller or a
+        // synthetic send on a bot's behalf. A folder or display name alone does not identify a bot chat.
+        if matches!(known_tool, Tool::Open | Tool::Send | Tool::Answer)
+            && let Some(path) = call.as_ref().and_then(|call| call.local_session.as_deref())
+            && text::saved_id(path).is_some()
+            && let Some(tab) = tabs.iter_mut().find(|tab| {
+                tab.tab_id == caller_tab_id
+                    && tab.device.is_none()
+                    && !tab.viewing
+                    && tab.status.is_up()
+                    && tab.session_path.as_deref() == Some(path)
+            })
+        {
+            let bots = self.bots();
+            let mut matches = bots
+                .all()
+                .iter()
+                .filter(|bot| bot.folder == tab.cwd && bot.has_session(path));
+            if let (Some(bot), None) = (matches.next(), matches.next()) {
+                let id = bot.id.clone();
+                tab.host_bot_call = Some(if known_tool == Tool::Answer {
+                    HostBotCall::Answer(id)
+                } else {
+                    HostBotCall::Message(id)
+                });
+            }
+        }
         self.name_untitled(&mut tabs).await;
         let caller = tabs.iter().find(|tab| tab.tab_id == caller_tab_id).cloned();
         let key = match (&call, &caller) {
@@ -1141,6 +1168,9 @@ pub struct CallId {
     pub id: String,
     #[serde(default)]
     pub resent: bool,
+    /// Saved file of the live local sidecar that emitted this call, captured by main outside the tool arguments.
+    #[serde(default, rename = "localSession")]
+    pub local_session: Option<String>,
 }
 
 pub const TURNED_OFF: &str = "OMPdesk control tools are turned off (Settings › Tools & extensions). Ask the user to turn them on.";

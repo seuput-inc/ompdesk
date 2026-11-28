@@ -1770,7 +1770,7 @@ impl Ctx {
                 self.with(|pool| pool.answering.remove(source));
                 sent?;
                 return self
-                    .route_answered(seq, source, &frame, None, false, "submitted")
+                    .route_answered(seq, source, &frame, None, false, "submitted", "unknown")
                     .await;
             }
             if self.with(|pool| pool.routed.contains_key(id)) {
@@ -1809,11 +1809,9 @@ impl Ctx {
         let Some(id) = id else {
             return Ok(());
         };
-        let owned = self.with(|pool| pool.request_owners.get(&id) == Some(&seq));
-        if !owned {
+        if !self.take_answer(seq, &id, frame, "unknown") {
             return Ok(());
         }
-        self.with(|pool| pool.request_owners.remove(&id));
         self.announce_ask_closed(tab, &id).await?;
         self.on_running_change().await?;
         // No window answered it: every window's later answer is refused.

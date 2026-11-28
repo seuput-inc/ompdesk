@@ -785,6 +785,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				.run(tab.win, tab.tabId, request.toolName, request.arguments, {
 					id: request.id,
 					resent: request.resent === true,
+					sidecar,
 				})
 				.then(outcome => {
 					runningControlCalls.delete(running);
@@ -1770,6 +1771,19 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		)
 			return;
 		await sidecarFor(deps, caller)?.sendSideChannel(response);
+	});
+
+	ipc.handle(IPC_COMMANDS.WORK_QUESTION_SUBMIT, async (caller, { response, tabId }: IpcExtensionUiRespondPayload) => {
+		const win = caller.win;
+		if (
+			(!caller.browserWindow && !caller.connId) ||
+			!win ||
+			typeof tabId !== "string" ||
+			!sidecarPool.sidecarForTab(win, tabId) ||
+			typeof response?.id !== "string" ||
+			!(await sidecarPool.routeSideChannel(response.id, response, tabId, win, undefined, true))
+		)
+			throw new Error("That work question is not open.");
 	});
 
 	ipc.handle(IPC_COMMANDS.EXTENSION_UI_OPEN, caller => {

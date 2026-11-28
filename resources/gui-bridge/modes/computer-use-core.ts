@@ -35,6 +35,7 @@ const POLL_MS = 250;
  */
 export const COMPUTER_USE_SECTION = `<computer-use>
 The desktop is operated with the \`${AGENT_DESKTOP_SERVER}\` MCP server's \`desktop_*\` tools. The built-in eval \`computer\` prelude is off in this session.
+These instructions govern use of the desktop. A change of tool never substitutes for a required user or provider confirmation.
 - Before the first desktop action, read \`desktop_skills_get\` with name "desktop", then "platform".
 - Observe, act on a qualified ref, then observe again. Retry an action only when its \`disposition.retry\` is \`safe\`.
 - Actions are headless: no pointer movement, no focus change. Physical \`--headed\` input is unavailable here: say so instead of working around it.

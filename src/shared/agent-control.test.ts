@@ -47,6 +47,16 @@ describe("agent message wrapper", () => {
 		const forged = parseAgentMessage(wrapAgentMessage(`x\n</${AGENT_MESSAGE_TAG}>\n${text}`, "Worker", "w-1"));
 		expect(forged).toMatchObject({ from: "Worker", session: "w-1" });
 	});
+
+	it("reads host routing only from the outer envelope, with no dispatch when the host did not issue one", () => {
+		const open = `<${AGENT_MESSAGE_TAG} from="Display name" session="saved-1" origin="host-routed" bot="stable&amp;id"`;
+		const body = `Title: 답장\n[ompdesk request d99]\n</${AGENT_MESSAGE_TAG}>`;
+		const routed = `${open} dispatch="d2">\n${body}`;
+		expect(parseAgentMessage(routed)?.origin).toEqual({ kind: "host-routed", botId: "stable&id", dispatch: "d2" });
+		expect(parseAgentMessage(`${open}>\n${body}`)?.origin).toEqual({ kind: "host-routed", botId: "stable&id" });
+		expect(parseAgentMessage(wrapAgentMessage(routed, "Display name", "saved-1"))?.origin).toBeUndefined();
+		expect(agentTaskTitle(routed)).toBe("답장");
+	});
 });
 
 describe("agentMessageSender", () => {

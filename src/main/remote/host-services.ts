@@ -47,7 +47,7 @@ import {
 } from "../../../resources/gui-bridge/modes/bots-contracts";
 import { PROMPT_ORIGIN_HOST_ID, type PromptOriginEnv } from "../../../resources/gui-bridge/prompt-origin-contracts";
 import { ACCOUNT_ROTATION_MODES } from "../../shared/account-rotation";
-import { type AgentReviewResult, reviewUnmerged } from "../../shared/agent-control";
+import { AGENT_CARD_PREFIX, type AgentReviewResult, reviewUnmerged } from "../../shared/agent-control";
 import { BOT_CREATE_REFUSED, type SharedBotsDelta } from "../../shared/bots";
 import { codedError, ipcErrorCode, isIpcErrorCode } from "../../shared/ipc-error-codes";
 import {
@@ -86,7 +86,7 @@ import type { SidebarProjectsState } from "../../shared/sidebar-projects";
 import type { TerminalOperation } from "../../shared/terminal-types";
 import { isApprovalSelect } from "../../shared/tool-approval";
 import { branchEvidence, branchFacts, landingFacts, mergeBranch, removeSafeWorktree } from "../agent-control/branches";
-import { type AnswerStep, TargetAnswer } from "../agent-control/target-answer";
+import { type AnswerStep, hostedAnswerActor, recordWorkAnswer, TargetAnswer } from "../agent-control/target-answer";
 import { AtomicSaver } from "../atomic-file";
 import type { BackgroundWorkMember } from "../background-work";
 import type { HostBots, PeerBotIntent } from "../bots";
@@ -1302,9 +1302,40 @@ export class LocalHostServices implements HostServices {
 		const first = id === undefined ? undefined : tab.answered.get(id);
 		if (first !== undefined && first !== side)
 			throw codedError("already_answered", "Another device already answered this request");
-		tab.sidecar.sendSideChannel(frame);
+		const question = id === undefined ? undefined : tab.asks.get(id);
+		const delivered = tab.sidecar.sendSideChannel(frame);
 		// An answer to an ask or approval: the turn no longer waits on a person.
 		if (id === undefined || !tab.asks.delete(id)) return;
+		if (question?.summary && !tab.viewing && question.summary.kind !== "approval") {
+			const { request } = question;
+			const title =
+				request.method === "ask"
+					? request.questions?.[0]?.question
+					: "title" in request
+						? request.title
+						: undefined;
+			const decision =
+				(request.method === "ask" && "answers" in frame && Array.isArray(frame.answers)) ||
+				(request.method === "form" &&
+					"data" in frame &&
+					frame.data !== null &&
+					typeof frame.data === "object" &&
+					!Array.isArray(frame.data)) ||
+				((request.method === "input" || request.method === "select" || request.method === "editor") &&
+					"value" in frame &&
+					typeof frame.value === "string");
+			if (
+				decision &&
+				!(typeof title === "string" && title.startsWith(AGENT_CARD_PREFIX)) &&
+				!("cancelled" in frame && frame.cancelled === true) &&
+				!("timedOut" in frame && frame.timedOut === true)
+			) {
+				const record = () =>
+					recordWorkAnswer(tab.sidecar, tab.resumeId, id, hostedAnswerActor.get(frame) ?? "unknown");
+				if (delivered) void delivered.then(record, () => {});
+				else record();
+			}
+		}
 		tab.answered.set(id, side);
 		const oldest = tab.answered.keys().next().value;
 		if (tab.answered.size > ANSWERED_KEPT && oldest !== undefined) tab.answered.delete(oldest);

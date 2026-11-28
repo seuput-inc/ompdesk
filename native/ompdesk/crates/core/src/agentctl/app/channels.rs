@@ -47,6 +47,7 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("rpc:command", Risk::Never(RAW_RPC)),
     ("rpc:command-for-tab", Risk::Never(RAW_RPC)),
     ("extension-ui:respond", Risk::Never(CARDS)),
+    ("extension-ui:submit-work-question", Risk::Never(CARDS)),
     ("extension-ui:open", Risk::Never(CARDS)),
     ("extension-ui:state", Risk::Never(CARDS)),
     (

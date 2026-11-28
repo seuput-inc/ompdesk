@@ -58,6 +58,7 @@ interface TestElement {
 let container: TestElement;
 let root: Root;
 let respondExtensionUi: Mock<(response: ExtensionUIResponse, tabId?: string) => void>;
+let submitWorkQuestion: typeof respondExtensionUi;
 let openExternal: Mock<(url: string) => Promise<void>>;
 
 async function flush(): Promise<void> {
@@ -76,14 +77,15 @@ async function mount({
 	runtime?: SessionRuntime;
 } = {}): Promise<void> {
 	respondExtensionUi = vi.fn();
+	submitWorkQuestion = vi.fn();
 	openExternal = vi.fn(async () => {});
 	const ompWindow = window as unknown as {
 		omp: {
-			ui: { respondExtensionUi: typeof respondExtensionUi };
+			ui: { respondExtensionUi: typeof respondExtensionUi; submitWorkQuestion: typeof respondExtensionUi };
 			system: { openExternal: typeof openExternal };
 		};
 	};
-	ompWindow.omp = { ui: { respondExtensionUi }, system: { openExternal } };
+	ompWindow.omp = { ui: { respondExtensionUi, submitWorkQuestion }, system: { openExternal } };
 	container = document.createElement("div") as unknown as TestElement;
 	document.body.appendChild(container as never);
 	root = createRoot(container as unknown as Element);
@@ -279,8 +281,9 @@ describe("ExtensionDialog native RPC form", () => {
 			html,
 			answers: [{ id: "field-0", selectedOptions: [], customInput: "3" }],
 		});
-		expect(respondExtensionUi).toHaveBeenCalledTimes(1);
-		expect(respondExtensionUi).toHaveBeenCalledWith(
+		expect(respondExtensionUi).not.toHaveBeenCalled();
+		expect(submitWorkQuestion).toHaveBeenCalledTimes(1);
+		expect(submitWorkQuestion).toHaveBeenCalledWith(
 			{ type: "extension_ui_response", id: "native-1", data: { n: 3 } },
 			"paired-pane",
 		);
@@ -300,6 +303,7 @@ describe("ExtensionDialog native RPC form", () => {
 		await click(cancel);
 		await act(async () => pending.resolve(ok({ data: { n: 3 } })));
 		expect(respondExtensionUi).toHaveBeenCalledTimes(1);
+		expect(submitWorkQuestion).not.toHaveBeenCalled();
 		expect(respondExtensionUi).toHaveBeenCalledWith(
 			{ type: "extension_ui_response", id: "native-2", cancelled: true },
 			"paired-pane",

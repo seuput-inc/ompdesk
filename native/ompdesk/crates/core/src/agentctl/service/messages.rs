@@ -32,7 +32,7 @@ use super::types::{
     AnswerArgs, ControlTab, ReportArgs, RpcResponse, SendArgs, StoredSession, UiRequest,
 };
 use super::util::{Flight, join};
-use super::wrap::{dispatch_mark, request_mark, wrap_agent_message};
+use super::wrap::{dispatch_mark, request_mark};
 use crate::agentctl::journal::attachments::{Resolved, image_block, shas_sig, with_attached};
 use crate::agentctl::journal::bots::Bots;
 use crate::agentctl::journal::pending_cleanups::CleanupAction;
@@ -677,14 +677,14 @@ impl AgentControl {
                 ))
             }
         };
-        let message = wrap_agent_message(
+        let message = caller.wrap_message(
             &with_dispatch(
                 &with_attached(&args.message, &carried.set.files),
                 dispatch.as_deref(),
                 request_id.as_deref(),
             ),
             sender(&self.bots(), caller).0,
-            saved_id_of_path(caller.session_path.as_deref()).as_deref(),
+            dispatch.as_deref(),
         );
         let dispatch_number = dispatch.as_deref().and_then(|d| d[1..].parse::<i64>().ok());
         let mut entry: Option<OutboxSend> = None;
@@ -1478,6 +1478,7 @@ impl AgentControl {
         if routed.is_some() {
             self.routed_answered(&target.tab_id, &ask.id, true);
         }
+        let bot_id = caller.answering_bot_id();
         let delivered = match self
             .companion(caller, target, &about, &ask.id, resolved)
             .await
@@ -1488,10 +1489,15 @@ impl AgentControl {
                         &target.tab_id,
                         json!({ "askId": ask.id, "response": response }),
                         &companion,
+                        bot_id,
                     )
                     .await
             }
-            Ok(None) => self.host.answer(&target.tab_id, &ask.id, &response).await,
+            Ok(None) => {
+                self.host
+                    .answer(&target.tab_id, &ask.id, &response, bot_id)
+                    .await
+            }
             Err(error) => Err(error),
         };
         if let Err(error) = delivered {

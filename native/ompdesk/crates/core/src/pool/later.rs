@@ -124,6 +124,8 @@ impl Ctx {
         responder: Option<i64>,
         choice: &str,
         claim: Option<u64>,
+        answer_bot: Option<String>,
+        submitted: bool,
     ) -> R<()> {
         // A paired computer forwards the displayed id unchanged; only its host resolves the proxy.
         let proxy = id.strip_prefix(ESCALATED_PREFIX).filter(|_| {
@@ -132,6 +134,7 @@ impl Ctx {
                     .is_some_and(|entry| entry.device.is_some())
             })
         });
+        let shown_id = id;
         let id = proxy.unwrap_or(id);
         // An agent's answer holds this question while its attachments go in: only the holder's answer passes.
         if let Err(held) = self.guard_ask(id, claim) {
@@ -191,6 +194,20 @@ impl Ctx {
                 return Begin::Unknown;
             };
             let (seq, tab_id) = (entry.seq, entry.tab_id.clone());
+            if submitted {
+                let key = id.to_owned();
+                let valid = responder.is_some()
+                    && frame["id"] == shown_id
+                    && pool.request_owners.get(&key) == Some(&seq)
+                    && !pool.sign_in_requests.contains(&key)
+                    && pool
+                        .request_bodies
+                        .get(&key)
+                        .is_some_and(|held| held.is_work_answer(frame));
+                if !valid {
+                    return Begin::Unknown;
+                }
+            }
             let viewed = !entry.viewers.is_empty() || !entry.device_views.is_empty();
             if let Some(answered) = pool.answered.get(&id.to_string())
                 && answered.seq == seq
@@ -244,9 +261,17 @@ impl Ctx {
                 }
             }
             let _ends = EndClaim(ctx.clone(), id.clone(), claim);
+            let actor = match answer_bot {
+                Some(bot) => format!("bot:{bot}"),
+                None if submitted => "person".to_owned(),
+                None => "unknown".to_owned(),
+            };
             let delivered = ctx
                 .out
-                .ask_later("sideChannelLater", &json!({"tab": tab, "frame": frame}))
+                .ask_later(
+                    "sideChannelLater",
+                    &json!({"tab": tab, "frame": frame, "actor": actor}),
+                )
                 .await;
             ctx.with(|pool| {
                 if delivered.is_err() && shared {
@@ -262,7 +287,7 @@ impl Ctx {
                 return;
             }
             match ctx
-                .route_answered(seq, &id, &frame, responder, shared, &choice)
+                .route_answered(seq, &id, &frame, responder, shared, &choice, &actor)
                 .await
             {
                 Ok(()) => ctx.settle_ok(token, Value::from(true)),
@@ -272,20 +297,41 @@ impl Ctx {
         Ok(())
     }
 
+    /// Close this exact open request once. The receipt describes a host submission, not an ACK from stock.
+    pub(super) fn take_answer(&self, seq: u64, id: &str, frame: &Value, actor: &str) -> bool {
+        let (open, record) = self.with(|pool| {
+            let key = id.to_owned();
+            if pool.request_owners.get(&key) != Some(&seq) {
+                return (false, None);
+            }
+            pool.request_owners.remove(&key);
+            let record = pool.by_seq(seq).filter(|entry| entry.device.is_none() && !entry.hosted_view)
+                .filter(|_| frame["id"] == id && !pool.sign_in_requests.contains(&key)
+                    && pool.request_bodies.get(&key).is_some_and(|held| held.is_work_answer(frame)))
+                .map(|entry| json!({"k": "workAnswer", "tab": entry.tab_id, "requestId": id, "actor": actor}));
+            (true, record)
+        });
+        if let Some(record) = record {
+            self.push(&record);
+        }
+        open
+    }
+
     /// What follows a delivered answer: the request closes, observers hear it, the other windows' cards close.
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn route_answered(
         &self,
         seq: u64,
         id: &str,
-        _frame: &Value,
+        frame: &Value,
         responder: Option<i64>,
         shared: bool,
         choice: &str,
+        actor: &str,
     ) -> R<()> {
-        let open = self.with(|pool| pool.request_owners.get(&id.to_string()) == Some(&seq));
+        let open = self.take_answer(seq, id, frame, actor);
         if open {
             let (tab, title) = self.with(|pool| {
-                pool.request_owners.remove(&id.to_string());
                 let title = pool
                     .request_bodies
                     .get(&id.to_string())

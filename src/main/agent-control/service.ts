@@ -73,6 +73,7 @@ import type { Pace } from "../session-pace";
 import type { FileEdits } from "../web/file-edit-reports";
 import type { BranchEvidence, BranchFacts, LandingFacts, MergeOutcome, WorktreeRef, WorktreeRemoval } from "./branches";
 import type { MailDelivery } from "./mail";
+import { answeringBot } from "./target-answer";
 import { ARGS, looseArgs, type OpenOne } from "./tools";
 
 export interface ControlAsk {
@@ -911,13 +912,13 @@ export class AgentControl {
 		callerTabId: string,
 		tool: AgentControlToolName,
 		args: unknown,
-		call?: { id: string; resent?: boolean },
+		call?: { id: string; resent?: boolean; localSession?: string },
 	): Promise<ToolOutcome> {
 		return this.#call("run", {
 			callerTabId,
 			tool,
 			args,
-			...(call ? { call: { id: call.id, resent: call.resent === true } } : {}),
+			...(call ? { call: { id: call.id, resent: call.resent === true, localSession: call.localSession } } : {}),
 		});
 	}
 
@@ -1233,12 +1234,18 @@ export class AgentControl {
 				command,
 				timeoutMs,
 				noDeadline,
+				answerBot,
 			}: {
 				tabId: string;
 				command: RpcCommand;
 				timeoutMs?: number;
 				noDeadline?: boolean;
-			}) => coded(() => host.command(tabId, command, noDeadline ? NO_DEADLINE : timeoutMs)),
+				answerBot?: string | null;
+			}) =>
+				coded(() => {
+					if (answerBot && command.type === "agent_control_answer") answeringBot.set(command.response, answerBot);
+					return host.command(tabId, command, noDeadline ? NO_DEADLINE : timeoutMs);
+				}),
 			spawn: ({ callerTabId, request }: { callerTabId: string; request: SpawnRequest }) =>
 				coded(async () => {
 					try {
@@ -1284,11 +1291,17 @@ export class AgentControl {
 				tabId,
 				requestId,
 				response,
+				answerBot,
 			}: {
 				tabId: string;
 				requestId: string;
 				response: ExtensionUIResponse;
-			}) => coded(async () => (await host.answer(tabId, requestId, response)) ?? null),
+				answerBot?: string | null;
+			}) =>
+				coded(async () => {
+					if (answerBot) answeringBot.set(response, answerBot);
+					return (await host.answer(tabId, requestId, response)) ?? null;
+				}),
 			escalateAsk: ({
 				tabId,
 				requestId,

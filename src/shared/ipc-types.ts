@@ -244,6 +244,7 @@ export const IPC_COMMANDS = {
 	RPC_COMMAND_FOR_TAB: "rpc:command-for-tab",
 	/** Respond to extension UI request */
 	EXTENSION_UI_RESPOND: "extension-ui:respond",
+	WORK_QUESTION_SUBMIT: "extension-ui:submit-work-question",
 	/** The asks and approvals this window's tabs still wait on (a page that reloaded missed their events) */
 	EXTENSION_UI_OPEN: "extension-ui:open",
 	/** The status texts, widgets and title this window's tabs show (no later frame repeats them for a page that loaded late) */
@@ -2711,6 +2712,7 @@ export interface OmpApi {
 	ui: {
 		/** Rejects with `remote_offline` when a paired host's tab cannot take the answer now: the card stays open. */
 		respondExtensionUi(response: ExtensionUIResponse, tabId?: string): Promise<void>;
+		submitWorkQuestion(response: ExtensionUIResponse, tabId: string): Promise<void>;
 		/** The asks and approvals this window's tabs wait on: a page that reloaded missed the events that raised them. */
 		openRequests(): Promise<IpcOpenExtensionRequest[]>;
 		/** The status texts, widgets and title this window's tabs show: no later frame repeats them for a late page. */

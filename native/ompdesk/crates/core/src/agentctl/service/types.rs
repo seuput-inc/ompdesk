@@ -161,6 +161,13 @@ pub struct ControlAsk {
     pub request: UiRequest,
 }
 
+/// Ingress provenance only. A notification generated while answering a card is not a bot's send.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum HostBotCall {
+    Message(String),
+    Answer(String),
+}
+
 /// One open tab of this app (any window), as the pool knows it. `here` is set by `HostState::tabs` for the caller.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -200,6 +207,9 @@ pub struct ControlTab {
     pub worktree: Option<TabWorktree>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_path: Option<String>,
+    /// Never read from a host snapshot, the tool arguments or the transcript.
+    #[serde(skip)]
+    pub(super) host_bot_call: Option<HostBotCall>,
     #[serde(default, skip_serializing)]
     pub opened_by_session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -280,6 +290,13 @@ pub struct ScheduledRetry {
 }
 
 impl ControlTab {
+    pub(super) fn answering_bot_id(&self) -> Option<&str> {
+        match &self.host_bot_call {
+            Some(HostBotCall::Answer(id)) => Some(id),
+            _ => None,
+        }
+    }
+
     pub fn saved_identity(&self) -> Option<(&str, &str)> {
         let path = self
             .session_path

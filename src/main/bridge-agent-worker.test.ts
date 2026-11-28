@@ -31,10 +31,10 @@ describe("worker contract", () => {
 	it("is in the child's prompt and not in the parent's", () => {
 		const on = hook();
 		const child = on({ systemPrompt: BASE }, session([{ type: "custom", customType: WORKER_ENTRY, data: {} }]));
-		expect(child?.systemPrompt).toEqual([...BASE, WORKER_CONTRACT]);
-		expect(
-			on({ systemPrompt: BASE }, session([{ type: "custom", customType: "ompdesk.agent-answer" }])),
-		).toBeUndefined();
+		const parent = on({ systemPrompt: BASE }, session([{ type: "custom", customType: "ompdesk.agent-answer" }]));
+		expect(parent?.systemPrompt).toContainEqual(expect.stringContaining("<ompdesk-session-messages>"));
+		expect(parent?.systemPrompt).not.toContain(WORKER_CONTRACT);
+		expect(child?.systemPrompt).toEqual([...(parent?.systemPrompt ?? []), WORKER_CONTRACT]);
 	});
 
 	it("asks the worker to end its answer with a Result line the app reads", () => {
@@ -45,6 +45,24 @@ describe("worker contract", () => {
 	it("leaves a worker's own subagents to its brief", () => {
 		const entries = [{ type: "custom", customType: WORKER_ENTRY }];
 		expect(hook()({ systemPrompt: BASE }, session(entries, "subagent"))).toBeUndefined();
+	});
+
+	it("stores a work-answer receipt without displaying or retaining the answer", async () => {
+		const entry = { at: 42, target: "worker", requestId: "exact/id", actor: "bot:ada" };
+		const journal: JournalEntry[] = [];
+		const env = {
+			session: () => ({
+				sessionManager: {
+					appendCustomEntry: (customType: string, data: unknown) =>
+						journal.push({ type: "custom", customType, data }),
+					flush: async () => {},
+				},
+			}),
+		} as unknown as BridgeEnv;
+		await methods["agent_control.workAnswer"]?.({ ...entry, answers: ["private"] }, env);
+		expect(journal).toEqual([
+			{ type: "custom", customType: "ompdesk.work-answer", data: { stage: "submitted", ...entry } },
+		]);
 	});
 
 	it("is journaled once by agent_control.worker", async () => {

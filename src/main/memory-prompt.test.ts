@@ -32,6 +32,13 @@ describe("promptTitle", () => {
 		expect(promptTitle(wrapped)).toBe("맥 자동업데이트 확인");
 	});
 
+	it("reads the assignment title through a host-routed bot envelope", () => {
+		const text =
+			'<ompdesk-agent-message from="Ada" session="s1" origin="host-routed" bot="b1" dispatch="d2">\nTitle: Review logs\n</ompdesk-agent-message>';
+		expect(promptTitle(text)).toBe("Review logs");
+		expect(isAgentPrompt(text)).toBe(true);
+	});
+
 	it("unwraps both wrappers whichever way they nest", () => {
 		const inner = wrapAgentMessage(stock("Title: 중첩된 작업\n\nbody"), "부모");
 		expect(promptTitle(inner)).toBe("중첩된 작업");

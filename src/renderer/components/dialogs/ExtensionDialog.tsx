@@ -27,6 +27,7 @@ import { Fragment, type KeyboardEvent as ReactKeyboardEvent, useEffect, useId, u
 import { createPortal } from "react-dom";
 import { OAUTH_PASTE_PROMPT } from "../../../../resources/gui-bridge/extensions/oauth-contracts";
 import { a2uiMarkerToolCallId } from "../../../../resources/gui-bridge/modes/a2ui-contracts";
+import { AGENT_CARD_PREFIX } from "../../../shared/agent-control";
 import type {
 	ExtensionAskDialogQuestion,
 	ExtensionAskDialogResult,
@@ -937,11 +938,15 @@ function ActiveDialog({
 			| { answers: Array<{ id: string; selectedOptions: string[]; customInput?: string }> }
 			| FormDataReply
 			| { cancelled: true },
+		submitted = false,
 	) => {
 		// The card stays until main handed the answer on: a paired host's tab with its link down refuses it.
 		if (sending.current === request.id) return;
 		sending.current = request.id;
-		const delivered = await sendResponse({ type: "extension_ui_response", id: request.id, ...response });
+		const title =
+			request.method === "ask" ? request.questions?.[0]?.question : "title" in request ? request.title : undefined;
+		const workSubmit = submitted && !(typeof title === "string" && title.startsWith(AGENT_CARD_PREFIX));
+		const delivered = await sendResponse({ type: "extension_ui_response", id: request.id, ...response }, workSubmit);
 		if (delivered) removeRequest(request.id);
 		else if (sending.current === request.id) sending.current = null;
 	};
@@ -954,7 +959,7 @@ function ActiveDialog({
 			) : (
 				<SelectDialog
 					onCancel={cancel}
-					onValue={value => respond({ value })}
+					onValue={value => respond({ value }, true)}
 					remaining={remaining}
 					request={request}
 				/>
@@ -975,7 +980,9 @@ function ActiveDialog({
 				<InputDialog
 					key={request.id}
 					onCancel={cancel}
-					onValue={value => respond({ value })}
+					onValue={value =>
+						respond({ value }, request.title !== OAUTH_PASTE_PROMPT && request.placeholder !== OAUTH_PASTE_PROMPT)
+					}
 					remaining={remaining}
 					request={request}
 				/>
@@ -991,7 +998,7 @@ function ActiveDialog({
 					key={request.id}
 					request={request}
 					remaining={remaining}
-					onData={respond}
+					onData={data => respond(data, true)}
 					onCancel={cancel}
 				/>
 			);
@@ -1007,6 +1014,7 @@ function ActiveDialog({
 					onSubmit={result =>
 						respond(
 							result.kind === "submit" ? { answers: result.results.map(askWireAnswer) } : { cancelled: true },
+							result.kind === "submit",
 						)
 					}
 					remaining={remaining}
@@ -1015,7 +1023,12 @@ function ActiveDialog({
 			);
 		case "editor":
 			return (
-				<EditorDialog key={request.id} onCancel={cancel} onValue={value => respond({ value })} request={request} />
+				<EditorDialog
+					key={request.id}
+					onCancel={cancel}
+					onValue={value => respond({ value }, true)}
+					request={request}
+				/>
 			);
 		case "open_url":
 			// Keyed: each link gets a fresh card, so focus lands on it again.

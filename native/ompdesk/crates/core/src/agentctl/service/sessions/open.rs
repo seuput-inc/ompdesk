@@ -17,8 +17,7 @@ use crate::agentctl::service::js::one_line;
 use crate::agentctl::service::messages::sent_answer;
 use crate::agentctl::service::resolve::{DeviceScope, Wanted};
 use crate::agentctl::service::text::{
-    folder_key, label, open_in_text, response_data, saved_id_of_path, start_failure,
-    unreached_text, with_dispatch,
+    folder_key, label, open_in_text, response_data, start_failure, unreached_text, with_dispatch,
 };
 use crate::agentctl::service::types::{
     ChildWorktree, ControlDevice, ControlTab, ModelInfo, OpenArgs, OpenOne, OpenedChild,
@@ -671,11 +670,7 @@ impl AgentControl {
         // objective turn itself; anything else as a prompt carrying its dispatch.
         let first = message.map(|message| {
             if args.mode.as_deref() == Some("goal") {
-                let prompt = wrap_agent_message(
-                    message,
-                    &caller.title,
-                    saved_id_of_path(caller.session_path.as_deref()).as_deref(),
-                );
+                let prompt = caller.wrap_message(message, &caller.title, None);
                 return (
                     None,
                     json!({ "type": "set_goal", "objective": message, "message": prompt }),
@@ -684,10 +679,10 @@ impl AgentControl {
             let dispatch = self.mailbox.dispatch(tab_id);
             let command = json!({
                 "type": "prompt",
-                "message": wrap_agent_message(
+                "message": caller.wrap_message(
                     &with_dispatch(message, Some(&dispatch), None),
                     &caller.title,
-                    saved_id_of_path(caller.session_path.as_deref()).as_deref(),
+                    Some(&dispatch),
                 ),
                 "streamingBehavior": "followUp",
             });

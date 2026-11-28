@@ -187,9 +187,13 @@ pub fn elapsed_text(ms: f64) -> String {
 
 /// The id a session path carries: stock names a session file `<time>_<session id>.jsonl`.
 pub fn saved_id_of_path(path: Option<&str>) -> Option<String> {
-    let stem = path?.strip_suffix(".jsonl")?;
+    saved_id(path?).map(str::to_owned)
+}
+
+pub(super) fn saved_id(path: &str) -> Option<&str> {
+    let stem = path.strip_suffix(".jsonl")?;
     let at = stem.rfind(['_', '/', '\\'])?;
-    (stem.as_bytes()[at] == b'_' && at + 1 < stem.len()).then(|| stem[at + 1..].to_owned())
+    (stem.as_bytes()[at] == b'_' && at + 1 < stem.len()).then(|| &stem[at + 1..])
 }
 
 fn is_quote(c: char) -> bool {
@@ -820,7 +824,7 @@ pub fn render_message(message: &AgentMessage) -> Option<String> {
             }
             let wrapped = parse_agent_message(text);
             // The saved id names the sender for an answer; titles repeat, and a message before it carried none.
-            let sender = wrapped.as_ref().map_or_else(String::new, |wrapped| {
+            let head = if let Some(wrapped) = &wrapped {
                 let mut parts = Vec::new();
                 if !wrapped.from.is_empty() {
                     parts.push(one_line(&wrapped.from, 60));
@@ -828,13 +832,19 @@ pub fn render_message(message: &AgentMessage) -> Option<String> {
                 if let Some(session) = &wrapped.session {
                     parts.push(format!("saved id {session}"));
                 }
-                parts.join(", ")
-            });
-            let head = if wrapped.is_some() {
-                if sender.is_empty() {
-                    "[user, sent by an agent]".to_owned()
+                let source = if let Some(route) = &wrapped.route {
+                    parts.push(format!("bot id {}", route.bot));
+                    if let Some(dispatch) = &route.dispatch {
+                        parts.push(format!("dispatch {dispatch}"));
+                    }
+                    "host-routed bot message"
                 } else {
-                    format!("[user, sent by an agent ({sender})]")
+                    "sent by an agent"
+                };
+                if parts.is_empty() {
+                    format!("[user, {source}]")
+                } else {
+                    format!("[user, {source} ({})]", parts.join(", "))
                 }
             } else {
                 "[user]".to_owned()

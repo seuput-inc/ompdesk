@@ -71,7 +71,13 @@ describe("agent channel risk table", () => {
 	});
 
 	it("never offers the cards, a raw RPC passthrough or the pairing and credential channels", () => {
-		for (const channel of ["extension-ui:respond", "rpc:command-for-tab", "rpc:command", "github-auth:logout"]) {
+		for (const channel of [
+			"extension-ui:respond",
+			"extension-ui:submit-work-question",
+			"rpc:command-for-tab",
+			"rpc:command",
+			"github-auth:logout",
+		]) {
 			const risk = catalog.channels[channel];
 			expect(risk && "never" in risk, channel).toBe(true);
 		}

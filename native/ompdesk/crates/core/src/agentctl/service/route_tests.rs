@@ -11,7 +11,7 @@ use crate::agentctl::journal::bots::BotRecord;
 use crate::agentctl::journal::system_clock;
 use crate::agentctl::service::host::{Caps, HostState};
 use crate::agentctl::service::tuning::Tuning;
-use crate::agentctl::service::{AgentControl, Files};
+use crate::agentctl::service::{AgentControl, CallId, Files};
 use crate::ports::Port;
 
 type Asked = Arc<Mutex<Vec<(String, Value)>>>;
@@ -161,8 +161,33 @@ async fn answer(control: &AgentControl, caller: &str, args: Value) -> (String, b
 }
 
 #[tokio::test]
+async fn a_registered_chat_without_a_matching_host_call_does_not_label_its_answer() {
+    let mut state = world(json!([{
+        "id": "r1", "request": { "id": "r1", "method": "input", "title": "Work question" }
+    }]));
+    state["tabs"][1]["cwd"] = json!("/bots/ada");
+    let (control, asked) = rig(9_908, state, main_replies);
+    ada(&control, false);
+    let (text, refused) = answer(
+        &control,
+        "chat",
+        json!({
+            "session": "work", "request": "r1", "text": "reply", "answerBot": "bot-ada"
+        }),
+    )
+    .await;
+    assert!(!refused, "{text}");
+    let submitted = asked_with(&asked, "answer");
+    assert_eq!(submitted.len(), 1);
+    assert!(submitted[0]["answerBot"].is_null());
+    control.host.port().close();
+}
+
+#[tokio::test]
 async fn a_form_raised_for_a_bot_s_request_goes_to_that_bot_which_alone_answers_it() {
-    let (control, asked) = rig(9_901, world(json!([form("r1")])), main_replies);
+    let mut state = world(json!([form("r1")]));
+    state["tabs"][1]["cwd"] = json!("/bots/ada");
+    let (control, asked) = rig(9_901, state, main_replies);
     ada(&control, false);
     assert_eq!(
         control.route_ask("work", "r1", &origin()).await.as_deref(),
@@ -216,15 +241,16 @@ async fn a_form_raised_for_a_bot_s_request_goes_to_that_bot_which_alone_answers_
         "{text}"
     );
     assert!(asked_with(&asked, "answer").is_empty());
-    let (text, is_error) = answer(
-        &control,
+    let submitted = control.run(
         "chat",
+        "ompdesk_session_answer",
         json!({ "session": "work", "request": "r1", "answers": [{ "id": "field-0", "selected": ["a"] }] }),
-    )
-    .await;
-    assert!(!is_error, "{text}");
+        Some(CallId { id: "answer-call".into(), resent: false, local_session: Some(CHAT.into()) }),
+    ).await;
+    assert!(!submitted.is_error, "{}", submitted.text);
     let answers = asked_with(&asked, "answer");
     assert_eq!(answers.len(), 1);
+    assert_eq!(answers[0]["answerBot"], "bot-ada");
     assert_eq!(
         answers[0]["response"],
         json!({ "type": "extension_ui_response", "id": "r1", "data": { "pick": "a" } })

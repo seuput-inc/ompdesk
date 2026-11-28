@@ -13,8 +13,10 @@
 import { redactDiagnosticsText } from "./redactor";
 
 const AGENT_MESSAGE_TAG = "ompdesk-agent-message";
-/** Either form: `from` alone (journals written before), or `from` and the sender's saved id `session`. */
-const WRAPPED_START = new RegExp(`^<${AGENT_MESSAGE_TAG} from="[^"]*"(?: session="[^"]*")?>[ \\t]*(?:\\r?\\n|$)`);
+/** Legacy agent envelopes and local bot envelopes share one body/title format. */
+const WRAPPED_START = new RegExp(
+	`^<${AGENT_MESSAGE_TAG} from="[^"]*"(?: session="[^"]*"(?: origin="host-routed" bot="[^"]+"(?: dispatch="[^"]+")?)?)?>[ \\t]*(?:\\r?\\n|$)`,
+);
 const WRAPPED_END = new RegExp(`(?:\\r?\\n|^)[ \\t]*</${AGENT_MESSAGE_TAG}>[ \\t]*$`);
 /** Stock wraps every subagent assignment in `prompts/system/subagent-user-prompt.md`. */
 const STOCK_PREFIX = /^Complete assignment thoroughly:[ \t]*(?:\r?\n|$)/i;

@@ -205,6 +205,7 @@ export interface AgentControlHostDeps {
 		| "routeSideChannel"
 		| "isRequestOpen"
 		| "sidecarOf"
+		| "sessionFileOf"
 		| "startTab"
 		| "setTabTask"
 		| "setTabOpener"
@@ -774,10 +775,25 @@ export class AgentControlRuntime {
 		callerTabId: string,
 		tool: AgentControlToolName,
 		args: unknown,
-		call?: { id: string; resent?: boolean },
+		call?: { id: string; resent?: boolean; sidecar?: SidecarLike },
 	): Promise<ToolOutcome> {
 		this.#windows.set(callerTabId, win);
-		const outcome = await this.control.run(callerTabId, tool, args, call);
+		// Bind the actual host-tool emitter before waiting. Neither tool arguments nor a stale tab handle name it.
+		const source = call?.sidecar;
+		const localSession =
+			(tool === "ompdesk_session_open" || tool === "ompdesk_session_send" || tool === "ompdesk_session_answer") &&
+			source?.processAlive &&
+			!source.device &&
+			!source.shared &&
+			this.#deps.pool.sidecarOf(callerTabId) === source
+				? this.#deps.pool.sessionFileOf(callerTabId)
+				: undefined;
+		const outcome = await this.control.run(
+			callerTabId,
+			tool,
+			args,
+			call && { id: call.id, resent: call.resent, localSession },
+		);
 		if (
 			tool === "ompdesk_session_open" ||
 			tool === "ompdesk_merge" ||

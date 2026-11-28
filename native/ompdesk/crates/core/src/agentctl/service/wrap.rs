@@ -3,8 +3,11 @@
 //! of a session an agent opened, the markers a message carries, and a schedule's frequency in words. The core has no
 //! regex engine, so each pattern is read by hand.
 
+use std::fmt::Write;
+
 use super::js::{self, len16, slice16, trim, trim_start};
-use super::types::{ScheduleEvent, ScheduleFrequency};
+use super::text::saved_id;
+use super::types::{ControlTab, HostBotCall, ScheduleEvent, ScheduleFrequency};
 
 pub const AGENT_MESSAGE_TAG: &str = "ompdesk-agent-message";
 /// A card OMPdesk raises itself starts with this; a card with it is never answerable by an agent.
@@ -29,9 +32,38 @@ fn unescape_attribute(value: &str) -> String {
         .replace("&amp;", "&")
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct HostRoute<T> {
+    pub bot: T,
+    pub dispatch: Option<T>,
+}
+
+impl ControlTab {
+    pub(super) fn wrap_message(&self, body: &str, from: &str, dispatch: Option<&str>) -> String {
+        let session = self.session_path.as_deref().and_then(saved_id);
+        let route = match &self.host_bot_call {
+            Some(HostBotCall::Message(bot)) => Some(HostRoute {
+                bot: bot.as_str(),
+                dispatch,
+            }),
+            _ => None,
+        };
+        envelope(body, from, session, route)
+    }
+}
+
 /// The text a session receives: `body` from the session titled `from` (empty when it has no title yet), whose saved
 /// id is `session` (absent while it has no saved file). A body cannot carry its own wrapper.
 pub fn wrap_agent_message(body: &str, from: &str, session: Option<&str>) -> String {
+    envelope(body, from, session, None)
+}
+
+fn envelope(
+    body: &str,
+    from: &str,
+    session: Option<&str>,
+    route: Option<HostRoute<&str>>,
+) -> String {
     let safe = body
         .replace(
             &format!("<{AGENT_MESSAGE_TAG}"),
@@ -41,51 +73,78 @@ pub fn wrap_agent_message(body: &str, from: &str, session: Option<&str>) -> Stri
             &format!("</{AGENT_MESSAGE_TAG}"),
             &format!("</\u{200b}{AGENT_MESSAGE_TAG}"),
         );
-    let id = match session {
-        Some(session) if !session.is_empty() => format!(" session=\"{}\"", attribute_of(session)),
-        _ => String::new(),
-    };
-    format!(
-        "<{AGENT_MESSAGE_TAG} from=\"{}\"{id}>\n{safe}\n</{AGENT_MESSAGE_TAG}>",
-        attribute_of(from)
-    )
+    let mut out = format!("<{AGENT_MESSAGE_TAG} from=\"{}\"", attribute_of(from));
+    if let Some(session) = session.filter(|id| !id.is_empty()) {
+        write!(out, " session=\"{}\"", attribute_of(session)).unwrap();
+        if let Some(route) = route {
+            write!(
+                out,
+                " origin=\"host-routed\" bot=\"{}\"",
+                attribute_of(route.bot)
+            )
+            .unwrap();
+            if let Some(dispatch) = route.dispatch {
+                write!(out, " dispatch=\"{}\"", attribute_of(dispatch)).unwrap();
+            }
+        }
+    }
+    write!(out, ">\n{safe}\n</{AGENT_MESSAGE_TAG}>").unwrap();
+    out
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct WrappedMessage {
+pub struct WrappedMessage<T = String> {
     /// The sending session's title; "" when it had none.
-    pub from: String,
+    pub from: T,
     /// The sending session's saved id; absent in a message written before it was carried.
-    pub session: Option<String>,
-    pub body: String,
+    pub session: Option<T>,
+    pub route: Option<HostRoute<T>>,
+    pub body: T,
 }
 
-/// `OPENING` at the start of `text`: the sender, the saved id (when written) and what follows the `>\n`.
-fn opening(text: &str) -> Option<(String, Option<String>, &str)> {
-    let rest = text.strip_prefix(&format!("<{AGENT_MESSAGE_TAG} from=\""))?;
-    let (from, rest) = rest.split_once('"')?;
-    let (session, rest) = match rest.strip_prefix(" session=\"") {
-        Some(after) => {
-            let (id, rest) = after.split_once('"')?;
-            (Some(id), rest)
+fn attribute<'a>(text: &'a str, prefix: &str) -> Option<(&'a str, &'a str)> {
+    text.strip_prefix(prefix)?.split_once('"')
+}
+
+fn opening(text: &str) -> Option<WrappedMessage<&str>> {
+    let (from, rest) = attribute(text, "<ompdesk-agent-message from=\"")?;
+    let (session, rest) =
+        attribute(rest, " session=\"").map_or((None, rest), |(id, rest)| (Some(id), rest));
+    let (route, rest) = match attribute(rest, " origin=\"host-routed\" bot=\"") {
+        Some((bot, rest)) if !bot.is_empty() && session.is_some_and(|id| !id.is_empty()) => {
+            let (dispatch, rest) = match attribute(rest, " dispatch=\"") {
+                Some(("", _)) => return None,
+                Some((id, rest)) => (Some(id), rest),
+                None => (None, rest),
+            };
+            (Some(HostRoute { bot, dispatch }), rest)
         }
-        None => (None, rest),
+        _ => (None, rest),
     };
-    let rest = rest.strip_prefix(">\n")?;
-    Some((
-        unescape_attribute(from),
-        session.map(unescape_attribute),
-        rest,
-    ))
+    Some(WrappedMessage {
+        from,
+        session,
+        route,
+        body: rest.strip_prefix(">\n")?,
+    })
 }
 
 /// The parts of a wrapped message, either form; None for anything else (a person's own prompt).
 pub fn parse_agent_message(text: &str) -> Option<WrappedMessage> {
-    let (from, session, rest) = opening(text)?;
-    let body = rest.strip_suffix(&format!("\n</{AGENT_MESSAGE_TAG}>"))?;
+    let header = opening(text)?;
+    let body = header
+        .body
+        .strip_suffix(&format!("\n</{AGENT_MESSAGE_TAG}>"))?;
     Some(WrappedMessage {
-        from,
-        session: session.filter(|session| !session.is_empty()),
+        from: unescape_attribute(header.from),
+        session: header
+            .session
+            .filter(|id| !id.is_empty())
+            .map(unescape_attribute),
+        route: header.route.map(|route| HostRoute {
+            bot: unescape_attribute(route.bot),
+            dispatch: route.dispatch.map(unescape_attribute),
+        }),
         body: body.to_owned(),
     })
 }
@@ -138,7 +197,7 @@ fn assignment_headline(text: &str) -> Option<String> {
 /// own prompt.
 pub fn agent_task_title(prompt: &str) -> Option<String> {
     let text = trim(prompt);
-    let (_, _, rest) = opening(text)?;
+    let rest = opening(text)?.body;
     let body = rest
         .strip_suffix(&format!("\n</{AGENT_MESSAGE_TAG}>"))
         .unwrap_or(rest);

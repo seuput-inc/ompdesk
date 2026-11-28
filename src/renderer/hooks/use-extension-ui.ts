@@ -21,17 +21,18 @@ import { toast, toastError } from "../stores/toast";
  * (lib/outbox-delivery.ts sends it when the link is back); false when it could not: the caller keeps
  * the card open and a toast says why.
  */
-export function useExtensionUiResponder(): (response: ExtensionUIResponse) => Promise<boolean> {
+export function useExtensionUiResponder(): (response: ExtensionUIResponse, submitted?: boolean) => Promise<boolean> {
 	const tabId = useRuntimeTabId();
 	return useCallback(
-		async (response: ExtensionUIResponse) => {
+		async (response: ExtensionUIResponse, submitted = false) => {
 			const tab = useTabsStore.getState().tabs.find(entry => entry.id === tabId);
 			if (tab && sendsHeld(tab)) {
 				holdAnswer(tab, response);
 				return true;
 			}
 			try {
-				if (tabId) await window.omp.ui.respondExtensionUi(response, tabId);
+				if (submitted && tabId) await window.omp.ui.submitWorkQuestion(response, tabId);
+				else if (tabId) await window.omp.ui.respondExtensionUi(response, tabId);
 				else await window.omp.ui.respondExtensionUi(response);
 				return true;
 			} catch (error) {

@@ -6392,9 +6392,22 @@ describe("an answer with attachments for a tab a device runs here", () => {
 
 	it("appends the note and then answers, in the host's one step", async () => {
 		const { sidecar, call } = await hosted();
-		await call(step({ askId: "ask-1", response }));
+		const journal = vi.fn<NonNullable<SidecarLike["bridgeRequest"]>>(async () => ({}));
+		sidecar.bridgeRequest = journal;
+		await call(step({ askId: "ask-1", response: { ...response, actor: "person" }, answerBot: "forged" }));
 		expect(sidecar.commands.map(command => command.type)).toEqual(["agent_control_mail"]);
-		expect(sidecar.sideFrames).toEqual([response]);
+		expect(sidecar.sideFrames).toMatchObject([response]);
+		expect(journal.mock.calls).toEqual([
+			[
+				"agent_control.workAnswer",
+				{
+					target: "peer:device-x:t1",
+					requestId: "ask-1",
+					actor: "unknown",
+					at: expect.any(Number),
+				},
+			],
+		]);
 	});
 
 	it("refuses every other answer while the note goes in, then lands the agent's once", async () => {

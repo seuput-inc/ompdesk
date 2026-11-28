@@ -324,6 +324,8 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
                     p.oi("responder"),
                     &p.os("choice").unwrap_or_default(),
                     p.oi("claim").and_then(|c| u64::try_from(c).ok()),
+                    p.os("answerBot"),
+                    p.b("submitted"),
                 )
                 .await,
             )

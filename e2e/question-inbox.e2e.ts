@@ -179,6 +179,7 @@ for (const lang of ["en", "ko"] as const) {
 						window.__harness!.calls.filter(
 							call =>
 								call.channel === "extension-ui:respond" ||
+								call.channel === "extension-ui:submit-work-question" ||
 								(call.channel === "bots:command" && (call.args[0] as BotsRequest).action === "item"),
 						),
 					),

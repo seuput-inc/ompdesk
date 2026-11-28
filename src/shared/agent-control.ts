@@ -447,7 +447,7 @@ export interface AgentReviewResult {
  */
 export const AGENT_MESSAGE_TAG = "ompdesk-agent-message";
 
-const OPENING = `<${AGENT_MESSAGE_TAG} from="([^"]*)"(?: session="([^"]*)")?>`;
+const OPENING = `<${AGENT_MESSAGE_TAG} from="([^"]*)"(?: session="([^"]*)"(?: origin="host-routed" bot="([^"]+)"(?: dispatch="([^"]+)")?)?)?>`;
 const WRAPPED = new RegExp(`^${OPENING}\\n([\\s\\S]*)\\n</${AGENT_MESSAGE_TAG}>$`);
 
 function attributeOf(value: string): string {
@@ -478,6 +478,8 @@ export interface AgentMessage {
 	from: string;
 	/** The sending session's saved id; absent in a message written before it was carried, or by a session unsaved yet. */
 	session?: string;
+	/** Routing metadata in the envelope, not authorization by the person. */
+	origin?: { kind: "host-routed"; botId: string; dispatch?: string };
 	body: string;
 }
 
@@ -491,7 +493,21 @@ export function parseAgentMessage(text: string): AgentMessage | null {
 	const match = WRAPPED.exec(text);
 	if (!match) return null;
 	const session = match[2] === undefined ? undefined : unescapeAttribute(match[2]);
-	return { from: unescapeAttribute(match[1] ?? ""), ...(session ? { session } : {}), body: match[3] ?? "" };
+	const bot = match[3];
+	if (bot && !session) return null;
+	const origin = bot
+		? {
+				kind: "host-routed" as const,
+				botId: unescapeAttribute(bot),
+				...(match[4] ? { dispatch: unescapeAttribute(match[4]) } : {}),
+			}
+		: undefined;
+	return {
+		from: unescapeAttribute(match[1] ?? ""),
+		...(session ? { session } : {}),
+		...(origin ? { origin } : {}),
+		body: match[5] ?? "",
+	};
 }
 
 /**
