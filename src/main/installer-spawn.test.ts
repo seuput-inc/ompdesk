@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { spawnDetachedOffThread } from "./installer-spawn";
+import { installerSpawnEnv, spawnDetachedOffThread } from "./installer-spawn";
 
 let dir: string;
 
@@ -36,5 +36,29 @@ describe("spawnDetachedOffThread", () => {
 		await expect(spawnDetachedOffThread(path.join(dir, "missing-setup.exe"), [])).rejects.toMatchObject({
 			code: "ENOENT",
 		});
+	});
+
+	it("strips inherited PSModulePath so Windows PowerShell 5.1 inside NSIS loads its own modules", async () => {
+		expect(installerSpawnEnv({ PATH: "/bin" })).toBeUndefined();
+		expect(installerSpawnEnv({ PATH: "/bin", PSModulePath: "C:\\pwsh\\Modules", OTHER: "1" })).toEqual({
+			PATH: "/bin",
+			OTHER: "1",
+		});
+		expect(installerSpawnEnv({ psmodulepath: "C:\\pwsh\\Modules", KEEP: "yes" })).toEqual({ KEEP: "yes" });
+
+		const marker = path.join(dir, "env.txt");
+		const previous = process.env.PSModulePath;
+		process.env.PSModulePath = "C:\\Program Files\\PowerShell\\7\\Modules";
+		try {
+			await spawnDetachedOffThread(process.execPath, [
+				"-e",
+				"require('node:fs').writeFileSync(process.argv[1], String(process.env.PSModulePath ?? 'ABSENT'))",
+				marker,
+			]);
+			await vi.waitFor(() => expect(fs.readFileSync(marker, "utf8")).toBe("ABSENT"));
+		} finally {
+			if (previous === undefined) delete process.env.PSModulePath;
+			else process.env.PSModulePath = previous;
+		}
 	});
 });

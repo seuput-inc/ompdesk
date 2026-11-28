@@ -195,6 +195,25 @@ describe("resources/installer.nsh and the test seams", () => {
 		expect(shipping).toMatch(/!if "\$\{REASON\}" == "incomplete"\n\s+\$\{IfNot\} \$\{Silent\}/);
 	});
 
+	it("clears inherited PSModulePath, waits for OMPdesk to exit before killing, retries the backup rename, and allows explicit --retry-failed", () => {
+		// Clearing PSModulePath before IS_POWERSHELL_AVAILABLE keeps Windows PowerShell 5.1 able to load CimCmdlets
+		// even when launched by an older OMPdesk build or from PowerShell 7.
+		expect(shipping).toMatch(
+			/!insertmacro ompCleanPowerShellEnv\n\s+!insertmacro IS_POWERSHELL_AVAILABLE\n\s+!insertmacro ompWaitForAppExit\n\s+!insertmacro _CHECK_APP_RUNNING/,
+		);
+		expect(shipping).toContain('SetEnvironmentVariable(t "PSModulePath", p 0)');
+		// During an update, give OMPdesk's 30 s quit chain + core/node stop time to exit cleanly before _CHECK_APP_RUNNING.
+		expect(shipping).toMatch(/!macro ompWaitForAppExit[\s\S]*AddSeconds\(35\)[\s\S]*Stop-Process/);
+		// Retry the atomic folder rename before falling back to copying the whole install folder.
+		expect(shipping).toMatch(
+			/!macro ompKeepOldFolder[\s\S]*\$\{For\} \$ompRetry 1 10[\s\S]*Rename "\$INSTDIR" "\$ompBackup"/,
+		);
+		// Explicit user click ("Restart & install") passes --retry-failed so ompSkipRepeatedFailure does not skip it.
+		expect(shipping).toMatch(/!macro ompSkipRepeatedFailure[\s\S]*--retry-failed/);
+		// Throttle FIND_PROCESS during the 120 s startup wait so PowerShell/WMI is not spawned every second.
+		expect(shipping).toMatch(/!macro ompStartAndVerify[\s\S]*IntOp \$R5 \$ompWaited % 5/);
+	});
+
 	it("starts nothing without the test profile and the isolated home in the setup's environment", () => {
 		expect(seams).toMatch(
 			/\$\{if\} \$R9 == ""\n\s+\$\{orIf\} \$R7 == ""\n\s+FileWrite \$R8 "@echo off\$\\r\$\\nexit \/b 1/,

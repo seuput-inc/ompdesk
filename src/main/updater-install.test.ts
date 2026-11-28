@@ -70,7 +70,10 @@ vi.mock("electron", () => ({
 	shell: { openPath: async () => "" },
 }));
 vi.mock("node:child_process", () => ({ spawn: mocks.spawn }));
-vi.mock("./installer-spawn", () => ({ spawnDetachedOffThread: mocks.startOffThread }));
+vi.mock("./installer-spawn", async importOriginal => {
+	const actual = await importOriginal<typeof import("./installer-spawn")>();
+	return { ...actual, spawnDetachedOffThread: mocks.startOffThread };
+});
 vi.mock("./shell-host/shell-calls", () => ({
 	installerQuitPending: mocks.quitPending,
 	installerQuitReceipt: mocks.quitReceipt,
@@ -409,6 +412,22 @@ describe("an approved quit with an update downloaded", () => {
 		expect(helper?.details).toMatchObject({ mode: "nsis", trigger: "quit" });
 	});
 
+	it("strips PSModulePath when installing at quit so Windows PowerShell 5.1 inside NSIS loads its own modules", () => {
+		const previous = process.env.PSModulePath;
+		process.env.PSModulePath = "C:\\Program Files\\PowerShell\\7\\Modules";
+		try {
+			mocks.spawn.mockReturnValueOnce({ once: () => {}, unref: () => {}, pid: 1 });
+			for (const listener of mocks.appEvents.get("will-quit") ?? []) listener();
+			for (const listener of mocks.appEvents.get("quit") ?? []) listener({}, 0);
+			const options = mocks.spawn.mock.calls.at(-1)?.[2] as { env?: Record<string, string> } | undefined;
+			expect(options?.env).toBeDefined();
+			expect(Object.keys(options?.env ?? {}).some(key => key.toLowerCase() === "psmodulepath")).toBe(false);
+		} finally {
+			if (previous === undefined) delete process.env.PSModulePath;
+			else process.env.PSModulePath = previous;
+		}
+	});
+
 	it("installs nothing when the app quits with a failure", () => {
 		for (const listener of mocks.appEvents.get("will-quit") ?? []) listener();
 		for (const listener of mocks.appEvents.get("quit") ?? []) listener({}, 1);
@@ -535,9 +554,11 @@ describe("the start mark and a start that failed", () => {
 		expect(await check(new Error("offline"))).toMatchObject({ state: "downloaded", version: "0.45.0" });
 	});
 
-	it('"Restart & install" still installs it', async () => {
+	it('"Restart & install" still installs it and passes --retry-failed so NSIS does not skip it', async () => {
 		await restartAndInstall();
 		expect(restarts()).toBe(1);
+		const file = path.join(mocks.userData.dir, "ompdesk-updater", "pending", "ompdesk-windows-setup.exe");
+		expect(mocks.startOffThread).toHaveBeenCalledWith(file, ["--updated", "--force-run", "--retry-failed"]);
 	});
 
 	it("a newer release found while it is held is downloaded and replaces it: the scheduler counts down for the newer one", async () => {

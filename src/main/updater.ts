@@ -47,7 +47,7 @@ import { CoreError } from "./core/process";
 import { markMainStep } from "./hang-watchdog";
 import { mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
-import { spawnDetachedOffThread } from "./installer-spawn";
+import { installerSpawnEnv, spawnDetachedOffThread } from "./installer-spawn";
 import { writeRuntimeLog } from "./runtime-log";
 import {
 	type InstallerStartReceipt,
@@ -411,7 +411,12 @@ function startInstaller(args: string[], start: (command: string, args: string[])
 function spawnDetached(command: string, args: string[]): Promise<number> {
 	const { promise, resolve, reject } = Promise.withResolvers<number>();
 	try {
-		const child = spawn(command, args, { detached: true, stdio: "ignore" });
+		const env = installerSpawnEnv();
+		const child = spawn(
+			command,
+			args,
+			env ? { detached: true, stdio: "ignore", env } : { detached: true, stdio: "ignore" },
+		);
 		child.once("error", reject);
 		child.once("spawn", () => resolve(child.pid ?? 0));
 		child.unref();
@@ -426,9 +431,10 @@ function spawnDetached(command: string, args: string[]): Promise<number> {
  * `CreateProcess`, which froze the main thread for seconds), and the shell's quit chain holds the quit until that
  * attempt reports, started or not (`installerQuitPending`, `installerQuitReceipt`; `quit_chain.rs`).
  */
-function startInstallerForRestart(): void {
+function startInstallerForRestart(retryFailed = false): void {
 	installerQuitPending();
-	void startInstaller(["--updated", "--force-run"], spawnDetachedOffThread)
+	const args = retryFailed ? ["--updated", "--force-run", "--retry-failed"] : ["--updated", "--force-run"];
+	void startInstaller(args, spawnDetachedOffThread)
 		.then<InstallerStartReceipt, InstallerStartReceipt>(
 			pid => ({ kind: "started", pid }),
 			(error: unknown) => ({
@@ -952,7 +958,7 @@ export function restartIntoUpdate(trigger: InstallTrigger): void {
 		}
 		noteInstallHelper("nsis", trigger);
 		logQuitAsked("update", { relaunch: true, detail: `${trigger}, installer` });
-		startInstallerForRestart();
+		startInstallerForRestart(trigger === "user click" && startFailure?.version === current.version);
 	}
 }
 

@@ -93,6 +93,7 @@ Var pid
   Var /GLOBAL ompScan
   Var /GLOBAL ompFailed
   Var /GLOBAL ompCount
+  Var /GLOBAL ompRetry
 !endif
 
 !macro ompKeepOldFolder
@@ -118,8 +119,26 @@ Var pid
       SetOutPath "$TEMP"
       ClearErrors
       Rename "$INSTDIR" "$ompBackup"
-      ${if} ${Errors}
+      ${ifNot} ${Errors}
+        StrCpy $ompBackupMode "renamed"
+      ${else}
+        ; Transient locks (Windows Defender, kernel handle drainage after process exit) often clear within a few seconds.
+        ; Retry the atomic rename before falling back to copying the install folder and running the old uninstaller.
+        ${For} $ompRetry 1 10
+          Sleep 500
+          ClearErrors
+          Rename "$INSTDIR" "$ompBackup"
+          ${ifNot} ${Errors}
+            StrCpy $ompBackupMode "renamed"
+            ${ExitFor}
+          ${endIf}
+        ${Next}
+      ${endIf}
+      ${if} $ompBackupMode == "renamed"
+        CreateDirectory "$INSTDIR"
+      ${else}
         ; A handle keeps the folder from moving: copy it. The old uninstaller then runs and clears the folder as it did.
+        !insertmacro ompLog "keep-old-folder: rename failed after retries; falling back to copy"
         ClearErrors
         RMDir /r "$ompBackup"
         CopyFiles /SILENT "$INSTDIR\*.*" "$ompBackup"
@@ -129,9 +148,6 @@ Var pid
         ${else}
           StrCpy $ompBackupMode "copied"
         ${endIf}
-      ${else}
-        StrCpy $ompBackupMode "renamed"
-        CreateDirectory "$INSTDIR"
       ${endIf}
     ${endIf}
   !endif
@@ -356,11 +372,15 @@ Var pid
         ${endIf}
         Sleep 1000
         ; Nothing of the new app runs any more (a shell that exits at once does not need the whole wait): ten seconds are
-        ; given for the start to show up, since it goes through Explorer.
+        ; given for the start to show up, since it goes through Explorer. Check every 5 s so repeated PowerShell/WMI
+        ; spawns do not compete with the newly starting app or stretch the wait well past 120 s.
         ${if} $ompWaited > 10
-          !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R4
-          ${if} $R4 != 0
-            ${ExitFor}
+          IntOp $R5 $ompWaited % 5
+          ${if} $R5 == 0
+            !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R4
+            ${if} $R4 != 0
+              ${ExitFor}
+            ${endIf}
           ${endIf}
         ${endIf}
       ${Next}
@@ -388,22 +408,27 @@ Var pid
 !macro ompSkipRepeatedFailure
   !ifndef BUILD_UNINSTALLER
     ${if} ${isUpdated}
-      !insertmacro ompUserDataDir
-      !insertmacro ompReadText "$ompFailed"
-      StrCpy $ompSeen "0"
-      !insertmacro ompMarkerHas '$\"version$\":$\"${VERSION}$\"'
-      ${if} $ompSeen == "1"
-        !insertmacro ompLog "start-failed-before: skipped (${VERSION} failed to start earlier); the previous app stays"
-        !ifdef OMP_MOVE_TEST
-          !insertmacro ompMoveTestAfterInstall
-          ${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" ""
-        !else
-          ${StdUtils.ExecShellAsUser} $0 "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "open" ""
-        !endif
-        SetErrorLevel 2
-        Quit
-      ${elseIf} ${FileExists} "$ompFailed"
-        Delete "$ompFailed"
+      ClearErrors
+      ${GetParameters} $R0
+      ${GetOptions} $R0 "--retry-failed" $R1
+      ${if} ${Errors}
+        !insertmacro ompUserDataDir
+        !insertmacro ompReadText "$ompFailed"
+        StrCpy $ompSeen "0"
+        !insertmacro ompMarkerHas '$\"version$\":$\"${VERSION}$\"'
+        ${if} $ompSeen == "1"
+          !insertmacro ompLog "start-failed-before: skipped (${VERSION} failed to start earlier); the previous app stays"
+          !ifdef OMP_MOVE_TEST
+            !insertmacro ompMoveTestAfterInstall
+            ${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" ""
+          !else
+            ${StdUtils.ExecShellAsUser} $0 "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "open" ""
+          !endif
+          SetErrorLevel 2
+          Quit
+        ${elseIf} ${FileExists} "$ompFailed"
+          Delete "$ompFailed"
+        ${endIf}
       ${endIf}
     ${endIf}
   !endif
@@ -462,9 +487,49 @@ Var pid
   !endif
 !macroend
 
+; A PSModulePath inherited from PowerShell 7 breaks Windows PowerShell 5.1 (which electron-builder's
+; IS_POWERSHELL_AVAILABLE / FIND_PROCESS / KILL_PROCESS invoke), forcing a fallback to `taskkill /IM OMPdesk.exe` that
+; leaves node.exe, ompdesk-core.exe and the preview browser locking $INSTDIR. Clearing it here protects upgrades even
+; when launched by an older OMPdesk build or from a PowerShell 7 shell.
+!macro ompCleanPowerShellEnv
+  System::Call 'kernel32::SetEnvironmentVariable(t "PSModulePath", p 0)'
+!macroend
+
+; During an in-app update (--updated), OMPdesk starts this setup before running its own quit chain (teardown -> close
+; -> settle -> core shutdown -> node stop, bounded by its 30 s quit watchdog). Electron-builder's _CHECK_APP_RUNNING
+; only waits 1.3 s before killing processes and ~5 s before popping a modal `appCannotBeClosed` dialog that can
+; stall behind SpiderBanner. Wait up to 35 s for processes under $INSTDIR to finish exiting cleanly, then force-stop
+; any stragglers before _CHECK_APP_RUNNING runs.
+!macro ompWaitForAppExit
+  !ifndef BUILD_UNINSTALLER
+    ${if} ${isUpdated}
+      ${if} $IsPowerShellAvailable == 0
+        System::Call 'kernel32::SetEnvironmentVariable(t "OMP_INSTALL_DIR", t "$INSTDIR")'
+        nsExec::Exec `"$PowerShellPath" -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$$d = $$env:OMP_INSTALL_DIR; if (-not $$d) { exit 0 }; if (-not $$d.EndsWith('\')) { $$d += '\' }; $$q = { @(Get-CimInstance Win32_Process -EA SilentlyContinue | ? { $$_.ExecutablePath -and $$_.ExecutablePath.StartsWith($$d, [StringComparison]::OrdinalIgnoreCase) }) }; $$end = (Get-Date).AddSeconds(35); do { $$p = & $$q; if ($$p.Count -eq 0) { exit 0 }; Start-Sleep -Milliseconds 500 } while ((Get-Date) -lt $$end); $$p | % { Stop-Process -Id $$_.ProcessId -Force -EA SilentlyContinue }; $$end = (Get-Date).AddSeconds(5); do { if ((& $$q).Count -eq 0) { exit 2 }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $$end); exit 1"`
+        Pop $R0
+        ${if} $R0 == 2
+          !insertmacro ompLog "wait-exit: processes remained after 35 s and were force-stopped"
+        ${elseIf} $R0 != 0
+          !insertmacro ompLog "wait-exit: processes under $INSTDIR still running after 40 s (rc=$R0)"
+        ${endIf}
+      ${else}
+        ${For} $ompRetry 1 35
+          !insertmacro FIND_PROCESS "${APP_EXECUTABLE_FILENAME}" $R0
+          ${if} $R0 != 0
+            ${ExitFor}
+          ${endIf}
+          Sleep 1000
+        ${Next}
+      ${endIf}
+    ${endIf}
+  !endif
+!macroend
+
 !macro customCheckAppRunning
   !insertmacro ompPinBanner
+  !insertmacro ompCleanPowerShellEnv
   !insertmacro IS_POWERSHELL_AVAILABLE
+  !insertmacro ompWaitForAppExit
   !insertmacro _CHECK_APP_RUNNING
   !insertmacro ompSkipRepeatedFailure
   !insertmacro ompKeepOldFolder
