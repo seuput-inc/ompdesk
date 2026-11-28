@@ -446,7 +446,7 @@ export function InputArea() {
 					    field state follows the TEXT field, not any focused descendant, so a
 					    focused toolbar control draws its own ring, never a ring in a ring. */}
 					<div
-						className="omp-composer-box relative flex flex-col rounded-(--sc-radius-xl) border border-(--sc-border-subtle) bg-(--sc-field) shadow-(--sc-shadow-sm) transition-[border-color,box-shadow] duration-(--sc-duration-fast)"
+						className="omp-composer-box relative flex flex-col rounded-(--sc-radius-xl) border border-(--sc-composer-border) bg-(--sc-composer-bg) shadow-(--sc-shadow-sm) transition-[border-color,box-shadow] duration-(--sc-duration-fast)"
 						data-composer-mode={composerMode?.mode}
 						data-composer-draft={text !== "" || undefined}
 						data-drag-active={dragActive || undefined}

@@ -237,7 +237,7 @@ function SidePanelViews({ actionRef }: { actionRef: (element: HTMLDivElement | n
 		<div className="flex min-h-0 flex-1 flex-col overflow-hidden">
 			{panelTab !== "terminal" && panelTab !== "preview" && (
 				<div
-					className="flex min-h-(--sc-space-10) shrink-0 items-center justify-end gap-1 border-b border-(--sc-divider) px-3 py-2 empty:hidden"
+					className="flex min-h-(--sc-control-md) shrink-0 items-center justify-end gap-1 border-b border-(--sc-divider) px-2 py-1 empty:hidden"
 					data-panel-actions
 					ref={actionRef}
 				/>

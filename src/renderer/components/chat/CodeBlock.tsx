@@ -201,7 +201,7 @@ export function CodeBlock({
 		<div
 			className={cx(
 				"omp-code-block group/code relative overflow-hidden text-(--sc-text)",
-				!bare && "rounded-(--sc-radius-md) border border-(--sc-border-subtle) bg-(--sc-surface-1)",
+				!bare && "rounded-(--sc-radius-md) border border-(--sc-code-border) bg-(--sc-code-bg)",
 				className,
 			)}
 		>

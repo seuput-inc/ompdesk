@@ -211,7 +211,7 @@
 	font-size: 1.32em;
 	letter-spacing: -0.02em;
 	padding-bottom: 0.3em;
-	border-bottom: 1px solid var(--omp-border-muted);
+	border-bottom: var(--sc-hairline) solid var(--sc-divider);
 }
 .markdown-body h2 {
 	font-size: 1.18em;
@@ -343,7 +343,7 @@
 .markdown-body section[data-footnotes] {
 	margin-top: 1.5em;
 	padding-top: 0.6em;
-	border-top: 1px solid var(--omp-md-hr);
+	border-top: var(--sc-hairline) solid var(--sc-divider);
 	font-size: 0.9em;
 	color: var(--sc-text-secondary);
 }
@@ -378,8 +378,8 @@
 .markdown-body code {
 	font-family: var(--sc-font-mono);
 	font-size: var(--omp-chat-code-size, 0.85em);
-	background: var(--sc-surface-2);
-	border: 0;
+	background: var(--sc-inline-code-bg);
+	border: var(--sc-hairline) solid var(--sc-inline-code-border);
 	border-radius: var(--sc-radius-xs);
 	padding: var(--sc-space-0-5) var(--sc-space-1);
 	color: var(--sc-text-secondary);
@@ -395,7 +395,7 @@
 }
 .markdown-body th,
 .markdown-body td {
-	border: 1px solid var(--omp-border-muted);
+	border: var(--sc-hairline) solid var(--sc-divider);
 	padding: 0.45em 0.75em;
 	text-align: start;
 }
@@ -3367,12 +3367,13 @@ button.omp-children-at-work-row:hover {
 }
 
 .omp-transcript-editorial .markdown-body code {
-	border: 0;
+	border: var(--sc-hairline) solid var(--sc-inline-code-border);
 	border-radius: var(--sc-radius-xs);
-	background: var(--sc-surface-2);
+	background: var(--sc-inline-code-bg);
 }
 
 .omp-transcript-editorial .markdown-body pre code {
+	border: 0;
 	background: transparent;
 }
 
@@ -3482,12 +3483,12 @@ button.omp-children-at-work-row:hover {
 	min-height: 0;
 }
 
-/* Composer field state. The field holds focus most of the time, so its focus
-   is a quiet neutral lift (firmer hairline, a touch more shadow), never an
-   accent halo that would sit there for good. The accent is for a file drag. */
+/* Composer field state (Orca parity): keep elevation calm so moving focus
+   into or out of the composer never flashes a heavy modal shadow; only the
+   hairline firms slightly. The accent is reserved for a file drag. */
 .omp-composer-box:has(textarea:focus) {
-	border-color: color-mix(in srgb, var(--sc-border) 45%, var(--sc-border-subtle));
-	box-shadow: var(--sc-shadow-md);
+	border-color: var(--sc-composer-border-focus);
+	box-shadow: var(--sc-shadow-sm);
 }
 
 .omp-composer-box[data-drag-active] {

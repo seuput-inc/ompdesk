@@ -363,7 +363,7 @@ function RoadmapView({ table, onOpen }: { table: GithubProjectTable; onOpen: (ro
 						<div className="w-62 shrink-0 truncate">
 							<ItemTitle onOpen={onOpen} row={row} />
 						</div>
-						<div className="relative h-5 flex-1 rounded-(--sc-radius-sm) bg-(--sc-surface-sunken)">
+						<div className="relative h-5 flex-1 rounded-(--sc-radius-sm) bg-(--sc-surface-2)">
 							{range ? (
 								<div
 									className="absolute inset-y-0.5 rounded-(--sc-radius-sm) bg-(--sc-accent)"
