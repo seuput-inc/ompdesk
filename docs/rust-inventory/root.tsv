@@ -300,9 +300,9 @@ src/main/memory-prompt.test.ts	tooling	-	Vitest suite: promptTitle.
 src/main/memory-record.test.ts	tooling	-	Vitest suite: who uses the memory.
 src/main/memory-record.ts	mixed	1	procs.pressureRecord scans and ranks in core, asks main for live owners after the scan and returns only the bounded record. RecordClock is read in the same memory-watch sample that admits a log. Receiver: idle-release/pool owner (§1.3c).
 src/main/memory-sampler.test.ts	tooling	-	Vitest suite: the core's reading of this computer.
-src/main/memory-sampler.ts	mixed	1	Production memory, process rows and idle-tree facts come from core. testMemoryReading reads only the fixture override; the memory watch consumes its answer in the same tick (§1.3c).
-src/main/memory-watch.test.ts	tooling	-	Checks that the watch makes release decisions from the live tabs after sampling and ignores failed process snapshots.
-src/main/memory-watch.ts	mixed	3	memory.reading/watchProcesses, memory.hibernate* and procs.pressureRecord run in core. Phase 2 wires memory-watch directly to memory.hibernateEvaluate and moves with the pool (§1.3a,c).
+src/main/memory-sampler.ts	mixed	1	Production memory, process rows, idle-tree facts and hibernation RPCs (memory.hibernateConfigure/Evaluate/Status/Mark) come from core. testMemoryReading reads only the fixture override; the memory watch consumes its answer in the same tick (§1.3c).
+src/main/memory-watch.test.ts	tooling	-	Checks that the watch makes release decisions from the live tabs after sampling, delegates hibernation policy to Rust hibernateEvaluate/hibernateMark and ignores failed process snapshots.
+src/main/memory-watch.ts	mixed	3	memory.reading/watchProcesses, memory.hibernate* and procs.pressureRecord run in core. memory-watch delegates eviction policy to memory.hibernateEvaluate/Mark (falling back to TS IdleRelease only when core is unavailable) and moves with the pool (§1.3a,c).
 src/main/menu-actions.test.ts	tooling	-	Vitest suite: menu actions (tauri-shell/src/app_menu.rs against MenuAction and NATIVE_CHORDS).
 src/main/message-update-slim.test.ts	tooling	-	Vitest suite: slimMessageUpdate.
 src/main/message-update-slim.ts	port	1	§1.3a,b,c: SidecarPool, the link encoder and subagent frame shaping synchronously strip repeated content using state for this turn. No I/O unit; move with the producer and its ordered sinks, not another round trip per event.

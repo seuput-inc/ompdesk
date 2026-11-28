@@ -5,7 +5,15 @@
  */
 import { IdleRelease, memoryShort } from "./idle-release";
 import { MainRiseClock, memoryRecord, RecordClock } from "./memory-record";
-import { type MemoryReading, type ProcessRow, readMemory, watchProcesses } from "./memory-sampler";
+import {
+	hibernateConfigure,
+	hibernateEvaluate,
+	hibernateMark,
+	type MemoryReading,
+	type ProcessRow,
+	readMemory,
+	watchProcesses,
+} from "./memory-sampler";
 import type { TagOwner } from "./session-processes";
 
 /** How often memory is read. */
@@ -17,6 +25,14 @@ export interface MemoryTab {
 	label: string;
 	/** Nothing in it is live (`idle-release.ts`): it may give its omp back while memory is short. */
 	quiet?: boolean;
+	sessionPath?: string;
+	cwd?: string;
+	visible?: boolean;
+	status?: string;
+	busy?: boolean;
+	pendingInteraction?: boolean;
+	pendingWork?: boolean;
+	agentOwned?: boolean;
 }
 
 export interface MemoryWatchDeps {
@@ -73,6 +89,7 @@ async function recordShort(
 /** Start reading memory; while it is short a quiet tab is released and who uses it is written down. */
 export function startMemoryWatch(deps: MemoryWatchDeps): void {
 	let sampling = false;
+	let hibernateConfigured = deps.releaseQuietMs === undefined;
 	const idle = new IdleRelease(deps.releaseQuietMs);
 	const clock = new RecordClock();
 	const mainRise = new MainRiseClock(Date.now());
@@ -97,16 +114,60 @@ export function startMemoryWatch(deps: MemoryWatchDeps): void {
 			const tabs = processes ? deps.tabs() : [];
 			deps.sampled?.(real, processes?.rows ?? null, tabs, readAt);
 			if (processes && release) {
-				const picked = idle.pick(Date.now(), reading, tabs, processes);
-				if (picked) {
-					const { tab, bytes } = picked;
-					deps.log("memory release", {
-						tab: tab.tabId,
-						label: tab.label,
-						gb: gb(bytes),
-						...(reading ? { availableGb: gb(reading.availableBytes), pressure: reading.pressure } : {}),
+				const nowMs = Date.now();
+				let handledByCore = false;
+				if (typeof hibernateEvaluate === "function") {
+					if (
+						!hibernateConfigured &&
+						deps.releaseQuietMs !== undefined &&
+						typeof hibernateConfigure === "function"
+					) {
+						await hibernateConfigure({ pressureQuietMs: deps.releaseQuietMs });
+						hibernateConfigured = true;
+					}
+					const pass = await hibernateEvaluate({
+						tabs,
+						nowMs,
+						reading,
+						watchProcesses: processes,
 					});
-					release(tab.tabId);
+					if (pass) {
+						handledByCore = true;
+						for (const candidate of pass.evict) {
+							deps.log("memory release", {
+								tab: candidate.tabId,
+								label: candidate.label,
+								gb: gb(candidate.bytes),
+								reason: candidate.reason,
+								...(reading ? { availableGb: gb(reading.availableBytes), pressure: reading.pressure } : {}),
+							});
+							release(candidate.tabId);
+							if (typeof hibernateMark === "function") {
+								void hibernateMark({
+									action: "hibernated",
+									tabId: candidate.tabId,
+									label: candidate.label,
+									...(candidate.sessionPath ? { sessionPath: candidate.sessionPath } : {}),
+									...(candidate.cwd ? { cwd: candidate.cwd } : {}),
+									freedBytes: candidate.bytes,
+									reason: candidate.reason,
+								});
+							}
+						}
+					}
+				}
+				if (!handledByCore) {
+					const picked = idle.pick(nowMs, reading, tabs, processes);
+					if (picked) {
+						const { tab, bytes } = picked;
+						deps.log("memory release", {
+							tab: tab.tabId,
+							label: tab.label,
+							gb: gb(bytes),
+							...(reading ? { availableGb: gb(reading.availableBytes), pressure: reading.pressure } : {}),
+						});
+						release(tab.tabId);
+					}
 				}
 			}
 		} finally {

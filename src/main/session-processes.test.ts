@@ -642,4 +642,86 @@ describe("what each live session holds (All sessions › Resources)", () => {
 		expect(await sessions.endProcess(100, 101, 5)).toBe(true);
 		expect(endOnly).toHaveBeenCalledWith([big.tag], [{ pid: 101, startedMs: 5 }]);
 	});
+
+	it("maps native Rust procs.sessionFootprints reports directly without full-OS process transfer", async () => {
+		const sessions = registry(false);
+		const big = sessions.open({ cwd: "/work/big", sessionPath: "/s/big.jsonl", device: "mac-mini" });
+		big.setPid(100);
+		const small = sessions.open({ cwd: "/work/small" });
+		small.setPid(200);
+		const footprints = vi.fn(async () => ({
+			sampledAtMs: 1_000,
+			totalSessionBytes: 1_450,
+			totalOrphanBytes: 0,
+			sessionCount: 2,
+			orphanProcessCount: 0,
+			sessions: [
+				{
+					tag: big.tag,
+					cwd: "/work/big",
+					sessionPath: "/s/big.jsonl",
+					ompPid: 100,
+					totalBytes: 1_200,
+					ompBytes: 300,
+					childrenBytes: 900,
+					stockWorkerBytes: 0,
+					totalCpuMs: 42,
+					processCount: 2,
+					childCount: 1,
+					stockWorkerCount: 0,
+					hasBlockingChildren: true,
+					overBudget: false,
+					topProcesses: [
+						{ pid: 100, ppid: 1, name: "bun", bytes: 300, omp: true },
+						{ pid: 101, ppid: 100, name: "next-server", bytes: 900, startedMs: 5, omp: false },
+					],
+				},
+				{
+					tag: small.tag,
+					cwd: "/work/small",
+					ompPid: 200,
+					totalBytes: 250,
+					ompBytes: 250,
+					childrenBytes: 0,
+					stockWorkerBytes: 0,
+					totalCpuMs: 10,
+					processCount: 1,
+					childCount: 0,
+					stockWorkerCount: 0,
+					hasBlockingChildren: false,
+					overBudget: false,
+					topProcesses: [{ pid: 200, ppid: 1, name: "bun", bytes: 250, omp: true }],
+				},
+			],
+			orphans: [],
+		}));
+
+		const use = await sessions.use(undefined, footprints);
+		expect(footprints).toHaveBeenCalledWith(
+			[
+				{ tag: big.tag, cwd: "/work/big", sessionPath: "/s/big.jsonl", ompPid: 100 },
+				{ tag: small.tag, cwd: "/work/small", ompPid: 200 },
+			],
+			{ includeOrphans: false, topPerSession: 32 },
+		);
+		expect(use).toEqual([
+			{
+				ompPid: 100,
+				cwd: "/work/big",
+				sessionPath: "/s/big.jsonl",
+				device: "mac-mini",
+				bytes: 1_200,
+				processes: [
+					{ pid: 100, name: "bun", bytes: 300, omp: true },
+					{ pid: 101, name: "next-server", bytes: 900, startedMs: 5, omp: false },
+				],
+			},
+			{
+				ompPid: 200,
+				cwd: "/work/small",
+				bytes: 250,
+				processes: [{ pid: 200, name: "bun", bytes: 250, omp: true }],
+			},
+		]);
+	});
 });

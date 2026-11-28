@@ -51,13 +51,128 @@ export interface WatchProcesses {
 	quietTrees: [pid: number, bytes: number][];
 }
 
+export type HibernateBlockReason =
+	| "noProcess"
+	| "visible"
+	| "notReady"
+	| "noSessionFile"
+	| "busy"
+	| "pendingInteraction"
+	| "pendingWork"
+	| "agentOwned"
+	| "notQuiet"
+	| "hasChildProcesses"
+	| "cooldown";
+
+export type HibernateEvictReason = "proactiveIdle" | "residentCap" | "memoryPressure" | "criticalPressure";
+
+export interface HibernatePolicy {
+	proactiveQuietMs?: number | null;
+	pressureQuietMs: number;
+	criticalQuietMs: number;
+	reserveFraction: number;
+	maxResidentTabs?: number | null;
+	capQuietMs: number;
+	maxEvictionsNormal: number;
+	maxEvictionsCritical: number;
+	cooldownMs: number;
+}
+
+export interface HibernateTabInput {
+	tabId: string;
+	pid?: number;
+	label: string;
+	sessionPath?: string;
+	cwd?: string;
+	quiet?: boolean;
+	visible?: boolean;
+	status?: string;
+	busy?: boolean;
+	pendingInteraction?: boolean;
+	pendingWork?: boolean;
+	agentOwned?: boolean;
+}
+
+export type HibernateTabEligibility =
+	| { state: "blocked"; reason: HibernateBlockReason }
+	| { state: "warmingQuiet"; quietMs: number; bytes: number }
+	| { state: "eligible"; quietMs: number; bytes: number; reason: HibernateEvictReason };
+
+export interface HibernateEvictCandidate {
+	tabId: string;
+	pid: number;
+	label: string;
+	sessionPath?: string;
+	cwd?: string;
+	bytes: number;
+	quietMs: number;
+	reason: HibernateEvictReason;
+}
+
+export interface HibernateTabEvaluation {
+	tabId: string;
+	pid?: number;
+	eligibility: HibernateTabEligibility;
+}
+
+export interface HibernatePass {
+	memoryShort: boolean;
+	pressure?: MemoryPressure | null;
+	residentCount: number;
+	evict: HibernateEvictCandidate[];
+	evaluations: HibernateTabEvaluation[];
+}
+
+export interface HibernatedTab {
+	tabId: string;
+	sessionPath?: string;
+	cwd?: string;
+	label: string;
+	hibernatedAtMs: number;
+	freedBytes: number;
+	reason: HibernateEvictReason;
+}
+
+export interface HibernateStats {
+	hibernationsTotal: number;
+	wakesTotal: number;
+	estimatedBytesFreed: number;
+}
+
+export interface HibernateStatus {
+	policy: HibernatePolicy;
+	quietTracked: number;
+	cooldownTracked: number;
+	hibernated: HibernatedTab[];
+	stats: HibernateStats;
+}
+
+export type HibernateMarkParams =
+	| {
+			action: "hibernated";
+			tabId: string;
+			sessionPath?: string;
+			cwd?: string;
+			label: string;
+			hibernatedAtMs?: number;
+			freedBytes: number;
+			reason: HibernateEvictReason;
+	  }
+	| { action: "woken"; tabId: string; nowMs?: number }
+	| { action: "forget"; tabId: string }
+	| { action: "reset" };
+
 /** How long one reading or one process listing may take; past it the sample counts as failed (never as safe). */
 export const SAMPLE_TIMEOUT_MS = 4_000;
 
 /** The core's answer to `method`, or null when it fails or has not answered within `SAMPLE_TIMEOUT_MS`. */
-async function sample<T>(method: string): Promise<T | null> {
+async function sample<T>(
+	method: string,
+	params: Record<string, unknown> = {},
+	timeoutMs = SAMPLE_TIMEOUT_MS,
+): Promise<T | null> {
 	try {
-		const answer = await core().call<T>(method, { timeoutMs: SAMPLE_TIMEOUT_MS }, { timeoutMs: SAMPLE_TIMEOUT_MS });
+		const answer = await core().call<T>(method, { timeoutMs, ...params }, { timeoutMs });
 		return answer.result;
 	} catch {
 		return null;
@@ -76,6 +191,42 @@ export function listProcesses(): Promise<ProcessRow[] | null> {
 
 export function watchProcesses(): Promise<WatchProcesses | null> {
 	return sample<WatchProcesses>("memory.watchProcesses");
+}
+
+/** Update the Rust hibernation engine's policy; returns the sanitized policy or null if the core is unavailable. */
+export function hibernateConfigure(policy: Partial<HibernatePolicy>): Promise<HibernatePolicy | null> {
+	return sample<HibernatePolicy>("memory.hibernateConfigure", policy);
+}
+
+/** Run one Rust hibernation evaluation pass over `tabs`, reusing a pre-sampled reading/process snapshot when given. */
+export function hibernateEvaluate(params: {
+	tabs: readonly HibernateTabInput[];
+	nowMs?: number;
+	reading?: MemoryReading | null;
+	watchProcesses?: WatchProcesses | null;
+	timeoutMs?: number;
+}): Promise<HibernatePass | null> {
+	const timeoutMs = params.timeoutMs ?? SAMPLE_TIMEOUT_MS;
+	return sample<HibernatePass>(
+		"memory.hibernateEvaluate",
+		{
+			tabs: params.tabs,
+			...(params.nowMs !== undefined ? { nowMs: params.nowMs } : {}),
+			...(params.reading != null ? { reading: params.reading } : {}),
+			...(params.watchProcesses != null ? { watchProcesses: params.watchProcesses } : {}),
+		},
+		timeoutMs,
+	);
+}
+
+/** Read the Rust hibernation engine's current policy, tracked counts, hibernated tabs, and cumulative stats. */
+export function hibernateStatus(): Promise<HibernateStatus | null> {
+	return sample<HibernateStatus>("memory.hibernateStatus");
+}
+
+/** Record a tab hibernation lifecycle transition (`hibernated`, `woken`, `forget`, or `reset`) in the Rust engine. */
+export function hibernateMark(params: HibernateMarkParams): Promise<unknown> {
+	return sample<unknown>("memory.hibernateMark", params);
 }
 
 /** Unpackaged test launches: the reading a test writes to `file` (`{"totalGb":16,"availableGb":3,"pressure":"warn"}`). */

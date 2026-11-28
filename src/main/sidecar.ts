@@ -1914,6 +1914,27 @@ export class SidecarManager extends EventEmitter {
 		this.#predict("asleep");
 	}
 
+	/**
+	 * Transparently wake a hibernated (`asleep`) tab on its preserved session handle through the core's `sidecar.wake`
+	 * RPC; idempotent when the lane is already starting or ready.
+	 */
+	async wake(): Promise<{ woke: boolean; status: SidecarStatus; sessionPath?: string; cwd: string } | null> {
+		if (this.#disposed) return null;
+		this.#ensureOpen();
+		if (this.#status === "asleep") this.#predict("starting");
+		try {
+			const result = (await this.#send("sidecar.wake", {}, { life: true, status: true })) as {
+				woke: boolean;
+				status: SidecarStatus;
+				sessionPath?: string;
+				cwd: string;
+			};
+			return result;
+		} catch {
+			return null;
+		}
+	}
+
 	dispose(): void {
 		if (!this.#disposed) {
 			this.#disposed = true;

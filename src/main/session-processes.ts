@@ -130,6 +130,72 @@ export interface EndResult {
 	own: string[];
 }
 
+/** Per-session metadata sent to Rust `procs.sessionFootprints`. */
+export interface SessionFootprintsMeta {
+	tag: string;
+	tabId?: string;
+	sessionPath?: string;
+	cwd?: string;
+	label?: string;
+	ompPid?: number;
+}
+
+export interface SessionFootprintsOptions {
+	includeOrphans?: boolean;
+	spikeBytes?: number;
+	topPerSession?: number;
+	timeoutMs?: number;
+}
+
+export interface TrackedProcess {
+	pid: number;
+	ppid: number;
+	name: string;
+	bytes: number;
+	cpuMs?: number;
+	startedMs?: number;
+	omp: boolean;
+	stock?: boolean;
+}
+
+export interface SessionFootprint {
+	tag: string;
+	tabId?: string;
+	sessionPath?: string;
+	cwd?: string;
+	label?: string;
+	ompPid?: number;
+	totalBytes: number;
+	ompBytes: number;
+	childrenBytes: number;
+	stockWorkerBytes: number;
+	totalCpuMs: number;
+	processCount: number;
+	childCount: number;
+	stockWorkerCount: number;
+	hasBlockingChildren: boolean;
+	overBudget: boolean;
+	topProcesses: TrackedProcess[];
+}
+
+export interface OrphanGroup {
+	tag: string;
+	totalBytes: number;
+	totalCpuMs: number;
+	processCount: number;
+	topProcesses: TrackedProcess[];
+}
+
+export interface SessionFootprintsReport {
+	sampledAtMs: number;
+	totalSessionBytes: number;
+	totalOrphanBytes: number;
+	sessionCount: number;
+	orphanProcessCount: number;
+	sessions: SessionFootprint[];
+	orphans: OrphanGroup[];
+}
+
 /** Every process with its tag; null when the core cannot answer in time. */
 export async function listTaggedProcesses(): Promise<TaggedProcess[] | null> {
 	try {
@@ -137,6 +203,35 @@ export async function listTaggedProcesses(): Promise<TaggedProcess[] | null> {
 			"procs.list",
 			{ env: SESSION_TAG_ENV, timeoutMs: LIST_TIMEOUT_MS },
 			{ timeoutMs: LIST_TIMEOUT_MS },
+		);
+		return answer.result;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Rust-native per-session process-tree memory & CPU accounting (`procs.sessionFootprints`).
+ * Attributes every tagged process in one core pass and returns bounded top-process lists per session.
+ */
+export async function sessionFootprints(
+	sessions: readonly SessionFootprintsMeta[],
+	options: SessionFootprintsOptions = {},
+): Promise<SessionFootprintsReport | null> {
+	const timeoutMs = options.timeoutMs ?? LIST_TIMEOUT_MS;
+	try {
+		const answer = await core().call<SessionFootprintsReport>(
+			"procs.sessionFootprints",
+			{
+				env: SESSION_TAG_ENV,
+				keepArg: STOCK_WORKER_ARG,
+				sessions,
+				includeOrphans: options.includeOrphans ?? true,
+				...(options.spikeBytes !== undefined ? { spikeBytes: options.spikeBytes } : {}),
+				...(options.topPerSession !== undefined ? { topPerSession: options.topPerSession } : {}),
+				timeoutMs,
+			},
+			{ timeoutMs },
 		);
 		return answer.result;
 	} catch {
@@ -511,15 +606,64 @@ export class SessionProcesses {
 
 	/**
 	 * What each live session holds now (after Orca's resource usage, `status-bar/resources/*`, FB100/FS101): its
-	 * processes, its omp first, from one listing, the largest session first. Null when the core cannot list in time.
+	 * processes, its omp first, from one native Rust `procs.sessionFootprints` pass, the largest session first.
+	 * Null when the core cannot list in time.
 	 */
-	async use(list: () => Promise<TaggedProcess[] | null> = listTaggedProcesses): Promise<SessionUse[] | null> {
+	async use(
+		list?: () => Promise<TaggedProcess[] | null>,
+		footprints: (
+			sessions: readonly SessionFootprintsMeta[],
+			options?: SessionFootprintsOptions,
+		) => Promise<SessionFootprintsReport | null> = sessionFootprints,
+	): Promise<SessionUse[] | null> {
+		if (!list) {
+			const liveMeta: SessionFootprintsMeta[] = [];
+			for (const entry of this.#entries.values()) {
+				if (entry.state !== "live") continue;
+				liveMeta.push({
+					tag: entry.record.tag,
+					cwd: entry.record.cwd,
+					...(entry.record.sessionPath !== undefined ? { sessionPath: entry.record.sessionPath } : {}),
+					...(entry.pid !== undefined ? { ompPid: entry.pid } : {}),
+				});
+			}
+			if (liveMeta.length === 0) return [];
+			const report = await footprints(liveMeta, { includeOrphans: false, topPerSession: 32 });
+			if (!report) return null;
+			const use: SessionUse[] = [];
+			for (const session of report.sessions) {
+				const entry = this.#entries.get(session.tag);
+				if (entry?.state !== "live") continue;
+				const { record, pid } = entry;
+				const listed = session.topProcesses.map(row => ({
+					pid: row.pid,
+					name: row.name,
+					bytes: row.bytes,
+					...(row.startedMs !== undefined ? { startedMs: row.startedMs } : {}),
+					omp: row.omp,
+				}));
+				use.push({
+					...(pid !== undefined ? { ompPid: pid } : {}),
+					cwd: record.cwd,
+					...(record.sessionPath !== undefined ? { sessionPath: record.sessionPath } : {}),
+					...(record.device !== undefined ? { device: record.device } : {}),
+					bytes: session.totalBytes,
+					processes: listed,
+				});
+			}
+			return use;
+		}
 		const rows = await list();
 		if (!rows) return null;
 		const byTag = new Map<string, TaggedProcess[]>();
 		for (const row of rows) {
 			if (!row.tag || this.#entries.get(row.tag)?.state !== "live") continue;
-			byTag.set(row.tag, [...(byTag.get(row.tag) ?? []), row]);
+			let bucket = byTag.get(row.tag);
+			if (!bucket) {
+				bucket = [];
+				byTag.set(row.tag, bucket);
+			}
+			bucket.push(row);
 		}
 		const use: SessionUse[] = [];
 		for (const [tag, processes] of byTag) {
