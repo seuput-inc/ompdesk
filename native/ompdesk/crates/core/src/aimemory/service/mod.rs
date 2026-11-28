@@ -242,9 +242,9 @@ pub struct Service {
 static SERVICES: LazyLock<Mutex<HashMap<String, Arc<Service>>>> = LazyLock::new(Default::default);
 /// Latest active service's `(url, dataDir)` for direct `ai-memory:*` core IPC calls (`aimemory/ipc.rs`).
 static CURRENT_SERVER: LazyLock<Mutex<Option<(String, Server)>>> = LazyLock::new(Default::default);
+type ActiveService = (String, Arc<Service>);
 /// Latest active service handle for direct lifecycle/care core IPC calls (`aimemory/ipc.rs`).
-static CURRENT_SERVICE: LazyLock<Mutex<Option<(String, Arc<Service>)>>> =
-    LazyLock::new(Default::default);
+static CURRENT_SERVICE: LazyLock<Mutex<Option<ActiveService>>> = LazyLock::new(Default::default);
 
 fn server_from_state(state: &State) -> Server {
     Server {
