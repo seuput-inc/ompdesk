@@ -209,7 +209,7 @@ function PolicyLine() {
 	const steeringMode = useSettingsStore(state => state.steeringMode);
 	const interruptMode = useSettingsStore(state => state.interruptMode);
 	return (
-		<p className="px-2 pb-1 text-sc-xs text-(--sc-text-subtle)" data-queue-policy>
+		<p className="mt-1 text-sc-xs text-(--sc-text-subtle)" data-queue-policy>
 			{t(steeringMode === "all" ? "composerQueue.policy.steerAll" : "composerQueue.policy.steerOne")}
 			{" · "}
 			{t(
@@ -257,9 +257,18 @@ export function ComposerQueuePill({ onSettled }: { onSettled: () => void }) {
 				aria-expanded={open}
 				aria-haspopup="dialog"
 				aria-label={t("composerQueue.pillOpen", { count: total })}
-				className="omp-composer-queue-pill"
+				className={cx(
+					"omp-composer-queue-pill rounded-full! border-(--sc-accent-border)! bg-(--sc-accent-soft)! px-2.5! text-(--sc-accent-on-soft)!",
+					steering.length > 0 && "font-medium",
+				)}
 				data-queue-pill
-				icon={<ListOrdered aria-hidden />}
+				data-queue-steering={steering.length > 0 ? "true" : undefined}
+				icon={
+					<span className="relative inline-flex items-center">
+						<ListOrdered aria-hidden className="size-(--sc-icon-sm)" />
+						{steering.length > 0 && <span aria-hidden className="ml-1 size-1.5 rounded-full bg-(--sc-accent)" />}
+					</span>
+				}
 				onClick={() => setOpen(value => !value)}
 				// Mouse only: the field keeps its focus (a pointerdown handler would swallow the click in WebKit).
 				onMouseDown={event => event.preventDefault()}
@@ -272,30 +281,34 @@ export function ComposerQueuePill({ onSettled }: { onSettled: () => void }) {
 			<Popover
 				anchorRef={anchor}
 				ariaLabel={t("composerQueue.listLabel")}
-				className="max-w-[min(30rem,calc(100vw-1rem))]! p-1.5!"
+				className="max-w-[min(30rem,calc(100vw-1rem))]! overflow-hidden p-0!"
 				onClose={close}
 				open={open}
 				placement="top-end"
 			>
 				<div className="w-[min(28rem,calc(100vw-2rem))]" data-queue-popover>
-					<div className="flex h-8 items-center gap-1.5 pr-0.5 pl-2 text-sc-xs text-(--sc-text-muted) [--hit-gap-x:8px] [--hit-gap-y:0px]">
-						<span className="font-medium text-(--sc-text-secondary)">{t("composerQueue.listLabel")}</span>
-						<span className="tabular-nums">{total}</span>
-						<span className="min-w-1 flex-1" />
-						<Button
-							className="h-6 px-2 text-sc-xs"
-							data-queue-clear
-							disabled={!actions.ready}
-							onClick={clearAll}
-							size="sm"
-							disabledReason={actions.ready ? undefined : t("common.notConnected")}
-							variant="ghost"
-						>
-							{t("composerQueue.clearAll")}
-						</Button>
+					<div className="border-b border-(--sc-divider) bg-(--sc-surface-1) px-2.5 py-2">
+						<div className="flex items-center gap-1.5 text-sc-xs text-(--sc-text-muted) [--hit-gap-x:8px] [--hit-gap-y:0px]">
+							<span className="font-semibold text-(--sc-text)">{t("composerQueue.listLabel")}</span>
+							<span className="rounded-full bg-(--sc-accent-soft) px-1.5 py-px font-mono text-sc-xs font-medium text-(--sc-accent-on-soft) tabular-nums">
+								{total}
+							</span>
+							<span className="min-w-1 flex-1" />
+							<Button
+								className="h-6 px-2 text-sc-xs"
+								data-queue-clear
+								disabled={!actions.ready}
+								onClick={clearAll}
+								size="sm"
+								disabledReason={actions.ready ? undefined : t("common.notConnected")}
+								variant="ghost"
+							>
+								{t("composerQueue.clearAll")}
+							</Button>
+						</div>
+						<PolicyLine />
 					</div>
-					<PolicyLine />
-					<div className="max-h-72 overflow-y-auto overscroll-contain [--hit-gap-y:0px]" data-queue-list>
+					<div className="max-h-72 overflow-y-auto overscroll-contain p-1.5 [--hit-gap-y:0px]" data-queue-list>
 						{lanes.map(
 							({ lane, items }) =>
 								items.length > 0 && (

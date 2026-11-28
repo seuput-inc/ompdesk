@@ -326,7 +326,7 @@ export function ContextUsagePopover({ variant = "ring" }: { variant?: "ring" | "
 						className={cx(
 							sheet
 								? "px-3 pt-1 pb-1 break-keep text-(--sc-text)"
-								: "fixed z-(--sc-z-popover) rounded-(--sc-radius-lg) border border-(--sc-border-subtle) bg-(--sc-elevated) px-4 pt-4 pb-2 break-keep text-(--sc-text) shadow-(--sc-shadow-md)",
+								: "fixed z-(--sc-z-popover) overflow-hidden rounded-(--sc-radius-xl) border border-(--sc-border-subtle) bg-(--sc-elevated) break-keep text-(--sc-text) shadow-(--sc-shadow-md)",
 							!sheet && (closing ? "omp-pop-out pointer-events-none" : "omp-pop-in"),
 						)}
 						id="omp-context-usage-popover"
@@ -343,109 +343,139 @@ export function ContextUsagePopover({ variant = "ring" }: { variant?: "ring" | "
 						role={sheet ? undefined : pinned ? "dialog" : "group"}
 						style={sheet ? undefined : popoverStyle}
 					>
-						<div className="flex items-baseline justify-between gap-4">
-							<span className="text-sc-md font-medium text-(--sc-text)">
-								{t("contextUsage.title")}{" "}
-								{capacityKnown && (
-									<strong className="ml-1 font-semibold text-(--sc-text)">{`${Math.round(percent)}%`}</strong>
-								)}
-							</span>
-							<span className="shrink-0 text-sc-md font-semibold tabular-nums" data-context-figure>
-								{capacityKnown
-									? `${approximateTokens(usedTokens)} / ${formatTokens(contextWindow)}`
-									: approximateTokens(usedTokens)}
-							</span>
-						</div>
-						{/* What is left, said once, where touch and the keyboard read it too; the compaction point beside it. */}
-						{capacityKnown && (
-							<p className="mt-1 text-sc-xs text-(--sc-text-muted) tabular-nums" data-context-left>
-								<span data-context-remaining>
-									{t("contextUsage.left", { tokens: formatTokens(remainingTokens) })}
+						<div className={cx(sheet ? "pb-2" : "border-b border-(--sc-divider) bg-(--sc-surface-1) px-4 py-3")}>
+							<div className="flex items-baseline justify-between gap-3">
+								<span className="flex items-center text-sc-md font-medium text-(--sc-text)">
+									{t("contextUsage.title")}{" "}
+									{capacityKnown && (
+										<strong
+											className={cx(
+												"ml-1.5 rounded-full px-1.5 py-px font-mono text-sc-xs font-semibold tabular-nums",
+												tone === "danger"
+													? "bg-(--sc-danger-soft) text-(--sc-danger-on-soft)"
+													: tone === "warning"
+														? "bg-(--sc-warning-soft) text-(--sc-warning-on-soft)"
+														: "bg-(--sc-accent-soft) text-(--sc-accent-on-soft)",
+											)}
+										>{`${Math.round(percent)}%`}</strong>
+									)}
 								</span>
-								{compactAt !== undefined && (
-									<>
-										{" · "}
-										<span data-context-compacts>
-											{t("contextUsage.compactsAt", { point: formatTokens(compactAt) })}
-										</span>
-									</>
-								)}
-							</p>
-						)}
-
-						{capacityKnown && (
-							<ProgressBar
-								ariaLabel={t("contextUsage.progress", { percent: Math.round(percent) })}
-								ariaValueText={t("contextUsage.left", { tokens: formatTokens(remainingTokens) })}
-								className="mt-3"
-								segments={
-									categories.length > 0
-										? categories.map(category => ({
-												value: category.tokens,
-												label: t(`contextUsage.category.${category.key}`),
-												color: category.color,
-											}))
-										: [{ value: usedTokens, label: t("contextUsage.used"), color: "var(--sc-accent)" }]
-								}
-								total={contextWindow}
-								value={percent / 100}
-							/>
-						)}
-
-						{!capacityKnown && (
-							<div className="mt-3 rounded-(--sc-radius-md) bg-(--sc-surface-2) px-2.5 py-2 text-sc-sm text-(--sc-text-muted)">
-								{t("contextUsage.windowUnknown")}
+								<span className="shrink-0 font-mono text-sc-sm font-semibold tabular-nums" data-context-figure>
+									{capacityKnown
+										? `${approximateTokens(usedTokens)} / ${formatTokens(contextWindow)}`
+										: approximateTokens(usedTokens)}
+								</span>
 							</div>
-						)}
-
-						{loading && categories.length === 0 ? (
-							<Spinner className="py-5" label={t("contextUsage.loading")} size="sm" />
-						) : error && categories.length === 0 ? (
-							<div className="flex flex-col items-start gap-2 py-4">
-								<p role="alert" className="text-sc-sm text-(--sc-text-muted)">
-									{t("contextUsage.unavailable")}
+							{/* What is left, said once, where touch and the keyboard read it too; the compaction point beside it. */}
+							{capacityKnown && (
+								<p className="mt-1 text-sc-xs text-(--sc-text-muted) tabular-nums" data-context-left>
+									<span data-context-remaining>
+										{t("contextUsage.left", { tokens: formatTokens(remainingTokens) })}
+									</span>
+									{compactAt !== undefined && (
+										<>
+											{" · "}
+											<span data-context-compacts>
+												{t("contextUsage.compactsAt", { point: formatTokens(compactAt) })}
+											</span>
+										</>
+									)}
 								</p>
-								<Button
-									icon={<RotateCw aria-hidden />}
-									onClick={() => setAttempt(count => count + 1)}
-									size="sm"
-									variant="secondary"
+							)}
+						</div>
+
+						<div className={sheet ? "pt-1" : "px-4 py-3"}>
+							{capacityKnown && (
+								<ProgressBar
+									ariaLabel={t("contextUsage.progress", { percent: Math.round(percent) })}
+									ariaValueText={t("contextUsage.left", { tokens: formatTokens(remainingTokens) })}
+									segments={
+										categories.length > 0
+											? categories.map(category => ({
+													value: category.tokens,
+													label: t(`contextUsage.category.${category.key}`),
+													color: category.color,
+												}))
+											: [{ value: usedTokens, label: t("contextUsage.used"), color: "var(--sc-accent)" }]
+									}
+									total={contextWindow}
+									value={percent / 100}
+								/>
+							)}
+
+							{!capacityKnown && (
+								<div className="rounded-(--sc-radius-md) bg-(--sc-surface-2) px-2.5 py-2 text-sc-sm text-(--sc-text-muted)">
+									{t("contextUsage.windowUnknown")}
+								</div>
+							)}
+
+							{loading && categories.length === 0 ? (
+								<Spinner className="py-5" label={t("contextUsage.loading")} size="sm" />
+							) : error && categories.length === 0 ? (
+								<div className="flex flex-col items-start gap-2 py-4">
+									<p role="alert" className="text-sc-sm text-(--sc-text-muted)">
+										{t("contextUsage.unavailable")}
+									</p>
+									<Button
+										icon={<RotateCw aria-hidden />}
+										onClick={() => setAttempt(count => count + 1)}
+										size="sm"
+										variant="secondary"
+									>
+										{t("common.retry")}
+									</Button>
+								</div>
+							) : (
+								<div className={cx("mt-3", sheet ? "space-y-2" : "space-y-1.5")}>
+									{categories.map(category => {
+										const share =
+											capacityKnown && contextWindow > 0
+												? Math.max(1, Math.round((category.tokens / contextWindow) * 100))
+												: null;
+										return (
+											<div className="flex items-center gap-2.5" key={category.key}>
+												<span
+													aria-hidden="true"
+													className="size-2 shrink-0 rounded-full"
+													style={{ backgroundColor: category.color }}
+												/>
+												<span className="min-w-0 flex-1 truncate text-sc-sm text-(--sc-text-secondary)">
+													{t(`contextUsage.category.${category.key}`)}
+												</span>
+												<span className="shrink-0 font-mono text-sc-sm font-medium text-(--sc-text) tabular-nums">
+													{approximateTokens(category.tokens)}
+												</span>
+												{share !== null && (
+													<span className="w-8 shrink-0 text-right font-mono text-sc-xs text-(--sc-text-subtle) tabular-nums">
+														{`${share}%`}
+													</span>
+												)}
+											</div>
+										);
+									})}
+								</div>
+							)}
+							{promptCache && (
+								<div
+									className="mt-3 flex items-center gap-2 rounded-(--sc-radius-md) border border-(--sc-border-subtle) bg-(--sc-surface-1) px-2.5 py-1.5 text-sc-xs text-(--sc-text-muted) tabular-nums"
+									data-prompt-cache={promptCache.state}
 								>
-									{t("common.retry")}
-								</Button>
-							</div>
-						) : (
-							<div className={cx("mt-3", sheet ? "space-y-2" : "space-y-1")}>
-								{categories.map(category => (
-									<div className="flex items-center gap-2.5" key={category.key}>
-										<span
-											aria-hidden="true"
-											className="size-2.5 shrink-0 rounded-(--sc-radius-xs)"
-											style={{ backgroundColor: category.color }}
-										/>
-										<span className="min-w-0 flex-1 truncate text-sc-sm text-(--sc-text-secondary)">
-											{t(`contextUsage.category.${category.key}`)}
-										</span>
-										<span className="shrink-0 text-sc-sm tabular-nums">
-											{approximateTokens(category.tokens)}
-										</span>
-									</div>
-								))}
-							</div>
-						)}
-						{promptCache && (
-							<p
-								className="mt-2 text-sc-xs text-(--sc-text-muted) tabular-nums"
-								data-prompt-cache={promptCache.state}
-							>
-								{promptCacheText(promptCache, Date.now(), t)}
-							</p>
-						)}
+									<span
+										aria-hidden
+										className={cx(
+											"size-1.5 shrink-0 rounded-full",
+											promptCache.state === "warm" ? "bg-(--sc-success)" : "bg-(--sc-text-subtle)",
+										)}
+									/>
+									<span className="min-w-0 truncate">{promptCacheText(promptCache, Date.now(), t)}</span>
+								</div>
+							)}
+						</div>
 						<div
 							className={
 								sheet
-									? "-mx-1 mt-3 flex flex-col gap-0.5 border-t border-(--sc-divider) pt-2"
-									: "-mx-4 mt-3 flex flex-wrap gap-1 border-t border-(--sc-divider) px-2 pt-2"
+									? "-mx-1 mt-2 flex flex-col gap-0.5 border-t border-(--sc-divider) pt-2"
+									: "flex flex-wrap gap-1 border-t border-(--sc-divider) bg-(--sc-surface-1) px-2 py-2"
 							}
 							data-context-actions
 						>
@@ -495,39 +525,47 @@ export function ContextUsagePopover({ variant = "ring" }: { variant?: "ring" | "
 
 const RING_TONE: Record<ContextTone, string> = {
 	unknown: "text-(--sc-text-muted)",
-	ok: "text-(--sc-text-secondary)",
+	ok: "text-(--sc-accent)",
 	warning: "text-(--sc-warning)",
 	danger: "text-(--sc-danger)",
 };
 
 /**
- * The composer's context meter glyph: a ring whose arc is the used share of the window, coloured by `tone`. No known
- * capacity draws the empty track only — a share would be invented. The arc and colour ease to a new value once
- * (`.omp-context-ring` in components.css); nothing loops, and reduced motion or software compositing jumps.
+ * The composer's context meter glyph: a crisp 16px Orca ring whose arc is the used share of the window,
+ * coloured by `tone`. No known capacity draws the empty track only — a share would be invented. The arc
+ * and colour ease to a new value once (`.omp-context-ring` in components.css); nothing loops, and reduced
+ * motion or software compositing jumps.
  */
 function ContextRing({ percent, tone }: { percent: number | null; tone: ContextTone }) {
-	const radius = 5.5;
+	const radius = 6;
 	const circumference = 2 * Math.PI * radius;
 	const filled = percent === null ? 0 : (Math.min(100, Math.max(0, percent)) / 100) * circumference;
 	return (
 		<svg
 			aria-hidden
 			className={cx("omp-context-ring size-(--sc-icon-md) shrink-0 -rotate-90", RING_TONE[tone])}
-			viewBox="0 0 14 14"
+			viewBox="0 0 16 16"
 		>
-			{/* The track must read as a gauge, not a loading spinner: a solid ring
-			    under the fill, at full border contrast. */}
-			<circle cx="7" cy="7" fill="none" r={radius} stroke="var(--sc-border)" strokeWidth="2" />
+			{/* The track must read as a gauge, not a loading spinner: a solid ring under the fill. */}
 			<circle
-				cx="7"
-				cy="7"
+				cx="8"
+				cy="8"
+				fill="none"
+				r={radius}
+				stroke="var(--sc-border)"
+				strokeOpacity="0.65"
+				strokeWidth="1.75"
+			/>
+			<circle
+				cx="8"
+				cy="8"
 				data-context-arc={percent === null ? undefined : Math.round(percent)}
 				fill="none"
 				r={radius}
 				stroke="currentColor"
 				strokeDasharray={`${filled} ${circumference}`}
 				strokeLinecap={filled > 0 ? "round" : "butt"}
-				strokeWidth="2"
+				strokeWidth="1.75"
 			/>
 		</svg>
 	);

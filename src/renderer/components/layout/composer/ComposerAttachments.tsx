@@ -262,8 +262,10 @@ const ImageStrip = memo(function ImageStrip({
 			>
 				<li
 					className={cx(
-						"flex min-h-7 shrink-0 items-center gap-1 text-sc-xs tabular-nums",
-						over ? "text-(--sc-warning)" : "text-(--sc-text-muted)",
+						"inline-flex min-h-6 shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-sc-xs tabular-nums",
+						over
+							? "border-(--sc-warning)/40 bg-(--sc-warning-soft) text-(--sc-warning-on-soft)"
+							: "border-(--sc-border-subtle) bg-(--sc-surface-1) text-(--sc-text-muted)",
 					)}
 					data-attachment-count={over ? "over" : "ok"}
 					// The count is read with the strip's name; only the warning interrupts.
@@ -309,7 +311,7 @@ const AttachedImage = memo(function AttachedImage({
 				mimeType={image.content.mimeType}
 				src={image.preview}
 				alt={t("input.attachmentAlt", { index: index + 1 })}
-				className="size-14 rounded-(--sc-radius-lg) border border-(--sc-border-subtle) object-cover"
+				className="size-14 rounded-(--sc-radius-lg) border border-(--sc-border-subtle) bg-(--sc-surface-1) object-cover shadow-(--sc-shadow-sm)"
 				gallery={gallery}
 				onLoad={event => {
 					const { naturalWidth, naturalHeight } = event.currentTarget;

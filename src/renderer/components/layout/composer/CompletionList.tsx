@@ -4,12 +4,23 @@
  * that work and notes on rows that are not shown. The field keeps focus; a row is taken on mouse down, and the
  * pointer moves the highlight like the history search's (one highlight, never a hover beside a selection).
  */
+import { Cpu, FileCode2, GitPullRequest, Smile, Sparkles, Terminal } from "lucide-react";
 import { memo, type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { currentShellMode, useShellInput } from "../../../hooks/use-shell-mode";
 import { cx } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { Kbd, OptionRow, useHeldOverlay } from "../../common";
 import type { CompletionItem, CompletionMenu } from "./use-completion-menu";
+
+const SOURCE_META: Record<CompletionMenu["source"], { icon: typeof Terminal; tag: string }> = {
+	mention: { icon: FileCode2, tag: "@" },
+	command: { icon: Terminal, tag: "/" },
+	"slash-arg": { icon: Terminal, tag: "/" },
+	skill: { icon: Sparkles, tag: "$" },
+	model: { icon: Cpu, tag: "^" },
+	"github-ref": { icon: GitPullRequest, tag: "#" },
+	emoji: { icon: Smile, tag: ":" },
+};
 
 /** The label with the spans the query matched set in the accent colour (the history search's `<mark>` look). */
 function HighlightedLabel({ label, ranges }: { label: string; ranges: readonly [number, number][] | undefined }) {
@@ -95,11 +106,15 @@ export const CompletionList = memo(function CompletionList({
 	const room = useMenuRoom(ref, menu !== null);
 	if (!menu) return null;
 	const footer = menu.footer;
+	const meta = SOURCE_META[menu.source] ?? SOURCE_META.command;
+	const SourceIcon = meta.icon;
+	const shownCount = menu.items.length;
+	const totalCount = menu.total ?? shownCount;
 	return (
 		<div
 			aria-hidden={closing || undefined}
 			className={cx(
-				"absolute bottom-full left-0 z-(--sc-z-popover) mb-2 flex max-h-[60vh] w-[min(440px,100%)] flex-col overflow-hidden rounded-(--sc-radius-lg) border border-(--sc-border-subtle) bg-(--sc-elevated) shadow-(--sc-shadow-md) [--omp-pop-origin:bottom_left]",
+				"absolute bottom-full left-0 z-(--sc-z-popover) mb-2 flex max-h-[60vh] w-[min(480px,100%)] flex-col overflow-hidden rounded-(--sc-radius-xl) border border-(--sc-border-subtle) bg-(--sc-elevated) shadow-(--sc-shadow-md) [--omp-pop-origin:bottom_left]",
 				closing ? "omp-pop-out" : "omp-pop-in",
 			)}
 			data-completion-menu={menu.source}
@@ -108,8 +123,23 @@ export const CompletionList = memo(function CompletionList({
 			style={room === null ? undefined : { maxHeight: room }}
 		>
 			<div
+				className="flex shrink-0 items-center justify-between gap-2 border-b border-(--sc-divider) bg-(--sc-surface-1) px-3 py-1.5 text-sc-xs text-(--sc-text-muted)"
+				data-completion-header
+			>
+				<span className="inline-flex min-w-0 items-center gap-1.5 font-medium text-(--sc-text-secondary)">
+					<SourceIcon aria-hidden className="size-3.5 shrink-0 text-(--sc-accent)" />
+					<span className="truncate">{t("input.completion.label")}</span>
+					<span className="rounded-(--sc-radius-xs) border border-(--sc-border-subtle) bg-(--sc-elevated) px-1 font-mono text-sc-xs text-(--sc-text-muted)">
+						{meta.tag}
+					</span>
+				</span>
+				<span className="shrink-0 font-mono text-sc-xs text-(--sc-text-subtle) tabular-nums">
+					{totalCount > shownCount ? `${shownCount} / ${totalCount}` : shownCount}
+				</span>
+			</div>
+			<div
 				aria-label={t("input.completion.label")}
-				className="min-h-0 flex-1 overflow-y-auto p-1"
+				className="min-h-0 flex-1 overflow-y-auto p-1.5"
 				id={menuId}
 				role="listbox"
 			>
@@ -131,25 +161,41 @@ export const CompletionList = memo(function CompletionList({
 							if (index !== menu.index) onHover(index);
 						}}
 						title={
-							item.description ? `${item.label}\n${item.description.replace(/\s+/g, " ").trim()}` : undefined
+							item.description ? `${item.label}\n${item.description.replace(/\s+/g, " ").trim()}` : item.label
 						}
-						className="items-baseline gap-3 rounded-(--sc-radius-sm)"
+						className="items-center gap-2 rounded-(--sc-radius-md)"
 					>
-						<span className="shrink-0 font-mono text-sc-md font-medium text-(--sc-text)">
+						<SourceIcon
+							aria-hidden
+							className={cx(
+								"size-3.5 shrink-0",
+								index === menu.index ? "text-(--sc-accent)" : "text-(--sc-text-subtle)",
+							)}
+						/>
+						<span
+							className={cx(
+								"min-w-0 truncate font-mono text-sc-sm font-medium text-(--sc-text)",
+								item.description ? "max-w-[55%] shrink-0" : "flex-1",
+							)}
+						>
 							<HighlightedLabel label={item.label} ranges={item.highlights} />
 						</span>
 						{item.description && (
-							<span className="min-w-0 truncate text-sc-sm text-(--sc-text-muted)">{item.description}</span>
+							<span className="min-w-0 flex-1 truncate text-sc-sm text-(--sc-text-muted)">
+								{item.description}
+							</span>
 						)}
 						{item.hint && (
-							<span className="ml-auto shrink-0 font-mono text-sc-xs text-(--sc-text-subtle)">{item.hint}</span>
+							<span className="ml-auto shrink-0 rounded-(--sc-radius-xs) bg-(--sc-surface-2) px-1.5 py-px font-mono text-sc-xs text-(--sc-text-subtle)">
+								{item.hint}
+							</span>
 						)}
 					</OptionRow>
 				))}
 			</div>
 			{footer && (!touch || footer.notes.length > 0) && (
 				<div
-					className="shrink-0 border-t border-(--sc-divider) px-3 py-1.5 text-sc-xs text-(--sc-text-muted)"
+					className="shrink-0 border-t border-(--sc-divider) bg-(--sc-surface-1) px-3 py-1.5 text-sc-xs text-(--sc-text-muted)"
 					data-menu-footer
 				>
 					{footer.notes.map(note => (

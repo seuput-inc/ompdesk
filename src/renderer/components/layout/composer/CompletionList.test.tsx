@@ -54,6 +54,11 @@ describe("CompletionList", () => {
 		expect(options.map(option => option.id)).toEqual(["menu-0", "menu-1", "menu-2"]);
 		// The pointer moves the highlight itself: no row draws a hover tint beside it.
 		expect(options.some(option => option.className.includes("hover:"))).toBe(false);
+		// Header shows picker mode tag & item count; labels truncate cleanly to avoid right-edge clipping.
+		const header = document.querySelector("[data-completion-header]");
+		expect(header?.textContent).toContain("/");
+		expect(header?.textContent).toContain("3");
+		expect(options[0]?.innerHTML).toContain("truncate");
 		await act(async () => {
 			options[2]?.dispatchEvent(new Event("mousedown", { bubbles: true, cancelable: true }));
 		});
