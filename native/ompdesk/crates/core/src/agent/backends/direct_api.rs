@@ -1765,8 +1765,9 @@ mod tests {
         .unwrap();
         assert_eq!(local.url, "http://127.0.0.1:11434/v1/chat/completions");
         assert!(local.auth_header_names().is_empty());
-        assert_eq!(local.body["messages"][3]["role"], "tool");
-        assert_eq!(local.body["messages"][3]["tool_call_id"], "tc_1");
+        assert_eq!(local.body["messages"][1]["tool_calls"][0]["id"], "tc_1");
+        assert_eq!(local.body["messages"][2]["role"], "tool");
+        assert_eq!(local.body["messages"][2]["tool_call_id"], "tc_1");
 
         // Cloud provider without API key fails with NotInstalled.
         let missing = build_http_request(
@@ -1782,7 +1783,7 @@ mod tests {
     }
 
     #[tokio::test]
-    fn executes_two_round_tool_loop_end_to_end_with_local_tool_executor() {
+    async fn executes_two_round_tool_loop_end_to_end_with_local_tool_executor() {
         let ws = tempfile::tempdir().unwrap();
         fs::write(ws.path().join("hello.txt"), "hello from momo workspace\n").unwrap();
 
@@ -1816,7 +1817,7 @@ mod tests {
         let executor = Arc::new(LocalToolExecutor::with_root(ws.path()));
         let adapter = DirectApiAdapter::new(DirectApiProvider::Anthropic, executor)
             .with_api_key("sk-ant-loop-test")
-            .with_transport(Arc::clone(&transport));
+            .with_transport(Arc::clone(&transport) as Arc<dyn SseTransport>);
 
         let mut session = adapter
             .start(SessionSpec::new("tab-loop", ws.path()))
@@ -1889,7 +1890,7 @@ mod tests {
     }
 
     #[tokio::test]
-    fn drives_mock_sse_chunks_and_preserves_hibernation_cursor() {
+    async fn drives_mock_sse_chunks_and_preserves_hibernation_cursor() {
         let sse = concat!(
             "event: message_start\n",
             "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m_sse\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":12}}}\n\n",

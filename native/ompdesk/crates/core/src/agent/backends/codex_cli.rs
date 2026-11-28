@@ -875,7 +875,7 @@ mod tests {
     }
 
     #[tokio::test]
-    fn pumps_mock_codex_jsonl_stream_and_handles_hibernate_resume() {
+    async fn pumps_mock_codex_jsonl_stream_and_handles_hibernate_resume() {
         let jsonl = concat!(
             "{\"type\":\"thread.started\",\"thread_id\":\"thr-404\"}\n",
             "{\"type\":\"turn.started\",\"turn_id\":\"t1\",\"model\":\"gpt-5.3-codex\"}\n",

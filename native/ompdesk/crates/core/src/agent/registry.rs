@@ -486,7 +486,7 @@ mod tests {
     }
 
     #[tokio::test]
-    fn falls_back_from_missing_preferred_backend_in_preference_order() {
+    async fn falls_back_from_missing_preferred_backend_in_preference_order() {
         let reg = sample_registry();
         let claude = BackendId::ProviderCli(ProviderCliKind::ClaudeCode);
         let req = ResolutionRequest::for_backend(claude)
@@ -505,7 +505,7 @@ mod tests {
     }
 
     #[tokio::test]
-    fn strict_mode_returns_typed_error_instead_of_falling_back() {
+    async fn strict_mode_returns_typed_error_instead_of_falling_back() {
         let reg = sample_registry();
         let claude = BackendId::ProviderCli(ProviderCliKind::ClaudeCode);
         let err = reg
@@ -537,7 +537,7 @@ mod tests {
     }
 
     #[tokio::test]
-    fn filters_by_zero_cli_requirement_and_backend_kind() {
+    async fn filters_by_zero_cli_requirement_and_backend_kind() {
         let reg = sample_registry();
         let req = ResolutionRequest::for_kind(BackendKind::DirectApi)
             .requiring(CapabilityRequirements::default().with_no_external_cli());

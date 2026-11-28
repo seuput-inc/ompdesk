@@ -683,7 +683,7 @@ mod tests {
     }
 
     #[tokio::test]
-    fn executes_write_read_list_and_bounds_outputs() {
+    async fn executes_write_read_list_and_bounds_outputs() {
         let ws = tempfile::tempdir().unwrap();
         let executor = LocalToolExecutor::with_root(ws.path()).with_policy(LocalToolPolicy {
             max_read_bytes: 20,
@@ -757,7 +757,7 @@ mod tests {
     }
 
     #[tokio::test]
-    fn executes_bounded_run_command_and_honors_disable_policy() {
+    async fn executes_bounded_run_command_and_honors_disable_policy() {
         let ws = tempfile::tempdir().unwrap();
         let executor = LocalToolExecutor::with_root(ws.path());
         let res = executor

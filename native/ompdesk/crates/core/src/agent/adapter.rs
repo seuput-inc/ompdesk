@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[tokio::test]
-    fn adapter_trait_is_dyn_compatible_and_defaults_guard_optional_operations() {
+    async fn adapter_trait_is_dyn_compatible_and_defaults_guard_optional_operations() {
         let adapter: Arc<dyn AgentAdapter> = Arc::new(MinimalPtyAdapter);
         assert_eq!(adapter.kind(), BackendKind::ProviderCli);
 

@@ -848,7 +848,7 @@ mod tests {
     }
 
     #[tokio::test]
-    fn contract_stub_registers_with_adapter_registry() {
+    async fn contract_stub_registers_with_adapter_registry() {
         let mut reg = AdapterRegistry::new();
         reg.register(Arc::new(OmpAdapterContract::new()));
         let outcome = reg

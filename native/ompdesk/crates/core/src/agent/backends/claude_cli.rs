@@ -553,7 +553,7 @@ mod tests {
     }
 
     #[tokio::test]
-    fn pumps_mock_claude_ndjson_stream_and_preserves_resume_handle() {
+    async fn pumps_mock_claude_ndjson_stream_and_preserves_resume_handle() {
         let ndjson = concat!(
             "{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"cl-sess-7\",\"model\":\"claude-sonnet-4-6\"}\n",
             "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"model\":\"claude-sonnet-4-6\"}}}\n",
@@ -594,7 +594,7 @@ mod tests {
     }
 
     #[tokio::test]
-    fn hibernate_and_resume_preserve_claude_resume_handle_and_reject_mismatched_backend() {
+    async fn hibernate_and_resume_preserve_claude_resume_handle_and_reject_mismatched_backend() {
         let adapter = ClaudeCliAdapter::with_binary("/usr/local/bin/claude");
         let mut spec = SessionSpec::new("tab-2", "/tmp");
         spec.resume = Some(ResumeHandle::new(
