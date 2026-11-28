@@ -9,10 +9,14 @@
 //! capability matrix, and Stage 2 wiring checklist.
 
 pub mod adapter;
+pub mod parsers;
 pub mod registry;
 pub mod types;
 
 pub use adapter::{AgentAdapter, AgentSession, BoxFuture};
+pub use parsers::claude_stream::ClaudeStreamParser;
+pub use parsers::codex_stream::CodexStreamParser;
+pub use parsers::direct_sse::{DirectSseParser, SseFrame, SseFrameDecoder};
 pub use registry::{
     AdapterRegistry, DEFAULT_PREFERENCE_ORDER, ResolutionOutcome, ResolutionRequest, SkipReason,
     SkippedCandidate, discovery_status_for, select_preferred_install,
