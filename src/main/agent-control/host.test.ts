@@ -861,13 +861,35 @@ describe("AgentControlRuntime", () => {
 		expect(spawned[0]).toEqual({ cwd: "C:\\work", device: "dev-1" });
 		await runtime.run(win, "main0001", T.open, { device: "dev-1" });
 		expect(spawned[1]).toEqual({ device: "dev-1" });
-		expect((await runtime.run(win, "main0001", T.open, { device: "dev-1", folder: "rel" })).text).toMatch(
-			/must be absolute/,
-		);
+		const wsl = String.raw`\\wsl.localhost\Ubuntu\home\me\repo`;
+		await runtime.run(win, "main0001", T.open, { device: "dev-1", folder: wsl });
+		expect(spawned[2]).toEqual({ cwd: wsl, device: "dev-1" });
+		for (const folder of [
+			"rel",
+			"C:work",
+			String.raw`\work`,
+			String.raw`\\server\share`,
+			String.raw`\\wsl.localhost`,
+			String.raw`\\wsl.localhost.evil\Ubuntu`,
+			String.raw`\\?\UNC\wsl.localhost\Ubuntu`,
+			String.raw`\\.\pipe\name`,
+			"//?/C:/work",
+		]) {
+			const result = await runtime.run(win, "main0001", T.open, { device: "dev-1", folder });
+			expect(result.text, folder).toMatch(/must be absolute/);
+		}
 		expect((await runtime.run(win, "main0001", T.open, { device: "dev-1", worktree: true })).text).toMatch(
 			/needs that device's repository/,
 		);
-		expect(spawned).toHaveLength(2);
+		expect(spawned).toHaveLength(3);
+	});
+
+	it("keeps a paired caller's WSL folder as typed on its own device", async () => {
+		const { runtime, win, spawned, sidecars } = setup({ tabs: [{ tabId: "main0001", device: "dev-1" }] });
+		sidecars.set("main0001", { cwd: "/repo", device: "dev-1" });
+		const folder = String.raw`\\wsl$\Debian\home\repo`;
+		await runtime.run(win, "main0001", T.open, { folder });
+		expect(spawned).toEqual([{ cwd: folder, device: "dev-1" }]);
 	});
 
 	it("lists a paired computer's saved session that a tab there holds as open there, which a tab here does not hold", async () => {

@@ -17,6 +17,6 @@ export const SCRATCH_SECTION_ID = "scratch";
 export function scratchSection(dir: string | undefined): string | undefined {
 	if (!dir) return undefined;
 	return `<scratch>
-Keep throwaway files under \`${dir}\`, not in the repo, home or system temp. After verification, remove your own unneeded build output and downloads; keep files that replies link or ongoing work needs. OMPdesk later sweeps closed tabs' scratch and keeps linked files until their sessions are deleted.
+Keep throwaway files you create under \`${dir}\`, not in the repo, home or system temp. Run the project's own checker as documented: it may create and remove its working folders and write output in the locations it requires. After verification, remove your own unneeded build output and downloads; keep files that replies link or ongoing work needs. OMPdesk later sweeps closed tabs' scratch and keeps linked files until their sessions are deleted.
 </scratch>`;
 }

@@ -142,6 +142,15 @@ const OPENING_MAX_MS = 5 * 60_000;
 /** A change to a paired host's bot: an item answer reaches the bot's chat there (opened when closed) before it answers. */
 const BOTS_COMMAND_TIMEOUT_MS = 60_000;
 
+/** A WSL share belongs to the destination Windows host; never widen this to arbitrary SMB servers. */
+function absoluteSessionFolder(folder: string, device: string | undefined): boolean {
+	if (/^[\\/]{2}[?.](?:[\\/]|$)/.test(folder)) return false;
+	return (
+		/^([a-zA-Z]:[\\/]|\/)/.test(folder) ||
+		(!!device && /^\\\\(?:wsl\.localhost|wsl\$)\\(?!\.{1,2}(?:[\\/]|$))[^\\/:*?"<>|]+(?:[\\/]|$)/i.test(folder))
+	);
+}
+
 async function localPathIs(path: string, kind: "file" | "directory"): Promise<boolean> {
 	try {
 		const { result } = await core().call<{ file: boolean; directory: boolean }>("fs.stat", { path });
@@ -981,7 +990,11 @@ export class AgentControlRuntime {
 	/** A paired host's folder as typed, or this computer's resolved against the caller's. */
 	async #folder(caller: { cwd: string; device?: string }, folder: string | undefined): Promise<string> {
 		if (!folder) return caller.cwd;
-		if (caller.device) return /^([a-zA-Z]:[\\/]|\/)/.test(folder) ? folder : posix.join(caller.cwd, folder);
+		if (caller.device) {
+			if (absoluteSessionFolder(folder, caller.device)) return folder;
+			if (/^(?:[\\/]|[a-zA-Z]:)/.test(folder)) throw new Error(`Not an absolute session folder: "${folder}".`);
+			return posix.join(caller.cwd, folder);
+		}
 		const target = isAbsolute(folder) ? folder : resolve(caller.cwd, folder);
 		if (!(await localPathIs(target, "directory"))) throw new Error(`"${target}" is not a folder on this computer.`);
 		return target;
@@ -1003,7 +1016,7 @@ export class AgentControlRuntime {
 		const cwd = request.sessionPath
 			? undefined
 			: elsewhere
-				? request.folder && /^([a-zA-Z]:[\\/]|\/)/.test(request.folder)
+				? request.folder && absoluteSessionFolder(request.folder, device)
 					? request.folder
 					: undefined
 				: await this.#folder(caller, request.folder);
