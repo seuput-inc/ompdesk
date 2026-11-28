@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.153.0] - 2026-11-28
+
+선택한 컴퓨터에 봇을 만들고, 질문함에서 여러 에이전트의 질문에 한 번에 답하고, ‘할 일’에서 진행 중인 일을 먼저 볼 수 있습니다.
+
+- 봇을 삭제하면 삭제 대상으로 표시된 봇 채팅과 워커 세션의 대화 기록도 영구 삭제됩니다. 다른 곳에 인계한 세션은 남습니다.
+- 사용량 패널에서 계정 크레딧을 확인할 수 있습니다.
+- Matt Pocock의 스킬 13개를 기본으로 제공하며 다른 기본 스킬 팩과 함께 자동으로 업데이트합니다.
+
+<!-- en -->
+
+Create a bot on the computer you choose, answer questions from multiple agents together in the Question inbox, and see active tasks first in Todos.
+
+- Deleting a bot permanently deletes the transcripts of its chats and worker sessions marked for deletion. A session handed off elsewhere is kept.
+- The usage panel now shows account credits.
+- Thirteen of Matt Pocock’s skills now ship as built-in skills and stay current with the other built-in packs.
+
 ## [0.152.0] - 2026-11-27
 
 페어링한 컴퓨터의 봇과 대화하고, 다시 연결해도 원래 채팅을 이어갈 수 있습니다.
