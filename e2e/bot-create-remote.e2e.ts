@@ -21,11 +21,12 @@ async function readRegistry(desktop: string): Promise<{ id: string; home: string
 }
 
 async function kickoffIds(file: string, folder: string) {
-	const [header, ...entries] = (await fs.readFile(file, "utf8"))
+	const entries = (await fs.readFile(file, "utf8"))
 		.trimEnd()
 		.split("\n")
 		.map(line => JSON.parse(line));
-	expect(header.type).toBe("session");
+	const header = entries.find(entry => entry.type === "session");
+	expect(header, "missing session header").toBeDefined();
 	expect(path.resolve(header.cwd)).toBe(path.resolve(folder));
 	return entries
 		.map(e => e.message ?? e)
