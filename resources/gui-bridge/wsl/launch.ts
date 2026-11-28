@@ -230,6 +230,7 @@ async function launch() {
 		writeFileSync(bunfig, "", { flag: "wx", mode: 0o600 });
 		const child = spawn(process.execPath, ["--no-env-file", `--config=${bunfig}`, "--no-install", ...args], {
 			cwd: r.cwd,
+			windowsHide: true,
 			env: {
 				HOME: home,
 				PATH: `/usr/local/bin:/usr/bin:/bin:${home}/.bun/bin`,
