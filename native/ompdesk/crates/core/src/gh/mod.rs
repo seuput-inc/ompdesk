@@ -16,7 +16,7 @@
 //! replaced by `***` in every fault this module answers and in the stderr `gh.text` answers (stdout is data its callers
 //! read, and passes as gh printed it). Nothing here logs a request or its environment.
 
-mod auth;
+pub(crate) mod auth;
 mod center;
 mod draft;
 pub(crate) mod gate;

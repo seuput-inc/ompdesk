@@ -1,5 +1,7 @@
 import { app, BrowserWindow } from "electron";
-import { SSH_TOOLS_AGENT, SSH_TOOLS_COMMAND, SSH_TOOLS_PROMPT, SSH_TOOLS_STATE } from "../../shared/ssh-tools";
+import { SSH_TOOLS_PROMPT, SSH_TOOLS_STATE } from "../../shared/ssh-tools";
+import { CorePort } from "../core/ports";
+import { core } from "../core/process";
 import type { IpcRegistry } from "../web/ipc-registry";
 import { SshTools } from "./service";
 
@@ -17,7 +19,7 @@ export function sshTerminalCommand(target: unknown): Promise<{ bin: string; args
 }
 
 /** Settings › SSH tools for every window; saved forwards start again right away (C151 restore). */
-export function registerSshToolsIpc(ipc: IpcRegistry): void {
+export function registerSshToolsIpc(_ipc: IpcRegistry): void {
 	const tools = new SshTools({
 		userData: app.getPath("userData"),
 		broadcast: (kind, data) => {
@@ -26,9 +28,23 @@ export function registerSshToolsIpc(ipc: IpcRegistry): void {
 		},
 	});
 	shared = tools;
-	ipc.handle(SSH_TOOLS_COMMAND, (_caller, request: unknown) => tools.command(request));
-	ipc.handle(SSH_TOOLS_AGENT, () => tools.agent());
-	// `ssh-tools:prompts` routes directly from tauri-shell to ompdesk-core (`crates/core/src/ssh/mod.rs`).
-	app.on("will-quit", () => tools.dispose());
+	// `ssh-tools:command`, `ssh-tools:agent` and `ssh-tools:prompts` route directly from tauri-shell to ompdesk-core
+	// (`crates/core/src/ssh/mod.rs`).
+	const port = new CorePort({
+		command: ({ request, hasRequest }: { request?: unknown; hasRequest?: boolean }) =>
+			tools.command(hasRequest ? request : undefined),
+		agent: () => tools.agent(),
+	});
+	const connect = () => {
+		void core()
+			.call("ssh.toolsPort", { port: port.id })
+			.catch(() => {});
+	};
+	connect();
+	core().on("ready", connect);
+	app.on("will-quit", () => {
+		port.close();
+		tools.dispose();
+	});
 	void tools.start().catch(error => console.warn("Could not restore SSH forwards:", error));
 }

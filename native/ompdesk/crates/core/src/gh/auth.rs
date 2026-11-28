@@ -15,11 +15,15 @@
 //! A fault carries no token: the values of gh's token variables in either runner's environment read `***` in it,
 //! whether gh printed them on stderr or stdout.
 
+use std::sync::{Arc, LazyLock, Mutex};
+
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json as sjson};
 
 use super::{Gh, TextOutput, json};
 use crate::fs::order::{is_js_space, js_trim};
+use crate::ipc::{Handled, IpcContext};
+use crate::ports::Port;
 use crate::run::Runner;
 use crate::server::{Fault, Registry, Reply};
 
@@ -523,6 +527,93 @@ pub fn register(registry: &mut Registry) {
             runs.answer(outcome)
         })
     });
+    registry.add("gh.authPort", |call| {
+        Box::pin(async move {
+            let PortParams { port } = call.params()?;
+            let opened = Port::open(&call.events, port, Value::Null)?;
+            *AUTH_PORT.lock().unwrap_or_else(|p| p.into_inner()) = Some(opened);
+            Reply::json(&())
+        })
+    });
+}
+
+#[derive(Deserialize)]
+struct PortParams {
+    port: u64,
+}
+
+static AUTH_PORT: LazyLock<Mutex<Option<Arc<Port<Value>>>>> = LazyLock::new(Default::default);
+
+async fn ask_auth(method: &str, args: Value) -> Result<Option<Value>, Fault> {
+    let port = AUTH_PORT.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let Some(port) = port else {
+        return Err(Fault::new(
+            "github_auth_unavailable",
+            "GitHub auth service is not connected",
+        ));
+    };
+    let val: Value = port.ask(method, &args).await?;
+    Ok(Some(val))
+}
+
+/// Direct core IPC `github-auth:refresh`.
+pub(crate) fn ipc_refresh(_ctx: IpcContext, args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let force = args.first().and_then(Value::as_bool).unwrap_or(false);
+        ask_auth("refresh", sjson!({ "force": force })).await
+    })
+}
+
+/// Direct core IPC `github-auth:login-start`.
+pub(crate) fn ipc_login_start(_ctx: IpcContext, args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let scopes = args
+            .first()
+            .and_then(Value::as_str)
+            .filter(|s| *s == "project");
+        ask_auth("startLogin", sjson!({ "scopes": scopes })).await
+    })
+}
+
+/// Direct core IPC `github-auth:login-open`.
+pub(crate) fn ipc_login_open(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
+    Box::pin(async move { ask_auth("openLogin", sjson!({})).await })
+}
+
+/// Direct core IPC `github-auth:login-cancel`.
+pub(crate) fn ipc_login_cancel(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
+    Box::pin(async move { ask_auth("cancelLogin", sjson!({})).await })
+}
+
+/// Direct core IPC `github-auth:logout`.
+pub(crate) fn ipc_logout(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
+    Box::pin(async move { ask_auth("logout", sjson!({})).await })
+}
+
+/// Direct core IPC `github-auth:switch`.
+pub(crate) fn ipc_switch(_ctx: IpcContext, args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let has_login = !args.is_empty();
+        let login = args.into_iter().next().unwrap_or(Value::Null);
+        ask_auth(
+            "switchAccount",
+            sjson!({ "login": login, "hasLogin": has_login }),
+        )
+        .await
+    })
+}
+
+/// Direct core IPC `github-auth:fill-identity`.
+pub(crate) fn ipc_fill_identity(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
+    Box::pin(async move { ask_auth("fillIdentity", sjson!({})).await })
+}
+
+/// Direct core IPC `github-auth:product-star`.
+pub(crate) fn ipc_product_star(_ctx: IpcContext, args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let star = args.first().and_then(Value::as_bool).unwrap_or(false);
+        ask_auth("productStar", sjson!({ "star": star })).await
+    })
 }
 
 #[cfg(test)]

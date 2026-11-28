@@ -6,7 +6,8 @@
  */
 import { homedir } from "node:os";
 import type { GithubAuthState } from "../../shared/github-auth";
-import { IPC_COMMANDS } from "../../shared/ipc-types";
+import { CorePort } from "../core/ports";
+import { core } from "../core/process";
 import { ghRunner, resolveBin } from "../local/git/exec";
 import { appleDeveloperDir } from "../setup/apple-git";
 import { spawnPath } from "../shell-env";
@@ -59,15 +60,25 @@ export function createGithubAuthService(
 	});
 }
 
-export function registerGithubAuthIpc(ipc: IpcRegistry, service: GithubAuthService): void {
-	ipc.handle(IPC_COMMANDS.GITHUB_AUTH_REFRESH, (_caller, force: unknown) => service.refresh(force === true));
-	ipc.handle(IPC_COMMANDS.GITHUB_AUTH_LOGIN_START, (_caller, scopes: unknown) =>
-		service.startLogin(scopes === "project" ? "project" : undefined),
-	);
-	ipc.handle(IPC_COMMANDS.GITHUB_AUTH_LOGIN_OPEN, () => service.openLogin());
-	ipc.handle(IPC_COMMANDS.GITHUB_AUTH_LOGIN_CANCEL, () => service.cancelLogin());
-	ipc.handle(IPC_COMMANDS.GITHUB_AUTH_LOGOUT, () => service.logout());
-	ipc.handle(IPC_COMMANDS.GITHUB_AUTH_SWITCH, (_caller, login: unknown) => service.switchAccount(login));
-	ipc.handle(IPC_COMMANDS.GITHUB_AUTH_FILL_IDENTITY, () => service.fillIdentity());
-	ipc.handle(IPC_COMMANDS.GITHUB_PRODUCT_STAR, (_caller, star: unknown) => service.productStar(star === true));
+export function registerGithubAuthIpc(_ipc: IpcRegistry, service: GithubAuthService): void {
+	// `github-auth:*` channels route directly from tauri-shell to ompdesk-core (`crates/core/src/gh/auth.rs`).
+	const port = new CorePort({
+		refresh: ({ force }: { force?: boolean }) => service.refresh(force === true),
+		startLogin: ({ scopes }: { scopes?: string | null }) =>
+			service.startLogin(scopes === "project" ? "project" : undefined),
+		openLogin: () => service.openLogin(),
+		cancelLogin: () => service.cancelLogin(),
+		logout: () => service.logout(),
+		switchAccount: ({ login, hasLogin }: { login?: unknown; hasLogin?: boolean }) =>
+			service.switchAccount(hasLogin ? login : undefined),
+		fillIdentity: () => service.fillIdentity(),
+		productStar: ({ star }: { star?: boolean }) => service.productStar(star === true),
+	});
+	const connect = () => {
+		void core()
+			.call("gh.authPort", { port: port.id })
+			.catch(() => {});
+	};
+	connect();
+	core().on("ready", connect);
 }

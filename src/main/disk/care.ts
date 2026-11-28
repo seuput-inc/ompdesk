@@ -37,8 +37,9 @@ import {
 	type DiskCareTrigger,
 	type DiskUsage,
 } from "../../shared/disk-care";
-import { IPC_COMMANDS } from "../../shared/ipc-types";
 import type { RpcOrphanWorktree } from "../../shared/rpc-types";
+import { CorePort } from "../core/ports";
+import { core } from "../core/process";
 import { coreHeld, withRepoLock } from "../local/git/exec";
 import type { IpcRegistry } from "../web/ipc-registry";
 import {
@@ -496,8 +497,17 @@ export class DiskCare {
 	}
 }
 
-/** IPC for the renderer: the state and a run now. No handler takes a path. */
-export function registerDiskCareIpc(ipc: IpcRegistry, care: Pick<DiskCare, "state" | "run">): void {
-	ipc.handle(IPC_COMMANDS.DISK_CARE_GET_STATE, () => care.state());
-	ipc.handle(IPC_COMMANDS.DISK_CARE_RUN, () => care.run("user"));
+/** IPC for the renderer: `disk-care:get-state` and `disk-care:run` route directly from tauri-shell to ompdesk-core. */
+export function registerDiskCareIpc(_ipc: IpcRegistry, care: Pick<DiskCare, "state" | "run">): void {
+	const port = new CorePort({
+		state: () => care.state(),
+		run: () => care.run("user"),
+	});
+	const connect = () => {
+		void core()
+			.call("disk.carePort", { port: port.id })
+			.catch(() => {});
+	};
+	connect();
+	core().on("ready", connect);
 }

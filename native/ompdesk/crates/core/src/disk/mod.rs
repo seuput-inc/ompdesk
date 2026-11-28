@@ -23,12 +23,17 @@ mod sizes;
 pub(crate) mod tree;
 mod usage;
 
+use std::sync::{Arc, LazyLock, Mutex};
+
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::git::read::blocking;
 use crate::git::run::Git;
+use crate::ipc::{Handled, IpcContext};
+use crate::ports::Port;
 use crate::run::Runner;
-use crate::server::{Registry, Reply};
+use crate::server::{Fault, Registry, Reply};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -309,4 +314,41 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&saved::checkout(&git, record).await?)
         })
     });
+    registry.add("disk.carePort", |call| {
+        Box::pin(async move {
+            let CarePortParams { port } = call.params()?;
+            let opened = Port::open(&call.events, port, Value::Null)?;
+            *CARE_PORT.lock().unwrap_or_else(|p| p.into_inner()) = Some(opened);
+            Reply::json(&())
+        })
+    });
+}
+
+#[derive(Deserialize)]
+struct CarePortParams {
+    port: u64,
+}
+
+static CARE_PORT: LazyLock<Mutex<Option<Arc<Port<Value>>>>> = LazyLock::new(Default::default);
+
+async fn ask_care(method: &str) -> Result<Option<Value>, Fault> {
+    let port = CARE_PORT.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let Some(port) = port else {
+        return Err(Fault::new(
+            "disk_care_unavailable",
+            "Disk care service is not connected",
+        ));
+    };
+    let val: Value = port.ask(method, &json!({})).await?;
+    Ok(Some(val))
+}
+
+/// Direct core IPC `disk-care:get-state`.
+pub(crate) fn ipc_get_state(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
+    Box::pin(async move { ask_care("state").await })
+}
+
+/// Direct core IPC `disk-care:run`.
+pub(crate) fn ipc_run(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
+    Box::pin(async move { ask_care("run").await })
 }

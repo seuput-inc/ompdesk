@@ -185,6 +185,14 @@ const OWNED: &[Owned] = &[
         handler: crate::resume::ipc_connectivity_report,
     },
     Owned {
+        channel: "disk-care:get-state",
+        handler: crate::disk::ipc_get_state,
+    },
+    Owned {
+        channel: "disk-care:run",
+        handler: crate::disk::ipc_run,
+    },
+    Owned {
         channel: "draft-pictures:put",
         handler: crate::draft_pictures::ipc_put,
     },
@@ -203,6 +211,38 @@ const OWNED: &[Owned] = &[
     Owned {
         channel: "extension-update:now",
         handler: crate::tools::ipc::ipc_extension_update_now,
+    },
+    Owned {
+        channel: "github-auth:fill-identity",
+        handler: crate::gh::auth::ipc_fill_identity,
+    },
+    Owned {
+        channel: "github-auth:login-cancel",
+        handler: crate::gh::auth::ipc_login_cancel,
+    },
+    Owned {
+        channel: "github-auth:login-open",
+        handler: crate::gh::auth::ipc_login_open,
+    },
+    Owned {
+        channel: "github-auth:login-start",
+        handler: crate::gh::auth::ipc_login_start,
+    },
+    Owned {
+        channel: "github-auth:logout",
+        handler: crate::gh::auth::ipc_logout,
+    },
+    Owned {
+        channel: "github-auth:product-star",
+        handler: crate::gh::auth::ipc_product_star,
+    },
+    Owned {
+        channel: "github-auth:refresh",
+        handler: crate::gh::auth::ipc_refresh,
+    },
+    Owned {
+        channel: "github-auth:switch",
+        handler: crate::gh::auth::ipc_switch,
     },
     Owned {
         channel: "log:snapshot",
@@ -259,6 +299,14 @@ const OWNED: &[Owned] = &[
     Owned {
         channel: "setup:retry",
         handler: crate::tools::ipc::ipc_setup_retry,
+    },
+    Owned {
+        channel: "ssh-tools:agent",
+        handler: crate::ssh::ipc_agent,
+    },
+    Owned {
+        channel: "ssh-tools:command",
+        handler: crate::ssh::ipc_command,
     },
     Owned {
         channel: "ssh-tools:prompts",

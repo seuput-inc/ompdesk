@@ -44,6 +44,7 @@ use rules::{Destination, Failure, Target, refused};
 use crate::fs::error::{Codes, NodeError, uv_code};
 use crate::fs::order::js_trim;
 use crate::ipc::{Handled, IpcContext};
+use crate::ports::Port;
 use crate::run::{Exec, Opts, Output, Runner};
 use crate::server::{Call, Events, Fault, Registry, Reply, Scope};
 
@@ -84,6 +85,55 @@ pub fn register(registry: &mut Registry) {
     registry.add("ssh.loadKeys", |call| Box::pin(load_keys(call)));
     registry.add("ssh.forgetHostKey", |call| Box::pin(forget_host_key(call)));
     registry.add("ssh.terminal", |call| Box::pin(terminal(call)));
+    registry.add("ssh.toolsPort", |call| {
+        Box::pin(async move {
+            let ToolsPortParams { port } = params(&call)?;
+            let opened = Port::open(&call.events, port, serde_json::Value::Null)?;
+            *locked(&TOOLS_PORT) = Some(opened);
+            Reply::json(&Done {})
+        })
+    });
+}
+
+#[derive(Deserialize)]
+struct ToolsPortParams {
+    port: u64,
+}
+
+static TOOLS_PORT: LazyLock<Mutex<Option<Arc<Port<serde_json::Value>>>>> =
+    LazyLock::new(Default::default);
+
+async fn ask_tools(
+    method: &str,
+    args: serde_json::Value,
+) -> Result<Option<serde_json::Value>, Fault> {
+    let port = locked(&TOOLS_PORT).clone();
+    let Some(port) = port else {
+        return Err(Fault::new(
+            "ssh_tools_unavailable",
+            "SSH tools service is not connected",
+        ));
+    };
+    let val: serde_json::Value = port.ask(method, &args).await?;
+    Ok(Some(val))
+}
+
+/// Direct core IPC `ssh-tools:command`: forwards validated SSH tools requests to the active service port.
+pub(crate) fn ipc_command(_ctx: IpcContext, args: Vec<serde_json::Value>) -> Handled {
+    Box::pin(async move {
+        let has_request = !args.is_empty();
+        let request = args.into_iter().next().unwrap_or(serde_json::Value::Null);
+        ask_tools(
+            "command",
+            serde_json::json!({ "request": request, "hasRequest": has_request }),
+        )
+        .await
+    })
+}
+
+/// Direct core IPC `ssh-tools:agent`: returns the current ssh-agent and key status via the active service port.
+pub(crate) fn ipc_agent(_ctx: IpcContext, _args: Vec<serde_json::Value>) -> Handled {
+    Box::pin(async move { ask_tools("agent", serde_json::json!({})).await })
 }
 
 /// A request's params; what does not read as them is refused in fixed words, which repeat nothing of the request (a
