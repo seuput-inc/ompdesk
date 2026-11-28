@@ -325,34 +325,91 @@ pub(crate) fn write_atomic_with_retries(
         if let Some(mode) = mode {
             chmod(&temp, mode)?;
         }
-        for wait in waits.iter().map(Some).chain([None]) {
-            if !commit() {
-                return Ok(false);
-            }
-            match fs::rename(&temp, file) {
-                Ok(()) => return Ok(true),
-                Err(error) => match wait {
-                    Some(wait) if rename_blocked(&error) => {
-                        std::thread::sleep(Duration::from_millis(*wait));
-                    }
-                    _ => {
-                        return Err(NodeError::with_dest(
-                            &error,
-                            "rename",
-                            Some(&temp.to_string_lossy()),
-                            Some(&file.to_string_lossy()),
-                        )
-                        .fault(crate::fs::error::Codes::None));
-                    }
-                },
-            }
-        }
-        Ok(false)
+        replace_retrying(&temp, file, commit, waits, || fs::rename(&temp, file))
     })();
     if !matches!(written, Ok(true)) {
         let _ = fs::remove_file(&temp);
     }
     written
+}
+
+fn replace_retrying(
+    temp: &Path,
+    file: &Path,
+    commit: &dyn Fn() -> bool,
+    waits: &[u64],
+    replace: impl Fn() -> io::Result<()>,
+) -> Result<bool, Fault> {
+    let mut waits = waits.iter();
+    while commit() {
+        match replace() {
+            Ok(()) => return Ok(true),
+            Err(error) => {
+                if rename_blocked(&error)
+                    && let Some(wait) = waits.next()
+                {
+                    std::thread::sleep(Duration::from_millis(*wait));
+                    continue;
+                }
+                return Err(NodeError::with_dest(
+                    &error,
+                    "rename",
+                    Some(&temp.to_string_lossy()),
+                    Some(&file.to_string_lossy()),
+                )
+                .fault(crate::fs::error::Codes::None));
+            }
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(unix)]
+pub(crate) fn sync_dir(path: &Path) -> io::Result<()> {
+    let dir = fs::File::open(path)?;
+    let result = dir.sync_all();
+    // macOS sync_all requests F_FULLFSYNC, which not every volume supports on directories.
+    #[cfg(target_os = "macos")]
+    if let Err(e) = &result
+        && matches!(
+            e.raw_os_error(),
+            Some(libc::ENOTSUP | libc::EINVAL | libc::ENOTTY)
+        )
+    {
+        return rustix::fs::fsync(dir).map_err(Into::into);
+    }
+    result
+}
+
+/// Commit a private sibling file before acknowledging the caller. A directory sync failure
+/// after rename is ambiguous: the new bytes are visible and must not be rolled back.
+pub(crate) fn write_durable(
+    file: &Path,
+    write: impl FnOnce(&mut io::BufWriter<fs::File>) -> io::Result<()>,
+) -> Result<(), Fault> {
+    let (temp, staged) = atomic_temp(file, Some(0o600))?;
+    let result = (|| {
+        let mut writer = io::BufWriter::new(staged);
+        write(&mut writer)
+            .and_then(|()| writer.flush())
+            .and_then(|()| writer.get_ref().sync_all())
+            .map_err(|e| fault(&e, "write", &temp))?;
+        drop(writer);
+        #[cfg(windows)]
+        let replace = || crate::sys::replace_durable(&temp, file);
+        #[cfg(not(windows))]
+        let replace = || fs::rename(&temp, file);
+        replace_retrying(&temp, file, &|| true, &RENAME_RETRY_MS, replace)?;
+        #[cfg(unix)]
+        if let Some(dir) = file.parent() {
+            sync_dir(dir).map_err(|e| fault(&e, "fsync", dir))?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
 }
 
 fn next_temp() -> u64 {

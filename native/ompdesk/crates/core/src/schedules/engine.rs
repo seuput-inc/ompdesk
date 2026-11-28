@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 
 use super::hooks;
 use super::rules::{self, Zone};
@@ -137,7 +138,17 @@ pub enum Out {
     /// The service closed: `journal` is the file's last content, written before anything else happens.
     Closed { journal: String },
     /// Ask main whether `device` has a model request left today; answered by `reserved`.
-    Reserve { ask: u64, device: String },
+    Reserve {
+        ask: u64,
+        device: String,
+        reservation_id: String,
+    },
+    /// Admit a logical delivery before coalescing it. This receipt itself costs no model request.
+    Remember {
+        ask: u64,
+        device: String,
+        reservation_id: String,
+    },
     /// The request `charge` reserved was not spent.
     Refund { charge: u64 },
     /// A run's files: the log folder, then its prompt file and a look at its folder (none of both for a wake-up);
@@ -194,6 +205,19 @@ pub struct HookCall {
     pub secret: Option<String>,
 }
 
+pub(super) enum Hooked {
+    Answer(&'static str),
+    Asked(u64),
+}
+
+/// The event after admission and filtering, without the credentials that admitted the call.
+struct HookEvent {
+    call_id: String,
+    detail: String,
+    body: Option<(String, Vec<u8>)>,
+    sample: bool,
+}
+
 struct Active {
     /// None while main is asked whether the start may be charged.
     run: Option<String>,
@@ -218,6 +242,11 @@ enum Held {
     },
     RunNow {
         schedule: String,
+    },
+    Delivery {
+        schedule: String,
+        device: String,
+        event: HookEvent,
     },
     /// A start waiting for its precheck (`due`: the timed start it is, so a refusal moves to the next one).
     Precheck {
@@ -327,6 +356,7 @@ fn webhook_event_mut(schedule: &mut Object) -> Option<&mut Object> {
 /// A schedule as anything outside the core sees it: without its webhook's signing secret.
 fn shown(schedule: &Object) -> Object {
     let mut shown = schedule.clone();
+    shown.shift_remove("quotaCursor");
     if shown.shift_remove("peerBotRequester").is_some() {
         shown.insert("needsHostActivation".into(), true.into());
         shown.insert("enabled".into(), false.into());
@@ -403,6 +433,27 @@ fn asks(schedule: &Object) -> bool {
             .is_some_and(|ask| !ask.trim().is_empty()),
         _ => false,
     }
+}
+
+/// The receiving peer's identity and sender-side request id together identify a manual action, even when
+/// a sample is charged to a different peer (the schedule's owner). Bound the ledger key independently of either.
+fn command_reservation(
+    kind: &str,
+    sender: &str,
+    reservation_id: Option<&str>,
+) -> Result<String, Fault> {
+    let request = reservation_id
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| fault("Missing schedule reservation id"))?;
+    Ok(delivery_id(kind, sender, request))
+}
+
+fn delivery_id(kind: &str, sender: &str, request: &str) -> String {
+    let mut hash = Sha256::new();
+    hash.update((sender.len() as u64).to_be_bytes());
+    hash.update(sender);
+    hash.update(request);
+    format!("schedule:{kind}:{}", crate::hex(&hash.finalize()))
 }
 
 impl Engine {
@@ -552,7 +603,12 @@ impl Engine {
             }
             changed = true;
             if now - due <= MISSED_GRACE_MS {
-                self.next.insert(id, now);
+                let start = if self.charges && self.schedules[at].contains_key("device") {
+                    due
+                } else {
+                    now
+                };
+                self.next.insert(id, start);
                 continue;
             }
             let why = format!("Missed while OMPdesk was closed (due {})", rules::iso(due));
@@ -893,6 +949,8 @@ impl Engine {
     pub(super) fn retire_trigger(&mut self, id: &str) {
         self.pending.remove(id);
         self.chain.remove(id);
+        self.held
+            .retain(|_, held| !matches!(held, Held::Delivery { schedule, .. } if schedule == id));
         let Some(ask) = self
             .active
             .get(id)
@@ -911,24 +969,24 @@ impl Engine {
     /// `POST /hooks/<id>`: fires the routine whose webhook it is, when the call carries its key (`Authorization:
     /// Bearer`, or the old key within its overlap after a rotate) or, once the routine has a signing secret, only its
     /// sender's signature. Every call the routine's id names is one of its recent calls with what became of it.
-    pub fn webhook(&mut self, id: &str, call: &HookCall, now: i64) -> &'static str {
+    pub(super) fn webhook(&mut self, id: &str, call: &HookCall, now: i64) -> Hooked {
         self.hook(id, call, None, now)
     }
 
     /// `webhook` with what fired the run given (`told`) instead of read from the call: the captured scenarios'
     /// webhook steps say it as main once did.
     #[cfg(test)]
-    pub fn webhook_told(
+    pub(super) fn webhook_told(
         &mut self,
         id: &str,
         call: &HookCall,
         told: &str,
         now: i64,
-    ) -> &'static str {
+    ) -> Hooked {
         self.hook(id, call, Some(told), now)
     }
 
-    fn hook(&mut self, id: &str, call: &HookCall, told: Option<&str>, now: i64) -> &'static str {
+    fn hook(&mut self, id: &str, call: &HookCall, told: Option<&str>, now: i64) -> Hooked {
         self.now = now;
         if let Some(event) = self
             .find(id)
@@ -942,21 +1000,21 @@ impl Engine {
             .and_then(|at| webhook_event(&self.schedules[at]))
             .cloned()
         else {
-            return "unknown";
+            return Hooked::Answer("unknown");
         };
         if let Err(reason) = self.admitted(&event, call) {
             self.log_call(id, "refused", Some(reason), None, false);
             self.changed();
-            return "denied";
+            return Hooked::Answer("denied");
         }
-        self.hook_call(id, &event, call, false, told)
+        self.hook_call(id, &event, call, false, told, None)
     }
 
     /// A Slack app's Events API call for a bot's Slack connector: signed with the app's signing secret (Slack's v0, a
     /// five-minute window), its URL check answered (`challenge`: the edge echoes Slack's challenge), and an event
     /// read as the Socket Mode source reads it (`connectors::slack_event`); a redelivery of an event already taken,
     /// by Slack's `event_id`, starts nothing.
-    fn slack_call(&mut self, id: &str, event: &Value, call: &HookCall) -> &'static str {
+    fn slack_call(&mut self, id: &str, event: &Value, call: &HookCall) -> Hooked {
         let secret = call.secret.as_deref().unwrap_or_default();
         if let Err(reason) = hooks::verify(
             hooks::Sender::Slack,
@@ -967,16 +1025,16 @@ impl Engine {
         ) {
             self.log_call(id, "refused", Some(reason), None, false);
             self.changed();
-            return "denied";
+            return Hooked::Answer("denied");
         }
         let body: Value = serde_json::from_slice(&call.body).unwrap_or(Value::Null);
         if body.get("type").and_then(Value::as_str) == Some("url_verification") {
-            return "challenge";
+            return Hooked::Answer("challenge");
         }
         let Some(at) = self.routine(id) else {
             self.log_call(id, "off", None, None, false);
             self.changed();
-            return "off";
+            return Hooked::Answer("off");
         };
         let (event_id, line) = match connectors::slack_event(event, &body) {
             SlackEvent::Asked { id, line } => (id, line),
@@ -984,37 +1042,43 @@ impl Engine {
                 self.log_call(id, "ignored", Some("not in who can ask"), None, false);
                 self.access_asked(id, &[ask]);
                 self.changed();
-                return "ignored";
+                return Hooked::Answer("ignored");
             }
             SlackEvent::Passed => {
                 self.log_call(id, "ignored", None, None, false);
                 self.changed();
-                return "ignored";
+                return Hooked::Answer("ignored");
             }
         };
         let delivery = format!("event:{event_id}");
+        let receipt = self
+            .charged(at)
+            .map(|device| (device, delivery_id("slack", id, &delivery)));
+        if receipt.is_none() && !self.new_delivery(id, delivery) {
+            return Hooked::Answer("duplicate");
+        }
+        self.call_seq += 1;
+        let event = HookEvent {
+            call_id: format!("call-{}-{}", self.now, self.call_seq),
+            detail: line,
+            body: None,
+            sample: false,
+        };
+        self.admit_hook(at, id, event, receipt)
+    }
+
+    fn new_delivery(&mut self, id: &str, delivery: String) -> bool {
         let seen = self.delivered.entry(id.to_owned()).or_default();
         if seen.contains(&delivery) {
             self.log_call(id, "duplicate", None, None, false);
             self.changed();
-            return "duplicate";
+            return false;
         }
         seen.push_back(delivery);
         if seen.len() > DELIVERIES_KEPT {
             seen.pop_front();
         }
-        self.call_seq += 1;
-        let call_id = format!("call-{}-{}", self.now, self.call_seq);
-        let queued = self.take_event(at, &line);
-        let run = self.active.get(id).and_then(|active| active.run.clone());
-        let (verdict, run) = if queued {
-            ("queued", None)
-        } else {
-            ("started", run)
-        };
-        self.log_call_as(&call_id, id, verdict, None, run, false);
-        self.changed();
-        "fired"
+        true
     }
 
     /// Whether a call may start its routine: its sender's signature once a secret is set (the key alone no longer
@@ -1056,17 +1120,18 @@ impl Engine {
         call: &HookCall,
         sample: bool,
         told: Option<&str>,
-    ) -> &'static str {
+        mut receipt: Option<(String, String)>,
+    ) -> Hooked {
         let Some(at) = self.routine(id) else {
             self.log_call(id, "off", None, None, sample);
             self.changed();
-            return "off";
+            return Hooked::Answer("off");
         };
         let document = hooks::document(&call.headers, &call.body);
         if !hooks::wanted(event, &document, &call.body) {
             self.log_call(id, "ignored", None, None, sample);
             self.changed();
-            return "ignored";
+            return Hooked::Answer("ignored");
         }
         let sender = event
             .get("signedBy")
@@ -1075,15 +1140,11 @@ impl Engine {
         if let Some(delivery) =
             hooks::delivery(&call.headers, &document, sender).filter(|_| !sample)
         {
-            let seen = self.delivered.entry(id.to_owned()).or_default();
-            if seen.contains(&delivery) {
-                self.log_call(id, "duplicate", None, None, sample);
-                self.changed();
-                return "duplicate";
-            }
-            seen.push_back(delivery);
-            if seen.len() > DELIVERIES_KEPT {
-                seen.pop_front();
+            receipt = self
+                .charged(at)
+                .map(|device| (device, delivery_id("hook", id, &delivery)));
+            if receipt.is_none() && !self.new_delivery(id, delivery) {
+                return Hooked::Answer("duplicate");
             }
         }
         self.call_seq += 1;
@@ -1093,22 +1154,57 @@ impl Engine {
             Some(told) => told.to_owned(),
             None => hooks::detail(event, &document, &call.body, file.as_deref(), sample),
         };
-        if let Some(file) = file {
-            self.outs.push(Out::HookBody {
-                file,
-                body: call.body.clone(),
+        let event = HookEvent {
+            call_id,
+            detail,
+            body: file.map(|file| (file, call.body.clone())),
+            sample,
+        };
+        self.admit_hook(at, id, event, receipt)
+    }
+
+    fn admit_hook(
+        &mut self,
+        at: usize,
+        id: &str,
+        event: HookEvent,
+        receipt: Option<(String, String)>,
+    ) -> Hooked {
+        if let Some((device, reservation_id)) = receipt {
+            self.last_ask += 1;
+            let ask = self.last_ask;
+            self.held.insert(
+                ask,
+                Held::Delivery {
+                    schedule: id.to_owned(),
+                    device: device.clone(),
+                    event,
+                },
+            );
+            self.outs.push(Out::Remember {
+                ask,
+                device,
+                reservation_id,
             });
+            return Hooked::Asked(ask);
         }
-        let queued = self.take_event(at, &detail);
+        self.fire_hook(at, id, event);
+        Hooked::Answer("fired")
+    }
+
+    fn fire_hook(&mut self, at: usize, id: &str, event: HookEvent) {
+        if let Some((file, body)) = event.body {
+            self.outs.push(Out::HookBody { file, body });
+        }
+        let queued = self.take_event(at, &event.detail);
         let run = self.active.get(id).and_then(|active| active.run.clone());
         let (verdict, run) = if queued {
             ("queued", None)
         } else {
             ("started", run)
         };
-        self.log_call_as(&call_id, id, verdict, None, run, sample);
+        self.log_call_as(&event.call_id, id, verdict, None, run, event.sample);
         self.changed();
-        "fired"
     }
 
     fn log_call(
@@ -1286,6 +1382,7 @@ impl Engine {
         &mut self,
         request: &Value,
         origin: Option<&str>,
+        reservation_id: Option<&str>,
         now: i64,
     ) -> Result<Commanded, Fault> {
         self.now = now;
@@ -1333,7 +1430,8 @@ impl Engine {
                     return Err(fault("This schedule is already running"));
                 }
                 if let Some(device) = origin.filter(|_| self.charges) {
-                    let ask = self.reserve(&id, device.to_owned());
+                    let token = command_reservation("manual", device, reservation_id)?;
+                    let ask = self.reserve(&id, device.to_owned(), token);
                     self.held.insert(ask, Held::RunNow { schedule: id });
                     return Ok(Commanded::Asked(ask));
                 }
@@ -1379,6 +1477,13 @@ impl Engine {
                 let event = webhook_event(&self.schedules[at])
                     .cloned()
                     .ok_or_else(|| fault("Only a webhook routine takes a test call"))?;
+                let receipt = match (origin, self.charged(at)) {
+                    (Some(sender), Some(device)) => Some((
+                        device,
+                        command_reservation("sample", sender, reservation_id)?,
+                    )),
+                    _ => None,
+                };
                 let body = json!({
                     "sample": true,
                     "message": "A test call from OMPdesk's Settings › Schedules",
@@ -1394,8 +1499,12 @@ impl Engine {
                     secret: None,
                 };
                 // The sample's own outcome is one of its recent calls; the state it changed is told already.
-                self.hook_call(&id, &event, &call, true, None);
-                return Ok(Commanded::Done);
+                return Ok(
+                    match self.hook_call(&id, &event, &call, true, None, receipt) {
+                        Hooked::Answer(_) => Commanded::Done,
+                        Hooked::Asked(ask) => Commanded::Asked(ask),
+                    },
+                );
             }
             _ => return Err(fault("Unknown schedules action")),
         }
@@ -1591,7 +1700,7 @@ impl Engine {
             }
             self.schedules[at].shift_remove("peerBotRequester");
         }
-        self.command(request, None, now)
+        self.command(request, None, None, now)
     }
 
     fn save(
@@ -1820,7 +1929,7 @@ impl Engine {
     }
 
     /// Holds the schedule's start and asks main whether `device` may be charged for it.
-    fn reserve(&mut self, id: &str, device: String) -> u64 {
+    fn reserve(&mut self, id: &str, device: String, reservation_id: String) -> u64 {
         self.last_ask += 1;
         self.active.insert(
             id.to_owned(),
@@ -1836,6 +1945,7 @@ impl Engine {
         self.outs.push(Out::Reserve {
             ask: self.last_ask,
             device,
+            reservation_id,
         });
         self.last_ask
     }
@@ -1887,7 +1997,15 @@ impl Engine {
             }
             changed = true;
             if let Some(device) = self.charged(at) {
-                let ask = self.reserve(&id, device);
+                // An interval is relative to the last run (or the initial arm). Catch-up can reconstruct a
+                // different wall-clock due time after a crash, but the predecessor in the journal is unchanged.
+                let token = if kind_of(&self.schedules[at]) == Some("interval") {
+                    let previous = text(&self.schedules[at], "quotaCursor").unwrap_or("initial");
+                    format!("schedule:interval:{id}:{previous}")
+                } else {
+                    format!("schedule:due:{id}:{due}")
+                };
+                let ask = self.reserve(&id, device, token);
                 self.held.insert(ask, Held::Due { schedule: id, due });
                 continue;
             }
@@ -1906,7 +2024,8 @@ impl Engine {
     fn start_event(&mut self, at: usize, details: Vec<String>) {
         if let Some(device) = self.charged(at) {
             let id = id_of(&self.schedules[at]).to_owned();
-            let ask = self.reserve(&id, device);
+            let token = format!("schedule:event:{}", super::uuid());
+            let ask = self.reserve(&id, device, token);
             self.held.insert(
                 ask,
                 Held::Event {
@@ -2046,6 +2165,50 @@ impl Engine {
         self.skipped(at, trigger, error, detail);
     }
 
+    pub(super) fn remembered(
+        &mut self,
+        ask: u64,
+        accepted: bool,
+        refused: Option<&str>,
+        now: i64,
+    ) -> Result<(), Fault> {
+        self.now = now;
+        let Some(Held::Delivery {
+            schedule,
+            device,
+            event,
+        }) = self.held.remove(&ask)
+        else {
+            return Err(fault("The webhook routine changed during admission"));
+        };
+        let at = self
+            .routine(&schedule)
+            .filter(|&at| text(&self.schedules[at], "device") == Some(device.as_str()))
+            .ok_or_else(|| fault("The webhook routine is no longer active for this device"))?;
+        if !accepted {
+            let verdict = if refused.is_some() {
+                "refused"
+            } else {
+                "duplicate"
+            };
+            self.log_call_as(
+                &event.call_id,
+                &schedule,
+                verdict,
+                refused,
+                None,
+                event.sample,
+            );
+            self.changed();
+            return Err(match refused {
+                Some(reason) => fault(reason),
+                None => Fault::new("quota_duplicate", "This delivery was already received"),
+            });
+        }
+        self.fire_hook(at, &schedule, event);
+        Ok(())
+    }
+
     /// Main's answer to a `Reserve`: `refused` is why the device has no request left. For a run now, how it went
     /// (the command's answer); none for a start the clock or an event made.
     pub fn reserved(
@@ -2056,14 +2219,14 @@ impl Engine {
     ) -> Option<Result<(), Fault>> {
         self.now = now;
         let held = self.held.remove(&ask)?;
-        if matches!(held, Held::Precheck { .. }) {
+        if matches!(held, Held::Precheck { .. } | Held::Delivery { .. }) {
             self.held.insert(ask, held);
             return None;
         }
         let (Held::Due { schedule, .. } | Held::Event { schedule, .. } | Held::RunNow { schedule }) =
             &held
         else {
-            unreachable!("a precheck is answered by prechecked");
+            unreachable!("a precheck or delivery has its own answer");
         };
         if self
             .active
@@ -2105,7 +2268,7 @@ impl Engine {
                     self.start_run(at, Trigger::Event, charge, Some(details));
                 }
             },
-            Held::Precheck { .. } => {}
+            Held::Precheck { .. } | Held::Delivery { .. } => {}
         }
         self.changed();
         None
@@ -2654,6 +2817,13 @@ impl Engine {
         let Value::Object(run) = run else {
             return;
         };
+        // A busy host can evict every run of this interval. Keep the predecessor that identifies its next charge.
+        if let Some(at) = text(&run, "scheduleId").and_then(|id| self.find(id))
+            && self.schedules[at].contains_key("device")
+            && kind_of(&self.schedules[at]) == Some("interval")
+        {
+            self.schedules[at].insert("quotaCursor".into(), id_of(&run).into());
+        }
         self.runs.insert(0, run);
         let mut kept = Vec::with_capacity(self.runs.len());
         let mut dropped = Vec::new();

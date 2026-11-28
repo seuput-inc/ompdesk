@@ -36,6 +36,7 @@ use super::crypto::is_raw_key;
 use crate::disk::saves::write_kept;
 use crate::git::parse::js_number;
 use crate::server::{Call, Fault, Registry, Reply};
+use crate::web::devices::Patch;
 
 /// Addresses kept per host; older ones fall off the end (`MAX_HOST_ADDRESSES`).
 pub const MAX_HOST_ADDRESSES: usize = 8;
@@ -83,7 +84,7 @@ pub struct Store {
     /// The count of the content written last, under the lock every write of the file takes, so a content rendered
     /// before another never lands after it (`persist`).
     written: Arc<Mutex<u64>>,
-    /// The thread that writes what [`Store::update_kept`] changed (`save_later`), started on first use.
+    /// The thread that writes the public quota projection (`save_later`), started on first use.
     later: Option<mpsc::Sender<()>>,
 }
 
@@ -254,15 +255,18 @@ fn read(file: &Path, kind: Kind) -> Vec<Row> {
     let Ok(bytes) = std::fs::read(file) else {
         return rows;
     };
-    let Ok(Value::Object(top)) = serde_json::from_str(&String::from_utf8_lossy(&bytes)) else {
+    let Ok(Value::Object(mut top)) = serde_json::from_str(&String::from_utf8_lossy(&bytes)) else {
         return rows;
     };
     if top.get("v").and_then(Value::as_f64) != Some(1.0) {
         return rows;
     }
-    let Some(Value::Array(raws)) = top.get(kind.key()) else {
+    let Some(Value::Array(raws)) = top.get_mut(kind.key()) else {
         return rows;
     };
+    if kind == Kind::Peers {
+        super::quota::restore_usage(file, super::quota::Which::Peers, raws, "pairedAt");
+    }
     for raw in raws {
         if let Some(fields) = parse_entry(kind, raw) {
             let id = string(&view(&fields), "deviceId")
@@ -423,18 +427,41 @@ impl Store {
         Ok(next)
     }
 
-    /// [`Store::update`] in memory only: the caller hands the write to the file's writer thread with [`save_later`],
-    /// so it never waits for the disk (the per-device limit's counts, `quota.rs`).
-    pub fn update_kept(
+    /// Check the pairing and publish only a committed quota change, under the pairing store's lock.
+    pub(super) fn edit_quota<T>(
         &mut self,
         device_id: &str,
-        patch: Vec<(String, Option<Value>)>,
-    ) -> io::Result<Option<Map<String, Value>>> {
-        let next = self.patch(device_id, patch)?;
-        if next.is_some() {
-            self.changes += 1;
+        op: impl FnOnce(f64, Option<&Value>, Option<&Value>) -> Result<(T, Patch), Fault>,
+    ) -> Result<Option<(T, bool)>, Fault> {
+        let Some(row) = self.rows().iter_mut().find(|r| r.id == device_id) else {
+            return Ok(None);
+        };
+        let field = |name: &str| {
+            row.fields
+                .iter()
+                .find(|(k, _)| k == name)
+                .and_then(|(_, v)| v.as_ref())
+        };
+        let pairing = field("pairedAt")
+            .and_then(Value::as_f64)
+            .ok_or_else(|| Fault::new("unknown_device", "Missing pairing generation"))?;
+        let (out, patch) = op(pairing, field("limits"), field("usage"))?;
+        let changed = patch.limits.is_some() || patch.usage.is_some();
+        for (key, value) in [("limits", patch.limits), ("usage", patch.usage)] {
+            if let Some(value) = value {
+                set(&mut row.fields, key.into(), value);
+            }
         }
-        Ok(next)
+        self.changes += u64::from(changed);
+        Ok(Some((out, changed)))
+    }
+
+    pub(super) fn flush(&mut self) -> io::Result<()> {
+        if self.changes <= *lock(&self.written) {
+            return Ok(());
+        }
+        let (count, text) = self.render();
+        persist(&self.file, &self.written, count, &text)
     }
 
     fn patch(
@@ -531,9 +558,8 @@ fn persist(file: &Path, written: &Mutex<u64>, count: u64, text: &str) -> io::Res
         .map_err(|fault| io::Error::other(fault.message))
 }
 
-/// Hands what [`Store::update_kept`] changed to the store's writer thread: one write at a time, and the changes made
-/// meanwhile go out together in the next, so at most one write runs and one waits. The caller's thread never waits
-/// for the disk; a crash loses at most the changes since the last write that finished.
+/// Queues the public quota projection for the store's writer. A later projection supersedes an earlier one.
+/// Admission and refunds never read these queued bytes; their receipts and counts are already committed.
 pub fn save_later(store: &Arc<Mutex<Store>>) {
     let mut guard = lock(store);
     if guard.later.is_none() {
@@ -567,26 +593,13 @@ pub fn flush() {
     let stores: Vec<_> = lock(&STORES).values().cloned().collect();
     for store in stores {
         let mut store = lock(&store);
-        if store.changes > *lock(&store.written) {
-            let (count, text) = store.render();
-            if let Err(error) = persist(&store.file, &store.written, count, &text) {
-                eprintln!(
-                    "ompdesk-core: couldn't save {}: {error}",
-                    store.file.display()
-                );
-            }
+        if let Err(error) = store.flush() {
+            eprintln!(
+                "ompdesk-core: couldn't save {}: {error}",
+                store.file.display()
+            );
         }
     }
-}
-
-/// Whether every change of `store` is on disk: waits for a write in progress (it holds `written`).
-#[cfg(test)]
-pub(crate) fn settled(store: &Arc<Mutex<Store>>) -> bool {
-    let (changes, written) = {
-        let store = lock(store);
-        (store.changes, Arc::clone(&store.written))
-    };
-    *lock(&written) >= changes
 }
 
 #[derive(Deserialize)]

@@ -39,6 +39,7 @@ import {
 	parseResearchPick,
 } from "../shared/model-setup";
 import type { OmpUpdateState } from "../shared/omp-update";
+import { modelNotStarted } from "../shared/rpc-types";
 import type { ScheduleCreated, ScheduleDraft, SchedulesRequest, SchedulesState } from "../shared/schedules";
 import type { SidebarProjectsRequest, SidebarProjectsState } from "../shared/sidebar-projects";
 import { BENCHMARK_TIMEOUT_MS, BenchmarkRunner } from "./benchmark-runner";
@@ -109,7 +110,12 @@ export interface MachineServices {
 	 * Settings › Schedules on that machine: its own ScheduleService validates the request and runs the schedules there.
 	 * `origin`: on this computer, the paired device whose request it serves (`host.schedules.command`), charged for its runs.
 	 */
-	schedules(request: SchedulesRequest, origin?: string, hostWindow?: boolean): Promise<SchedulesState>;
+	schedules(
+		request: SchedulesRequest,
+		origin?: string,
+		hostWindow?: boolean,
+		reservationId?: string,
+	): Promise<SchedulesState>;
 	/** A run's captured output on that machine, tail-capped. */
 	scheduleLog(runId: string): Promise<string>;
 	/**
@@ -273,9 +279,9 @@ export class LocalMachine implements MachineServices {
 		options: IpcBenchmarkRunOptions,
 		cwd: string | null,
 	): Promise<IpcBenchmarkRunResult> {
-		if (!cwd) return { success: false, error: "No active workspace", code: "no_workspace" };
+		if (!cwd) return modelNotStarted({ success: false, error: "No active workspace", code: "no_workspace" });
 		const resolution = await this.#deps.benchmarkOmp();
-		if (!resolution.ok) return { success: false, error: resolution.error };
+		if (!resolution.ok) return modelNotStarted({ success: false, error: resolution.error });
 		const runner = this.#benchmarks.get(caller) ?? new BenchmarkRunner();
 		this.#benchmarks.set(caller, runner);
 		try {
@@ -295,7 +301,7 @@ export class LocalMachine implements MachineServices {
 
 	async runModelSetup(caller: string, request: ModelSetupRequest): Promise<IpcModelSetupRunResult> {
 		const resolution = await this.#deps.benchmarkOmp();
-		if (!resolution.ok) return { success: false, error: resolution.error };
+		if (!resolution.ok) return modelNotStarted({ success: false, error: resolution.error });
 		const runner = this.#modelSetups.get(caller) ?? new ModelSetupRunner();
 		this.#modelSetups.set(caller, runner);
 		try {
@@ -420,8 +426,13 @@ export class LocalMachine implements MachineServices {
 		return updater.state();
 	}
 
-	async schedules(request: SchedulesRequest, origin?: string, hostWindow?: boolean): Promise<SchedulesState> {
-		return this.#scheduleService().command(request, origin, hostWindow);
+	async schedules(
+		request: SchedulesRequest,
+		origin?: string,
+		hostWindow?: boolean,
+		reservationId?: string,
+	): Promise<SchedulesState> {
+		return this.#scheduleService().command(request, origin, hostWindow, reservationId);
 	}
 
 	async scheduleLog(runId: string): Promise<string> {
@@ -581,8 +592,15 @@ export class RemoteMachine implements MachineServices {
 		return OmpUpdateStateSchema.parse(await this.#request<unknown>("host.ompUpdate.now", {}));
 	}
 
-	async schedules(request: SchedulesRequest): Promise<SchedulesState> {
-		return SchedulesStateSchema.parse(await this.#request<unknown>("host.schedules.command", { request }));
+	async schedules(
+		request: SchedulesRequest,
+		_origin?: string,
+		_hostWindow?: boolean,
+		requestId?: string,
+	): Promise<SchedulesState> {
+		return SchedulesStateSchema.parse(
+			await this.#request<unknown>("host.schedules.command", { request, ...(requestId ? { requestId } : {}) }),
+		);
 	}
 
 	async scheduleLog(runId: string): Promise<string> {

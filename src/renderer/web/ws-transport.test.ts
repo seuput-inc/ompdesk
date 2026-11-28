@@ -161,11 +161,30 @@ describe("WsTransport", () => {
 		const ok = transport.invoke<string>("sessions:list", "global");
 		const failed = transport.invoke("fs:read", "/x");
 		const [first, second] = last().framesOf("inv");
-		expect(first).toEqual({ t: "inv", id: 1, ch: "sessions:list", a: ["global"] });
+		expect(first).toEqual({ t: "inv", id: 1, requestId: expect.any(String), ch: "sessions:list", a: ["global"] });
+		expect(first?.requestId).not.toBe(second?.requestId);
 		last().serve({ t: "res", id: first?.id ?? 0, ok: true, v: "list" });
 		last().serve({ t: "res", id: second?.id ?? 0, ok: false, e: { message: "missing", code: "file_not_found" } });
 		await expect(ok).resolves.toBe("list");
 		await expect(failed).rejects.toThrow("[file_not_found] missing");
+	});
+
+	it("two pages of one device do not identify their first invokes by their shared reply counter", async () => {
+		const pages = [setup(), setup()];
+		for (const { transport } of pages) transport.start();
+		await settle();
+		const ids: string[] = [];
+		for (const { transport, last } of pages) {
+			last().serve(HELLO());
+			const answer = transport.invoke(IPC_COMMANDS.MODEL_SETUP_RUN, {});
+			const frame = last().framesOf("inv")[0];
+			if (!frame) throw new Error("no invoke");
+			expect(frame.id).toBe(1);
+			ids.push(frame.requestId);
+			last().serve({ t: "res", id: frame.id, ok: true, v: null });
+			await answer;
+		}
+		expect(new Set(ids).size).toBe(2);
 	});
 
 	it("holds calls made before the link is up and sends them after hello", async () => {
@@ -732,6 +751,16 @@ describe("WsTransport", () => {
 		clock.advance(60_000);
 		await settle();
 		expect(sockets).toHaveLength(1);
+	});
+
+	it("does not send an invoke to an older host that ignores its request id", async () => {
+		const { transport, last } = setup({ protocol: 4 });
+		transport.start();
+		await settle();
+		last().serve(HELLO());
+		expect(transport.state).toBe("outdated");
+		await expect(transport.invoke(IPC_COMMANDS.MODEL_SETUP_RUN, {})).rejects.toThrow();
+		expect(last().framesOf("inv")).toEqual([]);
 	});
 
 	it("closes a socket that never says hello and tries again", async () => {

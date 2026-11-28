@@ -371,13 +371,23 @@ export const methods: BridgeMethods = {
 		let content = mailContent(record.content);
 		if (!content) throw new Error("agent_control.mail needs content");
 		if (!mailHost) throw new Error("This omp cannot receive reports (no extension sendMessage).");
-		const { peerBotHome, ...details } = (record.details ?? {}) as Record<string, unknown>;
+		const { peerBotHome, quotaRecipient, ...details } = (record.details ?? {}) as Record<string, unknown>;
 		const id = typeof details.id === "string" ? details.id : undefined;
 		// Idempotent across restarts of either side: the journal is the record of what arrived, and until stock's loop
 		// takes a queued aside this process remembers it. `journaled` tells main which of the two it is: main keeps a
 		// report until the receiver's journal holds it (a killed omp loses an aside it still queued).
 		const session = env.session();
 		const manager = session.sessionManager;
+		if (
+			quotaRecipient !== undefined &&
+			(!quotaRecipient ||
+				typeof quotaRecipient !== "object" ||
+				!("sessionId" in quotaRecipient) ||
+				quotaRecipient.sessionId !== manager.getSessionId() ||
+				!("sessionPath" in quotaRecipient) ||
+				quotaRecipient.sessionPath !== manager.getSessionFile())
+		)
+			throw new Error("The session changed before mail delivery.");
 		if (peerBotHome !== undefined) {
 			requireBotHome(peerBotHome, botHomeOf(manager));
 			const context = latestBot(manager.getBranch());
@@ -385,7 +395,11 @@ export const methods: BridgeMethods = {
 				throw new Error("The active branch does not hold this bot's context.");
 		}
 		const journaled =
-			id !== undefined && hasMailEntry(peerBotHome === undefined ? manager.getBranch() : manager.getEntries(), id);
+			id !== undefined &&
+			hasMailEntry(
+				peerBotHome === undefined && quotaRecipient === undefined ? manager.getBranch() : manager.getEntries(),
+				id,
+			);
 		if (id && (journaled || queuedMail.has(id))) return { duplicate: true, journaled };
 		// Idle, an aside starts a turn (stock), so a no-turn report keeps stock's plain idle delivery: shown at once.
 		const deliverAs = record.deliverAs === "aside" || session.isStreaming ? "aside" : undefined;

@@ -37,6 +37,8 @@ export interface IpcCaller {
 	readonly sender: IpcSender;
 	/** A paired web page's connection the call came over (a device's pages share one window); absent for an Electron caller. */
 	readonly connId?: string;
+	/** This page's run identity, scoped to its authenticated device before forwarding to the scheduler. */
+	readonly scheduleReservationId?: string;
 }
 
 type IpcHandler = (caller: IpcCaller, ...args: unknown[]) => unknown;

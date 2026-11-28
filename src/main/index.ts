@@ -2257,8 +2257,8 @@ app.whenReady().then(async () => {
 			? { minuteMs: Number(process.env.OMP_GUI_TEST_SCHEDULE_MINUTE_MS) }
 			: {}),
 		// A schedule a paired device saved here spends that device's daily model requests at every start.
-		reserve: device => {
-			const reservation = devices.reserveModelRequest(device);
+		reserve: (device, reservationId) => {
+			const reservation = devices.reserveModelRequest(device, reservationId);
 			return reservation.ok
 				? reservation
 				: {
@@ -2266,6 +2266,7 @@ app.whenReady().then(async () => {
 						reason: `The daily ${reservation.refusal === "requests" ? "request" : "token"} limit of the device that saved this schedule is used up on this computer's models`,
 					};
 		},
+		remember: (device, reservationId) => devices.remember(device, reservationId),
 	});
 	const secretBox: SecretBox = {
 		available: () => safeStorage.isEncryptionAvailable(),

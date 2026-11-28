@@ -36,7 +36,7 @@
  * setup research and account-rotation pref (machine-services.ts), one benchmark and
  * one research run per device, aborted when it drops.
  */
-import { randomUUID } from "node:crypto";
+import { hash, randomUUID } from "node:crypto";
 import { isAbsolute, relative } from "node:path";
 import { z } from "zod";
 import {
@@ -66,6 +66,7 @@ import {
 	type ExtensionUIRequest,
 	type HostToolCallRequest,
 	isSignInRequest,
+	MODEL_NOT_STARTED,
 	type PromptResultFrame,
 	type RpcCommand,
 	type RpcResponse,
@@ -252,7 +253,7 @@ import type { HostConnection, HostServices } from "./host-server";
 import { HostedTabView, labelForViewer } from "./hosted-view";
 import { KEPT_CALL_PREFIX, type KeptCall, KeptCalls } from "./kept-calls";
 import { createLinkEventSender, createReadEncoder, encodedReadKey, type LinkEventSender } from "./link-events";
-import type { PeerQuota } from "./peer-quota";
+import { DuplicateReservation, machineModelNotStarted, type PeerQuota, type QuotaReservation } from "./peer-quota";
 import type { PeerInfo } from "./peers-store";
 import { HostPortDials } from "./port-tunnels";
 import { PreviewRelayTunnels } from "./preview-relay-tunnels";
@@ -1386,6 +1387,7 @@ export class LocalHostServices implements HostServices {
 		params: unknown,
 		conn: HostConnection,
 		signal?: AbortSignal,
+		requestId?: string,
 	): Promise<unknown> {
 		if (!this.#conns.has(conn)) {
 			const counts = this.#deps.localTabs.modelWait?.snapshot.local;
@@ -1446,7 +1448,7 @@ export class LocalHostServices implements HostServices {
 				return null;
 			}
 			case "tab.command":
-				return this.#command(peer, parse(CommandParams, method, params));
+				return this.#command(peer, parse(CommandParams, method, params), requestId);
 			case "tab.sideChannel": {
 				const { rtab, frame } = parse(SideChannelParams, method, params);
 				await this.#answer(this.#tab(peer, rtab), frame, "device");
@@ -1789,9 +1791,10 @@ export class LocalHostServices implements HostServices {
 				// Every model runs `runs` times: that many requests on this computer's credentials.
 				return this.#metered(
 					peer.deviceId,
+					requestId ?? randomUUID(),
 					Math.max(1, options.models.length * options.runs),
 					() => this.#deps.machine.runBenchmark(benchCaller(peer.deviceId), options, root),
-					result => result.success,
+					machineModelNotStarted,
 				);
 			}
 			case "host.bench.abort":
@@ -1800,9 +1803,10 @@ export class LocalHostServices implements HostServices {
 				const { request } = parse(ModelSetupRunParams, method, params);
 				return this.#metered(
 					peer.deviceId,
+					requestId ?? randomUUID(),
 					1,
 					() => this.#deps.machine.runModelSetup(benchCaller(peer.deviceId), request),
-					result => result.success,
+					machineModelNotStarted,
 				);
 			}
 			case "host.modelSetup.status":
@@ -1838,8 +1842,12 @@ export class LocalHostServices implements HostServices {
 			// Settings › Schedules and `ompdesk_schedule` of a device: this computer's own service checks the draft
 			// (folder, interval, time) and runs the schedule here, while this OMPdesk is open. A schedule the device
 			// saves is the device's: each of its runs, timed or run now, counts against its daily model limit here.
-			case "host.schedules.command":
-				return this.#deps.machine.schedules(parse(SchedulesCommandParams, method, params).request, peer.deviceId);
+			case "host.schedules.command": {
+				const { request, requestId: forwarded } = parse(SchedulesCommandParams, method, params);
+				return request.action === "runNow" || request.action === "sampleCall"
+					? this.#deps.machine.schedules(request, peer.deviceId, undefined, forwarded ?? requestId ?? randomUUID())
+					: this.#deps.machine.schedules(request, peer.deviceId);
+			}
 			case "host.schedules.log":
 				return this.#deps.machine.scheduleLog(parse(SchedulesLogParams, method, params).runId);
 			case "host.schedules.create":
@@ -1882,11 +1890,16 @@ export class LocalHostServices implements HostServices {
 						typeof request.kickoff === "string" &&
 						/\P{White_Space}/u.test(request.kickoff));
 				if (!turn) return change();
+				const logicalId =
+					request.action === "roomAsk" ? request.mailId : request.action === "item" ? request.requestId : null;
 				return this.#metered(
 					peer.deviceId,
+					typeof logicalId === "string" && logicalId
+						? `bot:${hash("sha256", JSON.stringify([request.action, request.id, logicalId]))}`
+						: (requestId ?? randomUUID()),
 					1,
 					change,
-					answer => typeof answer === "object" && answer !== null && !("refused" in answer),
+					answer => typeof answer === "object" && answer !== null && "refused" in answer,
 					kept,
 				);
 			}
@@ -2151,7 +2164,8 @@ export class LocalHostServices implements HostServices {
 							triggerTurn: true,
 						},
 					},
-					true,
+					undefined,
+					identity,
 				);
 				// A successful send may only have queued the message; ask the live journal before acknowledging it.
 				return sent.success ? 250 : 30_000;
@@ -3193,12 +3207,19 @@ export class LocalHostServices implements HostServices {
 		return tab.linkEvents;
 	}
 
-	async #command(peer: PeerInfo, params: z.infer<typeof CommandParams>, peerKickoff = false): Promise<RpcResponse> {
+	async #command(
+		peer: PeerInfo,
+		params: z.infer<typeof CommandParams>,
+		requestId?: string,
+		kickoffHome?: z.infer<typeof ObservedBotHome>,
+	): Promise<RpcResponse> {
 		// A message the device held while its link was down may come again (its answer was lost): omp gets it once
 		// (delivery-ledger.ts).
 		const { deliveryId, ...rest } = params.command;
-		if (typeof deliveryId === "string" && deliveryId)
-			return deliverOnce(deliveryId, () => this.#command(peer, { ...params, command: rest }));
+		if (params.command.type === "prompt" && typeof deliveryId === "string" && deliveryId) {
+			const key = `delivery:${hash("sha256", JSON.stringify([peer.deviceId, deliveryId]))}`;
+			return deliverOnce(key, () => this.#command(peer, { ...params, command: rest }, key));
+		}
 		// A command of a removed mode is refused before it is counted or reaches omp (local/modes.ts).
 		const refusal = removedModeRefusal(params.command);
 		if (refusal)
@@ -3230,11 +3251,31 @@ export class LocalHostServices implements HostServices {
 		// The client device forwards its renderer's RpcCommand verbatim; omp and
 		// the local handlers validate the command itself. A Stop is logged with the device and the control it named,
 		// and reaches omp without that origin.
-		const command = dispatchedCommand(params.command as unknown as RpcCommand, {
+		let command = dispatchedCommand(params.command as unknown as RpcCommand, {
 			tab: tab.resumeId,
 			session: tab.sessionFile ?? tab.resumeSessionPath,
 			peer: peer.deviceId,
 		});
+		const metered = commandUsesModel(command);
+		let replayMail = false;
+		if (
+			this.#quota &&
+			metered &&
+			command.type === "agent_control_mail" &&
+			typeof command.details?.id === "string" &&
+			command.details.id
+		) {
+			// The bridge checks the recipient again at send time and deduplicates queued and journaled mail.
+			const recipient =
+				kickoffHome ??
+				(tab.sessionId && tab.sessionFile
+					? { sessionId: tab.sessionId, sessionPath: tab.sessionFile }
+					: ObservedBotHome.parse(await tab.sidecar.bridgeRequest?.(BOT_HOME_OBSERVATION, {}, 15_000)));
+			const { sessionId, sessionPath } = recipient;
+			requestId = `mail:${hash("sha256", JSON.stringify([sessionPath, sessionId, command.details.id]))}`;
+			command = { ...command, details: { ...command.details, quotaRecipient: { sessionId, sessionPath } } };
+			replayMail = true;
+		}
 		// The user's Stop: nothing continues this turn after a crash (ipc.ts does the same for a local tab).
 		if (STOP_COMMANDS[command.type]) this.noteStopped(tab.resumeId);
 		// A view's moves and prompts are the tab's it shows: a window's (the pool counts them, ipc.ts as for a window's
@@ -3279,14 +3320,15 @@ export class LocalHostServices implements HostServices {
 				: undefined;
 		try {
 			const response = await trackMove(command.type, tracker, () =>
-				commandUsesModel(command)
+				metered
 					? this.#metered(
 							peer.deviceId,
+							requestId ?? randomUUID(),
 							1,
 							() => this.#run(tab, client, command, params.timeoutMs),
-							result => result.success,
-							// A lost kickoff reply does not prove the turn failed to start.
-							peerKickoff ? async () => true : undefined,
+							result => !replayMail && !result.success && result[MODEL_NOT_STARTED] === true,
+							undefined,
+							replayMail,
 						)
 					: this.#run(tab, client, command, params.timeoutMs),
 			);
@@ -3409,19 +3451,23 @@ export class LocalHostServices implements HostServices {
 		}
 	}
 
-	/**
-	 * Run work that spends `requests` of the device's daily model requests. The request is
-	 * reserved before the first await and given back when the work throws or reports failure,
-	 * so parallel callers at limit - 1 cannot all pass the check.
-	 */
+	/** A dispatched failure may be a lost answer. Refund only when the host knows the work did not start. */
 	async #metered<T>(
 		deviceId: string,
+		reservationId: string,
 		requests: number,
 		work: () => Promise<T>,
-		succeeded: (result: T) => boolean,
+		notStarted: (result: T) => boolean,
 		kept?: () => Promise<boolean>,
+		replayMail = false,
 	): Promise<T> {
-		const reservation = this.#quota?.reserve(deviceId, requests);
+		let reservation: QuotaReservation | undefined;
+		try {
+			reservation = this.#quota?.reserve(deviceId, requests, reservationId);
+		} catch (error) {
+			if (replayMail && error instanceof DuplicateReservation && error.charged) return work();
+			throw error;
+		}
 		if (reservation && !reservation.ok) {
 			throw codedError(
 				"remote_limit_reached",
@@ -3430,18 +3476,15 @@ export class LocalHostServices implements HostServices {
 					: `This device's ${reservation.refusal === "requests" ? "request" : "token"} limit for today on this computer's models is used up.`,
 			);
 		}
-		const refund = async (): Promise<void> => {
-			// A lost create reply is not evidence the host failed to write its bot.
-			if (reservation && (!kept || (await kept().catch(() => true)) === false)) reservation.refund();
-		};
+		let result: T;
 		try {
-			const result = await work();
-			if (!succeeded(result)) await refund();
-			return result;
+			result = await work();
 		} catch (error) {
-			await refund();
+			if (reservation && kept && !(await kept())) reservation.refund();
 			throw error;
 		}
+		if (reservation && notStarted(result) && (!kept || !(await kept()))) reservation.refund();
+		return result;
 	}
 
 	/** The host tab holding `sessionPath` with a process that has it in memory. */

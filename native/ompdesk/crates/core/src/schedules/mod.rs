@@ -9,7 +9,7 @@
 //! `fire`, `webhook`, `triggerFailed`, `prune`, `log`), one request after the other, so they are taken in the order
 //! they were made. What only main has, the core asks for by an event and main answers by a request:
 //!
-//! - `schedules.reserve` `{service, ask, device}` → `schedules.reserved`: whether a paired device has a model request
+//! - `schedules.reserve` `{service, ask, device, reservationId}` → `schedules.reserved`: whether a paired device has a model request
 //!   left today (main's `PeerQuota`); `schedules.refund` `{service, charge}` gives one back that was not spent.
 //! - `schedules.start` `{service, run, schedule, files, wake, charge?}` → `schedules.started`, then
 //!   `schedules.ended`: main starts the run, because the omp, its environment and its extensions are main's to
@@ -62,7 +62,7 @@ use crate::disk::saves::write_kept;
 use crate::disk::tree::fault as node_fault;
 use crate::run::Runner;
 use crate::server::{Call, Events, Fault, Registry, Reply};
-use engine::{Commanded, Engine, HookCall, Limits, Out};
+use engine::{Commanded, Engine, HookCall, Hooked, Limits, Out};
 
 /// How long a schedule's precheck may run before it counts as a no.
 const PRECHECK_TIMEOUT_MS: u64 = 60_000;
@@ -352,6 +352,13 @@ impl Service {
         Ok(())
     }
 
+    /// Register under the engine lock so the answer cannot overtake its waiter.
+    fn wait_for(&self, ask: u64) -> oneshot::Receiver<Result<(), Fault>> {
+        let (answer, waiting) = oneshot::channel();
+        locked(&self.waits).insert(ask, answer);
+        waiting
+    }
+
     fn carry_out(&self, engine: &mut Engine, out: Out) {
         let now = engine.now();
         match out {
@@ -360,9 +367,13 @@ impl Service {
                 self.publish_state(engine, state);
             }
             Out::Closed { journal } => self.journal.close(&journal),
-            Out::Reserve { ask, device } => self.tell(
+            Out::Remember { ask, device, reservation_id } => self.tell(
+                "schedules.remember",
+                serde_json::json!({ "ask": ask, "device": device, "reservationId": reservation_id }),
+            ),
+            Out::Reserve { ask, device, reservation_id } => self.tell(
                 "schedules.reserve",
-                serde_json::json!({ "ask": ask, "device": device }),
+                serde_json::json!({ "ask": ask, "device": device, "reservationId": reservation_id }),
             ),
             Out::Refund { charge } => {
                 self.tell("schedules.refund", serde_json::json!({ "charge": charge }))
@@ -604,6 +615,8 @@ struct At {
 struct CommandParams {
     request: Value,
     origin: Option<String>,
+    #[serde(rename = "reservationId")]
+    reservation_id: Option<String>,
     #[serde(default, rename = "hostWindow")]
     host_window: bool,
 }
@@ -639,6 +652,13 @@ struct PruneParams {
 struct ReservedParams {
     ask: u64,
     /// Why the device has no request left; absent when one was counted.
+    refused: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RememberedParams {
+    ask: u64,
+    accepted: bool,
     refused: Option<String>,
 }
 
@@ -753,17 +773,17 @@ async fn command(call: Call) -> Result<Reply, Fault> {
         let commanded = if params.host_window && params.origin.is_none() {
             engine.host_window_command(&params.request, now)
         } else {
-            engine.command(&params.request, params.origin.as_deref(), now)
+            engine.command(
+                &params.request,
+                params.origin.as_deref(),
+                params.reservation_id.as_deref(),
+                now,
+            )
         };
         service.settle(&mut engine);
         match commanded? {
             Commanded::Done => None,
-            // Registered before the engine is let go, so main's answer always finds it.
-            Commanded::Asked(ask) => {
-                let (answer, waiting) = oneshot::channel();
-                locked(&service.waits).insert(ask, answer);
-                Some(waiting)
-            }
+            Commanded::Asked(ask) => Some(service.wait_for(ask)),
         }
     };
     if let Some(waiting) = waiting {
@@ -847,7 +867,23 @@ pub fn register(registry: &mut Registry) {
                 body,
                 secret: params.secret,
             };
-            Reply::json(&service.with(|engine| engine.webhook(&params.id, &hook, now)))
+            let (answer, waiting) =
+                service.with(|engine| match engine.webhook(&params.id, &hook, now) {
+                    Hooked::Answer(verdict) => (verdict, None),
+                    Hooked::Asked(ask) => ("fired", Some(service.wait_for(ask))),
+                });
+            if let Some(waiting) = waiting {
+                match waiting
+                    .await
+                    .map_err(|_| Fault::new("schedules_closed", "The schedules closed"))?
+                {
+                    Err(fault) if fault.code == "quota_duplicate" => {
+                        return Reply::json(&"duplicate");
+                    }
+                    result => result?,
+                }
+            }
+            Reply::json(&answer)
         })
     });
     registry.add("schedules.prune", |call| {
@@ -871,6 +907,18 @@ pub fn register(registry: &mut Registry) {
         Box::pin(async move {
             let (service, now, _): (_, _, Value) = asked(&call)?;
             service.with(|engine| engine.tick(now));
+            Reply::json(&())
+        })
+    });
+    registry.add("schedules.remembered", |call| {
+        Box::pin(async move {
+            let (service, now, params): (_, _, RememberedParams) = asked(&call)?;
+            let outcome = service.with(|engine| {
+                engine.remembered(params.ask, params.accepted, params.refused.as_deref(), now)
+            });
+            if let Some(waiting) = locked(&service.waits).remove(&params.ask) {
+                let _ = waiting.send(outcome);
+            }
             Reply::json(&())
         })
     });

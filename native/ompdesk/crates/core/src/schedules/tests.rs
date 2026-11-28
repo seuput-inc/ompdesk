@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use super::captured;
-use super::engine::{Commanded, Engine, HookCall, Limits, Out};
+use super::engine::{Commanded, Engine, HookCall, Hooked, Limits, Out};
 use super::rules::Fixed;
 use crate::server::Fault;
 
@@ -46,6 +46,11 @@ fn ts_view(text: &str, pretty: bool) -> String {
     let mut stripped = value
         .as_object_mut()
         .is_some_and(|value| value.shift_remove("calls").is_some());
+    if let Some(schedules) = value.get_mut("schedules").and_then(Value::as_array_mut) {
+        for schedule in schedules.iter_mut().filter_map(Value::as_object_mut) {
+            stripped |= schedule.shift_remove("quotaCursor").is_some();
+        }
+    }
     if let Some(runs) = value.get_mut("runs").and_then(Value::as_array_mut) {
         for run in runs.iter_mut().filter_map(Value::as_object_mut) {
             for field in CORE_RUN_FIELDS {
@@ -150,7 +155,11 @@ impl Play {
             }
             for out in outs {
                 match out {
-                    Out::Reserve { ask, device } => {
+                    Out::Remember { ask, .. } => {
+                        let outcome = self.engine.remembered(ask, true, None, self.now);
+                        self.answered = Some(outcome);
+                    }
+                    Out::Reserve { ask, device, .. } => {
                         let refused = match &mut self.left {
                             Some(0) => Some(format!("{device}'s daily model limit is used up")),
                             Some(left) => {
@@ -278,7 +287,7 @@ impl Play {
         let mut result = None;
         let mut error = None;
         let command = |play: &mut Play, request: Value| {
-            let commanded = play.engine.command(&request, origin, now);
+            let commanded = play.engine.command(&request, origin, Some("capture"), now);
             play.settle();
             match commanded {
                 Ok(Commanded::Done) => None,
@@ -347,7 +356,8 @@ impl Play {
                     secret: None,
                 };
                 // The capture's detail is what main once made of the body; the core's own is pinned below.
-                result = Some(self.engine.webhook_told(&id, &call, detail, now).into());
+                let hook = self.engine.webhook_told(&id, &call, detail, now);
+                result = Some(self.hook_answer(hook).into());
             }
             "triggerFailed" => {
                 let reason = step["reason"].as_str().unwrap();
@@ -519,7 +529,7 @@ fn a_stop_asked_before_main_started_the_run_goes_out_once_it_did() {
     let id = engine.create(&draft, None, 0).unwrap();
     let run_now = serde_json::json!({ "action": "runNow", "id": id });
     assert!(matches!(
-        engine.command(&run_now, None, 0),
+        engine.command(&run_now, None, None, 0),
         Ok(Commanded::Done)
     ));
     let run = engine
@@ -539,7 +549,7 @@ fn a_stop_asked_before_main_started_the_run_goes_out_once_it_did() {
     engine.outs.clear();
     let stop = serde_json::json!({ "action": "stop", "runId": run });
     assert!(matches!(
-        engine.command(&stop, None, 0),
+        engine.command(&stop, None, None, 0),
         Ok(Commanded::Done)
     ));
     assert!(
@@ -586,7 +596,7 @@ fn a_charge_asked_while_the_schedule_goes_is_given_back() {
     assert!(engine.outs.is_empty());
     let delete = serde_json::json!({ "action": "delete", "id": id });
     assert!(matches!(
-        engine.command(&delete, None, 3_630_000),
+        engine.command(&delete, None, None, 3_630_000),
         Ok(Commanded::Done)
     ));
     engine.outs.clear();
@@ -666,7 +676,11 @@ fn peer_bot_routines_wait_for_this_hosts_window_and_replay_keeps_the_owners_choi
             json!({"action":"runNow","id":id}),
             json!({"action":"save","id":id,"draft":draft(json!({"kind":"interval","minutes":5}))}),
         ] {
-            assert!(play.engine.command(&request, origin, play.now).is_err());
+            assert!(
+                play.engine
+                    .command(&request, origin, None, play.now)
+                    .is_err()
+            );
         }
     }
     assert_eq!(play.engine.state(), state);
@@ -683,6 +697,7 @@ fn peer_bot_routines_wait_for_this_hosts_window_and_replay_keeps_the_owners_choi
                 .command(
                     &json!({"action":"save","id":id,"draft":draft}),
                     Some("creator"),
+                    None,
                     play.now
                 )
                 .is_err()
@@ -710,7 +725,7 @@ fn peer_bot_routines_wait_for_this_hosts_window_and_replay_keeps_the_owners_choi
     assert_eq!(row["needsHostActivation"], true);
     assert!(
         play.engine
-            .command(&enable, Some("creator"), play.now)
+            .command(&enable, Some("creator"), None, play.now)
             .is_err()
     );
     assert!(
@@ -834,7 +849,7 @@ impl Play {
     }
 
     fn run(&mut self, request: Value) -> Result<Commanded, Fault> {
-        let commanded = self.engine.command(&request, None, self.now);
+        let commanded = self.engine.command(&request, None, None, self.now);
         self.settle();
         commanded
     }
@@ -848,6 +863,37 @@ impl Play {
 
     fn runs(&self) -> Vec<Value> {
         self.engine.state()["runs"].as_array().unwrap().clone()
+    }
+}
+
+#[test]
+fn a_timed_reservation_survives_a_crash_before_the_start_is_journaled() {
+    for freq in [
+        serde_json::json!({"kind":"interval","minutes":60}),
+        serde_json::json!({"kind":"daily","time":"01:00","days":[]}),
+        serde_json::json!({"kind":"once","at":rules_iso(HOUR)}),
+    ] {
+        let mut play = Play::new(0);
+        play.engine.create(&draft(freq), Some("peer"), 0).unwrap();
+        let journal = play.engine.journal();
+        let id_at = |engine: &mut Engine, now| {
+            engine.tick(now);
+            engine
+                .outs
+                .iter()
+                .rev()
+                .find_map(|out| match out {
+                    Out::Reserve { reservation_id, .. } => Some(reservation_id.clone()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let first = id_at(&mut play.engine, HOUR);
+        // Quota committed, but the answer and every subsequent schedule write were lost.
+        let mut reopened = engine(std::sync::Arc::clone(&play.ids));
+        reopened.load(Some(&journal), HOUR + HOUR / 2);
+        reopened.catch_up(HOUR + HOUR / 2);
+        assert_eq!(id_at(&mut reopened, HOUR + HOUR / 2 + TICK_MS), first);
     }
 }
 
@@ -1015,7 +1061,11 @@ fn a_run_that_could_not_start_is_sent_again_once_whoever_asks() {
     let run = failed["id"].as_str().unwrap().to_owned();
     let resend = serde_json::json!({"action": "resend", "runId": run});
     // Another computer cannot spend it; this one can, once.
-    assert!(play.engine.command(&resend, Some("dev-a"), 0).is_err());
+    assert!(
+        play.engine
+            .command(&resend, Some("dev-a"), None, 0)
+            .is_err()
+    );
     assert!(play.run(resend.clone()).is_ok());
     assert_eq!(play.runs().len(), 2);
     let original = play
@@ -1270,8 +1320,18 @@ fn call(bearer: Option<&str>, headers: &[(&str, &str)], body: &str) -> HookCall 
 impl Play {
     fn hook(&mut self, id: &str, call: &HookCall) -> &'static str {
         let outcome = self.engine.webhook(id, call, self.now);
+        self.hook_answer(outcome)
+    }
+
+    fn hook_answer(&mut self, outcome: Hooked) -> &'static str {
         self.settle();
-        outcome
+        match outcome {
+            Hooked::Answer(verdict) => verdict,
+            Hooked::Asked(_) => {
+                self.answered.take().unwrap().unwrap();
+                "fired"
+            }
+        }
     }
 
     fn calls(&self, id: &str) -> Vec<Value> {

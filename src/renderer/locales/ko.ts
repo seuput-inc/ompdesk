@@ -2042,6 +2042,7 @@ export const ko: Record<string, string> = {
 		"이 컴퓨터에서 Tailscale이 실행 중이 아니에요. 실행하고 로그인한 뒤 다시 시도해 주세요.",
 	"ipcError.remote_limit_reached":
 		"이 기기가 호스트 모델을 하루에 쓸 수 있는 한도를 다 썼어요. 호스트 기준 자정에 초기화되고, 호스트의 설정 › 기기 및 연결에서 한도를 늘릴 수 있어요.",
+	"ipcError.quota_duplicate": "호스트가 이미 받은 요청이에요. 새로 시작하기 전에 원래 작업의 상태를 확인해 주세요.",
 	"ipcError.host_busy":
 		"호스트 컴퓨터에서 작업이 진행 중이라 지금은 다시 시작할 수 없어요. 세션과 기기가 모두 쉬고 있을 때 설치해 주세요.",
 	"ipcError.update_not_ready":

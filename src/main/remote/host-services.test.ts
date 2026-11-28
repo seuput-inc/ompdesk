@@ -38,13 +38,15 @@ import { HOST_DOWNLOAD_PART_BYTES, HOST_UPLOAD_PART_BYTES } from "../../shared/i
 import type { ModelSetupRequest, ModelSetupStatus } from "../../shared/model-setup";
 import type { OmpUpdateState } from "../../shared/omp-update";
 import { MAX_RPC_COMMAND_TIMEOUT_MS, timeoutForCommand } from "../../shared/rpc-client";
-import type {
-	AgentProgress,
-	AgentSessionEvent,
-	RpcCommand,
-	RpcResponse,
-	SidecarStatus,
-	SubagentFrame,
+import {
+	type AgentProgress,
+	type AgentSessionEvent,
+	MODEL_NOT_STARTED,
+	modelNotStarted,
+	type RpcCommand,
+	type RpcResponse,
+	type SidecarStatus,
+	type SubagentFrame,
 } from "../../shared/rpc-types";
 import type { ScheduleCreated, ScheduleDraft, SchedulesRequest, SchedulesState } from "../../shared/schedules";
 import { applySummaryChange, type SummaryDelta, type VersionedSummaries } from "../../shared/session-summary";
@@ -342,10 +344,8 @@ function fakeMachine() {
 		),
 		abortBenchmark: vi.fn(async (_caller: string) => true),
 		runModelSetup: vi.fn(
-			async (_caller: string, _request: ModelSetupRequest): Promise<IpcModelSetupRunResult> => ({
-				success: false,
-				error: "not run",
-			}),
+			async (_caller: string, _request: ModelSetupRequest): Promise<IpcModelSetupRunResult> =>
+				modelNotStarted({ success: false, error: "not run" }),
 		),
 		modelSetupStatus: vi.fn(async (_caller: string): Promise<ModelSetupStatus> => ({ running: false })),
 		abortModelSetup: vi.fn(async (_caller: string) => true),
@@ -550,9 +550,9 @@ describe("peer bot homes", () => {
 		expect(f.bots.observe).toHaveBeenCalledOnce();
 	});
 
-	it("keeps a queued kickoff across reconnect, reserves again for a lost queue, and acknowledges only one journal entry", async () => {
+	it("redelivers a lost kickoff queue under its original charge and acknowledges one journal entry", async () => {
 		const f = await fixture();
-		const { quota } = quotaOver(f.conn.peer);
+		const { quota } = quotaOver({ ...f.conn.peer, limits: { requestsPerDay: 1 } });
 		f.services.attachQuota(quota);
 		const attempts: string[] = [];
 		const reservations: number[] = [];
@@ -589,8 +589,8 @@ describe("peer bot homes", () => {
 		);
 		expect(f.journal).toEqual([f.mail.id]);
 		expect(attempts).toEqual([f.mail.id, f.mail.id]);
-		expect(reservations).toEqual([1, 2]);
-		expect(quota.view(f.home.device)?.usage.requests).toBe(2);
+		expect(reservations).toEqual([1, 1]);
+		expect(quota.view(f.home.device)?.usage.requests).toBe(1);
 	});
 
 	it("keeps a refused kickoff pending, then delivers through quota after the daily reset", async () => {
@@ -599,7 +599,7 @@ describe("peer bot homes", () => {
 			const f = await fixture();
 			const { quota } = quotaOver({ ...f.conn.peer, limits: { requestsPerDay: 1 } });
 			f.services.attachQuota(quota);
-			expect(quota.reserve(f.home.device).ok).toBe(true); // the create used today's last request
+			expect(quota.reserve(f.home.device, 1, "create").ok).toBe(true);
 			vi.spyOn(f.sidecar.rpcClient, "command").mockImplementation(async command => {
 				if (command.type !== "agent_control_mail") throw new Error(command.type);
 				f.journal.push(String(command.details.id));
@@ -1372,7 +1372,7 @@ describe("LocalHostServices", () => {
 			expect(used(stored)).toBe(3);
 		});
 
-		it("gives the reserved request back when the command fails or throws", async () => {
+		it("refunds a proven refusal, but retains a lost reply and refuses its replay after core restart", async () => {
 			const { services, sidecars, stored, x } = limited({ requestsPerDay: 1 });
 			await services.call(x.peer, "tab.open", { rtab: "t1", cwd: workDir, fresh: true }, x);
 			const sidecar = sidecars[0];
@@ -1381,17 +1381,29 @@ describe("LocalHostServices", () => {
 				type: "response",
 				command: command.type,
 				success: false,
+				[MODEL_NOT_STARTED]: true,
 				error: "busy",
 			});
 			await services.call(x.peer, "tab.command", { rtab: "t1", command: { type: "prompt" } }, x);
 			expect(used(stored)).toBe(0);
-			sidecar.rpcClient.command = async () => {
+			const run = vi.fn(async () => {
 				throw new Error("sidecar exited");
-			};
-			await expect(
-				services.call(x.peer, "tab.command", { rtab: "t1", command: { type: "prompt" } }, x),
-			).rejects.toThrow("sidecar exited");
-			expect(used(stored)).toBe(0);
+			});
+			sidecar.rpcClient.command = run;
+			const send = () =>
+				services.call(
+					x.peer,
+					"tab.command",
+					{ rtab: "t1", command: { type: "compact" } },
+					x,
+					undefined,
+					"same-call",
+				);
+			await expect(send()).rejects.toThrow("sidecar exited");
+			await stopCore();
+			await expect(send()).rejects.toThrow("[quota_duplicate]");
+			expect(run).toHaveBeenCalledTimes(1);
+			expect(used(stored)).toBe(1);
 		});
 
 		it("refuses host.bench.run and host.modelSetup.run past the limit without starting them", async () => {
@@ -1430,7 +1442,7 @@ describe("LocalHostServices", () => {
 				x,
 			);
 			expect(used(stored)).toBe(6);
-			// The default fakes report `success: false`: nothing was spent, so nothing stays counted.
+			// A refusal before model setup started returns its reservation.
 			await services.call(x.peer, "host.modelSetup.run", { request: MODEL_SETUP_REQUEST }, x);
 			expect(used(stored)).toBe(6);
 			machine.runModelSetup.mockResolvedValueOnce({

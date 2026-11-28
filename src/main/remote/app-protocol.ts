@@ -965,7 +965,8 @@ const ScheduleDraftSchema = z.object({
 const ScheduleId = z.string().min(1).max(200);
 
 /** `host.schedules.command` params: one Settings › Schedules action on the host's own service. */
-export const SchedulesCommandParams: z.ZodType<{ request: SchedulesRequest }> = z.object({
+export const SchedulesCommandParams: z.ZodType<{ request: SchedulesRequest; requestId?: string }> = z.object({
+	requestId: z.string().min(1).max(100).optional(),
 	request: z.discriminatedUnion("action", [
 		z.object({ action: z.literal("get") }),
 		z.object({ action: z.literal("save"), id: ScheduleId.optional(), draft: ScheduleDraftSchema }),

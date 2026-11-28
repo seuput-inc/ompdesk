@@ -10,9 +10,9 @@ import type { IpcErrorCode } from "./ipc-error-codes";
  * channels a page read its rows' live state from (`sessions:hosted`, `sessions:live`) with the session summaries, so
  * an older page against a newer host showed a session's run only once a tap opened its tab. 3: a large picture of a
  * transcript reaches the page as `ImageContent.blobUrl`, not as bytes inside a frame (main/web/page-images.ts); an
- * older page would draw such a picture as unavailable.
+ * older page would draw such a picture as unavailable. 4: metered invokes need a logical request id.
  */
-export const WEB_PROTOCOL_VERSION = 3;
+export const WEB_PROTOCOL_VERSION = 4;
 
 /** Where a paired page fetches what the host keeps for it instead of sending it in a frame (`/blob/<token>`). */
 export const WEB_BLOB_URL_PREFIX = "/blob/";
@@ -64,9 +64,9 @@ export interface WebFeatures {
 	passkey: boolean;
 }
 
-/** Page → host. `inv` expects a `res` with the same `id`; `snd` is fire-and-forget. */
+/** `id` correlates replies on this page; `requestId` identifies the invocation across pages and connections. */
 export type WebClientFrame =
-	| { t: "inv"; id: number; ch: string; a: unknown[] }
+	| { t: "inv"; id: number; requestId: string; ch: string; a: unknown[] }
 	| { t: "snd"; ch: string; a: unknown[] }
 	/** The last event `seq` the page applied. */
 	| { t: "ack"; seq: number }

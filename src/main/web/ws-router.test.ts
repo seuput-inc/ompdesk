@@ -4,22 +4,27 @@
  * merging, presence, the limits and the heartbeat. The core's timers and clock are the test's.
  */
 import { randomUUID } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { BOT_CONNECTORS_COMMAND } from "../../shared/bot-connector-channels";
 import { BOTS_COMMAND, BOTS_STATE } from "../../shared/bots";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICES_CHANGED, WEB_DEVICES_LIST, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
-import type { AgentSessionEvent } from "../../shared/rpc-types";
-import { SCHEDULES_STATE } from "../../shared/schedule-channels";
+import { type AgentSessionEvent, modelNotStarted } from "../../shared/rpc-types";
+import { SCHEDULES_COMMAND, SCHEDULES_STATE } from "../../shared/schedule-channels";
 import { SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "../../shared/sidebar-projects";
 import { WEB_PERMISSIONS, WEB_PROTOCOL_VERSION, type WebPermission } from "../../shared/web-protocol";
 import { connectorCommand } from "../connector-accounts";
 import { core } from "../core/process";
+import { PeerQuota } from "../remote/peer-quota";
 import { BlobStore } from "./blobs";
 import type { WebDevice } from "./devices-store";
 import { IPC_POLICY, type IpcChannel } from "./ipc-policy";
 import type { IpcCaller } from "./ipc-registry";
 import { PAGE_IMAGE_MIN_CHARS } from "./page-images";
+import { seededDevice, writeWebDevices } from "./test-web-devices";
 import { WebClientWindow, WebWindows } from "./web-client-window";
 import { CLOSE_REVOKED, convertsForModel, type WebChannelTable, type WsRouter } from "./ws-router";
 import { TestRouterHost } from "./ws-router-test-rig";
@@ -36,8 +41,11 @@ const CLOSE_POLICY = 1008;
 const CLOSE_TOO_BIG = 1009;
 const CLOSE_RATE_LIMITED = 4429;
 
-const device = (grants: readonly WebPermission[] = WEB_PERMISSIONS.filter(p => p !== "pairing-admin")): WebDevice => ({
-	deviceId: "dev1",
+const device = (
+	deviceId: string,
+	grants: readonly WebPermission[] = WEB_PERMISSIONS.filter(p => p !== "pairing-admin"),
+): WebDevice => ({
+	deviceId,
 	name: "Phone",
 	userAgent: "UA",
 	tailscaleLogin: null,
@@ -49,13 +57,15 @@ const device = (grants: readonly WebPermission[] = WEB_PERMISSIONS.filter(p => p
 });
 
 interface RigOptions {
+	deviceId?: string;
 	grants?: readonly WebPermission[];
 	webChannels?: WebChannelTable;
-	reserve?: () => { ok: true; refund(): void } | { ok: false; refusal: "requests" | "tokens" };
+	reserve?: PeerQuota["reserve"];
 }
 
 async function rig(options: RigOptions = {}) {
-	let current: WebDevice | undefined = device(options.grants);
+	const pairedId = options.deviceId ?? "dev1";
+	let current: WebDevice | undefined = device(pairedId, options.grants);
 	const callers: { channel: string; caller: IpcCaller; args: readonly unknown[] }[] = [];
 	const invoke = vi.fn(async (channel: string, caller: IpcCaller, args: readonly unknown[]): Promise<unknown> => {
 		callers.push({ channel, caller, args });
@@ -66,7 +76,7 @@ async function rig(options: RigOptions = {}) {
 	});
 	const refund = vi.fn();
 	const quota = {
-		reserve: vi.fn(options.reserve ?? (() => ({ ok: true as const, refund }))),
+		reserve: vi.fn<PeerQuota["reserve"]>(options.reserve ?? (() => ({ ok: true, refund }))),
 		record: vi.fn(),
 	};
 	const userData = `private:${randomUUID()}`;
@@ -75,7 +85,7 @@ async function rig(options: RigOptions = {}) {
 	const uploaded = new Map<string, Buffer>();
 	const uploads = {
 		take: vi.fn(async (deviceId: string, file: string) => {
-			const bytes = deviceId === "dev1" ? uploaded.get(file) : undefined;
+			const bytes = deviceId === pairedId ? uploaded.get(file) : undefined;
 			if (!bytes) throw new Error("no such upload");
 			uploaded.delete(file);
 			return bytes;
@@ -114,11 +124,12 @@ async function rig(options: RigOptions = {}) {
 	);
 	const router = host.router;
 	routerRef = router;
-	await host.device("dev1", current.grants);
-	const connection = await host.attach("dev1");
+	await host.device(pairedId, current.grants);
+	const connection = await host.attach(pairedId);
 	if (!connection) throw new Error("attach failed");
 	const socket = connection.socket;
-	const frame = (value: unknown): Promise<void> => connection.receive(JSON.stringify(value));
+	const frame = (value: Record<string, unknown>): Promise<void> =>
+		connection.receive(JSON.stringify(value.t === "inv" ? { requestId: randomUUID(), ...value } : value));
 	/** What the calls made so far answered: main's handlers ran, the core wrote their answers. */
 	const settle = async (): Promise<void> => {
 		for (let i = 0; i < 5; i++) await Promise.resolve();
@@ -147,7 +158,7 @@ async function rig(options: RigOptions = {}) {
 		fileEditReports,
 		revoke: async () => {
 			current = undefined;
-			await host.device("dev1", null);
+			await host.device(pairedId, null);
 		},
 	};
 }
@@ -257,7 +268,7 @@ describe("hello and calls", () => {
 	});
 
 	it("reads a picture the page sent by upload back into the call before it runs, and the upload is gone", async () => {
-		const { frame, settle, socket, callers, uploaded, uploads } = await rig();
+		const { frame, settle, socket, callers, uploaded, uploads, refund } = await rig();
 		uploaded.set("/up/dev1/a/image.jpeg", Buffer.from("JPEG"));
 		const prompt = (images: unknown[]) => ({
 			tabId: "t1",
@@ -289,6 +300,7 @@ describe("hello and calls", () => {
 		expect(callers).toHaveLength(1);
 		expect(socket.frames("res")[1]).toMatchObject({ id: 4, ok: false, e: { code: "file_not_found" } });
 		expect(uploads.take).toHaveBeenCalledWith("dev1", "/up/dev1/a/image.jpeg");
+		expect(refund).toHaveBeenCalledOnce();
 	});
 
 	it("reads a file the page uploaded back into a send to a paired host, and refuses one it no longer holds", async () => {
@@ -564,30 +576,146 @@ describe("model quota", () => {
 		expect(r.invoke).toHaveBeenCalledOnce();
 	});
 
-	it("gives the request back when the command fails, as a response or as a throw", async () => {
+	it("refunds an explicit host refusal, not an unknown outcome or a lookalike error from the model", async () => {
 		const r = await rig();
-		r.invoke.mockResolvedValueOnce({ type: "response", success: false, error: "no" });
+		const failure = { type: "response", success: false, error: "not connected", code: "sidecar_not_connected" };
+		r.invoke.mockResolvedValueOnce(modelNotStarted({ ...failure }));
 		await r.frame({ t: "inv", id: 1, ch: IPC_COMMANDS.RPC_COMMAND_FOR_TAB, a: [{ tabId: "t", ...prompt }] });
 		await r.settle();
-		expect(r.refund).toHaveBeenCalledTimes(1);
-		r.invoke.mockRejectedValueOnce(new Error("boom"));
+		expect(r.refund).toHaveBeenCalledOnce();
+		r.invoke.mockRejectedValueOnce(new Error("connection dropped"));
 		await r.frame({ t: "inv", id: 2, ch: IPC_COMMANDS.RPC_COMMAND, a: [prompt] });
-		await r.settle();
-		expect(r.refund).toHaveBeenCalledTimes(2);
-		r.invoke.mockResolvedValueOnce({ type: "response", success: true });
+		r.invoke.mockResolvedValueOnce(failure);
 		await r.frame({ t: "inv", id: 3, ch: IPC_COMMANDS.RPC_COMMAND, a: [prompt] });
 		await r.settle();
-		expect(r.refund).toHaveBeenCalledTimes(2);
+		expect(r.invoke).toHaveBeenCalledTimes(3);
+		expect(r.refund).toHaveBeenCalledOnce();
+	});
+
+	it("refuses an old page's unkeyed benchmark before reserving or running it", async () => {
+		const r = await rig();
+		await r.connection.receive(JSON.stringify({ t: "inv", id: 1, ch: IPC_COMMANDS.BENCH_RUN, a: [{}] }));
+		expect(r.socket.frames("res")).toMatchObject([{ ok: false, e: { code: "web_forbidden" } }]);
+		expect(r.quota.reserve).not.toHaveBeenCalled();
+		expect(r.invoke).not.toHaveBeenCalled();
+	});
+
+	it.each(["prompt", "mail", "benchmark"] as const)(
+		"does not rerun a %s redelivered on another socket",
+		async kind => {
+			const dir = mkdtempSync(join(tmpdir(), "web-quota-replay-"));
+			writeWebDevices(dir, [seededDevice({ deviceId: "dev1" }).record]);
+			const quota = new PeerQuota("web", dir, () => {});
+			onTestFinished(() => {
+				quota.close();
+				rmSync(dir, { recursive: true, force: true });
+			});
+			const r = await rig({ reserve: quota.reserve.bind(quota) });
+			if (kind === "mail") r.invoke.mockResolvedValueOnce({ success: true, data: "first recipient's reply" });
+			else r.invoke.mockRejectedValueOnce(new Error("reply lost after dispatch"));
+			const frame = (id: number, requestId: string, deliveryId: string) => {
+				if (kind === "benchmark")
+					return { t: "inv", id, requestId, ch: IPC_COMMANDS.BENCH_RUN, a: [{ models: ["m"], runs: 2 }] };
+				const command =
+					kind === "prompt"
+						? { ...prompt.command, deliveryId }
+						: {
+								type: "agent_control_mail",
+								details: { id: deliveryId },
+								content: `body-${id}`,
+								triggerTurn: true,
+							};
+				return {
+					t: "inv",
+					id,
+					requestId,
+					ch: IPC_COMMANDS.RPC_COMMAND_FOR_TAB,
+					a: [{ tabId: `tab-${id}`, command }],
+				};
+			};
+			await r.frame(frame(1, "first-invoke", "first-send"));
+			await r.connection.dispose();
+			const next = await r.host.attach("dev1");
+			if (!next) throw new Error("reattach failed");
+			// An outbox item or a mail id survives a fresh invoke, even when the page changes tab or content.
+			await next.receive(
+				JSON.stringify(frame(2, kind === "benchmark" ? "first-invoke" : "retry-invoke", "first-send")),
+			);
+			expect(next.socket.frames("res")).toMatchObject([{ ok: false, e: { code: "quota_duplicate" } }]);
+			expect(r.invoke).toHaveBeenCalledOnce();
+			expect(quota.view("dev1")?.usage.requests).toBe(kind === "benchmark" ? 2 : 1);
+			// A fresh page also starts numbering replies at one. Its new work must run.
+			await next.receive(JSON.stringify(frame(1, "second-invoke", "second-send")));
+			expect(next.socket.frames("res").at(-1)).toMatchObject({ ok: true });
+			expect(r.invoke).toHaveBeenCalledTimes(2);
+			expect(quota.view("dev1")?.usage.requests).toBe(kind === "benchmark" ? 4 : 2);
+		},
+	);
+
+	it("returns the outbox's original reply to the same phone, never to another phone using the same id", async () => {
+		const a = await rig();
+		const b = await rig({ deviceId: "dev2" });
+		const deliveryId = randomUUID();
+		const frame = (id: number) => ({
+			t: "inv",
+			id,
+			ch: IPC_COMMANDS.RPC_COMMAND_FOR_TAB,
+			a: [{ tabId: "t", command: { ...prompt.command, deliveryId, id: `rpc-${id}` } }],
+		});
+		const pending = Promise.withResolvers<unknown>();
+		a.invoke.mockReturnValueOnce(pending.promise);
+		await a.frame(frame(1));
+		await a.connection.dispose();
+		const next = await a.host.attach("dev1");
+		if (!next) throw new Error("reattach failed");
+		await next.receive(JSON.stringify({ ...frame(2), requestId: randomUUID() }));
+		b.invoke.mockResolvedValueOnce({ success: true, data: "phone B" });
+		await b.frame(frame(1));
+		expect(b.socket.frames("res")).toMatchObject([{ ok: true, v: { data: "phone B" } }]);
+		pending.resolve({ success: true, data: "phone A" });
+		await a.settle();
+		await next.receive(JSON.stringify({ ...frame(3), requestId: randomUUID() }));
+		expect(next.socket.frames("res")).toMatchObject([
+			{ id: 2, ok: true, v: { id: "rpc-2", data: "phone A" } },
+			{ id: 3, ok: true, v: { id: "rpc-3", data: "phone A" } },
+		]);
+		expect(a.quota.reserve).toHaveBeenCalledOnce();
+		expect(a.invoke).toHaveBeenCalledOnce();
+		expect(b.quota.reserve).toHaveBeenCalledOnce();
+	});
+
+	it.each(["runNow", "sampleCall"])("carries the %s identity to the scheduler across a reconnect", async action => {
+		const r = await rig();
+		const request = { t: "inv", id: 1, ch: SCHEDULES_COMMAND, a: [{ action, id: "routine" }, "paired-host"] };
+		await r.connection.receive(JSON.stringify(request));
+		expect(r.socket.frames("res")).toMatchObject([{ ok: false, e: { code: "web_forbidden" } }]);
+		const frame = { ...request, requestId: "page-call" };
+		await r.frame(frame);
+		await r.connection.dispose();
+		const next = await r.host.attach("dev1");
+		if (!next) throw new Error("reattach failed");
+		await next.receive(JSON.stringify({ ...frame, id: 9 }));
+		const key = r.callers[0]?.caller.scheduleReservationId;
+		expect(key).toMatch(/^web-[a-f0-9]{64}$/);
+		expect(r.callers).toHaveLength(2);
+		expect(r.callers[1]?.caller.scheduleReservationId).toBe(key);
+		expect(r.quota.reserve).not.toHaveBeenCalled();
 	});
 
 	it("weighs a benchmark by models × runs and a model setup run as one", async () => {
 		const r = await rig();
-		await r.frame({ t: "inv", id: 1, ch: IPC_COMMANDS.BENCH_RUN, a: [{ models: ["a", "b", "c"], runs: 4 }] });
-		await r.frame({ t: "inv", id: 2, ch: IPC_COMMANDS.MODEL_SETUP_RUN, a: [{}] });
+		await r.frame({
+			t: "inv",
+			id: 1,
+			requestId: "bench",
+			ch: IPC_COMMANDS.BENCH_RUN,
+			a: [{ models: ["a", "b", "c"], runs: 4 }],
+		});
+		await r.frame({ t: "inv", id: 2, requestId: "setup", ch: IPC_COMMANDS.MODEL_SETUP_RUN, a: [{}] });
 		await r.settle();
 		expect(r.quota.reserve.mock.calls).toEqual([
-			["dev1", 12],
-			["dev1", 1],
+			["dev1", 12, `web:${IPC_COMMANDS.BENCH_RUN}:bench`],
+			["dev1", 1, `web:${IPC_COMMANDS.MODEL_SETUP_RUN}:setup`],
 		]);
 	});
 

@@ -766,7 +766,10 @@ mod devices_store {
                 limits: member("limits"),
                 usage: member("usage"),
             };
-            devices.update_quota(&b.device_id, patch)
+            devices
+                .edit_quota(&b.device_id, |_, _, _| Ok(((), patch)))
+                .unwrap()
+                .is_some()
         };
         assert!(update(
             &devices,

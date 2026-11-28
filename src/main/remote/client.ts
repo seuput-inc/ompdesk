@@ -6,6 +6,7 @@
  * refused-retry window) and carries requests and pushed events on the link the core brings up: every request and
  * event on a link is main's.
  */
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { CORE_EXITED, core } from "../core/process";
 import { openAgain } from "../core/reopen";
@@ -237,6 +238,7 @@ export class RemoteClient {
 	#closed = false;
 	/** `connect` was called: the core is reconnecting this link. */
 	#running = false;
+	readonly #epoch = randomUUID();
 	#nextId = 1;
 
 	constructor(opts: RemoteClientOptions) {
@@ -393,7 +395,7 @@ export class RemoteClient {
 		}, timeoutMs);
 		this.#pending.set(id, { resolve, reject, timer });
 		try {
-			link.send({ t: "req", id, method, params });
+			link.send({ t: "req", id, epoch: this.#epoch, method, params });
 		} catch (error) {
 			clearTimeout(timer);
 			this.#pending.delete(id);

@@ -280,10 +280,11 @@ export class WsTransport implements OmpTransport {
 	}
 
 	invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
+		const requestId = crypto.randomUUID();
 		return new Promise<T>((resolve, reject) => {
 			const run = () => {
 				const id = this.#nextId++;
-				const frame: WebClientFrame = { t: "inv", id, ch: channel, a: args };
+				const frame: WebClientFrame = { t: "inv", id, requestId, ch: channel, a: args };
 				let text: string;
 				try {
 					text = JSON.stringify(frame);
@@ -438,7 +439,7 @@ export class WsTransport implements OmpTransport {
 		this.#clearTimer(this.#helloTimer);
 		this.#helloTimer = null;
 		this.#attempt = null;
-		if (frame.minClient > this.#protocol) {
+		if (frame.minClient > this.#protocol || !(frame.protocol >= this.#protocol)) {
 			this.#setState("outdated");
 			this.#started = false;
 			this.#drop(1000, "outdated");

@@ -1,34 +1,22 @@
-//! The per-device model limit on the host (was `src/main/remote/peer-quota.ts`, D65; native-rust ledger R-Q): how
-//! many model requests (prompts, steers, follow-ups, compactions…) and how many tokens a paired device may spend on
-//! this computer's models per day. Both limits are optional; none is the default. Usage counts per local calendar
-//! day and rides the device's record, so a restart does not reset it: a paired computer's in `remote-peers.json`
-//! (the devices instance's store, `store.rs`), a Mobile web device's in `web-devices.json` (`web/store.rs`).
+//! Host-side quota for a paired computer or web device. Limits stay on the pairing record. A locked device file
+//! commits a reservation and its weighted daily count before main may dispatch; the JSON writer only projects
+//! committed usage for the existing device lists. Old device files seed the ledger on the first change.
 //!
-//! Main reserves a request before it forwards a model command (which commands: `quota-commands.ts`) or starts a
-//! benchmark, a model setup run or a saved schedule, and refunds it when that work did not run. A reservation is a
-//! synchronous hub call answered from memory under one lock, so N reservations at limit - 1 let exactly one through.
-//! A weighted reservation (a benchmark's models × runs) is refused whole when it would take the day past the limit.
-//! Tokens come from each assistant `message_end`'s usage (`record`, a call main does not wait for). A turn already
-//! running when the limit is crossed finishes; the next request is refused.
-//!
-//! Counts are written after the answer: a paired computer's by the store's writer thread (`store::save_later`), a web
-//! device's by the web store's (`FileDevices::update_quota`), each one write at a time with the changes made
-//! meanwhile in the next. A core that crashes loses at most the changes since the last write that finished; one that
-//! exits writes them first (`store::flush`).
-//!
-//! Hub kind `quota`, opened with `{store: "peers"|"web", userData}`. Methods, each with `deviceId`:
-//! `reserve {requests}` → `{ok: true, day}` or `{ok: false, refusal: "requests"|"tokens"}`; `refund {day, requests}`
-//! (a refund after the day turned over leaves the new day alone); `record {requests?, tokens?}`;
-//! `setLimits {limits: {requestsPerDay?, tokensPerDay?}}` → whether the device exists (`{}` removes the limits);
-//! `view` → `{limits, usage: {requests, tokens}}` with today's usage, or null for an unknown device.
+//! `reserve {deviceId, requests, reservationId, attemptId}`: the same hub attempt can recover a lost answer;
+//! a new dispatch attempt with the same logical ID is refused, even after midnight or a refund. Only the host
+//! makes an attempt ID. Weight zero records schedule ingress without spending requests or checking daily limits.
+//! `refund {deviceId, reservationId}` releases the stored charge once. `record`, `view` and `setLimits` are unchanged.
+
+mod ledger;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 
 use super::store::{self, Store};
 use crate::hub::{Kind, Outcome, params};
@@ -45,26 +33,36 @@ pub const KIND: Kind = Kind {
     },
 };
 
-/// Where a device's `limits` and `usage` are kept.
-#[derive(Clone)]
+struct Quota {
+    records: Records,
+    path: PathBuf,
+}
+
 enum Records {
     Peers(Arc<Mutex<Store>>),
     Web(Arc<FileDevices>),
 }
 
-static INSTANCES: LazyLock<Mutex<HashMap<u64, Records>>> = LazyLock::new(Mutex::default);
-/// Check and count under one lock: every instance's, as the TypeScript's ran in one JavaScript turn.
-static COUNTING: Mutex<()> = Mutex::new(());
+static INSTANCES: LazyLock<Mutex<HashMap<u64, Arc<Quota>>>> = LazyLock::new(Mutex::default);
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum Which {
+pub(crate) enum Which {
     Peers,
     Web,
+}
+
+impl Which {
+    fn file(self) -> &'static str {
+        match self {
+            Self::Peers => "remote-quota",
+            Self::Web => "web-quota",
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -76,16 +74,12 @@ struct Opts {
 
 fn open(id: u64, opts: &RawValue, _: crate::hub::Out) -> Result<(), Fault> {
     let opts: Opts = params(opts)?;
-    let records = match opts.store {
-        Which::Peers => Records::Peers(store::open(&opts.user_data, store::Kind::Peers)),
-        Which::Web => Records::Web(FileDevices::open(&opts.user_data)),
-    };
-    locked(&INSTANCES).insert(id, records);
+    locked(&INSTANCES).insert(id, Arc::new(Quota::new(opts.store, &opts.user_data)));
     Ok(())
 }
 
 /// `{day, requests, tokens}` as stored.
-#[derive(Clone, Default)]
+#[derive(Debug)]
 struct Usage {
     day: String,
     requests: u64,
@@ -136,53 +130,91 @@ impl Limits {
 
 /// A device's record as the rules read it.
 struct Record {
-    limits: Option<Limits>,
+    pairing: f64,
+    limits: Limits,
     usage: Option<Usage>,
 }
 
-impl Records {
-    fn get(&self, device_id: &str) -> Option<Record> {
-        let (limits, usage) = match self {
-            Records::Peers(peers) => {
-                let entry = locked(peers).get(device_id)?;
-                (entry.get("limits").cloned(), entry.get("usage").cloned())
-            }
-            Records::Web(devices) => {
-                let device = devices.get(device_id)?;
-                (device.limits, device.usage)
-            }
+impl Record {
+    fn new(pairing: f64, limits: Option<&Value>, usage: Option<&Value>) -> Self {
+        Self {
+            pairing,
+            limits: limits
+                .and_then(|v| Limits::deserialize(v).ok())
+                .unwrap_or_default(),
+            usage: Usage::from_json(usage),
+        }
+    }
+}
+
+impl Quota {
+    fn new(which: Which, dir: &Path) -> Self {
+        let records = match which {
+            Which::Peers => Records::Peers(store::open(dir, store::Kind::Peers)),
+            Which::Web => Records::Web(FileDevices::open(dir)),
         };
-        Some(Record {
-            limits: limits.and_then(|value| serde_json::from_value(value).ok()),
-            usage: Usage::from_json(usage.as_ref()),
-        })
+        Self {
+            records,
+            path: dir.join(which.file()),
+        }
     }
 
-    /// Replaces `limits` or `usage` (`None` removes it); false when there is no such device.
-    fn write(&self, device_id: &str, key: &str, value: Option<Value>) -> bool {
-        match self {
-            Records::Peers(peers) => {
-                let written = locked(peers)
-                    .update_kept(device_id, vec![(key.to_owned(), value)])
-                    .is_ok_and(|next| next.is_some());
-                if written {
-                    store::save_later(peers);
-                }
-                written
-            }
-            Records::Web(devices) => {
-                let patch = match key {
-                    "limits" => Patch {
-                        limits: Some(value),
+    fn run(&self, device: &str, action: Action<'_>, day: &str) -> Result<Value, Fault> {
+        let apply = |pairing, limits: Option<&Value>, usage: Option<&Value>| {
+            if let Action::SetLimits(new) = action {
+                let none = new.requests_per_day.is_none() && new.tokens_per_day.is_none();
+                return Ok((
+                    json!(true),
+                    Patch {
+                        limits: Some((!none).then(|| new.json())),
                         usage: None,
                     },
-                    _ => Patch {
-                        limits: None,
-                        usage: Some(value),
-                    },
-                };
-                devices.update_quota(device_id, patch)
+                ));
             }
+            let record = Record::new(pairing, limits, usage);
+            ledger::apply(&ledger_path(&self.path, device), record, action, day)
+        };
+        let result = match &self.records {
+            Records::Peers(peers) => {
+                let result = locked(peers).edit_quota(device, apply)?;
+                if result.as_ref().is_some_and(|(_, changed)| *changed) {
+                    store::save_later(peers);
+                }
+                result.map(|(answer, _)| answer)
+            }
+            Records::Web(devices) => devices.edit_quota(device, apply)?,
+        };
+        match (result, action) {
+            (Some(answer), _) => Ok(answer),
+            (None, Action::Reserve { .. }) => {
+                Err(Fault::new("unknown_device", "Device is not paired"))
+            }
+            (None, Action::SetLimits(_)) => Ok(Value::Bool(false)),
+            (None, _) => Ok(Value::Null),
+        }
+    }
+}
+
+/// A device id is not a file name, even on a case-insensitive file system.
+fn ledger_path(dir: &Path, device: &str) -> PathBuf {
+    dir.join(crate::hex(&Sha256::digest(device.as_bytes())))
+        .with_extension("json")
+}
+
+/// Recover the public projection when the core stopped after committing the private ledger.
+pub(crate) fn restore_usage(file: &Path, which: Which, rows: &mut [Value], paired_at: &str) {
+    if rows.is_empty() {
+        return;
+    }
+    let path = file.with_file_name(which.file());
+    for row in rows {
+        if let (Some(id), Some(pairing)) = (row["deviceId"].as_str(), row[paired_at].as_f64())
+            && let Ok(Some(usage)) = ledger::latest(&ledger_path(&path, id), pairing)
+            && row["usage"]["day"]
+                .as_str()
+                .is_none_or(|stored| stored <= usage.day.as_str())
+        {
+            row["usage"] = usage.json();
         }
     }
 }
@@ -194,19 +226,12 @@ fn today() -> String {
     format!("{}-{:02}-{:02}", day.year, day.month, day.day)
 }
 
-/// Today's usage of a record (zero once the stored day is over).
-fn used(record: &Record, today: &str) -> (u64, u64) {
-    match &record.usage {
-        Some(usage) if usage.day == today => (usage.requests, usage.tokens),
-        _ => (0, 0),
-    }
-}
-
-/// Which limit stops `requests` more of this device's model requests today, or none.
-fn refusal(records: &Records, device_id: &str, requests: u64) -> Option<&'static str> {
-    let record = records.get(device_id)?;
-    let limits = record.limits?;
-    let (requests_used, tokens_used) = used(&record, &today());
+fn refusal(
+    limits: Limits,
+    requests_used: u64,
+    tokens_used: u64,
+    requests: u64,
+) -> Option<&'static str> {
     if limits
         .requests_per_day
         .is_some_and(|limit| requests_used.saturating_add(requests) > limit)
@@ -222,61 +247,22 @@ fn refusal(records: &Records, device_id: &str, requests: u64) -> Option<&'static
     None
 }
 
-fn record(records: &Records, device_id: &str, requests: u64, tokens: u64) {
-    let Some(current) = records.get(device_id) else {
-        return;
-    };
-    let day = today();
-    let (requests_used, tokens_used) = used(&current, &day);
-    let usage = Usage {
-        day,
-        requests: requests_used + requests,
-        tokens: tokens_used + tokens,
-    };
-    records.write(device_id, "usage", Some(usage.json()));
-}
-
-fn reserve(records: &Records, device_id: &str, requests: u64) -> Value {
-    if let Some(refusal) = refusal(records, device_id, requests) {
-        return json!({ "ok": false, "refusal": refusal });
-    }
-    let day = today();
-    record(records, device_id, requests, 0);
-    json!({ "ok": true, "day": day })
-}
-
-/// Gives back `requests` of `day`'s count; a refund after the day turned over leaves the new day alone.
-fn refund(records: &Records, device_id: &str, day: &str, requests: u64) {
-    let Some(Record {
-        usage: Some(usage), ..
-    }) = records.get(device_id)
-    else {
-        return;
-    };
-    if usage.day != day {
-        return;
-    }
-    let usage = Usage {
-        requests: usage.requests.saturating_sub(requests),
-        ..usage
-    };
-    records.write(device_id, "usage", Some(usage.json()));
-}
-
-fn set_limits(records: &Records, device_id: &str, limits: Limits) -> bool {
-    let none = limits.requests_per_day.is_none() && limits.tokens_per_day.is_none();
-    records.write(device_id, "limits", (!none).then(|| limits.json()))
-}
-
-fn view(records: &Records, device_id: &str) -> Value {
-    let Some(record) = records.get(device_id) else {
-        return Value::Null;
-    };
-    let (requests, tokens) = used(&record, &today());
-    json!({
-        "limits": record.limits.unwrap_or_default().json(),
-        "usage": { "requests": requests, "tokens": tokens },
-    })
+#[derive(Clone, Copy)]
+enum Action<'a> {
+    Reserve {
+        id: &'a str,
+        attempt: &'a str,
+        requests: u64,
+    },
+    Refund {
+        id: &'a str,
+    },
+    Record {
+        requests: u64,
+        tokens: u64,
+    },
+    SetLimits(Limits),
+    View,
 }
 
 #[derive(Deserialize)]
@@ -288,46 +274,45 @@ struct Args {
     #[serde(default)]
     tokens: Option<u64>,
     #[serde(default)]
-    day: Option<String>,
+    reservation_id: Option<String>,
+    #[serde(default)]
+    attempt_id: Option<String>,
     #[serde(default)]
     limits: Option<Limits>,
 }
 
+fn required_id<'a>(id: Option<&'a str>, name: &str) -> Result<&'a str, Fault> {
+    id.filter(|id| !id.is_empty() && id.len() <= 256)
+        .ok_or_else(|| Fault::new("invalid_params", format!("{name} must have 1 to 256 bytes")))
+}
+
 fn call(id: u64, method: &str, raw: &RawValue) -> Outcome {
     let run = || -> Result<Value, Fault> {
-        let records = locked(&INSTANCES)
+        let quota = locked(&INSTANCES)
             .get(&id)
             .cloned()
             .ok_or_else(|| Fault::new("no_instance", "No such quota instance"))?;
         let args: Args = params(raw)?;
-        let device = args.device_id.as_str();
-        let _counting = locked(&COUNTING);
-        Ok(match method {
-            "reserve" => reserve(&records, device, args.requests.unwrap_or(1)),
-            "refund" => {
-                let day = args
-                    .day
-                    .ok_or_else(|| Fault::new("invalid_params", "a refund names its day"))?;
-                refund(&records, device, &day, args.requests.unwrap_or(1));
-                Value::Null
-            }
-            "record" => {
-                record(
-                    &records,
-                    device,
-                    args.requests.unwrap_or(0),
-                    args.tokens.unwrap_or(0),
-                );
-                Value::Null
-            }
-            "setLimits" => json!(set_limits(
-                &records,
-                device,
-                args.limits.unwrap_or_default()
-            )),
-            "view" => view(&records, device),
+        let action = match method {
+            "reserve" => Action::Reserve {
+                id: required_id(args.reservation_id.as_deref(), "reservationId")?,
+                attempt: required_id(args.attempt_id.as_deref(), "attemptId")?,
+                requests: args.requests.ok_or_else(|| {
+                    Fault::new("invalid_params", "a reservation needs a request count")
+                })?,
+            },
+            "refund" => Action::Refund {
+                id: required_id(args.reservation_id.as_deref(), "reservationId")?,
+            },
+            "record" => Action::Record {
+                requests: args.requests.unwrap_or(0),
+                tokens: args.tokens.unwrap_or(0),
+            },
+            "setLimits" => Action::SetLimits(args.limits.unwrap_or_default()),
+            "view" => Action::View,
             _ => return Err(Fault::new("no_method", format!("quota has no {method}"))),
-        })
+        };
+        quota.run(&args.device_id, action, &today())
     };
     Outcome::Now(run())
 }

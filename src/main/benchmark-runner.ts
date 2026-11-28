@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { z } from "zod";
 import { codedError, ipcErrorCode } from "../shared/ipc-error-codes";
 import type { IpcBenchmarkRunOptions, IpcBenchmarkRunResult, IpcBenchmarkSummary } from "../shared/ipc-types";
+import { modelNotStarted } from "../shared/rpc-types";
 import { OMP_TELEMETRY_OFF, ompPathEnv } from "./omp-runtime";
 import { needsShell, spawnArgs, spawnCommand } from "./spawn";
 
@@ -117,17 +118,18 @@ export class BenchmarkRunner {
 		options: IpcBenchmarkRunOptions,
 		env: NodeJS.ProcessEnv,
 	): Promise<IpcBenchmarkRunResult> {
-		if (this.#child) return { success: false, error: "A benchmark is already running", code: "benchmark_running" };
+		if (this.#child)
+			return modelNotStarted({ success: false, error: "A benchmark is already running", code: "benchmark_running" });
 		let args: string[];
 		try {
 			args = benchmarkArgs(options);
 		} catch (error) {
 			const code = ipcErrorCode(error);
-			return {
+			return modelNotStarted({
 				success: false,
 				error: error instanceof Error ? error.message : String(error),
 				...(code ? { code } : {}),
-			};
+			});
 		}
 		this.#terminationReason = null;
 		const child = spawn(spawnCommand(ompBin), spawnArgs(ompBin, args), {
@@ -161,7 +163,10 @@ export class BenchmarkRunner {
 		};
 		child.stdout?.on("data", (chunk: Buffer) => append("stdout", chunk));
 		child.stderr?.on("data", (chunk: Buffer) => append("stderr", chunk));
-		child.once("error", error => finish({ success: false, error: error.message, stderr: stderr || undefined }));
+		child.once("error", error => {
+			const result = { success: false as const, error: error.message, stderr: stderr || undefined };
+			finish(child.pid === undefined ? modelNotStarted(result) : result);
+		});
 		child.once("close", exitCode => {
 			if (this.#terminationReason) {
 				finish({ success: false, error: this.#terminationReason, stderr: stderr || undefined });

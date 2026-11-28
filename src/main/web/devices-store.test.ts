@@ -231,12 +231,13 @@ describe("model quota on a web device", () => {
 		const devices = await store();
 		const quota = new PeerQuota("web", dir, () => {});
 		quota.setLimits(record.deviceId, { requestsPerDay: 2 });
-		const first = quota.reserve(record.deviceId);
+		const first = quota.reserve(record.deviceId, 1, "first");
 		expect(first.ok).toBe(true);
-		expect(quota.reserve(record.deviceId).ok).toBe(true);
-		expect(quota.reserve(record.deviceId)).toEqual({ ok: false, refusal: "requests" });
+		expect(quota.reserve(record.deviceId, 1, "second").ok).toBe(true);
+		expect(quota.reserve(record.deviceId, 1, "third")).toEqual({ ok: false, refusal: "requests" });
 		if (first.ok) first.refund();
-		expect(quota.reserve(record.deviceId).ok).toBe(true);
+		expect(() => quota.reserve(record.deviceId, 1, "first")).toThrow("[quota_duplicate]");
+		expect(quota.reserve(record.deviceId, 1, "third").ok).toBe(true);
 		quota.record(record.deviceId, { tokens: 500 });
 		expect(quota.view(record.deviceId)?.usage).toEqual({ requests: 2, tokens: 500 });
 		await devices.flush();

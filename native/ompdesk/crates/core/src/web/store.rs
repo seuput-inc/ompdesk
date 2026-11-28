@@ -222,10 +222,19 @@ impl FileDevices {
 
     fn load(dir: &Path, hub: Arc<Hub>) -> FileDevices {
         let file = dir.join(DEVICES_FILE);
+        let mut document = read_document(&file);
+        if let Some(rows) = document.get_mut("devices").and_then(Value::as_array_mut) {
+            crate::remote::quota::restore_usage(
+                &file,
+                crate::remote::quota::Which::Web,
+                rows,
+                "createdAt",
+            );
+        }
         FileDevices {
             hub,
             state: Mutex::new(DevicesState {
-                book: Book::parse(&read_document(&file)),
+                book: Book::parse(&document),
                 // One more than the empty count: a snapshot taken at open is newer than none.
                 lane: Lane {
                     version: 1,
@@ -291,10 +300,32 @@ impl FileDevices {
         locked(&self.state).book.get(device_id).cloned()
     }
 
-    /// The per-device limit's write (`remote/quota.rs`): limits or counts in memory, the file to the writer thread and
-    /// the list to main, in one step; false when there is no such device.
-    pub fn update_quota(&self, device_id: &str, patch: Patch) -> bool {
-        self.apply(None, |book| book.update(device_id, patch))
+    /// A device cannot be revoked between quota admission and publishing its committed usage to main.
+    pub(crate) fn edit_quota<T>(
+        &self,
+        device_id: &str,
+        op: impl FnOnce(f64, Option<&Value>, Option<&Value>) -> Result<(T, Patch), Fault>,
+    ) -> Result<Option<T>, Fault> {
+        self.apply(None, |book| {
+            let Some(device) = book.get(device_id) else {
+                return (Ok(None), Effect::default());
+            };
+            match op(
+                device.created_at as f64,
+                device.limits.as_ref(),
+                device.usage.as_ref(),
+            ) {
+                Ok((out, patch)) => {
+                    let effect = if patch.usage.is_some() || patch.limits.is_some() {
+                        book.update(device_id, patch).1
+                    } else {
+                        Effect::default()
+                    };
+                    (Ok(Some(out)), effect)
+                }
+                Err(fault) => (Err(fault), Effect::default()),
+            }
+        })
     }
 }
 

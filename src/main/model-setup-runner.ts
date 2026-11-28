@@ -21,6 +21,7 @@ import {
 	type ModelSetupStatus,
 	parseModelSetupPlan,
 } from "../shared/model-setup";
+import { modelNotStarted } from "../shared/rpc-types";
 import { CoreError, core } from "./core/process";
 import { OMP_TELEMETRY_OFF, ompPathEnv } from "./omp-runtime";
 
@@ -74,12 +75,15 @@ export class ModelSetupRunner {
 	}
 
 	async run(ompBin: string, input: unknown, env: NodeJS.ProcessEnv): Promise<IpcModelSetupRunResult> {
-		if (this.#live) return failure("Model research is already running", { code: "model_setup_running" });
+		if (this.#live)
+			return modelNotStarted(failure("Model research is already running", { code: "model_setup_running" }));
 		const parsed = ModelSetupRequestSchema.safeParse(input);
 		if (!parsed.success)
-			return failure(`Invalid model setup request: ${parsed.error.issues[0]?.message ?? ""}`, {
-				code: "model_setup_invalid",
-			});
+			return modelNotStarted(
+				failure(`Invalid model setup request: ${parsed.error.issues[0]?.message ?? ""}`, {
+					code: "model_setup_invalid",
+				}),
+			);
 		const request = parsed.data;
 		const run = `${process.pid}.${++sequence}`;
 		const ended = Promise.withResolvers<Ended>();

@@ -13,11 +13,13 @@
  * Every message between the core and main is handled in the order it came: a page's call reaches main before the
  * event that ends its connection, and a call's answer (`web.reply`) leaves after every push main made before it.
  */
+import { hash } from "node:crypto";
 import { BOTS_COMMAND, BOTS_STATE } from "../../shared/bots";
 import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICE_CONNECTED, WEB_DEVICES_CHANGED, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
-import type { AgentSessionEvent } from "../../shared/rpc-types";
+import type { AgentSessionEvent, RpcResponse } from "../../shared/rpc-types";
+import { SCHEDULES_COMMAND } from "../../shared/schedule-channels";
 import { SIDEBAR_PROJECTS_COMMAND, SIDEBAR_PROJECTS_STATE } from "../../shared/sidebar-projects";
 import {
 	holdsBlock,
@@ -29,8 +31,9 @@ import {
 	type WebPermission,
 } from "../../shared/web-protocol";
 import { CORE_EXITED, type CoreProcess, core } from "../core/process";
+import { deliverOnce } from "../delivery-ledger";
 import { removedModeRefusal } from "../local/modes";
-import type { PeerQuota } from "../remote/peer-quota";
+import { machineModelNotStarted, type PeerQuota } from "../remote/peer-quota";
 import { commandUsesModel } from "../remote/quota-commands";
 import type { BlobStore } from "./blobs";
 import type { WebDevice, WebDevices } from "./devices-store";
@@ -125,7 +128,7 @@ export interface WsRouterDeps {
 		send(channel: string, caller: IpcCaller, args: readonly unknown[]): void;
 	};
 	devices: Pick<WebDevices, "get">;
-	windows: Pick<WebWindows, "windowFor" | "all"> & { callerFor(deviceId: string, connId?: string): IpcCaller };
+	windows: Pick<WebWindows, "windowFor" | "all" | "callerFor">;
 	quota: Pick<PeerQuota, "reserve" | "record">;
 	webChannels: WebChannelTable;
 	features: () => WebFeatures;
@@ -170,6 +173,7 @@ export interface RouterConfig {
 interface CallEvent {
 	host: number;
 	call: number;
+	requestId?: string | null;
 	answer: boolean;
 	device: string;
 	connId: string;
@@ -248,7 +252,12 @@ export function convertsForModel(mimeType: string): boolean {
 }
 
 /** The command and the tab a model-using RPC payload names, for the quota. */
-function rpcPayload(payload: unknown): { command: unknown; tabId: string | undefined } {
+interface RpcPayload {
+	command: unknown;
+	tabId: string | undefined;
+}
+
+function rpcPayload(payload: unknown): RpcPayload {
 	if (typeof payload !== "object" || payload === null) return { command: undefined, tabId: undefined };
 	const command = "command" in payload ? payload.command : undefined;
 	const tabId = "tabId" in payload && typeof payload.tabId === "string" ? payload.tabId : undefined;
@@ -257,11 +266,6 @@ function rpcPayload(payload: unknown): { command: unknown; tabId: string | undef
 
 function isCommandWithType(command: unknown): command is Parameters<typeof commandUsesModel>[0] {
 	return typeof command === "object" && command !== null && "type" in command && typeof command.type === "string";
-}
-
-/** An RPC response that reports failure: the request it reserved is given back. */
-function refused(result: unknown): boolean {
-	return typeof result === "object" && result !== null && "success" in result && result.success === false;
 }
 
 /** `IPC_POLICY` as the core's router reads it, made once. */
@@ -539,8 +543,8 @@ export class WsRouter {
 	}
 
 	async #dispatch(event: CallEvent, args: readonly unknown[]): Promise<unknown> {
-		const { devices, windows, webChannels, registry } = this.#deps;
-		const { device: deviceId, ch: channel, dir } = event;
+		const { devices, windows, webChannels } = this.#deps;
+		const { device: deviceId, ch: channel } = event;
 		const device = devices.get(deviceId);
 		if (!device) throw codedError("web_forbidden", "This device is no longer paired");
 		const request = args[0];
@@ -560,46 +564,108 @@ export class WsRouter {
 		if (own) return own.handler({ deviceId, device, win, connId: event.connId }, args);
 
 		// A command of a removed mode is refused before it is counted against the device's quota (local/modes.ts).
-		if (channel === IPC_COMMANDS.RPC_COMMAND || channel === IPC_COMMANDS.RPC_COMMAND_FOR_TAB) {
-			const { command } = rpcPayload(request);
-			const refusal = isCommandWithType(command) ? removedModeRefusal(command) : undefined;
+		const rpc =
+			channel === IPC_COMMANDS.RPC_COMMAND || channel === IPC_COMMANDS.RPC_COMMAND_FOR_TAB
+				? rpcPayload(request)
+				: null;
+		if (rpc && isCommandWithType(rpc.command)) {
+			const refusal = removedModeRefusal(rpc.command);
 			if (refusal) return { type: "response", success: false, error: refusal, code: "mode_removed" };
+			if (rpc.command.type === "prompt" && rpc.command.deliveryId !== undefined) {
+				const { deliveryId, id } = rpc.command;
+				if (!event.requestId || typeof deliveryId !== "string" || deliveryId.length === 0)
+					throw codedError("web_forbidden", "Invalid prompt delivery or request id");
+				const key = `web:delivery:${hash("sha256", JSON.stringify([deviceId, deliveryId]))}`;
+				// This host owns the outbox receipt. Do not claim the page's unscoped id again in IPC or on a peer.
+				delete rpc.command.deliveryId;
+				const reply = await deliverOnce(
+					key,
+					() => this.#forward(event, args, win, rpc, key) as Promise<RpcResponse>,
+				);
+				return { ...reply, id };
+			}
+			if (rpc.command.type === "agent_control_mail" && typeof rpc.command.details?.id === "string") {
+				const key = `web:mail:${hash("sha256", JSON.stringify([deviceId, rpc.command.details.id]))}`;
+				return this.#forward(event, args, win, rpc, key);
+			}
 		}
-		const caller = windows.callerFor(deviceId, event.connId);
-		const refund = dir === "invoke" ? this.#meter(deviceId, channel, args, win) : null;
+		return this.#forward(event, args, win, rpc);
+	}
+
+	async #forward(
+		event: CallEvent,
+		args: readonly unknown[],
+		win: WebClientWindow,
+		rpc: RpcPayload | null,
+		deliveryKey?: string,
+	): Promise<unknown> {
+		const { registry, windows } = this.#deps;
+		const { device: deviceId, ch: channel, dir } = event;
+		const request = args[0];
+		let scheduleReservationId: string | undefined;
+		if (
+			channel === SCHEDULES_COMMAND &&
+			typeof request === "object" &&
+			request !== null &&
+			"action" in request &&
+			(request.action === "runNow" || request.action === "sampleCall")
+		) {
+			if (!event.requestId) throw codedError("web_forbidden", "A schedule run needs a request id");
+			// Two phones reach the downstream computer as one peer. Neither may claim the other's run.
+			const scope = JSON.stringify([deviceId, request.action, event.requestId]);
+			scheduleReservationId = `web-${hash("sha256", scope)}`;
+		}
+		const caller = windows.callerFor(deviceId, event.connId, scheduleReservationId);
+		const refund = dir === "invoke" ? this.#meter(event, request, rpc?.command, deliveryKey) : null;
+		let landed: readonly unknown[];
 		try {
 			// Synchronous unless a picture came by upload, so plain calls keep their order and timing.
-			const landed =
+			landed =
 				channel === IPC_COMMANDS.FS_UPLOAD_TO_HOST
 					? await this.#landHostUpload(deviceId, args)
 					: holdsBlock(args, isWebUploadedImage)
 						? await this.#landUploads(deviceId, args)
 						: args;
-			if (dir === "send") {
-				registry.send(
-					channel,
-					caller,
-					channel === IPC_COMMANDS.FS_MEDIA_RELEASE ? await this.#translateMediaRelease(deviceId, landed) : landed,
-				);
-				return undefined;
-			}
-			const result = await registry.invoke(channel, caller, landed);
-			if (refund && refused(result)) refund();
-			return this.#shape(deviceId, channel, args, result, win);
 		} catch (error) {
+			// No call reached the registry. A throw or lost reply after invoke is not proof it never started.
 			refund?.();
 			throw error;
 		}
+		if (dir === "send") {
+			registry.send(
+				channel,
+				caller,
+				channel === IPC_COMMANDS.FS_MEDIA_RELEASE ? await this.#translateMediaRelease(deviceId, landed) : landed,
+			);
+			return undefined;
+		}
+		if (refund && rpc) {
+			const tab = rpc.tabId ?? this.#deps.activeTab?.(win);
+			if (tab) this.noteDriver(tab, deviceId);
+		}
+		const result = await registry.invoke(channel, caller, landed);
+		if (refund && machineModelNotStarted(result)) refund();
+		return this.#shape(deviceId, channel, args, result, win);
 	}
 
 	/**
 	 * Count a model command against the device's daily limit before it runs (synchronously, so parallel
 	 * callers see each other). The returned function gives the request back; null when the call is free.
 	 */
-	#meter(deviceId: string, channel: string, args: readonly unknown[], win: WebClientWindow): (() => void) | null {
-		const weight = this.#modelRequests(deviceId, channel, args, win);
-		if (weight === 0) return null;
-		const reservation = this.#deps.quota.reserve(deviceId, weight);
+	#meter(event: CallEvent, request: unknown, command: unknown, deliveryKey?: string): (() => void) | null {
+		const { device: deviceId, ch, requestId } = event;
+		let weight = 1;
+		if (isCommandWithType(command)) {
+			if (!commandUsesModel(command)) return null;
+		} else if (ch === IPC_COMMANDS.BENCH_RUN) {
+			const models = typeof request === "object" && request !== null && "models" in request ? request.models : null;
+			const runs = typeof request === "object" && request !== null && "runs" in request ? request.runs : null;
+			const count = Array.isArray(models) && typeof runs === "number" ? models.length * runs : 1;
+			weight = Math.max(1, Number.isFinite(count) ? Math.floor(count) : 1);
+		} else if (ch !== IPC_COMMANDS.MODEL_SETUP_RUN) return null;
+		if (!requestId) throw codedError("web_forbidden", "A metered call needs a request id");
+		const reservationId = deliveryKey ?? `web:${ch}:${requestId}`;
+		const reservation = this.#deps.quota.reserve(deviceId, weight, reservationId);
 		if (!reservation.ok) {
 			throw codedError(
 				"remote_limit_reached",
@@ -609,25 +675,6 @@ export class WsRouter {
 			);
 		}
 		return reservation.refund;
-	}
-
-	/** How many model requests a call spends: 0 for a free one. */
-	#modelRequests(deviceId: string, channel: string, args: readonly unknown[], win: WebClientWindow): number {
-		if (channel === IPC_COMMANDS.RPC_COMMAND || channel === IPC_COMMANDS.RPC_COMMAND_FOR_TAB) {
-			const { command, tabId } = rpcPayload(args[0]);
-			if (!isCommandWithType(command) || !commandUsesModel(command)) return 0;
-			const tab = tabId ?? this.#deps.activeTab?.(win) ?? null;
-			if (tab) this.noteDriver(tab, deviceId);
-			return 1;
-		}
-		if (channel === IPC_COMMANDS.BENCH_RUN) {
-			const options = args[0];
-			const models = typeof options === "object" && options !== null && "models" in options ? options.models : null;
-			const runs = typeof options === "object" && options !== null && "runs" in options ? options.runs : null;
-			const count = Array.isArray(models) && typeof runs === "number" ? models.length * runs : 1;
-			return Math.max(1, Number.isFinite(count) ? Math.floor(count) : 1);
-		}
-		return channel === IPC_COMMANDS.MODEL_SETUP_RUN ? 1 : 0;
 	}
 
 	/** What a page may see: no secret-looking preferences, no raw bytes or `omp-media://` address. */

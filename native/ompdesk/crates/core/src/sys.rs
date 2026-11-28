@@ -146,6 +146,35 @@ pub(crate) fn copy_file(source: &str, target: &str, exclusive: bool) -> std::io:
     Err(error)
 }
 
+#[cfg(windows)]
+fn move_file(from: &std::path::Path, to: &std::path::Path, flags: u32) -> std::io::Result<()> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
+    }
+    let wide = |path: &std::path::Path| {
+        wide_path(
+            path.to_str()
+                .ok_or_else(|| std::io::Error::from_raw_os_error(123))?,
+        )
+    };
+    let from = wide(from)?;
+    let to = wide(to)?;
+    // SAFETY: both NUL-terminated buffers live through the synchronous call.
+    if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) } != 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(windows)]
+pub(crate) fn replace_durable(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    const MOVEFILE_REPLACE_EXISTING: u32 = 1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 8;
+    move_file(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)
+}
+
 /// The setup repair must not replace a destination created between its probe and the rename.
 pub(crate) fn move_launcher_exclusive(
     from: &std::path::Path,
@@ -173,22 +202,10 @@ pub(crate) fn move_launcher_exclusive(
         }
     };
     #[cfg(windows)]
-    let ok = {
-        #[link(name = "kernel32")]
-        unsafe extern "system" {
-            fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
-        }
-        let wide = |path: &std::path::Path| {
-            wide_path(
-                path.to_str()
-                    .ok_or_else(|| std::io::Error::from_raw_os_error(123))?,
-            )
-        };
-        let from = wide(from)?;
-        let to = wide(to)?;
-        // SAFETY: both buffers are NUL-terminated and valid for the call. Zero flags forbids replacement.
-        unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), 0) != 0 }
-    };
+    {
+        move_file(from, to, 0)
+    }
+    #[cfg(not(windows))]
     if ok {
         Ok(())
     } else {

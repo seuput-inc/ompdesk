@@ -5,6 +5,7 @@
  * the core's devices instance's (`crates/core/src/remote/devices/`); main answers the device's hello (`open`), which
  * makes the link one of this host's connections.
  */
+import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import { core } from "../core/process";
@@ -38,7 +39,14 @@ export type HostMachineInfo = Pick<HostHello, "platform" | "ompVersion" | "home"
 
 export interface HostServices {
 	/** `signal` aborts when the device gives up on the request or the link ends: a read may stop, a write never. */
-	call(peer: PeerInfo, method: string, params: unknown, conn: HostConnection, signal?: AbortSignal): Promise<unknown>;
+	call(
+		peer: PeerInfo,
+		method: string,
+		params: unknown,
+		conn: HostConnection,
+		signal?: AbortSignal,
+		requestId?: string,
+	): Promise<unknown>;
 	disconnected(peer: PeerInfo, conn: HostConnection): void;
 }
 
@@ -97,6 +105,7 @@ function slimNames(slim: LinkSlim): string {
 
 class PeerConnection implements HostConnection {
 	readonly link: Link;
+	readonly legacyEpoch = randomUUID();
 	peer: PeerInfo;
 	readonly slim: LinkSlim;
 	/** The device's OMPdesk version, from its hello. */
@@ -308,12 +317,12 @@ export class RemoteHost {
 		}
 		const request = WireRequest.safeParse(message);
 		if (!request.success) return;
-		const { id, method, params } = request.data;
+		const { id, method, params, epoch } = request.data;
 		if (method === NAME_METHODS.peerName || method === NAME_METHODS.hostRename) {
 			void this.#serveName(conn, id, method, params);
 			return;
 		}
-		void this.#serve(conn, id, method, params);
+		void this.#serve(conn, id, method, params, `${epoch ?? conn.legacyEpoch}:${id}`);
 	}
 
 	/** The device names itself (`peer.name`), or renames this computer (`host.rename`). */
@@ -358,7 +367,7 @@ export class RemoteHost {
 		return conns.length > 0;
 	}
 
-	async #serve(conn: PeerConnection, id: number, method: string, params: unknown): Promise<void> {
+	async #serve(conn: PeerConnection, id: number, method: string, params: unknown, requestId: string): Promise<void> {
 		let reply: object;
 		const controller = new AbortController();
 		conn.open.set(id, controller);
@@ -366,7 +375,7 @@ export class RemoteHost {
 			const result =
 				method === DEVICE_ORDER_EXCHANGE && this.#opts.exchangeDeviceOrder
 					? await this.#opts.exchangeDeviceOrder(conn.peer, params)
-					: await this.#opts.services.call(conn.peer, method, params, conn, controller.signal);
+					: await this.#opts.services.call(conn.peer, method, params, conn, controller.signal, requestId);
 			reply = { t: "res", id, ok: true, result };
 		} catch (error) {
 			reply = { t: "res", id, ok: false, error: errorPayload(error) };

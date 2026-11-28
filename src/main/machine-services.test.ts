@@ -354,6 +354,9 @@ describe("machineFor", () => {
 			{ device: "host-b", method: "host.schedules.log", params: { runId: "r1" } },
 			{ device: "host-b", method: "host.schedules.create", params: { draft } },
 		]);
+		const runNow = { action: "runNow" as const, id: "s1" };
+		await remote.schedules(runNow, undefined, undefined, "web-receipt");
+		expect(host.calls.at(-1)?.params).toEqual({ request: runNow, requestId: "web-receipt" });
 		const garbled = new RemoteMachine({
 			request: fakeHost(() => ({ paused: "no" })).request,
 			device: "host-b",

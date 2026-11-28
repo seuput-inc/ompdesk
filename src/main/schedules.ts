@@ -80,6 +80,9 @@ export type ThreadWake = Schedule & { thread?: string };
 
 export type RunLauncher = (schedule: Schedule, files: { log: string; prompt: string }) => Promise<RunProcess>;
 
+/** The production launcher has not yet sent anything to the supervisor. */
+class RunNotDispatched extends Error {}
+
 /** A paired device's daily model requests on this computer (`PeerQuota`): one counted, or why not. */
 export type ScheduleCharge = { ok: true; refund(): void } | { ok: false; reason: string };
 
@@ -107,7 +110,9 @@ export interface ScheduleServiceOptions {
 	 * Count one run against `device`'s daily model limit here. A schedule a paired device saved (`Schedule.device`)
 	 * is charged at every start, timed or not; absent = no device is ever charged (tests, no remote host).
 	 */
-	reserve?: (device: string) => ScheduleCharge;
+	reserve?: (device: string, reservationId: string) => ScheduleCharge;
+	/** Admit a delivery once before coalescing it with others; the resulting run, not each delivery, costs one request. */
+	remember?: (device: string, reservationId: string) => boolean;
 	/**
 	 * The clock, where a test owns it: the core then keeps no timer and reads no clock, this side checks every
 	 * `tickMs` and says the time with each request. Absent: the core's own timer and the system's clock.
@@ -243,15 +248,24 @@ export class ScheduleService {
 			),
 			host.on(
 				"schedules.start",
-				mine<StartAsk>(ask => void this.#run(ask)),
+				mine<StartAsk>((ask, generation) => void this.#run(ask, generation)),
 			),
 			host.on(
 				"schedules.stop",
 				mine<{ run: string }>(({ run }) => this.#runs.get(run)?.stop()),
 			),
 			host.on(
+				"schedules.remember",
+				mine<{ ask: number; device: string; reservationId: string }>(
+					({ ask, device, reservationId }, generation) =>
+						void this.#remember(ask, device, reservationId, generation),
+				),
+			),
+			host.on(
 				"schedules.reserve",
-				mine<{ ask: number; device: string }>(({ ask, device }) => this.#reserve(ask, device)),
+				mine<{ ask: number; device: string; reservationId: string }>(({ ask, device, reservationId }, generation) =>
+					this.#reserve(ask, device, reservationId, generation),
+				),
 			),
 			host.on(
 				"schedules.refund",
@@ -482,13 +496,18 @@ export class ScheduleService {
 	 * schedule that device's (its runs count against its daily model limit here); a save here makes it this computer's.
 	 * A run now from a device is charged to that device and refused past its limit.
 	 */
-	async command(request: SchedulesRequest, origin?: string, hostWindow?: boolean): Promise<SchedulesState> {
+	async command(
+		request: SchedulesRequest,
+		origin?: string,
+		hostWindow?: boolean,
+		reservationId?: string,
+	): Promise<SchedulesState> {
 		// A thread chat's mirror carries the Slack app's token, which only this side holds: never a paired device's.
 		if (request.action === "mirror") {
 			if (origin !== undefined) throw new Error("A bot's Slack thread chat is this computer's own");
 			return this.mirrorAction(request);
 		}
-		return this.#send<SchedulesState>("schedules.command", { request, origin, hostWindow });
+		return this.#send<SchedulesState>("schedules.command", { request, origin, hostWindow, reservationId });
 	}
 
 	/**
@@ -547,39 +566,63 @@ export class ScheduleService {
 		return this.#closing;
 	}
 
+	async #remember(ask: number, device: string, reservationId: string, generation: number): Promise<void> {
+		let accepted = false;
+		let refused: string | undefined;
+		try {
+			if (!this.#options.remember) throw new Error("Quota unavailable");
+			accepted = this.#options.remember(device, reservationId);
+		} catch (error) {
+			refused = error instanceof Error ? error.message : String(error);
+		}
+		await this.#call("schedules.remembered", { ask, accepted, refused }, generation).catch(() => undefined);
+	}
+
 	/** Counts a start against its device, tells the core, and keeps how to give it back until the run started. */
-	#reserve(ask: number, device: string): void {
-		const charge = this.#options.reserve?.(device) ?? { ok: true, refund: () => undefined };
+	#reserve(ask: number, device: string, reservationId: string, generation: number): void {
+		let charge: ScheduleCharge;
+		try {
+			charge = this.#options.reserve?.(device, reservationId) ?? { ok: false, reason: "Quota unavailable" };
+		} catch (error) {
+			charge = { ok: false, reason: error instanceof Error ? error.message : String(error) };
+		}
 		if (charge.ok) this.#refunds.set(ask, charge.refund);
-		// Not in its turn: a run now that waits for this answer holds the turn.
-		this.#call("schedules.reserved", { ask, ...(charge.ok ? {} : { refused: charge.reason }) }).catch(() => {
-			// A core that never heard the answer starts nothing on it.
-			this.#refunds.get(ask)?.();
-			this.#refunds.delete(ask);
-		});
+		// A lost reply does not prove the core missed the reservation. Only its explicit pre-dispatch refund counts.
+		this.#call("schedules.reserved", { ask, ...(charge.ok ? {} : { refused: charge.reason }) }, generation).catch(
+			() => undefined,
+		);
 	}
 
 	/** Starts the run the core asks for and follows it to its end. */
-	async #run({ run, schedule, files, wake, charge }: StartAsk): Promise<void> {
+	async #run({ run, schedule, files, wake, charge }: StartAsk, generation: number): Promise<void> {
+		// Consume this admission before dispatch. A repeated start or an ambiguous launcher failure cannot spend it twice.
+		const refund = charge === null ? undefined : this.#refunds.get(charge);
+		if (charge !== null && !this.#refunds.delete(charge)) return;
 		this.#runs.set(run, null);
 		let result: { code: number | null; error?: string };
 		try {
-			const process = wake ? await this.#options.wake?.(schedule, run) : await this.#options.launch(schedule, files);
-			if (!process) throw new Error("Waking a session is not available here");
+			const process = wake
+				? await this.#options.wake?.(schedule, run)
+				: await this.#options.launch(schedule, files).catch(error => {
+						if (error instanceof RunNotDispatched) refund?.();
+						throw error;
+					});
+			if (!process) {
+				refund?.();
+				throw new Error("Waking a session is not available here");
+			}
 			this.#runs.set(run, process);
-			// Started: the request it was charged with is spent.
-			if (charge !== null) this.#refunds.delete(charge);
 			if (this.#disposed) process.stop();
 			// The core sends a stop that was asked for meanwhile once it hears the run started.
-			if (process.opened) await this.#send("schedules.threadChat", { run, session: process.opened });
-			await this.#send("schedules.started", { run });
+			if (process.opened) await this.#send("schedules.threadChat", { run, session: process.opened }, generation);
+			await this.#send("schedules.started", { run }, generation);
 			result = await process.done;
 		} catch (error) {
 			result = { code: null, error: error instanceof Error ? error.message : String(error) };
 		}
 		this.#runs.delete(run);
 		if (this.#disposed) return;
-		await this.#send("schedules.ended", { run, ...result }).catch(() => undefined);
+		await this.#send("schedules.ended", { run, ...result }, generation).catch(() => undefined);
 	}
 }
 
@@ -601,7 +644,7 @@ export function ompRunLauncher(options: {
 	/** A new worktree of `schedule.cwd` for one run, seeded and set up as a worktree tab's; its folder. */
 	worktree?: (schedule: Schedule) => Promise<string>;
 }): RunLauncher {
-	return async (schedule, files) => {
+	const prepare = async (schedule: Schedule, files: { log: string }) => {
 		const resolution = await options.omp();
 		if (!resolution.ok) throw new Error(resolution.error);
 		const { bin } = resolution.runtime;
@@ -635,6 +678,12 @@ export function ompRunLauncher(options: {
 			...OMP_TELEMETRY_OFF,
 		}))
 			if (value !== undefined) ompEnv[name] = value;
+		return { bin, worktree, cwd, usageFile, ompEnv, args };
+	};
+	return async (schedule, files) => {
+		const { bin, worktree, cwd, usageFile, ompEnv, args } = await prepare(schedule, files).catch(error => {
+			throw new RunNotDispatched(error instanceof Error ? error.message : String(error));
+		});
 		const run = `${process.pid}.${++sequence}`;
 		const host = core();
 		const ended = Promise.withResolvers<{ code: number | null; error?: string }>();

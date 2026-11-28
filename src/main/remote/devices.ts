@@ -561,8 +561,12 @@ export class RemoteDevices {
 	}
 
 	/** Count one of a device's daily model requests on this computer outside a link call: a schedule it saved here starting. */
-	reserveModelRequest(deviceId: string): QuotaReservation {
-		return this.#quota.reserve(deviceId, 1);
+	reserveModelRequest(deviceId: string, reservationId: string): QuotaReservation {
+		return this.#quota.reserve(deviceId, 1, reservationId);
+	}
+
+	remember(deviceId: string, reservationId: string): boolean {
+		return this.#quota.remember(deviceId, reservationId);
 	}
 
 	/** A view shows (`true`) or stops showing the tailnet's computers; resolves with what is known now. */

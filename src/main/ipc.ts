@@ -130,13 +130,15 @@ import { MAIL_ACCOUNTS_COMMAND, type MailAccountDraft } from "../shared/mail-acc
 import { type ModelSetupRequest, parseResearchPick } from "../shared/model-setup";
 import { PREVIEW_HOST_PORT, PREVIEW_OPEN_FILE, PREVIEW_VISUAL, type PreviewVisualEvent } from "../shared/preview";
 import { isReplyLanguagePref, REPLY_LANGUAGE_PREF } from "../shared/reply-language";
-import type {
-	AgentMessage,
-	AgentSessionEvent,
-	RpcCommand,
-	RpcResponse,
-	RpcSessionState,
-	SidecarStatus,
+import {
+	type AgentMessage,
+	type AgentSessionEvent,
+	MODEL_NOT_STARTED,
+	modelNotStarted,
+	type RpcCommand,
+	type RpcResponse,
+	type RpcSessionState,
+	type SidecarStatus,
 } from "../shared/rpc-types";
 import { SCHEDULES_COMMAND, SCHEDULES_LOG } from "../shared/schedule-channels";
 import type { Schedule, SchedulesRequest } from "../shared/schedules";
@@ -988,49 +990,49 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		}
 		const refusal = removedModeRefusal(payload.command);
 		if (refusal) {
-			return {
+			return modelNotStarted({
 				id: payload.command.id,
 				type: "response",
 				command: payload.command.type,
 				success: false,
 				error: refusal,
 				code: "mode_removed",
-			};
+			});
 		}
 		// A tab whose omp is still starting (its place in the start queue, its first answer, a stalled start begun again)
 		// is waited for, not refused: a relaunch's restored tabs got "Sidecar not ready" for every read while they started.
 		if (sidecar && !sidecar.offline) await settledStart(sidecar);
 		const client = sidecar?.rpcClient;
 		if (!client || !sidecar) {
-			return {
+			return modelNotStarted({
 				id: payload.command.id,
 				type: "response",
 				command: payload.command.type,
 				success: false,
 				error: "Sidecar not connected",
 				code: "sidecar_not_connected",
-			};
+			});
 		}
 		// A tab on a paired host whose link is down: say so, not "not ready".
 		if (sidecar.offline) {
-			return {
+			return modelNotStarted({
 				id: payload.command.id,
 				type: "response",
 				command: payload.command.type,
 				success: false,
 				error: "The device running this tab is offline",
 				code: "remote_offline",
-			};
+			});
 		}
 		if (sidecar.status !== "ready") {
-			return {
+			return modelNotStarted({
 				id: payload.command.id,
 				type: "response",
 				command: payload.command.type,
 				success: false,
 				error: `Sidecar not ready (${sidecar.status})`,
 				code: "sidecar_not_ready",
-			};
+			});
 		}
 		// A message held while the sender's link was down comes with an id and may come again (its answer was lost): the
 		// first reaches omp, a repeat gets that one's answer (delivery-ledger.ts). A paired host's tab passes it on: that
@@ -1040,7 +1042,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			const response = await deliverOnce(deliveryId, () =>
 				dispatchRpcCommand(win, sidecar, issuerTabId, { ...payload, command }, channel),
 			);
-			return { ...response, id: payload.command.id };
+			const reply = { ...response, id: payload.command.id };
+			return !response.success && response[MODEL_NOT_STARTED] ? modelNotStarted(reply) : reply;
 		}
 		const { id: _id, ...cmd } = payload.command;
 		// A person's own prompt (an agent's is wrapped) means the session is theirs now: it never closes by itself, and no
@@ -1237,14 +1240,14 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				const asked = channel !== undefined ? deps.uploads?.goneIn(cmd.message, sidecar.cwd) : null;
 				const gone = asked ? await asked : null;
 				if (gone?.length) {
-					return {
+					return modelNotStarted({
 						id: _id,
 						type: "response",
 						command: cmd.type,
 						success: false,
 						error: gone.join(", "),
 						code: "attachment_gone",
-					};
+					});
 				}
 				const origin = promptOriginOf(win);
 				if (origin)
@@ -1734,7 +1737,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	ipc.handle(IPC_COMMANDS.RPC_COMMAND, async (caller, payload: IpcRpcCommandPayload) => {
 		const win = caller.win;
 		if (!win)
-			return { id: payload.command.id, type: "response", success: false, error: "No window", code: "no_window" };
+			return modelNotStarted({
+				id: payload.command.id,
+				type: "response",
+				success: false,
+				error: "No window",
+				code: "no_window",
+			});
 		const issuerTabId = sidecarPool.activeTabForWindow(win);
 		return dispatchRpcCommand(win, sidecarPool.sidecarForWindow(win), issuerTabId, payload, IPC_COMMANDS.RPC_COMMAND);
 	});
@@ -1745,7 +1754,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	ipc.handle(IPC_COMMANDS.RPC_COMMAND_FOR_TAB, async (caller, payload: IpcRpcCommandForTabPayload) => {
 		const win = caller.win;
 		if (!win)
-			return { id: payload?.command?.id, type: "response", success: false, error: "No window", code: "no_window" };
+			return modelNotStarted({
+				id: payload?.command?.id,
+				type: "response",
+				success: false,
+				error: "No window",
+				code: "no_window",
+			});
 		const sidecar = sidecarPool.sidecarForTab(win, payload.tabId);
 		return dispatchRpcCommand(win, sidecar, payload.tabId, payload, IPC_COMMANDS.RPC_COMMAND_FOR_TAB);
 	});
@@ -2716,7 +2731,12 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// Settings › Schedules on the machine the caller's focused tab runs on: a paired host runs its own schedules.
 	ipc.handle(SCHEDULES_COMMAND, (caller, request: unknown, device?: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid schedules request");
-		return machineFor(caller, device).schedules(request as SchedulesRequest, undefined, !!caller.browserWindow);
+		return machineFor(caller, device).schedules(
+			request as SchedulesRequest,
+			undefined,
+			!!caller.browserWindow,
+			caller.scheduleReservationId,
+		);
 	});
 	// The Bots page: this computer's bots and their items (the owner's own; agents use ompdesk_bot and ompdesk_item).
 	ipc.handle(BOTS_COMMAND, async (caller, request: unknown) => {

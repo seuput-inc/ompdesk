@@ -1237,7 +1237,12 @@ impl Host {
             return self.close_conn(&mut state, conn, CLOSE_POLICY, "malformed frame");
         };
         match frame {
-            Frame::Call { id, ch, args } => self.dispatch(&mut state, conn, id, &ch, args),
+            Frame::Call {
+                id,
+                request_id,
+                ch,
+                args,
+            } => self.dispatch(&mut state, conn, id, request_id.as_deref(), &ch, args),
             Frame::Ping => {
                 if let Some(c) = state.conns.get(&conn) {
                     c.write("{\"t\":\"pong\"}".to_owned());
@@ -1347,6 +1352,7 @@ impl Host {
         state: &mut State,
         conn: u64,
         id: Option<u64>,
+        request_id: Option<&str>,
         ch: &str,
         args: Box<RawValue>,
     ) {
@@ -1418,6 +1424,7 @@ impl Host {
             &json!({
                 "host": self.host,
                 "call": call,
+                "requestId": request_id,
                 "answer": answered,
                 "device": device,
                 "connId": conn_id,
@@ -1535,6 +1542,7 @@ fn writes_mobile_web(args: &RawValue) -> bool {
 enum Frame {
     Call {
         id: Option<u64>,
+        request_id: Option<String>,
         ch: String,
         args: Box<RawValue>,
     },
@@ -1567,6 +1575,16 @@ impl Frame {
                 } else {
                     None
                 };
+                let request_id = match members.get("requestId") {
+                    Some(raw) => {
+                        let key = string_of(raw)?;
+                        if key.is_empty() || key.len() > 128 || !key.is_ascii() {
+                            return None;
+                        }
+                        Some(key)
+                    }
+                    None => None,
+                };
                 let ch = string_of(members.get("ch")?)?;
                 let units = ch.encode_utf16().count();
                 if !(1..=128).contains(&units) {
@@ -1579,6 +1597,7 @@ impl Frame {
                 }
                 Some(Frame::Call {
                     id,
+                    request_id,
                     ch,
                     args: args.to_owned(),
                 })

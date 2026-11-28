@@ -681,11 +681,19 @@ export interface RpcResponseSuccess {
 	data?: unknown;
 }
 
+/** Only this host can attest the call never reached a model; JSON from an omp or a peer cannot carry it. */
+export const MODEL_NOT_STARTED = Symbol("modelNotStarted");
+
+export function modelNotStarted<const T extends object>(result: T): T {
+	return Object.defineProperty(result, MODEL_NOT_STARTED, { value: true });
+}
+
 export interface RpcResponseError {
 	id?: string;
 	type: "response";
 	command: string;
 	success: false;
+	[MODEL_NOT_STARTED]?: true;
 	error: string;
 	code?: string;
 	/**

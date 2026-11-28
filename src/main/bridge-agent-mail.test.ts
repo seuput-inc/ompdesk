@@ -104,6 +104,21 @@ describe("agent_control.mail", () => {
 		expect(sendMessage).toHaveBeenCalledTimes(1);
 	});
 
+	it("refuses a switched recipient and finds metered mail outside the current branch", async () => {
+		const send = (sessionId: string) =>
+			mail!(
+				{
+					content: "report",
+					triggerTurn: true,
+					details: { id: "counted", quotaRecipient: { sessionId, sessionPath: "/sessions/s1.jsonl" } },
+				},
+				env({ entries: [{ type: "custom_message", customType: MAIL_CUSTOM_TYPE, details: { id: "counted" } }] }),
+			);
+		await expect(send("s2")).rejects.toThrow("session changed");
+		await expect(send("s1")).resolves.toEqual({ duplicate: true, journaled: true });
+		expect(sendMessage).not.toHaveBeenCalled();
+	});
+
 	it("checks the expected home and active bot branch at delivery, without journaling private routing data", async () => {
 		const live = { cwd: "/bot", sessionId: "s1", sessionPath: "/sessions/s1.jsonl" };
 		const home = { ...live, botId: "bot-1" };

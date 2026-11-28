@@ -76,7 +76,12 @@ function fakeLauncher() {
 }
 
 /** A service on `dir` whose `until(predicate)` settles with the first pushed state that matches. */
-function harness(dir: string, launch: RunLauncher, reserve?: ScheduleServiceOptions["reserve"]) {
+function harness(
+	dir: string,
+	launch: RunLauncher,
+	reserve?: ScheduleServiceOptions["reserve"],
+	remember?: ScheduleServiceOptions["remember"],
+) {
 	const listeners = new Set<(state: SchedulesState) => void>();
 	const service = new ObservedSchedules({
 		file: join(dir, "schedules.json"),
@@ -84,6 +89,7 @@ function harness(dir: string, launch: RunLauncher, reserve?: ScheduleServiceOpti
 		launch,
 		now: () => Date.now(),
 		...(reserve ? { reserve } : {}),
+		...(remember ? { remember } : {}),
 		onState: state => {
 			for (const listener of [...listeners]) listener(state);
 		},
@@ -196,7 +202,9 @@ describe("ScheduleService", () => {
 		const { launch, runs, launched } = fakeLauncher();
 		let left = 1;
 		const charged: string[] = [];
-		const reserve = (device: string) => {
+		const attempts: string[] = [];
+		const reserve = (device: string, id: string) => {
+			attempts.push(id);
 			if (left === 0) return { ok: false as const, reason: `${device}'s daily model limit is used up` };
 			left -= 1;
 			charged.push(device);
@@ -222,8 +230,12 @@ describe("ScheduleService", () => {
 		const skipped = await until(state => state.runs[0]?.status === "skipped");
 		expect(skipped.runs[0]?.error).toBe("dev-a's daily model limit is used up");
 		expect(launch).toHaveBeenCalledTimes(1);
+		expect(attempts).toHaveLength(2);
+		expect(attempts[0]).not.toBe(attempts[1]);
 		// A run now from that device is refused; this computer's own run now is not charged to it.
-		await expect(service.command({ action: "runNow", id }, "dev-a")).rejects.toThrow("used up");
+		await expect(service.command({ action: "runNow", id }, "dev-a", undefined, "manual-1")).rejects.toThrow(
+			"used up",
+		);
 		await service.command({ action: "runNow", id });
 		await launched(2);
 		expect(charged).toEqual(["dev-a"]);
@@ -243,9 +255,51 @@ describe("ScheduleService", () => {
 		await service.start();
 		const id =
 			(await service.command({ action: "save", draft: draft(join(dir, "gone")) }, "dev-a")).schedules[0]?.id ?? "";
-		await service.command({ action: "runNow", id }, "dev-a");
+		await service.command({ action: "runNow", id }, "dev-a", undefined, "manual-2");
 		await until(state => state.runs[0]?.status === "failed");
 		expect(refunds).toEqual(["dev-a"]);
+		await service.dispose();
+	});
+
+	it("refunds an admitted run when omp preparation fails before dispatch", async () => {
+		fakeClock();
+		const dir = await tempDir();
+		const refund = vi.fn();
+		const launch = ompRunLauncher({ omp: async () => ({ ok: false, error: "omp missing" }), env: async () => ({}) });
+		const { service, until } = harness(dir, launch, () => ({ ok: true, refund }));
+		await service.start();
+		const { id } = await service.create(draft(dir));
+		await service.command({ action: "runNow", id }, "dev-a", undefined, "no-omp");
+		const state = await until(state => state.runs[0]?.status === "failed");
+		expect(state.runs[0]?.error).toBe("omp missing");
+		expect(refund).toHaveBeenCalledOnce();
+		await service.dispose();
+	});
+
+	it("a redelivered run now cannot launch again, even after a lost launcher answer", async () => {
+		fakeClock();
+		const dir = await tempDir();
+		const seen = new Set<string>();
+		const refund = vi.fn();
+		const reserve = (_device: string, id: string) => {
+			if (seen.has(id)) throw new Error("already reserved");
+			seen.add(id);
+			return { ok: true as const, refund };
+		};
+		const launch = vi.fn(async () => {
+			throw new Error("lost answer after dispatch");
+		});
+		const { service, until } = harness(dir, launch, reserve);
+		await service.start();
+		const { id } = await service.create(draft(dir));
+		const request = { action: "runNow" as const, id };
+		await service.command(request, "dev-a", undefined, "first");
+		await until(state => state.runs[0]?.status === "failed");
+		await expect(service.command(request, "dev-a", undefined, "first")).rejects.toThrow("already reserved");
+		await service.command(request, "dev-a", undefined, "second");
+		await until(state => state.runs.length === 2 && state.runs[0]?.status === "failed");
+		expect(launch).toHaveBeenCalledTimes(2);
+		expect(refund).not.toHaveBeenCalled();
 		await service.dispose();
 	});
 
@@ -623,6 +677,47 @@ describe("routines: event triggers, once, run history", () => {
 		expect(turns[0]?.prompt).toBe("Look\n\nTest run:\nA test run: no event fired");
 		expect(service.latest.runs[0]).toMatchObject({ trigger: "manual" });
 		await service.dispose();
+	});
+
+	it("coalesces a peer's admitted samples and deliveries without admitting either again after reopen", async () => {
+		fakeClock();
+		const dir = await tempDir();
+		const { launch, runs, launched } = fakeLauncher();
+		const reserve = vi.fn(() => ({ ok: true as const, refund: vi.fn() }));
+		const seen = new Set<string>();
+		const remember = (device: string, id: string) => {
+			expect(device).toBe("owner");
+			if (seen.has(id)) return false;
+			seen.add(id);
+			return true;
+		};
+		const first = harness(dir, launch, reserve, remember);
+		await first.service.start();
+		const { id } = await first.service.create(draft(dir, { frequency: event() }), "owner");
+		const sample = { action: "sampleCall" as const, id };
+		const frequency = first.service.latest.schedules[0]?.frequency;
+		const key = frequency?.kind === "event" && frequency.event.source === "webhook" ? frequency.event.key : "";
+		const hook = { ...call(id, key, "body"), headers: { "x-github-delivery": "shared" } };
+		await first.service.command(sample, "sender", undefined, "first");
+		await launched(1);
+		await first.service.command(sample, "sender", undefined, "shared");
+		expect(await first.service.webhook(hook)).toBe("fired");
+		runs[0]?.finish(0);
+		await launched(2);
+		expect(runs[1]?.prompt).toContain("Sample webhook call");
+		expect(runs[1]?.prompt).toContain("Webhook call");
+		runs[1]?.finish(0);
+		await first.until(state => state.runs[0]?.status === "succeeded");
+		await first.service.dispose();
+
+		const reopened = harness(dir, launch, reserve, remember);
+		await reopened.service.start();
+		await expect(reopened.service.command(sample, "sender", undefined, "shared")).rejects.toThrow("already received");
+		expect(await reopened.service.webhook(hook)).toBe("duplicate");
+		expect(seen.size).toBe(3);
+		expect(launch).toHaveBeenCalledTimes(2);
+		expect(reserve).toHaveBeenCalledTimes(2);
+		await reopened.service.dispose();
 	});
 
 	it("a webhook gets its key on save, keeps it through an edit, and fires only for that key", async () => {

@@ -155,6 +155,7 @@ export const SLIM_LOG_NAMES: Readonly<Record<keyof LinkSlim, string>> = {
 export const WireRequest = z.object({
 	t: z.literal("req"),
 	id: z.number().int().nonnegative(),
+	epoch: z.uuid().optional(),
 	method: z.string().min(1).max(128),
 	params: z.unknown(),
 });
