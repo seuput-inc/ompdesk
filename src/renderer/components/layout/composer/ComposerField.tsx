@@ -74,7 +74,7 @@ export function ComposerField({
 		if (el && el.value !== text) el.value = text;
 	}, [text, textareaRef]);
 	return (
-		<div className={cx("relative px-4 pt-3 pb-1", expanded && "flex min-h-0 flex-1 flex-col")}>
+		<div className={cx("relative px-3 pt-2.5 pb-1", expanded && "flex min-h-0 flex-1 flex-col")}>
 			<textarea
 				ref={textareaRef}
 				data-composer-input
@@ -164,7 +164,7 @@ export function ComposerField({
 			)}
 			{suggestionHint && (
 				<span
-					className="pointer-events-none absolute top-3 right-4 flex h-6 items-center gap-1.5 text-sc-xs text-(--sc-text-subtle)"
+					className="pointer-events-none absolute top-2.5 right-3 flex h-6 items-center gap-1.5 text-sc-xs text-(--sc-text-subtle)"
 					id={suggestionHintId}
 				>
 					<Kbd shortcut="Tab" />
@@ -175,6 +175,8 @@ export function ComposerField({
 		</div>
 	);
 }
+
+const HINT_CLASS = "truncate px-3 pb-1 text-sc-xs text-(--sc-text-muted)";
 
 /**
  * The one-line hint under the field, first match wins: "Esc again to clear", "Esc again to stop the turn" (the first Esc of
@@ -197,25 +199,20 @@ export function ComposerFieldHint({
 	const t = useT();
 	if (escHint)
 		return (
-			<div className="truncate px-4 pb-1 text-sc-xs text-(--sc-text-muted)" data-esc-hint role="status">
+			<div className={HINT_CLASS} data-esc-hint role="status">
 				{t("input.escAgainToClear")}
 			</div>
 		);
 	if (stopArmed)
 		return (
-			<div className="truncate px-4 pb-1 text-sc-xs text-(--sc-text-muted)" data-stop-hint role="status">
+			<div className={HINT_CLASS} data-stop-hint role="status">
 				{t("input.escAgainToStop")}
 			</div>
 		);
-	if (argHint) return <div className="truncate px-4 pb-1 font-mono text-sc-xs text-(--sc-text-muted)">{argHint}</div>;
+	if (argHint) return <div className={cx(HINT_CLASS, "font-mono")}>{argHint}</div>;
 	if (!unavailable) return null;
 	return (
-		<div
-			className="truncate px-4 pb-1 text-sc-xs text-(--sc-text-muted)"
-			data-next-prompt-unavailable
-			role="status"
-			title={unavailable.detail}
-		>
+		<div className={HINT_CLASS} data-next-prompt-unavailable role="status" title={unavailable.detail}>
 			{t(`input.suggestion.unavailable.${unavailable.reason}`)}
 		</div>
 	);

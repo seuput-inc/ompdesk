@@ -857,7 +857,7 @@ export function LiveStepPeek({
 					{header?.path ? (
 						<ToolPathTarget path={header.path} />
 					) : header?.target && kind !== "bash" && kind !== "eval" ? (
-						<span className="min-w-0 truncate font-mono" title={header.target}>
+						<span className="min-w-0 truncate font-mono text-(--sc-text-muted)" title={header.target}>
 							{header.target}
 						</span>
 					) : null}

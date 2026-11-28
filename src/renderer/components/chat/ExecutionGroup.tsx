@@ -345,8 +345,7 @@ export function ExecutionGroup({
 		<button
 			aria-expanded={expanded}
 			className={cx(
-				"omp-execution-group-header flex min-h-7 w-fit max-w-full min-w-0 items-center gap-2 rounded-(--sc-radius-sm) px-1.5 text-left text-sc-sm transition-colors duration-(--sc-duration-instant) hover:bg-(--sc-hover)",
-				"omp-execution-group-header--embedded",
+				"omp-execution-group-header omp-execution-group-header--embedded flex min-h-7 w-fit max-w-full min-w-0 items-center gap-1.5 rounded-(--sc-radius-sm) px-1.5 text-left text-sc-sm transition-colors duration-(--sc-duration-instant) hover:bg-(--sc-hover)",
 				state === "failed"
 					? "text-(--sc-danger)"
 					: "text-(--sc-text-muted) hover:text-(--sc-text) aria-expanded:text-(--sc-text-secondary)",

@@ -1157,13 +1157,13 @@ function SessionTranscript() {
 						// `safe`: taller than a short pane, plain centring spilled
 						// the top over the scroller's edge, out of reach, and left a sliver of the logo under the strip.
 						<div className="omp-empty-canvas flex min-h-full flex-col justify-center-safe pb-20">
-							<BrandMark size={36} className="omp-empty-logo mb-5 text-(--sc-text)" />
-							<h1 className="font-display text-sc-3xl font-semibold tracking-(--sc-tracking-tight) text-(--sc-text)">
+							<BrandMark size={32} className="omp-empty-logo mb-4 text-(--sc-text)" />
+							<h1 className="font-display text-sc-2xl font-semibold tracking-(--sc-tracking-tight) text-(--sc-text)">
 								{isChat ? t("chat.empty.title.chat") : t("chat.empty.title")}
 							</h1>
 							{/* Cards in a row stretch to one height, and their content centres in it: pinned to the top, a
 							    one-line card beside a two-line one (English) kept ~25 px of empty bottom. */}
-							<div className="omp-starter-grid mt-8 grid grid-cols-2 gap-(--sc-space-3) max-sm:grid-cols-1">
+							<div className="omp-starter-grid mt-6 grid grid-cols-2 gap-2.5 max-sm:grid-cols-1">
 								{starters.map(({ icon: Icon, title, prompt }) => (
 									<Card
 										as="button"
@@ -1173,12 +1173,12 @@ function SessionTranscript() {
 												new CustomEvent("omp:fill-composer", { detail: { text: prompt, tabId } }),
 											)
 										}
-										className="omp-starter-card group flex items-center gap-3 active:bg-(--sc-pressed)"
-										padding="lg"
+										className="omp-starter-card group"
+										padding="md"
 										radius="lg"
 									>
-										<span className="omp-starter-icon flex size-8 shrink-0 items-center justify-center rounded-(--sc-radius-md) bg-(--sc-surface-2) text-(--sc-text-muted)">
-											<Icon aria-hidden className="size-(--sc-icon-md)" />
+										<span className="omp-starter-icon">
+											<Icon aria-hidden className="size-(--sc-icon-sm)" />
 										</span>
 										<span className="min-w-0">
 											<span className="block text-sc-md font-medium text-(--sc-text)">{title}</span>

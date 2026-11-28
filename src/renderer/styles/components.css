@@ -362,8 +362,8 @@
 .markdown-body hr {
 	margin: 1.5em 0;
 	border: none;
-	height: 1px;
-	background: var(--omp-md-hr);
+	height: var(--sc-hairline);
+	background: var(--sc-divider);
 }
 /* Fenced code blocks render through the shared CodeBlock component (badge,
    copy, gutter), so no raw <pre> box styling lives here. This rule only guards
@@ -445,7 +445,7 @@
 .markdown-body details {
 	margin: 0.9em 0;
 	padding-inline: var(--sc-space-3);
-	border: 1px solid var(--sc-border-subtle);
+	border: var(--sc-hairline) solid var(--sc-border-subtle);
 	border-radius: var(--sc-radius-md);
 }
 .markdown-body summary {
@@ -464,7 +464,7 @@
 .markdown-body img {
 	max-width: 100%;
 	border-radius: var(--sc-radius-lg);
-	border: 1px solid var(--sc-border-subtle);
+	border: var(--sc-hairline) solid var(--sc-border-subtle);
 }
 /* A diagram or SVG figure sits in its own box; no second frame around the picture. */
 .markdown-body :is([data-figure], [data-svg-preview]) img {
@@ -1205,6 +1205,29 @@
 	);
 }
 
+.omp-message-actions {
+	display: flex;
+	align-items: center;
+	gap: var(--sc-space-0-5);
+	user-select: none;
+}
+
+.omp-message-actions > time {
+	padding-inline: var(--sc-space-1);
+	color: var(--sc-text-subtle);
+	font-size: var(--sc-font-xs);
+	font-variant-numeric: tabular-nums;
+	opacity: 0.78;
+	transition: opacity var(--sc-duration-fast) var(--sc-ease-standard);
+}
+
+.omp-transcript-editorial .group:hover > .omp-message-actions > time,
+.omp-transcript-editorial .group:hover > * > .omp-message-actions > time,
+.omp-transcript-editorial .group:focus-within > .omp-message-actions > time,
+.omp-transcript-editorial .group:focus-within > * > .omp-message-actions > time {
+	opacity: 1;
+}
+
 /* The buttons, and a clock that repeats the message before it (MessageBubble `clockRepeats`), show on hover, on focus
    and, under a finger, on a tap (sticky :hover); a new minute's clock always shows. */
 .omp-transcript-editorial .omp-message-actions > :not(time:not([data-clock-repeats])) {
@@ -1241,7 +1264,7 @@ html[data-input="touch"] [data-update-notice] {
 .omp-transcript-editorial .omp-assistant-actions {
 	position: absolute;
 	right: var(--omp-editorial-edge);
-	bottom: 0;
+	bottom: var(--sc-space-0-5);
 }
 
 .omp-transcript-editorial .omp-assistant-turn--compact {
@@ -1324,11 +1347,18 @@ html[data-input="touch"] [data-update-notice] {
 	max-width: 100%;
 	height: var(--sc-control-sm);
 	padding: 0 var(--sc-space-2);
-	border: var(--sc-hairline) solid var(--sc-divider);
+	border: var(--sc-hairline) solid var(--sc-code-border);
 	border-radius: var(--sc-radius-sm);
+	background: var(--sc-code-bg);
 	color: var(--sc-text-muted);
 	white-space: nowrap;
-	transition: background-color var(--sc-duration-instant);
+	transition:
+		background-color var(--sc-duration-instant) var(--sc-ease-standard),
+		border-color var(--sc-duration-instant) var(--sc-ease-standard);
+}
+
+.omp-work-metric[data-tone="ok"] {
+	border-color: color-mix(in srgb, var(--sc-success) 24%, var(--sc-code-border));
 }
 
 .omp-work-metric-figure {
@@ -1339,6 +1369,7 @@ html[data-input="touch"] [data-update-notice] {
 }
 
 .omp-work-metric:hover {
+	border-color: var(--sc-border-subtle);
 	background: var(--sc-hover);
 	color: var(--sc-text);
 }
@@ -1348,6 +1379,7 @@ html[data-input="touch"] [data-update-notice] {
    ground, so the quiet "+N more failed" line under the button sits inside the same block. */
 .omp-work-verdict-group {
 	min-width: 0;
+	border: var(--sc-hairline) solid color-mix(in srgb, var(--sc-danger) 22%, transparent);
 	border-radius: var(--sc-radius-md);
 	background: var(--sc-danger-soft);
 	color: var(--sc-danger-on-soft);
@@ -1412,11 +1444,18 @@ html[data-input="touch"] [data-update-notice] {
 	margin-inline-start: 0;
 }
 
-/* The opened steps sit inside the card on a quiet well. */
+/* The opened steps sit inside the card on a quiet code well. */
 .omp-execution-group-body {
 	margin: 0;
-	padding: var(--sc-space-1) var(--sc-space-3) var(--sc-space-2);
-	background: var(--sc-surface-1);
+	border-top: var(--sc-hairline) solid var(--sc-divider);
+	padding: var(--sc-space-1-5) var(--sc-space-3) var(--sc-space-2);
+	background: var(--sc-code-bg);
+}
+
+/* Reduce nested border stacking inside an already-framed work card or live stage. */
+.omp-execution-group-body .omp-code-block,
+.omp-work-stage .omp-code-block {
+	border-color: var(--sc-divider);
 }
 
 /* Steps inside an open group are already inset by the group. */
@@ -1494,7 +1533,7 @@ html[data-input="touch"] [data-update-notice] {
 
 /* Head ─────────────────────────────────────────────────────────────── */
 .omp-work-head {
-	--omp-work-head-line: calc(var(--sc-font-lg) * var(--sc-leading-snug));
+	--omp-work-head-line: calc(var(--sc-font-md) * var(--sc-leading-snug));
 	display: grid;
 	/* The narrative keeps a readable minimum; the side takes its full width only from what is left, but never less
 	   than its widest part, so a narrow card (a phone, a split pane) drops whole parts and never cuts a figure. */
@@ -1515,7 +1554,7 @@ html[data-input="touch"] [data-update-notice] {
 .omp-work-narrative {
 	overflow: hidden;
 	color: var(--sc-text);
-	font-size: var(--sc-font-lg);
+	font-size: var(--sc-font-md);
 	font-weight: var(--sc-weight-medium);
 	line-height: var(--sc-leading-snug);
 	text-overflow: ellipsis;
@@ -1701,8 +1740,8 @@ button.omp-children-at-work-row:hover {
 }
 
 .omp-work-context-row {
-	min-height: 26px;
-	padding: var(--sc-space-0-5) var(--sc-space-1-5);
+	min-height: var(--sc-control-sm);
+	padding: var(--sc-space-1) var(--sc-space-2);
 	border-radius: var(--sc-radius-md);
 	font-size: var(--sc-font-sm);
 }
@@ -1852,7 +1891,7 @@ button.omp-children-at-work-row:hover {
 	column-gap: var(--sc-space-2);
 	width: 100%;
 	min-height: var(--sc-control-sm);
-	padding: var(--sc-space-1) var(--sc-space-1-5);
+	padding: var(--sc-space-1) var(--sc-space-2);
 	border-radius: var(--sc-radius-md);
 	font-size: var(--sc-font-sm);
 	text-align: start;
@@ -2195,8 +2234,8 @@ button.omp-children-at-work-row:hover {
 	align-items: center;
 	column-gap: var(--sc-space-2);
 	width: 100%;
-	min-height: 28px;
-	padding: var(--sc-space-0-5) var(--sc-space-1-5);
+	min-height: var(--sc-control-sm);
+	padding: var(--sc-space-1) var(--sc-space-2);
 	border-radius: var(--sc-radius-md);
 	color: var(--sc-text-secondary);
 	font-size: var(--sc-font-sm);
@@ -2306,7 +2345,8 @@ button.omp-children-at-work-row:hover {
 	min-width: 0;
 	min-height: var(--sc-control-sm);
 	flex-shrink: 0;
-	padding: 0 var(--sc-space-1-5) var(--sc-space-1-5) var(--sc-space-2);
+	border-top: var(--sc-hairline) solid var(--sc-divider);
+	padding: var(--sc-space-1) var(--sc-space-2) var(--sc-space-1-5);
 }
 
 .omp-live-step[data-nested="true"] > .omp-live-work-strip {
@@ -3140,9 +3180,9 @@ button.omp-children-at-work-row:hover {
 	overflow-y: auto;
 	overscroll-behavior: contain;
 	margin: var(--sc-space-0-5) 0 var(--sc-space-1) var(--omp-step-rule-inset, 13px);
-	border-left: var(--sc-hairline) solid var(--sc-divider);
-	padding: var(--sc-space-1) 0 var(--sc-space-1) var(--sc-space-3);
-	line-height: var(--sc-leading-normal);
+	border-left: var(--sc-hairline) solid var(--sc-code-border);
+	padding: var(--sc-space-1) var(--sc-space-1) var(--sc-space-1) var(--sc-space-3);
+	line-height: var(--sc-leading-relaxed);
 }
 
 /* Reading body: the answer is the most prominent thing on screen, set a shade off the text color (Orca's chat body,
@@ -3189,7 +3229,7 @@ button.omp-children-at-work-row:hover {
 }
 
 .omp-transcript-editorial .omp-thinking-body .markdown-body :is(p, .omp-md-p) {
-	margin: 0.4em 0;
+	margin: 0.35em 0;
 }
 
 .omp-transcript-editorial .omp-thinking-body .markdown-body :is(table, thead, tbody, tr, th, td) {
@@ -3253,39 +3293,22 @@ button.omp-children-at-work-row:hover {
 	margin: 1.4em 0 0.5em;
 }
 
-.omp-transcript-editorial .markdown-body :is(ul, ol) {
+.omp-transcript-editorial .markdown-body :is(ul, ol):not(.contains-task-list) {
 	margin: 0.6em 0;
-	padding-left: 1.4em;
+	padding-inline-start: 1.4em;
 }
 
 .omp-transcript-editorial .markdown-body li {
 	margin: 0.3em 0;
-	padding-left: 0.15em;
+	padding-inline-start: 0.15em;
 }
 
 .omp-transcript-editorial .markdown-body blockquote {
 	padding: 0.1em 0 0.1em 1em;
-	border-left-width: 2px;
-	border-radius: 0;
-	color: var(--sc-text-secondary);
-	font-style: normal;
-}
-
-.omp-transcript-editorial .markdown-body blockquote.omp-md-alert {
-	color: var(--sc-text);
-}
-
-.omp-transcript-editorial .markdown-body .contains-task-list {
-	padding-left: 0.2em;
-}
-
-.omp-transcript-editorial .markdown-body .task-list-item .contains-task-list {
-	padding-left: 1.6em;
 }
 
 .omp-transcript-editorial .markdown-body hr {
 	margin: 1.75em 0;
-	background: var(--sc-divider);
 }
 
 /* Tables: hairline rows, no cell grid, header in body case (uppercase does
@@ -3316,10 +3339,6 @@ button.omp-children-at-work-row:hover {
 .omp-transcript-editorial .markdown-body th {
 	border-bottom-color: var(--sc-border-subtle);
 	color: var(--sc-text);
-	font-size: inherit;
-	font-weight: 600;
-	letter-spacing: 0;
-	text-transform: none;
 	white-space: nowrap;
 }
 
@@ -3364,17 +3383,6 @@ button.omp-children-at-work-row:hover {
 	padding-bottom: 0;
 	border-bottom: 0;
 	font-size: 1.28em;
-}
-
-.omp-transcript-editorial .markdown-body code {
-	border: var(--sc-hairline) solid var(--sc-inline-code-border);
-	border-radius: var(--sc-radius-xs);
-	background: var(--sc-inline-code-bg);
-}
-
-.omp-transcript-editorial .markdown-body pre code {
-	border: 0;
-	background: transparent;
 }
 
 
@@ -3445,6 +3453,45 @@ button.omp-children-at-work-row:hover {
 .omp-starter-grid {
 	width: 100%;
 	min-width: 0;
+}
+
+.omp-starter-card {
+	display: flex;
+	align-items: center;
+	gap: var(--sc-space-3);
+	border-color: var(--sc-code-border);
+	background: var(--sc-code-bg);
+	text-align: start;
+	transition:
+		background-color var(--sc-duration-fast) var(--sc-ease-standard),
+		border-color var(--sc-duration-fast) var(--sc-ease-standard);
+}
+
+.omp-starter-card:hover {
+	border-color: var(--sc-border-subtle);
+	background: var(--sc-hover);
+}
+
+.omp-starter-card:active {
+	background: var(--sc-pressed);
+}
+
+.omp-starter-icon {
+	display: flex;
+	width: var(--sc-control-sm);
+	height: var(--sc-control-sm);
+	flex-shrink: 0;
+	align-items: center;
+	justify-content: center;
+	border: var(--sc-hairline) solid var(--sc-inline-code-border);
+	border-radius: var(--sc-radius-md);
+	background: var(--sc-inline-code-bg);
+	color: var(--sc-text-muted);
+	transition: color var(--sc-duration-fast) var(--sc-ease-standard);
+}
+
+.omp-starter-card:hover .omp-starter-icon {
+	color: var(--sc-text);
 }
 
 .omp-starter-grid > *,
@@ -3834,9 +3881,9 @@ button.omp-children-at-work-row:hover {
    a transparent copy of the draft, then the muted continuation. */
 .omp-inline-ghost {
 	position: absolute;
-	top: var(--sc-space-3);
-	right: var(--sc-space-4);
-	left: var(--sc-space-4);
+	top: calc(var(--sc-space-2) + var(--sc-space-0-5));
+	right: var(--sc-space-3);
+	left: var(--sc-space-3);
 	max-height: 40vh;
 	overflow: hidden;
 	pointer-events: none;
@@ -3890,6 +3937,24 @@ button.omp-children-at-work-row:hover {
 .omp-composer-model-label,
 .omp-composer-chip .omp-composer-control-label {
 	min-width: 0;
+}
+
+/* Harmonize Run and model pills on desktop: uniform 28px chip height, subtle secondary weight, crisp hover lift. */
+:where(html:not([data-shell="phone"])) .omp-composer-chip {
+	height: var(--sc-control-sm);
+	gap: var(--sc-space-1-5);
+	padding-inline: var(--sc-space-2);
+	font-size: var(--sc-font-sm);
+	font-weight: var(--sc-weight-medium);
+	color: var(--sc-text-secondary);
+}
+
+:where(html:not([data-shell="phone"])) .omp-composer-chip:hover {
+	color: var(--sc-text);
+}
+
+.omp-composer-chip .omp-composer-chevron {
+	opacity: 0.7;
 }
 
 /* The chip that names the session's state (the Run chip): an active mode paints it accent. A data attribute, not a
