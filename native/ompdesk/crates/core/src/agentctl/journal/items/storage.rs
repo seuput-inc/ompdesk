@@ -421,9 +421,7 @@ impl Items {
     pub fn next_mail_session(&mut self) -> io::Result<Option<String>> {
         let session: Option<String> = self
             .db
-            .prepare_cached(
-                "SELECT session FROM item_mail WHERE session>?1 ORDER BY session LIMIT 1",
-            )
+            .prepare("SELECT session FROM item_mail WHERE session>?1 ORDER BY session LIMIT 1")
             .map_err(sql)?
             .query_row([&self.mail_cursor], |r| r.get(0))
             .optional()
@@ -437,7 +435,7 @@ impl Items {
 
     pub fn mail_wakes_session(&self, session: &str) -> io::Result<bool> {
         self.db
-            .prepare_cached(
+            .prepare(
                 "SELECT EXISTS(SELECT 1 FROM item_mail INDEXED BY item_mail_wake
              WHERE session=?1 AND json_extract(mail_json,'$.kind')='question')",
             )
@@ -449,9 +447,7 @@ impl Items {
     pub fn first_mail(&self, session: &str) -> io::Result<Option<Mail>> {
         let mut stmt = self
             .db
-            .prepare_cached(
-                "SELECT mail_json FROM item_mail WHERE session=?1 ORDER BY rowid LIMIT 1",
-            )
+            .prepare("SELECT mail_json FROM item_mail WHERE session=?1 ORDER BY rowid LIMIT 1")
             .map_err(sql)?;
         let mut rows = stmt.query([session]).map_err(sql)?;
         let Some(row) = rows.next().map_err(sql)? else {

@@ -488,7 +488,7 @@ impl Items {
     fn numbered(&self, bot: &str, number: u32) -> io::Result<Option<&ItemRecord>> {
         let mut stmt = self
             .db
-            .prepare_cached("SELECT id FROM item WHERE bot=?1 AND number=?2")
+            .prepare("SELECT id FROM item WHERE bot=?1 AND number=?2")
             .map_err(sql)?;
         let mut rows = stmt.query((bot, number)).map_err(sql)?;
         let Some(row) = rows.next().map_err(sql)? else {
@@ -560,7 +560,7 @@ impl Items {
         } else {
             "SELECT event_json,position FROM item_event WHERE item=?1 AND position<=?2 ORDER BY position DESC LIMIT ?3"
         };
-        let mut stmt = self.db.prepare_cached(query).map_err(sql)?;
+        let mut stmt = self.db.prepare(query).map_err(sql)?;
         let mut rows = stmt.query((&item.id, pos, PAGE as i64)).map_err(sql)?;
         let mut events = Vec::<Value>::new();
         let mut positions = (None, None);
@@ -585,9 +585,12 @@ impl Items {
             if !known.insert(id) {
                 continue;
             }
+            let Ok(id) = i64::try_from(id) else {
+                continue;
+            };
             let text: Option<String> = self.db.query_row(
                 "SELECT event_json FROM item_event WHERE item=?1 AND id=?2 AND json_extract(event_json,'$.kind')='asked'",
-                (&item.id,id), |r| r.get(0),
+                (&item.id, id), |r| r.get(0),
             ).optional().map_err(sql)?;
             if let Some(text) = text {
                 asks.push(serde_json::from_str(&text)?);
@@ -621,7 +624,7 @@ impl Items {
         let item = self.scoped_item(bot, key)?;
         // Older binaries wrote just the request on the event. This is the (item,request) index,
         // not a scan of history. An answer for a different question is never a successful retry.
-        let mut stmt = self.db.prepare_cached(
+        let mut stmt = self.db.prepare(
             "SELECT json_extract(event_json,'$.kind'),json_extract(event_json,'$.question')
              FROM item_event INDEXED BY item_legacy_request
              WHERE item=?1 AND request=?2 AND json_extract(event_json,'$.actor')='owner' ORDER BY position",
@@ -641,13 +644,20 @@ impl Items {
                 _ => {}
             }
         }
+        let question_id = match question {
+            Some(q) => match i64::try_from(q) {
+                Ok(n) => Some(n),
+                Err(_) => return Ok(json!({"outcome":"unknown"})),
+            },
+            None => None,
+        };
         let outcome: String = self.db.query_row(
             "SELECT CASE WHEN EXISTS (SELECT 1 FROM json_each(result_json,'$.refusedItems')
                 WHERE value->>0=?2 AND value->>1=?3 AND (?4 IS NULL OR value->>2 IS ?4)) THEN 'question_changed'
               WHEN ?4 IS NULL AND EXISTS (SELECT 1 FROM json_each(result_json,'$.changed')
                 WHERE value->>'bot'=?2 AND value->>'id'=?3) THEN 'changed'
               ELSE 'unknown' END FROM item_request WHERE id=?1",
-            (request,bot,&item.id,question), |r| r.get(0),
+            (request, bot, &item.id, question_id), |r| r.get(0),
         ).optional().map_err(sql)?.unwrap_or_else(|| "unknown".into());
         Ok(json!({"outcome":outcome}))
     }

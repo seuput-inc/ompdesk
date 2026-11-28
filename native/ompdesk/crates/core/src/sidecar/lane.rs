@@ -1484,7 +1484,7 @@ impl Lane {
                 self.emit("sidecar.bridgeState", json!({"connected":true}));
                 self.finish_ready(None);
             }
-            Notice::Frame(frame) => self.emit_frame(value_frame(&frame)),
+            Notice::Frame(frame) => self.emit_frame(value_frame(&frame), None),
             Notice::Answer(seq, value, reply) => {
                 if value["command"] == "get_state" {
                     self.observe_guest_state(&value);

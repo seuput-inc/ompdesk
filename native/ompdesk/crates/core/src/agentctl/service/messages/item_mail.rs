@@ -129,7 +129,7 @@ impl AgentControl {
             }
             (id, key)
         };
-        self.deliver_item_mail(outbox, &id, &key).await
+        self.deliver_worker_item_mail(outbox, &id, &key).await
     }
 
     fn may_send_item_mail(&self, board: &str, mail: &ItemMail, state: &HostState) -> bool {
@@ -184,12 +184,17 @@ impl AgentControl {
     pub(super) async fn redeliver_item_mail(&self, outbox: &SendOutbox) -> R<()> {
         let pending = self.items().pending_worker_mail();
         for (item, key) in pending {
-            self.deliver_item_mail(outbox, &item, &key).await?;
+            self.deliver_worker_item_mail(outbox, &item, &key).await?;
         }
         Ok(())
     }
 
-    async fn deliver_item_mail(&self, outbox: &SendOutbox, id: &str, key: &str) -> R<String> {
+    async fn deliver_worker_item_mail(
+        &self,
+        outbox: &SendOutbox,
+        id: &str,
+        key: &str,
+    ) -> R<String> {
         let missing = || Fail::Tool("holder_changed".into());
         // Use the regular receiver lane so retries, a sweep and two live senders don't overtake a handoff.
         let lane = self

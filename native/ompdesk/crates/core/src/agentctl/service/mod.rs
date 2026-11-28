@@ -1738,9 +1738,8 @@ pub(crate) fn launch_assignment(
         }
     }
     // A layout can restore its first tab before main has registered agent control.
-    find(&crate::agentctl::journal::items::Items::new(Some(
-        file.into(),
-    )))
+    let store = crate::agentctl::journal::items::Items::new(Some(file.into())).ok()?;
+    find(&store)
 }
 
 impl AgentControl {
