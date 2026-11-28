@@ -1,9 +1,10 @@
 import { z } from "zod";
+import { SESSION_TAG_PATTERN } from "../../../resources/gui-bridge/runtime-identifiers";
 
 export const ItemEffect = z.object({
 	item: z.string().min(1).max(200),
 	generation: z.number().int().positive().safe(),
-	effectKey: z.string().regex(/^[0-9a-f]{32}$/),
+	effectKey: z.string().regex(SESSION_TAG_PATTERN),
 });
 export const ItemTab = z.string().regex(/^item-[0-9a-f]{32}$/);
 export const ItemCheck = ItemEffect.pick({ item: true, generation: true }).extend({
