@@ -13,7 +13,7 @@ use crate::agentctl::journal::items::{BoardNumbers, EVENTS_KEPT, ItemRecord, Ite
 #[serde(untagged)]
 enum LegacyRow {
     Numbers(BoardNumbers),
-    Item(ItemRecord),
+    Item(Box<ItemRecord>),
 }
 
 const SCHEMA: &str = include_str!("../items_v1.sql");
@@ -73,7 +73,7 @@ fn initialize(db: &mut Connection, original: Option<&str>) -> io::Result<()> {
         for row in rows {
             match row {
                 LegacyRow::Numbers(board) => numbers.last_issued.extend(board.last_issued),
-                LegacyRow::Item(item) => items.push(item),
+                LegacyRow::Item(item) => items.push(*item),
             }
         }
         for item in &items {

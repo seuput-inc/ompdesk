@@ -6,9 +6,14 @@ use super::{State, invalid};
 
 pub(super) fn directory(path: &Path, create: bool) -> io::Result<()> {
     if create {
-        let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        let builder = {
+            let mut builder = fs::DirBuilder::new();
+            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = fs::DirBuilder::new();
         match builder.create(path) {
             Ok(()) => sync_parent(path)?,
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),

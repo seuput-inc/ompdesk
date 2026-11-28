@@ -2342,6 +2342,7 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
     let call = super::super::CallId {
         id: "same-call".into(),
         resent: false,
+        local_session: None,
     };
     let mut world = bot_world(&control.bot_named("Ada").unwrap().folder);
     world["tabs"][3]["ompPid"] = 45120.into();
@@ -2356,7 +2357,16 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
         biased;
         control.run("bot1", tool, open.clone(), Some(call.clone())),
         control.run("bot1", tool, open.clone(), Some(call.clone())),
-        control.run("bot2", tool, open.clone(), Some(super::super::CallId { id:"another-call".into(), resent:false }))
+        control.run(
+            "bot2",
+            tool,
+            open.clone(),
+            Some(super::super::CallId {
+                id: "another-call".into(),
+                resent: false,
+                local_session: None,
+            })
+        )
     );
     assert!(!a.is_error && !b.is_error, "{} / {}", a.text, b.text);
     assert!(contender.is_error, "{}", contender.text);

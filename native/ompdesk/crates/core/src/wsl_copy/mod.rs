@@ -203,9 +203,14 @@ impl Store {
         registration.validate()?;
         let dir = self.root.join(&key);
         // Exclusive creation, including in the (improbable) event of a random key collision.
-        let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        let builder = {
+            let mut builder = fs::DirBuilder::new();
+            std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = fs::DirBuilder::new();
         builder.create(&dir)?;
         files::sync_parent(&dir)?;
         files::create(&dir.join("lease"))?.sync_all()?;

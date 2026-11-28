@@ -132,6 +132,7 @@ async fn item_mail_commits_before_delivery_and_replays_the_same_receipt_without_
             Some(CallId {
                 id: "rpc".into(),
                 resent: true,
+                local_session: None,
             }),
         )
         .await;
@@ -144,7 +145,8 @@ async fn item_mail_commits_before_delivery_and_replays_the_same_receipt_without_
                 message(&id, "lost"),
                 Some(CallId {
                     id: "lost-call".into(),
-                    resent: true
+                    resent: true,
+                    local_session: None,
                 })
             )
             .await

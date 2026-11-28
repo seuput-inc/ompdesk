@@ -127,36 +127,6 @@ fn wide_path(path: &str) -> std::io::Result<Vec<u16>> {
         .collect())
 }
 
-/// Publish a flushed sibling file without unlinking the last good destination on a failed move.
-#[cfg(windows)]
-pub(crate) fn replace_durable(
-    source: &std::path::Path,
-    target: &std::path::Path,
-) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-
-    // Both paths are children of the canonical (verbatim) host-profile directory.
-    fn wide(path: &std::path::Path) -> std::io::Result<Vec<u16>> {
-        let mut units: Vec<_> = path.as_os_str().encode_wide().collect();
-        if units.contains(&0) {
-            return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
-        }
-        units.push(0);
-        Ok(units)
-    }
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
-    }
-    let source = wide(source)?;
-    let target = wide(target)?;
-    // SAFETY: both terminated buffers outlive this call. REPLACE_EXISTING | WRITE_THROUGH, no cross-volume copy.
-    if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), 0x1 | 0x8) } == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
 /// `fs.copyFile` on Windows uses CopyFileW, including its alternate data streams and exclusive-create behavior.
 #[cfg(windows)]
 pub(crate) fn copy_file(source: &str, target: &str, exclusive: bool) -> std::io::Result<()> {
@@ -202,6 +172,7 @@ fn move_file(from: &std::path::Path, to: &std::path::Path, flags: u32) -> std::i
     }
 }
 
+/// Publish a flushed sibling file without unlinking the last good destination on a failed move.
 #[cfg(windows)]
 pub(crate) fn replace_durable(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
     const MOVEFILE_REPLACE_EXISTING: u32 = 1;
@@ -2891,7 +2862,7 @@ pub use zone::{local_day, local_instant};
 /// Image File Execution Options (`IFEO\<exe>`). Never writes to the registry and never touches unrelated IFEO keys.
 #[cfg(windows)]
 pub mod win_reg {
-    use std::ffi::OsStr;
+    use std::ffi::{OsStr, c_void};
     use std::os::windows::ffi::OsStrExt;
     use std::ptr;
 
@@ -2931,10 +2902,10 @@ pub mod win_reg {
             index: u32,
             name: *mut u16,
             name_len: *mut u32,
-            reserved: *const u32,
+            reserved: *mut u32,
             class: *mut u16,
             class_len: *mut u32,
-            last_write: *mut u8,
+            last_write: *mut c_void,
         ) -> i32;
         fn RegCloseKey(hkey: isize) -> i32;
     }
@@ -3025,8 +2996,10 @@ pub mod win_reg {
             return None;
         }
         let mut units: Vec<u16> = buf
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&pair| u16::from_le_bytes(pair))
             .collect();
         while units.last() == Some(&0) {
             units.pop();
@@ -3047,7 +3020,7 @@ pub mod win_reg {
                     index,
                     buf.as_mut_ptr(),
                     &mut len,
-                    ptr::null(),
+                    ptr::null_mut(),
                     ptr::null_mut(),
                     ptr::null_mut(),
                     ptr::null_mut(),

@@ -632,7 +632,10 @@ impl Items {
         let mut rows = stmt.query((&item.id, request)).map_err(sql)?;
         while let Some(row) = rows.next().map_err(sql)? {
             let kind: String = row.get(0).map_err(sql)?;
-            let asked: Option<u64> = row.get(1).map_err(sql)?;
+            let asked: Option<u64> = row
+                .get::<_, Option<i64>>(1)
+                .map_err(sql)?
+                .and_then(|n| u64::try_from(n).ok());
             match kind.as_str() {
                 "answered" if question.is_none() || asked == question => {
                     return Ok(json!({"outcome":"answered"}));

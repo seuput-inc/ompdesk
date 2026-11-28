@@ -200,6 +200,8 @@ pub struct Item {
 
 /// An installer run, as the runner does it: what a test puts in its place.
 pub type RunFn = Rc<dyn Fn(Ctx, SpawnSpec, Env, Rc<dyn Fn(&str)>) -> LocalFuture<Ran>>;
+/// Test stand-in for reading live Windows Mandatory ASLR / IFEO state after a `gitAslr` step.
+pub type GitAslrOsFn = Rc<dyn Fn(&[String]) -> git_aslr::OsState>;
 
 /// What a test puts in place of the machine (`SetupServiceDeps`' seams); empty in production.
 #[derive(Default, Clone)]
@@ -210,7 +212,7 @@ pub struct Seams {
     #[allow(clippy::type_complexity)]
     pub omp_release: Option<Rc<dyn Fn(String, String, Env) -> LocalFuture<Result<Value, String>>>>,
     /// Test stand-in for reading live Windows Mandatory ASLR / IFEO state after a `gitAslr` step.
-    pub git_aslr_os: Option<Rc<dyn Fn(&[String]) -> git_aslr::OsState>>,
+    pub git_aslr_os: Option<GitAslrOsFn>,
 }
 
 #[cfg(test)]

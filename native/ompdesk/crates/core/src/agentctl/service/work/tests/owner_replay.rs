@@ -152,9 +152,10 @@ async fn owner_mail_survives_both_handoff_crash_windows() {
         assert_eq!(row["events"].as_array().unwrap().len(), version);
     }
     assert_eq!(state["items"].as_array().unwrap().len(), 2);
-    let store = host.items();
-    assert!(store.get("b").unwrap().events[1].id < store.get("a").unwrap().events[1].id);
-    drop(store);
+    {
+        let store = host.items();
+        assert!(store.get("b").unwrap().events[1].id < store.get("a").unwrap().events[1].id);
+    }
     let count = asked
         .lock()
         .unwrap()
