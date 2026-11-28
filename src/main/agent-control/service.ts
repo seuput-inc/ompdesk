@@ -280,6 +280,8 @@ export interface SentAnswer {
 export interface MailAnswer {
 	duplicate?: boolean;
 	journaled?: boolean;
+	/** Items only: the intended journal path, returned after that file flushes. */
+	itemSession?: string;
 }
 
 /** The sessions deleted outside the control tools (`deleted-sessions.ts`), by file and computer and by saved id. */
@@ -645,7 +647,7 @@ export interface AgentControlFiles {
 	mailOutbox?: string | null;
 	/** The bytes of the attachments an outbox entry still owes, by content (`<userData>/agent-attachments`). */
 	attachments?: string | null;
-	/** The bots (`bots.json`) and their items (`items.json`); absent: in memory only. */
+	/** Bot registry and legacy items import path (beside items.sqlite3); absent: in memory only. */
 	bots?: string | null;
 	items?: string | null;
 	/** Where a new bot's folder goes (`~/.omp/bots`). */

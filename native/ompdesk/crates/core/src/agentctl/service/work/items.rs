@@ -6,9 +6,8 @@
 //!   (the chat is reached as a routine's wake-up reaches it); any other change is a quiet note kept until the chat
 //!   opens. A change that changes nothing, a snooze alone (the item keeps its status), or one to an item that is gone
 //!   mails nothing and asks nothing. Several items changed at once (`ids`) are one mail per chat.
-//! - A comment or an answer the owner sends carries a request id: the same request again changes nothing (Orca's
-//!   `use-bot-item-pending-comments.ts`). An answer names the question it answers; when the bot has asked another one
-//!   since, the change is refused as `question_changed` and nothing is written.
+//! - Changes, grouped mail and the request's result commit together. A resend returns the original outcome,
+//!   even for a no-op or a `question_changed` refusal. A replaced question is never answered.
 //! - Every event says what it was: a status its old status and note, an edit its field before and after, a linked
 //!   session's report (`worker`) its first line (Orca's `BotItemActivityList.tsx`).
 //! - Read when listed: `stale` (Orca's `isBotItemStale`: Needs you untouched for its bot's `staleDays`, In progress or
@@ -16,6 +15,7 @@
 //!   session's `state`, and `limitUntil` (every live linked session waits for a usage limit: the earliest reset).
 //! - A closed item adds one line to `<bot folder>/memory/journal/YYYY-MM.md`.
 
+use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::path::Path;
 
@@ -31,7 +31,7 @@ use crate::agentctl::journal::items::{
     DECISIONS_MAX, ItemDecision, ItemLink, ItemQuestion, ItemRecord, ItemWait, STATUSES, is_open,
     parse_iso,
 };
-use crate::agentctl::rules::mail::{Mail, MailKind};
+use crate::agentctl::rules::mail::{Mail, MailKind, mail_text};
 use crate::aimemory::value::iso;
 
 /// An item's title, at most.
@@ -48,6 +48,11 @@ const DECISION_MAX: usize = 500;
 const OPTIONS_MAX: usize = 8;
 /// The owner's answer named a question the bot has since replaced (`BotsState.refused`).
 pub const QUESTION_CHANGED: &str = "question_changed";
+
+// `mailCommand.content` in src/main/local/agent-control.ts counts UTF-16 code units.
+const MAIL_UNITS_MAX: usize = 200_000;
+const MAIL_TOO_LONG: &str =
+    "The grouped item notification is too long. Select fewer items or shorten the note.";
 
 const DAY_MS: f64 = 24.0 * 60.0 * 60_000.0;
 /// Planned items wait this many times longer before they read as stale (Orca's `BOT_ITEM_PLANNED_STALE_FACTOR`).
@@ -135,16 +140,24 @@ fn item_line(item: &ItemRecord) -> String {
     line
 }
 
-/// `- YYYY-MM-DD | item #<n> | <status> | <title>` into `<folder>/memory/journal/YYYY-MM.md`.
-pub(crate) fn journal_line(folder: &Path, item: &ItemRecord, at: &str) {
-    let (day, month) = (&at[..at.len().min(10)], &at[..at.len().min(7)]);
-    let dir = folder.join("memory").join("journal");
-    let line = format!(
-        "- {day} | item #{} | {} | {}\n",
+pub(super) fn item_store_error(error: std::io::Error) -> Fail {
+    Fail::other(format!("Could not access bot items: {error}"))
+}
+
+fn closing_line(item: &ItemRecord, at: &str) -> String {
+    format!(
+        "- {} | item #{} | {} | {}\n",
+        &at[..at.len().min(10)],
         item.number,
         item.status,
         item.title.replace('\n', " ")
-    );
+    )
+}
+
+/// Append only after the item's transaction commits, without holding its store lock.
+fn journal_line(folder: &Path, line: &str, at: &str) {
+    let month = &at[..at.len().min(7)];
+    let dir = folder.join("memory").join("journal");
     let written = std::fs::create_dir_all(&dir).and_then(|()| {
         std::fs::OpenOptions::new()
             .create(true)
@@ -332,8 +345,8 @@ impl AgentControl {
     /// Session links that name a tab name its session file once the tab has one (a child an item's session open made
     /// before its first message was written). Whether anything changed.
     pub(crate) fn settle_item_links(&self, state: &HostState) -> bool {
+        let mut items = self.items();
         let pending: Vec<(String, usize, String)> = {
-            let items = self.items();
             let now = self.now();
             items
                 .visible(now)
@@ -346,14 +359,14 @@ impl AgentControl {
                 })
                 .collect()
         };
-        for (id, at, path) in &pending {
-            self.items().change(id, |item| {
-                if let Some(link) = item.links.get_mut(*at) {
-                    link.target = path.clone();
-                }
-            });
+        let mut changed = false;
+        for (id, at, path) in pending {
+            match items.change(&id, |item| item.links[at].target = path) {
+                Ok(item) => changed |= item.is_some(),
+                Err(error) => eprintln!("[items] could not settle link for {id}: {error}"),
+            }
         }
-        !pending.is_empty()
+        changed
     }
 
     /// `ompdesk_item`: only a bot's chat (a session in its folder) has items.
@@ -394,6 +407,7 @@ impl AgentControl {
             if !STATUSES.contains(&status.as_str()) {
                 return fail(format!("status is one of {}.", STATUSES.join(", ")));
             }
+            let mut store = self.items();
             let mut item = ItemRecord {
                 id: new_id("item"),
                 bot: bot.id.clone(),
@@ -409,7 +423,8 @@ impl AgentControl {
                 ..ItemRecord::default()
             };
             item.event(&at, "bot", "made", Some(&status));
-            let item = self.items().add(item).map_err(Fail::Tool)?;
+            let item = store.add(item).map_err(item_store_error)?;
+            drop(store);
             self.items_changed();
             return Ok(format!(
                 "Added item #{} “{}” ({}).",
@@ -635,7 +650,7 @@ impl AgentControl {
         {
             return fail(QUESTION_CHANGED);
         }
-        let Some(changed) = store.change(&found.id, |item| {
+        let changed = store.change(&found.id, |item| {
             let before = item.status.clone();
             let mut note: Option<String> = None;
             match action {
@@ -786,12 +801,13 @@ impl AgentControl {
             item.version += 1;
             item.updated_at = at.clone();
             item.touched = now;
-        }) else {
+        });
+        let Some(changed) = changed.map_err(item_store_error)? else {
             return fail("That item is gone.");
         };
         drop(store);
         if !changed.is_open() && is_open(&found.status) {
-            journal_line(Path::new(&bot.folder), &changed, &at);
+            journal_line(Path::new(&bot.folder), &closing_line(&changed, &at), &at);
         }
         self.items_changed();
         Ok(format!(
@@ -820,16 +836,17 @@ impl AgentControl {
     }
 
     /// A session an item links reported to its opener that it is done or blocked: the item's Activity says so.
-    pub(crate) fn item_worker_report(&self, caller: &ControlTab, kind: &str, text: &str) {
+    pub(crate) fn item_worker_report(&self, caller: &ControlTab, kind: &str, text: &str) -> R<()> {
         let path = caller.session_path.clone().filter(|path| !path.is_empty());
         let mut targets = vec![caller.tab_id.as_str()];
         if let Some(path) = path.as_deref() {
             targets.push(path);
         }
         let now = self.now();
-        let ids = self.items().linking(&targets, now);
+        let mut store = self.items();
+        let ids = store.linking(&targets, now);
         if ids.is_empty() {
-            return;
+            return Ok(());
         }
         let at = iso(now.max(0.0) as u64);
         let subject = cut(
@@ -840,8 +857,9 @@ impl AgentControl {
             240,
         );
         let link = path.unwrap_or_else(|| caller.tab_id.clone());
-        for id in ids {
-            self.items().change(&id, |item| {
+        let mut changed = false;
+        let result = ids.into_iter().try_for_each(|id| {
+            let updated = store.change(&id, |item| {
                 let event = item.event(
                     &at,
                     "bot",
@@ -853,24 +871,38 @@ impl AgentControl {
                 item.version += 1;
                 item.updated_at = at.clone();
                 item.touched = now;
-            });
+            })?;
+            changed |= updated.is_some();
+            Ok(())
+        });
+        drop(store);
+        if changed {
+            self.items_changed();
         }
-        self.items_changed();
+        result.map_err(|error: std::io::Error| {
+            Fail::other(format!(
+                "Report accepted, but its item activity was not saved: {error}"
+            ))
+        })
     }
 
     /// The owner's change to one item (`id`) or several (`ids`), `BotsRequest` `item`: mailed once to each item's
     /// chat, an answer as a turn. Answers `question_changed` when an answer names a question the bot replaced.
     pub(crate) async fn owner_item(&self, request: &Value) -> R<Option<&'static str>> {
-        let ids: Vec<String> = match request.get("ids").and_then(Value::as_array) {
-            Some(ids) => ids
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect(),
+        let (refused, changed) = self.commit_owner_item(request)?;
+        self.drain_item_mail().await;
+        if changed {
+            self.items_changed();
+        }
+        Ok(refused)
+    }
+
+    fn commit_owner_item(&self, request: &Value) -> R<(Option<&'static str>, bool)> {
+        let ids: Vec<&str> = match request.get("ids").and_then(Value::as_array) {
+            Some(ids) => ids.iter().filter_map(Value::as_str).collect(),
             None => request
                 .get("id")
                 .and_then(Value::as_str)
-                .map(str::to_owned)
                 .into_iter()
                 .collect(),
         };
@@ -903,19 +935,31 @@ impl AgentControl {
             .get("answer")
             .and_then(|answer| answer.get("question"))
             .and_then(Value::as_u64);
-        // Per chat: its lines, the first change's mail id, whether one is an answer.
-        let mut mails: Vec<(String, Vec<String>, String, bool)> = Vec::new();
-        let mut refused: Option<&'static str> = None;
-        let mut changed_any = false;
-        for id in &ids {
-            // A change to an item that is gone mails nothing and asks nothing.
-            let mut store = self.items();
+        let mut store = self.items();
+        if let Some(key) = request_id.as_deref()
+            && let Some(result) = store.receipt(key).map_err(item_store_error)?
+        {
+            return match result.as_deref() {
+                None => Ok((None, false)),
+                Some(QUESTION_CHANGED) => Ok((Some(QUESTION_CHANGED), false)),
+                Some(code) => fail(format!("Unknown stored item refusal: {code}")),
+            };
+        }
+        let mut mails: Vec<(String, Mail)> = Vec::new();
+        let mut groups: HashMap<&str, (usize, usize)> = HashMap::new();
+        let mut seen = HashSet::new();
+        let mut changed = Vec::new();
+        let mut closed = Vec::new();
+        let mut refused = None;
+        for &id in &ids {
+            if !seen.insert(id) {
+                continue;
+            }
             let Some(found) = store.get(id).filter(|item| item.visible_at(now)) else {
                 continue;
             };
-            if request_id
-                .as_deref()
-                .is_some_and(|request| found.has_request(request))
+            if let Some(key) = request_id.as_deref()
+                && store.has_request(id, key).map_err(item_store_error)?
             {
                 continue;
             }
@@ -923,7 +967,6 @@ impl AgentControl {
                 refused = Some(QUESTION_CHANGED);
                 continue;
             }
-            let found = found.v1();
             if request.get("answer").is_some()
                 && found.question.is_none()
                 && found
@@ -989,8 +1032,9 @@ impl AgentControl {
             if status.is_none() && answer.is_none() && comment.is_none() && snooze.is_none() {
                 continue;
             }
-            let Some(changed) = store.change(id, |item| {
-                let before = item.status.clone();
+            let item = {
+                let mut item = found.v1();
+                let before = &found.status;
                 if let Some(answer) = &answer {
                     let question = item.question.as_ref().map(|question| question.id);
                     let event = item.event(&at, "owner", "answered", Some(answer));
@@ -1040,23 +1084,17 @@ impl AgentControl {
                 } else {
                     note.as_deref()
                 };
-                settle_status(item, &before, &at, now, "owner", why);
+                settle_status(&mut item, before, &at, now, "owner", why);
                 item.version += 1;
                 item.updated_at = at.clone();
                 item.touched = now;
                 if !item.is_open() && item.close_note.is_none() {
                     item.close_note = note.clone().or_else(|| comment.clone());
                 }
-            }) else {
-                continue;
+                item
             };
-            drop(store);
-            changed_any = true;
-            if !changed.is_open()
-                && is_open(&found.status)
-                && let Some(bot) = self.bots().find(&changed.bot).cloned()
-            {
-                journal_line(Path::new(&bot.folder), &changed, &at);
+            if !item.is_open() && found.is_open() {
+                closed.push((item.bot.clone(), closing_line(&item, &at)));
             }
             let mut lines: Vec<String> = Vec::new();
             if let Some(answer) = &answer {
@@ -1076,63 +1114,66 @@ impl AgentControl {
             }
             // A snooze alone mails nobody: the item keeps its status (Orca's `BotItemSnooze.tsx`).
             if lines.is_empty() {
+                changed.push(item);
                 continue;
             }
             let line = format!(
                 "Item #{} “{}” [{}]: {}",
-                changed.number,
-                changed.title,
-                changed.status,
+                item.number,
+                item.title,
+                item.status,
                 lines.join(" ")
             );
-            match mails
-                .iter_mut()
-                .find(|(session, ..)| *session == changed.session)
-            {
-                Some((_, lines, _, answered)) => {
-                    lines.push(line);
-                    *answered |= answer.is_some();
-                }
-                None => mails.push((
-                    changed.session.clone(),
-                    vec![line],
-                    format!("item-{}-v{}", changed.id, changed.version),
-                    answer.is_some(),
-                )),
+            let (index, count) = groups.entry(&found.session).or_insert_with(|| {
+                let id = format!("item-{}-v{}", item.id, item.version);
+                let mail = Mail::new(&id, "ompdesk", "the owner", "", MailKind::Note, "", now);
+                let index = mails.len();
+                mails.push((item.session.clone(), mail));
+                (index, 0)
+            });
+            let mail = &mut mails[*index].1;
+            if *count == 0 {
+                mail.text = line;
+            } else {
+                mail.text.push('\n');
+                mail.text.push_str(&line);
+            }
+            // One UTF-16 unit needs at most three UTF-8 bytes. Bound the plan before rendering the envelope.
+            if mail.text.len() > 3 * MAIL_UNITS_MAX {
+                return fail(MAIL_TOO_LONG);
+            }
+            *count += 1;
+            if answer.is_some() {
+                mail.kind = MailKind::Question;
+                mail.instruction.get_or_insert_with(|| {
+                    "The owner answered your item's question: go on with the item now.".to_owned()
+                });
+            }
+            changed.push(item);
+        }
+        for (index, count) in groups.into_values().filter(|(_, count)| *count > 1) {
+            mails[index].1.id.push_str(&format!("+{count}"));
+        }
+        if mails
+            .iter()
+            .any(|(_, mail)| mail_text(mail).encode_utf16().nth(MAIL_UNITS_MAX).is_some())
+        {
+            return fail(MAIL_TOO_LONG);
+        }
+        let changed_any = !changed.is_empty();
+        if changed_any || request_id.is_some() {
+            store
+                .commit_owner(changed, request_id.as_deref(), refused, &mails, &ids)
+                .map_err(item_store_error)?;
+        }
+        drop(store);
+        for (id, line) in closed {
+            let folder = self.bots().find(&id).map(|bot| bot.folder.clone());
+            if let Some(folder) = folder {
+                journal_line(Path::new(&folder), &line, &at);
             }
         }
-        for (session, lines, id, answered) in mails {
-            // Several items in one move are one mail, named by its first change and how many it holds.
-            let id = if lines.len() > 1 {
-                format!("{id}+{}", lines.len())
-            } else {
-                id
-            };
-            let kind = if answered {
-                MailKind::Question
-            } else {
-                MailKind::Note
-            };
-            let mut mail = Mail::new(
-                &id,
-                "ompdesk",
-                "the owner",
-                "",
-                kind,
-                &lines.join("\n"),
-                now,
-            );
-            if answered {
-                mail.instruction = Some(
-                    "The owner answered your item's question: go on with the item now.".to_owned(),
-                );
-            }
-            self.mail_session(&session, mail, answered).await;
-        }
-        if changed_any {
-            self.items_changed();
-        }
-        Ok(refused)
+        Ok((refused, changed_any))
     }
 
     /// `ompdesk_session_open {item}` from a bot's chat: each child it opened is linked to the item, and a planned
@@ -1142,16 +1183,16 @@ impl AgentControl {
             return fail("item works only from a bot's chat.");
         };
         let now = self.now();
-        let Some(found) = self
-            .items()
+        let mut store = self.items();
+        let Some(id) = store
             .find(&bot.id, key)
             .filter(|item| item.visible_at(now))
-            .map(ItemRecord::v1)
+            .map(|found| found.id.clone())
         else {
             return fail(format!("No item \"{key}\" of the bot {}.", bot.name));
         };
         let at = iso(now.max(0.0) as u64);
-        self.items().change(&found.id, |item| {
+        let changed = store.change(&id, |item| {
             let before = item.status.clone();
             if !item
                 .links
@@ -1173,6 +1214,8 @@ impl AgentControl {
             item.updated_at = at.clone();
             item.touched = now;
         });
+        changed.map_err(item_store_error)?;
+        drop(store);
         self.items_changed();
         Ok(())
     }

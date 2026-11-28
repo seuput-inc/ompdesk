@@ -11,11 +11,20 @@
  *
  * And the owner's moves: a status (Waiting with what it waits on) or a snooze for one item or several at once.
  */
+import { z } from "zod";
 import { create } from "zustand";
-import type { Item, ItemDecision, ItemStatus } from "../../../../shared/bots";
+import {
+	ITEM_STATUSES,
+	type Item,
+	type ItemBatchChange,
+	type ItemDecision,
+	type ItemStatus,
+} from "../../../../shared/bots";
+import { errorDetail } from "../../../lib/error-detail";
+import { uiLocale } from "../../../lib/format";
 import { translate } from "../../../lib/i18n";
 import { useBotsStore } from "../../../stores/bots";
-import { toast, toastError } from "../../../stores/toast";
+import { toast, toastError, useToastStore } from "../../../stores/toast";
 import type { AnswerReview } from "../inbox-answers";
 import type { DecisionAnswer } from "./item-model";
 
@@ -119,26 +128,183 @@ export function discardComment(item: string, requestId: string): void {
 	setPending(item, list => list.filter(known => known.requestId !== requestId));
 }
 
-/** Moves `items` to `status` in one write (one mail per chat); Waiting says what they wait on (`wait`). */
-export function moveItems(items: readonly Item[], status: ItemStatus, note?: { wait?: string; note?: string }): void {
-	if (items.length === 0) return;
-	void useBotsStore
-		.getState()
-		.command({ action: "item", ids: items.map(item => item.id), status, ...note })
-		.catch((error: unknown) => toastError({ title: translate("bots.items.move.failed"), error }));
+const BATCH_KEY = "omp.itemBatch.v1:";
+const sending = new Set<string>();
+const savedBatch = z.strictObject({
+	device: z.string().min(1).nullable(),
+	ids: z.array(z.string().min(1)).min(1),
+	change: z.union([
+		z.strictObject({ status: z.enum(ITEM_STATUSES), wait: z.string().optional(), note: z.string().optional() }),
+		z.strictObject({ snoozeUntil: z.iso.datetime().nullable() }),
+	]),
+});
+type Batch = z.infer<typeof savedBatch>;
+
+function* pendingBatches(): Generator<[string, string]> {
+	for (let i = 0; i < localStorage.length; i++) {
+		const key = localStorage.key(i);
+		if (!key?.startsWith(BATCH_KEY)) continue;
+		const raw = localStorage.getItem(key);
+		if (raw !== null) yield [key.slice(BATCH_KEY.length), raw];
+	}
 }
 
-/** Snoozes `items` until `until` (epoch ms), or wakes them (null). The bot is not told. */
-export function snoozeItems(items: readonly Item[], until: number | null): void {
-	if (items.length === 0) return;
-	void useBotsStore
+function batchTitle({ device, ids, change }: Batch): string {
+	const state = useBotsStore.getState().state;
+	const host = state.remote?.find(host => host.device === device);
+	const first = state.items.find(row => row.id === ids[0] && (row.device ?? null) === device);
+	const target = first ? `#${first.number} ${first.title}` : ids[0];
+	const changeName =
+		"status" in change
+			? translate(`bots.items.status.${change.status}`)
+			: change.snoozeUntil
+				? translate("bots.items.snooze.rowUntil", { when: new Date(change.snoozeUntil).toLocaleString(uiLocale()) })
+				: translate("bots.items.snooze.unsnooze");
+	return [host?.name ?? device, ids.length > 1 ? `${target} (+${ids.length - 1})` : target, changeName]
+		.filter(Boolean)
+		.join(" · ");
+}
+
+function dismissRetry(id: string): void {
+	const notice = useToastStore
 		.getState()
-		.command({
-			action: "item",
-			ids: items.map(item => item.id),
-			snoozeUntil: until === null ? null : new Date(until).toISOString(),
-		})
-		.catch((error: unknown) => toastError({ title: translate("bots.items.snooze.failed"), error }));
+		.toasts.find(entry => entry.action?.key === BATCH_KEY + id && !entry.exitingAt);
+	if (notice) useToastStore.getState().dismiss(notice.id);
+}
+
+function offerRetry(id: string, raw: string, batch: Batch, error?: unknown): void {
+	if (useToastStore.getState().toasts.some(entry => entry.action?.key === BATCH_KEY + id && !entry.exitingAt)) return;
+	const key = BATCH_KEY + id;
+	toast({
+		variant: "warning",
+		title: batchTitle(batch),
+		message: translate("bots.items.batch.unknown"),
+		detail: errorDetail(error),
+		durationMs: Number.POSITIVE_INFINITY,
+		action: { key, label: translate("common.retry"), run: () => dispatchBatch(id, batch, raw) },
+		secondAction: {
+			label: translate("bots.items.comment.discard"),
+			run: () => {
+				if (localStorage.getItem(key) === raw) localStorage.removeItem(key);
+				dismissRetry(id);
+			},
+		},
+	});
+}
+
+/** Re-open the receipts, not the commands: a restart never sends an old move without the owner choosing Retry. */
+export function offerItemBatchRetries(): void {
+	try {
+		for (const [id, raw] of pendingBatches()) {
+			if (sending.has(id)) continue;
+			try {
+				const batch = savedBatch.safeParse(JSON.parse(raw));
+				if (batch.success) offerRetry(id, raw, batch.data);
+			} catch {
+				// An unreadable ticket must not hide a later one or become a command.
+			}
+		}
+	} catch {
+		// This origin does not allow storage. A new durable move will fail before dispatch.
+	}
+}
+
+const batchResult = z.object({
+	ids: z.array(z.string()),
+	changed: z.array(z.object({ id: z.string(), version: z.number().int().nonnegative() })),
+	refused: z.string().nullable(),
+});
+
+async function dispatchBatch(id: string, batch: Batch, raw?: string): Promise<void> {
+	if (sending.has(id)) return;
+	const key = BATCH_KEY + id;
+	sending.add(id);
+	dismissRetry(id);
+	try {
+		if (raw !== undefined && localStorage.getItem(key) !== raw) return;
+		const { device, ids, change } = batch;
+		const reply = await useBotsStore.getState().command({
+			action: raw === undefined ? "item" : "itemBatch",
+			device,
+			ids,
+			requestId: id,
+			...change,
+		});
+		let refused: string | null | undefined = reply.refused;
+		if (raw !== undefined) {
+			const receipt = batchResult.safeParse(reply.itemBatchResult);
+			if (
+				!receipt.success ||
+				receipt.data.ids.length !== ids.length ||
+				receipt.data.ids.some((value, i) => value !== ids[i])
+			) {
+				offerRetry(id, raw, batch);
+				return;
+			}
+			refused = receipt.data.refused;
+			localStorage.removeItem(key);
+		}
+		if (refused)
+			toast({ variant: "warning", title: batchTitle(batch), message: translate("bots.items.batch.refused") });
+	} catch (error) {
+		if (raw !== undefined) offerRetry(id, raw, batch, error);
+		else
+			toast({
+				variant: "warning",
+				title: batchTitle(batch),
+				message: translate("bots.items.batch.legacyUnknown"),
+				detail: errorDetail(error),
+			});
+	} finally {
+		sending.delete(id);
+	}
+}
+
+async function submitBatch(items: readonly Item[], change: ItemBatchChange, requestId: string): Promise<void> {
+	if (!items.length) return;
+	const device = items[0].device ?? null;
+	const batch = { device, ids: items.map(item => item.id), change };
+	const raw = JSON.stringify(batch);
+	const bots = useBotsStore.getState().state.bots;
+	const durable = bots.some(bot => bot.device === items[0].device && bot.itemReceipts);
+	try {
+		if (items.some(item => (item.device ?? null) !== device)) throw new Error("A batch must have one destination.");
+		const key = BATCH_KEY + requestId;
+		let saved: string | null = null;
+		try {
+			saved = localStorage.getItem(key);
+		} catch (error) {
+			if (durable) throw error;
+		}
+		if (saved !== null) {
+			if (saved !== raw) throw new Error("Request id already in use.");
+			return dispatchBatch(requestId, batch, raw);
+		}
+		if (durable) localStorage.setItem(key, raw);
+	} catch (error) {
+		toast({
+			variant: "error",
+			title: batchTitle(batch),
+			message: translate("bots.items.batch.notSent"),
+			detail: errorDetail(error),
+		});
+		return;
+	}
+	return dispatchBatch(requestId, batch, durable ? raw : undefined);
+}
+
+/** The caller starts one request per host. The saved command keeps the original wait reason or absolute wake time. */
+export function moveItems(
+	items: readonly Item[],
+	status: ItemStatus,
+	requestId: string,
+	note?: { wait?: string; note?: string },
+): Promise<void> {
+	return submitBatch(items, { status, ...note }, requestId);
+}
+
+export function snoozeItems(items: readonly Item[], until: number | null, requestId: string): Promise<void> {
+	return submitBatch(items, { snoozeUntil: until === null ? null : new Date(until).toISOString() }, requestId);
 }
 
 // ---- Held answers of a several-question ask ----------------------------------------------------------------------

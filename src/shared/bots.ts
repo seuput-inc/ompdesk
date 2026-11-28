@@ -33,6 +33,8 @@ export const NO_REPLY = "NO_REPLY";
 
 export interface Bot {
 	id: string;
+	/** Read-time capability of this bot's host: itemBatch records the command and its result. */
+	itemReceipts?: true;
 	name: string;
 	/** Absolute folder its chats run in. */
 	folder: string;
@@ -282,6 +284,8 @@ export interface BotsState {
 	looks?: BotLooks[];
 	/** The owner's answer named a question the bot has since replaced: nothing was written. */
 	refused?: "question_changed";
+	/** Command reply only: the stored outcome, not the items' current versions in this snapshot. */
+	itemBatchResult?: { ids: string[]; changed: { id: string; version: number }[]; refused: string | null };
 	/** This delete needs a new confirmation. Only the command reply carries it. */
 	deleteChanged?: BotDeletePreview;
 	/** The paired hosts' bots as this computer last heard them (absent while none is held). */
@@ -307,6 +311,7 @@ export interface SharedBots {
 	version: string;
 	state: Pick<BotsState, "bots" | "items">;
 	refused?: BotsState["refused"];
+	itemBatchResult?: BotsState["itemBatchResult"];
 	deleteChanged?: BotDeletePreview;
 }
 
@@ -385,6 +390,8 @@ export interface BotDeletePreview {
 	digest: string;
 }
 
+export type ItemBatchChange = { status: ItemStatus; note?: string; wait?: string } | { snoozeUntil: string | null };
+
 export type BotsRequest =
 	| { action: "get" }
 	| { action: "allowLegacyPeers"; ids: string[]; allow?: boolean }
@@ -424,6 +431,8 @@ export type BotsRequest =
 	/** The owner's change to an item (`id`), or one move of several (`ids`): each chat is mailed once. */
 	| {
 			action: "item";
+			/** When present, route only to this host (null pins this computer). */
+			device?: string | null;
 			id?: string;
 			ids?: string[];
 			status?: ItemStatus;
@@ -433,10 +442,11 @@ export type BotsRequest =
 			/** An answer to its question: one of its options, or written; `question` names the question it answers. */
 			answer?: { choice?: number; text?: string; question?: number };
 			comment?: string;
-			/** A comment's or an answer's request id: sent again, it posts once. */
+			/** The caller's request id. Legacy hosts deduplicate comments and answers only. */
 			requestId?: string;
 			snoozeUntil?: string | null;
 	  }
+	| ({ action: "itemBatch"; ids: string[]; device: string | null; requestId: string } & ItemBatchChange)
 	/** The owner opened the bot's Items tab: its items as they are now are seen. */
 	| { action: "itemsOpened"; id: string }
 	/** Its page opened (the kickoff's one retry, `asked` false) or the owner's Try again (`asked`): sent again only

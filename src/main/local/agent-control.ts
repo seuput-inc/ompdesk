@@ -122,7 +122,10 @@ export const handlers: Record<string, LocalHandler> = {
 	 */
 	agent_control_mail: async (command, ctx) => {
 		const mail = mailCommand.parse(command);
-		return ctx.bridge.request("agent_control.mail", mail);
+		return ctx.bridge.request(
+			mail.details.itemSession === undefined ? "agent_control.mail" : "agent_control.item_mail",
+			mail,
+		);
 	},
 	agent_control_item_mail: async (command, ctx) => {
 		return ctx.bridge.request("agent_control.item_mail", itemMailCommand.parse(command));

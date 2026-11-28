@@ -182,7 +182,7 @@ impl AgentControl {
     }
 
     pub(super) async fn redeliver_item_mail(&self, outbox: &SendOutbox) -> R<()> {
-        let pending = self.items().pending_mail();
+        let pending = self.items().pending_worker_mail();
         for (item, key) in pending {
             self.deliver_item_mail(outbox, &item, &key).await?;
         }

@@ -55,7 +55,7 @@ import {
 	questionLine,
 	snoozePresets,
 } from "./item-model";
-import { moveItems, snoozeItems } from "./item-store";
+import { moveItems, offerItemBatchRetries, snoozeItems } from "./item-store";
 
 /** Each bot's seen mark as this list opened; `own` (a bot's own tab) then marks its items seen. */
 function useSeenAtOpen(bots: readonly Bot[], own: boolean): ReadonlyMap<string, number> | null {
@@ -84,17 +84,22 @@ export interface ItemMoves {
 	dialog: ReactNode;
 }
 
+function eachItemHost(items: readonly Item[], send: (rows: Item[], requestId: string) => void): void {
+	for (const rows of Map.groupBy(items, item => item.device).values()) send(rows, crypto.randomUUID());
+}
+
 export function useItemMoves(onDone?: () => void): ItemMoves {
 	const [asking, setAsking] = useState<Asking>(null);
+	useEffect(offerItemBatchRetries, []);
 	const move = (items: readonly Item[], status: ItemStatus) => {
 		if (status === "waiting") setAsking({ kind: "wait", items });
 		else {
-			moveItems(items, status);
+			eachItemHost(items, (rows, id) => void moveItems(rows, status, id));
 			onDone?.();
 		}
 	};
 	const snooze = (items: readonly Item[], until: number | null) => {
-		snoozeItems(items, until);
+		eachItemHost(items, (rows, id) => void snoozeItems(rows, until, id));
 		onDone?.();
 	};
 	const dialog =
@@ -103,7 +108,7 @@ export function useItemMoves(onDone?: () => void): ItemMoves {
 				items={asking.items}
 				onClose={() => setAsking(null)}
 				onDone={wait => {
-					moveItems(asking.items, "waiting", { wait });
+					eachItemHost(asking.items, (rows, id) => void moveItems(rows, "waiting", id, { wait }));
 					setAsking(null);
 					onDone?.();
 				}}
@@ -361,7 +366,8 @@ export function BotItems({ bots, group, onOpen, onOrder }: BotItemsProps) {
 				message={t("bots.items.stale.confirmWhy", { reason: staleReason })}
 				onCancel={() => setCancelling(null)}
 				onConfirm={() => {
-					if (cancelling) moveItems(cancelling, "canceled", { note: staleReason });
+					if (cancelling)
+						eachItemHost(cancelling, (rows, id) => void moveItems(rows, "canceled", id, { note: staleReason }));
 					setCancelling(null);
 				}}
 				open={cancelling !== null}

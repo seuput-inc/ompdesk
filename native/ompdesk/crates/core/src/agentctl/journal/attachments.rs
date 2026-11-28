@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
@@ -39,7 +40,7 @@ pub fn is_image_type(mime: &str) -> bool {
     IMAGE_TYPES.contains(&mime)
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AttachmentRef {
     pub sha256: String,
     pub name: String,
@@ -48,7 +49,7 @@ pub struct AttachmentRef {
 }
 
 /// A file landed on the receiver's computer: its path there, and when (an upload is deleted after 24 hours).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LandedFile {
     pub file: AttachmentRef,
     pub path: String,
@@ -56,7 +57,7 @@ pub struct LandedFile {
 }
 
 /// What a stored message carries: the pictures by reference, and the files as landed.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AttachedSet {
     pub images: Vec<AttachmentRef>,
     pub files: Vec<LandedFile>,

@@ -39,7 +39,7 @@ pub(crate) struct ItemMail {
 }
 
 impl Items {
-    pub(crate) fn pending_mail(&self) -> Vec<(String, String)> {
+    pub(crate) fn pending_worker_mail(&self) -> Vec<(String, String)> {
         self.items
             .iter()
             .flat_map(|item| {
@@ -58,11 +58,9 @@ impl Items {
         key: &str,
         mail: ItemMail,
     ) -> Result<(), String> {
-        let index = self
-            .items
-            .iter()
-            .position(|row| row.id == item)
-            .ok_or("That item is gone.")?;
+        let Some(&index) = self.by_id.get(item) else {
+            return Err("That item is gone.".into());
+        };
         if !self.items[index].mail.contains_key(key)
             && self
                 .items
@@ -74,19 +72,8 @@ impl Items {
         {
             return Err("The item mail outbox is full; no message was accepted.".into());
         }
-        let previous = self.items[index].mail.insert(key.to_owned(), mail);
-        if let Err(error) = self.commit() {
-            let receipts = &mut self.items[index].mail;
-            match previous {
-                Some(old) => {
-                    receipts.insert(key.to_owned(), old);
-                }
-                None => {
-                    receipts.remove(key);
-                }
-            }
-            return Err(error);
-        }
-        Ok(())
+        self.persist_row(item, |row| {
+            row.mail.insert(key.to_owned(), mail);
+        })
     }
 }

@@ -1,6 +1,5 @@
 use super::*;
 use crate::agentctl::journal::attachments::sha256_hex;
-use crate::agentctl::journal::items::Items;
 use crate::agentctl::rules::mail::{Mail, MailKind};
 use crate::agentctl::service::{CallId, JournalFile};
 
@@ -48,18 +47,23 @@ async fn item_mail_commits_before_delivery_and_replays_the_same_receipt_without_
 {
     let root = Scratch::new();
     let files = files(&root);
-    let disk = files.items.clone();
+    let receiver = Arc::new(Mutex::new(None::<AgentControl>));
+    let receiving = receiver.clone();
     let (ctl, asked, board) = ada_in(&root, &files, Mails::default(), move |_, args| {
         let cmd = command(args)?;
-        let row = Items::new(disk.clone());
-        let mail =
-            &row.get(cmd["item"].as_str().unwrap()).unwrap().mail[cmd["key"].as_str().unwrap()];
+        let service = receiving.lock().unwrap().clone().unwrap();
+        let row = service
+            .items()
+            .committed_get(cmd["item"].as_str().unwrap())
+            .unwrap();
+        let mail = &row.mail[cmd["key"].as_str().unwrap()];
         assert_eq!(mail.session, PATH);
         assert_eq!(mail.generation, 1);
         assert_eq!(mail.state.status(), "accepted_pending_delivery");
         Some(json!({"success":true,"data":{"journaled":true,"key":cmd["key"]}}))
     })
     .await;
+    *receiver.lock().unwrap() = Some(ctl.clone());
     let id = item(&ctl, &board).await;
     assert!(
         ctl.run("bot1", TOOL, message("#1", "unset"), None)
@@ -275,14 +279,11 @@ async fn disconnected_execution_host_mail_never_targets_the_replacement_even_at_
 
 #[tokio::test]
 async fn item_mail_does_not_send_or_defer_an_uncommitted_acceptance() {
-    use crate::disk::saves::Saves;
     let root = Scratch::new();
     let (ctl, asked, board) = ada_in(&root, &files(&root), Mails::default(), |_, _| None).await;
     let id = item(&ctl, &board).await;
     assign(&ctl, &id, 1, PATH, None);
-    ctl.items().saves = Saves::manual(Box::new(|_, _, _, _| {
-        Err(crate::server::Fault::new("io", "ENOSPC: synthetic"))
-    }));
+    ctl.items().set_fail_writes(true).unwrap();
     let result = ctl.run("bot1", TOOL, message(&id, "full"), None).await;
     assert!(result.is_error && result.text.contains("ENOSPC"));
     ctl.redeliver_sends().await.unwrap();

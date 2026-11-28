@@ -273,7 +273,7 @@ export interface AgentControlHostDeps {
 	runtimeTuning?: RuntimeTuning;
 	/** Where accepted reports wait for their receiver's journal (`mail-outbox`); absent: kept in memory only. */
 	mailOutboxFile?: string | null;
-	/** Where the bots and their items are kept (`bots.json`, `items.json`) and where a new bot's folder goes (`~/.omp/bots`). */
+	/** Bot registry, legacy items import path (beside items.sqlite3), and parent folder for new bots. */
 	botsFile?: string | null;
 	itemsFile?: string | null;
 	botsRoot?: string | null;

@@ -1071,7 +1071,7 @@ fn a_bot_s_folder_name_and_specialty() {
 fn items_keep_closed_rows_and_history_outside_the_v1_window_across_reload() {
     let dir = Dir::new();
     let file = dir.file("items.json");
-    let mut items = Items::new(Some(file.clone()));
+    let mut items = Items::new(Some(file.clone())).unwrap();
     let item = |id: &str, bot: &str, number: u32| ItemRecord {
         id: id.into(),
         bot: bot.into(),
@@ -1082,37 +1082,54 @@ fn items_keep_closed_rows_and_history_outside_the_v1_window_across_reload() {
         ..ItemRecord::default()
     };
     items.new_board("b1");
+    assert_eq!(items.next_number("b1"), 1);
     assert_eq!(items.add(item("i1", "b1", 0)).unwrap().number, 1);
     items.new_board("b1");
     assert_eq!(items.add(item("i2", "b1", 0)).unwrap().number, 2);
     assert_eq!(items.add(item("i3", "b2", 0)).unwrap().number, 1);
+    assert_eq!(items.next_number("b1"), 3);
     assert!(items.write_address("b2", "#1").is_err(), "legacy board");
     assert_eq!(items.write_address("b2", "i3").unwrap().number, 1);
     assert_eq!(items.find("b1", "#2").unwrap().id, "i2");
     assert_eq!(items.find("b2", "1").unwrap().id, "i3");
     assert_eq!(items.find("b1", "i1").unwrap().number, 1);
-    items.change("i1", |item| {
-        item.status = "done".into();
-        item.closed = Some(1_000.0);
-    });
+    items
+        .change("i1", |item| {
+            item.status = "done".into();
+            item.closed = Some(1_000.0);
+        })
+        .unwrap();
     let week = 7.0 * 24.0 * 60.0 * 60_000.0;
     assert_eq!(items.visible(1_000.0 + week - 1.0).count(), 3);
     let day_eight = 1_000.0 + week;
     assert_eq!(items.visible(day_eight).count(), 2);
     // Save another item after the closed row has aged out of the API.
-    items.change("i2", |item| {
-        for _ in 0..50 {
-            item.event("x", "bot", "commented", None);
-        }
-    });
-    items.change("i2", |item| {
-        item.event("y", "owner", "commented", Some("next"));
-    });
+    items
+        .change("i2", |item| {
+            for _ in 0..50 {
+                item.event("x", "bot", "commented", None);
+            }
+        })
+        .unwrap();
+    items
+        .change("i2", |item| {
+            item.event("y", "owner", "commented", Some("next"));
+        })
+        .unwrap();
     drop(items);
-    let mut items = Items::new(Some(file));
+    {
+        let db = rusqlite::Connection::open(file.with_extension("sqlite3")).unwrap();
+        let history: (i64, i64) = db
+            .query_row(
+                "SELECT count(*), min(id) FROM item_event WHERE item = 'i2'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(history, (51, 1));
+    }
+    let mut items = Items::new(Some(file)).unwrap();
     assert_eq!(items.get("i1").unwrap().status, "done");
-    assert_eq!(items.get("i2").unwrap().events.len(), 51);
-    assert_eq!(items.get("i2").unwrap().events[0].id, 1);
     let shown = items.v1(day_eight);
     assert_eq!(
         shown.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
@@ -1125,7 +1142,7 @@ fn items_keep_closed_rows_and_history_outside_the_v1_window_across_reload() {
     assert_eq!(items.add(item("i4", "b1", 0)).unwrap().number, 3);
     assert_eq!(items.write_address("b1", "#3").unwrap().id, "i4");
     assert!(items.write_address("b1", "#99").is_err());
-    items.remove_bot("b1");
+    items.remove_bot("b1").unwrap();
     assert_eq!(items.visible(0.0).count(), 1);
 }
 
@@ -1160,7 +1177,7 @@ fn item_events_are_numbered_across_items_and_a_new_question_names_its_ask() {
         r#"[{"id":"i1","bot":"b1","number":1,"session":"/s","title":"A","status":"planned","events":[{"at":"x","actor":"bot","kind":"made"},{"at":"y","actor":"bot","kind":"edited"}]}]"#,
     )
     .unwrap();
-    let mut items = Items::new(Some(file.clone()));
+    let mut items = Items::new(Some(file.clone())).unwrap();
     let ids: Vec<u64> = items
         .get("i1")
         .unwrap()
@@ -1178,11 +1195,13 @@ fn item_events_are_numbered_across_items_and_a_new_question_names_its_ask() {
                 ..Default::default()
             });
         })
+        .unwrap()
         .unwrap();
     assert_eq!(changed.events.last().unwrap().id, 4);
     assert_eq!(changed.question.unwrap().id, 3, "the ask's own event");
     assert_eq!(items.newest_event("b1", 0.0), 4);
-    assert_eq!(Items::new(Some(file)).newest_event("b1", 0.0), 4);
+    drop(items);
+    assert_eq!(Items::new(Some(file)).unwrap().newest_event("b1", 0.0), 4);
 }
 
 #[test]

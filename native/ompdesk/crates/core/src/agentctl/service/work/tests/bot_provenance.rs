@@ -247,6 +247,7 @@ async fn an_unsaved_hand_does_not_change_the_opener_and_retry_persists_the_hand(
     let registry = root.0.join("bots.json");
     let files = Files {
         bots: Some(registry.clone()),
+        items: None,
         ..bot_files(&root)
     };
     let (control, asked, id) = ada_in(&root, &files, Mails::default(), |_, _| None).await;

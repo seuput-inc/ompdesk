@@ -22,12 +22,13 @@ use super::bot_files;
 use super::bot_first_run::{ChatFacts, bot_command, first_run_home};
 use super::bot_package;
 use super::bots_share::Kind;
+use super::items::item_store_error;
 use super::schedule::is_absolute;
 use crate::agentctl::journal::attachments::sha256_hex;
 use crate::agentctl::journal::bots::{
     BotRecord, BotWorker, Bots, STALE_DAYS, WORKERS_KEPT, WorkerOrigin, slug, specialty,
 };
-use crate::agentctl::journal::items::ItemRecord;
+use crate::agentctl::journal::items::{ItemRecord, STATUSES, parse_iso};
 use crate::agentctl::journal::looks::{EVERY_CHOICES, FOCUS_MAX, LookSetting, PER_LOOK, TITLE_MAX};
 use crate::agentctl::journal::mail_outbox::{
     MailAnswer, OutboxMail, RedeliverDeps, redeliver_mail,
@@ -51,7 +52,7 @@ const TIDY_PROMPT: &str = "Tidy your memory: MEMORY.md in your folder. First cop
 /// Notification kinds a bot's chats can be quiet about (`Bot.quiet`).
 const QUIET_KINDS: [&str; 3] = ["permission", "done", "failed"];
 /// What a paired device may ask of this computer's bots (`bots_from`).
-const FROM_DEVICE: [&str; 9] = [
+const FROM_DEVICE: [&str; 10] = [
     "get",
     "create",
     "createFolder",
@@ -59,6 +60,7 @@ const FROM_DEVICE: [&str; 9] = [
     "deletePreview",
     "delete",
     "item",
+    "itemBatch",
     "itemsOpened",
     "file",
 ];
@@ -154,12 +156,62 @@ impl RedeliverDeps for OutboxTabs<'_> {
 }
 
 fn with_command_outcome(mut state: Value, mut answer: Value) -> Value {
-    for field in ["refused", "deleteChanged"] {
+    for field in ["refused", "deleteChanged", "itemBatchResult"] {
         if let Some(value) = answer.get_mut(field) {
             state[field] = value.take();
         }
     }
     state
+}
+
+// Paired hosts meter waking answers under `item`; a retryable bulk move or snooze can never carry one.
+fn validate_item_batch(request: &Value) -> R<()> {
+    let Some(fields) = request.as_object() else {
+        return fail("An item batch must be an object.");
+    };
+    if !request["requestId"].as_str().is_some_and(|id| {
+        !id.is_empty()
+            && id.trim() == id
+            && !id.contains(char::is_control)
+            && id.chars().count() <= 200
+    }) {
+        return fail("An item batch needs a requestId of 1 to 200 characters.");
+    }
+    if !request["ids"].as_array().is_some_and(|ids| {
+        !ids.is_empty()
+            && ids
+                .iter()
+                .all(|id| id.as_str().is_some_and(|id| !id.is_empty()))
+    }) {
+        return fail("An item batch needs item ids.");
+    }
+    let snooze = fields.contains_key("snoozeUntil");
+    let allowed = fields.keys().all(|key| match key.as_str() {
+        "action" | "ids" | "requestId" => true,
+        "snoozeUntil" => snooze,
+        "status" | "wait" | "note" => !snooze,
+        _ => false,
+    });
+    let valid = if snooze {
+        request["snoozeUntil"].is_null()
+            || request["snoozeUntil"]
+                .as_str()
+                .and_then(parse_iso)
+                .is_some()
+    } else {
+        request["status"]
+            .as_str()
+            .is_some_and(|s| STATUSES.contains(&s))
+            && ["wait", "note"]
+                .iter()
+                .all(|key| fields.get(*key).is_none_or(Value::is_string))
+    };
+    if !allowed || !valid {
+        return fail(
+            "An item batch takes only a status and optional wait or note, or snoozeUntil.",
+        );
+    }
+    Ok(())
 }
 
 impl AgentControl {
@@ -233,6 +285,7 @@ impl AgentControl {
                 if let Some(fields) = value.as_object_mut() {
                     fields.remove("creationReceipt");
                     fields.remove("peerCreate");
+                    fields.insert("itemReceipts".into(), Value::Bool(true));
                     fields.remove("chatPins");
                     if let Some(home) = bot.chat_pins.iter().find(|pin| {
                         state.deleted_at_path(&pin.path, None).is_none()
@@ -455,6 +508,7 @@ impl AgentControl {
             self.return_bot_asks(id).await?;
         } else {
             self.redeliver_mail_now().await;
+            self.drain_item_mail().await;
         }
         Ok(bot)
     }
@@ -504,6 +558,8 @@ impl AgentControl {
         {
             self.bots().observe(&bot.folder, path);
         }
+        // Finish any handoff before closing the chats; no pending answer may reopen one during deletion.
+        let _delivery = self.item_delivery.lock().await;
         plan.apply(self, id).await?;
         let chats: HashSet<&String> = bot
             .home
@@ -554,7 +610,7 @@ impl AgentControl {
                 self.note_session(&sender, &text).await;
             }
         }
-        self.items().remove_bot(id);
+        self.items().remove_bot(id).map_err(item_store_error)?;
         self.rooms().remove_bot(id);
         self.looks().remove_bot(id);
         if let Some(dir) = &self.bot_config_dir {
@@ -643,6 +699,67 @@ impl AgentControl {
         }
     }
 
+    /// Serialize selection, handoff and acknowledgement, but never take the item store across an await.
+    pub(super) async fn drain_item_mail(&self) {
+        let _delivery = self.item_delivery.lock().await;
+        let pending = match self.items().pending_mail() {
+            Ok(pending) => pending,
+            Err(error) => {
+                eprintln!("[items] cannot read pending mail: {error}");
+                return;
+            }
+        };
+        // An answer can open its chat for older quiet notes. Never let it overtake them.
+        let mut wake: HashSet<&str> = pending
+            .iter()
+            .filter(|(_, mail)| mail.kind == MailKind::Question)
+            .map(|(session, _)| session.as_str())
+            .collect();
+        let mut blocked = HashSet::new();
+        for (session, mail) in &pending {
+            if blocked.contains(session.as_str()) || self.host.holds(session, None) {
+                continue;
+            }
+            match self
+                .hand_item_mail(session, mail, wake.remove(session.as_str()))
+                .await
+            {
+                Ok(true) => match self.items().ack_mail(&mail.id) {
+                    Ok(()) => continue,
+                    Err(error) => eprintln!("[items] cannot acknowledge {}: {error}", mail.id),
+                },
+                Ok(false) => {}
+                Err(error) => {
+                    eprintln!(
+                        "[items] mail {} still pending: {}",
+                        mail.id,
+                        error.message()
+                    )
+                }
+            }
+            blocked.insert(session.as_str());
+        }
+    }
+
+    async fn hand_item_mail(&self, session: &str, mail: &Mail, wake: bool) -> R<bool> {
+        let tab = if wake {
+            self.host.reach(session).await?
+        } else {
+            OutboxTabs { host: &self.host }.tab_of(session, None)
+        };
+        let Some(tab) = tab else { return Ok(false) };
+        if self.host.holds(session, None) {
+            return Ok(false);
+        }
+        let mut details = mail_details(mail);
+        details["itemSession"] = json!(session);
+        let answer = self
+            .host
+            .send_mail(&tab, &mail_text(mail), &details, delivery_for(mail.kind))
+            .await?;
+        Ok(answer.is_some_and(|answer| answer.journaled))
+    }
+
     // ---- what a bot chat's omp is told ------------------------------------------------------------------------------------
 
     /// One bot pass: chats seen with their files join their bot, and every bot chat's omp is handed its context when it
@@ -659,6 +776,7 @@ impl AgentControl {
         loop {
             self.observe_bots();
             self.finish_moves().await;
+            self.drain_item_mail().await;
             self.arm_looks().await;
             self.feed_bots().await;
             let mut mem = self.mem();
@@ -1555,6 +1673,22 @@ impl AgentControl {
                 None => fail("The computer returned no model roles."),
             };
         }
+        if matches!(request["action"].as_str(), Some("item" | "itemBatch")) {
+            let device = request.as_object_mut().and_then(|map| map.remove("device"));
+            if request["action"] == "itemBatch" {
+                validate_item_batch(&request)?;
+                if device.is_none() {
+                    return fail("Select the computer whose items you are changing.");
+                }
+            }
+            if let Some(device) = device {
+                return match device {
+                    Value::Null => self.own_bots_command(request, None).await,
+                    Value::String(id) if !id.is_empty() => self.bots_command_on(&id, request).await,
+                    _ => fail("Select the computer whose items you are changing."),
+                };
+            }
+        }
         if matches!(request["action"].as_str(), Some("create" | "createFolder"))
             && let Some(device) = request.as_object_mut().and_then(|map| map.remove("device"))
         {
@@ -1681,6 +1815,9 @@ impl AgentControl {
             return fail(format!(
                 "{device_name} cannot {action} the bots of this computer."
             ));
+        }
+        if action == "itemBatch" {
+            validate_item_batch(&request)?;
         }
         let receipt = if action == "create" {
             use crate::agentctl::journal::bots::receipt::CreationReceipt;
@@ -2030,7 +2167,7 @@ impl AgentControl {
                     return Ok(state);
                 }
             }
-            "item" => refused = self.owner_item(&request).await?,
+            "item" | "itemBatch" => refused = self.owner_item(&request).await?,
             "itemsOpened" => self.items_opened(&id)?,
             // The bot's page opened (its one retry, in the background) or the owner's Try again (`asked`).
             "kickoff" => {
@@ -2117,7 +2254,13 @@ impl AgentControl {
             other => return fail(format!("bots: no action {other}")),
         }
         let mut state = self.bots_state();
-        // The owner's answer named a question the bot has since replaced: nothing was written.
+        if request["action"] == "itemBatch" {
+            let key = request["requestId"].as_str().expect("validated item batch");
+            let Some(result) = self.items().batch_result(key).map_err(item_store_error)? else {
+                return fail("Could not read the committed item batch receipt.");
+            };
+            state["itemBatchResult"] = result;
+        }
         if let Some(code) = refused {
             state["refused"] = json!(code);
         }

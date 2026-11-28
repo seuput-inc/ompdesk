@@ -91,7 +91,8 @@ pub(super) fn rig(
         &files,
         Tuning::default(),
         system_clock(),
-    );
+    )
+    .unwrap();
     let runtime = start(
         control.clone(),
         id,

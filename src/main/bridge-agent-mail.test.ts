@@ -168,6 +168,33 @@ describe("agent_control.mail", () => {
 		await expect(ack).resolves.toMatchObject({ ...live, journaled: true });
 	});
 
+	it("acknowledges an item notice from another branch only after its chat flushes", async () => {
+		const itemMail = methods["agent_control.item_mail"]!;
+		const details = { id: "item-notice", itemSession: "/sessions/s1.jsonl" };
+		const entries = [{ type: "custom_message", customType: MAIL_CUSTOM_TYPE, details: { id: details.id } }];
+		const request = { content: "Owner comment", details };
+		await expect(
+			itemMail(
+				request,
+				env({
+					entries,
+					flush: async () => {
+						throw new Error("full disk");
+					},
+				}),
+			),
+		).rejects.toThrow("full disk");
+		await expect(
+			itemMail({ ...request, details: { ...details, itemSession: "/other" } }, env({ entries })),
+		).rejects.toThrow("chat changed");
+		await expect(itemMail(request, env({ entries }))).resolves.toEqual({
+			duplicate: true,
+			journaled: true,
+			itemSession: details.itemSession,
+		});
+		expect(sendMessage).not.toHaveBeenCalled();
+	});
+
 	it("sends a no-turn report as an aside while a turn runs, and plainly to an idle session", async () => {
 		const busy = env({ isStreaming: true });
 		await mail?.({ content: "busy", details: { id: "m4", kind: "progress" }, triggerTurn: false }, busy);

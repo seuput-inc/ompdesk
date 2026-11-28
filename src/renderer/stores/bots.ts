@@ -39,6 +39,11 @@ export function listedBots(state: BotsState): BotsState {
 
 /** The offline host a change to a paired host's bot or item would go to (its name), else null. */
 function offlineOwner(state: BotsState, request: BotsRequest): string | null {
+	if ((request.action === "item" || request.action === "itemBatch") && request.device !== undefined) {
+		if (request.device === null) return null;
+		const host = state.remote?.find(known => known.device === request.device);
+		return host?.online ? null : (host?.name ?? request.device);
+	}
 	const id = "id" in request ? request.id : "ids" in request ? request.ids?.[0] : undefined;
 	if (!id) return null;
 	const device =
@@ -59,7 +64,7 @@ export const useBotsStore = create<BotsStore>()(set => ({
 		useBotsStore.getState().receive(state);
 		return state;
 	},
-	receive: ({ deleteChanged: _deleteChanged, refused: _refused, ...state }) => {
+	receive: ({ deleteChanged: _deleteChanged, refused: _refused, itemBatchResult: _batch, ...state }) => {
 		rememberRead(undefined, READ_KEY, state);
 		set({ state: listedBots(state), live: true });
 	},

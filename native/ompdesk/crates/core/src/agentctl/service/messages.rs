@@ -1186,7 +1186,7 @@ impl AgentControl {
             && matches!(outcome, Posted::Delivered | Posted::Queued)
             && (kind_name == "done" || kind_name == "blocked")
         {
-            self.item_worker_report(caller, kind_name, &args.text);
+            self.item_worker_report(caller, kind_name, &args.text)?;
         }
         if let Some(parent) = &parent {
             self.host.review_changed(parent);

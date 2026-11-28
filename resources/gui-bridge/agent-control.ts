@@ -372,7 +372,10 @@ export const methods: BridgeMethods = {
 		let content = mailContent(record.content);
 		if (!content) throw new Error("agent_control.mail needs content");
 		if (!mailHost) throw new Error("This omp cannot receive reports (no extension sendMessage).");
-		const { peerBotHome, quotaRecipient, ...details } = (record.details ?? {}) as Record<string, unknown>;
+		const { peerBotHome, itemSession, quotaRecipient, ...details } = (record.details ?? {}) as Record<
+			string,
+			unknown
+		>;
 		const id = typeof details.id === "string" ? details.id : undefined;
 		if (id?.startsWith("item-mail:")) throw new Error("Item mail requires its receiver fence.");
 		// Idempotent across restarts of either side: the journal is the record of what arrived, and until stock's loop
@@ -380,6 +383,8 @@ export const methods: BridgeMethods = {
 		// report until the receiver's journal holds it (a killed omp loses an aside it still queued).
 		const session = env.session();
 		const manager = session.sessionManager;
+		if (itemSession !== undefined && (typeof itemSession !== "string" || itemSession !== manager.getSessionFile()))
+			throw new Error("The item's chat changed before delivery.");
 		if (
 			quotaRecipient !== undefined &&
 			(!quotaRecipient ||
@@ -396,12 +401,15 @@ export const methods: BridgeMethods = {
 			if (!context || context.bot.id !== peerBotHome.botId || !context.bot.firstRun || context.bot.paused)
 				throw new Error("The active branch does not hold this bot's context.");
 		}
-		const journaled =
-			id !== undefined &&
-			hasMailEntry(
-				peerBotHome === undefined && quotaRecipient === undefined ? manager.getBranch() : manager.getEntries(),
-				id,
-			);
+		const wholeFile = itemSession !== undefined || peerBotHome !== undefined || quotaRecipient !== undefined;
+		const journaled = id !== undefined && hasMailEntry(wholeFile ? manager.getEntries() : manager.getBranch(), id);
+		if (id && journaled && itemSession !== undefined) {
+			const home = botHomeOf(manager);
+			await manager.flush();
+			requireBotHome(home, botHomeOf(env.session().sessionManager));
+			queuedMail.delete(id);
+			return { duplicate: true, journaled: true, itemSession };
+		}
 		if (id && (journaled || queuedMail.has(id))) return { duplicate: true, journaled };
 		// Idle, an aside starts a turn (stock), so a no-turn report keeps stock's plain idle delivery: shown at once.
 		const deliverAs = record.deliverAs === "aside" || session.isStreaming ? "aside" : undefined;
@@ -623,3 +631,6 @@ export const methods: BridgeMethods = {
 		};
 	},
 };
+
+// A pre-migration bridge must refuse an item notice before it queues it in an unverified chat.
+methods["agent_control.item_mail"] = methods["agent_control.mail"]!;

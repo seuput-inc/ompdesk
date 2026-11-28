@@ -62,7 +62,8 @@ fn rig(
             ..Tuning::default()
         },
         system_clock(),
-    );
+    )
+    .unwrap();
     (control, asked)
 }
 

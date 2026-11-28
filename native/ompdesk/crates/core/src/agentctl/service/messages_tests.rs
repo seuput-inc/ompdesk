@@ -53,7 +53,8 @@ fn rig(
         &Files::default(),
         tuning,
         system_clock(),
-    );
+    )
+    .unwrap();
     (control, asked)
 }
 

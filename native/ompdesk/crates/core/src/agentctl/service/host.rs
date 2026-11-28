@@ -607,7 +607,8 @@ impl Host {
             .await?;
         Ok(answer.is_object().then(|| MailAnswer {
             duplicate: answer.get("duplicate").and_then(Value::as_bool) == Some(true),
-            journaled: answer.get("journaled").and_then(Value::as_bool) == Some(true),
+            journaled: answer.get("journaled").and_then(Value::as_bool) == Some(true)
+                && answer.get("itemSession") == details.get("itemSession"),
         }))
     }
 

@@ -660,7 +660,8 @@ fn rig(
             &files,
             Tuning::default(),
             system_clock(),
-        ),
+        )
+        .unwrap(),
         asked,
     )
 }
@@ -1031,7 +1032,8 @@ async fn a_device_is_found_by_id_name_or_a_unique_part_and_waited_for_while_it_c
         &Files::default(),
         short,
         system_clock(),
-    );
+    )
+    .unwrap();
     let away = ControlDevice {
         id: "d9".into(),
         name: "Laptop".into(),

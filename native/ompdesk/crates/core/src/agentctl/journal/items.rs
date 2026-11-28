@@ -1,6 +1,5 @@
-//! A bot's items (`src/shared/bots.ts` `Item`): what it works on for its owner and what it needs from them. Kept in
-//! `<userData>/items.json` (mode 0o600, one JSON array, written whole on every change). The age and event limits
-//! below apply to the v1 view, not the stored history.
+//! A bot's items. SQLite keeps the full history. The cache keeps each current row in insertion
+//! order with its last 50 events; closing an item only affects visibility, not its retention.
 //!
 //! Every event has an id, counted across all items (Orca's `e<n>`, `bot-items.ts`): an item's question names the
 //! event that asked it, an answer the question it answers, and a bot's Items tab is seen up to an id. The store
@@ -9,18 +8,15 @@
 //! What an item does not hold is read when the state is listed (`service/work/items.rs`): `stale`, `limitUntil` and
 //! each linked session's `state`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::fs::File;
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use serde::ser::{SerializeSeq, Serializer};
 use serde::{Deserialize, Serialize};
-
-use super::read_array;
-use crate::disk::saves::{SAVES, Saves};
 
 mod mail;
 pub(crate) use mail::{ItemMail, ItemMailState};
+mod storage;
 
 /// `ITEM_STATUSES`.
 pub const STATUSES: [&str; 6] = [
@@ -53,6 +49,7 @@ fn is_zero(value: &u64) -> bool {
 /// One question of several asked at once (Orca's `BotItemDecision`): its quick replies, the one recommended, and
 /// whether several may be picked.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ItemDecision {
     pub question: String,
     #[serde(default)]
@@ -64,7 +61,7 @@ pub struct ItemDecision {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ItemQuestion {
     pub text: String,
     #[serde(default)]
@@ -83,6 +80,7 @@ pub struct ItemQuestion {
 pub const DECISIONS_MAX: usize = 5;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ItemWait {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,6 +91,7 @@ pub struct ItemWait {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ItemLink {
     /// `session`, `pr`, `url`, `file` or `schedule`.
     pub kind: String,
@@ -106,6 +105,7 @@ pub struct ItemLink {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ItemEvent {
     /// Counted across all items; 0 until the store saved it.
     #[serde(default)]
@@ -194,7 +194,7 @@ impl ItemWork {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ItemRecord {
     pub id: String,
     /// The bot's id.
@@ -316,93 +316,28 @@ impl ItemRecord {
         });
         self.events.last_mut().expect("an event was just pushed")
     }
-
-    /// Whether an owner change with this request id was already taken.
-    pub fn has_request(&self, request: &str) -> bool {
-        self.events
-            .iter()
-            .any(|event| event.request.as_deref() == Some(request))
-    }
-}
-
-/// Gives every unsaved event of `item` the next id, and a question asked by this change the id of its ask.
-fn stamp(item: &mut ItemRecord, start: usize, next: &mut u64) {
-    for event in item.events[start..]
-        .iter_mut()
-        .filter(|event| event.id == 0)
-    {
-        *next += 1;
-        event.id = *next;
-    }
-    if let Some(question) = item.question.as_mut().filter(|question| question.id == 0) {
-        question.id = item
-            .events
-            .iter()
-            .rev()
-            .find(|event| event.kind == "asked")
-            .or(item.events.last())
-            .map_or(0, |event| event.id);
-    }
 }
 
 // Older readers skip this non-item row. If an older writer drops it, number-only writes fail closed.
-#[derive(Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct BoardNumbers {
-    last_issued: BTreeMap<String, u32>,
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct BoardNumbers {
+    pub(super) last_issued: BTreeMap<String, u32>,
 }
 
 /// The items.
 pub struct Items {
+    db: rusqlite::Connection,
+    // Held through connection close: another process must never serve a stale cache.
+    _writer: Option<File>,
     file: Option<PathBuf>,
-    pub(crate) saves: Arc<Saves>,
-    items: Vec<ItemRecord>,
     numbers: BoardNumbers,
-    /// The newest event id given.
+    items: Vec<ItemRecord>,
+    by_id: HashMap<String, usize>,
     last_event: u64,
 }
 
 impl Items {
-    pub fn new(file: Option<PathBuf>) -> Items {
-        let mut numbers = BoardNumbers::default();
-        let mut items = Vec::new();
-        for row in file.as_deref().map(read_array).unwrap_or_default() {
-            if row.get("lastIssued").is_some() {
-                numbers = serde_json::from_value(row).unwrap_or_default();
-            } else if let Ok(item) = serde_json::from_value::<ItemRecord>(row)
-                && !item.id.is_empty()
-                && !item.bot.is_empty()
-            {
-                items.push(item);
-            }
-        }
-        for item in &items {
-            if numbers
-                .last_issued
-                .get(&item.bot)
-                .is_some_and(|n| *n < item.number)
-            {
-                numbers.last_issued.remove(&item.bot);
-            }
-        }
-        let mut last_event = items
-            .iter()
-            .flat_map(|item| item.events.iter().map(|event| event.id))
-            .max()
-            .unwrap_or(0);
-        // A file written before events had ids: each gets one, in the order they are kept.
-        for item in &mut items {
-            stamp(item, 0, &mut last_event);
-        }
-        Items {
-            file,
-            items,
-            numbers,
-            last_event,
-            saves: Arc::clone(&SAVES),
-        }
-    }
-
     pub(crate) fn stored_at(&self, file: &std::path::Path) -> bool {
         self.file.as_deref() == Some(file)
     }
@@ -440,17 +375,6 @@ impl Items {
             .unwrap_or(0)
     }
 
-    pub fn new_board(&mut self, bot: &str) {
-        // Another call can publish the first item between bot registration and this notification.
-        if self.numbers.last_issued.contains_key(bot)
-            || self.items.iter().any(|item| item.bot == bot)
-        {
-            return;
-        }
-        self.numbers.last_issued.insert(bot.to_owned(), 0);
-        self.save();
-    }
-
     pub fn write_address(&self, bot: &str, key: &str) -> Result<&ItemRecord, String> {
         if key.trim().trim_start_matches('#').parse::<u32>().is_ok()
             && !self.numbers.last_issued.contains_key(bot)
@@ -461,7 +385,7 @@ impl Items {
             .ok_or_else(|| format!("No item \"{key}\" on this bot's board."))
     }
 
-    fn last_number(&self, bot: &str) -> u32 {
+    pub(super) fn last_number(&self, bot: &str) -> u32 {
         if let Some(number) = self.numbers.last_issued.get(bot) {
             return *number;
         }
@@ -473,22 +397,25 @@ impl Items {
             .unwrap_or(0)
     }
 
+    pub fn next_number(&self, bot: &str) -> u32 {
+        self.last_number(bot).saturating_add(1)
+    }
+
     /// The item of `bot` that `key` names: its number (`3`, `#3`), else its id.
     pub fn find(&self, bot: &str, key: &str) -> Option<&ItemRecord> {
         let key = key.trim();
         let number = key.trim_start_matches('#').parse::<u32>().ok();
-        self.items
-            .iter()
-            .find(|item| item.bot == bot && Some(item.number) == number)
-            .or_else(|| {
+        number
+            .and_then(|number| {
                 self.items
                     .iter()
-                    .find(|item| item.bot == bot && item.id == key)
+                    .find(|item| item.bot == bot && item.number == number)
             })
+            .or_else(|| self.get(key).filter(|item| item.bot == bot))
     }
 
     pub fn get(&self, id: &str) -> Option<&ItemRecord> {
-        self.items.iter().find(|item| item.id == id)
+        self.by_id.get(id).map(|&at| &self.items[at])
     }
 
     /// Ids of the items that link `target` (a session's tab id or file).
@@ -501,101 +428,6 @@ impl Items {
             })
             .map(|item| item.id.clone())
             .collect()
-    }
-
-    pub fn add(&mut self, mut item: ItemRecord) -> Result<ItemRecord, String> {
-        let previous = self.last_number(&item.bot);
-        item.number = previous
-            .checked_add(1)
-            .ok_or("This board has used every item number.")?;
-        let previous_event = self.last_event;
-        stamp(&mut item, 0, &mut self.last_event);
-        if let Some(last) = self.numbers.last_issued.get_mut(&item.bot) {
-            *last = item.number;
-        }
-        self.items.push(item);
-        if self.file.is_some()
-            && let Err(error) = self.commit()
-        {
-            let item = self.items.pop().expect("item just added");
-            if let Some(last) = self.numbers.last_issued.get_mut(&item.bot) {
-                *last = previous;
-            }
-            self.last_event = previous_event;
-            return Err(error);
-        }
-        Ok(self.items.last().expect("item just added").v1())
-    }
-
-    /// Changes item `id` and saves; its record as it is now.
-    pub fn change(&mut self, id: &str, change: impl FnOnce(&mut ItemRecord)) -> Option<ItemRecord> {
-        let item = self.items.iter_mut().find(|item| item.id == id)?;
-        let start = item.events.len();
-        change(item);
-        stamp(item, start, &mut self.last_event);
-        let changed = item.v1();
-        self.save();
-        Some(changed)
-    }
-
-    /// Drops every item of `bot`.
-    pub fn remove_bot(&mut self, bot: &str) {
-        let before = self.items.len();
-        self.items.retain(|item| item.bot != bot);
-        if self.numbers.last_issued.remove(bot).is_some() || self.items.len() != before {
-            self.save();
-        }
-    }
-
-    pub fn commit_work(&mut self, id: &str, work: ItemWork) -> Result<(), String> {
-        let index = self
-            .items
-            .iter()
-            .position(|item| item.id == id)
-            .ok_or("That item is gone.")?;
-        let old = self.items[index].work.replace(work);
-        let saved = self.commit();
-        if saved.is_err() {
-            self.items[index].work = old;
-        }
-        saved
-    }
-
-    fn bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
-        let mut bytes = Vec::new();
-        let mut writer = serde_json::Serializer::new(&mut bytes);
-        let mut rows = writer.serialize_seq(None)?;
-        for item in &self.items {
-            rows.serialize_element(item)?;
-        }
-        if !self.numbers.last_issued.is_empty() {
-            rows.serialize_element(&self.numbers)?;
-        }
-        rows.end()?;
-        Ok(bytes)
-    }
-
-    fn commit(&self) -> Result<(), String> {
-        let file = self.file.as_ref().ok_or("No durable item journal.")?;
-        let bytes = self.bytes().map_err(|error| error.to_string())?;
-        self.saves
-            .commit(file, &bytes, 0o600)
-            .map_err(|error| error.message)
-    }
-
-    fn save(&self) {
-        let Some(file) = &self.file else { return };
-        let saved = self
-            .bytes()
-            .map_err(|error| error.to_string())
-            .and_then(|bytes| {
-                self.saves
-                    .write(file, &bytes, Some(0o600), 0o777)
-                    .map_err(|error| error.message)
-            });
-        if let Err(error) = saved {
-            eprintln!("[items] not saved: {error}");
-        }
     }
 }
 

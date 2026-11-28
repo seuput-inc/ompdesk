@@ -16,6 +16,7 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use self::MailKind::{Blocked, Done, Note, Progress, Question, Review};
@@ -31,7 +32,8 @@ pub const MAIL_COALESCE_MS: u64 = 2_000;
 /// A coalesced progress report whose delivery failed is tried this many more times.
 pub const MAIL_PROGRESS_RETRIES: u32 = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum MailKind {
     Progress,
     Done,
@@ -68,13 +70,13 @@ impl MailKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MailCheck {
     pub command: String,
     pub passed: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Mail {
     /// Unique per report (idempotency of a retried tool call).
     pub id: String,

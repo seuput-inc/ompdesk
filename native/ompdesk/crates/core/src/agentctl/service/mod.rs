@@ -219,12 +219,13 @@ pub struct Inner {
     fates: Mutex<SessionFates>,
     cleanups: Mutex<PendingCleanups>,
     calls: Option<Mutex<CallJournal>>,
-    /// The bots (`bots.json`) and their items (`items.json`); take `bots` before `items` when both are held.
+    /// Take `bots` before the items store when both are held.
     bots: Mutex<Bots>,
     /// The owner's rename and a bot pass may try to move the same directory concurrently.
     bot_moves: tokio::sync::Mutex<()>,
     items: Mutex<Items>,
     peer_receipts: Mutex<paired_item::Receipts>,
+    item_delivery: tokio::sync::Mutex<()>,
     /// The bot groups and their rooms (`rooms.json` beside `items.json`); never held with `bots` or `items`.
     rooms: Mutex<Rooms>,
     /// What this computer shares of its bots with paired devices, and its hosts' bots as last heard (`bots_share`);
@@ -333,7 +334,7 @@ pub struct Files {
     pub mail_outbox: Option<JournalFile>,
     /// Where the bytes of the attachments an outbox entry still owes are kept, by content; absent: in memory only.
     pub attachments: Option<PathBuf>,
-    /// The bots (`bots.json`) and their items (`items.json`); absent: in memory only.
+    /// The bots registry and the legacy items import path; absent: in memory only.
     pub bots: Option<PathBuf>,
     pub items: Option<PathBuf>,
     /// Where a new bot's folder goes (`~/.omp/bots`).
@@ -348,7 +349,8 @@ impl AgentControl {
         files: &Files,
         tuning: Tuning,
         clock: Clock,
-    ) -> AgentControl {
+    ) -> std::io::Result<AgentControl> {
+        let items = Items::new(files.items.clone())?;
         let mut host = Host::new(port, caps)
             .with_clock(clock.clone())
             .with_attachments(Arc::new(AttachmentStore::with_clock(
@@ -395,8 +397,9 @@ impl AgentControl {
             mailbox,
             bots: Mutex::new(Bots::new(files.bots.clone())),
             bot_moves: Default::default(),
-            items: Mutex::new(Items::new(files.items.clone())),
+            items: Mutex::new(items),
             peer_receipts: Mutex::new(paired_item::Receipts::new(files.items.as_deref())),
+            item_delivery: Default::default(),
             rooms: Mutex::new(Rooms::new(
                 files
                     .items
@@ -427,7 +430,7 @@ impl AgentControl {
         }));
         control.hold_paused();
         control.settle_moves();
-        control
+        Ok(control)
     }
 
     /// A message reached `tab_id`: a blocking wait of its own ends (`#arrived`).
@@ -1316,7 +1319,14 @@ async fn open(call: Call) -> Result<Reply, Fault> {
         &params.files,
         params.tuning,
         system_clock(),
-    );
+    )
+    .map_err(|error| {
+        port.close();
+        Fault::new(
+            "items_store",
+            format!("Could not open the items store: {error}"),
+        )
+    })?;
     if let Some(config) = params.runtime {
         let invalidate = || -> Box<dyn Fn() + Send + Sync> {
             let port = port.clone();

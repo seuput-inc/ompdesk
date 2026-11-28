@@ -12,6 +12,8 @@ export type ToastVariant = "info" | "success" | "warning" | "error";
 
 /** One follow-up the toast offers (a link-styled button); running it dismisses the toast. */
 export interface ToastAction {
+	/** Separate actions on different records even when their visible failure text is identical. */
+	key?: string;
 	label: string;
 	run: () => void;
 }
@@ -76,6 +78,7 @@ export const useToastStore = create<ToastStore>()(set => ({
 					entry.exitingAt === undefined &&
 					entry.expiresAt > now &&
 					entry.variant === variant &&
+					entry.action?.key === toast.action?.key &&
 					entry.title === toast.title &&
 					entry.message === toast.message &&
 					entry.detail === toast.detail,

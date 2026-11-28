@@ -5,6 +5,7 @@
 
 mod bot_provenance;
 mod item_mail;
+mod owner_replay;
 mod peer_create;
 
 use std::path::Path;
@@ -95,7 +96,7 @@ fn rig_files(
         ready_poll_ms: 20,
         ..Tuning::default()
     };
-    let control = AgentControl::new(port, caps, files, tuning, system_clock());
+    let control = AgentControl::new(port, caps, files, tuning, system_clock()).unwrap();
     (control, asked)
 }
 
@@ -1237,7 +1238,11 @@ fn bots_main(
                 let mut mails = mails.lock().unwrap();
                 let fresh = !mails.iter().any(|(known, new)| *known == id && *new);
                 mails.push((id, fresh));
-                Ok(json!({ "duplicate": !fresh, "journaled": true }))
+                let mut ack = json!({ "duplicate": !fresh, "journaled": true });
+                if let Some(session) = args["details"].get("itemSession") {
+                    ack["itemSession"] = session.clone();
+                }
+                Ok(ack)
             }
             "command" => match args["command"]["type"].as_str() {
                 Some("prompt") | Some("agent_control_bot") => Ok(json!({ "success": true })),
@@ -2220,31 +2225,24 @@ async fn managed_item_open_recovers_only_a_tab_accepted_by_the_assigner() {
 
 #[tokio::test]
 async fn managed_item_open_commits_before_spawn_and_first_prompt() {
-    use crate::agentctl::journal::items::Items;
-    use crate::disk::saves::Saves;
-    use std::sync::atomic::AtomicBool;
-
     let root = Scratch::new();
-    let file = root.0.join("items.json");
-    let disk = file.clone();
     let receiver = Arc::new(Mutex::new(None::<AgentControl>));
     let receiving = receiver.clone();
     let (control, asked, bot) = ada(&root, Mails::default(), move |method, args| match method {
         "spawn" => {
-            let mut stored = Items::new(Some(disk.clone()));
+            let service = receiving.lock().unwrap().clone().unwrap();
             let effect: super::super::types::ItemOpen =
                 serde_json::from_value(args["request"]["itemOpen"].clone()).unwrap();
-            let work = stored.all(0.0)[0].work.clone().unwrap();
+            let work = service.items().committed_rows()[0].work.clone().unwrap();
             assert_eq!(work.effect_key, effect.effect_key);
             assert!(work.session.is_none() && work.accepted_tab.is_none());
-            let service = receiving.lock().unwrap().take().unwrap();
             assert!(service.accept_item_open("send1", &effect, "work1").is_err());
             assert!(service.accept_item_open("bot1", &effect, "work1").unwrap());
             assert!(!service.accept_item_open("bot1", &effect, "other").unwrap());
-            let receipt = Items::new(Some(disk.clone()));
             assert_eq!(
-                receipt
-                    .get(&effect.item)
+                service
+                    .items()
+                    .committed_get(&effect.item)
                     .unwrap()
                     .work
                     .as_ref()
@@ -2257,9 +2255,14 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
             Some(json!({"tabId": "work1", "worktree": worktree("managed")}))
         }
         "command" if args["command"]["type"] == "prompt" => {
-            let mut stored = Items::new(Some(disk.clone()));
+            let service = receiving.lock().unwrap().clone().unwrap();
             assert_eq!(
-                stored.all(0.0)[0].work.as_ref().unwrap().session.as_deref(),
+                service.items().committed_rows()[0]
+                    .work
+                    .as_ref()
+                    .unwrap()
+                    .session
+                    .as_deref(),
                 Some("/s/work.jsonl")
             );
             Some(json!({"success": true}))
@@ -2272,15 +2275,6 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
     })
     .await;
     *receiver.lock().unwrap() = Some(control.clone());
-    let full = Arc::new(AtomicBool::new(false));
-    let inject = full.clone();
-    let saves = Saves::manual(Box::new(move |file, bytes, mode, dir_mode| {
-        if inject.load(Ordering::SeqCst) {
-            return Err(crate::server::Fault::new("io", "ENOSPC: test disk is full"));
-        }
-        crate::disk::tree::write_atomic_if(file, bytes, mode, dir_mode, &|| true)
-    }));
-    control.items().saves = saves.clone();
     control
         .run(
             "bot1",
@@ -2290,10 +2284,13 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
         )
         .await;
     let id = control.items().find(&bot, "1").unwrap().id.clone();
-    full.store(true, Ordering::SeqCst);
-    control
-        .items()
-        .change(&id, |item| item.description = Some("ordinary edit".into()));
+    control.items().set_fail_writes(true).unwrap();
+    assert!(
+        control
+            .items()
+            .change(&id, |item| item.description = Some("ordinary edit".into()))
+            .is_err()
+    );
     let rejected = control
         .run(
             "bot1",
@@ -2311,10 +2308,12 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
         "{}",
         failed.text
     );
-    full.store(false, Ordering::SeqCst);
-    assert!(saves.retry_once(&file));
-    let reloaded = Items::new(Some(file.clone()));
-    let row = reloaded.get(&id).unwrap();
+    control.items().set_fail_writes(false).unwrap();
+    control
+        .items()
+        .change(&id, |item| item.description = Some("ordinary edit".into()))
+        .unwrap();
+    let row = control.items().committed_get(&id).unwrap();
     assert!(row.work.is_none());
     assert_eq!(row.description.as_deref(), Some("ordinary edit"));
     let batch = control
@@ -2969,6 +2968,7 @@ async fn a_session_a_bots_chat_opened_is_its_worker_with_its_branch() {
     });
     let files = Files {
         bots: Some(root.0.join("bots.json")),
+        items: None,
         ..bot_files(&root)
     };
     let (control, asked) = rig_files(
@@ -3166,6 +3166,7 @@ async fn a_session_handed_to_a_bot_gets_its_home_chat_as_opener_and_the_text_fro
     let root = Scratch::new();
     let files = Files {
         bots: Some(root.0.join("bots.json")),
+        items: None,
         ..bot_files(&root)
     };
     let (control, asked, id) = ada_in(&root, &files, Mails::default(), |_, _| None).await;

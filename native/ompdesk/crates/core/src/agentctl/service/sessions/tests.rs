@@ -119,7 +119,7 @@ fn rig_tuned(
         ..Tuning::default()
     };
     (
-        AgentControl::new(port, caps, files, tuning, system_clock()),
+        AgentControl::new(port, caps, files, tuning, system_clock()).unwrap(),
         asked,
     )
 }
