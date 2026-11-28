@@ -423,7 +423,10 @@ impl Store {
     pub fn runner_alive(&self, id: &str) -> bool {
         let path = self.file(id, "alive");
         open_plain_file(&path).is_some_and(|file| {
-            matches!(IdleLock::try_acquire(file), Err(fs::TryLockError::WouldBlock))
+            matches!(
+                IdleLock::try_acquire(file),
+                Err(fs::TryLockError::WouldBlock)
+            )
         })
     }
 
