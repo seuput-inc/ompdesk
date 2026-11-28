@@ -107,9 +107,17 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "internal",
 		summary:
 			"Reads omp's Bun floor from the package's `engines.bun` (>=X.Y.Z) to pick or refuse the Bun that runs it.",
-		files: ["src/main/omp-runtime.ts", "native/ompdesk/crates/core/src/tools/setup/detect.rs"],
-		stock: ["package.json engines.bun (>=X.Y.Z)"],
-		tests: ["src/main/omp-runtime.test.ts", "native/ompdesk/crates/core/src/tools/setup/tests.rs"],
+		files: [
+			"src/main/omp-runtime.ts",
+			"native/ompdesk/crates/core/src/tools/setup/detect.rs",
+			"resources/gui-bridge/wsl/launch.ts",
+		],
+		stock: ["@oh-my-pi/pi-coding-agent", "package.json engines.bun (>=X.Y.Z)"],
+		tests: [
+			"src/main/omp-runtime.test.ts",
+			"native/ompdesk/crates/core/src/tools/setup/tests.rs",
+			"scripts/wsl-guest-launch.test.ts",
+		],
 	},
 	{
 		id: "L06",
@@ -117,9 +125,14 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		contract: "public",
 		summary:
 			"Starts a session with `omp --mode rpc-ui -e <extension> --session --config --model` plus extra extension roots.",
-		files: ["src/main/omp-launch.ts", "src/main/sidecar.ts"],
-		stock: ["omp://rpc.md", "--mode rpc-ui", "-e", "--session", "--config", "--model"],
-		tests: ["src/main/omp-launch.test.ts", "src/main/sidecar.test.ts", "scripts/matt-stock.test.ts"],
+		files: ["src/main/omp-launch.ts", "src/main/sidecar.ts", "resources/gui-bridge/wsl/launch.ts"],
+		stock: ["omp://rpc.md", "--mode rpc-ui", "-e", "--session", "--session-dir", "--config", "--model"],
+		tests: [
+			"src/main/omp-launch.test.ts",
+			"src/main/sidecar.test.ts",
+			"scripts/matt-stock.test.ts",
+			"scripts/wsl-guest-launch.test.ts",
+		],
 	},
 	{
 		id: "L07",
