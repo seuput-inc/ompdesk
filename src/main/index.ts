@@ -2140,7 +2140,6 @@ app.whenReady().then(async () => {
 		openExternal: url => shell.openExternal(url),
 		openPath: path => shell.openPath(path),
 		copyPassword: clipboard.writePassword,
-		care: () => aiMemoryCare,
 	});
 	// start() turns every failure into the `failed` phase and a log line; anything escaping it is logged too.
 	void aiMemory.start().catch(error =>

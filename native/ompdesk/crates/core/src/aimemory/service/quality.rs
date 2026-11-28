@@ -35,6 +35,10 @@ enum RecallState {
 }
 
 impl Schedule {
+    pub(super) fn care_name(&self) -> &str {
+        &self.clients.care
+    }
+
     pub(super) fn new(clients: Clients, service: &Arc<Service>) -> Self {
         if clients.recall_terms_file.is_some() {
             let service = Arc::clone(service);

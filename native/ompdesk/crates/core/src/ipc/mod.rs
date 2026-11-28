@@ -85,12 +85,24 @@ const OWNED: &[Owned] = &[
         handler: crate::aimemory::ipc::ipc_cancel_handoff,
     },
     Owned {
+        channel: "ai-memory:care",
+        handler: crate::aimemory::ipc::ipc_care,
+    },
+    Owned {
+        channel: "ai-memory:care-undo",
+        handler: crate::aimemory::ipc::ipc_care_undo,
+    },
+    Owned {
         channel: "ai-memory:delete-page",
         handler: crate::aimemory::ipc::ipc_delete_page,
     },
     Owned {
         channel: "ai-memory:feedback",
         handler: crate::aimemory::ipc::ipc_feedback,
+    },
+    Owned {
+        channel: "ai-memory:get-state",
+        handler: crate::aimemory::ipc::ipc_get_state,
     },
     Owned {
         channel: "ai-memory:handoffs",
@@ -121,6 +133,10 @@ const OWNED: &[Owned] = &[
         handler: crate::aimemory::ipc::ipc_projects,
     },
     Owned {
+        channel: "ai-memory:purge",
+        handler: crate::aimemory::ipc::ipc_purge,
+    },
+    Owned {
         channel: "ai-memory:read-page",
         handler: crate::aimemory::ipc::ipc_read_page,
     },
@@ -133,12 +149,20 @@ const OWNED: &[Owned] = &[
         handler: crate::aimemory::ipc::ipc_restore_page,
     },
     Owned {
+        channel: "ai-memory:retry",
+        handler: crate::aimemory::ipc::ipc_retry,
+    },
+    Owned {
         channel: "ai-memory:search",
         handler: crate::aimemory::ipc::ipc_search,
     },
     Owned {
         channel: "ai-memory:sessions",
         handler: crate::aimemory::ipc::ipc_sessions,
+    },
+    Owned {
+        channel: "ai-memory:set-terminal",
+        handler: crate::aimemory::ipc::ipc_set_terminal,
     },
     Owned {
         channel: "ai-memory:sweep",

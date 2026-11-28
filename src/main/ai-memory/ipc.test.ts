@@ -11,63 +11,31 @@ const CALLER: IpcCaller = { win: null, browserWindow: null, sender: { id: 1, onc
 type Service = Parameters<typeof registerAiMemoryIpc>[1];
 
 function setup(webUrl: string | null = "http://127.0.0.1:49374/web") {
+	const channels: string[] = [];
 	const service = {
 		state: vi.fn(() => ({ webUrl, dataDir: "/data/ai-memory" }) as AiMemoryState),
-		refresh: vi.fn(async () => {}),
-		retry: vi.fn(async () => {}),
-		purge: vi.fn(async () => {}),
-		setTerminal: vi.fn(async (_enabled: boolean) => {}),
 		token: vi.fn(async () => "tok" as string | null),
 	} satisfies Service;
 	const deps = {
 		openExternal: vi.fn(async (_url: string) => {}),
 		openPath: vi.fn(async (_path: string) => ""),
 		copyPassword: vi.fn<(text: string) => Promise<void>>(),
-		care: () => null,
 	} satisfies AiMemoryIpcDeps;
-	const ipc = new IpcRegistry({ handle: () => {}, on: () => {} });
+	const ipc = new IpcRegistry({ handle: channel => channels.push(channel), on: () => {} });
 	registerAiMemoryIpc(ipc, service as unknown as AiMemoryService, deps);
 	const call = (channel: string, ...args: unknown[]) => ipc.invoke(channel, CALLER, args);
-	return { service, deps, call };
+	return { service, deps, call, channels };
 }
 
 describe("ai-memory IPC", () => {
-	it("get-state refreshes in the background and returns the snapshot", async () => {
-		const { service, call } = setup();
-		expect(await call(IPC_COMMANDS.AI_MEMORY_GET_STATE)).toMatchObject({ dataDir: "/data/ai-memory" });
-		expect(service.refresh).toHaveBeenCalledOnce();
-	});
-
-	it("a failing background refresh never fails get-state", async () => {
-		const { service, call } = setup();
-		service.refresh.mockRejectedValueOnce(new Error("down"));
-		await expect(call(IPC_COMMANDS.AI_MEMORY_GET_STATE)).resolves.toBeDefined();
-	});
-
-	it("retry returns before the work ends and swallows its failure", async () => {
-		const { service, call } = setup();
-		service.retry.mockRejectedValueOnce(new Error("boom"));
-		await expect(call(IPC_COMMANDS.AI_MEMORY_RETRY)).resolves.toBeUndefined();
-	});
-
-	it("set-terminal takes only a boolean and passes the service's refusal through", async () => {
-		const { service, call } = setup();
-		for (const bad of ["true", 1, null, undefined, {}]) {
-			await expect(call(IPC_COMMANDS.AI_MEMORY_SET_TERMINAL, bad)).rejects.toThrow("Invalid argument: enabled");
-		}
-		expect(service.setTerminal).not.toHaveBeenCalled();
-		await call(IPC_COMMANDS.AI_MEMORY_SET_TERMINAL, true);
-		await call(IPC_COMMANDS.AI_MEMORY_SET_TERMINAL, false);
-		expect(service.setTerminal.mock.calls).toEqual([[true], [false]]);
-		service.setTerminal.mockRejectedValueOnce(new Error("ai-memory is not managed by this build."));
-		await expect(call(IPC_COMMANDS.AI_MEMORY_SET_TERMINAL, true)).rejects.toThrow("not managed by this build");
-	});
-
-	it("purge passes the service's refusal through to the caller", async () => {
-		const { service, call } = setup();
-		service.purge.mockRejectedValueOnce(new Error("Purge failed: refusing"));
-		await expect(call(IPC_COMMANDS.AI_MEMORY_PURGE)).rejects.toThrow("Purge failed: refusing");
-		await expect(call(IPC_COMMANDS.AI_MEMORY_PURGE)).resolves.toBeUndefined();
+	it("serves only the 3 OS-action channels in main (the other 23 route directly to ompdesk-core)", () => {
+		expect(setup().channels.sort()).toEqual(
+			[
+				IPC_COMMANDS.AI_MEMORY_COPY_WEB_PASSWORD,
+				IPC_COMMANDS.AI_MEMORY_OPEN_WEB,
+				IPC_COMMANDS.AI_MEMORY_REVEAL_DATA,
+			].sort(),
+		);
 	});
 
 	describe("open-web", () => {

@@ -242,6 +242,9 @@ pub struct Service {
 static SERVICES: LazyLock<Mutex<HashMap<String, Arc<Service>>>> = LazyLock::new(Default::default);
 /// Latest active service's `(url, dataDir)` for direct `ai-memory:*` core IPC calls (`aimemory/ipc.rs`).
 static CURRENT_SERVER: LazyLock<Mutex<Option<(String, Server)>>> = LazyLock::new(Default::default);
+/// Latest active service handle for direct lifecycle/care core IPC calls (`aimemory/ipc.rs`).
+static CURRENT_SERVICE: LazyLock<Mutex<Option<(String, Arc<Service>)>>> =
+    LazyLock::new(Default::default);
 
 fn server_from_state(state: &State) -> Server {
     Server {
@@ -259,8 +262,19 @@ fn set_current_server(name: &str, state: &State) {
     *locked(&CURRENT_SERVER) = Some((name.to_owned(), server_from_state(state)));
 }
 
+fn set_current_service(name: &str, service: &Arc<Service>) {
+    *locked(&CURRENT_SERVICE) = Some((name.to_owned(), Arc::clone(service)));
+}
+
 fn clear_current_server(name: &str) {
     let mut slot = locked(&CURRENT_SERVER);
+    if slot.as_ref().is_some_and(|(active, _)| active == name) {
+        *slot = None;
+    }
+}
+
+fn clear_current_service(name: &str) {
+    let mut slot = locked(&CURRENT_SERVICE);
     if slot.as_ref().is_some_and(|(active, _)| active == name) {
         *slot = None;
     }
@@ -275,6 +289,30 @@ pub(crate) fn current_server() -> Server {
             url: Some(crate::aimemory::DEFAULT_SERVER_URL.to_owned()),
             data_dir: None,
         })
+}
+
+/// The active ai-memory service instance, if one has been opened by main.
+pub(crate) fn current_service() -> Option<Arc<Service>> {
+    locked(&CURRENT_SERVICE)
+        .as_ref()
+        .map(|(_, service)| Arc::clone(service))
+}
+
+/// Default initial `AiMemoryState` before the service opens, matching `AiMemoryService.#state`.
+pub(crate) fn initial_state() -> State {
+    State {
+        phase: "starting",
+        step: Some("stage"),
+        version: None,
+        binary: None,
+        data_dir: None,
+        server_url: None,
+        web_url: None,
+        wiring: Wiring::default(),
+        stats: None,
+        detail: None,
+        unsupported: None,
+    }
 }
 
 /// The file a spawned omp reads memory's address from (the bridge's recall, env `OMP_GUI_MEMORY`): `{url, dataDir}`
@@ -525,8 +563,60 @@ impl Service {
         self.tell("aimemory.service.state", json!({ "state": state }));
     }
 
-    fn state(&self) -> State {
+    pub(crate) fn state(&self) -> State {
         self.inner().state.clone()
+    }
+
+    /// Care service name and event channel if quality scheduling was configured on open.
+    pub(crate) fn care_client(&self) -> Option<(String, Events)> {
+        let inner = self.inner();
+        inner
+            .quality
+            .as_ref()
+            .map(|quality| (quality.care_name().to_owned(), self.events.clone()))
+    }
+
+    /// Fire-and-forget retry matching `Queued::Retry` in `queue()`.
+    pub(crate) fn queue_retry(&self) {
+        if !self.managed() {
+            return;
+        }
+        if let Some(retry) = self.inner().retry.take() {
+            retry.abort();
+        }
+        self.patch(|state| {
+            state.phase = "starting";
+            state.step = Some("stage");
+            state.detail = None;
+        });
+        self.enqueue(Op::Enable, None);
+    }
+
+    /// Queues a purge step and awaits its completion, refusing when unmanaged.
+    pub(crate) async fn run_purge(&self) -> Result<(), Fault> {
+        if !self.managed() {
+            return Err(Fault::new(
+                "memory_not_managed",
+                "ai-memory is not managed by this build.",
+            ));
+        }
+        self.patch(|state| {
+            state.phase = "starting";
+            state.step = Some("purge");
+            state.detail = None;
+        });
+        self.run_step(Op::Purge).await
+    }
+
+    /// Queues a terminal wiring change and awaits its completion, refusing when unmanaged.
+    pub(crate) async fn run_set_terminal(&self, enabled: bool) -> Result<(), Fault> {
+        if !self.managed() {
+            return Err(Fault::new(
+                "memory_not_managed",
+                "ai-memory is not managed by this build.",
+            ));
+        }
+        self.run_step(Op::Terminal(enabled)).await
     }
 
     /// Queues a step; `done` hears its end.
@@ -547,7 +637,7 @@ impl Service {
         })
     }
 
-    fn close(&self) {
+    pub(crate) fn close(&self) {
         let (retry, poll) = {
             let mut inner = self.inner();
             inner.disposed = true;
@@ -564,6 +654,7 @@ impl Service {
         locked(&self.asks).clear();
         locked(&self.timers).clear();
         clear_current_server(&self.name);
+        clear_current_service(&self.name);
         self.closed.send_replace(true);
     }
 }
@@ -677,19 +768,7 @@ fn open(call: &Call) -> Result<Reply, Fault> {
             .map(|file| RecallFile::open(PathBuf::from(file))),
         unit,
         inner: Mutex::new(Inner {
-            state: State {
-                phase: "starting",
-                step: Some("stage"),
-                version: None,
-                binary: None,
-                data_dir: None,
-                server_url: None,
-                web_url: None,
-                wiring: Wiring::default(),
-                stats: None,
-                detail: None,
-                unsupported: None,
-            },
+            state: initial_state(),
             disposed: false,
             quality: None,
             resolved: None,
@@ -727,8 +806,73 @@ fn open(call: &Call) -> Result<Reply, Fault> {
     }
     let state = service.state();
     set_current_server(&name, &state);
+    set_current_service(&name, &service);
     *locked(&service.worker) = Some(tokio::spawn(work(Arc::clone(&service), queued)));
     Reply::json(&state)
+}
+
+#[cfg(test)]
+pub(crate) fn open_for_ipc_test(
+    name: &str,
+    automatic: bool,
+    care_name: Option<&str>,
+    server: Option<Server>,
+) -> Arc<Service> {
+    let (events, _sender, _frames) = Events::capture();
+    let quality = care_name.map(|care| json!({ "care": care, "upkeep": care }));
+    let params = json!({
+        "service": name,
+        "quality": quality,
+        "deps": {
+            "platform": "win32",
+            "arch": "x64",
+            "automatic": automatic,
+            "toolsDir": "",
+            "noService": true,
+            "home": "",
+            "rootDir": "",
+            "uid": 0,
+            "unitAsks": true,
+            "codeRequirementAsks": false,
+            "bunCheck": false,
+            "beforeStart": false,
+            "pollMs": 0,
+            "healthWaitMs": 0,
+            "retryDelaysMs": [],
+            "stepMaxMs": 60_000,
+            "manual": true,
+            "hubEntry": null,
+            "builds": {
+                "binaries": { "win32-x64": { "binary": "ai-memory.exe", "sha256": "" } },
+                "manifest": "",
+                "version": "",
+                "macStageKey": "",
+                "requirement": ""
+            }
+        }
+    });
+    open(&Call {
+        params: serde_json::value::to_raw_value(&params).unwrap(),
+        scope: crate::server::Scope::detached(),
+        bin: None,
+        events,
+    })
+    .unwrap();
+    let svc = locked(&SERVICES).get(name).cloned().unwrap();
+    if let Some(server) = server {
+        svc.patch(|state| {
+            state.server_url = server.url.clone();
+            state.data_dir = server.data_dir.clone();
+        });
+    }
+    svc
+}
+
+#[cfg(test)]
+pub(crate) fn close_for_ipc_test(name: &str) {
+    if let Some(svc) = locked(&SERVICES).remove(name) {
+        svc.close();
+    }
 }
 
 #[derive(Deserialize)]

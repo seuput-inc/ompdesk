@@ -1,14 +1,16 @@
-//! Direct core IPC handlers for the 17 `ai-memory:*` wiki/data channels (H(c), routed `tauri-shell -> ompdesk-core`).
+//! Direct core IPC handlers for 23 `ai-memory:*` channels (H(c), routed `tauri-shell -> ompdesk-core`):
+//! the 17 wiki/data channels plus the 6 lifecycle & maintenance care channels (`get-state`, `retry`, `purge`,
+//! `set-terminal`, `care`, `care-undo`).
 //!
 //! Validation and error messages match the retired Node wrappers in `src/main/ai-memory/ipc.ts` 1-to-1; each call
-//! talks directly to the active local ai-memory server (`service::current_server()`) through `Client` without hopping
-//! through Node main.
+//! talks directly to the active local ai-memory service/server without hopping through Node main.
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::client::{Client, Server};
 use super::ops::{DeleteInput, PageAt, ProjectRef, WriteInput};
 use super::{out, service};
+use crate::care::{Common as CareCommon, Ctx as CareCtx, engine as care_engine};
 use crate::ipc::{Handled, IpcContext};
 use crate::server::Fault;
 
@@ -267,6 +269,118 @@ async fn run_cancel_handoff(server: Server, args: Vec<Value>) -> Result<Option<V
     let client = Client::new(server);
     client.cancel_handoff(&project, &id).await?;
     Ok(None)
+}
+
+pub(crate) fn ipc_get_state(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let Some(svc) = service::current_service() else {
+            return Ok(Some(out(service::initial_state())?));
+        };
+        let state = svc.state();
+        tokio::spawn(async move {
+            let _ = svc.refresh().await;
+        });
+        Ok(Some(out(state)?))
+    })
+}
+
+pub(crate) fn ipc_retry(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        if let Some(svc) = service::current_service() {
+            svc.queue_retry();
+        }
+        Ok(None)
+    })
+}
+
+pub(crate) fn ipc_purge(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let Some(svc) = service::current_service() else {
+            return Err(Fault::new(
+                "memory_not_managed",
+                "ai-memory is not managed by this build.",
+            ));
+        };
+        svc.run_purge().await?;
+        Ok(None)
+    })
+}
+
+pub(crate) fn ipc_set_terminal(_ctx: IpcContext, args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let Some(enabled) = args.first().and_then(Value::as_bool) else {
+            return Err(invalid("Invalid argument: enabled"));
+        };
+        let Some(svc) = service::current_service() else {
+            return Err(Fault::new(
+                "memory_not_managed",
+                "ai-memory is not managed by this build.",
+            ));
+        };
+        svc.run_set_terminal(enabled).await?;
+        Ok(None)
+    })
+}
+
+pub(crate) fn ipc_care(ctx: IpcContext, _args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let Some(user_data) = ctx.user_data else {
+            return Ok(Some(Value::Null));
+        };
+        let Some((care_name, events)) = service::current_service().and_then(|s| s.care_client())
+        else {
+            return Ok(Some(Value::Null));
+        };
+        let state_file = user_data
+            .join("ai-memory")
+            .join("care.json")
+            .to_string_lossy()
+            .into_owned();
+        let care_ctx = CareCtx::new(
+            CareCommon {
+                service: care_name,
+                asks: Vec::new(),
+                server: service::current_server(),
+                stock_host: String::new(),
+                locale: String::new(),
+                now: None,
+            },
+            &events,
+        );
+        let summary = care_engine::summary(&care_ctx, &state_file).await;
+        Ok(Some(summary.unwrap_or(Value::Null)))
+    })
+}
+
+pub(crate) fn ipc_care_undo(ctx: IpcContext, _args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let Some(user_data) = ctx.user_data else {
+            return Ok(Some(json!(0)));
+        };
+        let Some((care_name, events)) = service::current_service().and_then(|s| s.care_client())
+        else {
+            return Ok(Some(json!(0)));
+        };
+        let state_file = user_data
+            .join("ai-memory")
+            .join("care.json")
+            .to_string_lossy()
+            .into_owned();
+        let gate = care_engine::service(&care_name);
+        let care_ctx = CareCtx::new(
+            CareCommon {
+                service: care_name,
+                asks: Vec::new(),
+                server: service::current_server(),
+                stock_host: String::new(),
+                locale: String::new(),
+                now: None,
+            },
+            &events,
+        );
+        let restored = care_engine::undo(&gate, &care_ctx, &state_file).await?;
+        Ok(Some(json!(restored)))
+    })
 }
 
 pub(crate) fn ipc_projects(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
@@ -625,5 +739,167 @@ mod tests {
         assert!(write_req["body"].get("extra").is_none());
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    static SERVICE_TEST_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+        std::sync::LazyLock::new(Default::default);
+
+    fn ipc_ctx(user_data: Option<std::path::PathBuf>) -> IpcContext {
+        IpcContext {
+            caller: crate::ipc::Caller {
+                key: "w1".into(),
+                window: Some(1),
+                conn_id: None,
+                device_id: None,
+            },
+            user_data,
+        }
+    }
+
+    #[tokio::test]
+    async fn lifecycle_channels_match_retired_node_ipc_contract() {
+        let _guard = SERVICE_TEST_LOCK.lock().await;
+
+        // Without an open service: get-state returns initial state, retry returns undefined,
+        // purge and set-terminal refuse unmanaged, set-terminal validates strict bool first.
+        let initial = ipc_get_state(ipc_ctx(None), vec![]).await.unwrap().unwrap();
+        assert_eq!(initial["phase"], "starting");
+        assert_eq!(initial["step"], "stage");
+        assert_eq!(ipc_retry(ipc_ctx(None), vec![]).await.unwrap(), None);
+        assert!(
+            ipc_purge(ipc_ctx(None), vec![])
+                .await
+                .unwrap_err()
+                .message
+                .contains("not managed by this build")
+        );
+        for bad in [
+            vec![json!("true")],
+            vec![json!(1)],
+            vec![Value::Null],
+            vec![],
+            vec![json!({})],
+        ] {
+            assert_eq!(
+                ipc_set_terminal(ipc_ctx(None), bad)
+                    .await
+                    .unwrap_err()
+                    .message,
+                "Invalid argument: enabled"
+            );
+        }
+        assert!(
+            ipc_set_terminal(ipc_ctx(None), vec![json!(true)])
+                .await
+                .unwrap_err()
+                .message
+                .contains("not managed by this build")
+        );
+
+        // Open an unmanaged service (automatic: false): get-state returns snapshot, retry returns undefined,
+        // purge and set-terminal refuse unmanaged.
+        let _svc = service::open_for_ipc_test("ipc-lifecycle-unmanaged", false, None, None);
+        let snap = ipc_get_state(ipc_ctx(None), vec![]).await.unwrap().unwrap();
+        assert_eq!(snap["phase"], "starting");
+        assert_eq!(ipc_retry(ipc_ctx(None), vec![]).await.unwrap(), None);
+        assert!(
+            ipc_purge(ipc_ctx(None), vec![])
+                .await
+                .unwrap_err()
+                .message
+                .contains("not managed by this build")
+        );
+        assert!(
+            ipc_set_terminal(ipc_ctx(None), vec![json!(false)])
+                .await
+                .unwrap_err()
+                .message
+                .contains("not managed by this build")
+        );
+        service::close_for_ipc_test("ipc-lifecycle-unmanaged");
+    }
+
+    #[tokio::test]
+    async fn care_summary_and_undo_read_state_file_and_restore_pages() {
+        let _guard = SERVICE_TEST_LOCK.lock().await;
+        let user_data = tempfile::tempdir().unwrap();
+        let mem_dir = data_dir(Some("tok-care\n"));
+        let srv = fake(json!({
+            "POST /admin/restore-page": {"json": {"ok": true}}
+        }))
+        .await;
+
+        // Without care client configured: summary is null, undo is 0.
+        assert_eq!(
+            ipc_care(ipc_ctx(Some(user_data.path().to_path_buf())), vec![])
+                .await
+                .unwrap(),
+            Some(Value::Null)
+        );
+        assert_eq!(
+            ipc_care_undo(ipc_ctx(Some(user_data.path().to_path_buf())), vec![])
+                .await
+                .unwrap(),
+            Some(json!(0))
+        );
+
+        let _svc = service::open_for_ipc_test(
+            "ipc-care-test",
+            false,
+            Some("care-svc-1"),
+            Some(Server {
+                url: Some(srv.url.clone()),
+                data_dir: Some(mem_dir.to_string_lossy().into_owned()),
+            }),
+        );
+
+        // Write a recent change into <userData>/ai-memory/care.json.
+        let care_dir = user_data.path().join("ai-memory");
+        std::fs::create_dir_all(&care_dir).unwrap();
+        let now_iso = crate::care::Clock::new(None).iso();
+        std::fs::write(
+            care_dir.join("care.json"),
+            json!({
+                "version": "1.0.0",
+                "units": {},
+                "kept": [],
+                "changes": [{
+                    "workspace": "w",
+                    "project": "p",
+                    "path": "notes/a.md",
+                    "title": "Note A",
+                    "action": "retired",
+                    "rev": "r-prev",
+                    "at": now_iso
+                }],
+                "backfills": [],
+                "memo": {}
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let summary = ipc_care(ipc_ctx(Some(user_data.path().to_path_buf())), vec![])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary["retired"], 1);
+        assert_eq!(summary["pages"][0]["path"], "notes/a.md");
+
+        let restored = ipc_care_undo(ipc_ctx(Some(user_data.path().to_path_buf())), vec![])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored, json!(1));
+
+        // After undo, the Maintenance line clears to null.
+        let after = ipc_care(ipc_ctx(Some(user_data.path().to_path_buf())), vec![])
+            .await
+            .unwrap();
+        assert_eq!(after, Some(Value::Null));
+
+        service::close_for_ipc_test("ipc-care-test");
+        crate::care::engine::close("care-svc-1");
+        std::fs::remove_dir_all(mem_dir).unwrap();
     }
 }
