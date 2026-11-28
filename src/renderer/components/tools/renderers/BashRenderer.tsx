@@ -285,10 +285,10 @@ export function BashRenderer({
 
 	return (
 		<div className="flex flex-col gap-1.5">
-			{/* One terminal surface: the command line, then its output under a hairline. */}
+			{/* One framed terminal surface: the command line, then its output under a hairline. */}
 			<div
 				className={cx(
-					"omp-bash-terminal rounded-(--sc-radius-md) bg-(--omp-code-bg) font-mono text-sc-sm",
+					"omp-bash-terminal rounded-(--sc-radius-md) border border-(--sc-code-border) bg-(--sc-surface-1) font-mono text-sc-sm",
 					// `clip`, not `hidden`: the live command line sticks to the scrolling surface above it.
 					livePreview ? "omp-bash-live overflow-clip" : "overflow-hidden",
 				)}
@@ -296,7 +296,7 @@ export function BashRenderer({
 			>
 				{/* A call whose arguments are still streaming has no command yet: no bare `$`. */}
 				{prompt ? (
-					<div className="omp-bash-prompt flex items-start gap-2 px-2.5 py-1.5 leading-normal">
+					<div className="omp-bash-prompt flex items-center gap-2 bg-(--sc-code-bg) px-2.5 py-1.5 leading-normal">
 						{rowShowsCommand ? null : (
 							<>
 								<span aria-hidden className="shrink-0 select-none text-(--sc-text-subtle)">
@@ -306,17 +306,17 @@ export function BashRenderer({
 							</>
 						)}
 						{parsed.timedOut && (
-							<span className="omp-bash-badge shrink-0 rounded-(--sc-radius-xs) bg-(--sc-warning)/15 px-1 text-sc-2xs font-medium text-(--sc-warning)">
+							<span className="omp-bash-badge shrink-0 rounded-(--sc-radius-xs) bg-(--sc-warning-soft) px-1.5 py-0.5 text-sc-2xs font-medium text-(--sc-warning-on-soft)">
 								{t("tools.bash.timedOut")}
 							</span>
 						)}
 						{parsed.exitCode != null && (
 							<span
 								className={cx(
-									"omp-bash-badge shrink-0 rounded-(--sc-radius-xs) px-1 text-sc-2xs font-medium tabular-nums",
+									"omp-bash-badge shrink-0 rounded-(--sc-radius-xs) px-1.5 py-0.5 text-sc-2xs font-medium tabular-nums",
 									parsed.exitCode === 0 && !isError
-										? "bg-(--sc-success)/15 text-(--sc-success)"
-										: "bg-(--sc-danger)/15 text-(--sc-danger)",
+										? "bg-(--sc-success-soft) text-(--sc-success-on-soft)"
+										: "bg-(--sc-danger-soft) text-(--sc-danger-on-soft)",
 								)}
 							>
 								{t("tools.bash.exit", { code: parsed.exitCode })}

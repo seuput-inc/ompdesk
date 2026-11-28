@@ -1281,7 +1281,7 @@ html[data-input="touch"] [data-update-notice] {
    command (or failed outright) edges the frame in danger. */
 .omp-execution-group {
 	margin: var(--sc-space-1) 0 var(--sc-space-2);
-	border: var(--sc-hairline) solid var(--sc-divider);
+	border: var(--sc-hairline) solid var(--sc-code-border);
 	border-radius: var(--sc-radius-lg);
 	overflow: clip;
 }
@@ -1469,6 +1469,34 @@ html[data-input="touch"] [data-update-notice] {
 
 .omp-tool-card {
 	margin: 0;
+}
+
+/* Crisp mono target chip on single-line tool rows (Orca `NativeChatToolFileTarget` parity). */
+.omp-tool-path-name {
+	display: inline-block;
+	padding: 0 var(--sc-space-1);
+	border: var(--sc-hairline) solid var(--sc-divider);
+	border-radius: var(--sc-radius-xs);
+	background: var(--sc-surface-1);
+	font-size: var(--sc-font-xs);
+	line-height: 1.45;
+}
+
+.omp-tool-header:hover .omp-tool-path-name,
+.omp-tool-header[aria-expanded="true"] .omp-tool-path-name {
+	border-color: var(--sc-code-border);
+}
+
+.omp-tool-meta {
+	white-space: nowrap;
+}
+
+.omp-tool-diff-well {
+	min-width: 0;
+}
+
+.omp-thinking-header:is(:hover, [aria-expanded="true"]) .omp-thinking-icon {
+	color: var(--sc-text-muted);
 }
 
 .omp-tool-body,

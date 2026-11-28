@@ -71,10 +71,9 @@ const DIAGNOSTIC_TOOLS: Record<string, true> = { edit: true, write: true, apply_
 
 export type RunningIndicator = "spinner" | "dot";
 
-/** Row chrome shared by every work step (tool rows, grouped reads) so they read as one list.
- * The hover wash hugs the row's content instead of spanning the whole column. */
+/** Row chrome shared by every work step (tool rows, grouped reads) so they read as one aligned list. */
 export const TOOL_ROW_CLASS =
-	"omp-tool-header flex min-h-7 w-fit max-w-full min-w-0 items-center gap-2 rounded-(--sc-radius-sm) px-1.5 text-left text-sc-sm transition-colors duration-(--sc-duration-instant) hover:bg-(--sc-hover)";
+	"omp-tool-header flex min-h-7 w-full min-w-0 items-center gap-2 rounded-(--sc-radius-sm) px-2 text-left text-sc-sm transition-colors duration-(--sc-duration-instant) hover:bg-(--sc-hover)";
 
 /**
  * Under an intent, the target is the row's muted second part: it starts from no width and takes only the room
@@ -152,7 +151,7 @@ export function ToolStatusIcon({
 	);
 }
 
-/** File target: the name first, its folder muted — both mono, the whole path in the tooltip. */
+/** File target: the name as a crisp mono chip, its folder muted — the whole path in the tooltip. */
 export function ToolPathTarget({
 	path,
 	moreFiles,
@@ -171,7 +170,7 @@ export function ToolPathTarget({
 			className={cx("omp-tool-summary min-w-0 truncate font-mono", afterIntent && AFTER_INTENT_CLASS)}
 			title={`${path}${suffix ?? ""}${more}`}
 		>
-			<span className={afterIntent ? undefined : "text-(--sc-text)"}>
+			<span className={cx("omp-tool-path-name", afterIntent ? undefined : "text-(--sc-text)")}>
 				{basename(path)}
 				{suffix}
 			</span>
@@ -373,7 +372,6 @@ export function ToolCard({
 				chevron="end"
 				chevronClassName="omp-tool-chevron size-(--sc-icon-sm) text-(--sc-text-subtle)"
 				className={TOOL_ROW_CLASS}
-				inline
 				onToggle={() => setExpanded(value => !value)}
 				open={expanded}
 				ref={rowRef}
@@ -432,31 +430,33 @@ export function ToolCard({
 						{label}
 					</span>
 				) : null}
-				{diffStats && (diffStats.added > 0 || diffStats.removed > 0) ? <DiffStatChip stats={diffStats} /> : null}
-				<DiagnosticsChip files={diagnostics} />
-				{failed ? (
-					<span className="omp-tool-state shrink-0 text-sc-xs font-medium text-(--sc-danger)">
-						{t("tools.status.failed")}
-					</span>
-				) : noMatch ? (
-					<span className="omp-tool-state shrink-0 text-sc-xs text-(--sc-text-muted)">
-						{t("tools.agentDesktop.noMatch")}
-					</span>
-				) : isAborted ? (
-					<span className="omp-tool-state shrink-0 text-sc-xs text-(--sc-text-muted)">
-						{t("tools.status.interrupted")}
-					</span>
-				) : status === "running" ? (
-					<span className="sr-only">{t("tools.status.running")}</span>
-				) : (
-					<span className="sr-only">{t("tools.status.done")}</span>
-				)}
-				{thoughts ? <ThoughtCount count={thoughts.count} /> : null}
-				{duration && (
-					<span className="omp-tool-duration shrink-0 text-sc-xs tabular-nums text-(--sc-text-subtle)">
-						{duration}
-					</span>
-				)}
+				<span className="omp-tool-meta ms-auto flex shrink-0 items-center gap-2">
+					{diffStats && (diffStats.added > 0 || diffStats.removed > 0) ? <DiffStatChip stats={diffStats} /> : null}
+					<DiagnosticsChip files={diagnostics} />
+					{failed ? (
+						<span className="omp-tool-state shrink-0 rounded-(--sc-radius-xs) bg-(--sc-danger-soft) px-1.5 py-0.5 text-sc-2xs font-medium text-(--sc-danger-on-soft)">
+							{t("tools.status.failed")}
+						</span>
+					) : noMatch ? (
+						<span className="omp-tool-state shrink-0 text-sc-xs text-(--sc-text-muted)">
+							{t("tools.agentDesktop.noMatch")}
+						</span>
+					) : isAborted ? (
+						<span className="omp-tool-state shrink-0 text-sc-xs text-(--sc-text-muted)">
+							{t("tools.status.interrupted")}
+						</span>
+					) : status === "running" ? (
+						<span className="sr-only">{t("tools.status.running")}</span>
+					) : (
+						<span className="sr-only">{t("tools.status.done")}</span>
+					)}
+					{thoughts ? <ThoughtCount count={thoughts.count} /> : null}
+					{duration && (
+						<span className="omp-tool-duration shrink-0 text-sc-xs tabular-nums text-(--sc-text-subtle)">
+							{duration}
+						</span>
+					)}
+				</span>
 			</DisclosureButton>
 			<Collapse className="flow-root" open={expanded}>
 				<div className="omp-tool-body">

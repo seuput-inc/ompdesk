@@ -1,3 +1,4 @@
+import { Brain } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { STREAM_FORMAT_FLUSH_MS, useThrottledText } from "../../hooks/use-throttled-text";
 import { useDisplayPreference } from "../../lib/display-preferences";
@@ -122,11 +123,12 @@ export function ThinkingBlock({ text, live = false, startTime, endTime }: Thinki
 			<DisclosureButton
 				aria-label={t(open ? "chat.thinking.hide" : "chat.thinking.show")}
 				chevronClassName="size-(--sc-icon-sm) text-(--sc-text-subtle)"
-				className="omp-thinking-header min-h-7 min-w-0 rounded-(--sc-radius-sm) px-1.5 text-sc-sm text-(--sc-text-muted) transition-colors duration-(--sc-duration-instant) hover:bg-(--sc-hover) hover:text-(--sc-text-secondary) aria-expanded:text-(--sc-text-secondary)"
+				className="omp-thinking-header min-h-7 min-w-0 rounded-(--sc-radius-sm) px-2 text-sc-sm text-(--sc-text-muted) transition-colors duration-(--sc-duration-instant) hover:bg-(--sc-hover) hover:text-(--sc-text-secondary) aria-expanded:text-(--sc-text-secondary)"
 				inline
 				onToggle={() => setOpen(v => !v)}
 				open={open}
 			>
+				<Brain aria-hidden className="omp-thinking-icon size-(--sc-icon-sm) shrink-0 text-(--sc-text-subtle)" />
 				{isLive ? (
 					<LiveText className="omp-thinking-state font-medium" state="turn" text={t("chat.thinking.live")} />
 				) : (

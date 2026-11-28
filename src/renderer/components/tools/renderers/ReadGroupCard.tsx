@@ -88,7 +88,6 @@ export function ReadGroupCard({
 				chevron="end"
 				chevronClassName="size-(--sc-icon-sm) text-(--sc-text-subtle)"
 				className={cx("omp-read-group-header", TOOL_ROW_CLASS)}
-				inline
 				onToggle={() => setOpen(value => !value)}
 				open={open}
 				ref={rowRef}
@@ -125,16 +124,20 @@ export function ReadGroupCard({
 						</span>
 					</span>
 				)}
-				{state === "error" ? (
-					<span className="shrink-0 text-sc-xs font-medium text-(--sc-danger)">{t("tools.status.failed")}</span>
-				) : state === "aborted" ? (
-					<span className="shrink-0 text-sc-xs text-(--sc-text-muted)">{t("tools.status.interrupted")}</span>
-				) : state === "running" ? (
-					<span className="sr-only">{t("tools.status.running")}</span>
-				) : (
-					<span className="sr-only">{t("tools.status.done")}</span>
-				)}
-				{thoughts ? <ThoughtCount count={thoughts.count} /> : null}
+				<span className="omp-tool-meta ms-auto flex shrink-0 items-center gap-2">
+					{state === "error" ? (
+						<span className="shrink-0 rounded-(--sc-radius-xs) bg-(--sc-danger-soft) px-1.5 py-0.5 text-sc-2xs font-medium text-(--sc-danger-on-soft)">
+							{t("tools.status.failed")}
+						</span>
+					) : state === "aborted" ? (
+						<span className="shrink-0 text-sc-xs text-(--sc-text-muted)">{t("tools.status.interrupted")}</span>
+					) : state === "running" ? (
+						<span className="sr-only">{t("tools.status.running")}</span>
+					) : (
+						<span className="sr-only">{t("tools.status.done")}</span>
+					)}
+					{thoughts ? <ThoughtCount count={thoughts.count} /> : null}
+				</span>
 			</DisclosureButton>
 			<Collapse className="flow-root" open={open}>
 				<div className="omp-read-group-body">

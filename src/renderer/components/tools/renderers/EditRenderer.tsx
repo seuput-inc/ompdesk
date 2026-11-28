@@ -102,18 +102,12 @@ function EditHeader({
 	// Under a row that shows the file, a plain edit's label and icon only repeat the row's pencil.
 	const plainEdit = rowShowsTarget && title == null && op !== "create" && op !== "delete";
 	return (
-		<div className="omp-tool-edit-heading flex items-center gap-1.5 font-mono text-omp-sm">
+		<div className="omp-tool-edit-heading flex items-center gap-1.5 font-mono text-sc-xs">
 			{bare || plainEdit ? null : (
 				<>
-					<Icon
-						size={12}
-						className={cx("shrink-0", isError ? "text-[var(--omp-error)]" : "text-[var(--omp-dim)]")}
-					/>
+					<Icon size={12} className={cx("shrink-0", isError ? "text-(--sc-danger)" : "text-(--sc-text-subtle)")} />
 					<span
-						className={cx(
-							"shrink-0 font-semibold",
-							isError ? "text-[var(--omp-error)]" : "text-[var(--omp-muted)]",
-						)}
+						className={cx("shrink-0 font-semibold", isError ? "text-(--sc-danger)" : "text-(--sc-text-muted)")}
 					>
 						{label}
 					</span>
@@ -128,7 +122,7 @@ function EditHeader({
 			)}
 			{moveTo && (
 				<>
-					<span className="shrink-0 text-[var(--omp-dim)]">→</span>
+					<span className="shrink-0 text-(--sc-text-subtle)">→</span>
 					<PathLink path={moveTo} className="truncate">
 						<ToolPathTarget path={moveTo} />
 					</PathLink>
@@ -142,11 +136,9 @@ function EditHeader({
 /** A file's diff: the newest changed region on the live surface (its newest hunk kept in view), the whole diff in the transcript. */
 function EditDiff({ diff, path, livePreview }: { diff: string; path: string; livePreview?: boolean }) {
 	return (
-		<DiffView
-			{...(livePreview ? liveDiffProps(diff) : { diff })}
-			filePath={path}
-			className={cx("rounded", PREVIEW_SCROLL_LG)}
-		/>
+		<div className="omp-tool-diff-well overflow-hidden rounded-(--sc-radius-md) border border-(--sc-code-border) bg-(--sc-surface-1)">
+			<DiffView {...(livePreview ? liveDiffProps(diff) : { diff })} filePath={path} className={PREVIEW_SCROLL_LG} />
+		</div>
 	);
 }
 

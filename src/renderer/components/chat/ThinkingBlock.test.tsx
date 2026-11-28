@@ -115,6 +115,7 @@ describe("ThinkingBlock", () => {
 		await mountExpandedThinking(HEADLINED_THINKING);
 		const header = container.querySelector(".omp-thinking-header") as unknown as Element;
 		expect(header.getAttribute("aria-expanded")).toBe("true");
+		expect(header.querySelector(".omp-thinking-icon")).not.toBeNull();
 		expect(header.querySelector(".omp-disclosure-chevron")?.getAttribute("style")).toContain("rotate(90deg)");
 	});
 

@@ -451,4 +451,17 @@ describe("ToolCard opened bodies", () => {
 		expect(row.querySelector(".omp-tool-summary")?.hasAttribute("data-sliver")).toBe(true);
 		await act(async () => root.unmount());
 	});
+
+	it("aligns full-width tool rows with a mono path chip, right-edge meta cluster, and framed diff well", async () => {
+		const { root, row } = await renderRow(finished("c", "edit", edit, "Fixing the import", editResult), "edit", edit);
+		expect(row.className).toContain("w-full");
+		expect(row.querySelector(".omp-tool-path-name")?.textContent).toBe("main.ts");
+		const meta = row.querySelector(".omp-tool-meta");
+		expect(meta).not.toBeNull();
+		expect(meta?.querySelector(".omp-tool-diffstat")).not.toBeNull();
+		expect(meta?.querySelector(".omp-tool-duration")).not.toBeNull();
+		await open(row);
+		expect(row.parentElement?.querySelector(".omp-tool-diff-well")).not.toBeNull();
+		await act(async () => root.unmount());
+	});
 });
