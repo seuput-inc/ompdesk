@@ -123,11 +123,11 @@ export const DialogSurface = forwardRef<HTMLDivElement, DialogSurfaceProps>(func
 					)}
 				>
 					<div className="min-w-0 pt-0.5">
-						<h2 className="text-sc-xl font-semibold tracking-(--sc-tracking-tight) break-words" id={titleId}>
+						<h2 className="text-sc-lg font-semibold tracking-(--sc-tracking-tight) break-words" id={titleId}>
 							{title}
 						</h2>
 						{description && (
-							<p className="mt-1 text-sc-sm leading-relaxed text-(--sc-text-muted)" id={descriptionId}>
+							<p className="mt-0.5 text-sc-sm text-(--sc-text-muted)" id={descriptionId}>
 								{description}
 							</p>
 						)}

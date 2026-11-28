@@ -2,7 +2,7 @@
 
 **Base commit**: `9bb8924cc4` (`orca/line-v0155`, sitting on `v0.154.0` + 27 pending dev commits)  
 **Reference audited**: Orca renderer source (`/tmp/orca-src-research/src/renderer/src/**`) vs OMPdesk (`src/renderer/**`)  
-**Status**: Wave 1 implemented on `orca/design-overhaul-w1`; Waves 2–4 queued below.
+**Status**: Waves 1–4 implemented on `orca/design-overhaul-w1`; post-`#76` top-bar handoff checklist ready below.
 
 ---
 

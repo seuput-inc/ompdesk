@@ -274,11 +274,16 @@ export function SettingsPage() {
 						.querySelector<HTMLElement>("button:not([disabled]), input, select, textarea, [tabindex='0']")
 						?.focus({ preventScroll: true });
 				}
-				target.animate?.([{ backgroundColor: "var(--sc-selected)" }, { backgroundColor: "transparent" }], {
-					duration: 1600,
-				});
 				setFocusRowId(null);
 			}
+			// Compositor-only highlight fade (global.css `[data-settings-target-highlight]`) for both search jumps and deep links.
+			delete target.dataset.settingsTargetHighlight;
+			void target.offsetWidth;
+			target.dataset.settingsTargetHighlight = "";
+			const clearHighlight = () => {
+				delete target.dataset.settingsTargetHighlight;
+			};
+			target.addEventListener("animationend", clearHighlight, { once: true });
 		});
 		return () => cancelAnimationFrame(frame);
 	}, [focusRowId, section, sub, query, data.loadState]);
@@ -435,7 +440,7 @@ export function SettingsPage() {
 	const resultsList =
 		results &&
 		(results.length === 0 ? (
-			<EmptyState description={t("settings.search.emptyDesc")} title={t("settings.noMatches")} />
+			<EmptyState description={t("settings.search.emptyDesc")} size="sm" title={t("settings.noMatches")} />
 		) : (
 			<div className="flex flex-col gap-px" data-settings-search-results="true">
 				{results.map(result => (
@@ -463,7 +468,7 @@ export function SettingsPage() {
 						{showList && (
 							<nav
 								aria-labelledby="settings-page-title"
-								className="settings-nav flex shrink-0 flex-col gap-2 overflow-y-auto border-r border-(--sc-divider) px-2 pt-4 pb-4"
+								className="settings-nav flex shrink-0 flex-col gap-1.5 overflow-y-auto border-r border-(--sc-divider) px-2 pt-3 pb-4"
 							>
 								<h1
 									className="px-2 text-sc-lg font-semibold tracking-(--sc-tracking-tight) text-(--sc-text)"
@@ -484,7 +489,7 @@ export function SettingsPage() {
 									SETTINGS_NAV.map(group => (
 										<div key={group.id} role="group" aria-labelledby={`settings-nav-${group.id}`}>
 											<div
-												className="px-2.5 pt-1.5 pb-0.5 text-sc-xs font-medium text-(--sc-text-muted)"
+												className="px-2 pt-2 pb-0.5 text-sc-xs font-medium text-(--sc-text-subtle)"
 												id={`settings-nav-${group.id}`}
 											>
 												{t(`settings.navHeading.${group.id}`)}
@@ -505,6 +510,7 @@ export function SettingsPage() {
 															// Search results replace the section: no row claims the page meanwhile.
 															// A phone's list has no current section: the pushed page is it.
 															selected={results === null && !stacked && id === section}
+															size="sm"
 															title={t(`settings.section.${id}`)}
 															rowProps={{
 																"data-settings-nav": id,
@@ -529,7 +535,7 @@ export function SettingsPage() {
 							<div className="settings-content min-h-0 min-w-0 flex-1 overflow-y-auto" ref={contentRef}>
 								<section aria-labelledby="settings-section-title" className="settings-column">
 									{host && <SettingsDeviceBanner host={host} />}
-									<header className="mb-3">
+									<header className="mb-3 border-b border-(--sc-divider) pb-2.5">
 										<h2
 											className={`text-sc-xl font-semibold tracking-(--sc-tracking-tight) text-(--sc-text)${stacked && !results ? " sr-only" : ""}`}
 											id="settings-section-title"

@@ -86,13 +86,13 @@ export function SettingsSection({
 			id={id}
 		>
 			{(showTitle || description || actions) && (
-				<div className="mb-1 flex flex-wrap items-end gap-x-3 gap-y-1" data-settings-section-head>
+				<div className="mb-1.5 flex flex-wrap items-end gap-x-3 gap-y-1" data-settings-section-head>
 					{/* Wide actions wrap under the text instead of squeezing it into a column. */}
 					<div className="min-w-[min(100%,12rem)] flex-1">
 						{showTitle && (
 							<div className="flex items-center gap-1.5">
 								{nested ? (
-									<h4 className="text-sc-sm font-medium text-(--sc-text-secondary)" id={headingId}>
+									<h4 className="text-sc-xs font-semibold text-(--sc-text-muted)" id={headingId}>
 										{title}
 									</h4>
 								) : (
