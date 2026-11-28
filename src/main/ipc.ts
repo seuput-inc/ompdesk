@@ -168,6 +168,7 @@ import {
 import { type ConnectorAccounts, connectorCommand } from "./connector-accounts";
 import { createControlBackend } from "./control-socket/backend";
 import { controlSocketFailure, startControlSocket } from "./control-socket/index";
+import { core } from "./core/process";
 import { defaultWorkspace } from "./default-workspace";
 import { deliverOnce } from "./delivery-ledger";
 import { DesktopSlotHost } from "./desktop-slot-host";
@@ -2703,8 +2704,27 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return machineFor(caller, device).schedules(request as SchedulesRequest, undefined, !!caller.browserWindow);
 	});
 	// The Bots page: this computer's bots and their items (the owner's own; agents use ompdesk_bot and ompdesk_item).
-	ipc.handle(BOTS_COMMAND, (caller, request: unknown) => {
+	ipc.handle(BOTS_COMMAND, async (caller, request: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid bots request");
+		if ("action" in request && request.action === "pickPackage") {
+			const win = caller.browserWindow;
+			if (!win) throw new Error("Choose from this computer's package list.");
+			const name = "typeLabel" in request && typeof request.typeLabel === "string" ? request.typeLabel : "JSON";
+			const picked = await dialog.showOpenDialog(win, {
+				properties: ["openFile"],
+				filters: [{ name, extensions: ["json"] }],
+			});
+			const file = picked.filePaths[0];
+			if (picked.canceled || !file) return null;
+			return (await core().call<string>("fs.offerPickedBotPackage", { caller: `w${caller.sender.id}`, file }))
+				.result;
+		}
+		if ("action" in request && request.action === "importPackage") {
+			const owner = caller.browserWindow ? `w${caller.sender.id}` : caller.connId;
+			if (!owner || "file" in request || !("selectionId" in request) || typeof request.selectionId !== "string")
+				throw new Error("Choose the bot package again.");
+			return agentControl.bots({ action: "importPackage", selectionId: request.selectionId, caller: owner });
+		}
 		if (!caller.browserWindow && "action" in request && request.action === "create" && "folder" in request)
 			throw new Error("This computer chooses the folder for a bot created from a paired device.");
 		if ("action" in request && request.action === "allowLegacyPeers" && !caller.browserWindow)

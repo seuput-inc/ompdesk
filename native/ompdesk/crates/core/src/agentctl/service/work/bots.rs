@@ -1818,7 +1818,15 @@ impl AgentControl {
             }
             // A new bot from a package file: its name made unique, its parts checked before anything is written.
             "importPackage" => {
-                let package = bot_package::read(&text("file").unwrap_or_default())?;
+                let selected = request["caller"]
+                    .as_str()
+                    .zip(request["selectionId"].as_str());
+                let Some(file) =
+                    selected.and_then(|(caller, id)| crate::fs::bot_package_pick::take(caller, id))
+                else {
+                    return fail("Choose the bot package again.");
+                };
+                let package = bot_package::read(file)?;
                 let base = package.name.trim().to_owned();
                 let mut name = base.clone();
                 let mut n = 2;

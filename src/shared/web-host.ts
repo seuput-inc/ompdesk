@@ -47,6 +47,8 @@ export interface WebHostListRequest {
 	query?: string;
 	/** Also list files, not only folders. */
 	files?: boolean;
+	/** Offer an import ID for the visible JSON file whose name exactly matches the query. */
+	botPackage?: boolean;
 }
 
 export interface WebHostEntry {
@@ -55,6 +57,7 @@ export interface WebHostEntry {
 	directory: boolean;
 	/** Bytes of a file; null for a folder. */
 	size: number | null;
+	selectionId?: string;
 }
 
 export interface WebHostListing {

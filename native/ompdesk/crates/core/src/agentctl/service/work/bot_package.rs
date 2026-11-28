@@ -5,6 +5,7 @@
 //! and its Look around, notification and item settings. `MEMORY.md` (what it keeps about its owner), its
 //! chats, items and history stay home, as in Orca's package; one whose text holds a credential is refused.
 
+use std::io::Read;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -162,24 +163,25 @@ pub fn write(file: &str, package: &Package) -> R<()> {
     Ok(())
 }
 
-/// The package `file` holds, checked: its format and version, its name, its parts' names and sizes.
-pub fn read(file: &str) -> R<Package> {
-    let path = Path::new(file);
-    match std::fs::metadata(path) {
-        Ok(meta) if meta.is_file() && meta.len() <= PACKAGE_MAX => {}
-        Ok(_) => return fail(format!("{file} is no bot package (too large, or no file).")),
-        Err(error) => return fail(format!("Could not read {file}: {error}")),
+/// Read only the open file granted by the picker. Bound the actual read even if the file grows.
+pub fn read(file: std::fs::File) -> R<Package> {
+    if !file.metadata().is_ok_and(|meta| meta.len() <= PACKAGE_MAX) {
+        return fail("The selected bot package is too large or unavailable.");
     }
-    let text = match std::fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(error) => return fail(format!("Could not read {file}: {error}")),
-    };
-    let value: Value = match serde_json::from_str(&text) {
-        Ok(value) => value,
-        Err(_) => return fail(format!("{file} is no bot package.")),
+    let mut text = String::new();
+    if file
+        .take(PACKAGE_MAX + 1)
+        .read_to_string(&mut text)
+        .is_err()
+        || text.len() as u64 > PACKAGE_MAX
+    {
+        return fail("Could not read the selected bot package (invalid text or too large).");
+    }
+    let Ok(value) = serde_json::from_str::<Value>(&text) else {
+        return fail("The selected file is no bot package.");
     };
     if value.get("format").and_then(Value::as_str) != Some(FORMAT) {
-        return fail(format!("{file} is no bot package."));
+        return fail("The selected file is no bot package.");
     }
     if value
         .get("version")
@@ -189,7 +191,7 @@ pub fn read(file: &str) -> R<Package> {
         return fail("This bot package is from a newer OMPdesk: update OMPdesk, then import it.");
     }
     let Ok(package) = serde_json::from_value::<Package>(value) else {
-        return fail(format!("{file} is no bot package."));
+        return fail("The selected file is no bot package.");
     };
     let name = package.name.trim();
     if name.is_empty() || name.chars().count() > 80 {

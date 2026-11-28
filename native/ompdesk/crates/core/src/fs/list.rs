@@ -1,6 +1,6 @@
 //! `fs.list` (the Files panel's tree and the `@` list) and `fs.listDirs` (a paired device's folder picker).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
@@ -284,6 +284,8 @@ pub struct ListDirsParams {
 struct WebPicker {
     files: bool,
     limit: usize,
+    #[serde(rename = "packageCaller")]
+    package_caller: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -297,6 +299,8 @@ struct WebEntry {
     name: String,
     // Folders have no byte size in WebHostEntry.
     size: Option<u64>,
+    #[serde(rename = "selectionId", skip_serializing_if = "Option::is_none")]
+    selection_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -353,6 +357,7 @@ pub fn list_dirs(params: &ListDirsParams) -> Result<Reply, Fault> {
                 Some(WebEntry {
                     name: entry.name,
                     size,
+                    selection_id: None,
                 })
             })
             .collect();
@@ -364,6 +369,19 @@ pub fn list_dirs(params: &ListDirsParams) -> Result<Reply, Fault> {
         });
         let truncated = found.len() > web.limit;
         found.truncate(web.limit);
+        if let (Some(caller), Some(Value::String(name))) = (&web.package_caller, &params.query)
+            && Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+            && let Some(entry) = found
+                .iter_mut()
+                .find(|e| e.size.is_some() && e.name == *name)
+        {
+            entry.selection_id = Some(super::bot_package_pick::offer(
+                caller,
+                &dir.join(&entry.name),
+            )?);
+        }
         return Reply::json(&WebEntries {
             entries: found,
             truncated,
@@ -384,6 +402,36 @@ pub fn list_dirs(params: &ListDirsParams) -> Result<Reply, Fault> {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn package_selection_names_only_a_returned_file_and_survives_path_replacement() {
+        use std::io::Read;
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("picked.json");
+        fs::write(&file, "original").unwrap();
+        let list = |query: &str| {
+            let params = serde_json::from_value(serde_json::json!({
+                "dir": dir.path(), "locale": "en-US", "query": query,
+                "web": {"files": true, "limit": 10, "packageCaller": "picker-page"}
+            }))
+            .unwrap();
+            let reply = list_dirs(&params).unwrap();
+            serde_json::from_str::<Value>(reply.result.get()).unwrap()["entries"].clone()
+        };
+        assert!(list("picked")[0].get("selectionId").is_none());
+        assert_eq!(list("../picked.json"), serde_json::json!([]));
+        let entries = list("picked.json");
+        let id = entries[0]["selectionId"].as_str().unwrap();
+        fs::rename(&file, dir.path().join("moved")).unwrap();
+        fs::write(&file, "replacement").unwrap();
+        let mut text = String::new();
+        crate::fs::bot_package_pick::take("picker-page", id)
+            .unwrap()
+            .read_to_string(&mut text)
+            .unwrap();
+        assert_eq!(text, "original");
+    }
 
     #[test]
     fn root_walk_and_direct_subtree_use_the_same_scoped_ignores() {

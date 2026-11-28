@@ -475,6 +475,17 @@ export function createWebOmp(env: ShimEnv): WebOmp {
 	};
 
 	const shared = createOmpApi(shimTransport);
+	shared.bots.pickPackage = async typeLabel => {
+		const paths = await shared.system.showOpenDialog([{ name: typeLabel, extensions: ["json"] }]);
+		const file = paths?.[0];
+		if (!file) return null;
+		const cut = Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\"));
+		const name = file.slice(cut + 1);
+		const listing = await host.listDirs({ path: file.slice(0, cut + 1), query: name, files: true, botPackage: true });
+		const choice = listing.entries.find(entry => entry.name === name)?.selectionId;
+		if (!choice) throw new Error(env.t("bots.import.pickFirst"));
+		return choice;
+	};
 	const { updateSidebar } = shared.prefs;
 	shared.prefs.updateSidebar = change => {
 		if (change.op === "set-session-sort") return shared.prefs.set("sidebar.sessionSort", change.sort);

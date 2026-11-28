@@ -353,6 +353,21 @@ describe("the web shim", () => {
 			expect(fetches.map(f => f.url)).toEqual(["/upload", "/upload"]);
 		});
 
+		it("imports an uploaded package by its host listing ID, not its Windows upload path", async () => {
+			const { web, invoked, answers, fetchReply } = setup({
+				"web:host.listDirs": { entries: [{ name: "Ada.json", selectionId: "choice" }] },
+			});
+			answers.pick = [new File(["{}"], "Ada.json")];
+			fetchReply.current = () => new Response(JSON.stringify({ path: "C:\\uploads\\Ada.json" }));
+			const selectionId = await web.api.bots.pickPackage("JSON");
+			expect(selectionId).toBe("choice");
+			await web.api.bots.command({ action: "importPackage", selectionId: selectionId! });
+			expect(invoked.map(call => call.args)).toEqual([
+				[{ path: "C:\\uploads\\", query: "Ada.json", files: true, botPackage: true }],
+				[{ action: "importPackage", selectionId: "choice" }],
+			]);
+		});
+
 		it("returns null when no phone file was picked, and asks for a host folder when a directory is wanted", async () => {
 			const { web, answers } = setup();
 			await expect(web.api.system.showOpenDialog()).resolves.toBeNull();

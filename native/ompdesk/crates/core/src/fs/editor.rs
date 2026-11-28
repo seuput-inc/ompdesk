@@ -90,7 +90,7 @@ fn invalid() -> Fault {
     Fault::new("invalid_params", "Unknown external-editor draft")
 }
 
-fn regular_file(path: &Path) -> Result<File, Fault> {
+pub(super) fn regular_file(path: &Path) -> Result<File, Fault> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]

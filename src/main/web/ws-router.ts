@@ -89,6 +89,7 @@ const DESKTOP_ONLY_PUSH: readonly string[] = [WEB_DEVICES_CHANGED, WEB_DEVICE_CO
 /** The caller of a web-only channel: who, and the window their pushes and tabs belong to. */
 export interface WebCallContext {
 	deviceId: string;
+	connId?: string;
 	device: WebDevice;
 	win: WebClientWindow;
 }
@@ -541,7 +542,7 @@ export class WsRouter {
 			throw codedError("web_forbidden", "Moving device sections requires workspace access");
 		const win = windows.windowFor(deviceId);
 		const own = Object.hasOwn(webChannels, channel) ? webChannels[channel] : undefined;
-		if (own) return own.handler({ deviceId, device, win }, args);
+		if (own) return own.handler({ deviceId, device, win, connId: event.connId }, args);
 
 		// A command of a removed mode is refused before it is counted against the device's quota (local/modes.ts).
 		if (channel === IPC_COMMANDS.RPC_COMMAND || channel === IPC_COMMANDS.RPC_COMMAND_FOR_TAB) {

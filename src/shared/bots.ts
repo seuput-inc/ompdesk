@@ -440,7 +440,7 @@ export type BotsRequest =
 	/** The owner saw the bot's Suggestions: what is listed now is no longer new. */
 	| { action: "looksSeen"; id: string }
 	/** A new bot from a package file (`BOT_PACKAGE_SUFFIX`); its name is made unique. */
-	| { action: "importPackage"; file: string }
+	| { action: "importPackage"; selectionId: string }
 	| { action: "roomUpdate"; id: string; name?: string; bots?: string[]; replyMode?: RoomReplyMode }
 	| { action: "roomDelete"; id: string }
 	/** The owner's post; `messageId` makes a resend post once. */
@@ -527,6 +527,7 @@ export interface BotsApi {
 	deletePreview(request: { id: string }): Promise<BotDeletePreview>;
 	file(request: Omit<BotFileRequest, "action">): Promise<BotFile>;
 	importSources(): Promise<{ sources: BotImportSource[] }>;
+	pickPackage(typeLabel: string): Promise<string | null>;
 	exportPackage(request: Omit<BotExportRequest, "action">): Promise<{ file: string }>;
 	onState(callback: (state: BotsState) => void): () => void;
 }

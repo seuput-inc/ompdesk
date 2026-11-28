@@ -2538,10 +2538,31 @@ async fn a_bot_exported_to_a_package_file_comes_back_as_a_new_bot() {
     );
     std::fs::write(&file, legacy.to_string()).unwrap();
 
-    let state = control
-        .bots_command(json!({ "action": "importPackage", "file": file }))
-        .await
-        .unwrap();
+    let selection = crate::fs::bot_package_pick::offer("phone-A", Path::new(&file)).unwrap();
+    let import = |caller: &str, selection: &str| json!({ "action": "importPackage", "caller": caller, "selectionId": selection });
+    for bad in [
+        import("phone-B", &selection),
+        import("phone-A", "unknown"),
+        import("phone-A", &file),
+        json!({"action":"importPackage","file":file}),
+    ] {
+        assert!(control.bots_command(bad).await.is_err());
+    }
+    let selected = import("phone-A", &selection);
+    for denied in [
+        selected.clone(),
+        json!({"action":"importSources"}),
+        json!({"action":"pickPackage"}),
+    ] {
+        assert!(
+            control
+                .bots_from(denied, "peer", "Computer", None)
+                .await
+                .is_err()
+        );
+    }
+    let state = control.bots_command(selected.clone()).await.unwrap();
+    assert!(control.bots_command(selected).await.is_err());
     let copy = state["bots"]
         .as_array()
         .unwrap()

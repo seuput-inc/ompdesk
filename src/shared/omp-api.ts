@@ -317,6 +317,7 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			createModels: device => transport.invoke(BOTS_COMMAND, { action: "createModels", device }),
 			file: request => transport.invoke(BOTS_COMMAND, { ...request, action: "file" }),
 			importSources: () => transport.invoke(BOTS_COMMAND, { action: "importSources" }),
+			pickPackage: typeLabel => transport.invoke(BOTS_COMMAND, { action: "pickPackage", typeLabel }),
 			exportPackage: request => transport.invoke(BOTS_COMMAND, { ...request, action: "export" }),
 			onState: callback => subscribe<BotsState>(BOTS_STATE, callback),
 		},

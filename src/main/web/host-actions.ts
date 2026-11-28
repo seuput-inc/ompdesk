@@ -52,6 +52,7 @@ const ListRequest = z
 		path: z.string().max(4096).optional(),
 		query: z.string().max(255).optional(),
 		files: z.boolean().optional(),
+		botPackage: z.boolean().optional(),
 	})
 	.default({});
 const PathRequest = z.object({ path: z.string().min(1).max(4096) });
@@ -102,20 +103,24 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 		return path.normalize(abs);
 	};
 
-	const listDirs = async (_context: WebCallContext, args: readonly unknown[]): Promise<WebHostListing> => {
+	const listDirs = async (context: WebCallContext, args: readonly unknown[]): Promise<WebHostListing> => {
 		const request = parse(ListRequest, args[0]);
 		const homeDir = home();
 		const dir = request.path === undefined || request.path === "" ? homeDir : expandHome(request.path, homeDir);
 		if (!path.isAbsolute(dir)) throw codedError("not_absolute_path", "Not an absolute path");
 		const abs = path.resolve(dir);
-		let listed: { entries: { name: string; size: number | null }[]; truncated: boolean };
+		let listed: { entries: { name: string; size: number | null; selectionId?: string }[]; truncated: boolean };
 		try {
 			listed = (
 				await core().call<typeof listed>("fs.listDirs", {
 					dir: abs,
 					query: request.query,
 					locale: NAME_LOCALE,
-					web: { files: request.files === true, limit: WEB_HOST_LIST_MAX_ENTRIES },
+					web: {
+						files: request.files === true,
+						limit: WEB_HOST_LIST_MAX_ENTRIES,
+						packageCaller: request.botPackage && context.connId ? context.connId : undefined,
+					},
 				})
 			).result;
 		} catch (error) {
@@ -128,8 +133,9 @@ export function createHostActions(deps: HostActionsDeps): WebChannelTable {
 			path: abs,
 			parent: parent === abs ? null : parent,
 			home: homeDir,
-			entries: listed.entries.map(({ name, size }) => ({
+			entries: listed.entries.map(({ name, size, selectionId }) => ({
 				name,
+				...(selectionId ? { selectionId } : {}),
 				path: path.join(abs, name),
 				directory: size === null,
 				size,

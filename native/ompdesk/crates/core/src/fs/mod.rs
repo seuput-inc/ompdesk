@@ -6,6 +6,7 @@
 //! TypeScript set none) and whose message is node's text.
 
 mod agent_files;
+pub(crate) mod bot_package_pick;
 pub(crate) mod disk;
 mod editor;
 pub(crate) mod error;
@@ -26,6 +27,9 @@ use serde_json::Value;
 use crate::server::{Fault, Registry, Reply};
 
 pub fn register(registry: &mut Registry) {
+    registry.add("fs.offerPickedBotPackage", |call| {
+        Box::pin(blocking(move || bot_package_pick::native(call)))
+    });
     registry.add("fs.agentFile", |call| {
         Box::pin(blocking(move || agent_files::run(call)))
     });

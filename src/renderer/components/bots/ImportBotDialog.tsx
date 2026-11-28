@@ -78,13 +78,10 @@ export function ImportBotDialog({ onClose }: { onClose: () => void }) {
 	const importFile = async () => {
 		setError(null);
 		try {
-			const paths: unknown = await window.omp.system.showOpenDialog([
-				{ name: t("bots.settings.packageType"), extensions: ["json"] },
-			]);
-			const file = Array.isArray(paths) && typeof paths[0] === "string" ? paths[0] : null;
-			if (!file) return;
+			const selectionId = await window.omp.bots.pickPackage(t("bots.settings.packageType"));
+			if (!selectionId) return;
 			setBusy(true);
-			await command({ action: "importPackage", file });
+			await command({ action: "importPackage", selectionId });
 			toast({ variant: "success", message: t("bots.import.fileDone") });
 			onClose();
 		} catch (failure) {
