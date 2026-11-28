@@ -39,7 +39,7 @@ Use the current question id from `set`, `show`, or `list`. If the question chang
 
 From a bot's chat, open one worker for one item: `ompdesk_session_open {"item":"<id from list>","folder":"<project>","message":"Implement the agreed change."}`. Another open of that item returns its holder or pending reservation. Do not repeat the open without `item`. Use distinct items for parallel workers. A local git project gets its own worktree unless you pass `worktree: false`.
 
-Only the assigned worker can confirm its own assignment with `ompdesk_item {"action":"claim","item":"<immutable id>","generation":1}`. Use the generation returned by the open. Linking an existing session or sending it a message does not assign it.
+The assigned worker confirms its own assignment with `claim`. Pass its immutable `item` ID and the `generation` returned by the open. Linking a session or sending it a message does not assign it.
 
 To reach its current worker from the assigning board, send `ompdesk_session_send {"item":"#9","message":"The build is green.","request_id":"build-green-9"}`. Retry the same message with the same ID. If the board predates permanent numbering, use the immutable item ID from `list` instead. Use `show` to see whether there is a holder. Restarting the app does not give the work to another session.
 
