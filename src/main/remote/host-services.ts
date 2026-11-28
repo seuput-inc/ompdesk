@@ -1433,9 +1433,10 @@ export class LocalHostServices implements HostServices {
 			}
 			case "host.item.worktree": {
 				const { itemTab, ...input } = parse(ItemWorktree, method, params);
-				const fingerprint = createHash("sha256")
-					.update(JSON.stringify([input.baseCwd, input.name, input.baseRef, input.branchPrefix]))
-					.digest("hex");
+				const fingerprint = hash(
+					"sha256",
+					JSON.stringify([input.baseCwd, input.name, input.baseRef, input.branchPrefix]),
+				);
 				const receipt = await this.#itemReceipt(peer, conn, itemTab, { op: "worktree", fingerprint });
 				if (receipt !== true) return WorktreeCreateReply.parse(receipt);
 				this.#requireItemPeer(peer, conn);
