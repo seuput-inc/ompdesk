@@ -266,7 +266,7 @@ test(renameOnReopen, { tag: "@smoke" }, async () => {
 	await expect.poll(async () => (await tabs()).find(tab => tab.tabId === sender)?.status).toBe("ready");
 	const start = "Start the sender chat.";
 	expect(await prompt(sender, start)).toMatchObject({ success: true });
-	// A first-run bot answers the owner's task, not necessarily with the generic fixture reply.
+	// The bot's kickoff can add another assistant message after its answer to this prompt.
 	await expect
 		.poll(
 			async () => {
@@ -275,14 +275,15 @@ test(renameOnReopen, { tag: "@smoke" }, async () => {
 				expect(tab.cwd).toBe(renamed.folder);
 				expect(path.dirname(tab.sessionPath)).toBe(path.dirname(session));
 				expect(tab.sessionPath).not.toBe(session);
-				return (await fs.readFile(tab.sessionPath, "utf8"))
+				const messages = (await fs.readFile(tab.sessionPath, "utf8"))
 					.trimEnd()
 					.split("\n")
 					.map(line => JSON.parse(line))
 					.flatMap(entry =>
 						entry.type === "message" && ["user", "assistant"].includes(entry.message.role) ? [entry.message] : [],
-					)
-					.slice(-2);
+					);
+				const turn = messages.findIndex(m => m.role === "user" && m.content?.[0]?.text === start);
+				return turn < 0 ? [] : messages.slice(turn, turn + 2);
 			},
 			{ timeout: 30_000 },
 		)
@@ -290,6 +291,9 @@ test(renameOnReopen, { tag: "@smoke" }, async () => {
 			{ role: "user", content: [{ type: "text", text: start }] },
 			{ role: "assistant", content: [{ type: "text", text: expect.stringMatching(/\S/) }] },
 		]);
+	await expect
+		.poll(() => page.evaluate(id => window.omp.rpc.commandForTab(id, { type: "get_state" }), sender))
+		.toMatchObject({ success: true, data: { isSettled: true, queuedMessageCount: 0 } });
 	const note = "The renamed bot sent this.";
 	const sent = await page.evaluate(([id, command]) => window.omp.rpc.commandForTab(id, { type: "bash", command }), [
 		sender,
