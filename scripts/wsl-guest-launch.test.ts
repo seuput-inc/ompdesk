@@ -1,7 +1,17 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	linkSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -19,13 +29,13 @@ afterEach(() => {
 	for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
-function fixture() {
-	const home = mkdtempSync(join(linux && existsSync("/dev/shm") ? "/dev/shm" : tmpdir(), "omp-wsl-launch-"));
+function fixture(root = tmpdir()) {
+	const home = mkdtempSync(join(root, "omp-wsl-launch-"));
 	homes.push(home);
 	const cwd = join(home, "project");
-	const sessionDir = join(home, "assigned sessions");
+	const sessionKey = id();
+	const sessionDir = join(home, ".ompdesk-sessions", sessionKey);
 	mkdirSync(cwd);
-	mkdirSync(sessionDir);
 	const env = {
 		HOME: home,
 		USERPROFILE: home,
@@ -37,8 +47,8 @@ function fixture() {
 		PI_CODING_AGENT_DIR: "/must-not-be-forwarded",
 		OMP_GUI_BRIDGE: "host-pipe",
 	};
-	const request = { spawnId: id(), tabTag: id(), cwd, sessionDir, bridgeDir, minimumOmpVersion: "19.2.0" };
-	return { home, env, request, options: { cwd: home, env, timeout: 5000 } };
+	const request = { spawnId: id(), tabTag: id(), cwd, sessionKey, bridgeDir, minimumOmpVersion: "19.2.0" };
+	return { home, env, request, sessionDir, options: { cwd: home, env, timeout: 5000 } };
 }
 
 interface Fixture {
@@ -114,7 +124,7 @@ it("rejects a valid launch addressed to a different service before accessing gue
 	const f = fixture();
 	refused(
 		f,
-		`${JSON.stringify({ ...f.request, spawnId: id(), cwd: "/work", sessionDir: "/assigned", bridgeDir: "/bridge" })}\n`,
+		`${JSON.stringify({ ...f.request, spawnId: id(), cwd: "/work", bridgeDir: "/bridge" })}\n`,
 		/assigned service/,
 	);
 });
@@ -127,12 +137,13 @@ it("refuses oversized or unterminated headers without sending stock bytes", () =
 
 it("rejects injected fields, noncanonical IDs, host paths and session traversal at the wire", () => {
 	const f = fixture();
-	const req = { ...f.request, bridgeDir: "/bridge", cwd: "/work", sessionDir: "/assigned" };
+	const req = { ...f.request, bridgeDir: "/bridge", cwd: "/work" };
 	for (const [patch, reason] of [
 		[{ env: { PATH: "C:\\host" } }, /unexpected/i],
 		[{ spawnId: "A".repeat(32) }, /ID/],
 		[{ cwd: "C:\\host" }, /Linux paths/],
-		[{ sessionDir: "/assigned/../other" }, /Linux paths/],
+		[{ sessionDir: "/mnt/c/assigned" }, /unexpected/i],
+		[{ sessionKey: "../assigned" }, /ID/],
 		[{ sessionBasename: "../other.jsonl" }, /basename/],
 		[{ sessionBasename: "con .jsonl" }, /basename/],
 		[{ sessionBasename: "abc:secret.jsonl" }, /basename/],
@@ -156,15 +167,36 @@ describe.skipIf(!linux)("guest Linux launch", () => {
 		const f = fixture();
 		install(f);
 		const file = join(f.home, "other.jsonl");
-		writeFileSync(file, "");
-		symlinkSync(file, join(f.request.sessionDir, basename));
-		refused(f, `${JSON.stringify({ ...f.request, sessionBasename: basename })}\n`, /regular session/);
-		const linked = join(f.home, "linked");
-		symlinkSync(f.request.sessionDir, linked);
-		refused(f, `${JSON.stringify({ ...f.request, sessionDir: linked })}\n`, /session directory/);
+		writeFileSync(file, "", { mode: 0o600 });
+		mkdirSync(f.sessionDir, { recursive: true, mode: 0o700 });
+		symlinkSync(file, join(f.sessionDir, basename));
+		refused(f, `${JSON.stringify({ ...f.request, sessionBasename: basename })}\n`, /ELOOP|symbolic link/i);
+		const fresh = { ...f.request, sessionKey: id() };
+		symlinkSync(f.sessionDir, join(dirname(f.sessionDir), fresh.sessionKey));
+		refused(f, `${JSON.stringify({ ...fresh, sessionBasename: basename })}\n`, /Unsafe guest directory/);
 		symlinkSync(f.request.cwd, join(f.home, ".cache"));
-		refused(f, `${JSON.stringify(f.request)}\n`, /Unsafe guest directory/);
+		refused(f, `${JSON.stringify({ ...f.request, sessionKey: id() })}\n`, /Unsafe guest directory/);
 		expect(existsSync(join(f.request.cwd, "ompdesk"))).toBe(false);
+	});
+
+	it("never replaces a missing resume with a new conversation or reuses a fresh key", () => {
+		const f = fixture();
+		install(f);
+		refused(f, `${JSON.stringify({ ...f.request, sessionBasename: basename })}\n`, /ENOENT/);
+		expect(existsSync(f.sessionDir)).toBe(false);
+		mkdirSync(f.sessionDir, { recursive: true, mode: 0o700 });
+		refused(f, `${JSON.stringify(f.request)}\n`, /EEXIST/);
+		const outside = join(f.home, "outside.jsonl");
+		writeFileSync(outside, "not the assigned session\n", { mode: 0o600 });
+		linkSync(outside, join(f.sessionDir, basename));
+		refused(f, `${JSON.stringify({ ...f.request, sessionBasename: basename })}\n`, /private regular session/);
+	});
+
+	it.skipIf(!existsSync("/dev/shm"))("never puts a durable conversation in guest tmpfs", () => {
+		const f = fixture("/dev/shm");
+		install(f);
+		refused(f, `${JSON.stringify(f.request)}\n`, /persistent native Linux filesystem/);
+		expect(existsSync(f.sessionDir)).toBe(false);
 	});
 
 	it("refuses a non-directory project and an existing scratch readable by another user", () => {
@@ -226,7 +258,7 @@ describe.skipIf(!linux)("guest Linux launch", () => {
 					"-e",
 					join(bridgeDir, "index.ts"),
 					"--session-dir",
-					f.request.sessionDir,
+					f.sessionDir,
 					"--config",
 					join(bridgeDir, "fresh-launch.yml"),
 				],
@@ -248,8 +280,9 @@ describe.skipIf(!linux)("guest Linux launch", () => {
 	it.skipIf(!existsSync(runtime))("resumes the assigned file, preserving input coalesced with the header", () => {
 		const f = fixture();
 		install(f);
-		const file = join(f.request.sessionDir, basename);
-		writeFileSync(file, "");
+		mkdirSync(f.sessionDir, { recursive: true, mode: 0o700 });
+		const file = join(f.sessionDir, basename);
+		writeFileSync(file, "", { mode: 0o600 });
 		const result = send(
 			f,
 			`${JSON.stringify({ ...f.request, sessionBasename: basename, model: "guest/model" })}\n{}\n`,
@@ -262,7 +295,7 @@ describe.skipIf(!linux)("guest Linux launch", () => {
 				"-e",
 				join(bridgeDir, "index.ts"),
 				"--session-dir",
-				f.request.sessionDir,
+				f.sessionDir,
 				"--session",
 				file,
 				"--model",

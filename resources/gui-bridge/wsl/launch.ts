@@ -1,13 +1,13 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import {
+	closeSync,
 	lstatSync,
 	mkdirSync,
 	readFileSync,
 	realpathSync,
 	rmdirSync,
 	rmSync,
-	statfsSync,
 	writeFileSync,
 	writeSync,
 } from "node:fs";
@@ -16,6 +16,7 @@ import { dirname, join } from "node:path/posix";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { NUMERIC_VERSION, SESSION_TAG_PATTERN } from "../runtime-identifiers";
+import { ensureOwned, native, openOriginal, originalDirectory, ownedDir, sessionName } from "./original";
 
 const MAX_HEADER = 16 * 1024;
 const PACKAGE = "@oh-my-pi/pi-coding-agent";
@@ -40,17 +41,6 @@ function guestPath(value: unknown): value is string {
 	);
 }
 
-function sessionName(value: unknown): value is string {
-	return (
-		typeof value === "string" &&
-		value.length > 6 &&
-		value.endsWith(".jsonl") &&
-		!control.test(value) &&
-		!/[\\/:*?"<>|]/.test(value) &&
-		!/^(?:con|prn|aux|nul|conin\$|conout\$|clock\$|(?:com|lpt)[0-9¹²³]) *\./i.test(value)
-	);
-}
-
 function parseHeader(bytes: Buffer) {
 	let raw: unknown;
 	try {
@@ -63,7 +53,7 @@ function parseHeader(bytes: Buffer) {
 		"spawnId",
 		"tabTag",
 		"cwd",
-		"sessionDir",
+		"sessionKey",
 		"sessionBasename",
 		"bridgeDir",
 		"minimumOmpVersion",
@@ -73,15 +63,12 @@ function parseHeader(bytes: Buffer) {
 		Object.keys(raw).every(k => fields.includes(k)),
 		"Unexpected WSL launch field",
 	);
-	const { spawnId, tabTag, cwd, sessionDir, sessionBasename, bridgeDir, minimumOmpVersion, model } = raw as Record<
+	const { spawnId, tabTag, cwd, sessionKey, sessionBasename, bridgeDir, minimumOmpVersion, model } = raw as Record<
 		string,
 		unknown
 	>;
-	requireThat(id(spawnId) && id(tabTag), "Invalid WSL spawn or tab ID");
-	requireThat(
-		guestPath(cwd) && guestPath(sessionDir) && sessionDir !== "/" && guestPath(bridgeDir),
-		"Expected absolute Linux paths",
-	);
+	requireThat(id(spawnId) && id(tabTag) && id(sessionKey), "Invalid WSL spawn, tab or session ID");
+	requireThat(guestPath(cwd) && guestPath(bridgeDir), "Expected absolute Linux paths");
 	requireThat(sessionBasename === undefined || sessionName(sessionBasename), "Invalid WSL session basename");
 	requireThat(
 		typeof minimumOmpVersion === "string" &&
@@ -94,7 +81,7 @@ function parseHeader(bytes: Buffer) {
 			(typeof model === "string" && /^[a-z\d][\w.@+:/-]{0,255}$/i.test(model) && !control.test(model)),
 		"Invalid model selector",
 	);
-	return { spawnId, tabTag, cwd, sessionDir, sessionBasename, bridgeDir, minimumOmpVersion, model };
+	return { spawnId, tabTag, cwd, sessionKey, sessionBasename, bridgeDir, minimumOmpVersion, model };
 }
 
 // Keep one stdin reader for both protocols. Bun can rewind a preclosed stdin when a second reader attaches.
@@ -113,33 +100,6 @@ async function readRequest() {
 		pos += length;
 		if (lf >= 0) return { request: parseHeader(header.subarray(0, pos)), remainder: chunk.subarray(lf + 1), input };
 	}
-}
-
-// Linux statfs magic: ext2/3/4, XFS, Btrfs, F2FS and tmpfs. Unknown mounts, including DrvFS/9p, fail closed.
-const nativeFs = new Set([0xef53, 0x58465342, 0x9123683e, 0xf2f52010, 0x01021994]);
-function native(path: string) {
-	requireThat(nativeFs.has(statfsSync(path).type >>> 0), `Not a supported native Linux filesystem: ${path}`);
-}
-
-function ownedDir(path: string, uid: number, privateMode: boolean) {
-	const stat = lstatSync(path);
-	requireThat(
-		stat.isDirectory() &&
-			stat.uid === uid &&
-			realpathSync(path) === path &&
-			(privateMode ? (stat.mode & 0o7777) === 0o700 : !(stat.mode & 0o022)),
-		`Unsafe guest directory: ${path}`,
-	);
-	native(path);
-}
-
-function ensureOwned(path: string, uid: number, privateMode = true) {
-	try {
-		mkdirSync(path, { mode: 0o700 });
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-	}
-	ownedDir(path, uid, privateMode);
 }
 
 function guestFile(home: string, path: string, uid: number) {
@@ -193,15 +153,11 @@ async function launch() {
 	const entry = join(bridge, "index.ts");
 	requireThat(lstatSync(entry).isFile(), "Missing packaged OMPdesk bridge entry");
 	requireThat(lstatSync(realpathSync(r.cwd)).isDirectory(), "Expected an existing project directory");
-	requireThat(
-		realpathSync(r.sessionDir) === r.sessionDir && lstatSync(r.sessionDir).isDirectory(),
-		"Unsafe assigned session directory",
-	);
-	const args = [cli, "--mode", "rpc-ui", "-e", entry, "--session-dir", r.sessionDir];
+	const sessionDir = originalDirectory(home, r.sessionKey, uid, !r.sessionBasename);
+	const args = [cli, "--mode", "rpc-ui", "-e", entry, "--session-dir", sessionDir];
 	if (r.sessionBasename) {
-		const file = join(r.sessionDir, r.sessionBasename);
-		requireThat(lstatSync(file).isFile() && realpathSync(file) === file, "Expected an existing regular session file");
-		args.push("--session", file);
+		closeSync(openOriginal(home, r.sessionKey, r.sessionBasename, uid));
+		args.push("--session", join(sessionDir, r.sessionBasename));
 	} else {
 		const config = join(bridge, "fresh-launch.yml");
 		requireThat(lstatSync(config).isFile(), "Missing packaged fresh-launch config");
