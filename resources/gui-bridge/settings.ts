@@ -11,10 +11,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { UsageLimit, UsageReport } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import type { AccountCredits } from "../../src/shared/rpc-types";
+import type { AccountCredits, ModelInfo } from "../../src/shared/rpc-types";
 import { accountCredits, creditKind, creditLimitId, creditsInRaw, rawCredits } from "./account-credits";
 import { matchReportAccount, type StoredAccount } from "./accounts-core";
-import { discoverClaudeKeys, keyAdditionsSaved, keyDiscoveryStates, keyOffer } from "./claude-key-catalog";
+import {
+	discoverClaudeKeys,
+	keyAdditionsSaved,
+	keyContextWindow,
+	keyDiscoveryStates,
+	keyOffer,
+} from "./claude-key-catalog";
 import { pickerAccounts, refreshForeignCatalog, wireModel } from "./codex-picker";
 import { creditSpendEnabled } from "./credit-spend-core";
 import { guard, probe } from "./health";
@@ -329,11 +335,18 @@ async function catalogSnapshot(session: AgentSession, refreshPending: boolean) {
 	const rows = session.getAvailableModels();
 	const accounts = await pickerAccounts(session, rows);
 	return {
-		models: rows.flatMap(model => {
+		models: rows.flatMap<ModelInfo>(model => {
 			const offered = keyOffer(session, model);
 			if (offered === false) return [];
 			const row = wireModel(model, accounts);
-			return [offered ? { ...row, pickerAvailability: "account-verified" as const } : row];
+			if (!offered) return [row];
+			return [
+				{
+					...row,
+					contextWindow: keyContextWindow(session, model),
+					pickerAvailability: "account-verified" as const,
+				},
+			];
 		}),
 		discoveryStates: discoveryStates(session),
 		refreshPending,

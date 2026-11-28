@@ -390,7 +390,10 @@ export function ModelPicker() {
 	const describeModel = (model: ModelInfo): string => {
 		const key = `${model.provider}/${model.id}`;
 		const isCurrent = current?.provider === model.provider && current.id === model.id;
-		const compaction = compactionPoints?.bySelector.get(key);
+		const compaction =
+			model.contextWindow == null && modelProviderGroup(model.provider) === "anthropic-api-key"
+				? undefined
+				: compactionPoints?.bySelector.get(key);
 		const compactionValue = compaction ? compactionPointValue(compaction) : null;
 		return [
 			modelDisplayName(model),
@@ -556,13 +559,15 @@ export function ModelPicker() {
 					/>
 				</div>
 				{!error &&
-					visibleFailures.map(({ provider, fetchedAt }) => (
+					visibleFailures.map(({ provider, fetchedAt, lastConfirmedAt, models, stale }) => (
 						<div key={provider} className="px-2 py-1 text-sc-sm">
 							<strong>{nameByProvider.get(provider) ?? provider}</strong>
 							<KeyQueryFailure
 								account={nameByProvider.get(provider) ?? provider}
 								disabled={!sidecarReady}
 								fetchedAt={fetchedAt}
+								lastConfirmedAt={lastConfirmedAt}
+								lastModels={stale ? models : undefined}
 								provider={provider}
 							/>
 						</div>

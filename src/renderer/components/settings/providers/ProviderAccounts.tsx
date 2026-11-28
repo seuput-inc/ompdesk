@@ -352,6 +352,8 @@ export function ProviderAccountRows({
 									account={name}
 									disabled={!sidecarReady}
 									fetchedAt={failure.fetchedAt}
+									lastConfirmedAt={failure.lastConfirmedAt}
+									lastModels={failure.stale ? failure.models : undefined}
 									provider={config.id}
 								/>
 							)

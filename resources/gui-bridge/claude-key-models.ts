@@ -20,12 +20,14 @@ export function isClaudeKeyAccount(config: {
 	);
 }
 
+type OfferedModel = { name: string; contextWindow?: number };
+
 /** Anthropic's read-only entitlement check. Never follow a redirect with a credential, or return a provider's error body. */
-export async function offeredClaudeModels(baseUrl: string, apiKey: string): Promise<Map<string, string>> {
+export async function offeredClaudeModels(baseUrl: string, apiKey: string): Promise<Map<string, OfferedModel>> {
 	const url = new URL("/v1/models", CLAUDE_API_URL);
 	const unavailable = "Could not read the models available to this Claude API key";
 	if (baseUrl.replace(/\/$/, "") !== url.origin || !apiKey || apiKey.startsWith("!")) throw new Error(unavailable);
-	const models = new Map<string, string>();
+	const models = new Map<string, OfferedModel>();
 	const cursors = new Set<string>();
 	const signal = AbortSignal.timeout(10_000);
 	url.searchParams.set("limit", "1000");
@@ -43,7 +45,8 @@ export async function offeredClaudeModels(baseUrl: string, apiKey: string): Prom
 				if (typeof row?.id !== "string" || !row.id.trim()) throw new Error();
 				const name = typeof row.display_name === "string" && row.display_name ? row.display_name : row.id;
 				if (row.id.includes(apiKey) || name.includes(apiKey)) throw new Error();
-				models.set(row.id, name);
+				const limit = row.max_input_tokens;
+				models.set(row.id, { name, ...(Number.isSafeInteger(limit) && limit > 0 && { contextWindow: limit }) });
 			}
 			if (!page.has_more) break;
 			if (

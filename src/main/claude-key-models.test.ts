@@ -15,16 +15,16 @@ it("reads every page for the same key without following redirects or sending a p
 		);
 	});
 	expect(Array.from(await offeredClaudeModels(CLAUDE_API_URL, key))).toEqual([
-		["first", "First model"],
-		["second", "second"],
+		["first", { name: "First model" }],
+		["second", { name: "second" }],
 	]);
 	expect(requests.map(r => new URL(r.url).searchParams.get("after_id"))).toEqual([null, "cursor+/1"]);
 	for (const r of requests) {
 		expect(r.method).toBe("GET");
 		expect(new URL(r.url).origin + new URL(r.url).pathname).toBe(`${CLAUDE_API_URL}/v1/models`);
 		expect(r.redirect).toBe("error");
-		expect(r.headers.get("x-api-key")).toBe(key);
-		expect(r.headers.get("authorization")).toBeNull();
+		expect(r.headers.get("x-api-key") === key).toBe(true);
+		expect(r.headers.has("authorization")).toBe(false);
 		expect(r.headers.get("anthropic-version")).toBe("2023-06-01");
 	}
 });

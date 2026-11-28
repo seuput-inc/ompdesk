@@ -6,20 +6,29 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import type { ProviderDiscoveryState } from "../../src/shared/rpc-types";
 import { isClaudeKeyProvider } from "./claude-key-id";
 import { CLAUDE_API_URL, type ClaudeKeyAdditions, isClaudeKeyAccount, offeredClaudeModels } from "./claude-key-models";
+import { bindConfirmedReplacement, confirmKeyReceipt, currentKeyGeneration, keyReceipt } from "./claude-key-receipts";
 
 type Provider = {
 	api: string;
 	baseUrl: string;
 	auth?: string;
 	apiKey?: string;
-	models?: { id: string }[];
+	models?: { id: string; contextWindow?: number }[];
 };
-type Offers = Map<string, { models: Set<string> | null; fetchedAt: number } | null>;
-type Proof = { offers: Offers; partial?: boolean; additions?: ClaudeKeyAdditions };
+type Offer = {
+	models: Map<string, number | undefined> | null;
+	failed: boolean;
+	fetchedAt: number;
+	binding?: { generation: string; fingerprint: string };
+	confirmedAt?: number;
+};
+type Offers = Map<string, Offer | null>;
+type Proof = { offers: Offers; additions?: ClaudeKeyAdditions };
+const FRESH_MS = 5 * 60_000;
 type Source = { stamp: string; routeIds: string };
 const pending = new WeakMap<
 	AgentSession,
-	Source & { retryKey?: string; result: Promise<ClaudeKeyAdditions | undefined> }
+	Source & { rows: Map<string, Model>; targeted: boolean; result: Promise<ClaudeKeyAdditions | undefined> }
 >();
 const last = new WeakMap<AgentSession, Source & { proof: Proof; withdrawn?: boolean }>();
 
@@ -39,7 +48,11 @@ export function keyOffer(
 ): boolean | undefined {
 	if (!candidate(model)) return undefined;
 	const offered = verified(session)?.proof.offers.get(model.provider);
-	return offered === null ? undefined : (offered?.models?.has(model.id) ?? false);
+	return offered === null ? undefined : !!offered && !offered.failed && offered.models?.has(model.id) === true;
+}
+
+export function keyContextWindow(session: AgentSession, model: Pick<Model, "provider" | "id">): number | undefined {
+	return verified(session)?.proof.offers.get(model.provider)?.models?.get(model.id);
 }
 
 export function keyDiscoveryStates(session: AgentSession): ProviderDiscoveryState[] {
@@ -48,14 +61,15 @@ export function keyDiscoveryStates(session: AgentSession): ProviderDiscoveryStat
 	if (!offers) return states;
 	for (const [provider, offer] of offers) {
 		if (!offer) continue;
-		const { models, fetchedAt } = offer;
+		const { models, failed, fetchedAt } = offer;
 		states.push({
 			provider,
-			status: models === null ? "unavailable" : models.size ? "ok" : "empty",
+			status: failed ? "unavailable" : models?.size ? "ok" : "empty",
 			optional: true,
-			stale: false,
+			stale: failed && models !== null,
 			fetchedAt,
-			models: models ? [...models] : [],
+			...(failed && offer.confirmedAt !== undefined && { lastConfirmedAt: offer.confirmedAt }),
+			models: models ? [...models.keys()] : [],
 		});
 	}
 	return states;
@@ -71,13 +85,27 @@ async function fileContents(session: AgentSession) {
 	}
 }
 
-async function discover(session: AgentSession, rows: Map<string, Model>, bytes: Buffer, stamp: string): Promise<Proof> {
-	const config = Bun.YAML.parse(bytes.toString("utf8")) as { providers?: Record<string, Provider> } | null;
-	const offers: Offers = new Map();
-	const additions: ClaudeKeyAdditions = { stamp, models: {} };
+function configuredProviders(bytes: Buffer) {
+	return (Bun.YAML.parse(bytes.toString("utf8")) as { providers?: Record<string, Provider> } | null)?.providers;
+}
+
+async function discover(
+	session: AgentSession,
+	rows: Map<string, Model>,
+	bytes: Buffer,
+	stamp: string,
+	prior?: Proof,
+): Promise<Proof> {
+	const config = configuredProviders(bytes);
+	const dir = session.settings.getAgentDir();
+	const replacements = new Map<string, string>();
+	const offers: Offers = new Map(prior?.offers);
+	const additions: ClaudeKeyAdditions = { stamp, models: { ...prior?.additions?.models } };
 	await Promise.all(
 		Array.from(rows, async ([id, model]) => {
-			const entry = config?.providers?.[id];
+			const entry = config?.[id];
+			delete additions.models[id];
+			offers.set(id, { models: null, failed: true, fetchedAt: Date.now() });
 			if (!entry) return;
 			if (!isClaudeKeyAccount({ id, api: entry.api, baseUrl: entry.baseUrl, auth: entry.auth })) {
 				offers.set(id, null);
@@ -98,17 +126,34 @@ async function discover(session: AgentSession, rows: Map<string, Model>, bytes: 
 			try {
 				const key = await session.modelRegistry.getApiKey(model, session.sessionId);
 				if (key !== value) return;
-				const models = await offeredClaudeModels(CLAUDE_API_URL, key).catch(() => null);
-				offers.set(id, { models: models && new Set(models.keys()), fetchedAt: Date.now() });
-				if (!models) return;
-				const saved = new Set((entry.models ?? []).map(row => row.id));
-				for (const [modelId, name] of models) {
+				const fingerprint = createHash("sha256").update(key).digest("hex");
+				const receipt = keyReceipt(dir, id, fingerprint);
+				if (receipt.replacedGeneration) replacements.set(id, receipt.replacedGeneration);
+				const binding = { fingerprint, generation: receipt.generation };
+				const lastModels =
+					receipt.confirmedAt === undefined ? null : new Map(receipt.models.map(id => [id, undefined]));
+				offers.set(id, {
+					models: lastModels,
+					confirmedAt: receipt.confirmedAt,
+					fetchedAt: Date.now(),
+					failed: true,
+					binding,
+				});
+				const models = await offeredClaudeModels(CLAUDE_API_URL, key);
+				const saved = new Map((entry.models ?? []).map(row => [row.id, row.contextWindow]));
+				const contexts = new Map<string, number | undefined>();
+				const fetchedAt = Date.now();
+				offers.set(id, { models: contexts, failed: false, fetchedAt, binding });
+				for (const [modelId, { name, contextWindow }] of models) {
+					contexts.set(modelId, contextWindow ?? saved.get(modelId));
 					if (saved.has(modelId)) continue;
 					additions.models[id] ??= [];
 					additions.models[id].push({ id: modelId, name });
 				}
 			} catch {
-				// Never relay a resolver error or infer an offer from a previous successful lookup.
+				// Do not send resolver or provider error text to the renderer.
+				const attempted = offers.get(id);
+				if (attempted) attempted.fetchedAt = Date.now();
 			}
 		}),
 	);
@@ -118,10 +163,28 @@ async function discover(session: AgentSession, rows: Map<string, Model>, bytes: 
 			.digest("hex") !== stamp
 	)
 		throw new Error("Model config changed");
+	for (const [id, offer] of offers) {
+		const binding = offer?.binding;
+		if (!binding || !offer) continue;
+		if (rows.has(id) && !offer.failed && offer.models) {
+			const ids = [...offer.models.keys()];
+			const replaced = replacements.get(id);
+			if (replaced) {
+				binding.generation =
+					bindConfirmedReplacement(dir, id, binding.fingerprint, replaced, offer.fetchedAt, ids) ?? "";
+			} else {
+				confirmKeyReceipt(dir, id, binding.fingerprint, binding.generation, offer.fetchedAt, ids);
+			}
+		}
+		if (!binding.generation || currentKeyGeneration(dir, id, binding.fingerprint) !== binding.generation) {
+			offers.set(id, { models: null, failed: true, fetchedAt: Date.now() });
+			delete additions.models[id];
+		}
+	}
 	return { offers, ...(Object.keys(additions.models).length ? { additions } : {}) };
 }
 
-/** No dedicated stock rows: no config read, credential resolution, or network. Otherwise verify once per file or explicit refresh. */
+/** Join overlapping reads; each key ages from its own last attempt, including failed attempts. */
 export async function discoverClaudeKeys(
 	session: AgentSession,
 	force: boolean,
@@ -135,11 +198,20 @@ export async function discoverClaudeKeys(
 		pending.delete(session);
 		return;
 	}
+	const unavailable = () => {
+		last.set(session, {
+			stamp: "",
+			routeIds: "",
+			proof: {
+				offers: new Map([...rows.keys()].map(id => [id, { models: null, failed: true, fetchedAt: Date.now() }])),
+			},
+		});
+	};
 	let bytes: Buffer;
 	try {
 		bytes = await fileContents(session);
 	} catch {
-		last.delete(session);
+		unavailable();
 		pending.delete(session);
 		return;
 	}
@@ -148,40 +220,40 @@ export async function discoverClaudeKeys(
 	try {
 		const inflight = pending.get(session);
 		if (inflight?.stamp === stamp && inflight.routeIds === routeIds) {
-			if (!inflight.retryKey || (!force && (!retryKey || inflight.retryKey === retryKey)))
+			if (
+				retryKey ? inflight.rows.has(retryKey) : !inflight.targeted && (!force || inflight.rows.size === rows.size)
+			)
 				return await inflight.result;
 			await inflight.result;
 			return discoverClaudeKeys(session, force, retryKey);
 		}
 		const previous = verified(session);
 		const prior = previous?.stamp === stamp && previous.routeIds === routeIds ? previous.proof : undefined;
-		if (!force && !retryKey && prior && !prior.partial) return prior.additions;
-		const retained = retryKey && prior ? new Map(prior.offers) : undefined;
-		if (retryKey) {
-			retained?.delete(retryKey);
-			for (const id of rows.keys()) if (id !== retryKey) rows.delete(id);
+		for (const id of rows.keys()) {
+			const offer = prior?.offers.get(id);
+			const binding = offer?.binding;
+			const sameKey =
+				!binding ||
+				(binding.generation !== "" &&
+					currentKeyGeneration(session.settings.getAgentDir(), id, binding.fingerprint) === binding.generation);
+			if (
+				retryKey
+					? id !== retryKey
+					: !force && sameKey && (offer === null || (offer && Date.now() - offer.fetchedAt < FRESH_MS))
+			)
+				rows.delete(id);
 		}
-		if (retained) last.set(session, { stamp, routeIds, proof: { offers: retained, partial: true } });
-		else last.delete(session);
+		if (!rows.size) return prior?.additions;
+		const retained = new Map(prior?.offers);
+		for (const id of rows.keys()) retained.delete(id);
+		last.set(session, { stamp, routeIds, proof: { offers: retained } });
 		const read = {
 			stamp,
 			routeIds,
-			retryKey,
-			result: discover(session, rows, bytes, stamp).then((proof): ClaudeKeyAdditions | undefined => {
+			rows,
+			targeted: retryKey !== undefined,
+			result: discover(session, rows, bytes, stamp, prior).then((proof): ClaudeKeyAdditions | undefined => {
 				if (pending.get(session) !== read) return;
-				if (retryKey) {
-					if (retained) {
-						for (const [id, offer] of proof.offers) retained.set(id, offer);
-						proof.offers = retained;
-					}
-					proof.partial = !prior || prior.partial;
-					if (prior?.additions) {
-						const models = { ...prior.additions.models };
-						delete models[retryKey];
-						Object.assign(models, proof.additions?.models);
-						if (Object.keys(models).length) proof.additions = { stamp, models };
-					}
-				}
 				last.set(session, { stamp, routeIds, proof });
 				return proof.additions;
 			}),
@@ -190,12 +262,13 @@ export async function discoverClaudeKeys(
 		try {
 			return await read.result;
 		} catch {
-			if (pending.get(session) === read) last.delete(session);
+			if (pending.get(session) === read) unavailable();
 			return;
 		} finally {
 			if (pending.get(session) === read) pending.delete(session);
 		}
 	} catch {
+		unavailable();
 		return;
 	}
 }
@@ -208,14 +281,21 @@ export async function keyAdditionsSaved(session: AgentSession, previous: string,
 	if (!stamp || typeof session.modelRegistry.refresh !== "function") return;
 	try {
 		await session.modelRegistry.refresh("offline");
-		const current = createHash("sha256")
-			.update(await fileContents(session))
-			.digest("hex");
+		const bytes = await fileContents(session);
+		const current = createHash("sha256").update(bytes).digest("hex");
 		if (current === stamp && last.get(session) === cached && !pending.has(session)) {
+			const config = configuredProviders(bytes);
+			for (const [id, offer] of cached.proof.offers) {
+				const contexts = offer?.models;
+				if (!contexts) continue;
+				for (const row of config?.[id]?.models ?? []) {
+					if (contexts.has(row.id) && contexts.get(row.id) === undefined) contexts.set(row.id, row.contextWindow);
+				}
+			}
 			last.set(session, {
 				stamp,
 				routeIds: cached.routeIds,
-				proof: { offers: cached.proof.offers, partial: cached.proof.partial },
+				proof: { offers: cached.proof.offers },
 			});
 		}
 	} catch {

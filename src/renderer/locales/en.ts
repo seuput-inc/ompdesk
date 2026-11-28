@@ -3161,6 +3161,8 @@ export const en: Record<string, string> = {
 		"Couldn’t check the model list at {time}. You can’t select models for this key until the next successful lookup.",
 	"providers.keyModelsUnavailable":
 		"Couldn’t check the model list. You can’t select models for this key until the next successful lookup.",
+	"providers.keyModelsLastSeen": "Models last confirmed at {time}:",
+	"providers.keyModelsLastEmpty": "The last successful check at {time} returned no models.",
 	"providers.retryKeyModels": "Retry model lookup for {account}",
 	"chat.claudeApi.used": "Claude API · {key}",
 	"chat.claudeApi.skipped": "{key}: {reason}",

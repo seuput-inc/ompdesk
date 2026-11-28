@@ -1,6 +1,6 @@
 // models.yml through the core and the installed stock omp. The core's own cases (a stand-in stock: the file racing a
 // save, symlinks and modes, a missing roster, a misread edit) are in `native/ompdesk/crates/core/src/models/file`.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -101,13 +101,59 @@ describe.skipIf(!available)("models.yml through installed stock", () => {
 			onlyIfAbsent: true,
 			models: [],
 		};
-		vi.stubGlobal("fetch", () =>
-			Response.json({
-				data: [...known.map(id => ({ id })), { id: unknown.id, display_name: unknown.name }],
-				has_more: false,
-			}),
-		);
-		await upsertModelsProvider(input);
+		const { createServer } = await import("node:http");
+		const { createHash } = await import("node:crypto");
+		let receivedAt = 0;
+		const server = createServer((req, res) => {
+			if (
+				req.method !== "GET" ||
+				req.url?.split("?")[0] !== "/v1/models" ||
+				req.headers["x-api-key"] !== input.apiKey
+			) {
+				res.writeHead(403).end();
+				return;
+			}
+			receivedAt = Date.now();
+			res.end(
+				JSON.stringify({
+					data: [...known.map(id => ({ id })), { id: unknown.id, display_name: unknown.name }],
+					has_more: false,
+				}),
+			);
+		});
+		const send = globalThis.fetch;
+		try {
+			const listening = Promise.withResolvers<void>();
+			server.once("error", listening.reject).listen(0, "127.0.0.1", listening.resolve);
+			await listening.promise;
+			const address = server.address();
+			if (!address || typeof address === "string") throw new Error("Missing fixture port");
+			vi.stubGlobal("fetch", (url: URL, init: RequestInit) => {
+				if (url.origin !== CLAUDE_API_URL) throw new Error("network disabled");
+				return send(`http://127.0.0.1:${address.port}${url.pathname}${url.search}`, init);
+			});
+			await upsertModelsProvider(input);
+		} finally {
+			server.close();
+			server.closeAllConnections();
+		}
+		const savedAt = Date.now();
+		const fingerprint = createHash("sha256").update(input.apiKey!).digest("hex");
+		const receipts = join(process.cwd(), "resources/gui-bridge/claude-key-receipts.ts");
+		const receiptProbe = `
+			import { keyReceipt } from ${JSON.stringify(receipts)};
+			const { generation, confirmedAt, models } = keyReceipt(${JSON.stringify(dir)}, ${JSON.stringify(input.id)}, ${JSON.stringify(fingerprint)});
+			console.log(JSON.stringify({ generation, confirmedAt, models }));
+		`;
+		const readReceipt = () =>
+			JSON.parse(
+				execFileSync("bun", ["-e", receiptProbe], { cwd: dir, encoding: "utf8", env: stockFixtureEnv(dir) }),
+			);
+		const receipt = readReceipt();
+		expect(receivedAt).toBeGreaterThan(0);
+		expect(receipt.confirmedAt).toBeGreaterThanOrEqual(receivedAt);
+		expect(receipt.confirmedAt).toBeLessThanOrEqual(savedAt);
+		expect([...receipt.models].sort()).toEqual([...known, unknown.id].sort());
 		const [provider] = await listModelsProviders();
 		expect(provider.models.map(model => model.id)).toEqual([...known, unknown.id]);
 		const rows = saved().providers[input.id].models;
@@ -158,7 +204,19 @@ describe.skipIf(!available)("models.yml through installed stock", () => {
 		await expect(
 			upsertModelsProvider({ ...input, onlyIfAbsent: undefined, apiKey: "invalid-dummy" }),
 		).rejects.toThrow("[source_unavailable]");
-		expect(readFileSync(file, "utf8")).toBe(before);
+		expect(readFileSync(file, "utf8") === before).toBe(true);
+		expect(readReceipt()).toEqual(receipt);
+		const slow = Promise.withResolvers<Response>();
+		vi.stubGlobal("fetch", () => slow.promise);
+		const late = upsertModelsProvider({ ...input, onlyIfAbsent: undefined });
+		await deleteModelsProvider(input.id);
+		slow.resolve(Response.json({ data: [{ id: "late" }], has_more: false }));
+		await expect(late).rejects.toThrow("[changed_on_disk]");
+		const forgotten = readReceipt();
+		expect(forgotten.models).toEqual([]);
+		expect(forgotten.confirmedAt).toBeUndefined();
+		expect(forgotten.generation).not.toBe(receipt.generation);
+		expect(await listModelsProviders()).toEqual([]);
 	});
 
 	test("refresh appends new offers only at the verified config revision and preserves old explicit rows", async () => {
@@ -207,25 +265,29 @@ describe.skipIf(!available)("models.yml through installed stock", () => {
 		const probe = `
 			import { createHash } from "node:crypto";
 			import { readFile, unlink, writeFile } from "node:fs/promises";
-			import { discoverClaudeKeys, keyAdditionsSaved, keyDiscoveryStates, keyOffer } from ${JSON.stringify(join(bridge, "claude-key-catalog.ts"))};
+			import { discoverClaudeKeys, keyAdditionsSaved, keyContextWindow, keyDiscoveryStates, keyOffer } from ${JSON.stringify(join(bridge, "claude-key-catalog.ts"))};
 			const dir = ${JSON.stringify(dir)};
 			let calls = 0;
 			let retry = false;
 			let recover = false;
 			const started = Promise.withResolvers();
 			const release = Promise.withResolvers();
-			globalThis.fetch = Object.assign(async (url, init) => {
-				if (url.origin + url.pathname !== ${JSON.stringify(`${CLAUDE_API_URL}/v1/models`)} || (init.method ?? "GET") !== "GET") throw Error("network disabled");
+			const send = globalThis.fetch;
+			const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
 				calls++;
-				const good = new Headers(init.headers).get("x-api-key") === ${JSON.stringify(key)};
+				const good = request.headers.get("x-api-key") === ${JSON.stringify(key)};
 				if (retry) {
 					started.resolve();
 					await release.promise;
 					if (recover && !good) return Response.json({ data: [], has_more: false });
 				}
 				return good && !retry
-					? Response.json({ data: [{ id: "shared" }, { id: "new" }], has_more: false })
-					: new Response("private provider error " + init.headers["x-api-key"], { status: 401 });
+					? Response.json({ data: [{ id: "shared", max_input_tokens: 123456 }, { id: "new" }], has_more: false })
+					: new Response("private provider error", { status: 401 });
+			}});
+			globalThis.fetch = Object.assign(async (url, init) => {
+				if (url.origin + url.pathname !== ${JSON.stringify(`${CLAUDE_API_URL}/v1/models`)} || (init.method ?? "GET") !== "GET") throw Error("network disabled");
+				return send(new URL("/v1/models" + url.search, server.url), { ...init, redirect: "error", proxy: null });
 			}, { preconnect() {} });
 			const load = name => import(Bun.resolveSync("@oh-my-pi/" + name, ${JSON.stringify(root)}));
 			const { AuthStorage } = await load("pi-ai/auth-storage");
@@ -244,6 +306,7 @@ describe.skipIf(!available)("models.yml through installed stock", () => {
 				const firstTime = now;
 				Date.now = () => now;
 				const states = () => Object.fromEntries(keyDiscoveryStates(session).map(s => [s.provider, s]));
+				const beforeFirstGet = [keyOffer(session, model), keyOffer(session, other)];
 				const [additions] = await Promise.all([discoverClaudeKeys(session, false), discoverClaudeKeys(session, false)]);
 				now += 1000;
 				await discoverClaudeKeys(session, false);
@@ -258,13 +321,16 @@ describe.skipIf(!available)("models.yml through installed stock", () => {
 				const conflicted = [keyOffer(session, model), keyDiscoveryStates(session)];
 				await keyAdditionsSaved(session, additions.stamp, createHash("sha256").update(bytes).digest("hex"));
 				await discoverClaudeKeys(session, false);
-				const savedOffer = keyOffer(session, registry.find(model.provider, "new"));
+				const newModel = registry.find(model.provider, "new");
+				const savedOffer = keyOffer(session, newModel);
+				const contexts = [keyContextWindow(session, model), keyContextWindow(session, newModel) ?? null, newModel.contextWindow > 0];
 				const savedStates = states();
 				const oldStock = { ...session, modelRegistry: {} };
 				await discoverClaudeKeys(oldStock, false);
 				const withoutResolver = keyOffer(oldStock, model);
 				retry = true;
-				const refreshing = discoverClaudeKeys(session, true);
+				now += 5 * 60_000;
+				const refreshing = discoverClaudeKeys(session, false);
 				await started.promise;
 				const whileRefreshing = keyOffer(session, model);
 				const concurrent = discoverClaudeKeys(session, false);
@@ -275,21 +341,45 @@ describe.skipIf(!available)("models.yml through installed stock", () => {
 				recover = true;
 				await discoverClaudeKeys(session, false, other.provider);
 				const recovered = states();
+				recover = false;
+				const beforeRestart = calls;
+				const restarted = { ...session };
+				await discoverClaudeKeys(restarted, false);
+				const restartStates = Object.fromEntries(keyDiscoveryStates(restarted).map(s => [s.provider, s]));
+				const startupReads = calls - beforeRestart;
 				await unlink(${JSON.stringify(file)});
 				await discoverClaudeKeys(session, false);
 				console.log(JSON.stringify({
 					keyMatched: headers.get("x-api-key") === ${JSON.stringify(key)},
 					bearer: headers.has("authorization"), oauth: options.isOAuthToken,
-					initial, additions: additions?.models, refusedProof, withoutResolver, calls,
+					initial, additions: additions?.models, refusedProof, withoutResolver, calls: beforeRestart, beforeFirstGet,
+					restartStates, startupReads,
+					contexts,
 					initialStates, savedStates, recovered, retryStates, firstTime, retryTime: now, whileRefreshing, conflicted, savedOffer,
 					unrelatedUntouched: keyOffer(session, { ...model, provider: "manual" }) === undefined,
 					unreadable: keyOffer(session, model),
 				}));
-			} finally { auth.close(); }
+			} finally { auth.close(); server.stop(true); }
 		`;
-		const output = execFileSync("bun", ["-e", probe], { cwd: dir, encoding: "utf8", env: stockFixtureEnv(dir) });
-		const { initialStates, savedStates, recovered, retryStates, firstTime, retryTime, ...observed } =
-			JSON.parse(output);
+		const output = spawnSync("bun", ["-e", probe], {
+			cwd: dir,
+			encoding: "utf8",
+			env: stockFixtureEnv(dir),
+			timeout: 30_000,
+		});
+		// The probe command contains the synthetic credential. Never include its argv/stderr in an assertion.
+		expect(output.status).toBe(0);
+		const {
+			initialStates,
+			savedStates,
+			recovered,
+			retryStates,
+			restartStates,
+			startupReads,
+			firstTime,
+			retryTime,
+			...observed
+		} = JSON.parse(output.stdout);
 		const state = (provider: string, status: string, fetchedAt: number, models: string[]) => ({
 			provider,
 			status,
@@ -304,16 +394,28 @@ describe.skipIf(!available)("models.yml through installed stock", () => {
 		});
 		expect(savedStates).toEqual(initialStates);
 		expect(retryStates).toEqual({
-			[provider]: state(provider, "unavailable", retryTime, []),
+			[provider]: {
+				...state(provider, "unavailable", retryTime, ["shared", "new"]),
+				stale: true,
+				lastConfirmedAt: firstTime,
+			},
 			[refused]: state(refused, "unavailable", retryTime, []),
+		});
+		// A new session must GET even with a receipt. Legacy seed IDs never appear in its fallback.
+		expect(startupReads).toBe(2);
+		expect(restartStates).toEqual({
+			...retryStates,
+			[refused]: { ...state(refused, "unavailable", retryTime, []), stale: true, lastConfirmedAt: retryTime },
 		});
 		expect(recovered).toEqual({ ...retryStates, [refused]: state(refused, "empty", retryTime, []) });
 		expect(observed).toEqual({
 			keyMatched: true,
 			bearer: false,
 			oauth: false,
+			beforeFirstGet: [false, false],
 			initial: [true, false, false, 2],
 			additions: { [provider]: [{ id: "new", name: "new" }] },
+			contexts: [123456, null, true],
 			refusedProof: false,
 			whileRefreshing: false,
 			conflicted: [false, []],

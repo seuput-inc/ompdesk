@@ -217,6 +217,7 @@ src/main/checkout-peers.test.ts	tooling	-	Vitest suite: checkout peers.
 src/main/checkout-peers.ts	mixed	3	git.checkoutPlace, checkoutAliasDirs and checkoutStatus resolve paths and Git facts. The bridge publisher assigns seq before awaiting sends; agent-control reads peersOf synchronously to authorize reports. Move the pass with these callers, not the pure claim judgment alone (§1.3a,c).
 src/main/ci-queue.test.ts	tooling	-	Vitest suite: every macOS job of a dispatchable workflow.
 src/main/claude-key-models.test.ts	tooling	-	Vitest suite: model lists for individual Claude keys.
+src/main/claude-key-receipts.test.ts	tooling	-	Vitest suite: confirmed model IDs survive a restart but not a Claude key replacement or deletion.
 src/main/connectivity.test.ts	tooling	-	Vitest suite: ConnectivityMonitor.
 src/main/connectivity.ts	mixed	2	resume.probe connects to up to two shell-resolved addresses concurrently. Tauri enforces network policy and uncached resolution; main supplies proxy settings, OS events, timer callbacks and promises to the native connectivity hub.
 src/main/connector-accounts.test.ts	tooling	-	Vitest suite: a bot's Google sign-in kept sealed and read for Gmail.

@@ -164,7 +164,16 @@ describe("ModelPicker account availability", () => {
 		const fetchedAt = 1_800_000_000_000;
 		const state = { provider, fetchedAt, optional: false, stale: false, models: [] };
 		const other = "anthropic-api-key";
-		const failures = [provider, other].map(provider => ({ ...state, provider, status: "unavailable" as const }));
+		const failures = [
+			{
+				...state,
+				stale: true,
+				lastConfirmedAt: fetchedAt - 300_000,
+				models: ["last-confirmed-id"],
+				status: "unavailable" as const,
+			},
+			{ ...state, provider: other, status: "unavailable" as const },
+		];
 		useModelStore.setState({ discoveryStates: failures });
 		recent = { selectors: [`${provider}/opus`, `${other}/opus`] };
 		await mount(
@@ -178,6 +187,8 @@ describe("ModelPicker account availability", () => {
 		expect(document.body.textContent).toContain(
 			translate("providers.keyModelQueryFailed", { time: formatClock(fetchedAt) }),
 		);
+		expect(document.querySelector(`[data-key-query-failed="${provider}"] li`)?.textContent).toBe("last-confirmed-id");
+		expect(document.querySelector(`[data-key-query-failed="${other}"] li`)).toBeNull();
 		expect(document.querySelector('[role="option"]')).toBeNull();
 		expect(document.body.textContent).not.toContain(translate("modelPicker.connectProvider"));
 		const retry = (id: string) => document.querySelector<HTMLElement>(`[data-key-query-failed="${id}"] button`);

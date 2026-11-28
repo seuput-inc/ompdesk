@@ -2806,6 +2806,8 @@ export interface ProviderDiscoveryState {
 	optional: boolean;
 	stale: boolean;
 	fetchedAt?: number;
+	/** Timestamp of the last provider-confirmed key list when a later lookup failed. */
+	lastConfirmedAt?: number;
 	models: string[];
 	error?: string;
 }

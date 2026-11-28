@@ -49,6 +49,25 @@ function literals(ir: unknown): string[] {
 	return [];
 }
 export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
+	// This method table is also loaded in Node tests; only the Bun worker may load bun:sqlite.
+	"models.keyReceiptRegister": async params => {
+		const { dir, provider, fingerprint, confirmedAt, models } = params as {
+			dir: string;
+			provider: string;
+			fingerprint: string;
+			confirmedAt: number;
+			models: string[];
+		};
+		const { registerKeyReceipt } = await import("../claude-key-receipts");
+		registerKeyReceipt(dir, provider, fingerprint, confirmedAt, models);
+		return null;
+	},
+	"models.keyReceiptForget": async params => {
+		const { dir, provider } = params as { dir: string; provider: string };
+		const { forgetKeyReceipt } = await import("../claude-key-receipts");
+		forgetKeyReceipt(dir, provider);
+		return null;
+	},
 	"catalog.roster": async () => {
 		const schema = await stockSchema();
 		// Runtime-selected: catalog modules belong to the resolved omp installation.

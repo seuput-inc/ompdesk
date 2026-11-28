@@ -9,11 +9,15 @@ export function KeyQueryFailure({
 	provider,
 	account,
 	fetchedAt,
+	lastModels,
+	lastConfirmedAt,
 	disabled,
 }: {
 	provider: string;
 	account: string;
 	fetchedAt?: number;
+	lastModels?: readonly string[];
+	lastConfirmedAt?: number;
 	disabled: boolean;
 }) {
 	const t = useT();
@@ -36,6 +40,20 @@ export function KeyQueryFailure({
 					? t("providers.keyModelsUnavailable")
 					: t("providers.keyModelQueryFailed", { time: formatClock(fetchedAt) })}
 			</span>
+			{lastModels && (
+				<div className="w-full break-words">
+					{t(lastModels.length ? "providers.keyModelsLastSeen" : "providers.keyModelsLastEmpty", {
+						time: formatClock(lastConfirmedAt),
+					})}
+					{lastModels.length > 0 && (
+						<ul className="max-h-32 overflow-auto">
+							{lastModels.map(id => (
+								<li key={id}>{id}</li>
+							))}
+						</ul>
+					)}
+				</div>
+			)}
 			<Button
 				aria-label={t("providers.retryKeyModels", { account })}
 				disabled={disabled || busy}

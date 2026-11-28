@@ -1088,6 +1088,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/bridge-provider-logout-stock.test.ts",
 			"src/main/bridge-mcp-credentials-stock.test.ts",
 			"src/main/bridge-usage-live-stock.test.ts",
+			"src/main/models-config.test.ts",
 		],
 		changes: ["acfc2aab omp 18.18.2 changed logoutCredential's arguments; the provider disconnect threw a TypeError"],
 	},

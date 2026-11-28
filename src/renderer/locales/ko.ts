@@ -3150,6 +3150,8 @@ export const ko: Record<string, string> = {
 		"모델 목록을 확인하지 못했어요. 마지막 조회: {time}. 조회에 성공할 때까지 이 키의 모델을 선택할 수 없어요.",
 	"providers.keyModelsUnavailable":
 		"모델 목록을 확인하지 못했어요. 조회에 성공할 때까지 이 키의 모델을 선택할 수 없어요.",
+	"providers.keyModelsLastSeen": "{time}에 마지막으로 확인된 모델:",
+	"providers.keyModelsLastEmpty": "마지막으로 조회에 성공한 {time}에는 모델이 없었어요.",
 	"providers.retryKeyModels": "{account} 모델 목록 다시 조회",
 	"chat.claudeApi.used": "Claude API 키 · {key}",
 	"chat.claudeApi.skipped": "{key}: {reason} (건너뜀)",
