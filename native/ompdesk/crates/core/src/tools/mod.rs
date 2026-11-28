@@ -77,6 +77,7 @@
 mod cli;
 mod clock;
 mod ext;
+pub(crate) mod ipc;
 mod omp;
 mod queue;
 mod runner;
@@ -499,6 +500,34 @@ async fn schedule(tools: Weak<Tools>, updater: Updater) {
 
 thread_local! {
     static INSTANCES: RefCell<HashMap<u64, Rc<Tools>>> = RefCell::default();
+    static ACTIVE: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
+/// The active `tools` hub instance on the hub thread (most recently opened, falling back to any open one).
+pub(super) fn active_instance() -> Option<Rc<Tools>> {
+    INSTANCES.with(|instances| {
+        let instances = instances.borrow();
+        if let Some(id) = ACTIVE.with(Cell::get)
+            && let Some(tools) = instances.get(&id)
+        {
+            return Some(Rc::clone(tools));
+        }
+        instances
+            .iter()
+            .max_by_key(|(id, _)| *id)
+            .map(|(_, tools)| Rc::clone(tools))
+    })
+}
+
+#[cfg(test)]
+pub(super) fn install_for_test(id: u64, tools: Rc<Tools>) {
+    INSTANCES.with(|instances| instances.borrow_mut().insert(id, tools));
+    ACTIVE.with(|active| active.set(Some(id)));
+}
+
+#[cfg(test)]
+pub(super) fn remove_for_test(id: u64) {
+    close(id);
 }
 
 fn open(id: u64, opts: &RawValue, out: Out) -> Result<(), Fault> {
@@ -517,11 +546,20 @@ fn open(id: u64, opts: &RawValue, out: Out) -> Result<(), Fault> {
         queue::STEP_MAX_MS,
     );
     INSTANCES.with(|instances| instances.borrow_mut().insert(id, tools));
+    ACTIVE.with(|active| active.set(Some(id)));
     Ok(())
 }
 
 fn close(id: u64) {
-    let tools = INSTANCES.with(|instances| instances.borrow_mut().remove(&id));
+    let tools = INSTANCES.with(|instances| {
+        let mut instances = instances.borrow_mut();
+        let removed = instances.remove(&id);
+        if ACTIVE.with(Cell::get) == Some(id) {
+            let next = instances.keys().max().copied();
+            ACTIVE.with(|active| active.set(next));
+        }
+        removed
+    });
     if let Some(tools) = tools {
         tools.close();
     }

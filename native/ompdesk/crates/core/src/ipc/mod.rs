@@ -149,6 +149,14 @@ const OWNED: &[Owned] = &[
         handler: crate::aimemory::ipc::ipc_write_page,
     },
     Owned {
+        channel: "cli-update:get-state",
+        handler: crate::tools::ipc::ipc_cli_update_get_state,
+    },
+    Owned {
+        channel: "cli-update:now",
+        handler: crate::tools::ipc::ipc_cli_update_now,
+    },
+    Owned {
         channel: "draft-pictures:put",
         handler: crate::draft_pictures::ipc_put,
     },
@@ -161,8 +169,36 @@ const OWNED: &[Owned] = &[
         handler: crate::draft_pictures::ipc_remove,
     },
     Owned {
+        channel: "extension-update:get-state",
+        handler: crate::tools::ipc::ipc_extension_update_get_state,
+    },
+    Owned {
+        channel: "extension-update:now",
+        handler: crate::tools::ipc::ipc_extension_update_now,
+    },
+    Owned {
+        channel: "omp-update:get-state",
+        handler: crate::tools::ipc::ipc_omp_update_get_state,
+    },
+    Owned {
+        channel: "omp-update:now",
+        handler: crate::tools::ipc::ipc_omp_update_now,
+    },
+    Owned {
         channel: "preview:history",
         handler: crate::browsing::ipc_history,
+    },
+    Owned {
+        channel: "setup:cancel",
+        handler: crate::tools::ipc::ipc_setup_cancel,
+    },
+    Owned {
+        channel: "setup:get-state",
+        handler: crate::tools::ipc::ipc_setup_get_state,
+    },
+    Owned {
+        channel: "setup:retry",
+        handler: crate::tools::ipc::ipc_setup_retry,
     },
 ];
 

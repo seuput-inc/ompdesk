@@ -11,7 +11,7 @@ import type { RuntimeErrorSource } from "../../shared/ipc-types";
 import type { OmpUpdateState } from "../../shared/omp-update";
 import type { GitAslrResult, SetupItemState, SetupPlatform, SetupState } from "../../shared/setup";
 import { type HubItem, hub } from "../core/hub";
-import { isHubGivenUp } from "../core/process";
+import { core, isHubGivenUp } from "../core/process";
 import type { ExtensionApplyPlan } from "../extension-reload";
 import type { OmpResolution } from "../omp-runtime";
 import { writeRuntimeLog } from "../runtime-log";
@@ -146,6 +146,8 @@ export class ToolsClient {
 	#id: number | null = null;
 	/** `start` was called: an instance opened again on a new core starts again (setup detects, the timers run). */
 	#started = false;
+	/** Re-opens the hub instance when a restarted core comes up so direct core IPC always finds it live. */
+	#offReady: (() => void) | null = null;
 	/** The core's timers main runs, by the core's id (a `manual` instance). */
 	readonly #timers = new Map<number, NodeJS.Timeout>();
 
@@ -224,11 +226,19 @@ export class ToolsClient {
 	start(): boolean {
 		const id = this.#instance();
 		this.#started = true;
+		this.#offReady ??= core().on("ready", () => {
+			if (!this.#started || this.#id !== null || core().shuttingDown) return;
+			try {
+				this.#instance();
+			} catch {}
+		});
 		return hub().call<boolean>(id, "start");
 	}
 
 	/** The quit: the running step and what it started end, nothing queued runs. */
 	close(): void {
+		this.#offReady?.();
+		this.#offReady = null;
 		if (this.#id === null) return;
 		this.#started = false;
 		hub().call(this.#id, "close");

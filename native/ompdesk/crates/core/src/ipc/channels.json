@@ -17,10 +17,19 @@
 		"ai-memory:sessions",
 		"ai-memory:sweep",
 		"ai-memory:write-page",
+		"cli-update:get-state",
+		"cli-update:now",
 		"draft-pictures:put",
 		"draft-pictures:read",
 		"draft-pictures:remove",
-		"preview:history"
+		"extension-update:get-state",
+		"extension-update:now",
+		"omp-update:get-state",
+		"omp-update:now",
+		"preview:history",
+		"setup:cancel",
+		"setup:get-state",
+		"setup:retry"
 	],
 	"send": []
 }
