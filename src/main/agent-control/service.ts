@@ -52,6 +52,7 @@ import type {
 	IpcTabWorktree,
 	TabStatus,
 } from "../../shared/ipc-types";
+import type { ItemsV2Reply, ItemsV2Request } from "../../shared/items-v2";
 import type {
 	AgentMessage,
 	ExtensionUIRequest,
@@ -485,6 +486,8 @@ export interface AgentControlHost {
 	closedChildren?(): readonly ClosedChild[];
 	/** The bots state changed in the core (`botsChanged`): main keeps it and tells every window. */
 	botsChanged?(state: BotsState): void;
+	itemsV2Changed?(): void;
+	remoteItemsQuery?(device: string, request: ItemsV2Request): Promise<ItemsV2Reply>;
 	/** A session handed to a bot: `openerTabId` (the bot's home chat) becomes `tabId`'s opener, as the pool keeps one. */
 	setOpener?(tabId: string, openerTabId: string): void;
 	/** A paired host's bot by name (`host.bots.home`): its home chat file; the host refuses unless this computer is in its reach. */
@@ -991,6 +994,14 @@ export class AgentControl {
 		return this.#call("bots", request as unknown as Record<string, unknown>);
 	}
 
+	itemsQuery<R extends ItemsV2Request>(device: string | null, request: R): Promise<ItemsV2Reply<R>> {
+		return this.#call("itemsQuery", { request: { ...request, device } });
+	}
+
+	itemsQueryFrom<R extends ItemsV2Request>(request: R): Promise<ItemsV2Reply<R>> {
+		return this.#call("itemsQueryFrom", { request });
+	}
+
 	/** A quiet note (no turn) into a session file on this computer: now when a tab holds it, else when one opens it. */
 	noteSession(sessionPath: string, text: string): Promise<void> {
 		return this.#call("noteSession", { sessionPath, text });
@@ -1416,6 +1427,11 @@ export class AgentControl {
 					if (!host.botsCommand) throw new Error("Paired computers' bots are not reachable here.");
 					return host.botsCommand(where, request);
 				}),
+			remoteItemsQuery: ({ device, request }: { device: string; request: ItemsV2Request }) =>
+				coded(() => {
+					if (!host.remoteItemsQuery) throw new Error("Paired computers' items are not reachable here.");
+					return host.remoteItemsQuery(device, request);
+				}),
 			botsRoomPostTo: ({ device: where, post }: { device: string; post: unknown }) =>
 				coded(() => ({ sent: host.botsRoomPostTo?.(where, post) ?? false })),
 			connectorCredential: ({ service, account }: { service: string; account: string }) =>
@@ -1455,6 +1471,7 @@ export class AgentControl {
 			closedChildren: ({ rows }: { rows: ClosedChild[] }) => tell(() => host.runtime?.closedChildren(rows)),
 			sessionFatesChanged: () => told(() => host.runtime?.sessionFatesChanged?.()),
 			botsChanged: ({ state }: { state: BotsState }) => told(() => host.botsChanged?.(state)),
+			itemsV2Changed: () => told(() => host.itemsV2Changed?.()),
 			botsShared: ({ change }: { change: SharedBotsDelta }) => told(() => host.botsShared?.(change)),
 			wakeDone: ({ runId, code, error }: { runId: string; code: number | null; error?: string }) =>
 				told(() => host.runtime?.wakeDone(runId, { code, ...(error === undefined ? {} : { error }) })),

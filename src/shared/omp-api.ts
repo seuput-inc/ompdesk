@@ -33,7 +33,14 @@ import type {
 } from "./ai-memory";
 import { BOT_CONNECTORS_COMMAND } from "./bot-connector-channels";
 import type { BotConnectorsApi } from "./bot-connectors";
-import { BOTS_COMMAND, BOTS_STATE, type BotDeletePreview, type BotsState } from "./bots";
+import {
+	BOTS_COMMAND,
+	BOTS_STATE,
+	type BotDeletePreview,
+	type BotsState,
+	ITEMS_V2_CHANGED,
+	ITEMS_V2_QUERY,
+} from "./bots";
 import type { CliToolId, CliUpdateState } from "./cli-update";
 import type { CreditSpendState } from "./credit-spend";
 import type { DiagnosticBundleRequest, DiagnosticBundleResult } from "./diagnostic-bundle";
@@ -290,6 +297,8 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			},
 		},
 		bots: {
+			itemsV2: (device, request) => transport.invoke(ITEMS_V2_QUERY, device, request),
+			onItemsV2Changed: callback => subscribe(ITEMS_V2_CHANGED, callback),
 			command: async request => {
 				if (request.action !== "delete") return transport.invoke<BotsState>(BOTS_COMMAND, request);
 				const state = await transport.invoke<BotsState>(BOTS_COMMAND, {

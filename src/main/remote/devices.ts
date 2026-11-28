@@ -36,6 +36,13 @@ import {
 	type SessionInfo,
 	type TailnetComputer,
 } from "../../shared/ipc-types";
+import {
+	type ItemsV2Reply,
+	type ItemsV2Request,
+	ItemsV2RequestSchema,
+	parseItemsV2Reply,
+	projectLegacyItemsV2,
+} from "../../shared/items-v2";
 import { allowedLogin } from "../../shared/mobile-web";
 import type { OmpUpdateState } from "../../shared/omp-update";
 import type { SchedulesState } from "../../shared/schedules";
@@ -67,6 +74,9 @@ import {
 	DEVICE_RENAME_EVENT,
 	DeviceNameSchema,
 	HOST_NAME_EVENT,
+	ITEMS_V2_CHANGED,
+	ITEMS_V2_METHOD,
+	ItemsV2Changed,
 	KEPT_TABS_METHOD,
 	KeptTab,
 	KeptTabsReply,
@@ -208,6 +218,9 @@ const OFFLINE_SUMMARIES: VersionedSummaries = { version: "offline", sessions: []
 
 interface HostLink {
 	client: RemoteClient;
+	itemsEpoch: number;
+	itemsMode?: "legacy" | "v2";
+	itemsFeedRequested?: boolean;
 	/** rtab → tab on this host. */
 	tabs: Map<string, RemoteSidecar>;
 	/** Tabs closed here while the host was unreachable; it is told when the link is back. */
@@ -236,6 +249,7 @@ export class RemoteDevices {
 	/** Every host's transcripts this device read (subagent journals, tail pages): one folder for all tabs and hosts. */
 	readonly #transcripts: TranscriptCache;
 	readonly #links = new Map<string, HostLink>();
+	readonly #itemsListeners = new Set<(device: string, reseed: boolean) => void>();
 	/** Stand-ins here for the dev servers of host tabs (`hostPort`). */
 	readonly #ports = new DevicePortTunnels(deviceId =>
 		this.#links.has(deviceId) ? (method, params) => this.request(deviceId, method, params) : null,
@@ -845,6 +859,49 @@ export class RemoteDevices {
 		this.#deps.services.botsChanged(change);
 	}
 
+	itemsV2Changed(): void {
+		this.#deps.services.itemsV2Changed();
+	}
+
+	onItemsV2Changed(listener: (device: string, reseed: boolean) => void): () => void {
+		this.#itemsListeners.add(listener);
+		return () => this.#itemsListeners.delete(listener);
+	}
+
+	async itemsV2<R extends ItemsV2Request>(device: string, request: R): Promise<ItemsV2Reply<R>> {
+		ItemsV2RequestSchema.parse(request);
+		const link = this.#links.get(device);
+		if (!link) throw codedError("remote_unknown_device", "The device is not paired");
+		const epoch = link.itemsEpoch;
+		const stillConnected = () => {
+			if (link.itemsEpoch !== epoch || link.client.state !== "online" || this.#links.get(device) !== link)
+				throw codedError("remote_offline", "The device connection changed");
+		};
+		stillConnected();
+		if (request.action === "itemsFeed") link.itemsFeedRequested = true;
+		if (link.itemsMode !== "legacy") {
+			try {
+				const raw = await link.client.request<unknown>(ITEMS_V2_METHOD, request);
+				stillConnected();
+				const reply = parseItemsV2Reply(request, raw);
+				link.itemsMode = "v2";
+				return reply;
+			} catch (error) {
+				if (
+					!(error instanceof RemoteError) ||
+					error.code !== "unsupported" ||
+					error.message !== `[unsupported] Unknown method ${ITEMS_V2_METHOD}`
+				)
+					throw error;
+				stillConnected();
+				link.itemsMode = "legacy";
+			}
+		}
+		const raw = await link.client.request<unknown>("host.bots.list", {});
+		stillConnected();
+		return projectLegacyItemsV2(request, raw);
+	}
+
 	/** One of this computer's bots posted in device `device`'s group: told to that device; false while it is not connected. */
 	hostBotsRoomPost(device: string, post: unknown): boolean {
 		return this.#deps.services.botsRoomPost(device, post);
@@ -1000,6 +1057,7 @@ export class RemoteDevices {
 		});
 		const link: HostLink = {
 			client,
+			itemsEpoch: 0,
 			tabs: new Map(),
 			closes: new PendingTabCloses(),
 			sessions: new HostSessionList(deviceId, {
@@ -1016,6 +1074,8 @@ export class RemoteDevices {
 			if (state !== "online") this.#ports.linkLost(deviceId);
 			// What the host worked on is unknown while the link is down: its rows go quiet rather than stay lit.
 			if (state !== "online") {
+				link.itemsEpoch++;
+				link.itemsMode = undefined;
 				this.#deps.modelWait?.setHostCounts(deviceId, undefined);
 				if (link.summaries) {
 					link.summaries = undefined;
@@ -1030,6 +1090,7 @@ export class RemoteDevices {
 				void this.#tellBots(deviceId, { online: false });
 				return;
 			}
+			if (link.itemsFeedRequested) for (const listener of this.#itemsListeners) listener(deviceId, true);
 			void this.#readBots(deviceId, link);
 			void this.#exchangeDeviceOrder(deviceId, link);
 			link.closes.flush(rtab => client.request("tab.close", { rtab }));
@@ -1073,9 +1134,16 @@ export class RemoteDevices {
 						.catch(() => {});
 				return;
 			}
+			if (event === ITEMS_V2_CHANGED) {
+				if (link.itemsFeedRequested && client.state === "online" && ItemsV2Changed.safeParse(data).success)
+					for (const listener of this.#itemsListeners) listener(deviceId, false);
+				return;
+			}
 			if (event === BOTS_EVENT) {
 				const change = SharedBotsDeltaSchema.safeParse(data);
 				if (!change.success || link.client.state !== "online") return;
+				if (link.itemsMode === "legacy" && link.itemsFeedRequested)
+					for (const listener of this.#itemsListeners) listener(deviceId, true);
 				void this.#tellBots(deviceId, { online: true, change: change.data }).then(applied => {
 					// A change on a version this computer does not hold: it missed one, so it reads the whole copy.
 					if (applied === false) void this.#readBots(deviceId, link);

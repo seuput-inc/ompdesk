@@ -31,10 +31,15 @@ pub(crate) struct Rows {
 }
 
 fn copy_row(row: &Value, kind: Kind) -> Value {
-    let mut row = row.clone();
-    if kind == Kind::Bots
-        && let Some(fields) = row.as_object_mut()
-    {
+    if kind == Kind::Bots {
+        peer_bot(row.clone())
+    } else {
+        row.clone()
+    }
+}
+
+pub(super) fn peer_bot(mut row: Value) -> Value {
+    if let Some(fields) = row.as_object_mut() {
         let workers = fields
             .remove("workers")
             .or_else(|| fields.remove("workerLinks"));

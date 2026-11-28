@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 mod mail;
 pub(crate) use mail::{ItemMail, ItemMailState};
+mod queries;
 mod storage;
 
 /// `ITEM_STATUSES`.
@@ -335,6 +336,7 @@ pub struct Items {
     items: Vec<ItemRecord>,
     by_id: HashMap<String, usize>,
     last_event: u64,
+    feed: queries::Feed,
 }
 
 impl Items {

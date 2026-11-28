@@ -110,7 +110,7 @@ import {
 import { sweepStaleTemps } from "./atomic-file";
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
-import { botsStateNow, onBotsState } from "./bots";
+import { botsStateNow, ItemFeedViewers, onBotsState } from "./bots";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
 import { answersWithin, ConnectivityMonitor, PROBE_TIMEOUT_MS, probeTarget, reaches } from "./connectivity";
 import { ConnectorAccounts } from "./connector-accounts";
@@ -2205,10 +2205,11 @@ app.whenReady().then(async () => {
 			return made.path;
 		},
 	});
-	// The Bots page of every window follows the core's bots state (BOTS_STATE).
+	const desktopItemFeeds = new ItemFeedViewers<number>();
 	onBotsState(state => {
 		for (const win of BrowserWindow.getAllWindows()) {
-			if (!win.isDestroyed()) win.webContents.send(BOTS_STATE, state);
+			if (!win.isDestroyed() && desktopItemFeeds.wantsLegacy(win.webContents.id))
+				win.webContents.send(BOTS_STATE, state);
 		}
 	});
 	scheduleService = new ScheduleService({
@@ -2704,6 +2705,8 @@ app.whenReady().then(async () => {
 		logWatcher,
 		windowManager,
 		remoteDevices: devices,
+		itemsWebRouter: () => webHost?.router,
+		desktopItemFeeds,
 		hostedTabs: hostServices,
 		summaries: sessionSummaries,
 		webTabNotice,

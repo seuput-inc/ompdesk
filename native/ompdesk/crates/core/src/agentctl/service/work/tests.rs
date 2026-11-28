@@ -5,6 +5,7 @@
 
 mod bot_provenance;
 mod item_mail;
+mod items_feed;
 mod owner_replay;
 mod peer_create;
 

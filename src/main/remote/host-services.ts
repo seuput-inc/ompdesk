@@ -57,6 +57,7 @@ import {
 	type RemoteOpenedTab,
 	type SessionInfo,
 } from "../../shared/ipc-types";
+import { ItemsV2RequestSchema, parseItemsV2Reply } from "../../shared/items-v2";
 import { ModelSetupRequestSchema, ModelSetupResearchPickSchema } from "../../shared/model-setup";
 import type { OmpUpdateState } from "../../shared/omp-update";
 import { MAX_RPC_COMMAND_TIMEOUT_MS } from "../../shared/rpc-client";
@@ -193,6 +194,8 @@ import {
 	HostFsReadRangeParams,
 	HostUploadParams,
 	HostUploadPartParams,
+	ITEMS_V2_CHANGED,
+	ITEMS_V2_METHOD,
 	KEPT_TABS_METHOD,
 	type KeptTab,
 	MEMORY_METHODS,
@@ -789,6 +792,9 @@ export class LocalHostServices implements HostServices {
 	});
 	/** Live connections that have talked to us; `sessions.changed` goes to each. */
 	readonly #conns = new Set<HostConnection>();
+	readonly #itemsReaders = new Set<HostConnection>();
+	readonly #legacyBotReaders = new WeakSet<HostConnection>();
+	#itemsRevision = 0;
 	/** Each connected device's latest connection, for events meant for one device. */
 	readonly #connOf = new Map<string, HostConnection>();
 	readonly #itemChecks = new Map<
@@ -1971,7 +1977,20 @@ export class LocalHostServices implements HostServices {
 			}
 			// A device lists this computer's bots (orca-bots-remote): the copy it keeps, at its version.
 			case "host.bots.list":
+				this.#legacyBotReaders.add(conn);
 				return this.#bots().share();
+			case ITEMS_V2_METHOD: {
+				const request = parse(ItemsV2RequestSchema, method, params);
+				const bots = this.#bots();
+				if (!bots.itemsV2) throw new Error("Item reads are unavailable");
+				const revision = this.#itemsRevision;
+				const reply = parseItemsV2Reply(request, await bots.itemsV2(request));
+				if (request.action === "itemsFeed" && this.#conns.has(conn)) {
+					this.#itemsReaders.add(conn);
+					if (revision !== this.#itemsRevision) emitSafely(conn, ITEMS_V2_CHANGED, { protocol: 2 });
+				}
+				return reply;
+			}
 			// A device's change to one of this computer's bots: made here, once (a resent answer carries its request id).
 			// An answer to an item question, and a device group's question to a bot here, start a turn of the bot here:
 			// one of the device's model requests.
@@ -2078,6 +2097,8 @@ export class LocalHostServices implements HostServices {
 	disconnected(peer: PeerInfo, conn: HostConnection): void {
 		this.#conns.delete(conn);
 		for (const check of this.#itemChecks.values()) if (check.conn === conn) check.answer(false);
+		this.#itemsReaders.delete(conn);
+		this.#legacyBotReaders.delete(conn);
 		if (this.#connOf.get(peer.deviceId) === conn) this.#connOf.delete(peer.deviceId);
 		if (this.#connOf.get(peer.deviceId) === undefined) this.#deps.presence?.forget(peer.deviceId);
 		// Nobody is left to read the result.
@@ -2196,10 +2217,16 @@ export class LocalHostServices implements HostServices {
 		for (const conn of this.#conns) emitSafely(conn, PROJECTS_EVENT, state);
 	}
 
-	/** What devices list of this computer's bots changed (the core's `botsShared`): every connected device follows. */
+	/** A v2-only connection never needs a v1 body. Unnegotiated and mixed readers retain the old stream. */
 	botsChanged(change: SharedBotsDelta): void {
-		for (const conn of this.#conns) emitSafely(conn, BOTS_EVENT, change);
+		for (const conn of this.#conns)
+			if (!this.#itemsReaders.has(conn) || this.#legacyBotReaders.has(conn)) emitSafely(conn, BOTS_EVENT, change);
 		if (change.set.bots.length || change.set.items.length || change.remove.items.length) this.observeBotHomes();
+	}
+
+	itemsV2Changed(): void {
+		this.#itemsRevision++;
+		for (const conn of this.#itemsReaders) emitSafely(conn, ITEMS_V2_CHANGED, { protocol: 2 });
 	}
 
 	observeBotHomes(device?: string): void {
@@ -2452,6 +2479,7 @@ export class LocalHostServices implements HostServices {
 		this.#relays.dispose();
 		this.#ports.dispose();
 		this.#conns.clear();
+		this.#itemsReaders.clear();
 	}
 
 	/** The tab's browser relay ends here (its device is gone): forget it and tell the tab's omp to give its browser back. */

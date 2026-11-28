@@ -225,6 +225,7 @@ pub struct Inner {
     bot_moves: tokio::sync::Mutex<()>,
     items: Mutex<Items>,
     peer_receipts: Mutex<paired_item::Receipts>,
+    items_feed: Mutex<work::items_feed::Views>,
     item_delivery: tokio::sync::Mutex<()>,
     /// The bot groups and their rooms (`rooms.json` beside `items.json`); never held with `bots` or `items`.
     rooms: Mutex<Rooms>,
@@ -399,6 +400,7 @@ impl AgentControl {
             bot_moves: Default::default(),
             items: Mutex::new(items),
             peer_receipts: Mutex::new(paired_item::Receipts::new(files.items.as_deref())),
+            items_feed: Default::default(),
             item_delivery: Default::default(),
             rooms: Mutex::new(Rooms::new(
                 files
@@ -1594,6 +1596,19 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
         }
         // The owner's own change to the bots or their items (`BotsRequest`, Settings and the Bots page): the state after.
         "bots" => reply(control.bots_command(args).await),
+        "itemsQuery" | "itemsQueryFrom" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Read {
+                request: Value,
+            }
+            let Read { request } = args_of(args, method)?;
+            if method == "itemsQueryFrom" {
+                reply(control.items_query_from(&request))
+            } else {
+                reply(control.items_query(request).await)
+            }
+        }
         // A paired device asks for a bot's home chat by name (`host.bots.home`): refused unless that device may reach it.
         "botHome" => reply(control.bot_home(
             &text_arg(&args, "name", method)?,

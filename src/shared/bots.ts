@@ -10,6 +10,7 @@
  * Dependency-free (types aside).
  */
 import type { LOOK_EVERY } from "./bot-limits";
+import type { ItemsV2Reply, ItemsV2Request } from "./items-v2";
 import type { ModelRolesResult } from "./rpc-types";
 import type { ScheduleEvent, ScheduleFrequency } from "./schedules";
 import type { ApprovalMode } from "./tool-approval";
@@ -21,6 +22,12 @@ import type { ApprovalMode } from "./tool-approval";
 export const BOTS_AVAILABLE = true;
 export const BOTS_COMMAND = "bots:command";
 export const BOTS_STATE = "bots:state";
+export const ITEMS_V2_QUERY = "bots:itemsV2";
+export const ITEMS_V2_CHANGED = "bots:itemsV2Changed";
+export interface ItemsV2Change {
+	device: string | null;
+	reseed: boolean;
+}
 
 /** Where a new bot's folder goes, under the home folder, unless the owner picks one. */
 export const BOTS_FOLDER = ".omp/bots";
@@ -539,6 +546,8 @@ export type BotsAnswer<C extends BotsCall> = C extends BotFileRequest
 						: BotsState;
 
 export interface BotsApi {
+	itemsV2<R extends ItemsV2Request>(device: string | null, request: R): Promise<ItemsV2Reply<R>>;
+	onItemsV2Changed(callback: (change: ItemsV2Change) => void): () => void;
 	command(request: BotsRequest): Promise<BotsState>;
 	createFolder(name: string, device?: string): Promise<BotFolderPreview>;
 	createModels(device?: string): Promise<ModelRolesResult>;

@@ -36,6 +36,13 @@ use crate::agentctl::journal::mail_outbox::{
 use crate::agentctl::journal::write_text;
 use crate::agentctl::rules::mail::{Mail, MailKind, delivery_for, mail_details, mail_text};
 
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum BotView {
+    Legacy,
+    Local,
+    Peer,
+}
+
 /// The longest bot name.
 const NAME_MAX: usize = 80;
 /// What a bot chat's omp is given to take its context.
@@ -230,6 +237,11 @@ impl AgentControl {
     /// Something of the bots or their items changed: held mail follows the pauses, paired devices hear what changed of
     /// this computer's bots (`botsShared`, nothing when nothing they get changed), and main hears the new state.
     pub(crate) fn bots_changed(&self) {
+        self.items_v2_changed(true);
+        self.legacy_bots_changed();
+    }
+
+    pub(super) fn legacy_bots_changed(&self) {
         self.hold_paused();
         let own = self.own_bots_state();
         let change = self.across().share.take(&own);
@@ -263,7 +275,30 @@ impl AgentControl {
         let bots: Vec<BotRecord> = self.bots().all().to_vec();
         let items = self.items().v1(now);
         let state = self.host.state();
-        let looks: Vec<Value> = {
+        let mut snapshot = self.bot_metadata(&bots, &state, now, BotView::Legacy);
+        snapshot["items"] = Value::Array(
+            items
+                .iter()
+                .map(|item| {
+                    let bot = bots.iter().find(|bot| bot.id == item.bot);
+                    serde_json::to_value(self.read_item(&state, bot, item, now))
+                        .unwrap_or(Value::Null)
+                })
+                .collect(),
+        );
+        snapshot
+    }
+
+    pub(super) fn bot_metadata(
+        &self,
+        bots: &[BotRecord],
+        state: &super::super::host::HostState,
+        now: f64,
+        view: BotView,
+    ) -> Value {
+        let looks: Vec<Value> = if view == BotView::Peer {
+            Vec::new()
+        } else {
             let looks = self.looks();
             bots.iter()
                 .filter(|bot| bot.look().on)
@@ -320,26 +355,27 @@ impl AgentControl {
                         .map(|worker| worker_json(worker, &state.tabs))
                         .collect::<Vec<Value>>()
                 );
-                value["launch"] = json!(self.bot_launch(bot));
-                value
+                if view == BotView::Peer {
+                    super::bots_share::peer_bot(value)
+                } else {
+                    value["launch"] = json!(self.bot_launch(bot, view == BotView::Legacy));
+                    value
+                }
             })
             .collect();
-        let items_json: Vec<Value> = items
-            .iter()
-            .map(|item| {
-                let bot = bots.iter().find(|bot| bot.id == item.bot);
-                serde_json::to_value(self.read_item(&state, bot, item, now)).unwrap_or(Value::Null)
-            })
-            .collect();
-        let rooms_json = serde_json::to_value(self.rooms().all()).unwrap_or_else(|_| json!([]));
-        json!({ "bots": bots_json, "items": items_json, "rooms": rooms_json, "looks": looks })
+        if view == BotView::Peer {
+            json!({ "bots": bots_json })
+        } else {
+            let rooms = serde_json::to_value(self.rooms().all()).unwrap_or_else(|_| json!([]));
+            json!({ "bots": bots_json, "rooms": rooms, "looks": looks })
+        }
     }
 
     /// The flags each chat of `bot` starts with (main adds them to every spawn in its folder): the approval mode its
     /// owner picked (`--approval-mode`, stock's runtime override), and a settings overlay naming its skill projects'
     /// skill folders (`--config`, `skills.customDirectories`). Shortcut: the overlay stands in for a global
     /// `skills.customDirectories` in the bot's chats; merge the two when someone needs both.
-    fn bot_launch(&self, bot: &BotRecord) -> Vec<String> {
+    fn bot_launch(&self, bot: &BotRecord, prepare: bool) -> Vec<String> {
         let mut flags: Vec<String> = Vec::new();
         if let Some(mode) = &bot.chat_approval {
             flags.extend(["--approval-mode".to_owned(), mode.clone()]);
@@ -348,6 +384,10 @@ impl AgentControl {
             && let Some(dir) = &self.bot_config_dir
         {
             let file = dir.join(format!("{}.yml", bot.id));
+            if !prepare {
+                flags.extend(["--config".to_owned(), file.to_string_lossy().into_owned()]);
+                return flags;
+            }
             let folders: Vec<String> = bot
                 .skill_projects
                 .iter()
@@ -829,6 +869,8 @@ impl AgentControl {
         changed |= self.settle_item_links(&state);
         if changed {
             self.bots_changed();
+        } else {
+            self.observe_items_v2(&state);
         }
     }
 
@@ -1762,7 +1804,7 @@ impl AgentControl {
             .copies
             .apply(device, &name, true, Some(&answer));
         if applied {
-            self.bots_changed();
+            self.legacy_bots_changed();
         }
         Ok(with_command_outcome(self.bots_state(), answer))
     }
@@ -1865,7 +1907,7 @@ impl AgentControl {
             }
         };
         if applied {
-            self.bots_changed();
+            self.legacy_bots_changed();
         }
         json!({ "applied": applied })
     }

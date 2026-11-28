@@ -674,6 +674,46 @@ describe("the tabs a host keeps for this device", () => {
 		expect(await a.devices.deletedOnHost(hostId, ["/s/a.jsonl"])).toBeNull();
 	});
 
+	it("projects an old host only after its unknown-method response, not a broken v2 read", async () => {
+		const { a, b, hostId } = await rig.connected();
+		const feed = { protocol: 2, action: "itemsFeed" } as const;
+		const method = "host.bots.itemsV2";
+		let unavailable = false;
+		let lists = 0;
+		b.services.call.mockImplementation(async (_peer, name) => {
+			if (name === method) throw new Error(unavailable ? `[unsupported] Unknown method ${method}` : "read failed");
+			if (name !== "host.bots.list") return null;
+			lists++;
+			return { version: "epoch.9", state: { items: [], bots: [] } };
+		});
+		await expect(a.devices.itemsV2(hostId, feed)).rejects.toThrow("read failed");
+		const before = lists;
+		unavailable = true;
+		await expect(a.devices.itemsV2(hostId, feed)).resolves.toMatchObject({ protocol: 2, kind: "seed", legacy: true });
+		expect(lists).toBe(before + 1);
+	});
+
+	it("delivers validated v2 invalidations to readers without another bots.list", async () => {
+		const { a, b, hostId } = await rig.connected();
+		const seed = { protocol: 2, kind: "seed", version: "epoch.1", counts: {}, bots: [], open: [] };
+		b.services.call.mockImplementation(async (_peer, method) => (method === "host.bots.itemsV2" ? seed : null));
+		expect(await a.devices.itemsV2(hostId, { protocol: 2, action: "itemsFeed" })).toEqual(seed);
+		const conn = b.services.call.mock.calls.find(call => call[1] === "host.bots.itemsV2")?.[3] as HostConnection;
+		const before = b.services.call.mock.calls.filter(call => call[1] === "host.bots.list").length;
+		const heard = vi.fn();
+		a.devices.onItemsV2Changed(heard);
+		conn.emit("host.bots.itemsV2Changed", { protocol: 2, extra: true });
+		conn.emit("host.bots.itemsV2Changed", { protocol: 2 });
+		await vi.waitFor(() => expect(heard).toHaveBeenCalledExactlyOnceWith(hostId, false));
+		expect(b.services.call.mock.calls.filter(call => call[1] === "host.bots.list")).toHaveLength(before);
+		await b.devices.setHostEnabled(false);
+		await until(a, state => state.hosts[0]?.state !== "online");
+		await b.devices.setHostEnabled(true);
+		a.devices.wake("resume");
+		await vi.waitFor(() => expect(heard).toHaveBeenLastCalledWith(hostId, true), { timeout: 5_000 });
+		expect(b.services.call.mock.calls.filter(call => call[1] === "host.bots.itemsV2")).toHaveLength(1);
+	});
+
 	it("holds the host's session summaries: read as the link comes up, a delta on the held version applied, any other version read whole, quiet while offline", async () => {
 		const { a, b } = await rig.pair();
 		let whole = { version: "e.1", sessions: [summary("/s/a.jsonl")] };

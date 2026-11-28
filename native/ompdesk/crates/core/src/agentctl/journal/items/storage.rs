@@ -11,7 +11,7 @@ use crate::agentctl::rules::mail::Mail;
 #[path = "open.rs"]
 mod open;
 
-fn sql(error: rusqlite::Error) -> io::Error {
+pub(super) fn sql(error: rusqlite::Error) -> io::Error {
     let kind = match error.sqlite_error_code() {
         Some(ErrorCode::DiskFull) => io::ErrorKind::StorageFull,
         Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) => io::ErrorKind::WouldBlock,
@@ -181,6 +181,7 @@ impl Items {
 #[derive(Serialize)]
 struct Changed<'a> {
     id: &'a str,
+    bot: &'a str,
     version: u32,
 }
 
@@ -189,6 +190,8 @@ struct Outcome<'a> {
     ids: &'a [&'a str],
     changed: Vec<Changed<'a>>,
     refused: Option<&'a str>,
+    #[serde(rename = "refusedItems", skip_serializing_if = "Vec::is_empty")]
+    refused_items: Vec<(&'a str, &'a str, Option<u64>)>,
 }
 
 impl Items {
@@ -242,6 +245,7 @@ impl Items {
         {
             *entry = last;
         }
+        self.feed.change(None, Some(&item));
         self.last_event = next;
         self.by_id.insert(item.id.clone(), self.items.len());
         let result = item.clone();
@@ -291,6 +295,7 @@ impl Items {
         let tx = self.db.transaction().map_err(sql)?;
         update(&tx, old, &mut item, &mut next)?;
         tx.commit().map_err(sql)?;
+        self.feed.change(Some(old), Some(&item));
         self.last_event = next;
         let result = item.clone();
         self.items[at] = item;
@@ -318,10 +323,17 @@ impl Items {
             )
             .optional()
             .map_err(sql)?;
-        text.as_deref()
-            .map(serde_json::from_str)
-            .transpose()
-            .map_err(Into::into)
+        let Some(text) = text else { return Ok(None) };
+        let mut result: serde_json::Value = serde_json::from_str(&text)?;
+        if let Some(fields) = result.as_object_mut() {
+            fields.remove("refusedItems");
+            if let Some(changes) = fields.get_mut("changed").and_then(|v| v.as_array_mut()) {
+                for change in changes.iter_mut().filter_map(|v| v.as_object_mut()) {
+                    change.remove("bot");
+                }
+            }
+        }
+        Ok(Some(result))
     }
 
     pub fn has_request(&self, id: &str, request: &str) -> io::Result<bool> {
@@ -334,13 +346,14 @@ impl Items {
             .map_err(sql)
     }
 
-    pub fn commit_owner(
+    pub fn commit_owner_scoped(
         &mut self,
         mut changes: Vec<ItemRecord>,
         request_id: Option<&str>,
         refused: Option<&str>,
         mails: &[(String, Mail)],
         ids: &[&str],
+        refused_items: &[(&str, Option<u64>)],
     ) -> io::Result<()> {
         let mut next = self.last_event;
         let tx = self.db.transaction().map_err(sql)?;
@@ -361,10 +374,21 @@ impl Items {
                     .iter()
                     .map(|item| Changed {
                         id: &item.id,
+                        bot: &item.bot,
                         version: item.version,
                     })
                     .collect(),
                 refused,
+                refused_items: refused_items
+                    .iter()
+                    .map(|&(id, question)| {
+                        let at = self
+                            .by_id
+                            .get(id)
+                            .ok_or_else(|| invalid("missing refused item"))?;
+                        Ok((self.items[*at].bot.as_str(), id, question))
+                    })
+                    .collect::<io::Result<_>>()?,
             };
             tx.execute(
                 "INSERT INTO item_request(id,result_json) VALUES (?1,?2)",
@@ -386,6 +410,7 @@ impl Items {
         self.last_event = next;
         for item in changes {
             let at = self.by_id[&item.id];
+            self.feed.change(Some(&self.items[at]), Some(&item));
             self.items[at] = item;
         }
         Ok(())
@@ -432,6 +457,7 @@ impl Items {
         if deleted != 0 {
             self.items.retain(|item| {
                 if item.bot == bot {
+                    self.feed.change(Some(item), None);
                     self.by_id.remove(&item.id);
                     false
                 } else {

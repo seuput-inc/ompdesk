@@ -14,7 +14,7 @@
  * event that ends its connection, and a call's answer (`web.reply`) leaves after every push main made before it.
  */
 import { hash } from "node:crypto";
-import { BOTS_COMMAND, BOTS_STATE } from "../../shared/bots";
+import { BOTS_COMMAND, BOTS_STATE, ITEMS_V2_CHANGED } from "../../shared/bots";
 import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICE_CONNECTED, WEB_DEVICES_CHANGED, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
@@ -30,6 +30,7 @@ import {
 	type WebInvokeError,
 	type WebPermission,
 } from "../../shared/web-protocol";
+import { ItemFeedViewers } from "../bots";
 import { CORE_EXITED, type CoreProcess, core } from "../core/process";
 import { deliverOnce } from "../delivery-ledger";
 import { removedModeRefusal } from "../local/modes";
@@ -318,6 +319,7 @@ export class WsRouter {
 	readonly #deps: WsRouterDeps;
 	/** Each connected device's connections, as the core last told them. */
 	readonly #connections = new Map<string, PageConnection[]>();
+	readonly #itemsFeeds = new ItemFeedViewers<string>();
 	/** The device that last sent each tab a model command: it is charged that tab's tokens. */
 	readonly #drivers = new Map<string, string>();
 	/** A streamed push's data JSON, made once for every device that gets the pool's very push object. */
@@ -410,6 +412,23 @@ export class WsRouter {
 		}
 	}
 
+	readItemsFeed<T>(connId: string, device: string | null, query: () => Promise<T>): Promise<T> {
+		for (const connections of this.#connections.values()) {
+			if (connections.some(page => page.connId === connId))
+				return this.#itemsFeeds.read(
+					connId,
+					device,
+					notice => this.deliverToConnection(connId, ITEMS_V2_CHANGED, notice),
+					query,
+				);
+		}
+		throw new Error("The requesting page disconnected");
+	}
+
+	itemsV2Changed(device: string | null, reseed: boolean): void {
+		this.#itemsFeeds.changed(device, reseed);
+	}
+
 	/** A push the pool or a handler made to the device's window. */
 	deliver(deviceId: string, channel: string, payload: unknown): void {
 		this.#recordTokens(deviceId, channel, payload);
@@ -471,6 +490,11 @@ export class WsRouter {
 
 	/** The core's word on a device's connections. */
 	connections(event: ConnsEvent): void {
+		if (event.change !== "presence") {
+			for (const page of this.#connections.get(event.device) ?? []) {
+				if (!event.conns.some(current => current.connId === page.connId)) this.#itemsFeeds.forget(page.connId);
+			}
+		}
 		if (event.conns.length > 0) {
 			this.#connections.set(event.device, event.conns);
 		} else {
@@ -494,6 +518,7 @@ export class WsRouter {
 	/** The core ended, and every page socket with it. */
 	coreExited(): void {
 		const ended = [...this.#connections.keys()];
+		for (const pages of this.#connections.values()) for (const page of pages) this.#itemsFeeds.forget(page.connId);
 		this.#connections.clear();
 		for (const deviceId of ended) this.#deps.onConnectionsChanged?.(deviceId);
 	}

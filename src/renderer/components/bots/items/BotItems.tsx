@@ -18,6 +18,7 @@
 import { Check, Clock, ListChecks, ListFilter, MoreHorizontal, X } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { Bot, Item, ItemStatus } from "../../../../shared/bots";
+import { activityAt } from "../../../../shared/item-activity";
 import { cx, formatTimeAgo } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { useBotsStore } from "../../../stores/bots";
@@ -37,7 +38,6 @@ import { BotAvatar } from "../BotAvatar";
 import { formatSnooze, presetName, SnoozeDialog, WaitDialog } from "./BotItemDialogs";
 import { ItemStatusIcon, itemLive, statusName } from "./ItemStatusIcon";
 import {
-	activityAt,
 	filterItems,
 	filterOn,
 	GROUP_FOLDED,

@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { BOT_CONNECTORS_COMMAND } from "../../shared/bot-connector-channels";
-import { BOTS_COMMAND, BOTS_STATE } from "../../shared/bots";
+import { BOTS_COMMAND, BOTS_STATE, ITEMS_V2_CHANGED } from "../../shared/bots";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICES_CHANGED, WEB_DEVICES_LIST, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
 import { type AgentSessionEvent, modelNotStarted } from "../../shared/rpc-types";
@@ -805,6 +805,45 @@ describe("events", () => {
 			{ t: "res", id: 9, ok: true, v: "answered" },
 		]);
 		expect(other.socket.frames("evt")).toEqual([]);
+	});
+
+	it("keeps item feeds scoped to source and page, including changes during negotiation", async () => {
+		const r = await rig();
+		const other = await r.host.attach("dev1");
+		if (!other) throw new Error("second page did not attach");
+		const id = r.connection.connId;
+		const first = Promise.withResolvers<void>();
+		const reading = r.router.readItemsFeed(id, null, () => first.promise);
+		r.router.itemsV2Changed(null, false);
+		r.router.itemsV2Changed(null, true);
+		r.router.itemsV2Changed("other-host", false);
+		first.resolve();
+		await reading;
+		await r.host.flush();
+		expect(r.socket.frames("evt")).toEqual([
+			{ t: "evt", seq: 1, ch: ITEMS_V2_CHANGED, d: { device: null, reseed: true } },
+		]);
+		expect(other.socket.frames("evt")).toEqual([]);
+		const stale = Promise.withResolvers<string>();
+		const older = r.router.readItemsFeed(id, null, () => stale.promise);
+		const independent = r.router.readItemsFeed(other.connId, null, async () => "other seed");
+		await expect(r.router.readItemsFeed(id, null, async () => "new delta")).resolves.toBe("new delta");
+		await expect(independent).resolves.toBe("other seed");
+		stale.resolve("old seed");
+		await expect(older).rejects.toThrow("superseded");
+		const later = Promise.withResolvers<void>();
+		const pending = r.router.readItemsFeed(id, "other-host", () => later.promise);
+		await r.connection.dispose();
+		const replacement = await r.host.attach("dev1", id);
+		if (!replacement) throw new Error("page did not reconnect");
+		later.resolve();
+		await expect(pending).rejects.toThrow("superseded");
+		for (const device of [null, "other-host"]) r.router.itemsV2Changed(device, false);
+		await r.host.flush();
+		expect(replacement.socket.frames("evt")).toEqual([]);
+		expect(other.socket.frames("evt")).toEqual([
+			{ t: "evt", seq: 1, ch: ITEMS_V2_CHANGED, d: { device: null, reseed: false } },
+		]);
 	});
 
 	it("broadcasts the files waiting for disk space and their recovery to both pages", async () => {

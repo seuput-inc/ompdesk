@@ -173,24 +173,67 @@ fn journal_line(folder: &Path, line: &str, at: &str) {
     }
 }
 
-/// Whether `item` reads as stale after `days` (Orca's `isBotItemStale`); `live`: a linked session still works.
-fn is_stale(item: &ItemRecord, days: f64, live: bool, now: f64) -> bool {
-    if !item.is_open() || item.snoozed(now) {
-        return false;
+/// When this item becomes stale, including the clock restart when it wakes from a snooze.
+fn stale_at(item: &ItemRecord, days: f64, working: bool) -> Option<f64> {
+    if !item.is_open()
+        || days <= 0.0
+        || (working && matches!(item.status.as_str(), "working" | "waiting"))
+    {
+        return None;
     }
-    // Back from a snooze, its clock starts again then.
-    let woke = item
-        .snoozed_until
-        .as_deref()
-        .and_then(parse_iso)
-        .filter(|until| *until <= now)
-        .unwrap_or(0.0);
-    let idle = now - item.touched.max(woke);
-    match item.status.as_str() {
-        "planned" => idle >= days * PLANNED_STALE_FACTOR * DAY_MS,
-        "working" | "waiting" => idle >= days * DAY_MS && !live,
-        _ => idle >= days * DAY_MS,
+    let start = item.touched.max(
+        item.snoozed_until
+            .as_deref()
+            .and_then(parse_iso)
+            .unwrap_or(0.0),
+    );
+    let factor = if item.status == "planned" {
+        PLANNED_STALE_FACTOR
+    } else {
+        1.0
+    };
+    Some(start + days * factor * DAY_MS)
+}
+
+/// Read-time facts without copying an item's history. Only detail and v1 read each link's state.
+pub(super) fn read_facts(
+    state: &HostState,
+    item: &ItemRecord,
+    bot: Option<&BotRecord>,
+    mut session: impl FnMut(usize, &str),
+) -> (Option<f64>, Option<String>) {
+    let mut working = false;
+    let mut all_limited = true;
+    let mut earliest = f64::INFINITY;
+    for (index, link) in item
+        .links
+        .iter()
+        .enumerate()
+        .filter(|(_, link)| link.kind == "session")
+    {
+        let tab = state.tabs.iter().find(|tab| {
+            tab.tab_id == link.target
+                || (tab.device.is_none()
+                    && tab.session_path.as_deref() == Some(link.target.as_str()))
+        });
+        let status = match tab {
+            Some(tab) => {
+                if let Some(retry) = tab.scheduled_retry.as_ref().filter(|retry| retry.limit) {
+                    earliest = earliest.min(retry.at);
+                } else {
+                    all_limited = false;
+                }
+                session_state(tab)
+            }
+            None if state.deleted_at_path(&link.target, None).is_some() => "gone",
+            None => "done",
+        };
+        working |= matches!(status, "working" | "waiting");
+        session(index, status);
     }
+    let stale = bot.and_then(|bot| stale_at(item, bot.stale_days?, working));
+    let limit = (all_limited && earliest.is_finite()).then(|| iso(earliest.max(0.0) as u64));
+    (stale, limit)
 }
 
 /// Records an edit of `field`, its words before and after.
@@ -309,36 +352,11 @@ impl AgentControl {
     ) -> ItemRecord {
         // v1 strips authority-only work/mail and caps events to EVENTS_KEPT.
         let mut read = item.v1();
-        let mut limits: Vec<f64> = Vec::new();
-        let mut live = 0;
-        let mut working = false;
-        for link in read.links.iter_mut().filter(|link| link.kind == "session") {
-            let tab = state.tabs.iter().find(|tab| {
-                tab.tab_id == link.target
-                    || (tab.device.is_none()
-                        && tab.session_path.as_deref() == Some(link.target.as_str()))
-            });
-            link.state = Some(match tab {
-                Some(tab) => {
-                    live += 1;
-                    if let Some(retry) = tab.scheduled_retry.as_ref().filter(|retry| retry.limit) {
-                        limits.push(retry.at);
-                    }
-                    let state = session_state(tab);
-                    working |= state == "working" || state == "waiting";
-                    state.to_owned()
-                }
-                None if state.deleted_at_path(&link.target, None).is_some() => "gone".to_owned(),
-                None => "done".to_owned(),
-            });
-        }
-        read.limit_until = (live > 0 && limits.len() == live)
-            .then(|| limits.iter().copied().fold(f64::INFINITY, f64::min))
-            .map(|at| iso(at.max(0.0) as u64));
-        read.stale = bot
-            .and_then(|bot| bot.stale_days)
-            .filter(|days| *days > 0.0 && is_stale(item, *days, working, now))
-            .map(|_| true);
+        let (stale, limit) = read_facts(state, item, bot, |index, status| {
+            read.links[index].state = Some(status.to_owned());
+        });
+        read.stale = stale.filter(|at| now >= *at).map(|_| true);
+        read.limit_until = limit;
         read
     }
 
@@ -818,7 +836,8 @@ impl AgentControl {
 
     /// An item changed: main hears the new state and bot chats their new context.
     pub(crate) fn items_changed(&self) {
-        self.bots_changed();
+        self.items_v2_changed(false);
+        self.legacy_bots_changed();
         let control = self.clone();
         tokio::spawn(async move { control.bots_tick().await });
     }
@@ -951,6 +970,7 @@ impl AgentControl {
         let mut changed = Vec::new();
         let mut closed = Vec::new();
         let mut refused = None;
+        let mut refused_items = Vec::new();
         for &id in &ids {
             if !seen.insert(id) {
                 continue;
@@ -965,6 +985,7 @@ impl AgentControl {
             }
             if named.is_some() && found.question.as_ref().map(|question| question.id) != named {
                 refused = Some(QUESTION_CHANGED);
+                refused_items.push((id, named));
                 continue;
             }
             if request.get("answer").is_some()
@@ -984,6 +1005,7 @@ impl AgentControl {
                     })
             {
                 refused = Some(QUESTION_CHANGED);
+                refused_items.push((id, named));
                 continue;
             }
             let answer: Option<String> = request.get("answer").and_then(|answer| {
@@ -1163,7 +1185,14 @@ impl AgentControl {
         let changed_any = !changed.is_empty();
         if changed_any || request_id.is_some() {
             store
-                .commit_owner(changed, request_id.as_deref(), refused, &mails, &ids)
+                .commit_owner_scoped(
+                    changed,
+                    request_id.as_deref(),
+                    refused,
+                    &mails,
+                    &ids,
+                    &refused_items,
+                )
                 .map_err(item_store_error)?;
         }
         drop(store);
@@ -1261,7 +1290,7 @@ fn settle_status(
 }
 
 /// A linked session's state as its tab shows it now.
-fn session_state(tab: &ControlTab) -> &'static str {
+pub(super) fn session_state(tab: &ControlTab) -> &'static str {
     if tab.busy || tab.resuming {
         return "working";
     }

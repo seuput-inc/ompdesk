@@ -14,3 +14,7 @@ On open, the host checks the schema and version, file length against SQLite's pa
 For items, `items.sqlite3.committed` remains beside the database so that a missing database cannot be mistaken for first use. Back up that file too. A migration failure prevents the agent-control service from opening; it is not a successful startup with an empty Items tab.
 
 The v1 API is a read projection: seven days of closed items and up to fifty events per visible item. It is not a retention rule. Data already deleted by an older host cannot be reconstructed during import.
+
+Item readers opt in to protocol 2 with `itemsFeed`. A missing or obsolete cursor gets an open-item seed; a matching base gets changed summaries, removed IDs and affected bots' absolute counts. Do not put summaries into a v1 `items` array. `itemsPage` reads one bot's closed items in descending activity-time/number order, 50 at a time. `itemDetail` pages through events in append order using an event ID as the cursor. `itemReceipt` is scoped to the host, bot, item, request and optionally question. An `unknown` receipt is not proof that a write failed.
+
+A previous paired host can serve only its retained history. Its projected replies carry `legacy: true`; only an explicit unknown-method response permits this fallback. Disconnects and malformed replies are errors, not an empty archive.

@@ -6,7 +6,7 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use super::{initialize, load};
-use crate::agentctl::journal::items::{ItemRecord, Items};
+use crate::agentctl::journal::items::{ItemQuestion, ItemRecord, Items};
 use crate::agentctl::rules::mail::{Mail, MailKind};
 
 fn item(id: &str, bot: &str, number: u32) -> ItemRecord {
@@ -122,6 +122,12 @@ fn migration_keeps_the_original_and_ids_across_a_pruned_prefix_and_a_reload() {
     assert_eq!(pruned.events[0].id, 98);
     assert!(items.has_request("pruned", "legacy").unwrap());
     assert!(!items.has_request("old", "legacy").unwrap());
+    assert_eq!(
+        items
+            .item_receipt("b", &json!("pruned"), "legacy", Some(7))
+            .unwrap(),
+        json!({"outcome":"answered"})
+    );
     assert_eq!(fs::read_to_string(&path).unwrap(), original);
     drop(items);
     fs::set_permissions(&path, mode).unwrap();
@@ -268,15 +274,16 @@ fn batch_receipts_and_chat_intents_survive_reload_and_removal_keeps_the_high_wat
     s.add(item("j", "b", 2)).unwrap();
     let changes = vec![changed(&s, "j"), changed(&s, "i")];
     let mails = vec![mail("batch")];
-    s.commit_owner(
+    s.commit_owner_scoped(
         changes,
         Some("key"),
         Some("question_changed"),
         &mails,
         &["gone", "j", "i", "i"],
+        &[],
     )
     .unwrap();
-    s.commit_owner(vec![], Some("skip"), None, &[], &["gone"])
+    s.commit_owner_scoped(vec![], Some("skip"), None, &[], &["gone"], &[])
         .unwrap();
     drop(s);
     let mut s = Items::new(Some(path.clone())).unwrap();
@@ -296,7 +303,7 @@ fn batch_receipts_and_chat_intents_survive_reload_and_removal_keeps_the_high_wat
     assert_eq!(s.get("i").unwrap().events[0].id, 2);
     s.ack_mail("batch").unwrap();
     let update = changed(&s, "i");
-    s.commit_owner(vec![update], None, None, &[mail("next")], &["i"])
+    s.commit_owner_scoped(vec![update], None, None, &[mail("next")], &["i"], &[])
         .unwrap();
     s.remove_bot("b").unwrap();
     assert!(s.pending_mail().unwrap().is_empty());
@@ -332,11 +339,17 @@ fn vfs_disk_full_at_commit_does_not_publish_the_batch_or_consume_ids() {
     let mut large = mail("large");
     large.1.text = "x".repeat(512 * 1024);
     let changes = vec![changed(&items, "a"), changed(&items, "b")];
+    let base = items.feed_revision();
     let error = items
-        .commit_owner(changes, Some("retry"), None, &[large], &["a", "b"])
+        .commit_owner_scoped(changes, Some("retry"), None, &[large], &["a", "b"], &[])
         .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::StorageFull);
     assert!(error.to_string().starts_with("commit item batch:"));
+    assert_eq!(items.feed_revision(), base);
+    assert_eq!(
+        items.feed_rows(Some(base)),
+        json!({"set":[],"remove":[],"counts":{}})
+    );
     assert_eq!(items.get("a"), Some(&first));
     assert_eq!(items.get("b"), Some(&second));
     assert_eq!(items.receipt("retry").unwrap(), None);
@@ -358,8 +371,286 @@ fn vfs_disk_full_at_commit_does_not_publish_the_batch_or_consume_ids() {
         .unwrap();
     let changes = vec![changed(&items, "a"), changed(&items, "b")];
     items
-        .commit_owner(changes, Some("retry"), None, &[mail("ok")], &["a", "b"])
+        .commit_owner_scoped(
+            changes,
+            Some("retry"),
+            None,
+            &[mail("ok")],
+            &["a", "b"],
+            &[],
+        )
         .unwrap();
     assert_eq!(items.get("b").unwrap().events[0].id, 2);
     assert_eq!(items.pending_mail().unwrap(), [mail("ok")]);
+}
+
+#[test]
+fn closed_keysets_keep_day_eight_ties_unread_and_reopens() {
+    let mut store = Items::new(None).unwrap();
+    let now = 8.0 * 86_400_000.0;
+    for n in 1..=101 {
+        let mut row = item(&format!("i{n}"), "b", n);
+        row.status = "done".into();
+        row.closed = Some(0.0);
+        row.updated_at = "1970-01-01".into();
+        row.event(
+            "1970-01-01",
+            if n == 51 { "bot" } else { "owner" },
+            "commented",
+            None,
+        );
+        store.add(row).unwrap();
+    }
+    assert!(store.v1(now).is_empty());
+    let seed = store.feed_rows(None);
+    assert_eq!(seed["open"], json!([]));
+    assert_eq!(seed["counts"]["b"]["closedTotal"], 101);
+    let page = store.items_page("b", None, None, now);
+    assert_eq!(page["closed"].as_array().unwrap().len(), 50);
+    assert_eq!(page["closed"][0]["number"], 101);
+    let exactly_fifty = store.items_page("b", Some((0.0, 51)), None, now);
+    assert_eq!(exactly_fifty["closed"].as_array().unwrap().len(), 50);
+    assert!(exactly_fifty["next"].is_null());
+    assert_eq!(page["next"], json!({"at":0,"number":52}));
+    let second = store.items_page("b", Some((0.0, 52)), None, now);
+    assert_eq!(second["closed"][0]["number"], 51);
+    assert_eq!(second["next"], json!({"at":0,"number":2}));
+    let third = store.items_page("b", Some((0.0, 2)), None, now);
+    assert_eq!(third["closed"].as_array().unwrap().len(), 1);
+    assert_eq!(third["closed"][0]["number"], 1);
+    assert!(third["next"].is_null());
+    let unread = store.items_page("b", None, Some(0), now);
+    assert_eq!(unread["closedTotal"], 101);
+    assert_eq!(unread["unreadTotal"], 1);
+    assert_eq!(unread["closed"][0]["number"], 51);
+    let base = store.feed_revision();
+    store
+        .change("i51", |item| {
+            item.status = "working".into();
+            item.closed = None;
+        })
+        .unwrap();
+    let delta = store.feed_rows(Some(base));
+    assert_eq!(delta["set"][0]["id"], "i51");
+    assert_eq!(delta["counts"]["b"]["openCount"], 1);
+    assert_eq!(delta["counts"]["b"]["closedTotal"], 100);
+    assert_ne!(
+        delta["counts"]["b"]["archiveRevision"],
+        seed["counts"]["b"]["archiveRevision"]
+    );
+    assert_eq!(store.items_page("b", None, Some(0), now)["unreadTotal"], 0);
+    let base = store.feed_revision();
+    store.remove_bot("b").unwrap();
+    let removed = store.feed_rows(Some(base));
+    assert!(
+        removed["remove"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("i51"))
+    );
+    assert_eq!(removed["counts"]["b"]["closedTotal"], 0);
+}
+
+#[test]
+fn detail_uses_positions_not_global_id_order_and_fetches_only_referenced_asks() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let mut events = vec![
+        json!({"at":"1970-01-02", "actor":"bot", "kind":"asked","id":99,"text":"scope?"}),
+        json!({"at":"day", "actor":"owner","kind":"edited"}),
+    ];
+    for n in 1..=49 {
+        events.push(json!({"id":n, "at":"day", "actor":"owner","kind":"commented"}));
+    }
+    events.push(
+        json!({"id":50,"at":"day","actor":"owner","kind":"answered","question":99,"request":"yes"}),
+    );
+    let original = json!([{"id":"i","bot":"b","number":8,"session":"chat","title":"title","status":"working",
+        "description":"detail only", "links":[{"kind":"session","ref":"/chat"},{"kind":"url","ref":"private-url"}],
+        "events":events}]).to_string();
+    initialize(&mut db, Some(&original)).unwrap();
+    let store = load(db, None).unwrap();
+    let seed = store.feed_rows(None);
+    let row = &seed["open"][0];
+    assert_eq!(row["sessionLinks"], json!(["/chat"]));
+    for key in ["events", "links", "description", "doneMeans", "closeNote"] {
+        assert!(row.get(key).is_none());
+    }
+    assert_eq!(row["othersLast"], 0);
+    assert_eq!(row["lastEvent"], 50);
+    let detail = store.item_detail("b", &json!(8), None, None).unwrap();
+    assert_eq!(detail["item"]["description"], "detail only");
+    assert!(detail["item"].get("events").is_none());
+    assert_eq!(detail["events"].as_array().unwrap().len(), 50);
+    assert_eq!(detail["events"][0]["id"], 1);
+    assert_eq!(detail["beforeEvent"], 1);
+    assert!(detail["afterEvent"].is_null());
+    assert_eq!(
+        detail["asks"],
+        json!([{"at":"1970-01-02","actor":"bot","kind":"asked","id":99,"text":"scope?"}])
+    );
+    let prior = store.item_detail("b", &json!("i"), Some(1), None).unwrap();
+    assert_eq!(prior["events"].as_array().unwrap().len(), 2);
+    assert_eq!(prior["events"][0]["id"], 99);
+    assert_eq!(prior["events"][1]["id"], 100);
+    assert_eq!(prior["afterEvent"], 100);
+    assert!(prior["beforeEvent"].is_null());
+    let replay = store
+        .item_detail("b", &json!("i"), None, Some(100))
+        .unwrap();
+    assert_eq!(replay, detail);
+    assert_eq!(
+        store
+            .item_detail("other", &json!("i"), None, None)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    assert_eq!(
+        store
+            .item_detail("b", &json!("i"), Some(888), None)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidInput
+    );
+}
+
+#[test]
+fn receipt_proves_the_requested_item_and_question_even_after_tail_rollover() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("items.json");
+    let mut s = Items::new(Some(path.clone())).unwrap();
+    let mut first = item("a", "b", 1);
+    first.event("day", "bot", "asked", Some("first?"));
+    first
+        .event("day", "owner", "commented", Some("original"))
+        .request = Some("legacy".into());
+    let answer = first.event("day", "owner", "answered", Some("yes"));
+    answer.request = Some("answered".into());
+    answer.question = Some(1);
+    for _ in 0..51 {
+        first.event("day", "owner", "edited", None);
+    }
+    s.add(first).unwrap();
+    s.add(item("c", "b", 2)).unwrap();
+    let change = changed(&s, "a");
+    s.commit_owner_scoped(vec![change], Some("batch"), None, &[], &["a"], &[])
+        .unwrap();
+    s.commit_owner_scoped(
+        vec![],
+        Some("reject"),
+        Some("question_changed"),
+        &[],
+        &["a", "c"],
+        &[("c", Some(7))],
+    )
+    .unwrap();
+    drop(s);
+    let s = Items::new(Some(path)).unwrap();
+    let outcome = |id, q, key| s.item_receipt("b", &json!(id), key, q).unwrap()["outcome"].clone();
+    assert_eq!(outcome("a", None, "legacy"), "commented");
+    assert_eq!(outcome("c", None, "legacy"), "unknown");
+    assert_eq!(outcome("a", Some(1), "answered"), "answered");
+    assert_eq!(outcome("a", Some(7), "answered"), "unknown");
+    assert_eq!(outcome("a", Some(7), "reject"), "unknown");
+    assert_eq!(outcome("c", Some(7), "reject"), "question_changed");
+    assert_eq!(outcome("a", None, "batch"), "changed");
+    assert_eq!(outcome("a", Some(1), "batch"), "unknown");
+    assert_eq!(outcome("c", Some(9), "reject"), "unknown");
+    assert_eq!(outcome("c", None, "missing"), "unknown");
+    assert!(
+        s.batch_result("reject")
+            .unwrap()
+            .unwrap()
+            .get("refusedItems")
+            .is_none()
+    );
+}
+
+#[test]
+fn summary_and_delta_preserve_question_time_tail_and_insertion_order() {
+    let mut store = Items::new(None).unwrap();
+    let mut row = item("z", "b", 1);
+    row.status = "needs_you".into();
+    row.question = Some(ItemQuestion {
+        text: "pick one".into(),
+        options: vec!["one".into(), "two".into()],
+        ..Default::default()
+    });
+    row.event("1970-01-02", "bot", "asked", Some("pick one"));
+    store.add(row).unwrap();
+    store.add(item("a", "b", 2)).unwrap();
+    let seed = store.feed_rows(None);
+    assert_eq!(seed["open"][0]["id"], "z");
+    assert_eq!(seed["open"][1]["id"], "a");
+    assert_eq!(seed["open"][0]["askedAt"], 86_400_000);
+    assert_eq!(
+        seed["open"][0]["question"]["options"],
+        json!(["one", "two"])
+    );
+    let base = store.feed_revision();
+    store
+        .change("z", |r| {
+            for _ in 0..50 {
+                r.event("day", "owner", "commented", None);
+            }
+        })
+        .unwrap();
+    let delta = store.feed_rows(Some(base));
+    assert_eq!(delta["set"].as_array().unwrap().len(), 1);
+    assert_eq!(delta["counts"], json!({}));
+    assert_eq!(delta["set"][0]["lastEvent"], 51);
+    assert_eq!(delta["set"][0]["othersLast"], 0);
+    assert!(delta["set"][0]["askedAt"].is_null());
+    assert_eq!(delta["set"][0]["question"]["id"], 1);
+    assert!(store.feed_rows(Some(u64::MAX)).get("open").is_some());
+    for n in 3..=520 {
+        store.add(item(&n.to_string(), "b", n)).unwrap();
+    }
+    let reseed = store.feed_rows(Some(base));
+    assert_eq!(reseed["open"].as_array().unwrap().len(), 520);
+    assert!(reseed.get("set").is_none());
+}
+
+#[test]
+fn a_legacy_archive_wake_changes_order_and_revision_in_both_clock_directions() {
+    let mut db = Connection::open_in_memory().unwrap();
+    let mut waking = item("waking", "b", 1);
+    waking.status = "done".into();
+    waking.updated_at = "1970-01-01".into();
+    waking.snoozed_until = Some("1970-01-03".into());
+    let mut other = item("other", "b", 2);
+    other.status = "done".into();
+    other.updated_at = "1970-01-02".into();
+    initialize(&mut db, Some(&json!([waking, other]).to_string())).unwrap();
+    let mut store = load(db, None).unwrap();
+    let wake = 2.0 * 86_400_000.0;
+    assert!(!store.refresh_archive_clock(wake - 1.0));
+    assert_eq!(
+        store.items_page("b", None, None, wake - 1.0)["closed"][0]["id"],
+        "other"
+    );
+    let base = store.feed_revision();
+    assert!(store.refresh_archive_clock(wake));
+    let delta = store.feed_rows(Some(base));
+    assert_eq!(delta["counts"]["b"]["closedTotal"], 2);
+    assert_eq!(
+        delta["counts"]["b"]["archiveRevision"],
+        store.feed_revision()
+    );
+    assert_eq!(delta["set"], json!([]));
+    assert_eq!(delta["remove"], json!([]));
+    assert_eq!(
+        store.items_page("b", None, None, wake)["closed"][0]["id"],
+        "waking"
+    );
+    assert!(!store.refresh_archive_clock(wake + 1.0));
+    assert!(store.refresh_archive_clock(wake - 1.0));
+    assert_eq!(
+        store.items_page("b", None, None, wake - 1.0)["closed"][0]["id"],
+        "other"
+    );
+    store
+        .change("waking", |row| row.status = "working".into())
+        .unwrap();
+    assert!(!store.refresh_archive_clock(wake));
 }

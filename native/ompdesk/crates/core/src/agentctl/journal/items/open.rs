@@ -250,6 +250,7 @@ fn load(db: Connection, writer: Option<File>) -> io::Result<Items> {
         _writer: writer,
         file: None,
         numbers,
+        feed: super::super::queries::Feed::load(&items),
         items,
         by_id,
         last_event,

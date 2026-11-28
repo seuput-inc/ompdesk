@@ -38,7 +38,7 @@ import {
 	reviewFromDevice,
 } from "../shared/agent-control";
 import { BOT_CONNECTORS_COMMAND } from "../shared/bot-connector-channels";
-import { BOTS_COMMAND, BOTS_FOLDER, type BotsCall } from "../shared/bots";
+import { BOTS_COMMAND, BOTS_FOLDER, type BotsCall, ITEMS_V2_CHANGED, ITEMS_V2_QUERY } from "../shared/bots";
 import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
@@ -124,6 +124,7 @@ import {
 	type IpcSessionLinksChanged,
 	type IpcSessionsChanged,
 } from "../shared/ipc-types";
+import { ItemsV2DeviceSchema, ItemsV2RequestSchema, parseItemsV2Reply } from "../shared/items-v2";
 import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
 import { isMacPermission } from "../shared/mac-permissions";
 import { MAIL_ACCOUNTS_COMMAND, type MailAccountDraft } from "../shared/mail-accounts";
@@ -160,7 +161,7 @@ import { quitApproved, requestQuit } from "./app-quit";
 import { Autopilot, type AutopilotCommand, type AutopilotNotice } from "./autopilot";
 import { routeHostAutopilotNotice } from "./autopilot-notice-route";
 import { localBotChatOpener } from "./bot-chat-tab";
-import { type HostBots, setBotsAsk, setBotsState } from "./bots";
+import { type HostBots, type ItemFeedViewers, setBotsAsk, setBotsState } from "./bots";
 import {
 	CHECKOUT_PEERS_SWEEP_MS,
 	type CheckoutMember,
@@ -258,6 +259,7 @@ import type { FileEditReports } from "./web/file-edit-reports";
 import type { IpcCaller, IpcRegistry } from "./web/ipc-registry";
 import type { UploadStore } from "./web/uploads";
 import { WebClientWindow } from "./web/web-client-window";
+import type { WsRouter } from "./web/ws-router";
 import type { SpawnWindow, WindowManager } from "./window";
 import { sanitizeChromeColors, TOP_BAR_HEIGHT } from "./window-chrome";
 import {
@@ -299,6 +301,8 @@ export interface IpcDeps {
 	windowManager: WindowManager;
 	/** Both remote roles: the paired hosts tabs may run on, and this computer as a host. */
 	remoteDevices: RemoteDevices;
+	itemsWebRouter: () => Pick<WsRouter, "readItemsFeed" | "itemsV2Changed"> | undefined;
+	desktopItemFeeds: ItemFeedViewers<number>;
 	/**
 	 * The tabs this computer runs for paired devices (LocalHostServices): this computer's windows open one of their
 	 * sessions as a view of that tab, never as a second omp on its file.
@@ -640,6 +644,19 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	/** The same for a window's model setup research. */
 	const remoteModelSetups = new Map<number, string>();
 	const { sidecarPool, sessionIndex, logWatcher, windowManager, remoteDevices } = deps;
+	const { desktopItemFeeds } = deps;
+	const itemWindows = new WeakSet<IpcCaller["sender"]>();
+	const trackItemWindow = (caller: IpcCaller) => {
+		if (itemWindows.has(caller.sender)) return;
+		itemWindows.add(caller.sender);
+		const id = caller.sender.id;
+		caller.sender.once("destroyed", () => desktopItemFeeds.forget(id));
+	};
+	const itemsChanged = (device: string | null, reseed: boolean) => {
+		desktopItemFeeds.changed(device, reseed);
+		deps.itemsWebRouter()?.itemsV2Changed(device, reseed);
+	};
+	remoteDevices.onItemsV2Changed(itemsChanged);
 	/**
 	 * The person looked at the tab: its banners close here and on the phones, a pending summary forgets it, and the
 	 * pool's tab entry keeps when (the seen-since-run clock).
@@ -1595,6 +1612,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		itemsFile: path.join(app.getPath("userData"), "items.json"),
 		botsRoot: path.join(os.homedir(), BOTS_FOLDER),
 		botsChanged: setBotsState,
+		itemsV2Changed: () => {
+			itemsChanged(null, false);
+			remoteDevices.itemsV2Changed();
+		},
+		remoteItemsQuery: (device, request) => remoteDevices.itemsV2(device, request),
 		// What paired devices list of this computer's bots changed: each connected one hears the change.
 		botsShared: change => remoteDevices.hostBotsChanged(change),
 		// One of this computer's bots answered a paired device's group: handed to that device's link.
@@ -1713,6 +1735,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		peerItemReceipt: (peer, tab, step) => agentControl.control.peerItemReceipt(peer, tab, step),
 		ownerGrantsPeerItem: (device, tab, check) => agentControl.control.ownerGrantsPeerItem(device, tab, check),
 		share: () => agentControl.botsShare(),
+		itemsV2: request => agentControl.control.itemsQueryFrom(request),
 		from: (request, deviceId, deviceName, createKey) =>
 			agentControl.botsFrom(request, deviceId, deviceName, createKey),
 		created: (device, createKey) => agentControl.control.botPeerCreated(device, createKey),
@@ -2754,6 +2777,22 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			caller.scheduleReservationId,
 		);
 	});
+	ipc.handle(ITEMS_V2_QUERY, (caller, source: unknown, raw: unknown) => {
+		const device = ItemsV2DeviceSchema.parse(source);
+		const request = ItemsV2RequestSchema.parse(raw);
+		const query = async () => parseItemsV2Reply(request, await agentControl.control.itemsQuery(device, request));
+		if (request.action !== "itemsFeed") return query();
+		if (caller.connId !== undefined) {
+			const router = deps.itemsWebRouter();
+			if (!router) throw new Error("The requesting page disconnected");
+			return router.readItemsFeed(caller.connId, device, query);
+		}
+		const win = caller.browserWindow;
+		if (!win || win.isDestroyed()) throw new Error("The requesting window closed");
+		const id = caller.sender.id;
+		trackItemWindow(caller);
+		return desktopItemFeeds.read(id, device, notice => win.webContents.send(ITEMS_V2_CHANGED, notice), query);
+	});
 	// The Bots page: this computer's bots and their items (the owner's own; agents use ompdesk_bot and ompdesk_item).
 	ipc.handle(BOTS_COMMAND, async (caller, request: unknown) => {
 		if (typeof request !== "object" || request === null) throw new Error("Invalid bots request");
@@ -2786,6 +2825,14 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			const device = "device" in request ? request.device : undefined;
 			if (device !== undefined && typeof device !== "string") throw new Error("Invalid computer");
 			return agentControl.bots({ action: "createModels", callerTabId, device });
+		}
+		if (
+			caller.browserWindow &&
+			"action" in request &&
+			!["file", "deletePreview", "importSources", "export", "createFolder"].includes(String(request.action))
+		) {
+			trackItemWindow(caller);
+			desktopItemFeeds.legacyRead(caller.sender.id);
 		}
 		if (!caller.browserWindow && "action" in request && request.action === "update" && "reach" in request)
 			return agentControl.bots({ ...(request as BotsCall), pairedWeb: true });

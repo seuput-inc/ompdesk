@@ -7,7 +7,8 @@
 
 import type { z } from "zod";
 import type { BotContext } from "../../resources/gui-bridge/modes/bots-contracts";
-import type { Bot, BotsState, SharedBots } from "../shared/bots";
+import type { Bot, BotsState, ItemsV2Change, SharedBots } from "../shared/bots";
+import type { ItemsV2Request } from "../shared/items-v2";
 import type { BotsRoomPostSchema, SharedBotsDeltaSchema, SharedBotsSchema } from "./remote/app-protocol";
 import type { PeerItemCheck, PeerItemStep, PeerItemVerdict } from "./remote/item-work";
 
@@ -38,6 +39,7 @@ export interface HostBots {
 	home(name: string, deviceId: string, deviceName: string, fromBot?: boolean): Promise<{ path: string; name: string }>;
 	/** This computer's bots and items as its paired devices get them (`host.bots.list`). */
 	share(): Promise<SharedBots>;
+	itemsV2?(request: ItemsV2Request): Promise<unknown>;
 	/** A device's change to one of this computer's bots (`host.bots.command`): the copy after it, or a file. */
 	from(request: unknown, deviceId: string, deviceName: string, createKey?: string): Promise<unknown>;
 	/** Whether the host durably recorded this exact create. An unknown outcome is not a refund. */
@@ -50,6 +52,76 @@ export interface HostBots {
 	remote(update: HostBotsUpdate): Promise<{ applied: boolean }>;
 	/** A paired host's bot posted in one of this computer's groups. */
 	roomPost(post: HostBotsRoomPost): Promise<unknown>;
+}
+
+interface FeedReader {
+	send(change: ItemsV2Change): void;
+	active: boolean;
+	pending: number;
+	latest: number;
+	dirty: boolean | undefined;
+}
+
+/** Only a successful feed negotiates pushes. Keep changes racing its first read until it succeeds. */
+export class ItemFeedViewers<K> {
+	readonly #pages = new Map<K, Map<string | null, FeedReader>>();
+	readonly #legacy = new Set<K>();
+
+	async read<T>(key: K, device: string | null, send: FeedReader["send"], query: () => Promise<T>): Promise<T> {
+		let sources = this.#pages.get(key);
+		if (!sources) {
+			sources = new Map();
+			this.#pages.set(key, sources);
+		}
+		let reader = sources.get(device);
+		if (!reader) {
+			reader = { send, active: false, pending: 0, latest: 0, dirty: undefined };
+			sources.set(device, reader);
+		}
+		const ticket = ++reader.latest;
+		reader.pending++;
+		try {
+			const reply = await query();
+			if (this.#pages.get(key) !== sources || reader.latest !== ticket)
+				throw new Error("Item feed read was superseded");
+			if (!reader.active) {
+				reader.active = true;
+				if (reader.dirty !== undefined) reader.send({ device, reseed: reader.dirty });
+				reader.dirty = undefined;
+			}
+			return reply;
+		} finally {
+			if (--reader.pending === 0 && !reader.active) {
+				sources.delete(device);
+				if (!sources.size && this.#pages.get(key) === sources) this.#pages.delete(key);
+			}
+		}
+	}
+
+	changed(device: string | null, reseed: boolean): void {
+		for (const sources of this.#pages.values()) {
+			const reader = sources.get(device);
+			if (reader?.active) reader.send({ device, reseed });
+			else if (reader) reader.dirty = reseed || (reader.dirty ?? false);
+		}
+	}
+
+	legacyRead(key: K): void {
+		this.#legacy.add(key);
+	}
+
+	wantsLegacy(key: K): boolean {
+		if (!this.#legacy.has(key)) {
+			const sources = this.#pages.get(key);
+			if (sources) for (const reader of sources.values()) if (reader.active) return false;
+		}
+		return true;
+	}
+
+	forget(key: K): void {
+		this.#pages.delete(key);
+		this.#legacy.delete(key);
+	}
 }
 
 let current: BotsState = { bots: [], items: [] };

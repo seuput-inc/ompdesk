@@ -29,6 +29,7 @@ mod bots;
 pub(crate) mod bots_share;
 mod connectors;
 mod items;
+pub(crate) mod items_feed;
 mod review;
 mod rooms;
 mod schedule;

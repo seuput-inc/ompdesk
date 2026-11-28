@@ -12,6 +12,7 @@
  * - Several questions asked at once are answered in one comment, a line `Question → answer` each.
  */
 import type { Item, ItemDecision, ItemEvent, ItemQuestion, ItemStatus } from "../../../../shared/bots";
+import { activityAt, othersLast } from "../../../../shared/item-activity";
 
 export const ITEM_GROUPS = ["needs_you", "working", "waiting", "planned", "snoozed", "stale", "closed"] as const;
 export type ItemGroupId = (typeof ITEM_GROUPS)[number];
@@ -48,29 +49,15 @@ export function isSnoozed(item: Pick<Item, "status" | "snoozedUntil">, now: numb
 	return !isClosed(item.status) && item.snoozedUntil !== undefined && Date.parse(item.snoozedUntil) > now;
 }
 
-/** What a row's age and order count from: its last change, or when it came back from a snooze if later. */
-export function activityAt(item: Pick<Item, "updatedAt" | "snoozedUntil">, now: number): number {
-	const changed = Date.parse(item.updatedAt) || 0;
-	const woke = item.snoozedUntil ? Date.parse(item.snoozedUntil) : Number.NaN;
-	return woke <= now ? Math.max(changed, woke) : changed;
-}
-
 export function itemGroupOf(item: Item, now: number): ItemGroupId {
 	if (item.status === "done" || item.status === "canceled") return "closed";
 	if (isSnoozed(item, now)) return "snoozed";
 	return item.stale ? "stale" : item.status;
 }
 
-/** The newest event anyone but the owner made: what the unseen mark compares. */
-export function othersLast(item: Pick<Item, "events">): number {
-	let newest = 0;
-	for (const event of item.events) if (event.actor !== "owner" && event.id > newest) newest = event.id;
-	return newest;
-}
-
 /** Changed by anyone but the owner since the owner last opened its bot's Items tab. */
 export function isUnseen(item: Pick<Item, "events">, seen: number): boolean {
-	return othersLast(item) > seen;
+	return othersLast(item.events) > seen;
 }
 
 /** Several bots' items in one set of groups, each marked by its own bot's seen mark (`seenOf`). */

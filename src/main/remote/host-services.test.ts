@@ -575,6 +575,86 @@ describe("managed item receiver", () => {
 	});
 });
 
+describe("paired item reads", () => {
+	const feed = { protocol: 2, action: "itemsFeed" };
+	const method = "host.bots.itemsV2";
+	const event = "host.bots.itemsV2Changed";
+	const seed = { protocol: 2, kind: "seed", version: "epoch.1", counts: {}, bots: [], open: [] };
+
+	it("notifies only connections with successful feeds; rejects nested routing and commands", async () => {
+		const itemsV2 = vi.fn().mockResolvedValue(seed);
+		const bots = { ...fakeBots(), itemsV2 };
+		const { services } = setup(60_000, { bots: () => bots });
+		const x = new FakeConnection(peer("x"));
+		const old = new FakeConnection(peer("old"));
+		await services.call(old.peer, "host.bots.list", {}, old);
+		for (const invalid of [{ ...feed, device: "other" }, { ...feed, action: "create" }, { action: "itemsFeed" }])
+			await expect(services.call(x.peer, method, invalid, x)).rejects.toThrow();
+		expect(itemsV2).not.toHaveBeenCalled();
+		itemsV2.mockResolvedValueOnce({ malformed: true });
+		await expect(services.call(x.peer, method, feed, x)).rejects.toThrow();
+		services.itemsV2Changed();
+		expect(x.events.filter(e => e.event === event)).toHaveLength(0);
+		expect(await services.call(x.peer, method, feed, x)).toEqual(seed);
+		services.itemsV2Changed();
+		services.disconnected(x.peer, x);
+		services.itemsV2Changed();
+		expect(x.events.filter(e => e.event === event)).toEqual([{ event, data: { protocol: 2 } }]);
+		expect(old.events.filter(e => e.event === event)).toHaveLength(0);
+	});
+
+	it("keeps old delta bodies off v2-only links, but a link that asks for both gets both", async () => {
+		const bots = { ...fakeBots(), itemsV2: async () => seed };
+		const { services } = setup(60_000, { bots: () => bots });
+		const modern = new FakeConnection(peer("modern"));
+		const mixed = new FakeConnection(peer("mixed"));
+		const old = new FakeConnection(peer("old"));
+		await services.call(mixed.peer, "host.bots.list", {}, mixed);
+		await services.call(old.peer, "host.bots.list", {}, old);
+		for (const conn of [modern, mixed]) await services.call(conn.peer, method, feed, conn);
+		services.botsChanged({
+			base: "e.1",
+			version: "e.2",
+			set: { bots: [], items: [] },
+			remove: { bots: [], items: [] },
+		});
+		services.itemsV2Changed();
+		for (const [conn, expected] of [
+			[old, ["host.bots.changed"]],
+			[modern, [event]],
+			[mixed, ["host.bots.changed", event]],
+		] as const)
+			expect(conn.events.map(e => e.event).filter(name => name.startsWith("host.bots."))).toEqual(expected);
+	});
+
+	it("coalesces changes during the first feed without emitting before success", async () => {
+		const pending = Promise.withResolvers<unknown>();
+		const bots = { ...fakeBots(), itemsV2: () => pending.promise };
+		const { services } = setup(60_000, { bots: () => bots });
+		const x = new FakeConnection(peer("x"));
+		const reply = services.call(x.peer, method, feed, x);
+		services.itemsV2Changed();
+		services.itemsV2Changed();
+		expect(x.events.filter(e => e.event === event)).toHaveLength(0);
+		pending.resolve(seed);
+		await reply;
+		expect(x.events.filter(e => e.event === event)).toEqual([{ event, data: { protocol: 2 } }]);
+	});
+
+	it("a feed finishing after disconnect cannot subscribe the old connection", async () => {
+		const pending = Promise.withResolvers<unknown>();
+		const bots = { ...fakeBots(), itemsV2: () => pending.promise };
+		const { services } = setup(60_000, { bots: () => bots });
+		const x = new FakeConnection(peer("x"));
+		const reply = services.call(x.peer, method, feed, x);
+		services.disconnected(x.peer, x);
+		pending.resolve(seed);
+		await reply;
+		services.itemsV2Changed();
+		expect(x.events.filter(e => e.event === event)).toHaveLength(0);
+	});
+});
+
 describe("peer bot homes", () => {
 	async function fixture() {
 		const bots = fakeBots();

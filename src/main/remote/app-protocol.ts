@@ -263,6 +263,9 @@ export const PROJECTS_EVENT = "host.projects.changed";
  * on another version reads `host.bots.list` again); sent to every connected device. An older device drops it.
  */
 export const BOTS_EVENT = "host.bots.changed";
+export const ITEMS_V2_METHOD = "host.bots.itemsV2";
+export const ITEMS_V2_CHANGED = "host.bots.itemsV2Changed";
+export const ItemsV2Changed = z.strictObject({ protocol: z.literal(2) });
 /**
  * One of the host's bots posted in a group of the device it is sent to (data: BotsRoomPost): the device asked it
  * (`host.bots.command` `roomAsk`) and holds the room. Sent to that device only; an older device drops it.

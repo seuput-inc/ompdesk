@@ -279,6 +279,8 @@ export interface AgentControlHostDeps {
 	botsRoot?: string | null;
 	/** The core's bots state changed: main keeps it and tells every window. */
 	botsChanged?: (state: BotsState) => void;
+	itemsV2Changed?: AgentControlHost["itemsV2Changed"];
+	remoteItemsQuery?: AgentControlHost["remoteItemsQuery"];
 	/** This computer's bots changed as its paired devices see them: every connected device is told. */
 	botsShared?: (change: SharedBotsDelta) => void;
 	/** One of this computer's bots posted in a paired device's group: false when that device is not connected. */
@@ -1672,6 +1674,8 @@ export class AgentControlRuntime {
 			recordClosed: child => this.#recordClosed(child),
 			closedChildren: () => parseClosedChildren(deps.prefs.get(AGENT_CLOSED_CHILDREN_PREF)),
 			botsChanged: state => deps.botsChanged?.(state),
+			itemsV2Changed: deps.itemsV2Changed,
+			remoteItemsQuery: deps.remoteItemsQuery,
 			botsShared: change => deps.botsShared?.(change),
 			botsRoomPostTo: (device, post) => deps.botsRoomPostTo?.(device, post) ?? false,
 			botsCommand: (device, request) => {
