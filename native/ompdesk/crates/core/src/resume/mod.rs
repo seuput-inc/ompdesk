@@ -10,6 +10,7 @@ use serde_json::value::RawValue;
 use serde_json::{Value, json};
 
 use crate::hub::{self, Kind, Out, Outcome};
+use crate::ipc::{Handled, IpcContext};
 use crate::server::{Fault, Registry};
 
 mod connectivity;
@@ -207,4 +208,49 @@ where
     Fut: Future<Output = Result<Value, Fault>> + 'static,
 {
     Outcome::Later(Box::pin(work(inst)))
+}
+
+/// Direct core IPC `resume:stop`: ignores non-string args, otherwise stops the resumed turn on the active hub instance.
+pub(crate) fn ipc_stop(_ctx: IpcContext, args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let Some(tab_id) = args.first().and_then(Value::as_str).map(str::to_owned) else {
+            return Ok(None);
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        hub::post(move || {
+            let Some(inst) = machine::active_instance() else {
+                let _ = tx.send(Ok(()));
+                return;
+            };
+            hub::spawn(async move {
+                let _ = tx.send(inst.stop_resumed_direct(&tab_id).await);
+            });
+        });
+        rx.await
+            .map_err(|_| Fault::new("internal", "The hub thread ended before answering"))??;
+        Ok(None)
+    })
+}
+
+#[cfg(test)]
+mod ipc_tests {
+    use super::*;
+    use crate::ipc::Caller;
+
+    #[tokio::test]
+    async fn ipc_stop_ignores_non_string_and_handles_absent_instance() {
+        let ctx = || IpcContext {
+            caller: Caller {
+                key: "w1".into(),
+                window: Some(1),
+                conn_id: None,
+                device_id: None,
+            },
+            user_data: None,
+        };
+        for args in [vec![], vec![Value::Null], vec![json!(42)], vec![json!({})]] {
+            assert_eq!(ipc_stop(ctx(), args).await.unwrap(), None);
+        }
+        assert_eq!(ipc_stop(ctx(), vec![json!("tab-1")]).await.unwrap(), None);
+    }
 }

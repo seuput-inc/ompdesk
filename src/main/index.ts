@@ -2526,9 +2526,7 @@ app.whenReady().then(async () => {
 	});
 	// A paired device's Cancel on the wait or scheduled retry of a window's tab it views: this computer's own tab.
 	sidecarPool.onCancelWait = tabId => turnResume.cancelWait(tabId);
-	ipc.handle(IPC_COMMANDS.RESUME_STOP, async (_caller, tabId: unknown) => {
-		if (typeof tabId === "string") await turnResume.stopResumed(tabId);
-	});
+	// `resume:stop` routes directly from tauri-shell to ompdesk-core (`crates/core/src/resume/mod.rs`).
 	// A tab viewing a paired host's window tab: that host holds the offer.
 	ipc.handle(IPC_COMMANDS.RESUME_CONTINUE, async (_caller, tabId: unknown) => {
 		if (typeof tabId !== "string") return;

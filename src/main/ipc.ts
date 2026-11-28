@@ -909,7 +909,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	});
 	ipc.on(IPC_COMMANDS.RUNTIME_STARTUP_MARK, (_caller, mark: unknown) => markStartupFromRenderer(mark));
 
-	ipc.handle(IPC_COMMANDS.LOG_SNAPSHOT, () => logWatcher.getSnapshot());
+	// `log:snapshot` routes directly from tauri-shell to ompdesk-core (`crates/core/src/logs/mod.rs`).
 
 	// Windows title-bar overlay: the caption buttons repaint in the theme's top-bar colors.
 	ipc.on(IPC_EVENTS.WINDOW_CHROME_SET, (caller, value: unknown) => {

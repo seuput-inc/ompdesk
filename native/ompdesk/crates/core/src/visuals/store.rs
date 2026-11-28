@@ -14,6 +14,7 @@ use crate::disk::{
     saves::{Saves, waiting_content, write_kept},
     tree::{fault, write_atomic_if},
 };
+use crate::ipc::{Handled, IpcContext};
 use crate::server::{Fault, Registry, Reply};
 
 const MAX_VERSIONS: usize = 20;
@@ -560,4 +561,82 @@ pub(crate) fn register(registry: &mut Registry) {
             .await
         })
     });
+}
+
+/// Direct core IPC `preview:visuals`: lists `PreviewVisualRecord[]` from `<userData>/visuals`, matching
+/// `VisualStore.list()`.
+pub(crate) fn ipc_visuals(ctx: IpcContext, _args: Vec<serde_json::Value>) -> Handled {
+    Box::pin(async move {
+        let user_data = ctx
+            .user_data
+            .ok_or_else(|| Fault::new("internal", "userData is not known"))?;
+        let dir = user_data.join("visuals");
+        let list = with_catalog(dir, |c| {
+            serde_json::to_value(display::Summaries(&c.records))
+                .map_err(|e| Fault::new("internal", e.to_string()))
+        })
+        .await?;
+        Ok(Some(list))
+    })
+}
+
+#[cfg(test)]
+mod ipc_tests {
+    use super::*;
+    use crate::ipc::Caller;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn ipc_visuals_returns_empty_and_persisted_summaries() {
+        let user_data = tempfile::tempdir().unwrap();
+        let ctx = || IpcContext {
+            caller: Caller {
+                key: "w1".into(),
+                window: Some(1),
+                conn_id: None,
+                device_id: None,
+            },
+            user_data: Some(user_data.path().to_path_buf()),
+        };
+
+        let empty = ipc_visuals(ctx(), vec![]).await.unwrap().unwrap();
+        assert_eq!(empty, json!([]));
+
+        let visuals_dir = user_data.path().join("visuals");
+        std::fs::create_dir_all(&visuals_dir).unwrap();
+        std::fs::write(
+            visuals_dir.join("history.json"),
+            serde_json::to_vec(&json!([{
+                "id": "0123456789abcdef",
+                "label": "Chart",
+                "kind": "inline",
+                "target": "",
+                "cwd": "/tmp",
+                "root": "/tmp",
+                "entry": "index.html",
+                "createdAt": 100,
+                "updatedAt": 200,
+                "versions": [{"version": 1, "createdAt": 100, "file": "v1.html", "hash": "abc"}]
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        // Reset cached catalog dir to force reload of the freshly written file.
+        *CATALOG.lock().unwrap() = None;
+
+        let list = ipc_visuals(ctx(), vec![]).await.unwrap().unwrap();
+        assert_eq!(
+            list,
+            json!([{
+                "id": "0123456789abcdef",
+                "label": "Chart",
+                "kind": "inline",
+                "target": "",
+                "cwd": "/tmp",
+                "createdAt": 100,
+                "updatedAt": 200,
+                "versions": 1
+            }])
+        );
+    }
 }

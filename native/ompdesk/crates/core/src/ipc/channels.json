@@ -30,12 +30,16 @@
 		"draft-pictures:remove",
 		"extension-update:get-state",
 		"extension-update:now",
+		"log:snapshot",
 		"omp-update:get-state",
 		"omp-update:now",
 		"preview:history",
+		"preview:visuals",
+		"resume:stop",
 		"setup:cancel",
 		"setup:get-state",
-		"setup:retry"
+		"setup:retry",
+		"ssh-tools:prompts"
 	],
 	"send": []
 }

@@ -10,8 +10,10 @@ use std::time::{Duration, Instant};
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
+use crate::ipc::{Handled, IpcContext};
 use crate::server::{Answer, Call, Events, Fault, Registry, Reply};
 use checkpoint::{Changes, Checkpoint};
 use tail::{Batch, Tail};
@@ -20,11 +22,13 @@ const POLL: Duration = Duration::from_secs(15);
 const FLUSH: Duration = Duration::from_millis(150);
 
 type Respond = oneshot::Sender<Result<Reply, Fault>>;
+type RespondValue = oneshot::Sender<Result<Value, Fault>>;
 
 enum Input {
     Changed(notify::Result<Event>),
     Ready(Respond),
     Snapshot(Respond),
+    SnapshotValue(RespondValue),
     Close(Option<Respond>),
 }
 
@@ -36,6 +40,11 @@ struct Feed {
 fn feeds() -> MutexGuard<'static, HashMap<u64, Feed>> {
     static FEEDS: LazyLock<Mutex<HashMap<u64, Feed>>> = LazyLock::new(Default::default);
     FEEDS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn active_watcher() -> MutexGuard<'static, Option<u64>> {
+    static ACTIVE: LazyLock<Mutex<Option<u64>>> = LazyLock::new(Default::default);
+    ACTIVE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[derive(Deserialize)]
@@ -97,6 +106,10 @@ pub(super) fn register(registry: &mut Registry) {
                 .is_some_and(|feed| !feed.owner.reaches_another(&call.events))
                 && let Some(feed) = feeds.remove(&id.watcher)
             {
+                let mut active = active_watcher();
+                if *active == Some(id.watcher) {
+                    *active = feeds.keys().max().copied();
+                }
                 feed.input
                     .send(Input::Close(Some(reply)))
                     .map_err(|_| closed())?;
@@ -109,13 +122,44 @@ pub(super) fn register(registry: &mut Registry) {
 }
 
 pub(super) fn close_all(events: &Events) {
-    feeds().retain(|_, feed| {
+    let mut feeds = feeds();
+    feeds.retain(|_, feed| {
         if feed.owner.reaches_another(events) {
             return true;
         }
         let _ = feed.input.send(Input::Close(None));
         false
     });
+    let mut active = active_watcher();
+    if active.is_some_and(|id| !feeds.contains_key(&id)) {
+        *active = feeds.keys().max().copied();
+    }
+}
+
+/// Direct core IPC `log:snapshot`: reads the active `LogWatcher` feed's snapshot, or an empty batch before start.
+pub(crate) fn ipc_snapshot(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let input = {
+            let feeds = feeds();
+            let active = *active_watcher();
+            active
+                .and_then(|id| feeds.get(&id))
+                .or_else(|| feeds.iter().max_by_key(|(id, _)| *id).map(|(_, feed)| feed))
+                .map(|feed| feed.input.clone())
+        };
+        let Some(input) = input else {
+            return Ok(Some(json!({ "lines": [], "nextSequence": 0 })));
+        };
+        let (tx, rx) = oneshot::channel();
+        if input.send(Input::SnapshotValue(tx)).is_err() {
+            return Ok(Some(json!({ "lines": [], "nextSequence": 0 })));
+        }
+        match rx.await {
+            Ok(Ok(batch)) => Ok(Some(batch)),
+            Ok(Err(fault)) => Err(fault),
+            Err(_) => Ok(Some(json!({ "lines": [], "nextSequence": 0 }))),
+        }
+    })
 }
 
 fn start(call: Call, reply: Respond) -> Result<(), Fault> {
@@ -152,6 +196,7 @@ fn start(call: Call, reply: Respond) -> Result<(), Fault> {
         .spawn(move || run(open, tail, initial, call.events, input, rx, reply))
         .map_err(|error| Fault::new("logs_start", error.to_string()))?;
     feeds.insert(id, feed);
+    *active_watcher() = Some(id);
     Ok(())
 }
 
@@ -189,10 +234,25 @@ fn run(
             },
         );
     };
-    let publish = |tail: &mut Tail, snapshots: &mut Vec<Respond>| {
+    enum SnapshotReply {
+        Reply(Respond),
+        Value(RespondValue),
+    }
+    let publish = |tail: &mut Tail, snapshots: &mut Vec<SnapshotReply>| {
         tail.flush(emit);
+        let snapshot = tail.snapshot();
         for reply in snapshots.drain(..) {
-            let _ = reply.send(Reply::json(&tail.snapshot()));
+            match reply {
+                SnapshotReply::Reply(tx) => {
+                    let _ = tx.send(Reply::json(&snapshot));
+                }
+                SnapshotReply::Value(tx) => {
+                    let _ = tx.send(
+                        serde_json::to_value(&snapshot)
+                            .map_err(|error| Fault::new("internal", error.to_string())),
+                    );
+                }
+            }
         }
     };
     let mut snapshots = Vec::new();
@@ -241,9 +301,20 @@ fn run(
                 let _ = reply.send(Reply::json(&()));
             }
             // A snapshot cannot expose lines whose recovery marks main has not received yet.
-            Ok(Input::Snapshot(reply)) if tail.has_pending() => snapshots.push(reply),
+            Ok(Input::Snapshot(reply)) if tail.has_pending() => {
+                snapshots.push(SnapshotReply::Reply(reply))
+            }
             Ok(Input::Snapshot(reply)) => {
                 let _ = reply.send(Reply::json(&tail.snapshot()));
+            }
+            Ok(Input::SnapshotValue(reply)) if tail.has_pending() => {
+                snapshots.push(SnapshotReply::Value(reply))
+            }
+            Ok(Input::SnapshotValue(reply)) => {
+                let _ = reply.send(
+                    serde_json::to_value(tail.snapshot())
+                        .map_err(|error| Fault::new("internal", error.to_string())),
+                );
             }
             Ok(Input::Close(reply)) => {
                 drop(source);
@@ -256,5 +327,58 @@ fn run(
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc::Caller;
+    use crate::server::Scope;
+
+    #[tokio::test]
+    async fn ipc_snapshot_returns_empty_before_start_and_live_batch_when_running() {
+        let ctx = || IpcContext {
+            caller: Caller {
+                key: "w1".into(),
+                window: Some(1),
+                conn_id: None,
+                device_id: None,
+            },
+            user_data: None,
+        };
+
+        let empty = ipc_snapshot(ctx(), vec![]).await.unwrap().unwrap();
+        assert_eq!(empty, json!({ "lines": [], "nextSequence": 0 }));
+
+        let dir = tempfile::tempdir().unwrap();
+        let (events, _sender, _frames) = Events::capture();
+        let (tx, rx) = oneshot::channel();
+        let params = json!({
+            "watcher": 99_001,
+            "root": dir.path(),
+            "nextSequence": 1,
+            "checkpoint": { "files": {}, "lines": ["hello log"] }
+        });
+        start(
+            Call {
+                params: serde_json::value::to_raw_value(&params).unwrap(),
+                scope: Scope::detached(),
+                bin: None,
+                events: events.clone(),
+            },
+            tx,
+        )
+        .unwrap();
+        rx.await.unwrap().unwrap();
+
+        let snap = ipc_snapshot(ctx(), vec![]).await.unwrap().unwrap();
+        assert_eq!(snap["lines"], json!(["hello log"]));
+        assert_eq!(snap["nextSequence"], 1);
+
+        close_all(&events);
+        // After closing the active watcher, snapshot falls back to empty again.
+        let after = ipc_snapshot(ctx(), vec![]).await.unwrap().unwrap();
+        assert_eq!(after, json!({ "lines": [], "nextSequence": 0 }));
     }
 }

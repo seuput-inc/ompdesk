@@ -33,7 +33,6 @@ import {
 	PREVIEW_STREAM_POLL,
 	PREVIEW_TAB_LIMIT,
 	PREVIEW_VIEWPORTS,
-	PREVIEW_VISUALS,
 	type PreviewBounds,
 	type PreviewDevice,
 	type PreviewDeviceRequest,
@@ -1250,7 +1249,7 @@ export function registerPreviewHost(
 		await writeFile(choice.filePath, await contents.printToPDF({ printBackground: true }));
 		return choice.filePath;
 	});
-	ipc.handle(PREVIEW_VISUALS, () => visuals.list());
+	// `preview:visuals` routes directly from tauri-shell to ompdesk-core (`crates/core/src/visuals/store.rs`).
 	// This computer's running mobile devices (Orca's emulator pane): the core runs `simctl`/`adb` on the login shell's
 	// PATH; nothing is booted here (the `ompdesk-mobile-emulator` skill does that).
 	ipc.handle(PREVIEW_DEVICE, async (_caller, raw: unknown) => {

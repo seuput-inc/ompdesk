@@ -301,6 +301,15 @@ impl Askpass {
         self.shared.tell(&state);
     }
 
+    /// The questions currently waiting for the person, in the order they were asked.
+    pub fn prompts(&self) -> Vec<Prompt> {
+        locked(&self.shared.state)
+            .waiting
+            .iter()
+            .map(|entry| entry.prompt.clone())
+            .collect()
+    }
+
     /// Cancels every waiting question and stops listening.
     pub fn close(&self) {
         let mut state = locked(&self.shared.state);

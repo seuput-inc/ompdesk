@@ -43,6 +43,7 @@ use rules::{Destination, Failure, Target, refused};
 
 use crate::fs::error::{Codes, NodeError, uv_code};
 use crate::fs::order::js_trim;
+use crate::ipc::{Handled, IpcContext};
 use crate::run::{Exec, Opts, Output, Runner};
 use crate::server::{Call, Events, Fault, Registry, Reply, Scope};
 
@@ -201,6 +202,8 @@ struct Services {
     open: HashMap<String, Arc<Service>>,
     /// Main names every service once: a request that arrives after its service's close must not open it again.
     closed: HashSet<String>,
+    /// Most recently opened active service name for direct `ssh-tools:prompts` IPC reads.
+    active: Option<String>,
 }
 
 static SERVICES: LazyLock<Mutex<Services>> = LazyLock::new(Default::default);
@@ -215,15 +218,16 @@ fn service(name: &str, events: &Events) -> Result<Arc<Service>, Fault> {
     if services.closed.contains(name) {
         return Err(closed_fault());
     }
-    let service = services.open.entry(name.to_owned()).or_insert_with(|| {
+    let service = Arc::clone(services.open.entry(name.to_owned()).or_insert_with(|| {
         Arc::new(Service {
             events: events.clone(),
             closed: AtomicBool::new(false),
             askpass: Mutex::default(),
             runs: Mutex::default(),
         })
-    });
-    Ok(Arc::clone(service))
+    }));
+    services.active = Some(name.to_owned());
+    Ok(service)
 }
 
 /// Ends everything of the service `name` for good: its runs, its waiting questions, its listener.
@@ -231,7 +235,11 @@ fn end(name: &str) {
     let service = {
         let mut services = locked(&SERVICES);
         services.closed.insert(name.to_owned());
-        services.open.remove(name)
+        let removed = services.open.remove(name);
+        if services.active.as_deref() == Some(name) {
+            services.active = services.open.keys().next().cloned();
+        }
+        removed
     };
     let Some(service) = service else { return };
     service.closed.store(true, Ordering::SeqCst);
@@ -241,6 +249,25 @@ fn end(name: &str) {
     if let Some(askpass) = locked(&service.askpass).take() {
         askpass.close();
     }
+}
+
+/// Direct core IPC `ssh-tools:prompts`: current waiting SSH askpass prompts, or `[]` when none wait.
+pub(crate) fn ipc_prompts(_ctx: IpcContext, _args: Vec<serde_json::Value>) -> Handled {
+    Box::pin(async move {
+        let askpass = {
+            let services = locked(&SERVICES);
+            services
+                .active
+                .as_deref()
+                .and_then(|name| services.open.get(name))
+                .or_else(|| services.open.values().next())
+                .and_then(|svc| locked(&svc.askpass).clone())
+        };
+        let prompts = askpass.map(|a| a.prompts()).unwrap_or_default();
+        let value = serde_json::to_value(prompts)
+            .map_err(|error| Fault::new("internal", error.to_string()))?;
+        Ok(Some(value))
+    })
 }
 
 /// Ends every service that reports to `events`' output, or to none any more. `serve` calls it when its input ended:
@@ -1252,5 +1279,29 @@ esac",
             );
             assert!(events.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn ipc_prompts_returns_empty_without_service_and_with_idle_askpass() {
+        let ctx = || IpcContext {
+            caller: crate::ipc::Caller {
+                key: "w1".into(),
+                window: Some(1),
+                conn_id: None,
+                device_id: None,
+            },
+            user_data: None,
+        };
+        let empty = ipc_prompts(ctx(), vec![]).await.unwrap().unwrap();
+        assert_eq!(empty, json!([]));
+
+        let (events, _sender, _frames) = Events::capture();
+        let svc = service("ipc-prompts-test", &events).unwrap();
+        let _askpass = svc
+            .askpass("ipc-prompts-test", Duration::from_secs(30))
+            .unwrap();
+        let active = ipc_prompts(ctx(), vec![]).await.unwrap().unwrap();
+        assert_eq!(active, json!([]));
+        end("ipc-prompts-test");
     }
 }

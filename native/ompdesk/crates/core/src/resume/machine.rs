@@ -252,6 +252,21 @@ pub struct Inst {
 
 thread_local! {
     static INSTANCES: RefCell<HashMap<u64, Rc<Inst>>> = RefCell::default();
+    static ACTIVE: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
+pub fn active_instance() -> Option<Rc<Inst>> {
+    INSTANCES.with(|all| {
+        let all = all.borrow();
+        if let Some(id) = ACTIVE.with(Cell::get)
+            && let Some(inst) = all.get(&id)
+        {
+            return Some(Rc::clone(inst));
+        }
+        all.iter()
+            .max_by_key(|(id, _)| *id)
+            .map(|(_, inst)| Rc::clone(inst))
+    })
 }
 
 pub fn open(id: u64, opts: &serde_json::value::RawValue, out: Out) -> Result<(), Fault> {
@@ -280,11 +295,19 @@ pub fn open(id: u64, opts: &serde_json::value::RawValue, out: Out) -> Result<(),
         st: RefCell::new(st),
     });
     INSTANCES.with(|all| all.borrow_mut().insert(id, inst));
+    ACTIVE.with(|active| active.set(Some(id)));
     Ok(())
 }
 
 pub fn close(id: u64) {
-    INSTANCES.with(|all| all.borrow_mut().remove(&id));
+    INSTANCES.with(|all| {
+        let mut all = all.borrow_mut();
+        all.remove(&id);
+        if ACTIVE.with(Cell::get) == Some(id) {
+            let next = all.keys().max().copied();
+            ACTIVE.with(|active| active.set(next));
+        }
+    });
 }
 
 pub fn instance(id: u64) -> Option<Rc<Inst>> {
@@ -2453,6 +2476,17 @@ impl Inst {
             me.done(token);
         });
         Ok(token)
+    }
+
+    /// Direct core IPC `resume:stop`: performs the same stop/cancel/abort sequence and awaits completion.
+    pub async fn stop_resumed_direct(self: &Rc<Self>, tab: &str) -> R<()> {
+        self.ask("noteStopped", json!({"tab": tab})).await?;
+        self.cancel_wait(tab).await?;
+        self.push(json!({"k": "turnStop", "tab": tab}));
+        let _ = self
+            .command(Target::Tab(tab), json!({"type": "abort"}), None)
+            .await;
+        Ok(())
     }
 
     /// How a tab whose omp came up with work running in its journal goes on: after this launch's continuation of its

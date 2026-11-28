@@ -68,6 +68,14 @@ impl Serialize for History<'_> {
     }
 }
 
+/// Just `record` of each catalog item, matching `VisualStore.list()` for `preview:visuals`.
+pub(super) struct Summaries<'a>(pub(super) &'a [Record]);
+impl Serialize for Summaries<'_> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_seq(self.0.iter().map(|r| item(r).record))
+    }
+}
+
 pub(super) fn opened(
     record: &Record,
     added: bool,

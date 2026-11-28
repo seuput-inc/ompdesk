@@ -5,7 +5,7 @@ mod store;
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::json;
-pub(crate) use store::{register, saved_after_retry};
+pub(crate) use store::{ipc_visuals, register, saved_after_retry};
 use tokio::io::AsyncReadExt;
 
 use crate::fs::{disk, error::NodeError};

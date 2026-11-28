@@ -1,11 +1,5 @@
 import { app, BrowserWindow } from "electron";
-import {
-	SSH_TOOLS_AGENT,
-	SSH_TOOLS_COMMAND,
-	SSH_TOOLS_PROMPT,
-	SSH_TOOLS_PROMPTS,
-	SSH_TOOLS_STATE,
-} from "../../shared/ssh-tools";
+import { SSH_TOOLS_AGENT, SSH_TOOLS_COMMAND, SSH_TOOLS_PROMPT, SSH_TOOLS_STATE } from "../../shared/ssh-tools";
 import type { IpcRegistry } from "../web/ipc-registry";
 import { SshTools } from "./service";
 
@@ -34,8 +28,7 @@ export function registerSshToolsIpc(ipc: IpcRegistry): void {
 	shared = tools;
 	ipc.handle(SSH_TOOLS_COMMAND, (_caller, request: unknown) => tools.command(request));
 	ipc.handle(SSH_TOOLS_AGENT, () => tools.agent());
-	// A window that opens (or reloads) while a question waits still sees it.
-	ipc.handle(SSH_TOOLS_PROMPTS, () => tools.prompts());
+	// `ssh-tools:prompts` routes directly from tauri-shell to ompdesk-core (`crates/core/src/ssh/mod.rs`).
 	app.on("will-quit", () => tools.dispose());
 	void tools.start().catch(error => console.warn("Could not restore SSH forwards:", error));
 }

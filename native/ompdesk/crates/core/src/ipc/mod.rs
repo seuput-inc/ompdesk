@@ -201,6 +201,10 @@ const OWNED: &[Owned] = &[
         handler: crate::tools::ipc::ipc_extension_update_now,
     },
     Owned {
+        channel: "log:snapshot",
+        handler: crate::logs::ipc_snapshot,
+    },
+    Owned {
         channel: "omp-update:get-state",
         handler: crate::tools::ipc::ipc_omp_update_get_state,
     },
@@ -213,6 +217,14 @@ const OWNED: &[Owned] = &[
         handler: crate::browsing::ipc_history,
     },
     Owned {
+        channel: "preview:visuals",
+        handler: crate::visuals::ipc_visuals,
+    },
+    Owned {
+        channel: "resume:stop",
+        handler: crate::resume::ipc_stop,
+    },
+    Owned {
         channel: "setup:cancel",
         handler: crate::tools::ipc::ipc_setup_cancel,
     },
@@ -223,6 +235,10 @@ const OWNED: &[Owned] = &[
     Owned {
         channel: "setup:retry",
         handler: crate::tools::ipc::ipc_setup_retry,
+    },
+    Owned {
+        channel: "ssh-tools:prompts",
+        handler: crate::ssh::ipc_prompts,
     },
 ];
 
