@@ -1084,6 +1084,31 @@ html[data-gpu="software"] .omp-updating-hint {
 	border-top: var(--sc-hairline) solid var(--sc-divider);
 }
 
+/* Deep-link and search target feedback (Orca `.settings-target-highlight` parity, compositor-only opacity fade). */
+[data-settings-target-highlight] {
+	position: relative;
+}
+
+[data-settings-target-highlight]::after {
+	content: "";
+	position: absolute;
+	inset: 0 calc(-1 * var(--sc-space-2));
+	border-radius: var(--sc-radius-md);
+	background: color-mix(in srgb, var(--sc-text) 8%, transparent);
+	pointer-events: none;
+	animation: omp-target-fade calc(var(--sc-duration-slow) * 6) var(--sc-ease-exit) forwards;
+}
+
+@keyframes omp-target-fade {
+	0%,
+	55% {
+		opacity: 1;
+	}
+	100% {
+		opacity: 0;
+	}
+}
+
 .settings-field-row {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) minmax(10rem, 15rem);

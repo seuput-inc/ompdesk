@@ -52,7 +52,7 @@ export function ConfirmDialog({
 			size="sm"
 			title={title}
 		>
-			<div className="text-sc-md break-words whitespace-pre-wrap text-(--sc-text-secondary)">{message}</div>
+			<div className="text-sc-sm break-words whitespace-pre-wrap text-(--sc-text-secondary)">{message}</div>
 			{warning && <div className="mt-2 text-sc-sm text-(--sc-warning)">{warning}</div>}
 		</Modal>
 	);

@@ -567,23 +567,23 @@
 }
 
 .omp-dialog-size-sm {
-	width: min(clamp(26rem, 32vw, 30rem), calc(100vw - 2rem));
-	max-height: min(86dvh, 50rem, var(--sc-dialog-room));
+	width: min(clamp(25rem, 30vw, 28rem), calc(100vw - 2rem));
+	max-height: min(86dvh, 48rem, var(--sc-dialog-room));
 }
 
 .omp-dialog-size-md {
-	width: min(clamp(36rem, 42vw, 46rem), calc(100vw - 2rem));
-	max-height: min(88dvh, 56rem, var(--sc-dialog-room));
+	width: min(clamp(31rem, 40vw, 40rem), calc(100vw - 2rem));
+	max-height: min(88dvh, 54rem, var(--sc-dialog-room));
 }
 
 .omp-dialog-size-lg {
-	width: min(clamp(48rem, 64vw, 72rem), calc(100vw - 2rem));
-	max-height: min(90dvh, 64rem, var(--sc-dialog-room));
+	width: min(clamp(44rem, 60vw, 64rem), calc(100vw - 2rem));
+	max-height: min(90dvh, 62rem, var(--sc-dialog-room));
 }
 
 .omp-dialog-size-picker {
-	width: min(clamp(40rem, 48vw, 54rem), calc(100vw - 2rem));
-	max-height: min(76dvh, 56rem, var(--sc-dialog-room));
+	width: min(clamp(36rem, 46vw, 48rem), calc(100vw - 2rem));
+	max-height: min(76dvh, 54rem, var(--sc-dialog-room));
 }
 
 /* Dense list picker (model picker): one-line rows, so a narrow column fits. */

@@ -33,9 +33,9 @@ export type SheetPlacement = "right" | "bottom" | "left" | "full";
  * A dialog's and a sheet's shell insets: tight under a mouse, the roomier touch values under a finger (a phone's own
  * are mobile.css's). Head, body and foot share one side inset, so the body lines up with the title.
  */
-export const SHELL_HEAD_PAD = "py-2 pr-3 pl-4 [html[data-input=touch]_&]:py-3 [html[data-input=touch]_&]:pl-5";
+export const SHELL_HEAD_PAD = "py-2.5 pr-3 pl-4 [html[data-input=touch]_&]:py-3 [html[data-input=touch]_&]:pl-5";
 export const SHELL_BODY_PAD = "omp-body-pad px-4 py-3 [html[data-input=touch]_&]:px-5 [html[data-input=touch]_&]:py-4";
-export const SHELL_FOOT_PAD = "px-4 py-2 [html[data-input=touch]_&]:px-5 [html[data-input=touch]_&]:py-3";
+export const SHELL_FOOT_PAD = "px-4 py-2.5 [html[data-input=touch]_&]:px-5 [html[data-input=touch]_&]:py-3";
 
 const WIDTH: Record<SheetSize, string> = {
 	sm: "w-[min(360px,calc(100vw-48px))]",
@@ -121,7 +121,7 @@ export function SheetSurface({
 	return (
 		<div
 			className={cx(
-				"flex h-full flex-col border-(--sc-border-subtle) bg-(--sc-elevated) text-(--sc-text) shadow-(--sc-shadow-lg)",
+				"flex h-full flex-col border-(--sc-dialog-border) bg-(--sc-elevated) text-(--sc-text) shadow-(--sc-shadow-lg)",
 				PLACEMENT[placement].surface,
 				className,
 			)}
