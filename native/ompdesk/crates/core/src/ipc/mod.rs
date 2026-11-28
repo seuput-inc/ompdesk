@@ -636,6 +636,27 @@ async fn recorded(caller: Caller) -> Result<Option<Value>, Fault> {
 #[cfg(test)]
 pub(crate) static TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(Default::default);
 
+/// Full `IPC_POLICY` map built from `channels.json` for tests that start the core's IPC table via `ipc.start`.
+#[cfg(test)]
+pub(crate) fn test_policy() -> serde_json::Map<String, Value> {
+    let manifest: Value = serde_json::from_str(include_str!("channels.json")).unwrap();
+    ["invoke", "send"]
+        .into_iter()
+        .flat_map(|dir| {
+            manifest[dir]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(move |channel| {
+                    (
+                        channel.as_str().unwrap().to_owned(),
+                        serde_json::json!({"dir": dir}),
+                    )
+                })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,13 +735,7 @@ mod tests {
         let server = tokio::spawn(crate::serve(server_read, server_write, crate::registry()));
         let (client_read, mut client_write) = tokio::io::split(client);
         let mut lines = tokio::io::BufReader::new(client_read);
-        let mut policy_map = serde_json::Map::new();
-        for owned in OWNED {
-            policy_map.insert(
-                owned.channel.to_owned(),
-                serde_json::json!({"dir": "invoke"}),
-            );
-        }
+        let mut policy_map = test_policy();
         policy_map.insert("test:ipc.record".into(), serde_json::json!({"dir": "send"}));
         policy_map.insert(
             "test:ipc.recorded".into(),

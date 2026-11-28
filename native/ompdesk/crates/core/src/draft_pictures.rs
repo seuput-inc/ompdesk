@@ -779,17 +779,7 @@ mod tests {
         let mut lines = tokio::io::BufReader::new(client_read);
 
         // `ipc.start` refuses a policy that omits any channel the core serves, so list them all.
-        let manifest: Value = serde_json::from_str(include_str!("ipc/channels.json")).unwrap();
-        let policy: serde_json::Map<String, Value> = ["invoke", "send"]
-            .into_iter()
-            .flat_map(|dir| {
-                manifest[dir]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(move |channel| (channel.as_str().unwrap().to_owned(), json!({"dir": dir})))
-            })
-            .collect();
+        let policy = Value::Object(crate::ipc::test_policy());
         let phone = json!({"key": "c1", "window": -1, "connId": "1", "deviceId": "phone-a"});
         let desktop = json!({"key": "w1", "window": 1, "connId": null, "deviceId": null});
         let frames = [

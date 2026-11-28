@@ -817,8 +817,11 @@ pub(crate) fn open_for_ipc_test(
     automatic: bool,
     care_name: Option<&str>,
     server: Option<Server>,
-) -> Arc<Service> {
-    let (events, _sender, _frames) = Events::capture();
+) -> (
+    Arc<Service>,
+    tokio::sync::mpsc::UnboundedSender<crate::wire::Frame>,
+) {
+    let (events, sender, _frames) = Events::capture();
     let quality = care_name.map(|care| json!({ "care": care, "upkeep": care }));
     let params = json!({
         "service": name,
@@ -865,7 +868,7 @@ pub(crate) fn open_for_ipc_test(
             state.data_dir = server.data_dir.clone();
         });
     }
-    svc
+    (svc, sender)
 }
 
 #[cfg(test)]
