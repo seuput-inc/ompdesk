@@ -192,6 +192,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 				const formal = ["-e", join(deps.builtinDir, "formal")];
 				// Jakub Krehel's interface skills (resources/omp-builtin/interfaces): no switch, every spawn, skills only.
 				const interfaces = ["-e", join(deps.builtinDir, "interfaces")];
+				const matt = ["-e", join(deps.builtinDir, "matt")];
 				const ponytail = ["-e", join(bridgeDir, "ponytail.ts")];
 				const memory = (await deps.aiMemoryExtensionArgs?.(cwd)) ?? [];
 				const bot = (await deps.botLaunchArgs?.(cwd)) ?? [];
@@ -212,6 +213,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 						...ecc,
 						...formal,
 						...interfaces,
+						...matt,
 						...ponytail,
 						...memory,
 						...bot,

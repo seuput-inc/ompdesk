@@ -43,9 +43,14 @@ it("ships the kept skills' Markdown only, with the bytes and license recorded at
 });
 
 it("shares no skill name with another built-in root: stock keeps one skill per name", () => {
-	const elsewhere = ["skills", "pstack/skills", "ecc/skills", "formal/skills", "ponytail/skills"].flatMap(dir =>
-		existsSync(join(BUILTIN, dir)) ? readdirSync(join(BUILTIN, dir)) : [],
-	);
+	const elsewhere = [
+		"skills",
+		"pstack/skills",
+		"ecc/skills",
+		"formal/skills",
+		"matt/skills",
+		"ponytail/skills",
+	].flatMap(dir => (existsSync(join(BUILTIN, dir)) ? readdirSync(join(BUILTIN, dir)) : []));
 	expect(pin.curation.kept.filter(name => elsewhere.includes(name))).toEqual([]);
 });
 

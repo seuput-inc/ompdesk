@@ -16,6 +16,8 @@ const ALWAYS = [
 	"-e",
 	path.join("/builtin", "interfaces"),
 	"-e",
+	path.join("/builtin", "matt"),
+	"-e",
 	path.join("/bridge", "ponytail.ts"),
 ];
 const created = vi.hoisted(() => [] as SidecarOptions[]);

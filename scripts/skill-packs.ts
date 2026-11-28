@@ -92,6 +92,15 @@ const PACKS: Pack[] = [
 			...FORMAL_TESTS,
 		],
 	},
+	{
+		name: "matt",
+		config: "resources/omp-builtin/matt/matt-config.json",
+		repo: "mattpocock/skills",
+		paths: ["skills/engineering", "skills/productivity", "package.json", "LICENSE"],
+		versionFile: "package.json",
+		sync: "sync:matt",
+		tests: ["scripts/sync-matt.test.ts", "scripts/matt-stock.test.ts", ...PACKAGING_TESTS, ...FORMAL_TESTS],
+	},
 ];
 
 const Pin = z.object({

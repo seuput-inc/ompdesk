@@ -26,6 +26,7 @@
     "sync:ecc": "bun scripts/sync-ecc.ts",
     "sync:ponytail": "bun scripts/sync-ponytail.ts",
     "sync:interfaces": "bun scripts/sync-interfaces.ts",
+    "sync:matt": "bun scripts/sync-matt.ts",
     "gen:licenses": "bun scripts/generate-third-party-notices.ts",
     "licenses:check": "bun scripts/generate-third-party-notices.ts --check",
     "check": "node scripts/lint-surfaces.mjs && biome check . && bun run check:types",

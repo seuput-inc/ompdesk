@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 import aiMemorySource from "../native/memory/ompdesk.json" with { type: "json" };
 import cefPin from "../native/ompdesk/crates/shell/cef-pin.json" with { type: "json" };
 import interfacesPin from "../resources/omp-builtin/interfaces/interfaces-config.json" with { type: "json" };
+import mattPin from "../resources/omp-builtin/matt/matt-config.json" with { type: "json" };
 import ponytailPin from "../resources/omp-builtin/ponytail/ponytail-config.json" with { type: "json" };
 import agentDesktopPin from "./agent-desktop-pin.json" with { type: "json" };
 import { committedCrateList } from "./gen-crate-notices";
@@ -351,6 +352,13 @@ function vendoredSections(): string {
 			"Licensed under the MIT License (full text below and in LICENSES/MIT-interfaces.txt).",
 			"",
 			read("LICENSES/MIT-interfaces.txt"),
+		].join("\n"),
+		[
+			`Matt Pocock's skills ${mattPin.version} (https://github.com/${mattPin.repo}, commit ${mattPin.commit})`,
+			`${mattPin.curation.kept.length} engineering and productivity skills in resources/omp-builtin/matt/skills/. The Markdown and wizard template are copied unmodified. No plugin or installation scripts are loaded.`,
+			"Licensed under the MIT License (full text below and in LICENSES/MIT-matt.txt).",
+			"",
+			read("LICENSES/MIT-matt.txt"),
 		].join("\n"),
 		[
 			"dot-prop 10.2.0 (https://github.com/sindresorhus/dot-prop) and conf 16.0.0",

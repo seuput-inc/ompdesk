@@ -6503,6 +6503,34 @@ SOFTWARE.
 
 ------------------------------------------------------------------------------
 
+Matt Pocock's skills 1.3.2 (https://github.com/mattpocock/skills, commit bbadaa631c37af594e5a05c9cefacd9956136b18)
+13 engineering and productivity skills in resources/omp-builtin/matt/skills/. The Markdown and wizard template are copied unmodified. No plugin or installation scripts are loaded.
+Licensed under the MIT License (full text below and in LICENSES/MIT-matt.txt).
+
+MIT License
+
+Copyright (c) 2026 Matt Pocock
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+------------------------------------------------------------------------------
+
 dot-prop 10.2.0 (https://github.com/sindresorhus/dot-prop) and conf 16.0.0
 (https://github.com/sindresorhus/conf). dot-prop's parsePath and conf's own-property get, set and
 delete of a dotted key, which electron-store gave the preference files, are ported to Rust in

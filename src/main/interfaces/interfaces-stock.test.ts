@@ -62,11 +62,11 @@ afterAll(async () => {
 
 describe.skipIf(!packageRoot)("the interface skills on the installed omp", () => {
 	// The directory roots `sidecar-factory.ts` mounts with every switch on (Ponytail's skills sit in its folder).
-	const others = ["skills", "pstack", "ecc", "formal", "ponytail"].map(name =>
+	const roots = ["skills", "pstack", "ecc", "formal", "interfaces", "matt", "ponytail"].map(name =>
 		name === "skills" ? BUILTIN : path.join(BUILTIN, name),
 	);
-	const without = packageRoot ? probe(others) : undefined;
-	const all = packageRoot ? probe([...others, PACK]) : undefined;
+	const without = packageRoot ? probe(roots.filter(root => root !== PACK)) : undefined;
+	const all = packageRoot ? probe(roots) : undefined;
 	const ours = all?.skills.filter(skill => skill.path.startsWith(`${PACK}${path.sep}`)) ?? [];
 
 	it("loads every kept skill from the pack under its own name, beside every other built-in root", () => {

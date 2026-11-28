@@ -1,0 +1,39 @@
+{
+	"repo": "mattpocock/skills",
+	"commit": "bbadaa631c37af594e5a05c9cefacd9956136b18",
+	"version": "1.3.2",
+	"curation": {
+		"rule": "Only engineering and productivity are considered. New skills in either category require an explicit decision. Omit misc, in-progress and plugin metadata.",
+		"kept": [
+			"ask-matt",
+			"codebase-design",
+			"grill-with-docs",
+			"research",
+			"setup-matt-pocock-skills",
+			"to-spec",
+			"to-tickets",
+			"wayfinder",
+			"wizard",
+			"grilling",
+			"to-questionnaire",
+			"wait-what",
+			"writing-for-agents"
+		],
+		"excluded": {
+			"code-review": "pstack and Ponytail review",
+			"diagnosing-bugs": "pstack bug-fix and perf-issue",
+			"domain-modeling": "ECC context-and-decisions",
+			"implement": "pstack feature",
+			"implement-spec": "Autopilot",
+			"improve-codebase-architecture": "Runs a remote script",
+			"pr": "pstack opening-a-pr",
+			"prototype": "pstack prototype",
+			"retro": "pstack reflect",
+			"tdd": "pstack-tdd",
+			"triage": "Acts on untrusted commands",
+			"grill-me": "Identical alias of grilling",
+			"handoff": "pstack pause-safely and session-pickup",
+			"teach": "pstack-teach"
+		}
+	}
+}
