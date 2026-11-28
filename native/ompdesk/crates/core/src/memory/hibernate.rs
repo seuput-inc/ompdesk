@@ -1262,4 +1262,108 @@ mod tests {
         drop(client_write);
         server.await.unwrap().unwrap();
     }
+
+    #[test]
+    fn twenty_tab_multi_session_hibernation_stress() {
+        let mut engine = HibernateEngine::new(HibernatePolicy {
+            proactive_quiet_ms: Some(15 * 60_000),
+            max_resident_tabs: Some(6),
+            cap_quiet_ms: 2 * 60_000,
+            max_evictions_normal: 1,
+            cooldown_ms: 60_000,
+            ..HibernatePolicy::default()
+        });
+
+        let healthy = reading(12, Pressure::Normal);
+        let tab_bytes: u64 = 350 << 20; // 350 MiB per live omp sidecar
+        let mut live_tabs: Vec<TabInput> = (0..20)
+            .map(|i| {
+                let mut tab = quiet_tab(&format!("tab-{i}"), 1_000 + i as u32);
+                tab.visible = i == 0; // 1 active + 19 finished background
+                tab.cwd = Some(format!("/work/repo-{i}"));
+                tab
+            })
+            .collect();
+
+        let sample_for = |tabs: &[TabInput]| {
+            let rows: Vec<ProcessRow> = tabs
+                .iter()
+                .filter_map(|t| {
+                    t.pid.map(|pid| ProcessRow {
+                        pid,
+                        ppid: 1,
+                        bytes: tab_bytes,
+                        name: None,
+                        cpu_ms: None,
+                    })
+                })
+                .collect();
+            ProcessSample::from_rows(rows, false)
+        };
+
+        // Initial seed at t = 0: all 20 tabs live (7,000 MiB baseline).
+        let t0 = engine.evaluate(0, Some(&healthy), &live_tabs, &sample_for(&live_tabs));
+        assert_eq!(t0.resident_count, 20);
+        assert!(t0.evict.is_empty());
+
+        // Stage 1 (soft resident cap): after 2m+ quiet, drain 14 excess background tabs down to cap = 6.
+        let mut now = 2 * 60_000 + 5_000;
+        for _ in 0..14 {
+            let pass = engine.evaluate(now, Some(&healthy), &live_tabs, &sample_for(&live_tabs));
+            assert_eq!(pass.evict.len(), 1);
+            let victim = &pass.evict[0];
+            assert_eq!(victim.reason, EvictReason::ResidentCap);
+            assert_ne!(victim.tab_id, "tab-0");
+            engine.mark_hibernated(HibernatedTab {
+                tab_id: victim.tab_id.clone(),
+                session_path: victim.session_path.clone(),
+                cwd: victim.cwd.clone(),
+                label: victim.label.clone(),
+                hibernated_at_ms: now,
+                freed_bytes: victim.bytes,
+                reason: victim.reason,
+            });
+            if let Some(slot) = live_tabs.iter_mut().find(|t| t.tab_id == victim.tab_id) {
+                slot.pid = None;
+                slot.status = Some("asleep".into());
+            }
+            now += 5_000;
+        }
+        assert_eq!(engine.status().hibernated.len(), 14);
+
+        // Stage 2 (proactive idle): after 15m quiet, hibernate the remaining 5 background tabs.
+        now = 16 * 60_000;
+        for _ in 0..5 {
+            let pass = engine.evaluate(now, Some(&healthy), &live_tabs, &sample_for(&live_tabs));
+            assert_eq!(pass.evict.len(), 1);
+            let victim = &pass.evict[0];
+            assert_eq!(victim.reason, EvictReason::ProactiveIdle);
+            assert_ne!(victim.tab_id, "tab-0");
+            engine.mark_hibernated(HibernatedTab {
+                tab_id: victim.tab_id.clone(),
+                session_path: victim.session_path.clone(),
+                cwd: victim.cwd.clone(),
+                label: victim.label.clone(),
+                hibernated_at_ms: now,
+                freed_bytes: victim.bytes,
+                reason: victim.reason,
+            });
+            if let Some(slot) = live_tabs.iter_mut().find(|t| t.tab_id == victim.tab_id) {
+                slot.pid = None;
+                slot.status = Some("asleep".into());
+            }
+            now += 5_000;
+        }
+
+        // Steady state: 19/19 background tabs hibernated, 1 active tab untouched, 6,650 MiB (95%) reclaimed.
+        let status = engine.status();
+        assert_eq!(status.hibernated.len(), 19);
+        assert_eq!(status.stats.hibernations_total, 19);
+        assert_eq!(status.stats.estimated_bytes_freed, 19 * tab_bytes);
+        assert!(status.hibernated.iter().all(|h| h.session_path.is_some()));
+
+        let final_pass = engine.evaluate(now, Some(&healthy), &live_tabs, &sample_for(&live_tabs));
+        assert_eq!(final_pass.resident_count, 1);
+        assert!(final_pass.evict.is_empty());
+    }
 }

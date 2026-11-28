@@ -261,4 +261,27 @@ mod tests {
         assert_eq!(buf.len(), 0);
         assert_eq!(buf.total_bytes(), 0);
     }
+
+    #[test]
+    fn run_message_buffer_stress_2000_large_messages_holds_8mib_and_256_count_caps() {
+        let mut buf = RunMessageBuffer::default();
+        let payload = "a".repeat(64 * 1024);
+        for i in 0..2_000u64 {
+            buf.push(
+                json!({ "role": "assistant", "timestamp": i, "text": &payload }),
+                payload.len(),
+            );
+            assert!(buf.len() <= RUN_MESSAGES_MAX_COUNT);
+            assert!(buf.total_bytes() <= RUN_MESSAGES_MAX_BYTES);
+        }
+        // 128 MiB streamed input -> strictly <= 8 MiB retained (128 x 64 KiB = 8 MiB).
+        assert_eq!(buf.total_bytes(), RUN_MESSAGES_MAX_BYTES);
+        assert_eq!(buf.len(), RUN_MESSAGES_MAX_BYTES / (64 * 1024));
+        assert!(buf.dropped_count() > 1_800);
+        let drained = buf.take_all();
+        assert_eq!(drained.len(), 128);
+        assert_eq!(drained.last().unwrap()["timestamp"], 1_999);
+        assert_eq!(buf.len(), 0);
+        assert_eq!(buf.total_bytes(), 0);
+    }
 }
