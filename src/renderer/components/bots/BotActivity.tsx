@@ -83,7 +83,7 @@ const ROWS = 5;
 
 export function BotActivity({ bot }: { bot: Bot }) {
 	return (
-		<div className="flex flex-col gap-5 p-4" data-bot-activity={bot.id}>
+		<div className="flex flex-col gap-4 p-4" data-bot-activity={bot.id}>
 			<BotFirstScreen bot={bot} />
 			<NeedsYou bot={bot} />
 			{!bot.device && <Suggestions bot={bot} />}
@@ -133,7 +133,7 @@ export function BotInspectorHome({ bot }: { bot: Bot }) {
 				</ul>
 			) : (
 				<EmptyState
-					className="mt-3.5 gap-2 px-6 py-12 [&>span]:size-5 [&>span]:bg-transparent [&>span>svg]:size-5"
+					className="mt-2 gap-2 px-6 py-8 [&>span]:size-5 [&>span]:bg-transparent [&>span>svg]:size-5"
 					size="sm"
 					description={t("panel.inspector.emptyItems", { name: bot.name })}
 					icon={<ListChecks />}
@@ -273,6 +273,17 @@ function NeedsYou({ bot }: { bot: Bot }) {
 							description={row.detail}
 							key={row.key}
 							leading={<StatusDot decorative tone="attention" />}
+							meta={
+								<Badge size="xs" variant={row.kind === "approval" ? "attention" : "default"}>
+									{t(
+										row.kind === "approval"
+											? "attention.approval"
+											: row.kind === "ask"
+												? "attention.question"
+												: "bots.needs.title",
+									)}
+								</Badge>
+							}
 							onClick={row.open}
 							size="sm"
 							title={row.title}

@@ -8,7 +8,7 @@ import { useMinuteTick } from "../../lib/now-tick";
 import type { QuestionRow } from "../../lib/question-inbox";
 import { groupQuestions, openInboxRow } from "../../lib/question-inbox-view";
 import { toastError } from "../../stores/toast";
-import { Button, Card, EmptyState, PageLayout } from "../common";
+import { Badge, Button, Card, EmptyState, PageLayout } from "../common";
 import {
 	type AnswerReceipt,
 	confirmedAnswers,
@@ -40,9 +40,15 @@ function QuestionField({
 	const changed =
 		drafts.some(entry => entry.key === row.key && entry.question.id !== question?.id) ||
 		receipts.some(entry => entry.draft.key === row.key && entry.outcome === "changed");
+	const kindBadge =
+		row.source === "approval"
+			? { variant: "attention" as const, label: t("attention.approval") }
+			: row.source === "access"
+				? { variant: "warning" as const, label: t("bots.needs.title") }
+				: { variant: "info" as const, label: t("attention.question") };
 	return (
 		<fieldset
-			className="min-w-0 space-y-2 rounded-(--sc-radius-lg) border border-(--sc-border-subtle) bg-(--sc-surface-1) p-3"
+			className="min-w-0 space-y-2 rounded-(--sc-radius-lg) border border-(--sc-code-border) bg-(--sc-code-bg) p-3"
 			data-item-id={row.source === "item" ? row.item.id : undefined}
 			data-question-row={row.source}
 			onKeyDown={event => {
@@ -68,20 +74,26 @@ function QuestionField({
 			}}
 		>
 			<legend className="sr-only">{[row.project, row.asker, row.title].join(" · ")}</legend>
-			<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-				<h4 className="font-medium">{row.title}</h4>
-				<span className="text-sc-xs text-(--sc-text-muted)">
-					{row.deviceName || row.device || t("board.thisComputer")}
+			<div className="flex flex-wrap items-center justify-between gap-x-2.5 gap-y-1">
+				<div className="flex min-w-0 flex-1 items-center gap-2">
+					<Badge size="xs" variant={kindBadge.variant}>
+						{kindBadge.label}
+					</Badge>
+					<h4 className="min-w-0 truncate text-sc-sm font-medium text-(--sc-text)">{row.title}</h4>
+				</div>
+				<span className="flex shrink-0 items-center gap-1.5 text-sc-xs tabular-nums text-(--sc-text-subtle)">
+					<span>{row.deviceName || row.device || t("board.thisComputer")}</span>
+					<span aria-hidden>·</span>
+					<span>
+						{row.askedAt === null
+							? t("inbox.timeUnknown")
+							: t("inbox.time", {
+									time: formatClock(row.askedAt),
+									age: formatSpan(Date.now() - row.askedAt),
+								})}
+					</span>
 				</span>
 			</div>
-			<p className="text-sc-xs text-(--sc-text-muted)">
-				{row.askedAt === null
-					? t("inbox.timeUnknown")
-					: t("inbox.time", {
-							time: formatClock(row.askedAt),
-							age: formatSpan(Date.now() - row.askedAt),
-						})}
-			</p>
 			{row.source === "item" ? (
 				<>
 					{changed && !draft && <p className="text-sc-sm text-(--sc-attention)">{t("inbox.result.changed")}</p>}
@@ -223,33 +235,39 @@ export function QuestionInbox() {
 								</ul>
 							</Card>
 						)}
-						{!rows.length && <EmptyState icon={<Inbox />} title={t("inbox.empty")} />}
-						{groups.map(group => (
-							<section className="space-y-3" key={group.key}>
-								<h2 className="text-sc-lg font-semibold">{group.project}</h2>
-								{group.askers.map(({ key, asker, rows: questions }) => (
-									<div className="space-y-2" key={key}>
-										<h3 className="text-sc-sm font-semibold text-(--sc-text-muted)">{asker}</h3>
-										{questions.map(row => (
-											<QuestionField
-												drafts={drafts}
-												key={row.key}
-												onEdit={(edited, answers) =>
-													useItemsUi.setState(state => editAnswer(state, edited, answers))
-												}
-												receipts={receipts}
-												row={row}
-												sending={sending}
-											/>
-										))}
+						{!rows.length && <EmptyState icon={<Inbox />} size="sm" title={t("inbox.empty")} />}
+						{groups.map(group => {
+							const groupCount = group.askers.reduce((sum, entry) => sum + entry.rows.length, 0);
+							return (
+								<section className="space-y-2.5" key={group.key}>
+									<div className="flex items-baseline justify-between gap-2 border-b border-(--sc-divider) pb-1.5">
+										<h2 className="text-sc-md font-semibold text-(--sc-text)">{group.project}</h2>
+										<span className="text-sc-xs tabular-nums text-(--sc-text-subtle)">{groupCount}</span>
 									</div>
-								))}
-							</section>
-						))}
+									{group.askers.map(({ key, asker, rows: questions }) => (
+										<div className="space-y-2" key={key}>
+											<h3 className="text-sc-xs font-semibold text-(--sc-text-muted)">{asker}</h3>
+											{questions.map(row => (
+												<QuestionField
+													drafts={drafts}
+													key={row.key}
+													onEdit={(edited, answers) =>
+														useItemsUi.setState(state => editAnswer(state, edited, answers))
+													}
+													receipts={receipts}
+													row={row}
+													sending={sending}
+												/>
+											))}
+										</div>
+									))}
+								</section>
+							);
+						})}
 					</div>
 				</div>
 				{(rows.some(row => row.source === "item") || ready.length > 0) && (
-					<footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-(--sc-border-subtle) px-4 pt-2 pb-[calc(var(--safe-b)+0.5rem)]">
+					<footer className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-(--sc-divider) px-4 pt-2 pb-[calc(var(--safe-b)+0.5rem)]">
 						<Button data-inbox-recommend disabled={sending || !recommended.length} onClick={recommend}>
 							{t("inbox.recommend")}
 						</Button>

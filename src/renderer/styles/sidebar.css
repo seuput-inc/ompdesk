@@ -49,7 +49,7 @@ html[data-input="touch"] :is(.omp-session-sidebar, .omp-sidebar-session-rename) 
 
 .omp-session-sidebar .omp-sidebar-bot-row {
 	gap: var(--sc-space-1-5);
-	padding: calc(var(--sc-space-1) * 1.25);
+	padding: var(--sc-space-1) var(--sc-space-1-5);
 }
 
 .omp-sidebar-bot-row [data-bot-row] {
@@ -76,6 +76,21 @@ html[data-input="touch"] .omp-sidebar-bot-fold {
    square to it; under a finger 32 px (mobile.css raises a project header to `--sc-row-touch`). */
 .omp-session-sidebar .omp-sidebar-head {
 	height: var(--omp-sidebar-head-h);
+	transition: background-color var(--sc-duration-instant) var(--sc-ease-standard);
+}
+
+.omp-session-sidebar [data-fold-summary] {
+	margin-inline-start: auto;
+	padding-inline-start: var(--sc-space-1);
+	font-variant-numeric: tabular-nums;
+}
+
+.omp-session-sidebar [data-sidebar-options] > button {
+	color: var(--sc-text-muted);
+}
+
+.omp-session-sidebar [data-sidebar-options="changed"] > button {
+	color: var(--sc-accent);
 }
 
 html:not([data-input="touch"]) .omp-session-sidebar .omp-sidebar-head {

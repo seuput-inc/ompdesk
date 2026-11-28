@@ -18,7 +18,7 @@ export function PanelToolbar({ children, className }: { children: ReactNode; cla
 	return (
 		<div
 			className={cx(
-				"flex min-h-(--sc-space-10) shrink-0 flex-wrap items-center gap-2 border-b border-(--sc-divider) px-3 py-2",
+				"flex min-h-(--sc-control-md) shrink-0 flex-wrap items-center gap-1.5 border-b border-(--sc-divider) px-2.5 py-1",
 				className,
 			)}
 		>
@@ -28,7 +28,7 @@ export function PanelToolbar({ children, className }: { children: ReactNode; cla
 }
 
 export const PANEL_ROW_SURFACE =
-	"min-h-(--sc-control-sm) rounded-(--sc-radius-sm) px-2 py-1.5 text-left text-sc-sm text-(--sc-text) transition-colors duration-(--sc-duration-fast) ease-(--sc-ease-standard) hover:bg-(--sc-hover) focus-visible:outline-(length:--sc-focus-width) focus-visible:outline-offset-(--sc-focus-offset) focus-visible:outline-(--sc-focus-ring)";
+	"min-h-(--sc-control-sm) rounded-(--sc-radius-sm) px-2 py-1 text-left text-sc-sm text-(--sc-text) transition-colors duration-(--sc-duration-fast) ease-(--sc-ease-standard) hover:bg-(--sc-hover) focus-visible:outline-(length:--sc-focus-width) focus-visible:outline-offset-(--sc-focus-offset) focus-visible:outline-(--sc-focus-ring)";
 
 /** A changed file's git state, as the Changes list and a commit's file list say it. */
 export type ChangeStatusName = "modified" | "added" | "deleted" | "untracked" | "renamed" | "conflicted";

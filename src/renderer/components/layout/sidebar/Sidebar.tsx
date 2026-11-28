@@ -2875,7 +2875,7 @@ export function Sidebar({ desktopChrome = false }: { desktopChrome?: boolean } =
 					</SidebarChats>
 				)}
 				{archivedRows.length > 0 && (
-					<section className="mt-3" data-sidebar-archived ref={archivedRef}>
+					<section className="mt-2" data-sidebar-archived ref={archivedRef}>
 						<div
 							className="omp-sidebar-head group/head relative flex items-center rounded-(--sc-radius-md) hover:bg-(--sc-hover)"
 							data-flip-key="archived"
@@ -2944,7 +2944,7 @@ export function Sidebar({ desktopChrome = false }: { desktopChrome?: boolean } =
 		<>
 			<aside
 				aria-label={t("sidebar.label")}
-				className="omp-session-sidebar relative flex h-full min-h-0 shrink-0 flex-col border-r border-(--sc-border-subtle) bg-(--sc-surface-1)"
+				className="omp-session-sidebar relative flex h-full min-h-0 shrink-0 flex-col border-r border-(--sc-divider) bg-(--sc-surface-1)"
 				style={{ width: sidebarWidth }}
 			>
 				{!desktopChrome && (
@@ -2965,7 +2965,7 @@ export function Sidebar({ desktopChrome = false }: { desktopChrome?: boolean } =
 					</div>
 				)}
 
-				<div className="omp-sidebar-controls flex shrink-0 flex-col gap-2 px-2 pt-1 pb-2">
+				<div className="omp-sidebar-controls flex shrink-0 flex-col gap-1.5 px-2 pt-1">
 					{/* One line: the search over every session (projects and chats), then the open-or-create project
 					    folder button. Once device sections show, each device header carries its own, so the search takes
 					    the whole line. New code sessions start from a project row's +, ⌘N, the palette, the menu and the

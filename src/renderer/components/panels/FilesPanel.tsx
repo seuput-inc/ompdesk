@@ -384,7 +384,7 @@ function FilePreview({
 					/>
 				</div>
 			)}
-			<div className="min-h-(--sc-space-10) shrink-0 border-b border-(--sc-divider) px-3 py-2">
+			<div className="min-h-(--sc-control-md) shrink-0 border-b border-(--sc-divider) px-2.5 py-1.5">
 				<div className="flex min-w-0 items-center gap-2" data-file-viewer-head>
 					<IconButton
 						icon={<ArrowLeft />}
@@ -883,7 +883,7 @@ export function FilesPanel() {
 
 	return (
 		<div className="omp-explorer flex h-full min-h-0 min-w-0 flex-col">
-			<PanelToolbar className="min-h-(--sc-control-md) gap-1 px-2 py-0.5">
+			<PanelToolbar className="gap-1 px-2 py-0.5">
 				<span className="min-w-0 flex-1 truncate text-sc-xs leading-4 font-medium" title={cwd}>
 					{basename(cwd)}
 				</span>
@@ -949,7 +949,7 @@ export function FilesPanel() {
 					size="sm"
 				/>
 			</PanelToolbar>
-			<div className="flex shrink-0 flex-col gap-2 border-b border-(--sc-divider) p-2">
+			<div className="flex shrink-0 flex-col gap-1.5 border-b border-(--sc-divider) px-2 py-1.5">
 				<SegmentedChoice
 					aria-label={t("filesPanel.search")}
 					fit="equal"
@@ -986,15 +986,16 @@ export function FilesPanel() {
 					{loading && tree.length === 0 ? (
 						<SkeletonRows className="py-1" label={t("filesPanel.scanning")} widths={FILES_SKELETON_WIDTHS} />
 					) : error !== null ? (
-						<div className="px-4 py-8 text-center text-sc-sm leading-relaxed text-(--sc-text-muted)">
-							{ipcErrorCode(error) ? errorMessage(error) : t("filesPanel.unavailable")}
-							<ErrorDetail className="mt-1" error={error} />
-							<div className="mt-2">
-								<Button onClick={() => void load()} size="sm" variant="ghost">
+						<EmptyState
+							actions={
+								<Button onClick={() => void load()} size="sm" variant="secondary">
 									{t("common.retry")}
 								</Button>
-							</div>
-						</div>
+							}
+							description={<ErrorDetail error={error} />}
+							size="sm"
+							title={ipcErrorCode(error) ? errorMessage(error) : t("filesPanel.unavailable")}
+						/>
 					) : nodes.length === 0 ? (
 						<EmptyState
 							className="omp-explorer-empty"

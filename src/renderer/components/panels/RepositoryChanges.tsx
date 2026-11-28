@@ -405,14 +405,14 @@ export function RepositoryChanges({ sourceSelector, repo }: { sourceSelector?: R
 				<EmptyState icon={<FolderGit2 />} size="sm" title={t("diffPanel.notRepoTitle")} />
 			) : reviewOpen && changes && !selected ? (
 				<div className="min-h-0 flex-1 overflow-y-auto">
-					<div className="flex items-center gap-1 px-2 pt-2">
+					<div className="flex min-h-(--sc-control-md) items-center gap-1 border-b border-(--sc-divider) px-2 py-1">
 						<IconButton
 							icon={<ArrowLeft />}
 							label={t("scm.conflicts.close")}
 							onClick={() => setReviewing(false)}
 							size="sm"
 						/>
-						<span className="text-sc-sm">{t("scm.conflicts.title")}</span>
+						<span className="text-sc-sm font-medium">{t("scm.conflicts.title")}</span>
 					</div>
 					<ConflictReview
 						files={changes.files}
@@ -431,14 +431,14 @@ export function RepositoryChanges({ sourceSelector, repo }: { sourceSelector?: R
 			) : combined && root ? (
 				<div className="min-h-0 flex-1 overflow-y-auto" ref={setCombinedScroller}>
 					<div>
-						<div className="flex items-center gap-1 px-2 pt-2">
+						<div className="flex min-h-(--sc-control-md) items-center gap-1 border-b border-(--sc-divider) px-2 py-1">
 							<IconButton
 								icon={<ArrowLeft />}
 								label={t("scm.combined.close")}
 								onClick={() => setCombined(false)}
 								size="sm"
 							/>
-							<span className="text-sc-sm">{t("scm.combined.title", { count: files.length })}</span>
+							<span className="text-sc-sm font-medium">{t("scm.combined.title", { count: files.length })}</span>
 						</div>
 						<CombinedDiff
 							against={against}
@@ -454,8 +454,8 @@ export function RepositoryChanges({ sourceSelector, repo }: { sourceSelector?: R
 				</div>
 			) : (
 				<div className="omp-changes-body min-h-0 flex-1" data-open={!!selected}>
-					<div ref={setListScroller} className="omp-changes-list min-h-0 overflow-y-auto px-3 pb-3">
-						<div className="sticky top-0 z-(--sc-z-sticky) flex items-center gap-2 bg-(--sc-surface-1) pt-2 pb-1 [[data-sheet-panel]_&]:bg-(--sc-elevated)">
+					<div ref={setListScroller} className="omp-changes-list min-h-0 overflow-y-auto px-2 pb-2">
+						<div className="sticky top-0 z-(--sc-z-sticky) flex items-center gap-1.5 bg-(--sc-surface-1) py-1.5 [[data-sheet-panel]_&]:bg-(--sc-elevated)">
 							<div className="min-w-0 flex-1">
 								<SearchField
 									controlSize="sm"
@@ -599,7 +599,7 @@ export function RepositoryChanges({ sourceSelector, repo }: { sourceSelector?: R
 					</div>
 					{selected && (
 						<div ref={setPreviewScroller} className="omp-changes-preview min-h-0 min-w-0 overflow-y-auto">
-							<div className="sticky top-0 z-(--sc-z-sticky) flex flex-wrap items-center gap-1 bg-(--sc-surface-1) px-2 py-2 [[data-sheet-panel]_&]:bg-(--sc-elevated)">
+							<div className="sticky top-0 z-(--sc-z-sticky) flex min-h-(--sc-control-md) flex-wrap items-center gap-1 border-b border-(--sc-divider) bg-(--sc-surface-1) px-2 py-1 [[data-sheet-panel]_&]:bg-(--sc-elevated)">
 								<IconButton
 									icon={<ArrowLeft />}
 									label={t("diffPanel.back")}
@@ -690,11 +690,7 @@ export function RepositoryChanges({ sourceSelector, repo }: { sourceSelector?: R
 							) : preview && kind === "image" && root ? (
 								<ImageDiff against={against} oldPath={current?.oldPath} path={selected} root={root} rpc={rpc} />
 							) : (
-								preview && (
-									<p className="p-3 text-sc-sm text-(--sc-text-muted)">
-										{t(`diffPanel.kind.${preview.kind}`)}
-									</p>
-								)
+								preview && <EmptyState size="sm" title={t(`diffPanel.kind.${preview.kind}`)} />
 							)}
 							{preview?.truncated && !editing && (
 								<p className="p-3 text-sc-xs text-(--sc-warning)">{t("diffPanel.previewLimited")}</p>

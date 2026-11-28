@@ -236,7 +236,7 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 			{/* controls-ok: the section header's words, styled as the fold header beside them (SidebarFoldButton). */}
 			<button
 				aria-label={t("bots.section.openPage")}
-				className="flex min-w-0 flex-1 items-center self-stretch rounded-(--sc-radius-md) pr-1 text-left text-sc-xs font-semibold text-(--sc-text-muted) hover:text-(--sc-text) focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--sc-focus-ring)"
+				className="flex min-w-0 flex-1 items-center gap-1.5 self-stretch rounded-(--sc-radius-md) pr-1 text-left text-sc-xs font-semibold text-(--sc-text-muted) hover:text-(--sc-text) focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--sc-focus-ring)"
 				data-destination="bots"
 				data-roving-item="bots:page"
 				data-sidebar-bots-open
@@ -246,7 +246,7 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 			>
 				<span className="min-w-0 truncate">{t("destination.bots")}</span>
 				{folded && (
-					<span className="ml-1 flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden" data-bot-faces>
+					<span className="flex min-w-0 flex-1 items-center gap-0.5 overflow-hidden" data-bot-faces>
 						{foldedFaces(sorted, facts)
 							.slice(0, 6)
 							.map(bot => (
@@ -301,7 +301,7 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 				/>
 			)}
 			<MenuButton
-				className="mr-1 text-(--sc-text-subtle) hover:text-(--sc-text)"
+				className="mr-0.5 text-(--sc-text-subtle) hover:text-(--sc-text)"
 				icon={<Plus />}
 				items={[
 					{ id: "new", label: t("bots.add.new"), icon: BotIcon, onSelect: () => openBotDialog({ kind: "new" }) },
@@ -453,7 +453,7 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 	};
 
 	return (
-		<section aria-label={t("bots.section.region")} className="mb-1" data-sidebar-bots>
+		<section aria-label={t("bots.section.region")} data-sidebar-bots>
 			{header}
 			<Collapse open={!folded}>
 				<div className="space-y-px" data-bot-lane>

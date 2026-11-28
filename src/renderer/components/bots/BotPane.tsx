@@ -86,7 +86,7 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 					{t("bots.remote.offlineBanner", { device: hostName })}
 				</Banner>
 			)}
-			<header className="flex items-center gap-3 px-4 pt-4" data-bot-pane-header>
+			<header className="flex items-center gap-3 px-4 pt-3 pb-2" data-bot-pane-header>
 				<BotAvatar bot={bot} mark={mark} size={36} working={facts.working} />
 				<div className="flex min-w-0 flex-1 flex-col">
 					{renaming ? (
@@ -138,7 +138,7 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 			<Tabs
 				activeId={tab}
 				ariaLabel={bot.name}
-				className="px-4 pt-2"
+				className="border-b border-(--sc-divider) px-4 pt-1"
 				data-bot-pane-tabs
 				onChange={id => useBotPage.setState({ tab: id as BotPageTab })}
 				tabs={[
