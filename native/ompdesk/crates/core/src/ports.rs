@@ -230,6 +230,10 @@ impl<S: DeserializeOwned + Send + Sync + 'static> Port<S> {
         Sink::close(self);
     }
 
+    pub(crate) fn is_closed(&self) -> bool {
+        *self.closed.borrow()
+    }
+
     /// Resolves once the port is closed.
     pub async fn until_closed(&self) {
         let mut closed = self.closed.subscribe();

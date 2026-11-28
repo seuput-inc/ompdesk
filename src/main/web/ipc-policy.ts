@@ -121,7 +121,7 @@ type RequestDirection = "invoke" | "send";
 export type ChannelPolicy =
 	| { dir: RequestDirection; permission: WebPermission; mode: "pass" }
 	| { dir: RequestDirection; permission: WebPermission; mode: "web"; web: string }
-	| { dir: RequestDirection; permission: "pairing-admin"; mode: "boundary" }
+	| { dir: RequestDirection; permission: "pairing-admin" | "workspace"; mode: "boundary" }
 	/** The core's router answers it for a page itself (main registers no handler). */
 	| { dir: RequestDirection; permission: WebPermission; mode: "core" }
 	/** `permission`: the core's router pushes it only to a device holding that grant. */
@@ -203,6 +203,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		web: "The session a link or notification named rides the page's own URL",
 	},
 	[C.SPAWN_TAB]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.OPEN_BOT_CHAT]: { dir: "invoke", permission: "workspace", mode: "boundary" },
 	[C.CLOSE_TAB]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	// The core's web router keeps each connection's report (`crates/core/src/web/file_edits.rs`); only a paired page
 	// reports (a desktop window closes its own tabs and guards its own edits).

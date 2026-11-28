@@ -8301,6 +8301,7 @@ export const ko: Record<string, string> = {
 	"bots.new.failed": "봇을 만들지 못했어요",
 	"bots.new.forHandOver": '"{title}"용: 만들면 이 세션을 넘겨받아요.',
 	"bots.launch.notStarted": "홈 채팅이 열리지 않았어요.",
+	"bots.launch.occupied": "이 채팅이 다른 곳에 열려 있을 수 있어요. 거기서 닫고 다시 시도하거나 새 채팅을 선택하세요.",
 	"bots.first.title": "준비 중",
 	"bots.first.create": "봇 만들기",
 	"bots.first.start": "홈 채팅에서 omp 시작",

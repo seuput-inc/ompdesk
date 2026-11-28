@@ -36,6 +36,9 @@ pub struct BotRecord {
     /// Host-private creation record. Only `peerPending` is included in bot state.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub peer_create: Option<peer::PeerCreate>,
+    /// Local Bots launches only. Folder observations and delivery routes do not supply these stock IDs.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub chat_pins: Vec<ChatPin>,
     /// Session files of its chats on this computer, oldest first.
     pub sessions: Vec<String>,
     pub paused: bool,
@@ -82,6 +85,12 @@ pub struct BotRecord {
     pub kickoffs: Vec<String>,
     /// The newest kickoff's turn ended without a word: its page offers Try again.
     pub kickoff_silent: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChatPin {
+    pub path: String,
+    pub id: String,
 }
 
 /// A bot's folder moving from `from` to `to` (`BotRecord.moving`).
@@ -264,6 +273,25 @@ impl Bots {
         let removed = self.bots.remove(at);
         self.save();
         Some(removed)
+    }
+
+    pub(crate) fn pin_chat(&mut self, id: &str, path: &str, stock_id: &str) -> Result<(), String> {
+        let at = self
+            .bots
+            .iter()
+            .position(|bot| bot.id == id)
+            .ok_or("Bot not found.")?;
+        self.bots[at].chat_pins.push(ChatPin {
+            path: path.into(),
+            id: stock_id.into(),
+        });
+        if let Err(error) = self.save_checked() {
+            self.bots[at].chat_pins.pop();
+            // Supersede any deferred disk-full write that included the refused pin.
+            self.save();
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// A chat of the bot whose folder is `cwd` was seen with its session file: it joins `sessions`, and the first one

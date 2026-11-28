@@ -13,7 +13,7 @@ import { sessionDisplayTitle } from "../../lib/session-title";
 import { useBotsStore } from "../../stores/bots";
 import { tabSummary, useHostedSessionsStore } from "../../stores/hosted-sessions";
 import { useTabsStore } from "../../stores/tabs";
-import { type BotChatFacts, type BotFacts, botFacts } from "./bot-view";
+import { type BotChatFacts, type BotFacts, botChatHome, botFacts } from "./bot-view";
 
 export function useBotFacts(bots: readonly Bot[]): ReadonlyMap<string, BotFacts> {
 	const t = useT();
@@ -26,6 +26,7 @@ export function useBotFacts(bots: readonly Bot[]): ReadonlyMap<string, BotFacts>
 		return new Map(
 			bots.map(bot => {
 				// A paired host's bot chats there: its sessions are that host's, never this computer's list.
+				const home = botChatHome(bot);
 				const chats = sessions
 					.filter(session => !bot.device && session.cwd === bot.folder)
 					.map((session): BotChatFacts => {
@@ -36,7 +37,7 @@ export function useBotFacts(bots: readonly Bot[]): ReadonlyMap<string, BotFacts>
 						);
 						return {
 							path: session.path,
-							title: session.path === bot.home ? t("bots.chats.home") : sessionDisplayTitle(session, ""),
+							title: session.path === home ? t("bots.chats.home") : sessionDisplayTitle(session, ""),
 							modified: session.modified,
 							waiting: run.ask ? t(ATTENTION_LABEL_KEY[run.ask]) : null,
 							running: run.running,

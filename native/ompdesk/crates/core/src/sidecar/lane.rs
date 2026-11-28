@@ -16,6 +16,7 @@ use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot, watch};
 
+use super::bot::BotChat;
 use super::bridge::{Bridge, CONNECT_TIMEOUT, Out, Sink, new_address, remove_address};
 use super::chips::{Chips, Lane as ChipLane};
 use super::frames::{Decoder, Frame, head_of, js_trim, strip_vt_control_characters, supports_v2};
@@ -72,6 +73,13 @@ pub type StockReply = oneshot::Sender<Result<(), Fault>>;
 pub type BridgeReply = oneshot::Sender<Result<Option<Box<RawValue>>, Fault>>;
 type QueueReply = oneshot::Sender<Result<Box<RawValue>, Fault>>;
 
+type BotReply = oneshot::Sender<Option<String>>;
+
+pub enum BotCheck {
+    Start(u64),
+    Call(BotReply),
+}
+
 /// What main sent that the lane applies in `seq` order.
 pub enum Command {
     Start,
@@ -99,6 +107,10 @@ pub enum Command {
         reply: QueueReply,
     },
     Send(Box<RawValue>),
+    BotQuery {
+        spawn_id: Option<u64>,
+        reply: BotReply,
+    },
     DesktopProcess {
         spawn_id: u64,
         action: DesktopProcessAction,
@@ -205,6 +217,11 @@ pub enum Msg {
         frame: Frame,
         bridge: bool,
     },
+    BotChecked {
+        spawn_id: u64,
+        unchanged: bool,
+        check: BotCheck,
+    },
     BridgeLost {
         spawn_id: u64,
     },
@@ -236,7 +253,7 @@ pub enum Msg {
     RestartTimer {
         epoch: u64,
     },
-    QueueTimeout {
+    StockTimeout {
         generation: u64,
         id: String,
     },
@@ -360,6 +377,7 @@ enum Waiter {
         reply: QueueReply,
         _cancel_timer: oneshot::Sender<()>,
     },
+    BotCheck(u64, BotReply),
     /// The lane's own `negotiate_protocol` of that spawn.
     Negotiate(u64),
     /// The lane's own `get_state`, whose answer lets the tab read `ready` (no deadline).
@@ -386,6 +404,7 @@ struct Pending {
 /// One omp that runs, and everything that dies with it.
 struct Running {
     spawn_id: u64,
+    bot: Option<BotChat>,
     proc: Arc<Proc>,
     confirmed_exit: watch::Receiver<bool>,
     pending: Vec<Pending>,
@@ -408,7 +427,7 @@ struct Stopping {
 struct Held {
     id: u64,
     event: Value,
-    frames: Vec<Frame>,
+    frames: Vec<(Frame, Option<u64>)>,
 }
 
 enum Ask {
@@ -454,6 +473,8 @@ pub struct Lane {
     /// The highest `seq` applied: every event says which state it describes.
     applied: u64,
     cwd: String,
+    /// Moves only into the original child. No restart or recovery gets it.
+    bot_launch: Option<BotChat>,
     event_filter: Vec<String>,
     bridge_enabled: bool,
     ledger_file: Option<String>,
@@ -547,8 +568,9 @@ pub fn exit_reason(exit: &Exit) -> String {
 
 impl Lane {
     #[allow(clippy::new_ret_no_self)]
-    pub fn open(
+    pub(super) fn open(
         params: OpenParams,
+        bot_launch: Option<BotChat>,
         events: Events,
         open_reply: oneshot::Sender<Result<(), Fault>>,
     ) -> mpsc::UnboundedSender<Msg> {
@@ -576,6 +598,7 @@ impl Lane {
             open_reply: Some(open_reply),
             applied: params.seq,
             cwd: params.cwd,
+            bot_launch,
             event_filter: params.event_filter,
             bridge_enabled: params.bridge,
             ledger_file: params.ledger_file,
@@ -672,13 +695,24 @@ impl Lane {
         }
     }
 
-    fn emit_frame(&mut self, frame: Frame) {
+    fn emit_frame(&mut self, frame: Frame, bot_spawn: Option<u64>) {
         if self.quiet {
             return;
         }
         let raw = self.stream.frame(frame.raw, frame.ty.as_deref());
         let data = json!({ "tab": self.tab, "cmd": self.applied });
         super::tap(&self.tab, "sidecar.frame", &data, Some(&raw));
+        let mut data = data;
+        if let Some(spawn) = bot_spawn
+            && self.running.as_ref().is_some_and(|r| {
+                r.spawn_id == spawn
+                    && r.proc.running()
+                    && r.bot.as_ref().is_some_and(BotChat::bound)
+            })
+        {
+            // This metadata is for main's host-tool receiver only, never a subscriber or the child frame.
+            data["botCallSpawn"] = json!(spawn);
+        }
         self.events.send_bin("sidecar.frame", &data, raw);
     }
 
@@ -753,6 +787,65 @@ impl Lane {
         self.exiting.retain(|stopping| !*stopping.done.borrow());
     }
 
+    fn revoke_bot(&mut self) {
+        self.bot_launch = None;
+        if let Some(running) = &mut self.running {
+            running.bot = None;
+        }
+    }
+
+    fn current_bot(&mut self) -> Option<&BotChat> {
+        let slot = match &mut self.running {
+            Some(r) if r.proc.running() => &mut r.bot,
+            Some(_) => return None,
+            None => &mut self.bot_launch,
+        };
+        if !slot.as_ref()?.current(&self.cwd) {
+            *slot = None;
+        }
+        slot.as_ref()
+    }
+
+    /// The bridge's sticky switch/branch witness can only deny the already observed stock identity.
+    fn check_bot_bridge(&self, spawn_id: u64, check: BotCheck) {
+        let Some(r) = self
+            .running
+            .as_ref()
+            .filter(|r| r.spawn_id == spawn_id && r.bot.is_some())
+        else {
+            return;
+        };
+        let bridge = r.bridge.clone();
+        let inbox = self.inbox.clone();
+        let new_home = match check {
+            BotCheck::Start(_) => r.bot.as_ref().and_then(|bot| bot.new_home(&self.cwd)),
+            BotCheck::Call(_) => None,
+        };
+        tokio::spawn(async move {
+            let materialized = match new_home {
+                Some(home) => bridge
+                    .request(
+                        "agent_control.bot_home_persist",
+                        Some(home),
+                        Some(COMMAND_TIMEOUT),
+                    )
+                    .await
+                    .is_ok(),
+                None => true,
+            };
+            let unchanged = materialized
+                && bridge
+                    .request("bot_session_unchanged", None, Some(COMMAND_TIMEOUT))
+                    .await
+                    .is_ok_and(|result| result.is_some_and(|raw| raw.get() == "true"));
+            let _ = inbox.send(Msg::BotChecked {
+                spawn_id,
+                unchanged,
+                check,
+            });
+        });
+    }
+
     // ---- the message loop -----------------------------------------------------------------------------------------
 
     /// One message; true once the lane is over.
@@ -798,8 +891,42 @@ impl Lane {
                             super::tap(&self.tab, "sidecar.frame", &data, Some(&frame.raw));
                             self.events.send_bin("sidecar.frame", &data, frame.raw);
                         }
+                    } else if frame.ty.as_deref() == Some("bot_session_changed") {
+                        self.revoke_bot();
                     } else {
-                        self.route_frame(frame);
+                        if bridge && matches!(frame.ty.as_deref(), Some("response" | "ready")) {
+                            // Only this child's stdout may answer a stock command for its launch.
+                            self.revoke_bot();
+                        }
+                        let bot_spawn = (!bridge
+                            && frame.ty.as_deref() == Some("host_tool_call")
+                            && self.current_bot().is_some_and(BotChat::bound))
+                        .then_some(spawn_id);
+                        self.route_frame(frame, bot_spawn);
+                    }
+                }
+            }
+            Msg::BotChecked {
+                spawn_id,
+                unchanged,
+                check,
+            } => {
+                if let Some(r) = self.running.as_mut().filter(|r| r.spawn_id == spawn_id)
+                    && let Some(bot) = &mut r.bot
+                    && (!unchanged || !r.proc.running() || !bot.bridge_confirmed(&self.cwd))
+                {
+                    r.bot = None;
+                }
+                match check {
+                    BotCheck::Start(generation) => self.after_answered(generation),
+                    BotCheck::Call(reply) => {
+                        let id = self
+                            .running
+                            .as_ref()
+                            .filter(|r| r.spawn_id == spawn_id)
+                            .and_then(|r| r.bot.as_ref())
+                            .filter(|b| b.bound());
+                        let _ = reply.send(id.map(|b| b.id.clone()));
                     }
                 }
             }
@@ -809,6 +936,7 @@ impl Lane {
                     .as_ref()
                     .is_some_and(|r| r.spawn_id == spawn_id)
                 {
+                    self.revoke_bot();
                     self.emit("sidecar.bridgeLost", json!({}));
                 }
             }
@@ -834,7 +962,7 @@ impl Lane {
                 }
             }
             Msg::NegotiateTimeout { generation, id } => self.on_negotiate_timeout(generation, &id),
-            Msg::QueueTimeout { generation, id } => {
+            Msg::StockTimeout { generation, id } => {
                 if self.is_live(generation)
                     && let Some(running) = &mut self.running
                     && let Some(at) = running.pending.iter().position(|pending| pending.id == id)
@@ -888,10 +1016,21 @@ impl Lane {
                 resume_session_path,
             } => self.restart(cwd, resume_session_path),
             Command::Kill => self.stop_child(None),
-            Command::Sleep => self.sleep(),
+            Command::Sleep => {
+                self.revoke_bot();
+                self.sleep();
+            }
             Command::Dispose { stdin_grace } => self.dispose(stdin_grace),
-            Command::Cwd(cwd) => self.cwd = cwd,
-            Command::Gate => self.start_gate = true,
+            Command::Cwd(cwd) => {
+                if self.cwd != cwd {
+                    self.revoke_bot();
+                }
+                self.cwd = cwd;
+            }
+            Command::Gate => {
+                self.revoke_bot();
+                self.start_gate = true;
+            }
             Command::Stock {
                 seq,
                 command,
@@ -945,9 +1084,42 @@ impl Lane {
                 self.queue_step(step, reply);
             }
             Command::Send(frame) => {
+                if self.running.as_ref().is_some_and(|r| r.bot.is_some())
+                    && head_of(frame.get())
+                        .and_then(|(ty, _)| ty)
+                        .is_some_and(|ty| SESSION_CHANGING_COMMANDS.contains(&ty.as_str()))
+                {
+                    self.revoke_bot();
+                }
                 let mut line = frame.get().as_bytes().to_vec();
                 line.push(b'\n');
                 self.write_line(line);
+            }
+            Command::BotQuery {
+                spawn_id: None,
+                reply,
+            } => {
+                let _ = reply.send(self.current_bot().map(|b| b.id.clone()));
+            }
+            Command::BotQuery {
+                spawn_id: Some(spawn),
+                reply,
+            } => {
+                if self.running.as_ref().is_some_and(|r| r.spawn_id == spawn)
+                    && self.current_bot().is_some_and(BotChat::bound)
+                    && let Some(id) = self.internal(
+                        json!({ "type": "get_state" }),
+                        Waiter::BotCheck(spawn, reply),
+                        Some(COMMAND_TIMEOUT),
+                    )
+                {
+                    let generation = self.generation;
+                    let inbox = self.inbox.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(COMMAND_TIMEOUT).await;
+                        let _ = inbox.send(Msg::StockTimeout { generation, id });
+                    });
+                }
             }
             Command::DesktopProcess {
                 spawn_id,
@@ -1000,6 +1172,12 @@ impl Lane {
                     return;
                 };
                 let bridge = running.bridge.clone();
+                if matches!(
+                    method.as_str(),
+                    "sessions.switch_leaf" | "sessions.fork_from"
+                ) {
+                    self.revoke_bot();
+                }
                 tokio::spawn(async move {
                     let _ = reply.send(bridge.request(&method, params, timeout).await);
                 });
@@ -1036,6 +1214,9 @@ impl Lane {
         if self.disposed || self.quit {
             return;
         }
+        if self.start_seq != 0 {
+            self.revoke_bot();
+        }
         self.set_status("starting", Detail::default());
         // omp + env resolution takes up to a few seconds. A restart()/start() landing inside that window supersedes
         // this pending spawn — it already killed whatever child existed (nothing yet) — so spawning on its answer
@@ -1055,6 +1236,9 @@ impl Lane {
         };
         if self.disposed || seq != self.start_seq {
             return;
+        }
+        if matches!(outcome, "waiting" | "owned") {
+            self.revoke_bot();
         }
         match outcome {
             "owned" => {
@@ -1187,6 +1371,14 @@ impl Lane {
         self.booted = false;
         self.set_session(None);
         let open = session_open(self.session_path.as_deref(), self.is_new, file_exists);
+        if self.bot_launch.is_some()
+            && !matches!(
+                (&open, &self.session_path),
+                (Open::New, None) | (Open::Session(_), Some(_))
+            )
+        {
+            self.revoke_bot();
+        }
         let bridge_address = self.bridge_enabled.then(new_address);
         let model = self.no_model_boot.clone().or_else(|| {
             self.boot_model_fallback
@@ -1237,6 +1429,7 @@ impl Lane {
     }
 
     fn start_process(&mut self, generation: u64, start: &Start, bridge_address: Option<String>) {
+        let bot = self.bot_launch.take().filter(|_| start.cwd == self.cwd);
         self.spawn_counter += 1;
         let spawn_id = self.spawn_counter;
         let inbox = self.inbox.clone();
@@ -1325,6 +1518,7 @@ impl Lane {
         let bridge = Bridge::new(bridge_address.clone(), sink);
         self.running = Some(Running {
             spawn_id,
+            bot,
             proc: Arc::clone(&proc),
             confirmed_exit: started.confirmed_exit,
             pending: Vec::new(),
@@ -1364,6 +1558,9 @@ impl Lane {
         let Some(running) = self.running.as_mut() else {
             return Err(waiter);
         };
+        if SESSION_CHANGING_COMMANDS.contains(&info.ty.as_str()) {
+            running.bot = None;
+        }
         running.next_id += 1;
         let id = format!("gui-{}", running.next_id);
         let Ok(id_raw) = serde_json::value::to_raw_value(&id) else {
@@ -1494,7 +1691,7 @@ impl Lane {
                         tokio::select! {
                             _ = cancelled => {}
                             () = tokio::time::sleep(QUEUE_STOCK_TIMEOUT) => {
-                                let _ = inbox.send(Msg::QueueTimeout { generation, id });
+                                let _ = inbox.send(Msg::StockTimeout { generation, id });
                             }
                         }
                     });
@@ -1516,10 +1713,10 @@ impl Lane {
         }
     }
 
-    fn route_frame(&mut self, frame: Frame) {
+    fn route_frame(&mut self, frame: Frame, bot_spawn: Option<u64>) {
         // Request bookkeeping no window reads leaves in main, before any copy of the frame is made.
         if let Some(held) = self.held.as_mut() {
-            held.frames.push(frame);
+            held.frames.push((frame, bot_spawn));
             return;
         }
         let ty = frame.ty.clone().unwrap_or_default();
@@ -1551,7 +1748,7 @@ impl Lane {
                 _ => {}
             }
         }
-        self.dispatch_frame(frame);
+        self.dispatch_frame(frame, bot_spawn);
     }
 
     /// Stock `agent_end` messages carry no `entryId`, which the renderer needs to reconcile committed messages. Let
@@ -1602,9 +1799,9 @@ impl Lane {
         if let Some(messages) = messages {
             event["messages"] = messages;
         }
-        self.dispatch_frame(value_frame(&event));
-        for frame in held.frames {
-            self.route_frame(frame);
+        self.dispatch_frame(value_frame(&event), None);
+        for (frame, bot_spawn) in held.frames {
+            self.route_frame(frame, bot_spawn);
         }
         self.release_barriers();
     }
@@ -1624,16 +1821,16 @@ impl Lane {
         let Some(held) = self.held.take() else {
             return;
         };
-        self.dispatch_frame(value_frame(&held.event));
-        for frame in held.frames {
+        self.dispatch_frame(value_frame(&held.event), None);
+        for (frame, _) in held.frames {
             if frame.ty.as_deref() != Some("ready") {
-                self.dispatch_frame(frame);
+                self.dispatch_frame(frame, None);
             }
         }
         self.release_barriers();
     }
 
-    fn dispatch_frame(&mut self, mut frame: Frame) {
+    fn dispatch_frame(&mut self, mut frame: Frame, bot_spawn: Option<u64>) {
         match frame.ty.as_deref() {
             Some("ready") => {
                 if let Ok(ready) = serde_json::from_slice::<Value>(&frame.raw) {
@@ -1655,7 +1852,7 @@ impl Lane {
             }
             _ => {}
         }
-        self.emit_frame(frame);
+        self.emit_frame(frame, bot_spawn);
     }
 
     /// The session the person's queued messages belong to: the tab's, else the one omp named.
@@ -1713,7 +1910,20 @@ impl Lane {
             return false;
         }
         let pending = running.pending.remove(at);
-        self.observe(&pending.command, &text);
+        let initial = matches!(pending.waiter, Waiter::Answered(_));
+        let state = self.observe(&pending.command, &text);
+        if pending.command.ty == "get_state"
+            && let Some(r) = &mut self.running
+            && let Some(bot) = &mut r.bot
+        {
+            let observed = state
+                && self.session.as_ref().is_some_and(|s| {
+                    bot.observe(initial, s.session_file.as_deref(), s.session_id.as_deref())
+                });
+            if !observed {
+                r.bot = None;
+            }
+        }
         match pending.waiter {
             Waiter::Caller(seq, reply) => {
                 // The answer is an event, in the order omp wrote it among the frames; the request answers behind it.
@@ -1733,8 +1943,15 @@ impl Lane {
                     self.queue_step(step, reply);
                 }
             }
+            Waiter::BotCheck(spawn, reply) => self.check_bot_bridge(spawn, BotCheck::Call(reply)),
             Waiter::Negotiate(generation) => self.after_negotiate(generation, true),
-            Waiter::Answered(generation) => self.after_answered(generation),
+            Waiter::Answered(generation) => {
+                if let Some(r) = self.running.as_ref().filter(|r| r.bot.is_some()) {
+                    self.check_bot_bridge(r.spawn_id, BotCheck::Start(generation));
+                } else {
+                    self.after_answered(generation);
+                }
+            }
             Waiter::Ignore => {}
         }
         true
@@ -1742,33 +1959,37 @@ impl Lane {
 
     /// Track the session identity through the responses every hydrate already requests.
     // formal/tab-session `Observe`, `Switch(f)`, `NewSession` (findings F1, F2; CORRESPONDENCE A5).
-    fn observe(&mut self, command: &CommandInfo, response: &str) {
+    fn observe(&mut self, command: &CommandInfo, response: &str) -> bool {
         #[derive(Deserialize)]
         struct Response<'a> {
             success: Option<bool>,
             #[serde(borrow)]
+            command: Option<&'a RawValue>,
+            #[serde(borrow)]
             data: Option<&'a RawValue>,
         }
         let Ok(response) = serde_json::from_str::<Response>(response) else {
-            return;
+            return false;
         };
         if response.success != Some(true) {
-            return;
+            return false;
         }
         if command.ty == "get_state" {
             use std::collections::BTreeMap;
-            let Some(raw) = response.data else { return };
+            let Some(raw) = response.data else {
+                return false;
+            };
             // Like JSON.parse, duplicate keys keep the last value; arrays have no named identity fields.
             let fields = match raw.get().as_bytes().first() {
                 Some(b'{') => {
                     let Ok(map) = serde_json::from_str::<BTreeMap<String, &RawValue>>(raw.get())
                     else {
-                        return;
+                        return false;
                     };
                     map
                 }
                 Some(b'[') => Default::default(),
-                _ => return,
+                _ => return false,
             };
             let text = |key: &str| serde_json::from_str::<String>(fields.get(key)?.get()).ok();
             let next = Identity {
@@ -1784,6 +2005,9 @@ impl Lane {
             if let Some(file) = file {
                 self.set_tab_session(Some(file), false);
             }
+            return response
+                .command
+                .is_some_and(|ty| ty.get() == "\"get_state\"");
         } else if SESSION_CHANGING_COMMANDS.contains(&command.ty.as_str()) {
             self.set_session(None);
             self.run_messages.clear();
@@ -1797,7 +2021,7 @@ impl Lane {
                 .and_then(|data| data.get("cancelled"))
                 .is_some_and(|cancelled| cancelled == &Value::Bool(true));
             if cancelled {
-                return;
+                return false;
             }
             if command.ty == "switch_session"
                 && let Some(path) = &command.session_path
@@ -1813,8 +2037,9 @@ impl Lane {
             // the live session ends here (the sidebar's, the title bar's, Autopilot's, a paired computer's), so this is
             // where the tab, its windows and a paired computer viewing it learn the name.
             let frame = json!({ "type": "session_info_update", "title": js_trim(name) });
-            self.route_frame(value_frame(&frame));
+            self.route_frame(value_frame(&frame), None);
         }
+        false
     }
 
     // ---- ready ----------------------------------------------------------------------------------------------------
@@ -2154,6 +2379,7 @@ impl Lane {
 
     // formal/tab-session `Crash`: the restart timer calls `spawn` on the same session state.
     fn attempt_restart(&mut self, reason: &str) {
+        self.revoke_bot();
         // The exit code alone is never the diagnosis; the spawn's stderr carries it.
         let excerpt = stderr_excerpt(&self.last_stderr);
         let detail = if excerpt.is_empty() {
@@ -2293,6 +2519,7 @@ impl Lane {
     /// on, even before the replacement spawns. Returns the omp that was running, for its stop.
     fn cleanup(&mut self) -> Option<Running> {
         // Main drops what the lane sent before the command that tears this down: nothing after leans on it.
+        self.revoke_bot();
         self.stream.reset();
         self.generation += 1;
         self.slow_epoch += 1;

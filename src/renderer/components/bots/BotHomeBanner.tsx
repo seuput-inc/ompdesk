@@ -10,6 +10,7 @@ import { botOfFolder, useBotsStore } from "../../stores/bots";
 import { Button } from "../common";
 import { BotAvatar } from "./BotAvatar";
 import { openBotPage } from "./bot-page";
+import { botChatHome } from "./bot-view";
 
 export function BotHomeBanner({
 	cwd,
@@ -25,7 +26,7 @@ export function BotHomeBanner({
 	const available = useBotsAvailable();
 	const bot: Bot | undefined = useBotsStore(s => botOfFolder(s.state.bots, cwd, device));
 	if (!available || !bot) return null;
-	const home = sessionPath !== undefined && sessionPath === bot.home;
+	const home = sessionPath !== undefined && sessionPath === botChatHome(bot);
 	return (
 		<Button
 			aria-label={t("bots.banner.open", { name: bot.name })}

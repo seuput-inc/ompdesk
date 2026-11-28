@@ -46,10 +46,10 @@ describe.skipIf(!stockRoot)("sessions.owned against stock's ownership lease (ins
 		const helper = bun([path.resolve("resources/gui-bridge/stock-helper/host.ts")], env);
 		const lines = createInterface({ input: helper.stdout });
 		let id = 0;
-		const owned = async (): Promise<unknown> => {
+		const owned = async (file = sessionPath, requireFreeLease = false): Promise<unknown> => {
 			const reply = once(lines, "line");
 			helper.stdin.write(
-				`${JSON.stringify({ id: ++id, method: "sessions.owned", params: { sessionsRoot, sessionPath } })}\n`,
+				`${JSON.stringify({ id: ++id, method: "sessions.owned", params: { sessionsRoot, sessionPath: file, requireFreeLease } })}\n`,
 			);
 			const [line] = await reply;
 			const answer = JSON.parse(String(line)) as { result?: unknown; error?: unknown };
@@ -57,6 +57,10 @@ describe.skipIf(!stockRoot)("sessions.owned against stock's ownership lease (ins
 			return answer.result;
 		};
 		expect(await owned()).toBe(false);
+		expect(await owned(sessionPath, true)).toBe(false);
+		const missing = path.join(sessionsRoot, "-p", "missing.jsonl");
+		expect(await owned(missing)).toBe(false);
+		expect(await owned(missing, true)).toBe(true);
 
 		// Another omp's hold, the way stock takes it when a session is opened (`FileSessionStorage.claimSession`).
 		const storage = path.join(stockRoot ?? "", "src", "session", "session-storage.ts");

@@ -150,10 +150,43 @@ fn fake_omp(mode: &str) {
         }
         match ty {
             "get_state" => {
+                if mode == "bot-check" {
+                    if std::env::var_os("FAKE_SESSION_FILE")
+                        .is_some_and(|f| !PathBuf::from(f).exists())
+                    {
+                        say(r#"{"type":"host_tool_call","id":"before-state"}"#);
+                    }
+                    let gate = PathBuf::from("hold-state");
+                    if gate.exists() {
+                        say(r#"{"type":"waiting_on_state"}"#);
+                        while gate.exists() {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                    }
+                }
                 let file = std::env::var("FAKE_SESSION_FILE").ok();
-                reply(json!({ "sessionId": "s1", "sessionFile": file }));
+                let stock_id = if mode == "wrong-id" {
+                    "replacement"
+                } else {
+                    "s1"
+                };
+                reply(json!({ "sessionId": stock_id, "sessionFile": file }));
             }
             "new_session" | "switch_session" => reply(json!({ "cancelled": false })),
+            "bot_call" => {
+                say(
+                    r#"{"type":"host_tool_call","botId":"spoof","botCallSpawn":1,"name":"test","args":{}}"#,
+                );
+                reply(json!({}));
+            }
+            "bot_held_call" => {
+                say(concat!(
+                    r#"{"type":"agent_end","messages":[{"role":"assistant","content":"hold"}]}"#,
+                    "\n",
+                    r#"{"type":"host_tool_call","id":"held"}"#,
+                ));
+                reply(json!({}));
+            }
             "slot_on_stdout" => {
                 say(
                     &json!({"type": "desktop_slot_touch", "processId": std::process::id()})
@@ -305,6 +338,7 @@ async fn bridge_connection(stream: BoxedIo) {
     let (read, mut write) = tokio::io::split(stream);
     let mut read = tokio::io::BufReader::new(read);
     let mut line = String::new();
+    let mut switched = false;
     while let Ok(n) = read.read_line(&mut line).await {
         if n == 0 {
             break;
@@ -341,7 +375,22 @@ async fn bridge_connection(stream: BoxedIo) {
         if hold {
             continue;
         }
-        let result = if method == "sessions.attach_entry_ids" {
+        let result = if method == "agent_control.bot_home_persist" {
+            let file = std::env::var("FAKE_SESSION_FILE").unwrap();
+            assert_eq!(request["params"]["sessionPath"], file);
+            assert_eq!(request["params"]["sessionId"], "s1");
+            std::fs::write(
+                file,
+                json!({"type": "session", "id": "s1", "cwd": request["params"]["cwd"]}).to_string(),
+            )
+            .unwrap();
+            json!({})
+        } else if method == "bot_session_unchanged" {
+            json!(!switched)
+        } else if method == "fixture.switchSilently" {
+            switched = true;
+            Value::Null
+        } else if method == "sessions.attach_entry_ids" {
             let messages: Vec<Value> = request["params"]["messages"]
                 .as_array()
                 .cloned()
@@ -759,6 +808,258 @@ fn no_queue() -> Value {
 }
 
 // ---- tests --------------------------------------------------------------------------------------------------------
+
+const BOT: &str = "bot-aaaaaaaaaaaa";
+static BOT_PORT: AtomicU64 = AtomicU64::new(6_900_000);
+
+async fn bot_rig(name: &str, mode: &str, pinned: bool, dedicated: bool) -> (Rig, u64) {
+    let mut rig = Rig::new(name, mode).await;
+    let port = BOT_PORT.fetch_add(1, Ordering::Relaxed);
+    let file = rig.dir.join("session.jsonl");
+    let bots = rig.dir.join("bots.json");
+    let mut record = json!({"id": BOT, "name": "Bot", "folder": rig.dir});
+    if pinned {
+        record["chatPins"] = json!([{"path": file, "id": "s1"}]);
+    }
+    if pinned || mode == "preexisting+bridge" {
+        std::fs::write(
+            &file,
+            json!({"type":"session","id":"s1","cwd":rig.dir}).to_string(),
+        )
+        .unwrap();
+    }
+    std::fs::write(&bots, json!([record]).to_string()).unwrap();
+    rig.call(
+        "agentControl.open",
+        json!({
+            "port": port, "state": {}, "files": {"bots": bots}, "runtime": {"sweepMs": 0}
+        }),
+    )
+    .await
+    .unwrap();
+    let path = pinned.then_some(&file);
+    let launch = rig
+        .call(
+            "agentRuntime.botChatLaunch",
+            json!({
+                "port": port, "botId": BOT, "sessionPath": path
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(launch["botId"], BOT);
+    rig.behaviour.lock().unwrap().session_file = Some(file.to_string_lossy().into_owned());
+    let seq = rig.seq();
+    let mut open = rig.open_params(seq, no_queue());
+    open["botId"] = json!(BOT);
+    open["botChatPort"] = launch["botChatPort"].clone();
+    open["sessionPath"] = json!(path);
+    let method = if dedicated {
+        "sidecar.openBot"
+    } else {
+        "sidecar.open"
+    };
+    let _open = rig.post(method, open);
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+    (rig, port)
+}
+
+async fn bot_receipt(rig: &mut Rig) -> Value {
+    rig.tab_call("sidecar.command", json!({"command": {"type": "bot_call"}}))
+        .await
+        .unwrap();
+    rig.until("host tool call", |event| {
+        event.name == "sidecar.frame"
+            && serde_json::from_slice::<Value>(&event.bin)
+                .is_ok_and(|frame| frame["type"] == "host_tool_call")
+    })
+    .await
+    .data["botCallSpawn"]
+        .clone()
+}
+
+#[tokio::test]
+async fn only_the_dedicated_child_receives_identity_and_an_in_flight_check_loses_it_on_switch() {
+    let (mut rig, port) = bot_rig("bot-switch", "bot-check+bridge", false, true).await;
+    assert!(rig.seen.iter().any(|e| e.bin.as_slice()
+        == br#"{"type":"host_tool_call","id":"before-state"}"#
+        && e.data["botCallSpawn"].is_null()));
+    let mut subscriber = super::subscribe(&rig.tab);
+    let spawn = bot_receipt(&mut rig).await;
+    assert_eq!(spawn, rig.spawn_id());
+    let mut tapped_call = false;
+    while let Ok(event) = subscriber.try_recv() {
+        if event.bin.as_deref().is_some_and(|bin| {
+            serde_json::from_slice::<Value>(bin)
+                .is_ok_and(|frame| frame["type"] == "host_tool_call")
+        }) {
+            tapped_call = true;
+            assert!(event.data.get("botCallSpawn").is_none());
+        }
+    }
+    assert!(tapped_call);
+    let recheck = json!({"spawnId": spawn});
+    assert_eq!(
+        rig.tab_call("sidecar.recheckBotCall", recheck.clone())
+            .await
+            .unwrap(),
+        BOT
+    );
+    assert_eq!(
+        rig.tab_call("sidecar.currentBotChat", json!({}))
+            .await
+            .unwrap(),
+        BOT
+    );
+    let gate = rig.dir.join("hold-state");
+    std::fs::write(&gate, "").unwrap();
+    let seq = rig.seq();
+    let pending = rig.post(
+        "sidecar.recheckBotCall",
+        json!({"tab": rig.tab,"seq":seq,"spawnId":spawn}),
+    );
+    rig.until("the recheck's stock read", |event| {
+        event.bin.as_slice() == br#"{"type":"waiting_on_state"}"#
+    })
+    .await;
+    rig.tab_call("sidecar.send", json!({"frame":{"type":"switch_session"}}))
+        .await
+        .unwrap();
+    rig.tab_call("sidecar.barrier", json!({})).await.unwrap();
+    std::fs::remove_file(gate).unwrap();
+    assert!(settle(pending).await.unwrap().is_null());
+    assert!(bot_receipt(&mut rig).await.is_null());
+    assert!(
+        rig.tab_call("sidecar.currentBotChat", json!({}))
+            .await
+            .unwrap()
+            .is_null()
+    );
+    rig.call("agentControl.close", json!({"port":port}))
+        .await
+        .unwrap();
+    finish(rig).await;
+}
+
+#[tokio::test]
+async fn a_fresh_lane_cannot_materialize_or_claim_an_existing_journal() {
+    let (mut rig, port) = bot_rig("bot-existing", "preexisting+bridge", false, true).await;
+    assert!(bot_receipt(&mut rig).await.is_null());
+    assert!(!log(&rig).contains("bridge agent_control.bot_home_persist"));
+    rig.call("agentControl.close", json!({"port": port}))
+        .await
+        .unwrap();
+    finish(rig).await;
+}
+
+#[tokio::test]
+async fn a_pinned_reopen_checks_the_stock_id_and_the_receipt_checks_the_live_branch() {
+    for (name, mode, dedicated, expected) in [
+        ("bot-reopen", "ok+bridge", true, true),
+        ("bot-lost-registry", "ok+bridge", true, true),
+        ("bot-other-stock", "wrong-id+bridge", true, false),
+        ("bot-ordinary", "ok+bridge", false, false),
+    ] {
+        let (mut rig, port) = bot_rig(name, mode, true, dedicated).await;
+        let spawn = rig.spawn_id();
+        assert_eq!(
+            bot_receipt(&mut rig).await,
+            if expected { json!(spawn) } else { Value::Null }
+        );
+        if expected {
+            let check = json!({"spawnId": spawn});
+            assert_eq!(
+                rig.tab_call("sidecar.recheckBotCall", check.clone())
+                    .await
+                    .unwrap(),
+                BOT
+            );
+            if name == "bot-lost-registry" {
+                rig.call("agentControl.close", json!({"port": port}))
+                    .await
+                    .unwrap();
+            } else {
+                rig.tab_call(
+                    "sidecar.bridge",
+                    json!({"spawnId":spawn, "method":"fixture.switchSilently"}),
+                )
+                .await
+                .unwrap();
+            }
+            assert!(
+                rig.tab_call("sidecar.recheckBotCall", check)
+                    .await
+                    .unwrap()
+                    .is_null()
+            );
+            assert!(bot_receipt(&mut rig).await.is_null());
+        }
+        rig.call("agentControl.close", json!({"port":port}))
+            .await
+            .unwrap();
+        finish(rig).await;
+    }
+}
+
+#[tokio::test]
+async fn a_wake_or_restart_on_the_pinned_file_never_reissues_the_launch() {
+    for (name, stop) in [
+        ("bot-wake", "sidecar.sleep"),
+        ("bot-restart", "sidecar.restart"),
+    ] {
+        let (mut rig, port) = bot_rig(name, "ok+bridge", true, true).await;
+        let before = bot_receipt(&mut rig).await;
+        assert_eq!(before, rig.spawn_id());
+        rig.tab_call(stop, json!({})).await.unwrap();
+        if stop == "sidecar.sleep" {
+            rig.status("asleep").await;
+            rig.tab_call("sidecar.start", json!({})).await.unwrap();
+        }
+        rig.status("ready").await;
+        assert_ne!(before, rig.spawn_id());
+        assert!(bot_receipt(&mut rig).await.is_null());
+        assert!(
+            rig.tab_call("sidecar.recheckBotCall", json!({"spawnId":before}))
+                .await
+                .unwrap()
+                .is_null()
+        );
+        rig.call("agentControl.close", json!({"port":port}))
+            .await
+            .unwrap();
+        finish(rig).await;
+    }
+}
+
+#[tokio::test]
+async fn a_host_tool_frame_released_by_teardown_has_no_source_even_if_the_child_is_still_draining()
+{
+    let (mut rig, port) = bot_rig("bot-held", "ok+bridge", true, true).await;
+    assert_eq!(bot_receipt(&mut rig).await, rig.spawn_id());
+    rig.tab_call("sidecar.send", json!({"frame":{"type":"bot_held_call"}}))
+        .await
+        .unwrap();
+    rig.until("the held agent_end", |e| {
+        e.data["desktopSpawnId"].is_number()
+    })
+    .await;
+    rig.tab_call("sidecar.kill", json!({})).await.unwrap();
+    rig.tab_call("sidecar.barrier", json!({})).await.unwrap();
+    let seq = rig.seq;
+    rig.until("barrier after teardown", |e| {
+        e.name == "sidecar.answer" && e.data["seq"] == seq
+    })
+    .await;
+    assert!(!rig.seen.iter().any(|e| {
+        e.bin.as_slice() == br#"{"type":"host_tool_call","id":"held"}"#
+            && !e.data["botCallSpawn"].is_null()
+    }));
+    rig.call("agentControl.close", json!({"port":port}))
+        .await
+        .unwrap();
+    finish(rig).await;
+}
 
 #[tokio::test]
 async fn cancelling_a_turn_read_does_not_wait_for_the_held_page_or_block_the_lane() {

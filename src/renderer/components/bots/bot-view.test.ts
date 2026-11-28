@@ -6,6 +6,7 @@ import { BOT_TEMPLATES } from "./bot-templates";
 import {
 	type BotChatFacts,
 	type BotFacts,
+	botChatHome,
 	botFacts,
 	botMatches,
 	botWorkerChildren,
@@ -40,6 +41,13 @@ const chat = (path: string, over: Partial<BotChatFacts> = {}): BotChatFacts => (
 	failed: false,
 	unread: false,
 	...over,
+});
+
+it("prefers the local host-created home without changing the paired bot's destination", () => {
+	const ada = bot("a", { chatHome: "/s/new" });
+	expect(botChatHome(ada)).toBe("/s/new");
+	expect(botChatHome({ ...ada, device: "peer" })).toBe("/s/a-home.jsonl");
+	expect(botChatHome(bot("a"))).toBe("/s/a-home.jsonl");
 });
 
 describe("a bot row's second line", () => {

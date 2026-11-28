@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SidecarStatus } from "../shared/rpc-types";
 import { core } from "./core/process";
 import type { OmpResolution } from "./omp-runtime";
-import { SidecarManager } from "./sidecar";
+import { type BotCallSource, SidecarManager } from "./sidecar";
 import { ANSWERS_COMMANDS, RM_TEMP, writeFakeOmp } from "./test-fake-omp";
 
 const TABS = 4;
@@ -36,6 +36,77 @@ function nextReady(sidecar: SidecarManager): Promise<void> {
 }
 
 describe("tabs whose core ended under them", () => {
+	it("drops the dedicated opener and every captured call when the core is replaced", async () => {
+		const cwd = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-bot-loss-")));
+		const botId = "bot-aaaaaaaaaaaa";
+		const port = 6_900_100;
+		const session = path.join(cwd, "home.jsonl");
+		const bots = path.join(cwd, "bots.json");
+		await fs.writeFile(session, `${JSON.stringify({ type: "session", id: "stable", cwd })}\n`);
+		await fs.writeFile(
+			bots,
+			JSON.stringify([{ id: botId, name: "Bot", folder: cwd, chatPins: [{ path: session, id: "stable" }] }]),
+		);
+		const bin = await writeFakeOmp(
+			cwd,
+			`import { createServer } from "node:net";
+import { createInterface } from "node:readline";
+const out = frame => console.log(JSON.stringify(frame));
+createServer(socket => createInterface({ input: socket }).on("line", line => {
+	const { id, method } = JSON.parse(line);
+	socket.write(JSON.stringify({ id, ok: true, result: method === "bot_session_unchanged" }) + "\\n");
+})).listen(process.env.OMP_GUI_BRIDGE, () => out({ type: "ready" }));
+createInterface({ input: process.stdin }).on("line", line => {
+	const { id, type } = JSON.parse(line);
+	if (type === "abort") out({ type: "host_tool_call", id: "c", name: "test", botId: "spoof", botCallSpawn: 1 });
+	out({ type: "response", id, command: type, success: true, data: { sessionId: "stable", sessionFile: ${JSON.stringify(session)} } });
+}).on("close", () => process.exit(0));`,
+		);
+		let sidecar: SidecarManager | undefined;
+		try {
+			await core().call("agentControl.open", { port, state: {}, files: { bots }, runtime: { sweepMs: 0 } });
+			const launch = await core().call<{ botChatPort: number }>("agentRuntime.botChatLaunch", {
+				port,
+				botId,
+				sessionPath: session,
+			});
+			const manager = new SidecarManager({
+				cwd,
+				omp: ompAt(bin),
+				bridgeDir: cwd,
+				botChatId: botId,
+				botChatPort: launch.result.botChatPort,
+				botChatSessionPath: session,
+				sessionFree: async () => "free",
+			});
+			sidecar = manager;
+			const receipt = async () => {
+				const call = Promise.withResolvers<BotCallSource | undefined>();
+				manager.once("hostToolCall", (_frame, source?: BotCallSource) => call.resolve(source));
+				await manager.rpcClient!.stock({ type: "abort" });
+				return call.promise;
+			};
+			const firstReady = nextReady(manager);
+			manager.restart(undefined, session);
+			await firstReady;
+			const source = await receipt();
+			expect(await source?.recheck()).toBe(botId);
+			const back = nextReady(manager);
+			core().abandon("a test replaces the bot's core");
+			await back;
+			expect(await source?.recheck()).toBeNull();
+			expect(await receipt()).toBeUndefined();
+			expect(await manager.currentBotChatId()).toBeNull();
+		} finally {
+			sidecar?.dispose();
+			await sidecar?.whenExited();
+			await core()
+				.call("agentControl.close", { port })
+				.catch(() => {});
+			await fs.rm(cwd, RM_TEMP);
+		}
+	}, 60_000);
+
 	it("each start a new omp on its own session in the next core", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gui-core-loss-"));
 		const spawns = path.join(tempDir, "spawns.log");

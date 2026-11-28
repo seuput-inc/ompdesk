@@ -36,6 +36,7 @@ import type {
 	TodoPhase,
 } from "../../shared/rpc-types";
 import { readSplitNode, type SplitLayout, type SplitPlacement, splitTabIds } from "../../shared/split-layout";
+import { openBotChat } from "../components/bots/bot-launch";
 import { attachTabSession, hydrateSession, hydrateTabSession, refreshSessionState } from "../hooks/use-rpc-events";
 import { translate } from "../lib/i18n";
 import { useTabHistoryStore } from "../lib/tab-history";
@@ -121,6 +122,7 @@ interface MockOmp {
 	tabs: {
 		list: Mock<() => Promise<IpcTabInfo[]>>;
 		spawn: Mock<(payload: IpcSpawnTabPayload) => Promise<IpcSpawnTabResult | null>>;
+		openBotChat: Mock<(id: string, sessionPath: string | null) => Promise<IpcSpawnTabResult | null>>;
 		close: Mock<(tabId: string) => Promise<boolean>>;
 		setActive: Mock<(tabId: string) => Promise<boolean>>;
 		setView: Mock<
@@ -151,6 +153,7 @@ function installMockOmp(): { omp: MockOmp; emitTabStatus: TabStatusHandler } {
 		tabs: {
 			list: vi.fn(async () => []),
 			spawn: vi.fn(async () => null),
+			openBotChat: vi.fn(async () => null),
 			close: vi.fn(async () => true),
 			setActive: vi.fn(async () => true),
 			setView: vi.fn(async () => true),
@@ -553,6 +556,25 @@ describe("tabs store switch", () => {
 		expect(omp.tabs.spawn).toHaveBeenCalledWith({ cwd: "/alpha", sessionPath: undefined, kind: "agent" });
 		expect(useTabsStore.getState().tabs.map(tab => tab.id)).toEqual(["t0", "t1"]);
 		expect(useTabsStore.getState().activeTabId).toBe("t1");
+	});
+
+	it("opens a local bot in the host-selected folder and never falls back to a regular open on conflict", async () => {
+		seedTabs();
+		omp.tabs.openBotChat.mockResolvedValueOnce({ tabId: "bot-tab", cwd: "/bot" });
+		const bot = { id: "bot", folder: "/caller" };
+		expect(await openBotChat(bot, null)).toBe("bot-tab");
+		expect(omp.tabs.openBotChat).toHaveBeenCalledWith("bot", null);
+		expect(useTabsStore.getState().tabs.find(tab => tab.id === "bot-tab")?.cwd).toBe("/bot");
+		await useTabsStore.getState().switchTab("t1");
+		omp.tabs.openBotChat.mockResolvedValueOnce({ tabId: null, refusal: "bot-chat-occupied" });
+		useTabsStore.setState(state => ({
+			tabs: state.tabs.map(tab => (tab.id === "t0" ? { ...tab, sessionPath: "/s" } : tab)),
+		}));
+		expect(await openBotChat(bot, "/s")).toBeNull();
+		expect(omp.tabs.openBotChat).toHaveBeenLastCalledWith("bot", "/s");
+		expect(useTabsStore.getState().activeTabId).toBe("t1");
+		expect(omp.tabs.spawn).not.toHaveBeenCalled();
+		expect(useToastStore.getState().toasts.at(-1)?.message).toBe(translate("bots.launch.occupied"));
 	});
 
 	it("opens Work as an agent in the main-owned default workspace", async () => {

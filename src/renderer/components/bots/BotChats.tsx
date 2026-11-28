@@ -15,6 +15,7 @@ import { useTabsStore } from "../../stores/tabs";
 import { toastError } from "../../stores/toast";
 import { Badge, Button, ConfirmDialog, EmptyState, Input, ListRow, MenuButton, SearchField, TimeAgo } from "../common";
 import { openBotChat } from "./bot-launch";
+import { botChatHome } from "./bot-view";
 
 export function BotChats({ bot }: { bot: Bot }) {
 	const t = useT();
@@ -24,11 +25,12 @@ export function BotChats({ bot }: { bot: Bot }) {
 	const [query, setQuery] = useState("");
 	const [renaming, setRenaming] = useState<{ path: string; name: string } | null>(null);
 	const [deleting, setDeleting] = useState<{ path: string; title: string } | null>(null);
+	const homePath = botChatHome(bot);
 	const chats = sessions
 		.filter(session => session.cwd === bot.folder && sessionHasContent(session))
 		.toSorted(
 			(a, b) =>
-				Number(b.path === bot.home) - Number(a.path === bot.home) ||
+				Number(b.path === homePath) - Number(a.path === homePath) ||
 				Date.parse(b.modified) - Date.parse(a.modified),
 		)
 		.filter(
@@ -63,7 +65,7 @@ export function BotChats({ bot }: { bot: Bot }) {
 				/>
 			) : (
 				chats.map(session => {
-					const home = session.path === bot.home;
+					const home = session.path === homePath;
 					const title = home ? t("bots.chats.home") : sessionDisplayTitle(session, "") || t("bots.chats.untitled");
 					const tab = tabs.find(entry => entry.sessionPath === session.path && entry.device === bot.device);
 					if (renaming?.path === session.path)
@@ -108,8 +110,11 @@ export function BotChats({ bot }: { bot: Bot }) {
 											label: t("bots.chats.delete"),
 											icon: Trash2,
 											danger: true,
-											disabled: home || tab?.status === "running",
-											disabledReason: home ? t("bots.chats.homeStays") : t("bots.chats.running"),
+											disabled: home || session.path === bot.home || tab?.status === "running",
+											disabledReason:
+												home || session.path === bot.home
+													? t("bots.chats.homeStays")
+													: t("bots.chats.running"),
 											onSelect: () => setDeleting({ path: session.path, title }),
 										},
 									]}

@@ -21,6 +21,18 @@ import { INSTALLED_OMP as omp } from "./test-bridge-probe";
 
 afterAll(runCleanups, CLEANUP_MS);
 
+describe.skipIf(!existsSync(omp))("bot chat run continuity on stock omp", () => {
+	it("invalidates a run after stock replaces its session without replacing its process", async () => {
+		const provider = await startProvider();
+		atEnd(() => provider.close());
+		const session = await startOmp(provider);
+		expect(await session.bridge.request("bot_session_unchanged")).toBe(true);
+		expect(await session.send({ type: "new_session" })).toMatchObject({ success: true });
+		expect(await session.bridge.request("bot_session_unchanged")).toBe(false);
+		expect(provider.turns).toBe(0);
+	}, 120_000);
+});
+
 /**
  * A report another session sends (`ompdesk_report`) reaches a busy receiver between its steps, not after its turn:
  * the delivery frames from the core's mailbox through `agent_control.mail` on the installed omp, with a scripted

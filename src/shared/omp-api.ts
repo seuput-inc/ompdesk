@@ -707,6 +707,8 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			seenSinceRun: () => transport.invoke(IPC_COMMANDS.TABS_SEEN_SINCE_RUN) as Promise<string[]>,
 			spawn: (payload: IpcSpawnTabPayload) =>
 				transport.invoke(IPC_COMMANDS.SPAWN_TAB, payload) as Promise<IpcSpawnTabResult | null>,
+			openBotChat: (botId, sessionPath) =>
+				transport.invoke<IpcSpawnTabResult | null>(IPC_COMMANDS.OPEN_BOT_CHAT, { botId, sessionPath }),
 			close: (tabId: string, expectedTurn?: AutoCloseTurn) =>
 				transport.invoke<boolean>(
 					IPC_COMMANDS.CLOSE_TAB,

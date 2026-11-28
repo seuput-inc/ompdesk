@@ -70,6 +70,7 @@ import { exportBot } from "./BotActionsMenu";
 import { BotAvatar } from "./BotAvatar";
 import { BotConnectorsSection } from "./BotConnectors";
 import { openBotChat, openBotDialog } from "./bot-launch";
+import { botChatHome } from "./bot-view";
 
 type Page = "root" | "soul" | "memory" | "access";
 
@@ -329,8 +330,10 @@ function BotSettingsRoot({
 					description={t("bots.settings.skillsHint")}
 					leading={<BookOpen aria-hidden className="size-4 text-(--sc-text-muted)" />}
 					onClick={() =>
-						void openBotChat(bot, bot.home)
-							.then(() => useUiStore.getState().openSettings("tools:skills"))
+						void openBotChat(bot, botChatHome(bot))
+							.then(tab => {
+								if (tab) useUiStore.getState().openSettings("tools:skills");
+							})
 							.catch(() => {})
 					}
 					size="sm"

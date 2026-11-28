@@ -791,7 +791,7 @@ export class LocalHostServices implements HostServices {
 	 * Tabs whose `tab.open` is still awaiting (folder, session kind), and those of them the device closed meanwhile:
 	 * that close found no tab, so the open must not make one, or it would hold its session with nobody to close it.
 	 */
-	readonly #opening = new Map<string, number>();
+	readonly #opening = new Map<string, Set<{ sessionPath?: string }>>();
 	readonly #closedWhileOpening = new Set<string>();
 	/**
 	 * Views whose window tab closed while their device was away (it never heard `viewEnded`): its return under that
@@ -1223,6 +1223,14 @@ export class LocalHostServices implements HostServices {
 			for (const listener of this.#remoteOpenedListeners) listener();
 		}, REMOTE_OPENED_DEBOUNCE_MS);
 		this.#remoteOpenedTimer.unref?.();
+	}
+
+	/** A dedicated bot reopen must not start a writer in front of a device's still-opening tab. */
+	holdsOrOpensSession(sessionPath: string): boolean {
+		if (this.#runner(sessionPath)) return true;
+		for (const opens of this.#opening.values())
+			for (const open of opens) if (open.sessionPath === sessionPath) return true;
+		return false;
 	}
 
 	/**
@@ -2578,7 +2586,9 @@ export class LocalHostServices implements HostServices {
 			return { cwd: view.cwd, kind: view.kind, attached: true, viewing: true };
 		}
 		if (!params.cwd) throw codedError("no_workspace", "No workspace");
-		this.#opening.set(key, (this.#opening.get(key) ?? 0) + 1);
+		const opens = this.#opening.get(key) ?? new Set<{ sessionPath?: string }>();
+		opens.add(params);
+		this.#opening.set(key, opens);
 		let cwd: string;
 		let kind: "agent" | "chat";
 		try {
@@ -2608,9 +2618,8 @@ export class LocalHostServices implements HostServices {
 				: await directory(params.cwd);
 			this.#checkOpenSession(params.sessionPath);
 		} finally {
-			const left = (this.#opening.get(key) ?? 1) - 1;
-			if (left > 0) this.#opening.set(key, left);
-			else this.#opening.delete(key);
+			opens.delete(params);
+			if (opens.size === 0) this.#opening.delete(key);
 		}
 		this.#checkOpenSession(params.sessionPath);
 		if (this.#closedWhileOpening.delete(key)) throw codedError("unknown_tab", "The device closed this tab");

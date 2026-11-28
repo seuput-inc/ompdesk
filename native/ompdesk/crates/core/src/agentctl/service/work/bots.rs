@@ -233,6 +233,13 @@ impl AgentControl {
                 if let Some(fields) = value.as_object_mut() {
                     fields.remove("creationReceipt");
                     fields.remove("peerCreate");
+                    fields.remove("chatPins");
+                    if let Some(home) = bot.chat_pins.iter().find(|pin| {
+                        state.deleted_at_path(&pin.path, None).is_none()
+                            && state.deleted_at_id(&pin.id).is_none()
+                    }) {
+                        fields.insert("chatHome".into(), json!(home.path));
+                    }
                     if let Some(peer) = &bot.peer_create {
                         let pending = if bot.home.is_none() {
                             Some("home")

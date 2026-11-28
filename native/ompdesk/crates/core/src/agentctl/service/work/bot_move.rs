@@ -406,6 +406,11 @@ impl AgentControl {
             for session in &mut record.sessions {
                 *session = map(session.as_str());
             }
+            for pin in &mut record.chat_pins {
+                if let Some(new) = moved.get(&pin.path) {
+                    pin.path.clone_from(new);
+                }
+            }
             for worker in &mut record.workers {
                 worker.opened_by_session = worker.opened_by_session.as_deref().map(map);
             }

@@ -423,6 +423,8 @@ export const IPC_COMMANDS = {
 	SESSION_CONSUME_PENDING: "session:consume-pending",
 	/** Spawn a tab (own sidecar) bound to the calling window */
 	SPAWN_TAB: "tab:spawn",
+	/** The Bots page on this computer requests a new chat or a registered transcript, never a launch identity. */
+	OPEN_BOT_CHAT: "tab:open-bot-chat",
 	/** Close a tab: release its sidecar; last tab leaves the window tab-less */
 	CLOSE_TAB: "tab:close",
 	/** A paired web page says which of its tabs holds unsaved Files edits (`IpcFileEditReportPayload`); main closes a tab for an agent only while that page says it is clean. */
@@ -2111,7 +2113,7 @@ export interface IpcSpawnTabResult {
 	 * disagrees with the target session file's stamped kind; `folder-missing` =
 	 * the folder the session file records (`folder`) no longer exists.
 	 */
-	refusal?: "owned" | "kind-mismatch" | "folder-missing";
+	refusal?: "owned" | "kind-mismatch" | "folder-missing" | "bot-chat-occupied";
 	/** With `folder-missing`: the folder the session belongs in. */
 	folder?: string;
 	/** With `folder-missing`: disk care saved that folder before removing it; `restoreSaved` puts it back. */
@@ -2797,6 +2799,7 @@ export interface OmpApi {
 		 * `{ tabId: null, ownerTabId, ownerWinId }` instead of spawning (F-OWN).
 		 */
 		spawn(payload: IpcSpawnTabPayload): Promise<IpcSpawnTabResult | null>;
+		openBotChat(botId: string, sessionPath: string | null): Promise<IpcSpawnTabResult | null>;
 		/** Release a tab's sidecar. False when the tab is unknown or foreign. */
 		close(tabId: string, expectedTurn?: AutoCloseTurn): Promise<boolean>;
 		/** Move full event forwarding to this tab. False when unknown or foreign. */

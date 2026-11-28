@@ -22,6 +22,7 @@
 //! out); the wire is `agentRuntime.*`, by the same port number.
 
 mod activity;
+mod bot_chat;
 mod review;
 mod wake;
 
@@ -42,6 +43,9 @@ use super::service::types::ClosedChild;
 use crate::server::{Call, Fault, Registry, Reply, at_once};
 
 pub use activity::Activity;
+pub(crate) use bot_chat::{
+    bot_chat_authority, bot_chat_matches, bot_chat_prior_paths, observe_bot_chat,
+};
 
 /// How the runtime waits; the defaults are the TypeScript's, a test shortens them.
 #[derive(Clone, Debug, Deserialize)]
@@ -103,6 +107,7 @@ struct Rt {
 
 /// The runtime of one service.
 pub struct Runtime {
+    bot_chat_port: Option<u64>,
     control: AgentControl,
     config: RuntimeConfig,
     rt: Mutex<Rt>,
@@ -122,6 +127,7 @@ const ATTACHMENT_SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
 /// Starts the runtime of `control` (opened as port `port`): its timer runs until the port closes.
 pub fn start(control: AgentControl, port: u64, config: RuntimeConfig) -> Arc<Runtime> {
     let runtime = Arc::new(Runtime {
+        bot_chat_port: bot_chat::new_port(),
         control: control.clone(),
         config,
         rt: Mutex::new(Rt::default()),
@@ -166,7 +172,7 @@ pub fn start(control: AgentControl, port: u64, config: RuntimeConfig) -> Arc<Run
             ended.await;
         }
         timer.stop();
-        lock(&RUNTIMES).remove(&port);
+        lock(&RUNTIMES).retain(|_, current| !Arc::ptr_eq(current, &timer));
     });
     runtime
 }
@@ -499,6 +505,7 @@ fn acknowledge(call: &Call) -> Result<Reply, Fault> {
 }
 
 pub fn register(registry: &mut Registry) {
+    bot_chat::register(registry);
     registry.add("agentRuntime.activity", |call| {
         at_once(activity_call(&call))
     });

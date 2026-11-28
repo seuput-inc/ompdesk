@@ -62,6 +62,7 @@ import {
 	TextArea,
 } from "../../common";
 import { openBotChat } from "../bot-launch";
+import { botChatHome } from "../bot-view";
 import { formatSnooze } from "./BotItemDialogs";
 import { snoozeMenu, useItemMoves } from "./BotItems";
 import { ItemAnswerEditor } from "./ItemAnswerEditor";
@@ -286,12 +287,12 @@ export function BotItemPage({
 						<dd>
 							<LinkButton onClick={() => void openBotChat(bot, item.session).catch(() => {})} tone="inherit">
 								<span className="inline-flex items-center gap-1">
-									{item.session === bot.home ? (
+									{item.session === botChatHome(bot) ? (
 										<House aria-hidden className="size-3" />
 									) : (
 										<MessageSquare aria-hidden className="size-3" />
 									)}
-									{item.session === bot.home ? t("bots.chats.home") : t("bots.items.chatFallback")}
+									{item.session === botChatHome(bot) ? t("bots.chats.home") : t("bots.items.chatFallback")}
 								</span>
 							</LinkButton>
 						</dd>

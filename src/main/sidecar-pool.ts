@@ -99,9 +99,9 @@ import { HostedTabView } from "./remote/hosted-view";
 import type { TabHolder } from "./remote/protocol";
 import type { SessionSummaries, SummaryFacts, SummarySource } from "./session-summaries";
 import type { SettleWatch } from "./settle-watch";
-import type { SidecarSessionIdentity, SidecarStartGate } from "./sidecar";
+import type { BotCallSource, SidecarSessionIdentity, SidecarStartGate } from "./sidecar";
 import { claudeRetryBlocked, type RunReading } from "./sidecar-run-state";
-import { type SidecarLike, VIEW_ENDED_EVENT } from "./sidecar-types";
+import { type BotChatSpawn, type SidecarLike, VIEW_ENDED_EVENT } from "./sidecar-types";
 import { nextSnowflake } from "./snowflake";
 import { createSubagentFrameBatcher } from "./subagent-frames";
 import { MAX_FORMER_TAB_IDS, type PersistedTabLayout, TAB_LAYOUT_VERSION } from "./tab-layout";
@@ -121,6 +121,7 @@ export type SidecarFactory = (
 	tabId: string,
 	/** The tab is the phone page's (a paired web window owns it), not a desktop window's. */
 	web: boolean,
+	botChat?: BotChatSpawn,
 ) => SidecarLike;
 
 function forwardToWindow(win: ClientWindow, channel: string, data: unknown): void {
@@ -264,6 +265,8 @@ interface TabHandle {
 	win: ClientWindow;
 	/** Paired host deviceId the tab runs on (immutable, set at acquire). */
 	device: string | undefined;
+	/** Acquisition provenance only, never used as a live bot identity. */
+	botChat?: BotChatSpawn;
 	hosted: boolean;
 	/** The core released the tab: it is not in the pool any more, its sidecar is still being let go of. */
 	gone: boolean;
@@ -283,6 +286,8 @@ interface TabHandle {
 
 interface PendingAcquire {
 	handle?: TabHandle;
+	botChat?: BotChatSpawn;
+	localFile?: string;
 	phase: "pending" | "bound" | "saved" | { bindError: unknown };
 }
 
@@ -461,7 +466,12 @@ export class SidecarPool {
 	 * it answers every hostToolCall (shown or hidden tab), unknown tools with an explicit error.
 	 */
 	hostToolExecutor:
-		| ((sidecar: SidecarLike, request: HostToolCallRequest, tab: { tabId: string; win: ClientWindow }) => void)
+		| ((
+				sidecar: SidecarLike,
+				request: HostToolCallRequest,
+				tab: { tabId: string; win: ClientWindow },
+				botSource?: BotCallSource,
+		  ) => void)
 		| null = null;
 	/** A paired host took a host tool result this computer sent (`RemoteSidecar`'s `hostReplyDelivered`), by call id. */
 	hostReplyDelivered: ((id: string) => void) | null = null;
@@ -790,6 +800,7 @@ export class SidecarPool {
 				}
 				const cwd = item.cwd as string;
 				// One spelling per directory: the sidecar reports its realpath'd cwd.
+				const botChat = this.#acquiring.get(tab)?.botChat;
 				const sidecar = this.#factory(
 					device ? cwd : canonicalCwd(cwd),
 					item.kind as "agent" | "chat",
@@ -797,18 +808,21 @@ export class SidecarPool {
 					device,
 					tab,
 					isWebWindow(item.win as number),
+					botChat,
 				);
 				const status = sidecar.status;
 				// Before anything can start it: the gate must be in place for the first `ready`.
-				const gate = this.worktreeStartGate?.(tab, item.win as number, {
-					kind: item.kind as "agent" | "chat",
-					sessionPath: (item.sessionPath as string | null) ?? undefined,
-					device,
-					worktree: (item.worktree as IpcTabWorktree | null) ?? undefined,
-					fresh: item.fresh === true,
-					placeholder: item.placeholder === true,
-					deferStart: item.deferStart === true,
-				});
+				const gate =
+					!botChat &&
+					this.worktreeStartGate?.(tab, item.win as number, {
+						kind: item.kind as "agent" | "chat",
+						sessionPath: (item.sessionPath as string | null) ?? undefined,
+						device,
+						worktree: (item.worktree as IpcTabWorktree | null) ?? undefined,
+						fresh: item.fresh === true,
+						placeholder: item.placeholder === true,
+						deferStart: item.deferStart === true,
+					});
 				if (gate) sidecar.setStartGate?.(gate);
 				this.#hold(tab, sidecar, win, device, false);
 				this.#wireLight(tab, sidecar);
@@ -1047,9 +1061,15 @@ export class SidecarPool {
 		// This computer stands in for the host's sign-in callback (sign-in-relay.ts).
 		sidecar.on("signInRelay", relay => feed("signInRelay", relay));
 		// A tool call blocks the turn until answered, so a hidden tab's calls are answered too.
-		sidecar.on("hostToolCall", (request: HostToolCallRequest) => {
+		sidecar.on("hostToolCall", (request: HostToolCallRequest, botSource?: BotCallSource) => {
 			const handle = this.#handles.get(tab);
-			if (handle) this.hostToolExecutor?.(sidecar, request, { tabId: tab, win: handle.win });
+			if (!handle || handle.sidecar !== sidecar) return;
+			this.hostToolExecutor?.(
+				sidecar,
+				request,
+				{ tabId: tab, win: handle.win },
+				handle.hosted || handle.device ? undefined : botSource,
+			);
 		});
 		sidecar.on("hostReplyDelivered", (id: string) => this.hostReplyDelivered?.(id));
 		// OMPdesk registers no host URI schemes: fail the read/write instead of leaving omp waiting, shown tab or hidden.
@@ -1248,6 +1268,7 @@ export class SidecarPool {
 			hosted,
 			gone: false,
 			sessionFile: null,
+			botChat: this.#acquiring.get(tab)?.botChat,
 			openedBy: null,
 			openedBySession: null,
 			openedByDevice: null,
@@ -1259,9 +1280,14 @@ export class SidecarPool {
 		if (acquire) acquire.handle = handle;
 	}
 
-	#withAcquire<T>(tab: string, refused: T, acquire: () => T): T {
+	#withAcquire<T>(tab: string, refused: T, acquire: () => T, botChat?: BotChatSpawn, localFile?: string): T {
 		if (this.#handles.has(tab) || this.#acquiring.has(tab)) return refused;
-		this.#acquiring.set(tab, { phase: "pending" });
+		// A synchronous core callback can reenter main before the first acquire has registered its session file.
+		if (localFile) {
+			for (const other of this.#acquiring.values())
+				if (other.localFile === localFile && (botChat || other.botChat)) return refused;
+		}
+		this.#acquiring.set(tab, { phase: "pending", botChat, localFile });
 		try {
 			return acquire();
 		} finally {
@@ -1299,26 +1325,65 @@ export class SidecarPool {
 		agent?: { task?: string; opener?: string },
 		formerIds?: string[],
 	): SidecarLike | null {
-		return this.#withAcquire(tabId, null, () => {
-			const result = this.#call<{ ok: boolean; added: boolean }>("acquire", {
-				cwd,
-				win: this.#windowId(win),
-				tab: tabId,
-				sessionPath,
-				kind,
-				worktree,
-				fresh,
-				placeholder,
-				deferStart,
-				title,
-				device,
-				task: agent?.task,
-				opener: agent?.opener,
-				formerIds,
-			});
-			if (!result.added) this.#handles.delete(tabId);
-			return result.ok ? (this.#live(tabId)?.sidecar ?? null) : null;
+		return this.#acquire(win, tabId, {
+			cwd,
+			sessionPath,
+			kind,
+			worktree,
+			fresh,
+			placeholder,
+			deferStart,
+			title,
+			device,
+			task: agent?.task,
+			opener: agent?.opener,
+			formerIds,
 		});
+	}
+
+	acquireBotChat(win: ClientWindow, tabId: string, cwd: string, botChat: BotChatSpawn): SidecarLike | null {
+		if (isWebWindow(win.webContents.id)) return null;
+		const sessionPath = botChat.botChatSessionPath;
+		return this.#acquire(win, tabId, { cwd, kind: "agent", fresh: !sessionPath, sessionPath }, botChat);
+	}
+
+	/** A second New chat before the dedicated new tab has a file joins that launch instead. */
+	pendingBotChat(botId: string, port: number): string | null {
+		for (const [tab, handle] of this.#handles) {
+			const launch = handle.botChat;
+			if (handle.gone || launch?.botChatId !== botId || launch.botChatPort !== port || launch.botChatSessionPath)
+				continue;
+			const status = handle.sidecar.status;
+			if ((status === "starting" || status === "ready") && !this.sessionFileOf(tab)) return tab;
+		}
+		return null;
+	}
+
+	#acquire(
+		win: ClientWindow,
+		tabId: string,
+		params: { cwd: string; sessionPath?: string; device?: string } & Record<string, unknown>,
+		botChat?: BotChatSpawn,
+	): SidecarLike | null {
+		const localFile = params.device ? undefined : params.sessionPath;
+		return this.#withAcquire(
+			tabId,
+			null,
+			() => {
+				// A regular open can have passed its first owner check before a dedicated reopen acquired the file.
+				if (localFile) {
+					const owner = this.sessionOwner(localFile);
+					if (owner && (botChat || this.#live(owner.tabId)?.botChat)) return null;
+				}
+				params.win = this.#windowId(win);
+				params.tab = tabId;
+				const result = this.#call<{ ok: boolean; added: boolean }>("acquire", params);
+				if (!result.added) this.#handles.delete(tabId);
+				return result.ok ? (this.#live(tabId)?.sidecar ?? null) : null;
+			},
+			botChat,
+			localFile,
+		);
 	}
 
 	/**

@@ -479,7 +479,15 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		summary:
 			"Extension hooks and registration API: `pi.on`, `registerTool`, the hook context and message injection (the hook names are listed per module that registers them).",
 		files: ["resources/gui-bridge/index.ts"],
-		stock: ["omp://extensions.md", "pi.on", "registerTool", "sendCustomMessage"],
+		stock: [
+			"omp://extensions.md",
+			"pi.on",
+			"session_switch",
+			"session_branch",
+			"session_tree",
+			"registerTool",
+			"sendCustomMessage",
+		],
 		tests: [
 			"src/main/bridge-agent-mail-stock.test.ts",
 			"src/main/bridge-agent-send-stock.test.ts",

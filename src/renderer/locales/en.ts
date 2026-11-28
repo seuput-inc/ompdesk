@@ -8333,6 +8333,7 @@ export const en: Record<string, string> = {
 	"bots.new.failed": "The bot was not made",
 	"bots.new.forHandOver": 'For "{title}": it takes the session over when you create it.',
 	"bots.launch.notStarted": "Its home chat did not open.",
+	"bots.launch.occupied": "This chat may be open elsewhere. Close it there and try again, or choose New chat.",
 	"bots.first.title": "Setting up",
 	"bots.first.create": "Create bot",
 	"bots.first.start": "Start omp in its home chat",

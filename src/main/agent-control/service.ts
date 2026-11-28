@@ -736,6 +736,14 @@ export class RuntimeClient {
 		this.#control = control;
 	}
 
+	/** The local Bots launch. Its selector expires with this incarnation of the host runtime. */
+	botChatLaunch(
+		botId: string,
+		sessionPath: string | null,
+	): Promise<{ cwd: string; sessionPath: string | null; botId: string | null; botChatPort: number }> {
+		return this.#control.callRuntime("botChatLaunch", { botId, sessionPath });
+	}
+
 	/** One tab activity the pool reported, with what only main knows at that moment (`activity.rs`). */
 	activity(activity: Record<string, unknown>): Promise<void> {
 		return this.#control.callRuntime("activity", { activity });

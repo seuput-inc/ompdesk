@@ -427,9 +427,6 @@ export default async function guiBridge(pi: ExtensionAPI): Promise<void> {
 		latestContext = ctx;
 	};
 	pi.on("session_start", remember);
-	pi.on("session_switch", remember);
-	pi.on("session_branch", remember);
-	pi.on("session_tree", remember);
 
 	const write = (socket: net.Socket, frame: unknown) => {
 		if (!socket.destroyed) socket.write(`${JSON.stringify(frame)}\n`);
@@ -452,7 +449,21 @@ export default async function guiBridge(pi: ExtensionAPI): Promise<void> {
 	};
 	bindEnv(env);
 
+	// A tree switch can replace the conversation without changing its file or stock session id.
+	let sessionChanged = false;
+	const change = (event: unknown, ctx: ExtensionContext) => {
+		remember(event, ctx);
+		if (!sessionChanged) {
+			sessionChanged = true;
+			env.emit({ type: "bot_session_changed" });
+		}
+	};
+	pi.on("session_switch", change);
+	pi.on("session_branch", change);
+	pi.on("session_tree", change);
+
 	const respond = async (method: unknown, params: unknown): Promise<unknown> => {
+		if (method === "bot_session_unchanged") return !sessionChanged;
 		const { table, failures } = await loading;
 		const fn = typeof method === "string" && Object.hasOwn(table, method) ? table[method] : undefined;
 		if (fn) return fn(params, env);
@@ -481,6 +492,7 @@ export default async function guiBridge(pi: ExtensionAPI): Promise<void> {
 	const server = net.createServer(socket => {
 		firstUse.resolve();
 		clients.add(socket);
+		if (sessionChanged) write(socket, { event: { type: "bot_session_changed" } });
 		socket.setEncoding("utf8");
 		let buffer = "";
 		socket.on("data", (chunk: string) => {

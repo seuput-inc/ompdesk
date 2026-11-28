@@ -26,6 +26,13 @@ export interface DesktopSlotProcess {
 	stop(restart: boolean): void;
 }
 
+/** Host-private launch authorization, never taken from a tab payload or persisted in its layout. */
+export interface BotChatSpawn {
+	botChatId: string;
+	botChatPort: number;
+	botChatSessionPath?: string;
+}
+
 /**
  * What the pool, ipc.ts and the host-tool executor need from a tab's sidecar:
  * the local SidecarManager, a RemoteSidecar whose omp runs on a paired host, or a HostedTabView of the omp
@@ -46,6 +53,7 @@ export interface SidecarLike extends Pick<EventEmitter, "on" | "off" | "once" | 
 	readonly pid?: number;
 	/** Local sidecars: the tab's process tag (`SessionProcesses`), once its first omp started. */
 	readonly processTag?: string;
+	currentBotChatId?(): Promise<string | null>;
 	/** Paired host deviceId the omp runs on; absent for a local sidecar. */
 	readonly device?: string;
 	/** True while a remote sidecar's link to its host is down (commands fail with `remote_offline`). */

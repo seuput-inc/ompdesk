@@ -42,7 +42,7 @@ vi.mock("./i18n", () => ({ ompFailureText: (reason: string) => reason }));
 vi.mock("electron", () => ({ app: {} }));
 
 describe("localSidecarFactory", () => {
-	it("hands every tab it spawns, hosted ones included, the stored launch profile's flags", () => {
+	it("isolates the local bot launch while ordinary and hosted tabs keep their launch profile", async () => {
 		let stored: string[] = ["--no-rules"];
 		const create = localSidecarFactory({
 			bridgeDir: "/bridge",
@@ -69,8 +69,18 @@ describe("localSidecarFactory", () => {
 			stored = ["--no-rules"];
 			expect(options.launchFlags?.("/w/alpha")).toEqual(["--no-rules"]);
 			stored = [];
+			expect(options.botChatId).toBeUndefined();
 			expect(options.launchFlags?.("/w/alpha")).toEqual([]);
 		}
+		const launch = { botChatId: "bot", botChatPort: 8, botChatSessionPath: "/s/home" };
+		create("/w/alpha", "agent", false, undefined, false, launch);
+		const bot = created.at(-1);
+		expect(bot).toMatchObject(launch);
+		expect(await bot?.sessionFree?.("/s/home")).toBe("owned");
+		expect(() => create("/w/alpha", "agent", false, undefined, true, launch)).toThrow();
+		expect(() =>
+			create("/w/alpha", "agent", false, { deviceId: "p", name: "P", hostName: "H" }, false, launch),
+		).toThrow();
 	});
 
 	it("hands every tab the prompt-suggestion switches, read per use, so a hosted tab follows this machine's pref", () => {

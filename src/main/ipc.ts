@@ -159,6 +159,7 @@ import type { AnswerStep } from "./agent-control/target-answer";
 import { quitApproved, requestQuit } from "./app-quit";
 import { Autopilot, type AutopilotCommand, type AutopilotNotice } from "./autopilot";
 import { routeHostAutopilotNotice } from "./autopilot-notice-route";
+import { localBotChatOpener } from "./bot-chat-tab";
 import { type HostBots, setBotsAsk, setBotsState } from "./bots";
 import {
 	CHECKOUT_PEERS_SWEEP_MS,
@@ -305,6 +306,7 @@ export interface IpcDeps {
 	hostedTabs: Pick<
 		LocalHostServices,
 		| "viewSession"
+		| "holdsOrOpensSession"
 		| "showAway"
 		| "summariesChanged"
 		| "remoteOpened"
@@ -2040,6 +2042,16 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			payload,
 		);
 	});
+
+	const openBotChat = localBotChatOpener({
+		resolve: (id, path) => agentControl.botChatLaunch(id, path),
+		pool: sidecarPool,
+		hosted: path => deps.hostedTabs.holdsOrOpensSession(path),
+		ownedElsewhere: path => sessionIndex.ownedElsewhere(path, true),
+		legacy: (win, cwd, sessionPath) =>
+			spawnTabForWindow({ ...agentSpawnDeps, anyWindowViews: true }, win, { cwd, sessionPath, kind: "agent" }),
+	});
+	ipc.handle(IPC_COMMANDS.OPEN_BOT_CHAT, (caller, payload: unknown) => openBotChat(caller.browserWindow, payload));
 
 	// Release a tab's sidecar. The window falls back to its initial no-tab
 	// state when its last tab closes (welcome screen; handlers tolerate null).

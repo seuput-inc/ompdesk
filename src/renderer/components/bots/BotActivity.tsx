@@ -81,6 +81,7 @@ import { useBotHostName } from "./BotOwner";
 import { type BotAutomation, botAutomations, turnedOffAfterFailures, useSchedulesOf } from "./bot-automations";
 import { type LaunchStep, openBotChat, retryKickoff, useBotLaunch } from "./bot-launch";
 import { openBotPage } from "./bot-page";
+import { botChatHome } from "./bot-view";
 import { openItem } from "./items/item-store";
 import { type MemoryLineChange, memoryLineChanges, undoMemoryLine } from "./memory-lines";
 import { useBotFacts } from "./use-bot-facts";
@@ -368,7 +369,7 @@ function Suggestions({ bot }: { bot: Bot }) {
 	const on = bot.lookSetting?.on ?? bot.lookAround !== null;
 	const act = (item: BotSuggestion, how: "start" | "dismiss") =>
 		void command({ action: "suggestion", id: bot.id, suggestion: item.id, act: how })
-			.then(() => (how === "start" ? openBotChat(bot, bot.home, item.ask) : undefined))
+			.then(() => (how === "start" ? openBotChat(bot, botChatHome(bot), item.ask) : undefined))
 			.catch((error: unknown) => toastError({ title: t("bots.suggestions.failed"), error }));
 	const lookNow = () => {
 		if (bot.lookAround)
@@ -542,7 +543,7 @@ function Automations({ bot, inspector = false }: { bot: Bot; inspector?: boolean
 		const text = t("bots.automations.draft");
 		if (inspector && tabId) handToTab(tabId, { text, mode: "append" });
 		else
-			void openBotChat(bot, bot.home, text).catch(error =>
+			void openBotChat(bot, botChatHome(bot), text).catch(error =>
 				toastError({ title: t("bots.automations.failed"), error }),
 			);
 	};

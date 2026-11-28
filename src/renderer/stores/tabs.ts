@@ -670,6 +670,8 @@ export interface TabsStore {
 	openTab: (args?: {
 		cwd?: string;
 		sessionPath?: string;
+		/** Bots UI only. Calls a separate host IPC with just this registry key and the requested path. */
+		localBot?: string;
 		kind?: SessionKind;
 		/** Full agent in the GUI-owned default Work workspace. */
 		work?: boolean;
@@ -998,23 +1000,30 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 				const kind = args?.kind ?? "agent";
 				let result: IpcSpawnTabResult | null;
 				try {
-					result = await window.omp.tabs.spawn({
-						// Work and chat tabs run in the default workspace main picks.
-						cwd: args?.work || kind === "chat" ? undefined : cwd || undefined,
-						sessionPath: args?.sessionPath,
-						kind,
-						...(args?.work ? { defaultWorkspace: true } : {}),
-						...(args?.placeholder ? { placeholder: true } : {}),
-						...(args?.restoreSaved ? { restoreSaved: true } : {}),
-						worktree: args?.worktree,
-						...(device === undefined ? {} : { device }),
-					});
+					result =
+						args?.localBot !== undefined
+							? await window.omp.tabs.openBotChat(args.localBot, args.sessionPath ?? null)
+							: await window.omp.tabs.spawn({
+									// Work and chat tabs run in the default workspace main picks.
+									cwd: args?.work || kind === "chat" ? undefined : cwd || undefined,
+									sessionPath: args?.sessionPath,
+									kind,
+									...(args?.work ? { defaultWorkspace: true } : {}),
+									...(args?.placeholder ? { placeholder: true } : {}),
+									...(args?.restoreSaved ? { restoreSaved: true } : {}),
+									worktree: args?.worktree,
+									...(device === undefined ? {} : { device }),
+								});
 				} catch (error) {
 					toastError({ title: translate("tabs.newFailed"), error });
 					return null;
 				}
 				if (!result) {
 					toast({ variant: "error", message: translate("tabs.newFailed") });
+					return null;
+				}
+				if (result.refusal === "bot-chat-occupied") {
+					toast({ variant: "warning", message: translate("bots.launch.occupied") });
 					return null;
 				}
 				// Cross-kind refusal: the target session file carries a different kind —
@@ -1057,6 +1066,7 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 					}
 					// A web page has no other window to bring forward: its "open in a new window" opens a tab here again,
 					// which main refuses again, without end.
+					if (args?.localBot !== undefined) return null;
 					if (args?.sessionPath && !webRuntime()) {
 						try {
 							await window.omp.sessions.openInNewWindow({
@@ -1083,11 +1093,19 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 						.catch(() => undefined);
 				// Attached as a viewer of a session another window holds: the tab is already running there, so its
 				// status, title and viewers come from the list rather than from a first ready push that never comes.
-				if (result.attached) await get().reconcileTabs();
+				if (result.attached) {
+					await get().reconcileTabs();
+					if (args?.localBot !== undefined && !get().tabs.some(tab => tab.id === tabId && !tab.ghost)) return null;
+				}
 				set(state => {
 					const existing = state.tabs.find(tab => tab.id === tabId);
 					if (existing) {
-						if (!args?.sessionPath || existing.pendingSessionPath === args.sessionPath) return state;
+						if (
+							args?.localBot !== undefined ||
+							!args?.sessionPath ||
+							existing.pendingSessionPath === args.sessionPath
+						)
+							return state;
 						return {
 							tabs: state.tabs.map(tab =>
 								tab.id === tabId
@@ -1107,12 +1125,12 @@ export const useTabsStore = create<TabsStore>()((set, get) => ({
 						device,
 						unreadDone: false,
 						sessionPath: args?.sessionPath,
-						pendingSessionPath: args?.sessionPath,
+						pendingSessionPath: args?.localBot === undefined ? args?.sessionPath : undefined,
 					};
 					return { tabs: [...state.tabs, tab] };
 				});
 				await get().switchTab(tabId);
-				return tabId;
+				return args?.localBot === undefined || get().activeTabId === tabId ? tabId : null;
 			})(),
 		),
 

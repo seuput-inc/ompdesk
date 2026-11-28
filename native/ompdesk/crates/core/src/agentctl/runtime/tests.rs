@@ -77,7 +77,7 @@ fn state(tabs: Vec<Value>) -> Value {
     json!({ "enabled": true, "tabs": tabs, "windowOf": windows })
 }
 
-fn rig(
+pub(super) fn rig(
     id: u64,
     state: Value,
     files: Files,

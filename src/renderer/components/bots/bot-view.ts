@@ -10,6 +10,12 @@ import { isOmpdeskWorktreeFolder } from "../../../shared/project-origin";
 import type { SidebarProjectsState } from "../../../shared/sidebar-projects";
 import type { RowGroup } from "../../../shared/sidebar-rows";
 import { sessionHasContent } from "../../lib/session-title";
+import { webRuntime } from "../../web/runtime";
+
+/** The local owner's chat destination; delivery, schedules and paired views still use `home`. */
+export function botChatHome(bot: Bot): string | null {
+	return !bot.device && !webRuntime() ? (bot.chatHome ?? bot.home) : bot.home;
+}
 
 /** One chat of a bot as its sidebar row reads it. */
 export interface BotChatFacts {
@@ -53,8 +59,9 @@ const newestFirst = (a: BotChatFacts, b: BotChatFacts) => Date.parse(b.modified)
 export function botFacts(bot: Bot, chats: readonly BotChatFacts[], itemsNeedingYou: number): BotFacts {
 	const sorted = chats.toSorted(newestFirst);
 	// The home chat wins a tie (Orca's bot-row-line.ts:111).
+	const home = botChatHome(bot);
 	const pick = (match: (chat: BotChatFacts) => boolean) =>
-		sorted.find(chat => match(chat) && chat.path === bot.home) ?? sorted.find(match);
+		sorted.find(chat => match(chat) && chat.path === home) ?? sorted.find(match);
 	const waiting = pick(chat => chat.waiting !== null);
 	const working = pick(chat => chat.running);
 	const newest = sorted[0];

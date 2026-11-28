@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AGENT_CONTROL_REVIEW } from "../shared/agent-control";
 import { codedError } from "../shared/ipc-error-codes";
 import { IPC_COMMANDS, IPC_EVENTS, type IpcExtensionUiPayload, type IpcTabStatusPayload } from "../shared/ipc-types";
+import { createOmpApi } from "../shared/omp-api";
 import type {
 	ExtensionUIRequest,
 	RpcCommand,
@@ -15,12 +16,13 @@ import type {
 } from "../shared/rpc-types";
 import { unsavedSessionKey } from "../shared/session-summary";
 import { answeringBot } from "./agent-control/target-answer";
+import { localBotChatOpener } from "./bot-chat-tab";
 import { core } from "./core/process";
 import { deletedSessions, initDeletedSessions } from "./deleted-sessions";
 import { RemoteSidecar } from "./remote/remote-sidecar";
 import type { SidecarSessionIdentity, SidecarStartGate } from "./sidecar";
 import { SidecarPool, type TabActivity } from "./sidecar-pool";
-import { type SidecarLike, VIEW_ENDED_EVENT } from "./sidecar-types";
+import { type BotChatSpawn, type SidecarLike, VIEW_ENDED_EVENT } from "./sidecar-types";
 import type { PersistedTabLayout } from "./tab-layout";
 import { InterruptedTurnStore, TurnResume } from "./turn-resume";
 import { BlobStore } from "./web/blobs";
@@ -230,6 +232,121 @@ function closeTurn(pool: SidecarPool, win: ClientWindow, tabId: string) {
 	if (!turn) throw new Error(`No close turn for ${tabId}`);
 	return turn;
 }
+
+describe("local Bots tab acquisition", () => {
+	function setup() {
+		const launches: Array<BotChatSpawn | undefined> = [];
+		const pool = new SidecarPool((cwd, _kind, _fresh, _device, _tab, _web, botChat) => {
+			launches.push(botChat);
+			return Object.assign(new FakeSidecar(cwd), {
+				currentBotChatId: async () => botChat?.botChatId ?? null,
+			}) as unknown as SidecarLike;
+		});
+		const resolve = vi.fn(async (botId: string, sessionPath: string | null) => {
+			if (botId !== "bot" || sessionPath === "/foreign") throw new Error("Not a member");
+			return { botId: sessionPath === "/legacy" ? null : botId, cwd: "/bot", sessionPath, botChatPort: 123 };
+		});
+		const ownedElsewhere = vi.fn(async (_path: string) => false);
+		const hosted = vi.fn((_path: string) => false);
+		const open = localBotChatOpener({
+			pool,
+			resolve,
+			hosted,
+			ownedElsewhere,
+			legacy: async (win, cwd, path) => (pool.acquire(cwd, win, "legacy", path) ? { tabId: "legacy" } : null),
+		});
+		const api = (win: ClientWindow) =>
+			createOmpApi({
+				invoke: <T>(channel: string, payload: unknown) => {
+					expect(channel).toBe(IPC_COMMANDS.OPEN_BOT_CHAT);
+					return open(win, payload) as Promise<T>;
+				},
+				on: () => () => {},
+				send: () => {},
+			}).tabs;
+		return { pool, open, api, resolve, hosted, ownedElsewhere, launches };
+	}
+
+	it("joins simultaneous New chat requests across windows; only the new local manager receives the grant", async () => {
+		const { pool, api, launches } = setup();
+		const a = fakeWindow(1).win;
+		const b = fakeWindow(2).win;
+		const [first, other] = await Promise.all([api(a).openBotChat("bot", null), api(b).openBotChat("bot", null)]);
+		expect(first).toEqual({ tabId: expect.any(String), cwd: "/bot" });
+		expect(other).toMatchObject({ tabId: first?.tabId, attached: true });
+		expect(pool.tabsForWindow(b).map(tab => tab.tabId)).toContain(first?.tabId);
+		expect(launches).toEqual([{ botChatId: "bot", botChatPort: 123 }]);
+		if (!first?.tabId) throw new Error("No new tab");
+		pool.noteSessionFile(first.tabId, "/home");
+		expect(await api(b).openBotChat("bot", "/home")).toMatchObject({ tabId: first?.tabId });
+		expect(await api(a).openBotChat("bot", "/home")).toMatchObject({ tabId: first.tabId });
+		expect(pool.acquire("/bot", a, "ordinary", "/home")).toBeNull();
+		expect(launches).toHaveLength(1);
+	});
+
+	it("refuses a recorded bot chat already held by an ordinary local tab before probing stock", async () => {
+		const { pool, api, ownedElsewhere, launches } = setup();
+		const win = fakeWindow(1).win;
+		pool.acquire("/bot", win, "ordinary", "/home");
+		expect(await api(win).openBotChat("bot", "/home")).toEqual({ tabId: null, refusal: "bot-chat-occupied" });
+		expect(ownedElsewhere).not.toHaveBeenCalled();
+		expect(pool.sessionOwner("/home")?.tabId).toBe("ordinary");
+		expect(launches).toEqual([undefined]);
+	});
+
+	it("does not let a nested regular open attach before the bot acquire has registered its file", async () => {
+		const { pool, api, launches } = setup();
+		const win = fakeWindow(1).win;
+		let nested: SidecarLike | null | undefined;
+		pool.onAcquire = () => {
+			pool.onAcquire = null;
+			nested = pool.acquire("/bot", win, "nested", "/home");
+		};
+		const opened = await api(win).openBotChat("bot", "/home");
+		expect(nested).toBeNull();
+		expect(pool.sessionOwner("/home")?.tabId).toBe(opened?.tabId);
+		expect(launches).toHaveLength(1);
+	});
+
+	it("reopens only a validated unoccupied path; a legacy read never carries bot provenance", async () => {
+		const { api, pool, launches } = setup();
+		const win = fakeWindow(1).win;
+		expect(await api(win).openBotChat("bot", "/legacy")).toEqual({ tabId: "legacy" });
+		const result = await api(win).openBotChat("bot", "/home");
+		expect(result?.tabId).toBeTruthy();
+		expect(pool.sessionOwner("/home")?.tabId).toBe(result?.tabId);
+		expect(launches).toEqual([undefined, { botChatId: "bot", botChatPort: 123, botChatSessionPath: "/home" }]);
+	});
+
+	it("never promotes a regular tab that acquired the file during the lease probe", async () => {
+		const { pool, api, ownedElsewhere, launches } = setup();
+		const win = fakeWindow(1).win;
+		ownedElsewhere.mockImplementationOnce(async path => {
+			pool.acquire("/bot", win, "ordinary", path);
+			return false;
+		});
+		expect(await api(win).openBotChat("bot", "/home")).toEqual({ tabId: null, refusal: "bot-chat-occupied" });
+		expect(pool.sessionOwner("/home")?.tabId).toBe("ordinary");
+		expect(launches).toEqual([undefined]);
+	});
+
+	it("rejects web, caller launch options, nonmembers, hosted writers and unknown or held leases", async () => {
+		const { open, api, resolve, hosted, ownedElsewhere, launches } = setup();
+		const win = fakeWindow(1).win;
+		expect(await api(fakeWindow(-1).win).openBotChat("bot", null)).toBeNull();
+		expect(await open(win, { botId: "bot", sessionPath: null, botChatPort: 123 })).toBeNull();
+		expect(resolve).not.toHaveBeenCalled();
+		await expect(api(win).openBotChat("bot", "/foreign")).rejects.toThrow();
+		hosted.mockReturnValueOnce(true);
+		ownedElsewhere
+			.mockResolvedValueOnce(false)
+			.mockRejectedValueOnce(new Error("Unknown"))
+			.mockResolvedValueOnce(true);
+		for (let i = 0; i < 3; i++)
+			expect(await api(win).openBotChat("bot", "/home")).toEqual({ tabId: null, refusal: "bot-chat-occupied" });
+		expect(launches).toEqual([]);
+	});
+});
 
 describe("SidecarPool session kind", () => {
 	it("threads the spawn kind through the factory into TAB_STATUS payloads", () => {
@@ -2674,6 +2791,22 @@ describe("SidecarPool request-origin routing (F-UI-ORIGIN)", () => {
 		a?.emitHostToolCall("one");
 		b?.emitHostToolCall("two");
 		expect(calls).toEqual(["tab-a:one", "tab-b:two"]);
+	});
+
+	it("never takes a bot call source from a tool's request body or a remote sidecar", () => {
+		const { pool, sidecars } = fakePool();
+		const { win } = fakeWindow(1);
+		pool.acquire("/bot", win, "local");
+		pool.acquire("/bot", win, "remote", undefined, "agent", undefined, true, false, false, undefined, "peer");
+		const [local, remote] = sidecars;
+		const checked = { recheck: async () => "bot-a" };
+		const frame = { type: "host_tool_call", id: "call", toolName: "ompdesk_sessions", botSource: checked };
+		const sources: unknown[] = [];
+		pool.hostToolExecutor = (_sidecar, _frame, _tab, source) => sources.push(source);
+		local?.emit("hostToolCall", frame);
+		local?.emit("hostToolCall", frame, checked);
+		remote?.emit("hostToolCall", frame, checked);
+		expect(sources).toEqual([undefined, checked, undefined]);
 	});
 
 	it("drops pending routes when the owning tab is released", async () => {

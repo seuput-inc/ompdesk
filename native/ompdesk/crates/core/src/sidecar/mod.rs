@@ -25,6 +25,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::server::{Answer, Call, Events, Fault, Registry, Reply};
 
+mod bot;
 pub mod bridge;
 mod chips;
 mod frames;
@@ -54,6 +55,9 @@ const CLOSE_WAIT: Duration = Duration::from_secs(2);
 
 pub fn register(registry: &mut Registry) {
     registry.add("sidecar.open", open);
+    registry.add("sidecar.openBot", open_bot);
+    registry.add("sidecar.currentBotChat", |call| bot_query(call, false));
+    registry.add("sidecar.recheckBotCall", |call| bot_query(call, true));
     registry.add("sidecar.start", |call| plain(call, |_: Seq| Command::Start));
     registry.add("sidecar.restart", |call| {
         plain(call, |params: RestartParams| Command::Restart {
@@ -607,6 +611,70 @@ fn bridge_request<P: serde::de::DeserializeOwned + Into<BridgeParams>>(call: Cal
     })
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BotOpenParams {
+    kind: String,
+    bot_id: String,
+    bot_chat_port: u64,
+    #[serde(flatten)]
+    open: OpenParams,
+}
+
+fn open_bot(call: Call) -> Answer {
+    let params: BotOpenParams = match call.params() {
+        Ok(params) => params,
+        Err(fault) => return failed(fault),
+    };
+    let open = params.open;
+    if params.kind != "agent"
+        || !open.bridge
+        || (open.session_path.is_none() && (!open.fresh || !open.is_new.unwrap_or(true)))
+    {
+        return failed(Fault::new(
+            "invalid_params",
+            "A bot needs its own local launch",
+        ));
+    }
+    match bot::BotChat::open(
+        params.bot_chat_port,
+        params.bot_id,
+        &open.cwd,
+        open.session_path.as_deref(),
+    ) {
+        Ok(bot) => open_lane(call, open, Some(bot)),
+        Err(fault) => failed(fault),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BotQuery {
+    tab: String,
+    seq: u64,
+    spawn_id: Option<u64>,
+}
+
+fn bot_query(call: Call, effect: bool) -> Answer {
+    let p: BotQuery = match call.params() {
+        Ok(params) => params,
+        Err(fault) => return failed(fault),
+    };
+    if effect != p.spawn_id.is_some() {
+        return failed(Fault::new("invalid_params", "Expected the receiving spawn"));
+    }
+    let (reply, answer) = oneshot::channel();
+    deliver(
+        &p.tab,
+        p.seq,
+        Command::BotQuery {
+            spawn_id: p.spawn_id,
+            reply,
+        },
+    );
+    Box::pin(async move { Reply::json(&answer.await.unwrap_or_default()) })
+}
+
 /// Makes the tab's lane. Answers only once the tab is disposed and every omp it started has exited, so main learns of
 /// a lost core by this request's rejection.
 fn open(call: Call) -> Answer {
@@ -614,6 +682,10 @@ fn open(call: Call) -> Answer {
         Ok(params) => params,
         Err(fault) => return failed(fault),
     };
+    open_lane(call, params, None)
+}
+
+fn open_lane(call: Call, params: OpenParams, bot: Option<bot::BotChat>) -> Answer {
     let (reply, answer) = oneshot::channel();
     {
         let mut tabs = locked(&TABS);
@@ -627,7 +699,7 @@ fn open(call: Call) -> Answer {
         }
         // A request the previous numbering left behind is stale.
         entry.buffer.retain(|at, _| *at > seq);
-        entry.inbox = Some(lane::Lane::open(params, call.events.clone(), reply));
+        entry.inbox = Some(lane::Lane::open(params, bot, call.events.clone(), reply));
         entry.events = Some(call.events.clone());
         entry.next = Some(seq + 1);
         entry.drain();

@@ -122,10 +122,10 @@ describe("IPC channel policy", () => {
 		expect(subscribedChannels()).toEqual(policyChannels("push"));
 	});
 
-	it("refuses only the pairing boundary, and grants pairing-admin nowhere else", () => {
+	it("refuses pairing administration and dedicated local bot launches, and grants pairing-admin nowhere else", () => {
 		const boundary = Object.entries(IPC_POLICY).filter(([, policy]) => policy.mode === "boundary");
 		const expected = [...mobileWeb.MOBILE_WEB_ADMIN_CHANNELS].sort();
-		expect(boundary.map(([channel]) => channel).sort()).toEqual(expected);
+		expect(boundary.map(([channel]) => channel).sort()).toEqual([...expected, IPC_COMMANDS.OPEN_BOT_CHAT].sort());
 		const pairing = Object.entries(IPC_POLICY).filter(
 			([, policy]) => policy.dir !== "push" && policy.permission === "pairing-admin",
 		);

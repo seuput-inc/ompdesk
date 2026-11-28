@@ -89,10 +89,14 @@ export class StockSessionStore {
 		return Array.isArray(result) ? (result as AgentMessage[]) : [];
 	}
 
-	/** Whether another live omp process owns the session's file (stock's ownership lease); false when unknown. */
-	async owned(sessionPath: string): Promise<boolean> {
-		const result = await stockHelperRequest("sessions.owned", { sessionsRoot: this.#sessionsRoot, sessionPath });
-		return result === true;
+	/** A trusted reopen treats every answer except a successful free lease probe as owned. */
+	async owned(sessionPath: string, requireFreeLease = false): Promise<boolean> {
+		const result = await stockHelperRequest("sessions.owned", {
+			sessionsRoot: this.#sessionsRoot,
+			sessionPath,
+			requireFreeLease,
+		});
+		return requireFreeLease ? result !== false : result === true;
 	}
 
 	stop(): void {

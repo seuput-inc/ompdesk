@@ -34,12 +34,15 @@ import type { SessionKindStore } from "./session-kinds";
 import type { SessionProcesses } from "./session-processes";
 import { shellSpawnEnv } from "./shell-env";
 import { type RecoveryStuck, SidecarManager, type SidecarOptions } from "./sidecar";
+import type { BotChatSpawn } from "./sidecar-types";
 import { markStartup } from "./startup-timing";
 import { turnStagesReport } from "./turn-stages-log";
 
 export interface LocalSidecarDeps {
 	/** Waits until no other live omp owns a stored session a start opens (session-free.ts). */
 	sessionFree?: (sessionPath: string) => Promise<"free" | "owned">;
+	/** Trusted reopens require a positive free lease probe; a failed probe is occupied. */
+	botSessionFree?: (sessionPath: string) => Promise<"free" | "owned">;
 	/** The gui-bridge extension directory. */
 	bridgeDir: string;
 	/** OMPdesk's own extension root (`resources/omp-builtin`). */
@@ -147,6 +150,7 @@ export type LocalSidecarFactory = (
 	fresh: boolean,
 	origin?: PromptOriginEnv,
 	web?: boolean,
+	botChat?: BotChatSpawn,
 ) => SidecarManager;
 
 /** What the factory hands the coordinator: the status to overlay, and the bridge's autopilot frames. */
@@ -163,7 +167,15 @@ export interface DesktopSlotFrameSink {
 export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory {
 	const { bridgeDir, bridgeHealth, sessionKinds } = deps;
 	let reportedPriorityFailure = false;
-	return (cwd, kind, fresh, origin, web) => {
+	return (cwd, kind, fresh, origin, web, botChat) => {
+		if (botChat && (origin || web || kind !== "agent")) throw new Error("Bot chats require a local agent tab");
+		const trustedPath = botChat?.botChatSessionPath;
+		const sessionFree = trustedPath
+			? async (path: string) => {
+					if (path !== trustedPath) return (await deps.sessionFree?.(path)) ?? "free";
+					return (await deps.botSessionFree?.(path).catch(() => "owned" as const)) ?? "owned";
+				}
+			: deps.sessionFree;
 		const sc: SidecarManager = new SidecarManager({
 			reportPriorityFailure: reason => {
 				if (reportedPriorityFailure) return;
@@ -234,13 +246,12 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 			cwd,
 			kind,
 			fresh,
+			...botChat,
 			promptOrigin: origin,
 			controlEnv: () => controlEnvFor(origin !== undefined || web === true),
 			proxyEnv: deps.proxyEnv,
 			shellEnv: shellSpawnEnv,
-			...(deps.sessionFree
-				? { sessionFree: deps.sessionFree, sessionOwnedText: () => mainT("omp.sessionOwned") }
-				: {}),
+			...(sessionFree ? { sessionFree, sessionOwnedText: () => mainT("omp.sessionOwned") } : {}),
 			replyLanguage: () => resolveReplyLanguage(deps.replyLanguagePref(), replyLanguageName(deviceLanguage())),
 			...(deps.defaultBrowserPref
 				? {

@@ -1113,6 +1113,7 @@ app.whenReady().then(async () => {
 	const createLocalSidecar = localSidecarFactory({
 		bridgeDir,
 		builtinDir,
+		botSessionFree: async path => ((await sessionIndex.ownedElsewhere(path, true)) ? "owned" : "free"),
 		sessionFree: async sessionPath => {
 			const started = Date.now();
 			const outcome = await whenSessionFree(sessionPath, {
@@ -1245,8 +1246,8 @@ app.whenReady().then(async () => {
 			isMutedFolder(mutedGroups, sidebarProjects.state().worktrees, target.sidecar.cwd)
 		);
 	};
-	sidecarPool = new SidecarPool((cwd, kind, fresh, device, tabId, web) => {
-		if (!device) return createLocalSidecar(cwd, kind, fresh, undefined, web);
+	sidecarPool = new SidecarPool((cwd, kind, fresh, device, tabId, web, botChat) => {
+		if (!device) return createLocalSidecar(cwd, kind, fresh, undefined, web, botChat);
 		// The host runs its own health check, session-kind record and bridge probe; only the probe's verdict comes
 		// back, for this machine's toast (no record and no repair here: the host keeps and repairs its own).
 		const sc = devices.createSidecar(device, tabId, cwd, kind, fresh);

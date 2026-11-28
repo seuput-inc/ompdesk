@@ -339,11 +339,16 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 	"sessions.owned": async params => {
 		const { sessionPath } = paths(params);
 		if (!sessionPath) throw new Error("Invalid session path");
+		const unknown =
+			typeof params === "object" &&
+			params !== null &&
+			"requireFreeLease" in params &&
+			params.requireFreeLease === true;
 		const id = await sessionHeaderId(sessionPath);
-		if (!id) return false;
+		if (!id) return unknown;
 		const storage = await loadOmpModule<Record<string, unknown>>("pi-coding-agent/session/session-storage");
 		const tryAcquire = storage.tryAcquireSessionLease;
-		if (typeof tryAcquire !== "function") return false;
+		if (typeof tryAcquire !== "function") return unknown;
 		const lease = (tryAcquire as (sessionId: string) => { release(): void } | null)(id);
 		if (!lease) return true;
 		lease.release();

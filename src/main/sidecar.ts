@@ -238,6 +238,11 @@ export interface SidecarSessionIdentity {
 	sessionName?: string;
 }
 
+/** Host-only. The receiver rechecks immediately before an effect, after any asynchronous work. */
+export interface BotCallSource {
+	recheck(): Promise<string | null>;
+}
+
 export interface SidecarOptions {
 	/** Resolves the system omp (path + version gate); consulted on every start(). */
 	omp: () => Promise<OmpResolution>;
@@ -248,6 +253,10 @@ export interface SidecarOptions {
 	/** Whether the OMPdesk control tools are registered with the GUI's host tools (Settings switch); default off. */
 	hostTools?: () => boolean;
 	cwd: string;
+	/** Only the dedicated, local Bots opener supplies this grant. Never a renderer launch option. */
+	botChatId?: string;
+	botChatPort?: number;
+	botChatSessionPath?: string;
 	extraFlags?: string[];
 	/** Fresh GUI tabs must not inherit the CLI's persistent autoResume setting. */
 	fresh?: boolean;
@@ -502,6 +511,7 @@ interface LaneEvent {
 	cmd: number;
 }
 interface FrameEvent extends LaneEvent {
+	botCallSpawn?: number;
 	desktopSpawnId?: number;
 }
 interface LaneAsk extends LaneEvent {
@@ -751,6 +761,8 @@ export class SidecarManager extends EventEmitter {
 	#seq = 0;
 	/** The lane exists in the core (`sidecar.open` was sent and has not ended). */
 	#opened = false;
+	#botLaunch: { id: string; port: number; path: string | null } | undefined;
+	#botLane = false;
 	#alive = false;
 	#pid: number | undefined;
 	#rpcClient: RpcClient | null = null;
@@ -810,7 +822,12 @@ export class SidecarManager extends EventEmitter {
 
 	constructor(options: SidecarOptions) {
 		super();
-		this.#options = options;
+		if (options.botChatId !== undefined) {
+			const { botChatId, botChatPort, botChatSessionPath, ...ordinary } = options;
+			this.#options = ordinary;
+			if (botChatPort !== undefined)
+				this.#botLaunch = { id: botChatId, port: botChatPort, path: botChatSessionPath ?? null };
+		} else this.#options = options;
 		this.#isNew = options.fresh === true;
 		lanes.set(this.#tab, (name, data, bin, generation) => this.#onLane(name, data, bin, generation));
 		listen();
@@ -855,22 +872,27 @@ export class SidecarManager extends EventEmitter {
 
 	start(): void {
 		if (this.#disposed) return;
-		this.#ensureOpen();
+		this.#ensureOpen(null);
 		this.#tell("sidecar.start", {}, { status: true });
 		this.#predict("starting");
 	}
 
 	/** Creates the tab's lane in the core: at the first call that needs it, so a restored tab that is never shown costs nothing. */
-	#ensureOpen(): void {
+	#ensureOpen(initialPath?: string | null): void {
 		if (this.#opened) return;
 		this.#opened = true;
 		const options = this.#options;
+		const bot = this.#botLaunch?.path === initialPath ? this.#botLaunch : undefined;
+		this.#botLaunch = undefined;
+		this.#botLane = bot !== undefined;
+		if (bot) this.#sessionPath = bot.path;
 		const stops = core().stops;
 		const tuning = { ...(options.startQueue ?? { startsAtOnce: 0 }), ...options.tuning };
 		core()
 			.call(
-				"sidecar.open",
+				bot ? "sidecar.openBot" : "sidecar.open",
 				{
+					...(bot ? { botId: bot.id, botChatPort: bot.port } : {}),
 					tab: this.#tab,
 					seq: ++this.#seq,
 					cwd: options.cwd,
@@ -906,6 +928,7 @@ export class SidecarManager extends EventEmitter {
 	 */
 	#laneLost(error: unknown, stops: number): void {
 		this.#opened = false;
+		this.#botLane = false;
 		this.#markGone();
 		this.#batcher?.dispose();
 		this.#batcher = null;
@@ -1329,7 +1352,15 @@ export class SidecarManager extends EventEmitter {
 		// Before anything in main reads it.
 		if (obj.type === "message_update")
 			[obj] = this.#rebuild.events([obj as unknown as AgentSessionEvent]) as unknown as Frame[];
-		this.#dispatchFrame(obj);
+		const relay = this.#bridge;
+		const source: BotCallSource | undefined =
+			obj.type === "host_tool_call" &&
+			relay &&
+			relay.spawnId === event.botCallSpawn &&
+			relay.generation === generation
+				? { recheck: () => this.#checkBotCall(relay) }
+				: undefined;
+		this.#dispatchFrame(obj, source);
 	}
 
 	#transform(frame: Frame): Frame {
@@ -1348,7 +1379,7 @@ export class SidecarManager extends EventEmitter {
 		this.emit("beforeResponse");
 	}
 
-	#dispatchFrame(frame: Frame): void {
+	#dispatchFrame(frame: Frame, source?: BotCallSource): void {
 		const obj = this.#transform(frame);
 		const type = obj.type as string;
 		// A response nobody waits for (its caller timed out) is a frame, as it always was.
@@ -1364,7 +1395,8 @@ export class SidecarManager extends EventEmitter {
 				(type === "extension_ui_request" && (obj.method === "ask" || obj.method === "form"))
 			)
 				this.#batcher?.flushNow();
-			this.emit(FRAME_EVENTS[type], obj);
+			if (type === "host_tool_call" && source) this.emit("hostToolCall", obj, source);
+			else this.emit(FRAME_EVENTS[type], obj);
 		}
 		this.emit("frame", obj);
 	}
@@ -1827,6 +1859,7 @@ export class SidecarManager extends EventEmitter {
 	 */
 	adoptCwd(cwd: string): boolean {
 		if (cwd === this.#options.cwd) return false;
+		this.#botLaunch = undefined;
 		this.#options = { ...this.#options, cwd };
 		if (this.#opened) this.#tell("sidecar.cwd", { cwd }, { cwd: true });
 		return true;
@@ -1837,6 +1870,32 @@ export class SidecarManager extends EventEmitter {
 		this.#startGate = gate;
 		this.#ensureOpen();
 		this.#tell("sidecar.gate");
+	}
+
+	/** For focusing an already dedicated tab, not for attributing a tool call. */
+	async currentBotChatId(): Promise<string | null> {
+		if (!this.#botLane || !this.#opened || this.#disposed) return null;
+		const generation = core().generation;
+		const answer = await core()
+			.call<string | null>("sidecar.currentBotChat", { tab: this.#tab, seq: ++this.#seq }, { generation })
+			.catch(() => null);
+		return !this.#disposed && this.#botLane && core().generation === generation ? (answer?.result ?? null) : null;
+	}
+
+	async #checkBotCall(relay: BridgeRelay): Promise<string | null> {
+		if (this.#bridge !== relay || core().generation !== relay.generation) return null;
+		const seq = ++this.#seq;
+		const answer = await core()
+			.call<string | null>(
+				"sidecar.recheckBotCall",
+				{ tab: this.#tab, seq, spawnId: relay.spawnId },
+				{ generation: relay.generation },
+			)
+			.catch(() => null);
+		// A newer command may already have switched the session while the lane's answer travelled back.
+		return this.#seq === seq && this.#bridge === relay && core().generation === relay.generation
+			? (answer?.result ?? null)
+			: null;
 	}
 
 	desktopSlotProcess(owner: number, acquire: boolean): DesktopSlotProcess | null {
@@ -1886,6 +1945,18 @@ export class SidecarManager extends EventEmitter {
 	 * else on `resumeSessionPath` or the session the tab is on.
 	 */
 	restart(cwd?: string, resumeSessionPath?: string): void {
+		if (
+			!this.#disposed &&
+			!this.#opened &&
+			cwd === undefined &&
+			resumeSessionPath &&
+			this.#botLaunch?.path === resumeSessionPath
+		) {
+			// The pool's first open of a saved file is normally spelled restart(undefined, file).
+			this.#ensureOpen(resumeSessionPath);
+			this.start();
+			return;
+		}
 		if (cwd) this.#options = { ...this.#options, cwd };
 		if (this.#disposed) return;
 		this.#ensureOpen();
@@ -1899,6 +1970,7 @@ export class SidecarManager extends EventEmitter {
 	}
 
 	kill(): void {
+		this.#botLaunch = undefined;
 		if (!this.#opened || this.#disposed) return;
 		this.#tell("sidecar.kill", {}, { life: true });
 		this.#markGone();
@@ -1909,7 +1981,8 @@ export class SidecarManager extends EventEmitter {
 	 * on its session file when it is shown or messaged (`idle-release.ts`). The omp stops as a restart stops it.
 	 */
 	sleep(): void {
-		if (this.#disposed || !this.#alive) return;
+		this.#botLaunch = undefined;
+		if (this.#disposed || (!this.#alive && !(this.#opened && this.#botLane))) return;
 		this.#tell("sidecar.sleep", {}, { life: true, status: true });
 		this.#markGone();
 		this.#predict("asleep");

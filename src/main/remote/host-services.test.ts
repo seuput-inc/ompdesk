@@ -1681,8 +1681,10 @@ describe("LocalHostServices", () => {
 				x,
 			)
 			.catch((error: unknown) => error);
+		expect(services.holdsOrOpensSession("/s/closed-while-opening.jsonl")).toBe(true);
 		await services.call(x.peer, "tab.close", { rtab: "t" }, x);
 		expect(ipcErrorCode(await opening)).toBe("unknown_tab");
+		expect(services.holdsOrOpensSession("/s/closed-while-opening.jsonl")).toBe(false);
 		expect(sidecars.every(sidecar => sidecar.disposed)).toBe(true);
 		expect(services.summarySources()).toEqual([]);
 		// The same rtab opens again afterwards.

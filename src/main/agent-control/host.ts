@@ -450,6 +450,10 @@ export class AgentControlRuntime {
 		return this.control.bots(request);
 	}
 
+	botChatLaunch(botId: string, sessionPath: string | null) {
+		return this.control.runtime.botChatLaunch(botId, sessionPath);
+	}
+
 	/** A quiet note (no turn) into a session file on this computer: now when a tab holds it, else when one opens it. */
 	noteSession(sessionPath: string, text: string): Promise<void> {
 		return this.control.noteSession(sessionPath, text);

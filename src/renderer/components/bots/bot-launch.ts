@@ -16,7 +16,9 @@ import { useRemoteStore } from "../../stores/remote";
 import { useTabsStore } from "../../stores/tabs";
 import { toast, toastError } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";
+import { webRuntime } from "../../web/runtime";
 import type { BotTemplate } from "./bot-templates";
+import { botChatHome } from "./bot-view";
 
 /** Where a new bot comes from besides a blank start. */
 export type BotImportPick = BotImportSource | { app: "other"; folder: string; name: string };
@@ -187,8 +189,13 @@ export async function createBot(draft: NewBotDraft): Promise<Bot> {
 	const bot = useBotsStore.getState().state.bots.find(known => known.name === name && known.device === draft.device);
 	if (!bot) throw new Error(translate("bots.new.failed"));
 	noteLaunch(bot.id, { tabId: null, start: "running" });
-	useUiStore.getState().closeDestination();
-	const tabId = await useTabsStore.getState().openTab({ cwd: bot.folder, kind: "agent", ...where });
+	let tabId: string | null;
+	if (bot.device || webRuntime()) {
+		useUiStore.getState().closeDestination();
+		tabId = await useTabsStore.getState().openTab({ cwd: bot.folder, kind: "agent", ...where });
+	} else {
+		tabId = await openBotChat(bot, null);
+	}
 	if (!tabId) {
 		noteLaunch(bot.id, { tabId: null, start: "failed", error: translate("bots.launch.notStarted") });
 		return bot;
@@ -213,7 +220,7 @@ export async function createBot(draft: NewBotDraft): Promise<Bot> {
 
 /** Opens the bot's home chat (focusing the tab that holds it), or a first chat in its folder when it has none yet. */
 export function openBotHome(bot: Bot): void {
-	void openBotChat(bot, bot.home).catch(() => {});
+	void openBotChat(bot, botChatHome(bot)).catch(() => {});
 }
 
 /**
@@ -221,7 +228,12 @@ export function openBotHome(bot: Bot): void {
  * host's bot chats on that host, as a tab of it (the way its sessions open); while the host is offline nothing opens and
  * a notice says so: the chat lives there.
  */
-export async function openBotChat(bot: Bot, session: string | null, draft?: string, cwd = bot.folder): Promise<void> {
+export async function openBotChat(
+	bot: Pick<Bot, "id" | "folder" | "device">,
+	session: string | null,
+	draft?: string,
+	cwd = bot.folder,
+): Promise<string | null> {
 	if (bot.device) {
 		const host = useRemoteStore.getState().state?.hosts.find(known => known.deviceId === bot.device);
 		if (host?.state !== "online") {
@@ -230,14 +242,18 @@ export async function openBotChat(bot: Bot, session: string | null, draft?: stri
 				variant: "warning",
 				message: translate("bots.remote.offlineChat", { device: host?.name ?? kept ?? "" }),
 			});
-			return;
+			return null;
 		}
 	}
-	useUiStore.getState().closeDestination();
 	const tabs = useTabsStore.getState();
-	const held = session ? tabs.tabs.find(tab => tab.sessionPath === session && tab.device === bot.device) : undefined;
+	const localBot = !bot.device && !webRuntime();
+	if (!localBot) useUiStore.getState().closeDestination();
+	const held =
+		session && !localBot
+			? tabs.tabs.find(tab => tab.sessionPath === session && tab.device === bot.device)
+			: undefined;
 	let tabId: string | null = held?.id ?? null;
-	const where = bot.device ? { device: bot.device } : {};
+	const where = bot.device ? { device: bot.device } : localBot ? { localBot: bot.id } : {};
 	if (held) await tabs.switchTab(held.id);
 	else
 		tabId = await tabs.openTab(
@@ -245,5 +261,7 @@ export async function openBotChat(bot: Bot, session: string | null, draft?: stri
 				? { cwd, sessionPath: session, kind: "agent", ...where }
 				: { cwd: bot.folder, kind: "agent", ...where },
 		);
+	if (tabId && localBot) useUiStore.getState().closeDestination();
 	if (tabId && draft) handToTab(tabId, { text: draft, mode: "append" });
+	return tabId;
 }

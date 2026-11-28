@@ -38,6 +38,8 @@ export interface Bot {
 	folder: string;
 	/** Its home chat's session file: the one chat that always exists (null until its first chat). */
 	home: string | null;
+	/** This computer's first chat started from Bots. A shortcut, never a runtime identity. */
+	chatHome?: string;
 	/** Session files of its chats on this computer, oldest first. */
 	sessions: string[];
 	/** A paused bot is woken by nothing: its mail is held until it is resumed, sends to it are refused. */
