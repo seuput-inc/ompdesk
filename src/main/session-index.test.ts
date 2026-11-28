@@ -120,6 +120,52 @@ it("searches only listed candidates, in caller order, and quotes original conver
 	}
 });
 
+it("publishes a person-closed child until a real holder or newer conversation supersedes its close", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "session-person-close-"));
+	tempDirs.push(root);
+	const [child, remote, unrelated] = await Promise.all([
+		writeSession(root, "child"),
+		writeSession(root, "remote"),
+		writeSession(root, "unrelated"),
+	]);
+	const closedAt = Date.now();
+	const rows: SessionInfo[] = [child, remote, unrelated].map(file => ({
+		path: file,
+		id: file,
+		cwd: root,
+		created: "",
+		modified: new Date(closedAt - 1).toISOString(),
+		title: null,
+		messageCount: 1,
+		size: 100,
+		status: "pending",
+		firstMessage: '<ompdesk-agent-message from="boss">',
+		...(file === remote ? { promptOriginDevice: "studio" } : {}),
+	}));
+	const store = vi.spyOn(StockSessionStore.prototype, "list").mockImplementation(async () => [...rows]);
+	try {
+		const index = new SessionIndex(root, root);
+		indexes.push(index);
+		index.personClosedChildren = async () => [
+			[child, "boss", closedAt],
+			[remote, "boss", closedAt],
+		];
+		const initial = await index.listShared();
+		expect(initial.sessions.filter(row => row.personClosedChild)).toEqual([
+			{ ...rows[0], openedBySession: "boss", personClosedChild: true },
+		]);
+		const change = Promise.withResolvers<SessionInfo[]>();
+		index.onListChange = delta => delta && change.resolve(delta.set);
+		index.heldSessionsChanged(new Set([child]));
+		expect(await change.promise).toEqual([rows[0]]);
+		rows[0]!.modified = new Date(closedAt + 1).toISOString();
+		index.heldSessionsChanged(new Set());
+		expect((await index.list("global")).find(row => row.path === child)).toEqual(rows[0]);
+	} finally {
+		store.mockRestore();
+	}
+});
+
 describe.skipIf(!stockRoot)("SessionIndex using real stock storage", () => {
 	it("keeps GUI kind overlays and handles headers with no title slot", async () => {
 		const { index, dir } = await makeIndex();

@@ -2187,12 +2187,13 @@ export interface SessionInfo {
 	 */
 	promptOriginDevice?: string;
 	/**
-	 * A paired host's row: the session file of the session whose agent opened it, as that host knows it (one of its
-	 * windows' tabs, its record of a child it closed), so a viewing device nests it as the host's own sidebar does.
-	 * `null`: the host knows none (a device then reads the agent brief, as the host does). Absent from this computer's
-	 * own rows and from an older host's.
+	 * The opening session's path on this computer. A local row can name the opener of a person-closed child.
+	 * A paired host also supplies openers from its tabs and closed-child records; `null` means it knows none.
+	 * Older hosts omit this field.
 	 */
 	openedBySession?: string | null;
+	/** Display evidence only: this saved child was closed by the person, not held or active again since. */
+	personClosedChild?: true;
 	/**
 	 * A paired host's row of a session an agent opened there whose last turn failed, or whose finished work has not
 	 * landed, as that host's review list says (`reviewUnmerged`): a device viewing the host lists it as the host does,

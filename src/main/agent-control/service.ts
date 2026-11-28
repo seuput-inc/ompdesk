@@ -308,6 +308,7 @@ export interface HostRuntime {
 	reviewSent(tabId: string, review: AgentReviewResult): void;
 	nextPromptChildren(tabId: string, children: { title: string; waiting?: true }[]): void;
 	closedChildren(rows: ClosedChild[]): void;
+	sessionFatesChanged?(): void;
 	wakeDone(runId: string, result: { code: number | null; error?: string }): void;
 }
 
@@ -878,6 +879,11 @@ export class AgentControl {
 		return this.#call("clearQueue", { tabId });
 	}
 
+	/** A batch from the two journals, with no pool snapshot or per-session RPC. Never used for custody. */
+	personClosedChildren(): Promise<Array<[path: string, opener: string, at: number]>> {
+		return this.#invoke("agentControl.call", { method: "personClosedChildren", args: {} }, true, false);
+	}
+
 	/**
 	 * A tab closed. `session`: the saved session it held, when nobody closed it through the control tools (those record
 	 * who did): its ids keep naming that session.
@@ -1018,18 +1024,18 @@ export class AgentControl {
 		return this.#invoke("agentControl.call", { method, args }, true);
 	}
 
-	async #invoke<T>(wire: string, params: Record<string, unknown>, retry: boolean): Promise<T> {
+	async #invoke<T>(wire: string, params: Record<string, unknown>, retry: boolean, pushState = true): Promise<T> {
 		await this.#open();
 		// What the call reads of main is main as it is now: the core applies a push in the order main wrote it, so the
 		// call that follows starts on it.
-		this.#port.push();
+		if (pushState) this.#port.push();
 		try {
 			return (await core().call<T>(wire, { port: this.#port.id, ...params }, { timeoutMs: NO_TIMEOUT_MS })).result;
 		} catch (error) {
 			if (!(error instanceof CoreError)) throw error;
 			if ((error.code === "no_instance" || error.code === "no_runtime") && retry) {
 				this.#opened = null;
-				return this.#invoke(wire, params, false);
+				return this.#invoke(wire, params, false, pushState);
 			}
 			if (error.code === "tool_error") throw new ToolError(error.message);
 			throw error;
@@ -1397,6 +1403,7 @@ export class AgentControl {
 			nextPromptChildren: ({ tabId, children }: { tabId: string; children: { title: string; waiting?: true }[] }) =>
 				told(() => host.runtime?.nextPromptChildren(tabId, children)),
 			closedChildren: ({ rows }: { rows: ClosedChild[] }) => tell(() => host.runtime?.closedChildren(rows)),
+			sessionFatesChanged: () => told(() => host.runtime?.sessionFatesChanged?.()),
 			botsChanged: ({ state }: { state: BotsState }) => told(() => host.botsChanged?.(state)),
 			botsShared: ({ change }: { change: SharedBotsDelta }) => told(() => host.botsShared?.(change)),
 			wakeDone: ({ runId, code, error }: { runId: string; code: number | null; error?: string }) =>

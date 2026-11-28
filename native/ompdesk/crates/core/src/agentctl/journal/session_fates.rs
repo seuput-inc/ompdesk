@@ -7,10 +7,12 @@
 //!
 //! Seams: the clock. See `journal/mod.rs` for the deferred write that is a plain write here.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 
+use super::call_journal::CallJournal;
 use super::{
     Clock, js_number, number, object, read_array, string, stringify, system_clock, write_text,
 };
@@ -139,6 +141,7 @@ pub struct SessionFates {
     now: Clock,
     /// Oldest first.
     fates: Vec<SessionFate>,
+    pub(crate) changed: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl SessionFates {
@@ -151,7 +154,12 @@ impl SessionFates {
             .as_deref()
             .map(|file| read_array(file).iter().filter_map(parse_fate).collect())
             .unwrap_or_default();
-        SessionFates { file, now, fates }
+        SessionFates {
+            file,
+            now,
+            fates,
+            changed: None,
+        }
     }
 
     /// The newest entry `id` names.
@@ -173,6 +181,53 @@ impl SessionFates {
                     && fate.session.device.as_deref() == device
             })
             .cloned()
+    }
+
+    /// Display evidence only. A restored tab may already be detached when main records its close.
+    pub(crate) fn person_closed_children<'a>(
+        &'a self,
+        calls: Option<&'a CallJournal>,
+    ) -> Vec<(&'a str, &'a str, f64)> {
+        let mut seen = HashSet::new();
+        let mut by_tab = None;
+        self.fates
+            .iter()
+            .rev()
+            .filter_map(|fate| {
+                let child = &fate.session;
+                let path = child.path.as_deref()?;
+                if child.device.is_some()
+                    || !seen.insert(path)
+                    || child.hidden
+                    || fate.state != FateState::Closed
+                    || fate.by != fate_by::PERSON
+                    || fate.at <= 0.0
+                {
+                    return None;
+                }
+                let opener = match (
+                    child.opened_by_session.as_deref(),
+                    child.opened_by_device.as_deref(),
+                ) {
+                    (Some(opener), Some("")) => opener,
+                    (None, None) => {
+                        // Release writes current/former tab ids, then the saved id, then ids from older fates.
+                        let calls = calls?;
+                        let openers = by_tab.get_or_insert_with(|| calls.local_tab_openers());
+                        let saved = crate::agentctl::service::text::saved_id_of_path(Some(path));
+                        let mut named = child
+                            .ids
+                            .iter()
+                            .take_while(|id| Some(id.as_str()) != saved.as_deref())
+                            .filter_map(|id| openers.get(id.as_str()).copied());
+                        let opener = named.next()??;
+                        named.all(|other| other == Some(opener)).then_some(opener)?
+                    }
+                    _ => return None,
+                };
+                (opener != path).then_some((path, opener, fate.at))
+            })
+            .collect()
     }
 
     /// Its tab closed and the session stays saved. A deleted session stays deleted: a late close never revives it.
@@ -263,6 +318,9 @@ impl SessionFates {
         if self.fates.len() > SESSION_FATES_MAX {
             let extra = self.fates.len() - SESSION_FATES_MAX;
             self.fates.drain(..extra);
+        }
+        if let Some(changed) = &self.changed {
+            changed();
         }
         let Some(file) = &self.file else { return };
         let text = stringify(self.fates.iter().map(SessionFate::to_json).collect());

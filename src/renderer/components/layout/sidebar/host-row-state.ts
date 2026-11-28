@@ -4,9 +4,9 @@
  * counts of it. This computer's rows, a paired host's rows, a family row and every folded header read
  * it, on a desktop window, a paired computer's view and a phone page alike. Pure.
  */
-import type { RemoteOpenedTab } from "../../../../shared/ipc-types";
+import type { RemoteOpenedTab, SessionInfo } from "../../../../shared/ipc-types";
 import type { SessionSummary } from "../../../../shared/session-summary";
-import type { RowActivity } from "../../../../shared/sidebar-rows";
+import { type RowActivity, tabOfRow } from "../../../../shared/sidebar-rows";
 import { type RunFacts, type SessionRun, sessionRun } from "../../../lib/session-run";
 import type { SessionTab } from "../../../stores/tabs";
 import { type FoldSignal, type FoldSummary, foldSummary, sessionFoldSignal } from "./fold-summary";
@@ -20,14 +20,27 @@ export function summaryRowState(
 	return { ...run, fold: sessionFoldSignal({ waiting: run.ask, running: run.running, done: run.done }) };
 }
 
+/** A close can leave the journal pending. Only a live summary can show work in that case. */
+export function rowWorking(run: SessionRun, row: SessionInfo): boolean {
+	return run.running || (!run.signal && !row.personClosedChild && row.status === "pending");
+}
+
+/** An idle summary can outlast its tab. It cannot keep a known closed loose child on screen. */
+export function looseChildHeld(row: SessionInfo, held: ReadonlySet<string>, tabs: readonly SessionTab[]): boolean {
+	if (!held.has(row.path)) return false;
+	if (!row.personClosedChild || row.heldOnHost) return true;
+	const tab = tabOfRow(tabs, row);
+	return tab !== undefined && !tab.ghost;
+}
+
 /**
  * What the sort and the sleep rule (`sidebarRows`) read of a row: its own prompt waits on the person, it works (its
  * run, else the index's `pending` for a session no tab of its computer runs), or neither.
  */
-export function rowActivity(facts: RunFacts | undefined, indexStatus: string | undefined): RowActivity {
+export function rowActivity(facts: RunFacts | undefined, row: SessionInfo): RowActivity {
 	const run = sessionRun(facts);
 	if (run.ask) return "waiting";
-	return run.running || (!run.signal && indexStatus === "pending") ? "working" : null;
+	return rowWorking(run, row) ? "working" : null;
 }
 
 /**

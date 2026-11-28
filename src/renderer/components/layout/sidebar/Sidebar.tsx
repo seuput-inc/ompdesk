@@ -160,7 +160,7 @@ import { workingAgentCount } from "../live-work";
 import { SessionLiveTitle, sessionLive } from "../SessionLiveTitle";
 import { openedChildCounts, openedChildRows } from "../work-board/opened-children";
 import { childFoldSignal, type FoldSignal, foldSummary, sessionFoldSignal } from "./fold-summary";
-import { remoteOpenedTab, rowActivity, summaryRowState } from "./host-row-state";
+import { looseChildHeld, remoteOpenedTab, rowActivity, rowWorking, summaryRowState } from "./host-row-state";
 import { NewTaskRows } from "./NewTaskRows";
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
 import { ProjectGlyph } from "./ProjectGlyph";
@@ -817,7 +817,7 @@ export function Sidebar() {
 			sessions: sessions.map(session => ({
 				...session,
 				openedBySession:
-					recordedOpeners.get(session.path) ?? session.openedBySession ?? workerOpeners.get(session.path) ?? null,
+					session.openedBySession ?? recordedOpeners.get(session.path) ?? workerOpeners.get(session.path) ?? null,
 			})),
 			tabs: rowTabs,
 			// A session this computer runs (a paired device's tab here, another window's tab) is in use, whatever its
@@ -890,7 +890,7 @@ export function Sidebar() {
 						(session.liveTabId === undefined
 							? undefined
 							: summaryByPath.get(unsavedSessionKey(session.liveTabId))),
-					session.status,
+					session,
 				),
 			current: session => tabOfRow(localTabs, session)?.id === activeTabId,
 			now: minute,
@@ -1708,18 +1708,15 @@ export function Sidebar() {
 		const waiting: AttentionKind | undefined =
 			run.ask ?? (!run.down && tab && childrenWaitingOf.has(tab.id) ? "childWaiting" : undefined);
 		const { settling, done: unseen } = run;
-		// A session no tab of this computer runs, whose journal reads as mid-turn (another omp, an archived row): the
-		// index's `pending` says it works, as `isSessionBusy` does.
-		const running = run.running || (!run.signal && session.status === "pending");
+		const running = rowWorking(run, session);
 		const failed =
 			!waiting &&
 			!running &&
 			(run.signal ? run.signal.labelKey === "titlebar.status.error" : session.status === "error");
 		const done = !waiting && !failed && unseen;
 		const openElsewhere = tab !== undefined && !isCurrent && !inVisibleSplit;
-		// Busy (no delete, the project busy) only while it runs or its own prompt waits: an idle parent whose child waits
-		// is not.
-		const busy = isAsk(waiting) || running || run.signal?.active === true;
+		// Display evidence of a close never changes the delete guard.
+		const busy = isAsk(waiting) || run.running || (run.signal?.active ?? session.status === "pending");
 		const waitingLabel = waiting ? t(ATTENTION_LABEL_KEY[waiting]) : null;
 		const statusLabel =
 			waitingLabel ??
@@ -1804,7 +1801,11 @@ export function Sidebar() {
 		// No tab here and nothing this computer runs of it: another computer's window holds it, and that item says how it is.
 		const elsewhere = row.tab === undefined && row.summary === undefined ? review : undefined;
 		const failed =
-			row.failed || review?.failed === true || lastRun?.stopReason === "error" || lastRun?.stopReason === "aborted";
+			row.failed ||
+			(child.personClosedChild === true && (child.status === "aborted" || child.status === "error")) ||
+			review?.failed === true ||
+			lastRun?.stopReason === "error" ||
+			lastRun?.stopReason === "aborted";
 		const status = openedChildStatus({
 			// Only the child's own question or approval waits; its waiting child is its own.
 			waiting: isAsk(row.waiting) || elsewhere?.waiting === true,
@@ -1812,6 +1813,7 @@ export function Sidebar() {
 			finished: elsewhere
 				? elsewhere.state !== "running"
 				: lastRun !== undefined ||
+					child.personClosedChild === true ||
 					closedTitleOf.has(child.path) ||
 					(row.tab === undefined && row.summary === undefined) ||
 					(!row.busy && child.messageCount >= 2),
@@ -2006,7 +2008,9 @@ export function Sidebar() {
 	const archivedFoldSignals = () => archivedRows.map(session => sessionFoldSignal(sessionRowState(session)));
 	/** A group's loose children that show: the ones that need a look, and any a tab holds, in the place they have. */
 	const looseOf = (group: RowGroup) =>
-		group.folded.map(child => ({ ...familyChildFor(child), held: rows.held.has(child.path) })).filter(isShownOpened);
+		group.folded
+			.map(child => ({ ...familyChildFor(child), held: looseChildHeld(child, rows.held, localTabs) }))
+			.filter(isShownOpened);
 	/** This device's whole list, while its section is folded: every project, the chats, the archive. A
 	 * filter shows every match under it: its rows say it. */
 	const localFoldSummary = () =>

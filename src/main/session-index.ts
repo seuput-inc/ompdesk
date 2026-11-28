@@ -61,6 +61,10 @@ export class SessionIndex {
 	/** The global list, read once per change while the tree is watched and shared by every asker. */
 	readonly #share = new SessionListShare(() => this.#readAll());
 	#warmup: NodeJS.Timeout | undefined;
+	/** A read-only batch from agent control's close and open-call journals. */
+	personClosedChildren?: () => Promise<Array<[path: string, opener: string, at: number]>>;
+	#held: ReadonlySet<string> = new Set();
+	readonly #closedCandidates = new Set<string>();
 
 	/**
 	 * The watch reported a session file, or a project or session directory, that appeared, changed or vanished, once its
@@ -251,6 +255,18 @@ export class SessionIndex {
 		this.#share.changed();
 	}
 
+	/** A reopen can change a closed child's row before it writes its first new message. */
+	heldSessionsChanged(held: ReadonlySet<string>): void {
+		const before = this.#held;
+		this.#held = held;
+		for (const path of this.#closedCandidates) {
+			if (before.has(path) !== held.has(path)) {
+				this.relist();
+				return;
+			}
+		}
+	}
+
 	/**
 	 * Every session file once (deleted ones never), chat-labelled, newest first, one row per session id: stock moves
 	 * sessions between its old and new directory names for a cwd (`-AiProject-x` → `home-x-<hash>`), and meanwhile one
@@ -272,11 +288,19 @@ export class SessionIndex {
 			rows: infos.map(info => ({ path: info.path, id: info.id })),
 			kinds: this.#kindsFile,
 		});
+		const fates = await this.personClosedChildren?.();
+		const closed = new Map(fates?.map(([path, opener, at]) => [path, { opener, at }]));
+		this.#closedCandidates.clear();
 		this.#listedGeneration = generation;
 		return listedAnswer.parse(result).listed.flatMap(({ row, chat }) => {
 			const info = infos[row];
 			if (!info) return [];
 			if (chat) info.kind = "chat";
+			const fate = closed.get(info.path);
+			if (!chat && !info.promptOriginDevice && fate && Date.parse(info.modified) <= fate.at) {
+				this.#closedCandidates.add(info.path);
+				if (!this.#held.has(info.path)) return [{ ...info, openedBySession: fate.opener, personClosedChild: true }];
+			}
 			return [info];
 		});
 	}

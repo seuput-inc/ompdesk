@@ -6311,6 +6311,70 @@ describe("an id keeps naming its session after its tab is gone, and says when th
 		expect(readFileSync(path, "utf8")).toBe("synthetic conversation");
 	});
 
+	it("lists the person-closed child of a saved local opener after a relaunch without granting custody", async () => {
+		const calls = join(dir, "agent-control-calls.json");
+		const original = launch();
+		original.host.files.calls = calls;
+		const opened = await original.service.run("boss0001", T.open, { message: "Read the parser" }, { id: "open" });
+		expect(opened.isError, opened.text).toBe(false);
+		const former = original.host.first[0]!.tabId;
+		const localCalls = JSON.parse(readFileSync(calls, "utf8")) as Record<string, unknown>[];
+		writeFileSync(
+			calls,
+			JSON.stringify([
+				...localCalls,
+				{ ...localCalls[0], key: "studio\n/s/boss.jsonl\nremote-open", opened: ["paired-tab"] },
+			]),
+		);
+		const path = join(dir, "restored_child.jsonl");
+		writeFileSync(path, "saved conversation");
+		const restored = launch();
+		restored.host.files.calls = calls;
+		const session = { path, title: "Child", cwd: dir, formerIds: [former] };
+		await restored.service.released("new-tab", session);
+		await restored.service.released("direct", {
+			...session,
+			path: "/s/direct.jsonl",
+			formerIds: [],
+			openedBySession: "/s/boss.jsonl",
+			openedByDevice: "",
+		});
+		for (const [name, other] of Object.entries({
+			pairedCall: { formerIds: ["paired-tab"] },
+			conflictingCalls: { formerIds: [former, "paired-tab"] },
+			remoteChild: { device: "studio" },
+			remoteOpener: { openedBySession: "/s/boss.jsonl", openedByDevice: "studio" },
+			legacy: { openedBySession: "/s/boss.jsonl" },
+			hidden: { hidden: true },
+			noCall: { formerIds: [] },
+		})) {
+			await restored.service.released(name, { ...session, path: `/s/${name}.jsonl`, ...other });
+		}
+		// The filename's saved id is not a tab id the open call returned for this session.
+		await restored.service.released("unrelated", { ...session, path: `/s/another_${former}.jsonl`, formerIds: [] });
+
+		const next = launch();
+		next.host.files.calls = calls;
+		expect(await next.service.personClosedChildren()).toEqual([
+			["/s/direct.jsonl", "/s/boss.jsonl", expect.any(Number)],
+			[path, "/s/boss.jsonl", expect.any(Number)],
+		]);
+		next.host.storedRows = [storedRow({ path })];
+		next.host.cardAnswer = false;
+		const deletion = await next.service.run("boss0001", T.stop, { session: "11111111-aaaa", delete: true });
+		expect(deletion.text).toContain("declined");
+		expect(next.host.cards).toHaveLength(1);
+		expect(readFileSync(path, "utf8")).toBe("saved conversation");
+		expect(next.host.deletedStored).toEqual([]);
+		// No open-call proof survives eviction. The complete fate needs no call record.
+		writeFileSync(calls, "[]");
+		const afterEviction = launch();
+		afterEviction.host.files.calls = calls;
+		expect(await afterEviction.service.personClosedChildren()).toEqual([
+			["/s/direct.jsonl", "/s/boss.jsonl", expect.any(Number)],
+		]);
+	});
+
 	it("reads a session whose tab the person closed by the id it was opened with, in this launch and the next", async () => {
 		const first = launch(kid);
 		// The person closes the tab in its window: the pool releases it, with the session it held.
@@ -6339,6 +6403,7 @@ describe("an id keeps naming its session after its tab is gone, and says when th
 		first.host.parents.set("kid00002", "boss0001");
 		expect((await first.service.run("boss0001", T.stop, { session: "kid00002", close: true })).isError).toBe(false);
 		const second = launch();
+		expect(await second.service.personClosedChildren()).toEqual([]);
 		expect((await second.service.run("boss0001", T.read, { session: "kid00002" })).text).toContain("the whole table");
 		const deleted = await second.service.run("boss0001", T.stop, { session: "kid00002", delete: true });
 		expect(deleted.isError, deleted.text).toBe(false);
@@ -6361,6 +6426,7 @@ describe("an id keeps naming its session after its tab is gone, and says when th
 		await service.autoClose("boss0001");
 		await service.autoClose("boss0001");
 		expect(host.deletedStored).toEqual([{ path: "/s/lookup.jsonl", device: undefined }]);
+		expect(await service.personClosedChildren()).toEqual([]);
 		for (const [tool, args] of [
 			[T.read, { session: child.tabId }],
 			[T.result, { session: child.tabId }],

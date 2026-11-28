@@ -493,6 +493,7 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 		const folder = facts.folder(session.cwd);
 		if (
 			facts.closed.has(session.path) ||
+			session.personClosedChild ||
 			(briefed.has(session.path) && agentMessageSender(session.firstMessage) !== null) ||
 			folder.kind === "agent"
 		)

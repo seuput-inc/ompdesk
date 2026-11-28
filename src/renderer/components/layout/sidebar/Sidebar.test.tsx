@@ -3823,6 +3823,69 @@ describe("Sidebar device sections", () => {
 		});
 	}
 
+	it.each([false, true])("hides a person-closed child until it needs a look or reopens (paired=%s)", async paired => {
+		const device = paired ? "dev-studio" : undefined;
+		const cwd = "/work/alpha";
+		const boss = session("/s/boss", cwd, { device });
+		const child = session("/s/child", cwd, {
+			device,
+			title: "Review build",
+			openedBySession: boss.path,
+			personClosedChild: true,
+			status: "pending",
+			messageCount: 1,
+		});
+		const orphan = { ...child, id: "orphan", path: "/s/orphan", firstMessage: "", openedBySession: "/s/gone" };
+		const stopped = { ...child, id: "stopped", path: "/s/stopped", status: "aborted" as const };
+		const manual = session("/s/manual", cwd, { device, title: child.title, status: "pending" });
+		const omp = installMockOmp([]);
+		omp.sessions.list.mockImplementation(async (_scope, host) =>
+			host === device ? [boss, child, orphan, stopped, manual] : [],
+		);
+		seedStores();
+		if (paired) pairHost("online");
+		setSummaries([summary(orphan.path, { cwd })], device);
+		useSidebarFolds.getState().setGroupsFolded([cwd], false, device);
+		const family = device ? `device:${device}:${boss.path}` : boss.path;
+		useSidebarSubagentsStore.setState({ expanded: new Set([family]) });
+		await mount(<Sidebar />);
+
+		const familyRow = (path: string) =>
+			container.querySelector(`[data-sidebar-family="${family}"] [data-session-path="${path}"]`);
+		const projectRow = (path: string) =>
+			container.querySelector(
+				paired ? `[data-device-session="${path}"]` : `.omp-sidebar-session-row[data-session-path="${path}"]`,
+			);
+		const loose = () => container.querySelector(`[data-sidebar-loose-children] [data-session-path="${orphan.path}"]`);
+		expect(familyRow(stopped.path)?.getAttribute("data-child-status")).toBe("failed");
+		expect(familyRow(child.path)).toBeNull();
+		expect(projectRow(child.path)).toBeNull();
+		expect(loose()).toBeNull();
+		expect(projectRow(orphan.path)).toBeNull();
+		expect(projectRow(manual.path)).not.toBeNull();
+		if (!paired) expect(projectRow(manual.path)?.getAttribute("data-signal")).toBe("running");
+
+		await act(async () => {
+			setSummaries([summary(child.path, { cwd, status: "running" }), summary(orphan.path, { cwd })], device);
+			useTabsStore.setState(({ tabs }) => ({
+				tabs: [
+					...tabs,
+					{
+						id: "reopen",
+						cwd,
+						device,
+						sessionPath: orphan.path,
+						status: "ready",
+						kind: "agent",
+						unreadDone: false,
+					},
+				],
+			}));
+		});
+		expect(familyRow(child.path)?.getAttribute("data-child-status")).toBe("running");
+		expect(loose()?.getAttribute("data-child-status")).toBe("done");
+	});
+
 	it.each([false, true])(
 		"opens only the bot chat's saved worker and keeps its project fallback (paired=%s)",
 		async paired => {

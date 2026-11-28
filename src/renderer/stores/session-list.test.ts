@@ -87,6 +87,20 @@ describe("session list snapshot", () => {
 		release();
 	});
 
+	it("takes a person-close or reopening even when the opener and journal are unchanged", async () => {
+		const child = { ...row("/child"), openedBySession: "/boss" };
+		let current: SessionInfo = { ...child, personClosedChild: true };
+		snapshots().write("sessions", "device:dev-1", "global", [child]);
+		install(async () => [current]);
+		const feed = sessionListFeed("global", "dev-1");
+		const release = feed.retain();
+		await vi.waitFor(() => expect(feed.store.getState().sessions[0]?.personClosedChild).toBe(true));
+		current = child;
+		feed.refresh();
+		await vi.waitFor(() => expect(feed.store.getState().sessions[0]).toEqual(child));
+		release();
+	});
+
 	it("takes a row whose automatic title came, changed or went though its file did not", async () => {
 		snapshots().write("sessions", "local", "global", [{ ...row("/a"), title: "Release prep" }]);
 		const read = Promise.withResolvers<SessionInfo[]>();

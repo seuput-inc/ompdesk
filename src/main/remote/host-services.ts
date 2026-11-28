@@ -341,7 +341,7 @@ export interface HostServicesDeps {
 		| "sessionsDir"
 		| "readMessages"
 	> &
-		Partial<Pick<SessionIndex, "pace">>;
+		Partial<Pick<SessionIndex, "pace" | "heldSessionsChanged">>;
 	/** Session files this computer's user hid from agents (Sidebar › Hide from other agents); a device's agent never reads them. */
 	agentHidden?: () => ReadonlySet<string>;
 	sessionMoved?: (from: string, to: string) => void;
@@ -810,8 +810,7 @@ export class LocalHostServices implements HostServices {
 	/** `remoteOpened` as last sent to the devices and the windows, batched with the live list. */
 	#remoteOpenedSnapshot = "[]";
 	/**
-	 * What a device's last read of the list said of who holds and who opened each session (`#listing`): a tab here
-	 * taking or letting go of one, or an opener becoming known, writes no journal, so the index never says so.
+	 * The last shared read's opener and holder snapshot. A tab taking a session can change both before a journal write.
 	 * Undefined until a device read the list.
 	 */
 	#listingSnapshot: string | undefined;
@@ -1951,10 +1950,12 @@ export class LocalHostServices implements HostServices {
 	 * their last read said, since no journal moved.
 	 */
 	listingChanged(): void {
-		this.#windowHeldChanged();
+		const windows = this.windowHeldSessions();
+		this.#windowHeldChanged(windows);
+		const held = this.#heldSessions(windows);
+		this.#deps.sessionIndex.heldSessionsChanged?.(held);
 		if (this.#listingSnapshot === undefined) return;
-		const { openers, held } = this.#listing();
-		const snapshot = listingSignature(openers, held);
+		const snapshot = listingSignature(this.#deps.sessionOpeners?.() ?? new Map(), held);
 		if (snapshot === this.#listingSnapshot) return;
 		this.#listingSnapshot = snapshot;
 		this.sessionsChanged();
@@ -1973,38 +1974,41 @@ export class LocalHostServices implements HostServices {
 		};
 	}
 
-	#windowHeldChanged(): void {
+	#windowHeldChanged(windows: ReadonlySet<string>): void {
 		if (this.#windowHeldListeners.size === 0) return;
-		const snapshot = JSON.stringify([...this.windowHeldSessions()].sort());
+		const snapshot = JSON.stringify([...windows].sort());
 		if (snapshot === this.#windowHeldSnapshot) return;
 		this.#windowHeldSnapshot = snapshot;
 		for (const listener of this.#windowHeldListeners) listener();
 	}
 
-	/** Who opened each session as far as this computer knows, and the sessions a tab here holds (a window's, a device's). */
-	#listing(): { openers: ReadonlyMap<string, string>; held: ReadonlySet<string> } {
-		const held = new Set(this.#deps.localTabs.windowSessionFiles());
+	#heldSessions(held: Set<string>): Set<string> {
 		for (const tab of this.#tabs.values()) if (tab.sessionFile) held.add(tab.sessionFile);
-		return { openers: this.#deps.sessionOpeners?.() ?? new Map<string, string>(), held };
+		return held;
 	}
 
 	/**
-	 * This machine's rows as a device gets them: what this computer knows of each beside its journal (`#listing`).
+	 * This machine's rows as a device gets them, including who holds each file at the time of the read.
 	 * `shared`: the rows are the shared list's, so the listing they show becomes what devices last heard.
 	 */
 	#decorated(rows: readonly SessionInfo[], shared = true): SessionInfo[] {
-		const { openers, held } = this.#listing();
+		const openers = this.#deps.sessionOpeners?.() ?? new Map<string, string>();
+		const held = this.#heldSessions(this.windowHeldSessions());
 		if (shared) this.#listingSnapshot = listingSignature(openers, held);
 		const problems = new Map([...this.#childProblems.values()].flatMap(children => [...children]));
 		// Every row says, even `null` for none: an older host's rows say nothing, and a device lists those as before.
 		return rows.map(row => {
 			const childProblem = problems.get(row.path);
-			return {
+			const heldOnHost = held.has(row.path);
+			const openedBySession = (heldOnHost ? undefined : row.openedBySession) ?? openers.get(row.path) ?? null;
+			const info: SessionInfo = {
 				...row,
-				openedBySession: openers.get(row.path) ?? null,
+				openedBySession,
 				...(childProblem ? { childProblem } : {}),
-				...(held.has(row.path) ? { heldOnHost: true as const } : {}),
+				...(heldOnHost ? { heldOnHost: true } : {}),
 			};
+			if (heldOnHost) delete info.personClosedChild;
+			return info;
 		});
 	}
 

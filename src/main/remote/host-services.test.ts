@@ -3218,6 +3218,24 @@ describe("LocalHostServices", () => {
 		]);
 	});
 
+	it("publishes a person-close from the index but never lets it override a reopened host tab", async () => {
+		const child = "/s/kid.jsonl";
+		const openers = new Map<string, string>();
+		const { services, local } = setup(60_000, {
+			sessionIndex: {
+				list: async () => [{ path: child, openedBySession: "/s/original.jsonl", personClosedChild: true }],
+			} as unknown as HostServicesDeps["sessionIndex"],
+			sessionOpeners: () => openers,
+		});
+		const x = new FakeConnection(peer("device-x"));
+		const list = () => services.call(x.peer, "sessions.list", { scope: "global" }, x);
+		expect(await list()).toEqual([{ path: child, openedBySession: "/s/original.jsonl", personClosedChild: true }]);
+		local.owned.set(child, { tabId: "new-tab", winId: 1 });
+		openers.set(child, "/s/new-opener.jsonl");
+		services.listingChanged();
+		expect(await list()).toEqual([{ path: child, openedBySession: "/s/new-opener.jsonl", heldOnHost: true }]);
+	});
+
 	it("tells a device which listed sessions a tab here holds, so it keeps their rows as this computer's sidebar does", async () => {
 		const row = (path: string) => ({ path, id: path, title: path, cwd: workDir, firstMessage: "" });
 		const { services, local } = setup(60_000, {

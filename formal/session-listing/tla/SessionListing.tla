@@ -128,8 +128,8 @@ PostStale(st) == TRUE
 \* ===== rows, deltas and the listing =====
 
 Held(f) == {f[t] : t \in {u \in Tabs : f[u] # NoS}}
-\* host-services.ts #listing(): who opened each session = the opener tab's session file (`Opens` = pairs <<child tab, opener tab>>),
-\* plus the closed-child record of index.ts sessionOpeners().
+\* The host projects openers from live tab pairs and closed-child evidence.
+\* ClosedPair abstracts a known relation, not the provenance of the close (see A8).
 Openers(f, r) ==
     {<<f[x[1]], f[x[2]]>> : x \in {y \in Opens : f[y[1]] # NoS /\ f[y[2]] # NoS /\ f[y[1]] # f[y[2]]}}
     \cup (IF r THEN {ClosedPair} ELSE {})

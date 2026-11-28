@@ -285,7 +285,7 @@ impl Runtime {
                     let opener = state.tabs.iter().find(|opener| {
                         opener.device.is_none()
                             && opener.tab_id != tab.tab_id
-                            && opener.session_path.as_deref() == Some(file.as_str())
+                            && opener.session_path.as_deref() == Some(file)
                     })?;
                     Some((tab.tab_id.clone(), opener.tab_id.clone()))
                 })

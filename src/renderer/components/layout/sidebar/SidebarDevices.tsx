@@ -104,7 +104,7 @@ import {
 import { workingAgentCount } from "../live-work";
 import { SessionLiveTitle, sessionLive } from "../SessionLiveTitle";
 import { childFoldSignal, type FoldSignal, type FoldSummary, foldSummary } from "./fold-summary";
-import { hostSectionSummary, remoteOpenedTab, rowActivity, summaryRowState } from "./host-row-state";
+import { hostSectionSummary, looseChildHeld, remoteOpenedTab, rowActivity, summaryRowState } from "./host-row-state";
 import { useHostWorkspace } from "./host-workspace";
 import { NewTaskRows } from "./NewTaskRows";
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog";
@@ -671,7 +671,7 @@ function DeviceSessions({
 							(session.liveTabId === undefined
 								? undefined
 								: hostSummaries.get(unsavedSessionKey(session.liveTabId))),
-						session.status,
+						session,
 					),
 				current: session => tabOfRow(deviceTabs, session)?.id === activeTabId,
 				now: minute,
@@ -849,6 +849,7 @@ function DeviceSessions({
 			review?.failed === true ||
 			child.childProblem === "failed" ||
 			child.status === "error" ||
+			(child.personClosedChild === true && child.status === "aborted") ||
 			tab?.lastRun?.stopReason === "error" ||
 			tab?.lastRun?.stopReason === "aborted";
 		const running = run.running || review?.state === "running";
@@ -1729,7 +1730,7 @@ function DeviceSessions({
 														foldKey={`device-group:${host.deviceId}:${group.cwd}`}
 														opened={group.folded.map(child => ({
 															...familyChildFor(child),
-															held: tree.rows.held.has(child.path),
+															held: looseChildHeld(child, tree.rows.held, deviceTabs),
 														}))}
 													/>
 												</div>

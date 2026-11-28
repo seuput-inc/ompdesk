@@ -1620,6 +1620,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		deviceName: id => remoteDevices.state().hosts.find(host => host.deviceId === id)?.name ?? id,
 		sessions: {
 			list: () => sessionIndex.list("global"),
+			relist: () => sessionIndex.relist(),
 			search: (query, paths) => sessionIndex.searchContent(query, paths),
 			read: sessionPath => sessionIndex.readMessages(sessionPath),
 			pace: sessionPath => sessionIndex.pace(sessionPath),
@@ -1677,6 +1678,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			return response === 0;
 		},
 	});
+	sessionIndex.personClosedChildren = () => agentControl.control.personClosedChildren();
 	const pruneSchedules = () =>
 		void deps
 			.schedules?.()

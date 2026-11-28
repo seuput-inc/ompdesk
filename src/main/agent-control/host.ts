@@ -210,6 +210,7 @@ export interface AgentControlHostDeps {
 		search(query: string, paths: string[]): Promise<SessionContentMatch[]>;
 		read(sessionPath: string): Promise<AgentMessage[]>;
 		pace?(sessionPath: string): Promise<Pace | undefined>;
+		relist?(): void;
 	};
 	/** The paired hosts this computer runs sessions on (Settings › Devices) and a request to one of them. */
 	remote?: {
@@ -1666,6 +1667,7 @@ export class AgentControlRuntime {
 				nextPromptChildren: (callerTabId, children) =>
 					void this.#hostCommand(callerTabId, { type: "set_next_prompt_children", children }),
 				closedChildren: rows => this.#setClosedChildren(rows),
+				sessionFatesChanged: () => deps.sessions?.relist?.(),
 				wakeDone: (runId, result) => {
 					this.#wakes.get(runId)?.(result);
 					this.#wakes.delete(runId);

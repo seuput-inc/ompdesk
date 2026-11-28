@@ -10,6 +10,7 @@
 //! Differences: `begin` takes no `acked` (the service never passed one); `get` returns a copy, so a caller changes a
 //! record only through `finish`, `note` and `acknowledge`.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde_json::{Map, Value};
@@ -204,6 +205,7 @@ pub struct CallJournal {
     now: Clock,
     /// Oldest first, as the TypeScript `Map` held them.
     records: Vec<CallRecord>,
+    pub(crate) pruned: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl CallJournal {
@@ -217,6 +219,7 @@ impl CallJournal {
             file,
             now,
             records: Vec::new(),
+            pruned: None,
         };
         if let Some(file) = journal.file.clone() {
             for item in read_array(&file) {
@@ -246,17 +249,45 @@ impl CallJournal {
 
     /// The session file of this computer's session whose `ompdesk_session_open` opened a tab with one of `ids` (a tab
     /// keeps its earlier ids across relaunches), by the newest such call; None when a paired device's session made it.
-    pub fn opener_of(&self, ids: &[&str]) -> Option<String> {
-        let record = self.records.iter().rev().find(|record| {
-            record.tool == "ompdesk_session_open"
-                && record
-                    .opened
-                    .as_ref()
-                    .is_some_and(|opened| opened.iter().any(|id| ids.contains(&id.as_str())))
-        })?;
-        let mut parts = record.key.splitn(3, '\n');
-        let (device, file) = (parts.next()?, parts.next()?);
-        (device.is_empty() && !file.is_empty()).then(|| file.to_owned())
+    pub fn opener_of(&self, ids: &[&str]) -> Option<&str> {
+        self.opens()
+            .rev()
+            .find(|(opened, _)| opened.iter().any(|id| ids.contains(&id.as_str())))?
+            .1
+    }
+
+    /// The saved list joins all closed tabs in one pass. Conflicting claims prove no local opener.
+    pub(super) fn local_tab_openers(&self) -> HashMap<&str, Option<&str>> {
+        let mut openers = HashMap::new();
+        for (tabs, opener) in self.opens() {
+            for tab in tabs {
+                openers
+                    .entry(tab.as_str())
+                    .and_modify(|old| {
+                        if *old != opener {
+                            *old = None;
+                        }
+                    })
+                    .or_insert(opener);
+            }
+        }
+        openers
+    }
+
+    /// Opened tab ids and their caller's local file. A foreign or unproven caller has no local file.
+    fn opens(&self) -> impl DoubleEndedIterator<Item = (&[String], Option<&str>)> {
+        self.records.iter().filter_map(|record| {
+            if record.tool != "ompdesk_session_open" {
+                return None;
+            }
+            let opened = record.opened.as_deref()?;
+            let mut parts = record.key.splitn(3, '\n');
+            let device = parts.next();
+            let file = parts
+                .next()
+                .filter(|file| device == Some("") && !file.is_empty());
+            Some((opened, file))
+        })
     }
 
     /// Record a call before its effect; written before this returns.
@@ -324,17 +355,25 @@ impl CallJournal {
 
     /// Only acknowledged records go, by age and then oldest first past `CALL_JOURNAL_MAX`.
     fn write(&mut self) -> Result<(), String> {
+        let mut lost_opener = false;
         let cutoff = (self.now)() - CALL_JOURNAL_TTL_MS;
-        self.records
-            .retain(|record| !(record.acked && record.at < cutoff));
+        self.records.retain(|record| {
+            let expired = record.acked && record.at < cutoff;
+            lost_opener |= expired && record.opened.is_some();
+            !expired
+        });
         let mut excess = self.records.len().saturating_sub(CALL_JOURNAL_MAX);
         self.records.retain(|record| {
             if excess == 0 || !record.acked {
                 return true;
             }
             excess -= 1;
+            lost_opener |= record.opened.is_some();
             false
         });
+        if lost_opener && let Some(pruned) = &self.pruned {
+            pruned();
+        }
         match &self.file {
             Some(file) => write_text(
                 file,

@@ -1185,6 +1185,14 @@ async fn open(call: Call) -> Result<Reply, Fault> {
         system_clock(),
     );
     if let Some(config) = params.runtime {
+        let invalidate = || -> Box<dyn Fn() + Send + Sync> {
+            let port = port.clone();
+            Box::new(move || port.tell("sessionFatesChanged", &()))
+        };
+        control.fates().changed = Some(invalidate());
+        if let Some(mut calls) = control.calls() {
+            calls.pruned = Some(invalidate());
+        }
         crate::agentctl::runtime::start(control.clone(), params.port, config);
     }
     lock(&INSTANCES).insert(params.port, control);
@@ -1268,6 +1276,11 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
             Reply::json(&control.run(&caller, &tool, given, call_id).await)
         }
         "childrenOf" => Reply::json(&control.children_of(&text_arg(&args, "callerTabId", method)?)),
+        "personClosedChildren" => {
+            let fates = control.fates();
+            let calls = control.calls();
+            Reply::json(&fates.person_closed_children(calls.as_deref()))
+        }
         "childAsked" => reply(
             control
                 .child_asked(
