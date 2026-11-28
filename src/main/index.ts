@@ -66,7 +66,7 @@ import {
 	TOOLS_AUTO_UPDATE_PREF,
 } from "../shared/desktop-prefs";
 import { ECC_PREF } from "../shared/ecc";
-import { IPC_COMMANDS, IPC_EVENTS, type IpcRemoveFromComputerResult, type SessionKind } from "../shared/ipc-types";
+import { IPC_EVENTS, type IpcRemoveFromComputerResult, type SessionKind } from "../shared/ipc-types";
 import { KEYCHAIN_WOULD_ASK } from "../shared/keychain";
 import { LAUNCH_INCIDENT_PREF, launchIncidentOf } from "../shared/launch-incident";
 import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
