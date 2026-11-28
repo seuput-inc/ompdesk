@@ -2281,12 +2281,14 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"native/ompdesk/crates/core/src/sessions/rules.rs",
 			"src/main/session-index.ts",
 			"resources/gui-bridge/stock-helper/sessions.ts",
+			"resources/gui-bridge/wsl/checkpoint.ts",
 		],
 		stock: ["omp://session.md", "session JSONL entries"],
 		tests: [
 			"src/main/session-index.test.ts",
 			"src/main/session-index-activity.test.ts",
 			"src/main/session-index-first-prompt.test.ts",
+			"scripts/wsl-checkpoint.test.ts",
 		],
 	},
 	{
