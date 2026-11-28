@@ -56,7 +56,12 @@ class BuildError extends Error {}
 const SEPARATE_CRATES = ["shell", "shell-preview", "tauri-shell"];
 
 function sourceFiles(root: string): string[] {
-	const files = ["scripts/build-native.ts", "scripts/cargo.ts"];
+	const files = [
+		"scripts/build-native.ts",
+		"scripts/cargo.ts",
+		"resources/gui-bridge/wsl/probe-tools.sh",
+		"src/shared/omp-minimum.json",
+	];
 	function walk(dir: string): void {
 		for (const entry of fs.readdirSync(path.join(root, dir), { withFileTypes: true })) {
 			if (entry.name === ".DS_Store" || entry.name === "target") continue;

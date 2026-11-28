@@ -21,6 +21,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import ompMinimum from "../shared/omp-minimum.json";
 import ompTested from "../shared/omp-tested.json";
 import { core } from "./core/process";
 import type { OmpRuntime } from "./local/types";
@@ -57,7 +58,7 @@ import {
  * `worktree.onStart`/`onExit` (18.8.6), per-model compaction limits and account
  * identity keys (18.8.7), stock's project-scoped memory backend call (18.11.0).
  */
-export const MIN_OMP_VERSION = "19.2.0";
+export const MIN_OMP_VERSION: string = ompMinimum;
 
 /**
  * The omp this OMPdesk release was verified against (`src/shared/omp-tested.json`, moved by the omp bump). OMPdesk

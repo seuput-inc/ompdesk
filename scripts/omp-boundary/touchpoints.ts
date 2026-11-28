@@ -79,8 +79,8 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		id: "L03",
 		area: "launch",
 		contract: "public",
-		summary: "Version detection through `omp --version` and the minimum supported omp (MIN_OMP_VERSION 18.18.9).",
-		files: ["src/main/omp-runtime.ts"],
+		summary: "Version detection through `omp --version` and the minimum supported omp.",
+		files: ["src/main/omp-runtime.ts", "src/shared/omp-minimum.json"],
 		stock: ["omp --version", "semver string output"],
 		tests: ["src/main/omp-runtime.test.ts"],
 		changes: [
@@ -111,12 +111,14 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/omp-runtime.ts",
 			"native/ompdesk/crates/core/src/tools/setup/detect.rs",
 			"resources/gui-bridge/wsl/launch.ts",
+			"resources/gui-bridge/wsl/probe-tools.sh",
 		],
 		stock: ["@oh-my-pi/pi-coding-agent", "package.json engines.bun (>=X.Y.Z)"],
 		tests: [
 			"src/main/omp-runtime.test.ts",
 			"native/ompdesk/crates/core/src/tools/setup/tests.rs",
 			"scripts/wsl-guest-launch.test.ts",
+			"scripts/wsl-probe-tools.test.ts",
 		],
 	},
 	{

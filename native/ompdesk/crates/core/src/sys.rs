@@ -6,6 +6,10 @@
 //! dial that fails at once when refused.
 #![allow(unsafe_code)]
 
+#[cfg(windows)]
+#[path = "setup/wsl/windows.rs"]
+pub(crate) mod wsl;
+
 /// Set the child's priority before publishing its PID. A denied adjustment does not prevent a launch.
 pub(crate) fn spawn_low_priority(
     command: &mut tokio::process::Command,

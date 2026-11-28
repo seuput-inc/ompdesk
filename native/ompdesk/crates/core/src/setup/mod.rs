@@ -8,6 +8,7 @@
 //!   `{platform, arch, …}` and `setup.resolveTailscale` `{platform, msiArch, …}` answer the release; a lookup that
 //!   cannot say fails `setup_lookup` with a readable reason.
 //! - `setup.probeOmp` checks the Bun that would run a package launcher, then its installed manifest or `--version`.
+//! - `setup.wslInventory` `{}` reads Windows registration only. `setup.wslPreflight` `{id}` probes one registered WSL 2 guest.
 //! - `mirror` is a test's server on 127.0.0.1 standing in for every host (`net::routed`).
 
 pub(crate) mod archives;
@@ -20,6 +21,7 @@ mod registry_path;
 pub(crate) mod runtime;
 #[cfg(test)]
 mod tests;
+pub(crate) mod wsl;
 
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -53,6 +55,7 @@ pub fn register(registry: &mut Registry) {
         Box::pin(async move { resolve_tailscale_method(call).await })
     });
     registry_path::register(registry);
+    wsl::register(registry);
 }
 
 #[derive(Deserialize)]

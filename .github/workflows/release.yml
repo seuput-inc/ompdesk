@@ -127,11 +127,7 @@ jobs:
             echo "::error file=CHANGELOG.md::The '## [$V]' section in CHANGELOG.md is empty."
             exit 1
           fi
-          MIN_OMP=$(sed -n 's/^export const MIN_OMP_VERSION = "\(.*\)";$/\1/p' src/main/omp-runtime.ts)
-          if [ -z "$MIN_OMP" ]; then
-            echo "::error file=src/main/omp-runtime.ts::MIN_OMP_VERSION not found."
-            exit 1
-          fi
+          MIN_OMP=$(jq -er 'select(type == "string" and test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))' src/shared/omp-minimum.json)
           # shellcheck disable=SC2016 # literal backticks are Markdown
           printf '\n---\n\nRequires omp **%s** or newer (`omp update`).\n' "$MIN_OMP" >> notes/notes.md
           echo "release=true" >> "$GITHUB_OUTPUT"

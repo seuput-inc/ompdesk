@@ -197,6 +197,30 @@ impl Core {
     }
 }
 
+#[tokio::test]
+async fn wsl_setup_rejects_commands_paths_env_binary_and_display_names_before_inspection() {
+    let mut core = Core::start().await;
+    let id = "{12345678-abcd-0000-0000-123456789abc}";
+    for (method, params) in [
+        ("setup.wslInventory", json!({"env": {}})),
+        ("setup.wslInventory", json!([])),
+        ("setup.wslPreflight", json!([id])),
+        ("setup.wslPreflight", json!({"id": "Ubuntu"})),
+        ("setup.wslPreflight", json!({"id": id, "cwd": "/project"})),
+        ("setup.wslPreflight", json!({"id": id, "command": "true"})),
+        ("setup.wslPreflight", json!({"id": id, "env": {}})),
+        ("setup.wslPreflight", json!({"id": id, "minimum": "0.0.0"})),
+    ] {
+        let reply = core.call(method, params).await;
+        assert_eq!(reply["error"]["code"], "invalid_params");
+    }
+    core.write
+        .write_all(b"{\"id\":42,\"method\":\"setup.wslInventory\",\"params\":{},\"bin\":1}\nx")
+        .await
+        .unwrap();
+    assert_eq!(core.next().await["error"]["code"], "invalid_params");
+}
+
 /// What a route sends: the status, extra headers, the body in chunks, and what happens after the last one.
 #[derive(Clone)]
 struct Script {
