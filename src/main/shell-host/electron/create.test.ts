@@ -1113,7 +1113,7 @@ describe("ipcMain with main's IpcRegistry", () => {
 			},
 			policy,
 		);
-		const caller = { win, browserWindow: win, sender: win.webContents };
+		const caller = { win, browserWindow: win as never, sender: win.webContents };
 		await expect(registry.invoke("core:echo", caller, [1])).resolves.toEqual({ echoed: true });
 		expect(calls).toEqual([
 			{ method: "ipc.routes", params: { invoke: ["main:hi"], send: [], policy } },

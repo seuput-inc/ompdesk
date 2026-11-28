@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { IPC_COMMANDS } from "../shared/ipc-types";
 import { CoreProcess } from "./core/process";
 import { DRAFT_PICTURE_MAX_BYTES, DraftPictures } from "./draft-pictures";
+import { nativeBinPath } from "./native-bin";
 import { IPC_POLICY } from "./web/ipc-policy";
 
 const ID = "0b5c1e2a-7d4f-4c8e-9a1b-3f6e2d9c8a71";
@@ -85,7 +86,7 @@ describe("draft pictures", () => {
 
 	it("answers a desktop window from this computer's pictures and a paired page from its device's over core IPC", async () => {
 		const userData = join(root, "..");
-		const proc = new CoreProcess();
+		const proc = new CoreProcess({ binary: () => nativeBinPath("ompdesk-core"), log: () => {} });
 		try {
 			await proc.call("ipc.start", { policy: IPC_POLICY, userData });
 			const pageCaller = { key: "c1", window: -1, connId: "1", deviceId: "phone-a" };
