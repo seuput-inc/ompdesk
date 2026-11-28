@@ -307,11 +307,12 @@ test(renameOnReopen, { tag: "@smoke" }, async () => {
 	await expect.poll(() => app.windows().length).toBe(2);
 	const reopened = app.windows().find(win => win !== page);
 	if (!reopened) throw new Error("The saved recipient did not reopen.");
-	await expect(reopened.getByText(history, { exact: true })).toBeVisible();
+	const userBubbles = reopened.locator(".omp-user-bubble");
+	await expect(userBubbles.getByText(history, { exact: true })).toBeVisible();
 	await expect
 		.poll(() => reopened.evaluate(async () => (await window.omp?.tabs.list())?.find(tab => tab.active)?.sessionPath))
 		.toBe(session);
-	await expect(reopened.locator(".omp-user-bubble").filter({ hasText: note }).locator("[data-agent-sent]")).toHaveText(
+	await expect(userBubbles.filter({ hasText: note }).locator("[data-agent-sent]")).toHaveText(
 		"Sent by an agent · Bea",
 	);
 });
