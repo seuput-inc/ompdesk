@@ -168,7 +168,7 @@ import {
 import { type ConnectorAccounts, connectorCommand } from "./connector-accounts";
 import { createControlBackend } from "./control-socket/backend";
 import { controlSocketFailure, startControlSocket } from "./control-socket/index";
-import { CorePort } from "./core/ports";
+import { CorePort, type PortHandlers } from "./core/ports";
 import { core } from "./core/process";
 import { defaultWorkspace } from "./default-workspace";
 import { deliverOnce } from "./delivery-ledger";
@@ -698,6 +698,51 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			...remoteMachine,
 			...(target && target.device === id ? { tab: { rtab: target.tabId, cwd: target.sidecar.cwd } } : {}),
 		});
+	};
+
+	interface CoreIpcPortCall {
+		args?: unknown[];
+		caller?: {
+			window?: number | null;
+			connId?: string | null;
+			deviceId?: string | null;
+		};
+	}
+
+	/** Reconstructs an `IpcCaller` from the caller metadata forwarded by `ompdesk-core`'s `IpcPort`. */
+	const callerFromPort = (call: CoreIpcPortCall): IpcCaller => {
+		const meta = call.caller;
+		const id = typeof meta?.window === "number" ? meta.window : 0;
+		const connId = typeof meta?.connId === "string" && meta.connId ? meta.connId : undefined;
+		const browserWindow = connId
+			? null
+			: (BrowserWindow.getAllWindows().find(w => !w.isDestroyed() && w.webContents.id === id) ?? null);
+		const win =
+			browserWindow ?? (deps.webPages?.() ?? []).find(w => !w.isDestroyed() && w.webContents.id === id) ?? null;
+		return {
+			win,
+			browserWindow,
+			sender: {
+				id,
+				once: (_event, listener) => {
+					win?.once("closed", listener);
+				},
+			},
+			...(connId ? { connId } : {}),
+		};
+	};
+
+	const bindCorePort = (rpcMethod: string, handlers: PortHandlers): CorePort => {
+		const port = new CorePort(handlers);
+		const connect = () => {
+			void core()
+				.call(rpcMethod, { port: port.id })
+				.catch(() => {});
+		};
+		connect();
+		core().on("ready", connect);
+		app.once("will-quit", () => port.close());
+		return port;
 	};
 
 	// A closed window's benchmark and model setup stop with it.
@@ -2607,72 +2652,72 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return host ? remoteDefaultWorkspace(host) : defaultWorkspace();
 	});
 
-	// models.yml custom providers of the machine the caller's focused tab runs on.
-	ipc.handle(IPC_COMMANDS.MODELS_PROVIDERS_LIST, (caller, device?: unknown) =>
-		machineFor(caller, device).listProviders(),
-	);
-	// A true first run, known before omp boots (the first-run provider step opens at once): stock's own
-	// credential store and env-key map in the stock helper, under the environment omp itself gets. Anything
-	// that cannot answer (no omp yet, an old omp, a broker that is down) is "cannot tell".
-	ipc.handle(IPC_COMMANDS.MODELS_SIGNED_IN, async () => {
-		try {
-			const env = await shellSpawnEnv();
-			const result = await stockHelperRequest<{ signedIn: boolean }>(
-				"accounts.signedIn",
-				{ env },
-				{ timeoutMs: SIGNED_IN_TIMEOUT_MS },
-			);
-			return result.signedIn;
-		} catch {
-			return null;
-		}
-	});
-
-	ipc.handle(IPC_COMMANDS.MODELS_PROVIDER_UPSERT, (caller, input: CustomProviderInput, device?: unknown) =>
-		machineFor(caller, device).upsertProvider(input),
-	);
-
-	ipc.handle(IPC_COMMANDS.MODELS_PROVIDER_DELETE, (caller, id: string, device?: unknown) =>
-		machineFor(caller, device).deleteProvider(id),
-	);
-
-	ipc.handle(
-		IPC_COMMANDS.MODELS_OVERRIDE_SET,
-		(caller, provider: unknown, modelId: unknown, override: unknown, device?: unknown) => {
+	// models.yml custom providers, account rotation, local engines, and credit spend route directly from
+	// tauri-shell to ompdesk-core (`crates/core/src/models/ipc.rs`).
+	bindCorePort("models.ipcPort", {
+		listProviders: (call: CoreIpcPortCall) => machineFor(callerFromPort(call), call.args?.[0]).listProviders(),
+		// A true first run, known before omp boots (the first-run provider step opens at once): stock's own
+		// credential store and env-key map in the stock helper, under the environment omp itself gets. Anything
+		// that cannot answer (no omp yet, an old omp, a broker that is down) is "cannot tell".
+		signedIn: async () => {
+			try {
+				const env = await shellSpawnEnv();
+				const result = await stockHelperRequest<{ signedIn: boolean }>(
+					"accounts.signedIn",
+					{ env },
+					{ timeoutMs: SIGNED_IN_TIMEOUT_MS },
+				);
+				return result.signedIn;
+			} catch {
+				return null;
+			}
+		},
+		upsertProvider: (call: CoreIpcPortCall) =>
+			machineFor(callerFromPort(call), call.args?.[1]).upsertProvider(call.args?.[0] as CustomProviderInput),
+		deleteProvider: (call: CoreIpcPortCall) =>
+			machineFor(callerFromPort(call), call.args?.[1]).deleteProvider(call.args?.[0] as string),
+		setModelOverride: (call: CoreIpcPortCall) => {
+			const [provider, modelId, override, device] = call.args ?? [];
 			if (typeof provider !== "string" || !provider || typeof modelId !== "string" || !modelId) {
 				throw codedError("invalid_preference_key", "Invalid model override target");
 			}
-			return machineFor(caller, device).setModelOverride(
+			return machineFor(callerFromPort(call), device).setModelOverride(
 				provider,
 				modelId,
 				ModelOverrideInputSchema.nullable().parse(override),
 			);
 		},
-	);
-
-	// Account rotation is per machine: a paired host's tabs follow the host's own pref.
-	ipc.handle(IPC_COMMANDS.ACCOUNT_ROTATION_GET, (caller, device?: unknown) =>
-		machineFor(caller, device).accountRotation(),
-	);
-
-	ipc.handle(IPC_COMMANDS.ACCOUNT_ROTATION_SET, (caller, mode: unknown, device?: unknown) => {
-		if (!isAccountRotationMode(mode)) throw codedError("invalid_preference_key", "Invalid account rotation");
-		return machineFor(caller, device).setAccountRotation(mode);
-	});
-
-	ipc.handle(IPC_COMMANDS.LOCAL_ENGINES_GET, (caller, device?: unknown) =>
-		machineFor(caller, device).localEngineDetect(),
-	);
-	ipc.handle(IPC_COMMANDS.LOCAL_ENGINES_SET, (caller, enabled: unknown, device?: unknown) => {
-		if (typeof enabled !== "boolean") {
-			throw codedError("invalid_preference_key", "Invalid local engine detection preference");
-		}
-		return machineFor(caller, device).setLocalEngineDetect(enabled);
-	});
-	ipc.handle(IPC_COMMANDS.CREDIT_SPEND_GET, (caller, device?: unknown) => machineFor(caller, device).creditSpend());
-	ipc.handle(IPC_COMMANDS.CREDIT_SPEND_SET, (caller, enabled: unknown, device?: unknown) => {
-		if (typeof enabled !== "boolean") throw codedError("invalid_preference_key", "Invalid credit use preference");
-		return machineFor(caller, device).setCreditSpend(enabled);
+		// "Edit config" — open the agent's models.yml in the system editor. The core creates it with a minimal
+		// skeleton when missing so there is always something to edit; when no editor association exists, reveal it
+		// in the file manager instead. A paired host's file is out of this editor's reach: its providers are edited in-app.
+		openConfig: async (call: CoreIpcPortCall) => {
+			if (deviceOf(call.args?.[0])) throw codedError("remote_path_native", "The models file is on another device");
+			const file = await modelsPath({ create: true });
+			const openError = await shell.openPath(file);
+			if (openError) shell.showItemInFolder(file);
+			return { path: file, opened: !openError };
+		},
+		// Account rotation is per machine: a paired host's tabs follow the host's own pref.
+		getAccountRotation: (call: CoreIpcPortCall) => machineFor(callerFromPort(call), call.args?.[0]).accountRotation(),
+		setAccountRotation: (call: CoreIpcPortCall) => {
+			const [mode, device] = call.args ?? [];
+			if (!isAccountRotationMode(mode)) throw codedError("invalid_preference_key", "Invalid account rotation");
+			return machineFor(callerFromPort(call), device).setAccountRotation(mode);
+		},
+		getLocalEngines: (call: CoreIpcPortCall) => machineFor(callerFromPort(call), call.args?.[0]).localEngineDetect(),
+		setLocalEngines: (call: CoreIpcPortCall) => {
+			const [enabled, device] = call.args ?? [];
+			if (typeof enabled !== "boolean") {
+				throw codedError("invalid_preference_key", "Invalid local engine detection preference");
+			}
+			return machineFor(callerFromPort(call), device).setLocalEngineDetect(enabled);
+		},
+		getCreditSpend: (call: CoreIpcPortCall) => machineFor(callerFromPort(call), call.args?.[0]).creditSpend(),
+		setCreditSpend: (call: CoreIpcPortCall) => {
+			const [enabled, device] = call.args ?? [];
+			if (typeof enabled !== "boolean") throw codedError("invalid_preference_key", "Invalid credit use preference");
+			return machineFor(callerFromPort(call), device).setCreditSpend(enabled);
+		},
 	});
 	ipc.handle(IPC_COMMANDS.HOST_DESKTOP_GET, (caller, device?: unknown) => machineFor(caller, device).desktop());
 	ipc.handle(IPC_COMMANDS.HOST_DESKTOP_UPDATE, (caller, action: unknown, device?: unknown) => {
@@ -2776,18 +2821,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return machineFor(caller, device).sidebarProjects(params.request);
 	});
 
-	// "Edit config" — open the agent's models.yml in the system editor. The
-	// core creates it with a minimal skeleton when missing so there is always
-	// something to edit; when no editor association exists, reveal it in the
-	// file manager instead. A paired host's file is out of this editor's reach:
-	// its providers are edited in-app.
-	ipc.handle(IPC_COMMANDS.MODELS_CONFIG_OPEN, async (_caller, device?: unknown) => {
-		if (deviceOf(device)) throw codedError("remote_path_native", "The models file is on another device");
-		const file = await modelsPath({ create: true });
-		const openError = await shell.openPath(file);
-		if (openError) shell.showItemInFolder(file);
-		return { path: file, opened: !openError };
-	});
+	// `models:config-open` routes through `models.ipcPort` above.
 
 	// Workspace filesystem — node:fs against the tab's cwd (src/main/workspace-fs.ts);
 	// works without a live sidecar session and never throws (renderer reads
@@ -3118,7 +3152,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		window?: number | null;
 	}
 	const argOf = (call: RemotePortCall): unknown => (call.hasArg ? call.arg : undefined);
-	const remotePort = new CorePort({
+	bindCorePort("remote.ipcPort", {
 		getState: () => remoteDevices.state(),
 		setDeviceSectionOrder: (call: RemotePortCall) => remoteDevices.setDeviceSectionOrder(argOf(call)),
 		setHostEnabled: (call: RemotePortCall) => remoteDevices.setHostEnabled(argOf(call) === true),
@@ -3155,13 +3189,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			return remoteDevices.listDirs(payload?.deviceId, payload?.path, payload?.query);
 		},
 	});
-	const connectRemotePort = () => {
-		void core()
-			.call("remote.ipcPort", { port: remotePort.id })
-			.catch(() => {});
-	};
-	connectRemotePort();
-	core().on("ready", connectRemotePort);
 
 	// External-editor round trip ($VISUAL/$EDITOR, temp file, exit-0 read-back)
 	// for the composer editor dialog. Result shape carries availability +

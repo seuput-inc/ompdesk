@@ -28,6 +28,7 @@ mod boot;
 mod detect;
 mod engines;
 mod file;
+pub(crate) mod ipc;
 mod release_dates;
 mod stream;
 
@@ -57,6 +58,7 @@ const EXIT_GRACE: Duration = Duration::from_secs(5);
 pub fn register(registry: &mut Registry) {
     file::register(registry);
     detect::register(registry);
+    ipc::register(registry);
     registry.add("models.releaseDates", release_dates::handle);
     registry.add("models.bootSelector", boot::handle);
     registry.add("models.probeLocalEngine", engines::handle);

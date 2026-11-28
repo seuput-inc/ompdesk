@@ -16,6 +16,8 @@
 //!
 //! The web permission check of a paired page's call stays in main's `ws-router.ts` until the web router moves (8c).
 
+pub(crate) mod port;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -80,6 +82,14 @@ struct Owned {
 
 /// The channels the core serves. Must match `channels.json` 1-to-1 (pinned by `channels_json_matches_owned`).
 const OWNED: &[Owned] = &[
+    Owned {
+        channel: "account-rotation:get",
+        handler: crate::models::ipc::ipc_account_rotation_get,
+    },
+    Owned {
+        channel: "account-rotation:set",
+        handler: crate::models::ipc::ipc_account_rotation_set,
+    },
     Owned {
         channel: "ai-memory:cancel-handoff",
         handler: crate::aimemory::ipc::ipc_cancel_handoff,
@@ -185,6 +195,14 @@ const OWNED: &[Owned] = &[
         handler: crate::resume::ipc_connectivity_report,
     },
     Owned {
+        channel: "credit-spend:get",
+        handler: crate::models::ipc::ipc_credit_spend_get,
+    },
+    Owned {
+        channel: "credit-spend:set",
+        handler: crate::models::ipc::ipc_credit_spend_set,
+    },
+    Owned {
         channel: "disk-care:get-state",
         handler: crate::disk::ipc_get_state,
     },
@@ -245,8 +263,40 @@ const OWNED: &[Owned] = &[
         handler: crate::gh::auth::ipc_switch,
     },
     Owned {
+        channel: "local-engines:get",
+        handler: crate::models::ipc::ipc_local_engines_get,
+    },
+    Owned {
+        channel: "local-engines:set",
+        handler: crate::models::ipc::ipc_local_engines_set,
+    },
+    Owned {
         channel: "log:snapshot",
         handler: crate::logs::ipc_snapshot,
+    },
+    Owned {
+        channel: "models:config-open",
+        handler: crate::models::ipc::ipc_config_open,
+    },
+    Owned {
+        channel: "models:override-set",
+        handler: crate::models::ipc::ipc_override_set,
+    },
+    Owned {
+        channel: "models:provider-delete",
+        handler: crate::models::ipc::ipc_provider_delete,
+    },
+    Owned {
+        channel: "models:provider-upsert",
+        handler: crate::models::ipc::ipc_provider_upsert,
+    },
+    Owned {
+        channel: "models:providers-list",
+        handler: crate::models::ipc::ipc_providers_list,
+    },
+    Owned {
+        channel: "models:signed-in",
+        handler: crate::models::ipc::ipc_signed_in,
     },
     Owned {
         channel: "omp-update:get-state",
