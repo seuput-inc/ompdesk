@@ -7,9 +7,103 @@
 //!
 //! Every one of those messages arrived as a `message_end` first, in stream order.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use serde_json::Value;
+
+/// Hard upper bound on `message_end` entries retained per active turn in `Lane.run_messages`.
+pub const RUN_MESSAGES_MAX_COUNT: usize = 256;
+/// Hard upper bound on retained `message_end` raw payload bytes per active turn (8 MiB).
+pub const RUN_MESSAGES_MAX_BYTES: usize = 8 * 1024 * 1024;
+/// Capacity above which a drained `RunMessageBuffer` releases its backing VecDeque allocation.
+const SHRINK_CAPACITY_THRESHOLD: usize = 64;
+
+/// Bounded FIFO buffer for `message_end` payloads within a single agent turn.
+///
+/// Retains the newest delivery suffix within `(max_count, max_bytes)` so `complete_run_messages`
+/// can still reconstruct deferred/compacted `agent_end` frames without allowing a 100-step tool
+/// turn (large diffs, file reads, screenshots) to pin tens of MiBs of cloned ASTs in `ompdesk-core`.
+#[derive(Debug)]
+pub struct RunMessageBuffer {
+    entries: VecDeque<(Value, usize)>,
+    total_bytes: usize,
+    dropped_count: u64,
+    max_count: usize,
+    max_bytes: usize,
+}
+
+impl Default for RunMessageBuffer {
+    fn default() -> Self {
+        Self::with_limits(RUN_MESSAGES_MAX_COUNT, RUN_MESSAGES_MAX_BYTES)
+    }
+}
+
+impl RunMessageBuffer {
+    pub fn with_limits(max_count: usize, max_bytes: usize) -> Self {
+        Self {
+            entries: VecDeque::new(),
+            total_bytes: 0,
+            dropped_count: 0,
+            max_count: max_count.max(1),
+            max_bytes: max_bytes.max(1),
+        }
+    }
+
+    pub fn push(&mut self, message: Value, raw_bytes: usize) {
+        let bytes = raw_bytes.max(1);
+        if bytes > self.max_bytes {
+            self.dropped_count += 1;
+            return;
+        }
+        while self.entries.len() >= self.max_count
+            || self.total_bytes.saturating_add(bytes) > self.max_bytes
+        {
+            let Some((_, evicted)) = self.entries.pop_front() else {
+                break;
+            };
+            self.total_bytes = self.total_bytes.saturating_sub(evicted);
+            self.dropped_count += 1;
+        }
+        self.total_bytes = self.total_bytes.saturating_add(bytes);
+        self.entries.push_back((message, bytes));
+    }
+
+    pub fn take_all(&mut self) -> Vec<Value> {
+        let out = self.entries.drain(..).map(|(msg, _)| msg).collect();
+        self.total_bytes = 0;
+        if self.entries.capacity() > SHRINK_CAPACITY_THRESHOLD {
+            self.entries = VecDeque::new();
+        }
+        out
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.total_bytes = 0;
+        if self.entries.capacity() > SHRINK_CAPACITY_THRESHOLD {
+            self.entries = VecDeque::new();
+        }
+    }
+
+    pub fn shrink_to_fit(&mut self) {
+        self.entries.shrink_to_fit();
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    #[cfg(test)]
+    pub fn total_bytes(&self) -> usize {
+        self.total_bytes
+    }
+
+    #[cfg(test)]
+    pub fn dropped_count(&self) -> u64 {
+        self.dropped_count
+    }
+}
 
 /// JavaScript's truthiness of a parsed JSON value.
 fn truthy(value: &Value) -> bool {
@@ -139,5 +233,32 @@ mod tests {
             [user(), call(), touched.clone(), undelivered, reply()]
         );
         assert_eq!(completed[2], touched);
+    }
+
+    #[test]
+    fn run_message_buffer_enforces_count_and_byte_bounds_and_keeps_newest_tail() {
+        let mut buf = RunMessageBuffer::with_limits(3, 500);
+        buf.push(user(), 100);
+        buf.push(call(), 150);
+        buf.push(result(), 200);
+        assert_eq!(buf.len(), 3);
+        assert_eq!(buf.total_bytes(), 450);
+        assert_eq!(buf.dropped_count(), 0);
+
+        // Exceeds both count (3) and byte budget (500): evicts oldest entries until it fits.
+        buf.push(reply(), 250);
+        assert_eq!(buf.len(), 2);
+        assert_eq!(buf.total_bytes(), 450);
+        assert_eq!(buf.dropped_count(), 2);
+
+        // Single message larger than max_bytes is skipped without clearing the retained tail.
+        buf.push(reminder(), 501);
+        assert_eq!(buf.len(), 2);
+        assert_eq!(buf.dropped_count(), 3);
+
+        let taken = buf.take_all();
+        assert_eq!(taken, [result(), reply()]);
+        assert_eq!(buf.len(), 0);
+        assert_eq!(buf.total_bytes(), 0);
     }
 }

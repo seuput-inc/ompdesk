@@ -158,8 +158,8 @@ pub struct Proc {
     pub pid: Option<u32>,
     /// True once the process exited.
     pub exited: watch::Receiver<bool>,
-    pub stdin: mpsc::UnboundedSender<StdinMsg>,
-    pub signals: mpsc::UnboundedSender<Signal>,
+    pub stdin: mpsc::Sender<StdinMsg>,
+    pub signals: mpsc::Sender<Signal>,
     pub hold: Mutex<Hold>,
     pub timing: Timing,
     /// The stop's end, once one began: one stop per process, a second caller waits on the same one.
@@ -177,8 +177,8 @@ impl Proc {
     pub fn new(
         pid: Option<u32>,
         exited: watch::Receiver<bool>,
-        stdin: mpsc::UnboundedSender<StdinMsg>,
-        signals: mpsc::UnboundedSender<Signal>,
+        stdin: mpsc::Sender<StdinMsg>,
+        signals: mpsc::Sender<Signal>,
         timing: Timing,
     ) -> Arc<Proc> {
         Arc::new(Proc {
@@ -249,15 +249,15 @@ impl Proc {
         let Some(pid) = self.pid else { return };
         locked(&self.hold).begin(Instant::now() + self.timing.hold_max);
         if !stdin_grace.is_zero() {
-            let _ = self.stdin.send(StdinMsg::End);
+            let _ = self.stdin.send(StdinMsg::End).await;
             if self.within_grace(stdin_grace).await {
                 return;
             }
         }
         if cfg!(windows) {
-            let _ = self.stdin.send(StdinMsg::End);
+            let _ = self.stdin.send(StdinMsg::End).await;
         } else {
-            let _ = self.signals.send(Signal::Term);
+            let _ = self.signals.send(Signal::Term).await;
         }
         if self.within_grace(self.timing.grace).await {
             return;
@@ -280,8 +280,8 @@ impl Proc {
 #[cfg(unix)]
 fn kill_tree(
     pid: u32,
-    _signals: mpsc::UnboundedSender<Signal>,
-    _stdin: mpsc::UnboundedSender<StdinMsg>,
+    _signals: mpsc::Sender<Signal>,
+    _stdin: mpsc::Sender<StdinMsg>,
     _exited: watch::Receiver<bool>,
 ) {
     if !crate::sys::signal_group(pid, true) {
@@ -292,8 +292,8 @@ fn kill_tree(
 #[cfg(windows)]
 fn kill_tree(
     pid: u32,
-    signals: mpsc::UnboundedSender<Signal>,
-    stdin: mpsc::UnboundedSender<StdinMsg>,
+    signals: mpsc::Sender<Signal>,
+    stdin: mpsc::Sender<StdinMsg>,
     exited: watch::Receiver<bool>,
 ) {
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -310,8 +310,8 @@ fn kill_tree(
             Err(_) => false,
         };
         if !killed && !*exited.borrow() {
-            let _ = stdin.send(StdinMsg::End);
-            let _ = signals.send(Signal::Term);
+            let _ = stdin.send(StdinMsg::End).await;
+            let _ = signals.send(Signal::Term).await;
         }
     });
 }

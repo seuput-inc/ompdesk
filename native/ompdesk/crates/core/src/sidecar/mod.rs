@@ -124,21 +124,36 @@ pub struct LaneEvent {
     pub bin: Option<std::sync::Arc<[u8]>>,
 }
 
+/// Maximum queued events per in-core subscriber before backpressure drops excess events.
+pub const TAP_CHANNEL_CAPACITY: usize = 2048;
+
 /// How many subscriptions are open: with none, a lane's events cost nothing more.
 static TAPPED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-static TAPS: LazyLock<Mutex<HashMap<String, Vec<mpsc::UnboundedSender<LaneEvent>>>>> =
+/// Cumulative events dropped due to a slow/full in-core subscriber channel.
+static TAP_DROPPED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static TAPS: LazyLock<Mutex<HashMap<String, Vec<mpsc::Sender<LaneEvent>>>>> =
     LazyLock::new(Default::default);
 
 /// Every event tab `tab`'s lane sends main from now on, beside main (code in the core that serves the tab too: a
-/// paired device's link, `docs/rust-remaining-units.md` R6). The receiver ends when the lane is over.
-pub fn subscribe(tab: &str) -> mpsc::UnboundedReceiver<LaneEvent> {
-    let (sender, receiver) = mpsc::unbounded_channel();
+/// paired device's link, `docs/rust-remaining-units.md` R6). Bounded at `TAP_CHANNEL_CAPACITY` so a stalled
+/// subscriber cannot grow `ompdesk-core` memory unboundedly. The receiver ends when the lane is over.
+pub fn subscribe(tab: &str) -> mpsc::Receiver<LaneEvent> {
+    subscribe_with_capacity(tab, TAP_CHANNEL_CAPACITY)
+}
+
+fn subscribe_with_capacity(tab: &str, capacity: usize) -> mpsc::Receiver<LaneEvent> {
+    let (sender, receiver) = mpsc::channel(capacity.max(1));
     locked(&TAPS)
         .entry(tab.to_owned())
         .or_default()
         .push(sender);
     TAPPED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     receiver
+}
+
+/// Cumulative count of tap events dropped because a subscriber's bounded queue was full.
+pub fn tap_dropped_count() -> u64 {
+    TAP_DROPPED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Hands a lane's event to the tab's subscribers (`lane.rs` calls it beside every send to main).
@@ -156,7 +171,14 @@ pub(crate) fn tap(tab: &str, name: &str, data: &Value, bin: Option<&[u8]>) {
         bin: bin.map(std::sync::Arc::from),
     };
     let before = senders.len();
-    senders.retain(|sender| sender.send(event.clone()).is_ok());
+    senders.retain(|sender| match sender.try_send(event.clone()) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            TAP_DROPPED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            true
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => false,
+    });
     TAPPED.fetch_sub(before - senders.len(), std::sync::atomic::Ordering::SeqCst);
 }
 

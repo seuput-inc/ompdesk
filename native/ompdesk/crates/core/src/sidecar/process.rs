@@ -121,8 +121,13 @@ fn refused(start: &Start, error: &std::io::Error) -> String {
     format!("spawn {} {}", start.bin, uv_code(error))
 }
 
+/// Bounded capacity for pending stdin writes to one `omp` process.
+const STDIN_CHANNEL_CAPACITY: usize = 512;
+/// Bounded capacity for stop signals sent to the child owner task.
+const SIGNAL_CHANNEL_CAPACITY: usize = 16;
+
 /// Writes the lines to the omp's stdin in order; the pipe closes at `End` or when the omp is gone.
-async fn write_stdin(mut stdin: ChildStdin, mut msgs: mpsc::UnboundedReceiver<StdinMsg>) {
+async fn write_stdin(mut stdin: ChildStdin, mut msgs: mpsc::Receiver<StdinMsg>) {
     while let Some(msg) = msgs.recv().await {
         match msg {
             StdinMsg::Line(line) => {
@@ -153,9 +158,9 @@ pub fn start(
         return Err(format!("spawn {} the pipes were not open", start.bin));
     };
     let pid = child.id();
-    let (lines, written) = mpsc::unbounded_channel();
+    let (lines, written) = mpsc::channel(STDIN_CHANNEL_CAPACITY);
     tokio::spawn(write_stdin(stdin, written));
-    let (signals, mut asked) = mpsc::unbounded_channel::<Signal>();
+    let (signals, mut asked) = mpsc::channel::<Signal>(SIGNAL_CHANNEL_CAPACITY);
     let (exit, exited) = watch::channel(false);
     let (proof, confirmed_exit) = watch::channel(false);
     tokio::spawn(async move {

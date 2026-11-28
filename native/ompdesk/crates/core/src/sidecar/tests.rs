@@ -1114,6 +1114,60 @@ async fn wake_resumes_an_asleep_tab_preserving_session_path_and_is_idempotent_wh
     finish(rig).await;
 }
 
+#[test]
+fn tap_backpressure_drops_excess_events_for_stalled_subscriber_without_blocking() {
+    let tab = "tap-backpressure-test";
+    let mut rx = super::subscribe_with_capacity(tab, 2);
+    let dropped_before = super::tap_dropped_count();
+    for i in 0..5 {
+        super::tap(tab, "sidecar.frame", &json!({ "n": i }), Some(b"{}"));
+    }
+    assert!(super::tap_dropped_count() >= dropped_before + 3);
+    assert_eq!(rx.try_recv().unwrap().data["n"], 0);
+    assert_eq!(rx.try_recv().unwrap().data["n"], 1);
+    assert!(rx.try_recv().is_err());
+    drop(rx);
+    // Closed subscriber is pruned on the next tap without incrementing dropped count.
+    let dropped_after = super::tap_dropped_count();
+    super::tap(tab, "sidecar.frame", &json!({ "n": 99 }), None);
+    assert_eq!(super::tap_dropped_count(), dropped_after);
+    super::untap(tab);
+}
+
+#[test]
+fn held_frame_backpressure_sheds_progress_noise_but_keeps_critical_frames() {
+    let mut held = super::lane::Held::new(1, json!({ "type": "agent_end", "messages": [] }));
+    let progress = || super::frames::Frame {
+        raw: vec![b'x'; 16],
+        ty: Some("tool_execution_update".into()),
+    };
+    // Fill to the count cap with progress updates.
+    for _ in 0..super::lane::HELD_FRAMES_MAX_COUNT {
+        assert!(held.push(progress()));
+    }
+    // Additional progress/telemetry frames are shed under backpressure.
+    assert!(!held.push(progress()));
+    assert!(!held.push(super::frames::Frame {
+        raw: vec![b't'; 16],
+        ty: Some("token_rate".into()),
+    }));
+    assert_eq!(held.dropped, 2);
+
+    // Critical terminal, lifecycle, and response frames are never dropped.
+    for ty in [
+        "response",
+        "agent_end",
+        "message_end",
+        "extension_ui_request",
+    ] {
+        assert!(held.push(super::frames::Frame {
+            raw: vec![b'c'; 16],
+            ty: Some(ty.into()),
+        }));
+    }
+    assert_eq!(held.frames.len(), super::lane::HELD_FRAMES_MAX_COUNT + 4);
+}
+
 #[tokio::test]
 async fn stderr_is_stripped_of_its_colors_before_main_reads_it() {
     let mut rig = Rig::new("stderr", "ok").await;

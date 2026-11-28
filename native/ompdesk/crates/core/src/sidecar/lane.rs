@@ -24,7 +24,7 @@ use super::launch::{
     MAX_RESTART_ATTEMPTS, Open, WINDOWS_SESSION_END_EXIT_CODE, file_exists, restart_delay,
     session_open,
 };
-use super::messages::complete_run_messages;
+use super::messages::{RunMessageBuffer, complete_run_messages};
 use super::process::{self, Exit, Start, pump_stderr, pump_stdout, signal_name};
 use super::queue::{Slot, queue};
 use super::queue_commands::{self, Continuation, Step};
@@ -422,13 +422,54 @@ struct Stopping {
     exited: watch::Receiver<bool>,
 }
 
+/// Maximum low-priority frames held behind `agent_end` before dropping non-terminal progress noise.
+pub(super) const HELD_FRAMES_MAX_COUNT: usize = 2048;
+/// Maximum buffered payload bytes held behind `agent_end` before dropping non-terminal progress noise (16 MiB).
+const HELD_FRAMES_MAX_BYTES: usize = 16 * 1024 * 1024;
+
+/// High-frequency telemetry/progress frames safe to shed under `Held` backpressure; terminal,
+/// turn-lifecycle, message, and response frames are never dropped.
+pub(super) fn is_droppable_frame_type(ty: Option<&str>) -> bool {
+    matches!(
+        ty,
+        Some("tool_execution_update" | "token_rate" | "subagent_progress")
+    )
+}
+
 /// An `agent_end` waiting for its entry ids, and every frame that arrived behind it, responses included. Holding the
 /// tail keeps the renderer's frame order (`agent_end` before `prompt_result`/`session_settled`) intact, and a response
 /// (`get_state`, a transcript page) never overtakes the run it already reports.
-struct Held {
+pub(super) struct Held {
     id: u64,
     event: Value,
-    frames: Vec<Frame>,
+    pub(super) frames: Vec<Frame>,
+    bytes: usize,
+    pub(super) dropped: u64,
+}
+
+impl Held {
+    pub(super) fn new(id: u64, event: Value) -> Self {
+        Self {
+            id,
+            event,
+            frames: Vec::new(),
+            bytes: 0,
+            dropped: 0,
+        }
+    }
+
+    pub(super) fn push(&mut self, frame: Frame) -> bool {
+        let len = frame.raw.len();
+        let over_budget = self.frames.len() >= HELD_FRAMES_MAX_COUNT
+            || self.bytes.saturating_add(len) > HELD_FRAMES_MAX_BYTES;
+        if over_budget && is_droppable_frame_type(frame.ty.as_deref()) {
+            self.dropped += 1;
+            return false;
+        }
+        self.bytes = self.bytes.saturating_add(len);
+        self.frames.push(frame);
+        true
+    }
 }
 
 enum Ask {
@@ -519,7 +560,7 @@ pub struct Lane {
     start_gate: bool,
     held: Option<Held>,
     held_counter: u64,
-    run_messages: Vec<Value>,
+    run_messages: RunMessageBuffer,
     barriers: Vec<(u64, oneshot::Sender<()>)>,
     running: Option<Running>,
     ask_counter: u64,
@@ -639,7 +680,7 @@ impl Lane {
             start_gate: false,
             held: None,
             held_counter: 0,
-            run_messages: Vec::new(),
+            run_messages: RunMessageBuffer::default(),
             barriers: Vec::new(),
             running: None,
             ask_counter: 0,
@@ -765,7 +806,7 @@ impl Lane {
 
     fn write_line(&self, line: Vec<u8>) {
         if let Some(running) = &self.running {
-            let _ = running.proc.stdin.send(StdinMsg::Line(line));
+            let _ = running.proc.stdin.try_send(StdinMsg::Line(line));
         }
     }
 
@@ -1403,7 +1444,7 @@ impl Lane {
             waiter,
             deadline: timeout.map(|timeout| Instant::now() + timeout),
         });
-        let _ = running.proc.stdin.send(StdinMsg::Line(line));
+        let _ = running.proc.stdin.try_send(StdinMsg::Line(line));
         Ok(id)
     }
 
@@ -1543,22 +1584,22 @@ impl Lane {
     fn route_frame(&mut self, frame: Frame) {
         // Request bookkeeping no window reads leaves in main, before any copy of the frame is made.
         if let Some(held) = self.held.as_mut() {
-            held.frames.push(frame);
+            held.push(frame);
             return;
         }
         let ty = frame.ty.clone().unwrap_or_default();
         if ty != "response" {
             match ty.as_str() {
                 "message_end" => {
-                    if let Ok(value) = serde_json::from_slice::<Value>(&frame.raw)
-                        && let Some(message) = value.get("message")
+                    if let Ok(Value::Object(mut map)) = serde_json::from_slice::<Value>(&frame.raw)
+                        && let Some(message) = map.remove("message")
                         && (message.is_object() || message.is_array())
                     {
-                        self.run_messages.push(message.clone());
+                        self.run_messages.push(message, frame.raw.len());
                     }
                 }
                 "agent_end" => {
-                    let delivered = std::mem::take(&mut self.run_messages);
+                    let delivered = self.run_messages.take_all();
                     if self.running.is_some()
                         && let Ok(mut event) = serde_json::from_slice::<Value>(&frame.raw)
                         && let Some(terminal) = event.get("messages").and_then(Value::as_array)
@@ -1584,11 +1625,7 @@ impl Lane {
         self.held_counter += 1;
         let id = self.held_counter;
         let params = json!({ "messages": event.get("messages") });
-        self.held = Some(Held {
-            id,
-            event,
-            frames: Vec::new(),
-        });
+        self.held = Some(Held::new(id, event));
         let generation = self.generation;
         let Some(bridge) = self.running.as_ref().map(|running| running.bridge.clone()) else {
             return;
