@@ -996,15 +996,8 @@ app.whenReady().then(async () => {
 	// Every IPC handler registers once, here and in what this hands it to: on ipcMain for the app's windows,
 	// and in the table a paired web device's calls are dispatched from (web/ipc-registry.ts).
 	const ipc = new IpcRegistry(ipcMain);
-	// Before any window opens: the shell serves a page only the channels it or main owns.
+	// Before any window opens: the shell serves a page only the channels it, the core (H(c)), or main owns.
 	await ipc.routeShell(shellIpc, IPC_POLICY);
-	// The channels the core serves (none until the pool moves, 9d) register once the core took IPC_POLICY; a core that
-	// cannot start leaves them unregistered and every channel main serves as it is.
-	ipc.routeCore(core(), IPC_POLICY).catch((error: unknown) =>
-		console.warn(
-			`[ipc] the core's channels are not served: ${error instanceof Error ? error.message : String(error)}`,
-		),
-	);
 	ipc.handle(IPC_COMMANDS.BRIDGE_HEALTH_TAKE, () => bridgeHealth.take());
 	ipc.handle(IPC_COMMANDS.DISK_FULL_GET, () => ({ files: diskFull.names() }));
 	// The first local tab boots alone: the stats server and machine setup's optional installs (gh, Node;

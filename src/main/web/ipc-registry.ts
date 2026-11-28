@@ -8,18 +8,14 @@
  * `BrowserWindow.fromWebContents(event.sender)`, looked up again on every read like the call it replaces, and
  * `caller.sender` is `event.sender`.
  *
- * The channels the core serves (`crates/core/src/ipc`, unit 9a) are registered the same way by `routeCore`, which
- * hands the core `IPC_POLICY` as data and takes its table of channels: each call of one goes to the core's
- * `ipc.call`, every other channel stays here and never touches the core, so a core that is down or resting fails
- * only its own channels.
- *
- * The channels the Tauri shell serves itself (`crates/tauri-shell/src/ipc_router.json`) never reach main from an app
- * page. `routeShell` hands the shell the channels main serves (the shell refuses every other one) and registers each
- * native channel here only for main's own callers (a paired page, an agent), which reach the shell's handler through
- * `ipc.call`. `handle`/`on` refuse a native channel: one channel, one owner.
+ * The channels the Tauri shell serves itself (`crates/tauri-shell/src/ipc_router.json`) and the channels the shell
+ * forwards directly to `ompdesk-core` (`crates/core/src/ipc/channels.json`, H(c)) never reach main from an app page.
+ * `routeShell` hands the shell the channels main serves plus `IPC_POLICY` (the shell passes the policy to each core
+ * generation via `ipc.start` and refuses every unlisted channel) and registers each shell-routed channel here only for
+ * main's own callers (a paired page, an agent), which reach the shell or core through `ipc.call`. `handle`/`on` refuse
+ * a shell-routed channel: one channel, one owner.
  */
 import { BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from "electron";
-import type { CoreAnswer, CoreCallOptions } from "../core/process";
 import { tookIpc } from "../slow-steps";
 import type { ClientWindow } from "./client-window";
 
@@ -49,43 +45,36 @@ export interface IpcRoute {
 
 /** What `routeShell` needs of the Tauri shell (`shell-host/electron/index.ts`). */
 export interface IpcShell {
-	/** The channels the shell serves itself: `hello`'s `nativeIpc`. */
+	/** The channels the shell serves itself or forwards directly to `ompdesk-core`: `hello`'s `nativeIpc`. */
 	readonly channels: readonly IpcRoute[];
-	/** `ipc.routes`: the channels main serves, handed over once. */
-	routes(main: { invoke: string[]; send: string[] }): Promise<unknown>;
-	/** `ipc.call`: a native channel's call for one of main's callers; the handler's value. */
+	/** `ipc.routes`: the channels main serves plus `IPC_POLICY` for `ompdesk-core`, handed over once. */
+	routes(main: {
+		invoke: string[];
+		send: string[];
+		policy: Readonly<Record<string, { dir: string; mode?: string }>>;
+	}): Promise<unknown>;
+	/** `ipc.call`: a shell-routed (native or core) channel's call for one of main's callers; the handler's value. */
 	call(params: IpcRoute & { caller: IpcCallerParams; args: unknown[] }): Promise<unknown>;
 }
 
-/** A caller as the core and the shell take it: its lane key (one per window page, one per paired connection). */
+/** A caller as the shell and the core take it: its lane key (one per window page, one per paired connection). */
 interface IpcCallerParams {
 	key: string;
 	window: number | null;
 	connId: string | null;
+	deviceId: string | null;
 }
 
 function callerParams(caller: IpcCaller): IpcCallerParams {
+	const win = caller.win as (ClientWindow & { deviceId?: unknown }) | null;
+	const deviceId = win && typeof win.deviceId === "string" ? win.deviceId : null;
 	return {
 		key: caller.connId === undefined ? `w${caller.sender.id}` : `c${caller.connId}`,
 		window: caller.win?.webContents.id ?? null,
 		connId: caller.connId ?? null,
+		deviceId,
 	};
 }
-
-/** What `routeCore` needs of the core: `CoreProcess`. */
-export interface IpcCore {
-	readonly pid: number | null;
-	call<T>(method: string, params?: unknown, options?: CoreCallOptions): Promise<CoreAnswer<T>>;
-}
-
-/** A channel the core serves, as `ipc.start` names it; its direction is `IPC_POLICY`'s. */
-interface CoreChannel {
-	channel: string;
-	dir: "invoke" | "send";
-}
-
-/** A core-served channel's call has no deadline of its own, as an Electron handler has none. */
-const CORE_CALL_MS = 2 ** 31 - 1;
 
 /** What the registry registers on: Electron's `ipcMain`. */
 interface ElectronIpc {
@@ -124,14 +113,7 @@ export class IpcRegistry {
 	readonly #ipcMain: ElectronIpc;
 	readonly #invokeHandlers = new Map<string, IpcHandler>();
 	readonly #sendHandlers = new Map<string, IpcHandler>();
-	#core: IpcCore | null = null;
-	#coreParams: { policy: Record<string, unknown>; testChannels?: boolean } | null = null;
-	/** The core that was handed the policy last; a core started again (another pid) is handed it again first. */
-	#startedPid: number | null = null;
-	#starting: Promise<unknown> | null = null;
-	/** Core calls made while the policy was being handed over, in the order they came; given the hand-over's failure. */
-	#held: Array<(failure: unknown) => void> = [];
-	/** The channels the Tauri shell serves itself; main registers no handler of its own for them. */
+	/** The channels the Tauri shell serves itself or routes directly to the core; main registers no handler for them. */
 	readonly #native = new Set<string>();
 
 	constructor(ipcMain: ElectronIpc) {
@@ -139,29 +121,10 @@ export class IpcRegistry {
 	}
 
 	/**
-	 * Hands the core `policy` (`IPC_POLICY`) and registers each channel it serves, as `handle`/`on` would. Rejects when
-	 * the core cannot be started or refuses the policy; the channels main serves are untouched either way.
-	 */
-	async routeCore(core: IpcCore, policy: Record<string, unknown>, options: { testChannels?: boolean } = {}) {
-		this.#core = core;
-		this.#coreParams = { policy, ...(options.testChannels ? { testChannels: true } : {}) };
-		const channels = await this.#handOver();
-		for (const { channel, dir } of channels) {
-			if (dir === "invoke")
-				this.handle(channel, (caller, ...args) => this.#viaCore(caller, "invoke", channel, args));
-			else
-				this.on(channel, (caller, ...args) => {
-					this.#viaCore(caller, "send", channel, args).catch((error: unknown) =>
-						console.warn(`[ipc] ${channel}: ${error instanceof Error ? error.message : String(error)}`),
-					);
-				});
-		}
-	}
-
-	/**
-	 * Registers each channel the shell serves for main's own callers only (never on `ipcMain`: an app page's call of one
-	 * never comes here), then hands the shell the channels of `policy` (`IPC_POLICY`) main serves. Rejects when a
-	 * channel would have both owners or the shell refuses the hand-over; call it before the first window opens.
+	 * Registers each shell-routed channel (shell-native or core-owned) for main's own callers only (never on `ipcMain`:
+	 * an app page's call of one never comes here), then hands the shell the channels of `policy` (`IPC_POLICY`) main
+	 * serves along with the full policy for `ompdesk-core`. Rejects when a channel would have both owners or the shell
+	 * refuses the hand-over; call it before the first window opens.
 	 */
 	async routeShell(shell: IpcShell, policy: Readonly<Record<string, { dir: string; mode?: string }>>): Promise<void> {
 		for (const { channel, dir } of shell.channels) {
@@ -185,70 +148,15 @@ export class IpcRegistry {
 					}),
 				);
 		}
-		const main: { invoke: string[]; send: string[] } = { invoke: [], send: [] };
+		const main: {
+			invoke: string[];
+			send: string[];
+			policy: Readonly<Record<string, { dir: string; mode?: string }>>;
+		} = { invoke: [], send: [], policy };
 		for (const [channel, { dir, mode }] of Object.entries(policy))
 			if ((dir === "invoke" || dir === "send") && mode !== "core" && !this.#native.has(channel))
 				main[dir].push(channel);
 		await shell.routes(main);
-	}
-
-	/** `ipc.start` on the running core (starting it), once at a time; its table of channels. */
-	#handOver(): Promise<CoreChannel[]> {
-		const core = this.#core;
-		if (!core || !this.#coreParams) return Promise.reject(new Error("No core to route IPC to"));
-		const started = core.call<{ channels: CoreChannel[] }>("ipc.start", this.#coreParams);
-		const pid = core.pid;
-		const handed = started.then(
-			answer => {
-				this.#startedPid = pid;
-				return answer.result.channels;
-			},
-			(error: unknown) => {
-				this.#startedPid = null;
-				throw error;
-			},
-		);
-		this.#starting = handed.then(
-			() => undefined,
-			(error: unknown) => error ?? new Error("ompdesk-core refused IPC_POLICY"),
-		);
-		void this.#starting.then(failure => {
-			this.#starting = null;
-			const held = this.#held;
-			this.#held = [];
-			for (const send of held) send(failure);
-		});
-		return handed;
-	}
-
-	/**
-	 * A call of a core-served channel. Its line is written to the core at once, so a page's calls reach the core in the
-	 * order Electron ran their handlers; a call that finds the core started again (or not yet handed the policy) waits,
-	 * behind the calls already waiting, until the policy is handed over again.
-	 */
-	#viaCore(caller: IpcCaller, dir: "invoke" | "send", channel: string, args: unknown[]): Promise<unknown> {
-		const core = this.#core;
-		if (!core) return Promise.reject(new Error(`No handler registered for '${channel}'`));
-		const params = {
-			// The lane the call is ordered in, in the core: one per window page, one per paired page's connection.
-			caller: callerParams(caller),
-			channel,
-			dir,
-			args,
-		};
-		const send = (): Promise<unknown> =>
-			core
-				.call<{ value: unknown }>("ipc.call", params, { timeoutMs: CORE_CALL_MS })
-				.then(answer => answer.result.value);
-		const current = this.#startedPid !== null && core.pid === this.#startedPid;
-		if (current && !this.#starting) return send();
-		const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-		this.#held.push(failure => {
-			if (failure !== undefined) reject(failure);
-			else send().then(resolve, reject);
-		});
-		if (!this.#starting) this.#handOver().catch(() => undefined);
-		return promise;
 	}
 
 	/** An invoke channel's handler; its result (or rejection) is the caller's. A second one for a channel throws, as in Electron. */

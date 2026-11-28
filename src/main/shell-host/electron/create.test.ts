@@ -1094,36 +1094,39 @@ describe("ipcMain with main's IpcRegistry", () => {
 		expect(() => registry.handle("sum", () => 0)).toThrow("second handler");
 	});
 
-	it("routes a core channel through IpcRegistry.routeCore as under Electron", async () => {
+	it("delegates shell-routed channels through IpcRegistry.routeShell and hands over policy", async () => {
 		const { BrowserWindow, ipcMain } = electron;
 		const win = new BrowserWindow({});
 		const registry = new IpcRegistry(ipcMain as never);
 		const calls: Array<{ method: string; params: unknown }> = [];
-		const core = {
-			pid: 7,
-			call: vi.fn(async (method: string, params?: unknown) => {
-				calls.push({ method, params });
-				if (method === "ipc.start") return { result: { channels: [{ channel: "core:echo", dir: "invoke" }] } };
-				return { result: { value: { echoed: true } } };
-			}),
-		};
-		await registry.routeCore(core as never, { "core:echo": {} });
-		const answer = await shell.call("ipc.invoke", {
-			wcId: win.webContents.id,
-			frameUrl: "app://ompdesk/",
-			channel: "core:echo",
-			args: [1],
-		});
-		expect(answer).toEqual({ value: { echoed: true } });
-		expect(calls.at(-1)).toMatchObject({
-			method: "ipc.call",
-			params: {
-				caller: { key: `w${win.webContents.id}`, window: win.webContents.id },
-				channel: "core:echo",
-				dir: "invoke",
-				args: [1],
+		const policy = { "core:echo": { dir: "invoke" }, "main:hi": { dir: "invoke" } };
+		await registry.routeShell(
+			{
+				channels: [{ channel: "core:echo", dir: "invoke" }],
+				routes: async main => {
+					calls.push({ method: "ipc.routes", params: main });
+				},
+				call: async params => {
+					calls.push({ method: "ipc.call", params });
+					return { echoed: true };
+				},
 			},
-		});
+			policy,
+		);
+		const caller = { win, browserWindow: win, sender: win.webContents };
+		await expect(registry.invoke("core:echo", caller, [1])).resolves.toEqual({ echoed: true });
+		expect(calls).toEqual([
+			{ method: "ipc.routes", params: { invoke: ["main:hi"], send: [], policy } },
+			{
+				method: "ipc.call",
+				params: {
+					channel: "core:echo",
+					dir: "invoke",
+					caller: { key: `w${win.webContents.id}`, window: win.webContents.id, connId: null, deviceId: null },
+					args: [1],
+				},
+			},
+		]);
 	});
 
 	it("answers ipc.sendSync when a handler sets returnValue, even much later, and with null when none listens", async () => {

@@ -2,12 +2,12 @@
  * The handler table: an Electron call and a caller from outside Electron reach the same handler, the Electron
  * one with the window `BrowserWindow.fromWebContents` finds for its sender, as the handlers looked it up before.
  */
-import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CoreProcess } from "../core/process";
 import { nativeBinPath } from "../native-bin";
 import type { ClientWindow } from "./client-window";
 import { type IpcCaller, IpcRegistry, type IpcShell } from "./ipc-registry";
+import { WebClientWindow } from "./web-client-window";
 
 const electron = vi.hoisted(() => ({ windows: new Map<object, unknown>() }));
 vi.mock("electron", () => ({
@@ -145,19 +145,30 @@ describe("IpcRegistry: the channels the shell serves", () => {
 		"demo:pushed": { dir: "push" },
 	};
 
-	it("hands the shell main's channels and reaches the shell's handler with the caller's identity", async () => {
+	it("hands the shell main's channels and policy, and reaches the shell's handler with the caller's identity", async () => {
 		const { ipc, invokes, sends } = registry();
 		const { fake, calls, routes } = shell();
 		await ipc.routeShell(fake, policy);
-		expect(routes).toEqual([{ invoke: ["demo:main"], send: ["demo:report"] }]);
+		expect(routes).toEqual([{ invoke: ["demo:main"], send: ["demo:report"], policy }]);
 		// An app page's call never comes to main: nothing is registered on ipcMain.
 		expect([...invokes.keys(), ...sends.keys()]).toEqual([]);
-		const paired: IpcCaller = { ...webCaller, connId: "k1" };
+		const pageWin = new WebClientWindow("phone-1", -1, () => {});
+		const paired: IpcCaller = { win: pageWin, browserWindow: null, sender: pageWin.webContents, connId: "k1" };
 		await expect(ipc.invoke("demo:native", paired, [5])).resolves.toBe("from the shell");
 		ipc.send("demo:native-send", webCaller, ["x"]);
 		expect(calls).toEqual([
-			{ channel: "demo:native", dir: "invoke", caller: { key: "ck1", window: -1, connId: "k1" }, args: [5] },
-			{ channel: "demo:native-send", dir: "send", caller: { key: "w-1", window: -1, connId: null }, args: ["x"] },
+			{
+				channel: "demo:native",
+				dir: "invoke",
+				caller: { key: "ck1", window: -1, connId: "k1", deviceId: "phone-1" },
+				args: [5],
+			},
+			{
+				channel: "demo:native-send",
+				dir: "send",
+				caller: { key: "w-1", window: -1, connId: null, deviceId: null },
+				args: ["x"],
+			},
 		]);
 	});
 
@@ -174,67 +185,69 @@ describe("IpcRegistry: the channels the shell serves", () => {
 	});
 });
 
-describe("IpcRegistry: the channels the core serves", () => {
+describe("ompdesk-core IPC lanes", () => {
 	const cores: CoreProcess[] = [];
 	afterEach(async () => {
 		await Promise.all(cores.splice(0).map(core => core.stop()));
 	});
 
-	function startCore(binary: () => string = () => nativeBinPath("ompdesk-core")): CoreProcess {
-		const core = new CoreProcess({ binary, log: () => {} });
+	function startCore(): CoreProcess {
+		const core = new CoreProcess({ binary: () => nativeBinPath("ompdesk-core"), log: () => {} });
 		cores.push(core);
 		return core;
 	}
 
 	it("runs a page's sends to a core channel in the order the page made them", async () => {
-		const { ipc, invokes, sends } = registry();
-		await ipc.routeCore(startCore(), TEST_POLICY, { testChannels: true });
-		const record = sends.get("test:ipc.record");
-		const recorded = invokes.get("test:ipc.recorded");
-		if (!record || !recorded) throw new Error("the core's channels were not registered on ipcMain");
-		const page = { id: 7 };
+		const core = startCore();
+		await core.call("ipc.start", { policy: TEST_POLICY, testChannels: true });
+		const pageCaller = { key: "w7", window: 7, connId: null, deviceId: null };
+		const web = { key: "cconn-1", window: -1, connId: "conn-1", deviceId: "phone-1" };
 		// The first send holds 50 ms in the core before it records: a later send that overtook it would record first.
-		record({ sender: page }, "first", 50);
-		record({ sender: page }, "second", 0);
-		await expect(recorded({ sender: page })).resolves.toEqual(["first", "second"]);
-		// A paired page's connection is a caller of its own, through the web table.
-		const web = { ...webCaller, connId: "conn-1" };
-		ipc.send("test:ipc.record", web, ["web", 0]);
-		await expect(ipc.invoke("test:ipc.recorded", web, [])).resolves.toEqual(["web"]);
-		await expect(recorded({ sender: page })).resolves.toEqual(["first", "second"]);
+		const first = core.call("ipc.call", {
+			caller: pageCaller,
+			channel: "test:ipc.record",
+			dir: "send",
+			args: ["first", 50],
+		});
+		const second = core.call("ipc.call", {
+			caller: pageCaller,
+			channel: "test:ipc.record",
+			dir: "send",
+			args: ["second", 0],
+		});
+		const pageRecorded = core.call<{ value: unknown }>("ipc.call", {
+			caller: pageCaller,
+			channel: "test:ipc.recorded",
+			dir: "invoke",
+			args: [],
+		});
+		await Promise.all([first, second]);
+		expect((await pageRecorded).result.value).toEqual(["first", "second"]);
+		await core.call("ipc.call", { caller: web, channel: "test:ipc.record", dir: "send", args: ["web", 0] });
+		expect(
+			(
+				await core.call<{ value: unknown }>("ipc.call", {
+					caller: web,
+					channel: "test:ipc.recorded",
+					dir: "invoke",
+					args: [],
+				})
+			).result.value,
+		).toEqual(["web"]);
+		expect(
+			(
+				await core.call<{ value: unknown }>("ipc.call", {
+					caller: pageCaller,
+					channel: "test:ipc.recorded",
+					dir: "invoke",
+					args: [],
+				})
+			).result.value,
+		).toEqual(["first", "second"]);
 	});
 
-	it("fails only the core's channels while the core is down or resting", async () => {
-		const { ipc } = registry();
-		ipc.handle("main:here", () => "main answers");
-		let binary = nativeBinPath("ompdesk-core");
-		const core = startCore(() => binary);
-		await ipc.routeCore(core, TEST_POLICY, { testChannels: true });
-		await expect(ipc.invoke("test:ipc.recorded", webCaller, [])).resolves.toEqual([]);
-
-		await core.stop();
-		binary = join(__dirname, "no-such-core.exe");
-		// Three starts that fail, then the core rests: every call of its channels fails, none of main's does.
-		for (let attempt = 0; attempt < 3; attempt++) {
-			await expect(ipc.invoke("test:ipc.recorded", webCaller, [])).rejects.toThrow(/could not run/);
-			await expect(ipc.invoke("main:here", webCaller, [])).resolves.toBe("main answers");
-		}
-		await expect(ipc.invoke("test:ipc.recorded", webCaller, [])).rejects.toThrow(/not started again/);
-		await expect(ipc.invoke("main:here", webCaller, [])).resolves.toBe("main answers");
-	});
-
-	it("leaves main's channels served when the core cannot take the policy", async () => {
-		const { ipc, invokes } = registry();
-		ipc.handle("main:here", () => "main answers");
-		await expect(
-			ipc.routeCore(
-				startCore(() => join(__dirname, "no-such-core.exe")),
-				TEST_POLICY,
-				{ testChannels: true },
-			),
-		).rejects.toThrow(/could not run/);
-		await expect(ipc.routeCore(startCore(), {}, { testChannels: true })).rejects.toThrow(/IPC_POLICY/);
-		expect([...invokes.keys()]).toEqual(["main:here"]);
-		await expect(ipc.invoke("main:here", webCaller, [])).resolves.toBe("main answers");
+	it("refuses ipc.start when IPC_POLICY omits a core-served channel", async () => {
+		const core = startCore();
+		await expect(core.call("ipc.start", { policy: {}, testChannels: true })).rejects.toThrow(/IPC_POLICY/);
 	});
 });

@@ -263,6 +263,7 @@ mod tests {
             key: "c1".into(),
             window: Some(-1),
             conn_id: Some("1".into()),
+            device_id: None,
         };
         let page = Caller::Page(Identity {
             win: None,

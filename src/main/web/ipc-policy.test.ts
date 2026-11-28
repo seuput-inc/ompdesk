@@ -24,6 +24,10 @@ const MAIN = path.join(__dirname, "..");
 const NATIVE = JSON.parse(
 	fs.readFileSync(path.join(MAIN, "../../native/ompdesk/crates/tauri-shell/src/ipc_router.json"), "utf8"),
 ) as { invoke: string[]; send: string[] };
+/** The channels `ompdesk-core` serves directly via the shell (`crates/core/src/ipc/channels.json`, H(c)). */
+const CORE_IPC = JSON.parse(
+	fs.readFileSync(path.join(MAIN, "../../native/ompdesk/crates/core/src/ipc/channels.json"), "utf8"),
+) as { invoke: string[]; send: string[] };
 const NAMED: Record<string, unknown> = {
 	...botConnectors,
 	...bots,
@@ -95,26 +99,31 @@ function subscribedChannels(): string[] {
 }
 
 describe("IPC channel policy", () => {
-	it("gives every invoke and send channel exactly one owner: main, the shell or the core's router", () => {
+	it("gives every invoke and send channel exactly one owner: main, the shell or the core", () => {
 		const { invoke, send } = registeredChannels();
 		const native = [...NATIVE.invoke, ...NATIVE.send];
-		// Channels the core's router answers for a page itself (`mode: "core"`): main registers no handler for them.
-		const coreServed = Object.entries(IPC_POLICY)
+		const coreIpc = [...CORE_IPC.invoke, ...CORE_IPC.send];
+		// Channels the core's web router answers for a page itself (`mode: "core"`): main registers no handler for them.
+		const coreRouter = Object.entries(IPC_POLICY)
 			.filter(([, policy]) => policy.mode === "core")
 			.map(([channel, policy]) => ({ channel, dir: policy.dir }));
-		const core = coreServed.map(({ channel }) => channel);
+		const coreWeb = coreRouter.map(({ channel }) => channel);
 		expect(new Set(invoke).size).toBe(invoke.length);
 		expect(new Set(send).size).toBe(send.length);
 		expect(new Set(native).size).toBe(native.length);
-		expect([...invoke, ...send].filter(channel => native.includes(channel))).toEqual([]);
-		expect([...invoke, ...send, ...native].filter(channel => core.includes(channel))).toEqual([]);
-		const coreOf = (dir: string) => coreServed.filter(entry => entry.dir === dir).map(({ channel }) => channel);
-		expect([...invoke, ...NATIVE.invoke, ...coreOf("invoke")].sort()).toEqual(policyChannels("invoke"));
-		expect([...send, ...NATIVE.send, ...coreOf("send")].sort()).toEqual(policyChannels("send"));
+		expect(new Set(coreIpc).size).toBe(coreIpc.length);
+		expect([...invoke, ...send].filter(channel => native.includes(channel) || coreIpc.includes(channel))).toEqual([]);
+		expect(native.filter(channel => coreIpc.includes(channel))).toEqual([]);
+		expect([...invoke, ...send, ...native, ...coreIpc].filter(channel => coreWeb.includes(channel))).toEqual([]);
+		const coreWebOf = (dir: string) => coreRouter.filter(entry => entry.dir === dir).map(({ channel }) => channel);
+		expect([...invoke, ...NATIVE.invoke, ...CORE_IPC.invoke, ...coreWebOf("invoke")].sort()).toEqual(
+			policyChannels("invoke"),
+		);
+		expect([...send, ...NATIVE.send, ...CORE_IPC.send, ...coreWebOf("send")].sort()).toEqual(policyChannels("send"));
 		// The remaining-work meter of docs/rust-node-removal.md: the page channels main still serves.
 		const remaining = [...invoke, ...send].sort();
 		console.info(
-			`[ipc] main serves ${remaining.length} page channels, the shell ${native.length}: ${remaining.join(" ")}`,
+			`[ipc] main serves ${remaining.length} page channels, the shell ${native.length}, the core ${coreIpc.length + coreWeb.length}: ${remaining.join(" ")}`,
 		);
 	});
 

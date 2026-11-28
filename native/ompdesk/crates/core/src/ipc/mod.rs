@@ -1,10 +1,11 @@
-//! The command entry (unit 9a): the channels of the page's `invoke`/`send` the core serves itself. Main's
-//! `IpcRegistry` (`src/main/web/ipc-registry.ts`) asks for this table once per core (`ipc.start`), registers each
-//! channel in it on Electron's `ipcMain` and in its web table, and hands every call of one to `ipc.call`; every other
-//! channel stays main's and never touches the core, so a core that is down or resting fails only the channels here.
+//! The command entry (unit 9a, H(c)): the channels of the page's `invoke`/`send` the core serves itself. The Tauri
+//! shell (`crates/tauri-shell/src/core_ipc.rs`) hands `IPC_POLICY` and `<userData>` once per core (`ipc.start`) and
+//! sends every call of a channel listed in `channels.json` here over its `client: "shell"` connection (`ipc.call`):
+//! desktop page calls directly from `omp_ipc`, and main's own callers (paired pages, agents) through the shell's
+//! `ipc.call`, keeping one writer per lane.
 //!
 //! The table names channels and their handlers, nothing else: a channel's direction and web permission are
-//! `IPC_POLICY`'s (`src/main/web/ipc-policy.ts`, typed over the channel union), which main hands over as data in
+//! `IPC_POLICY`'s (`src/main/web/ipc-policy.ts`, typed over the channel union), which the shell hands over as data in
 //! `ipc.start`. A channel served here that the policy does not list as `invoke` or `send` refuses the start.
 //!
 //! Order: a page's calls reach a handler in the order the page made them, as Electron runs them. Each caller (a
@@ -16,6 +17,7 @@
 //! The web permission check of a paired page's call stays in main's `ws-router.ts` until the web router moves (8c).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
@@ -41,11 +43,11 @@ enum Dir {
     Send,
 }
 
-/// Who made a call, as main describes it.
+/// Who made a call, as the shell describes it.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Caller {
-    /// One per page that calls (`w<webContents id>`, `d<device>:<connection>`): the lane its calls are ordered in.
+    /// One per page that calls (`w<webContents id>`, `c<connId>`): the lane its calls are ordered in.
     pub key: String,
     /// The calling window's routing id; null when the page has none.
     #[allow(dead_code)]
@@ -53,28 +55,42 @@ pub struct Caller {
     /// A paired page's connection.
     #[allow(dead_code)]
     pub conn_id: Option<String>,
+    /// A paired web device's id; None for this computer's own desktop windows.
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
-type Handled = Pin<Box<dyn Future<Output = Result<Value, Fault>> + Send>>;
-type ChannelHandler = fn(Caller, Vec<Value>) -> Handled;
+/// What a core IPC channel handler receives alongside its JSON arguments.
+#[derive(Clone, Debug)]
+pub struct IpcContext {
+    pub caller: Caller,
+    /// `<userData>`, passed by the shell in `ipc.start` for user-scoped stores.
+    #[allow(dead_code)]
+    pub user_data: Option<PathBuf>,
+}
+
+/// `Some(value)` serializes as `{"value": value}` (preserving JSON `null`), while `None` omits `"value"` so JS
+/// receives `undefined` (matching a `void` or missing-key Electron handler).
+type Handled = Pin<Box<dyn Future<Output = Result<Option<Value>, Fault>> + Send>>;
+type ChannelHandler = fn(IpcContext, Vec<Value>) -> Handled;
 
 struct Owned {
     channel: &'static str,
     handler: ChannelHandler,
 }
 
-/// The channels the core serves. Empty until the first subsystem behind a channel moves here (9d, the pool).
+/// The channels the core serves. Must match `channels.json` 1-to-1 (pinned by `channels_json_matches_owned`).
 const OWNED: &[Owned] = &[];
 
 /// Plumbing channels for main's tests (as `core.echo` is the wire's), served only when `ipc.start` asks for them.
 const TEST_OWNED: &[Owned] = &[
     Owned {
         channel: "test:ipc.record",
-        handler: |caller, args| Box::pin(record(caller, args)),
+        handler: |ctx, args| Box::pin(record(ctx.caller, args)),
     },
     Owned {
         channel: "test:ipc.recorded",
-        handler: |caller, _| Box::pin(recorded(caller)),
+        handler: |ctx, _| Box::pin(recorded(ctx.caller)),
     },
 ];
 
@@ -86,15 +102,16 @@ struct Entry {
 struct Item {
     dir: Dir,
     handler: ChannelHandler,
-    caller: Caller,
+    ctx: IpcContext,
     args: Vec<Value>,
-    reply: oneshot::Sender<Result<Value, Fault>>,
+    reply: oneshot::Sender<Result<Option<Value>, Fault>>,
 }
 
 #[derive(Default)]
 struct State {
-    /// None until `ipc.start`: a core started again has no table until main hands it the policy again.
+    /// None until `ipc.start`: a core started again has no table until the shell hands it the policy again.
     table: Option<HashMap<&'static str, Entry>>,
+    user_data: Option<PathBuf>,
     lanes: HashMap<String, mpsc::UnboundedSender<Item>>,
 }
 
@@ -116,6 +133,9 @@ struct PolicyEntry {
 struct StartParams {
     /// `IPC_POLICY` as main has it.
     policy: HashMap<String, PolicyEntry>,
+    /// `<userData>` path for user-scoped stores owned by the core.
+    #[serde(default)]
+    user_data: Option<String>,
     #[serde(default)]
     test_channels: bool,
 }
@@ -177,7 +197,12 @@ fn start(call: &Call) -> Result<Reply, Fault> {
         })
         .collect();
     channels.sort_by_key(|served| served.channel);
-    state().table = Some(table);
+    let mut guard = state();
+    guard.table = Some(table);
+    guard.user_data = params
+        .user_data
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from);
     Reply::json(&StartResult { channels })
 }
 
@@ -192,7 +217,8 @@ struct CallParams {
 
 #[derive(Serialize)]
 struct CallResult {
-    value: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    value: Option<Value>,
 }
 
 /// `ipc.call`: takes the call's place in its caller's lane now, before the server reads the next line.
@@ -206,7 +232,7 @@ fn enqueue(call: Call) -> Answer {
     })
 }
 
-fn place(call: &Call) -> Result<oneshot::Receiver<Result<Value, Fault>>, Fault> {
+fn place(call: &Call) -> Result<oneshot::Receiver<Result<Option<Value>, Fault>>, Fault> {
     let params: CallParams = call.params()?;
     let mut state = state();
     let Some(table) = &state.table else {
@@ -232,14 +258,17 @@ fn place(call: &Call) -> Result<oneshot::Receiver<Result<Value, Fault>>, Fault> 
         ));
     }
     let (reply, answer) = oneshot::channel();
+    let key = params.caller.key.clone();
     let item = Item {
         dir: entry.dir,
         handler: entry.handler,
-        caller: params.caller,
+        ctx: IpcContext {
+            caller: params.caller,
+            user_data: state.user_data.clone(),
+        },
         args: params.args,
         reply,
     };
-    let key = item.caller.key.clone();
     // Sent under the state's lock: a lane that finds its queue empty under the same lock ends, and the next call
     // makes a new one, so no call is ever left in a lane that already ended.
     let item = match state.lanes.get(&key) {
@@ -268,7 +297,7 @@ async fn run_lane(key: String, mut queue: mpsc::UnboundedReceiver<Item>) {
                 }
             }
         };
-        let running = (item.handler)(item.caller, item.args);
+        let running = (item.handler)(item.ctx, item.args);
         match item.dir {
             Dir::Send => {
                 let _ = item.reply.send(running.await);
@@ -293,25 +322,31 @@ fn records() -> MutexGuard<'static, HashMap<String, Vec<Value>>> {
 
 /// `test:ipc.record (value, holdMs)`: records `value` for the caller after holding `holdMs`, so a later call of the
 /// same caller that overtook it would be recorded first.
-async fn record(caller: Caller, args: Vec<Value>) -> Result<Value, Fault> {
+async fn record(caller: Caller, args: Vec<Value>) -> Result<Option<Value>, Fault> {
     let hold = args.get(1).and_then(Value::as_u64).unwrap_or(0);
     if hold > 0 {
         tokio::time::sleep(std::time::Duration::from_millis(hold)).await;
     }
     let value = args.into_iter().next().unwrap_or(Value::Null);
     records().entry(caller.key).or_default().push(value);
-    Ok(Value::Null)
+    Ok(Some(Value::Null))
 }
 
-async fn recorded(caller: Caller) -> Result<Value, Fault> {
-    Ok(Value::Array(
+async fn recorded(caller: Caller) -> Result<Option<Value>, Fault> {
+    Ok(Some(Value::Array(
         records().get(&caller.key).cloned().unwrap_or_default(),
-    ))
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Deserialize)]
+    struct Manifest {
+        invoke: Vec<String>,
+        send: Vec<String>,
+    }
 
     fn policy(entries: &[(&str, &str)]) -> HashMap<String, PolicyEntry> {
         entries
@@ -328,9 +363,18 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_table_is_empty_until_a_channel_moves() {
-        let table = table_of(&policy(&[]), OWNED.iter()).unwrap();
-        assert!(table.is_empty());
+    fn channels_json_matches_owned() {
+        let manifest: Manifest = serde_json::from_str(include_str!("channels.json")).unwrap();
+        let mut listed: Vec<&str> = manifest
+            .invoke
+            .iter()
+            .chain(manifest.send.iter())
+            .map(String::as_str)
+            .collect();
+        listed.sort();
+        let mut owned: Vec<&str> = OWNED.iter().map(|entry| entry.channel).collect();
+        owned.sort();
+        assert_eq!(listed, owned);
     }
 
     #[test]

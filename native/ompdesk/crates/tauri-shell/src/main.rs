@@ -7,6 +7,7 @@ mod assets;
 mod automation;
 #[cfg(windows)]
 mod boot_paint;
+mod core_ipc;
 mod core_pages;
 mod diagnostic_bundle_name;
 mod entry;
@@ -76,6 +77,11 @@ fn core_owner() -> &'static std::sync::Arc<owner::Owner> {
         std::sync::LazyLock::new(|| {
             owner::Owner::with_pages(
                 std::sync::Arc::new(|event: &str, data: Value| {
+                    if event == "core.ended"
+                        && let Some(generation) = data["generation"].as_u64()
+                    {
+                        core_ipc::ended(generation);
+                    }
                     let frames = CORE_OWNER_FRAMES
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -91,7 +97,10 @@ fn core_owner() -> &'static std::sync::Arc<owner::Owner> {
                         push.pushed,
                         &push.data,
                     ),
-                    owner::PageEvent::Ended { generation } => core_pages::ended(generation),
+                    owner::PageEvent::Ended { generation } => {
+                        core_ipc::ended(generation);
+                        core_pages::ended(generation);
+                    }
                 })),
             )
         });
@@ -100,7 +109,60 @@ fn core_owner() -> &'static std::sync::Arc<owner::Owner> {
 
 /// Serves main's core-owner connection (PROTOCOL.md › 12a): its first line is the host token, then owner requests, one
 /// JSON object per line. Main sends them from a worker thread, which a main thread blocked in a hub wait cannot hold
-/// back. The connection's end (main exited) ends every core.
+/// back. Intercepts `core.start` to hand each core's `OMPDESK_CLIENTS` endpoint to `core_ipc` without modifying
+/// `owner.rs`. The connection's end (main exited) ends every core.
+fn serve_core_owner_lines(input: impl std::io::BufRead, frames: &owner::Frames) {
+    let owner = core_owner();
+    for line in input.lines() {
+        let Ok(line) = line else { break };
+        let Ok(request) = serde_json::from_str::<Value>(line.trim_end()) else {
+            eprintln!("ompdesk core owner: skipped a line that is not a request");
+            continue;
+        };
+        let id = request["id"].clone();
+        let method = request["method"].as_str().unwrap_or_default();
+        let params = &request["params"];
+        let start_info = if method == "core.start" {
+            let generation = params["generation"].as_u64();
+            let address = params["env"]["OMPDESK_CLIENTS"].as_str().map(str::to_owned);
+            let token = params["env"]["OMPDESK_CLIENTS_TOKEN"]
+                .as_str()
+                .map(str::to_owned);
+            if let Some(generation) = generation {
+                core_ipc::starting(generation);
+            }
+            generation.map(|g| (g, address, token))
+        } else {
+            None
+        };
+        let answer = frames.clone();
+        let reply: owner::Reply = Box::new(move |result| {
+            let ok = result.is_ok();
+            let _ = answer.send(Some(match result {
+                Ok(value) => json!({"id": id, "ok": true, "result": value}),
+                Err((code, message)) => {
+                    json!({"id": id, "ok": false, "error": {"code": code, "message": message}})
+                }
+            }));
+            if let Some((generation, address, token)) = start_info {
+                match (ok, address, token) {
+                    (true, Some(address), Some(token)) => {
+                        core_ipc::started(generation, address, token);
+                    }
+                    _ => core_ipc::ended(generation),
+                }
+            }
+        });
+        if !owner.handle(method, params, reply) {
+            let _ = frames.send(Some(json!({
+                "id": request["id"],
+                "ok": false,
+                "error": {"code": "unsupported", "message": format!("unknown method {method}")},
+            })));
+        }
+    }
+}
+
 fn serve_core_owner(mut listener: conn::Listener, token: String) {
     std::thread::spawn(move || {
         loop {
@@ -120,8 +182,9 @@ fn serve_core_owner(mut listener: conn::Listener, token: String) {
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = value;
             };
             set(Some(frames.clone()));
-            owner::serve_lines(core_owner(), input, &frames);
+            serve_core_owner_lines(input, &frames);
             set(None);
+            core_ipc::reset();
             core_owner().end_all();
             let _ = frames.send(None);
             let _ = writer.join();
@@ -1348,7 +1411,7 @@ fn dispatch(call: host::Call) {
         return;
     }
     if call.method == "ipc.routes" {
-        match ipc_router::hand_over(&call.params) {
+        match ipc_router::hand_over(&call.params, &runtime().user_data) {
             Ok(()) => call.ok(json!({})),
             Err(message) => call.err("invalid", message),
         }
@@ -1761,6 +1824,24 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
                     let answer = answer?;
                     return Ok(if kind == "invoke" {
                         Value::from_iter([("value", answer)])
+                    } else {
+                        json!({})
+                    });
+                }
+                // Routed directly shell -> ompdesk-core (H(c)): never reaches main, even on failure.
+                ipc_router::Route::Core => {
+                    let channel = channel.to_owned();
+                    let args = value["args"].clone();
+                    let answer = tauri::async_runtime::spawn_blocking(move || {
+                        let caller = ipc_router::Caller::Page(identity);
+                        ipc_router::call_core(&caller, dir, &channel, &args)
+                    })
+                    .await
+                    .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
+                    ensure_current(identity)?;
+                    let answer = answer?;
+                    return Ok(if kind == "invoke" {
+                        ipc_router::wrap_answer(answer)
                     } else {
                         json!({})
                     });

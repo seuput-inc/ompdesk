@@ -1,16 +1,21 @@
-//! Who serves each page channel of `omp_ipc` (docs/rust-node-removal.md §2), keyed by direction and channel.
+//! Who serves each page channel of `omp_ipc` (docs/rust-node-removal.md §2, §4), keyed by direction and channel.
 //!
-//! `ipc_router.json` names the channels the shell serves itself; main hands over the channels it serves
-//! (`ipc.routes`, once, right after `hello` and before it opens a window). A page's call goes to exactly one owner:
-//! a native channel runs here and never reaches main, even when its handler fails (a mutation is never tried a
-//! second time on main); a channel main listed goes to main as before; anything else (unknown, the other direction,
-//! a call before the handover) is refused. Main's own callers of a native channel (a paired page's connection, an
-//! agent's `ompdesk_app`) reach the same handler through `ipc.call`, after main's permission checks.
+//! `ipc_router.json` names the channels the shell serves itself; `crates/core/src/ipc/channels.json` names the
+//! channels `ompdesk-core` serves over the shell's direct `client: "shell"` connection (`core_ipc.rs`); main hands
+//! over the channels it still serves plus `IPC_POLICY` (`ipc.routes`, once, right after `hello` and before it opens a
+//! window). A page's call goes to exactly one owner: a shell-native channel runs here and never reaches main, even
+//! when its handler fails; a core-owned channel goes directly `tauri-shell -> ompdesk-core` (`core_ipc.rs`) and never
+//! reaches main (a mutation is never tried a second time on main); a channel main listed goes to main as before;
+//! anything else (unknown, the other direction, a call before the handover) is refused. Main's own callers of a
+//! shell-routed channel (a paired page's connection, an agent's `ompdesk_app`) reach the same handler through
+//! `ipc.call`, after main's permission checks.
 //!
-//! Moving a channel here: add its handler to `handler`, its name to `ipc_router.json` and delete main's handler in the
-//! same change. A `send` channel moves only with its ordering against main's sends settled: the page's sends reach
-//! main in order, and a native one overtakes them.
+//! Moving a channel to the shell: add its handler to `handler`, its name to `ipc_router.json` and delete main's
+//! handler in the same change. Moving a channel to the core: add it to `crates/core/src/ipc/mod.rs` and
+//! `channels.json` and delete main's handler in the same change. A `send` channel moves only with its ordering against
+//! main's sends settled: the page's sends reach main in order, and a native or core one overtakes them.
 
+use crate::core_ipc;
 use crate::log::log;
 use crate::native_services::diagnostic_logs::FeedbackRead;
 use crate::registry::Identity;
@@ -29,7 +34,7 @@ pub(crate) enum Dir {
 }
 
 impl Dir {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Invoke => "invoke",
             Self::Send => "send",
@@ -37,12 +42,22 @@ impl Dir {
     }
 }
 
-/// Channels by direction, as `ipc_router.json` and `ipc.routes` write them.
+/// Channels by direction, as `ipc_router.json`, `channels.json` and `ipc.routes` write them.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Channels {
     invoke: BTreeSet<String>,
     send: BTreeSet<String>,
+}
+
+/// `ipc.routes` payload from main: main's channels, plus `IPC_POLICY` for `ompdesk-core`'s `ipc.start`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HandOver {
+    invoke: BTreeSet<String>,
+    send: BTreeSet<String>,
+    #[serde(default)]
+    policy: Option<Value>,
 }
 
 impl Channels {
@@ -63,6 +78,10 @@ static NATIVE: LazyLock<Channels> = LazyLock::new(|| {
     serde_json::from_str(include_str!("ipc_router.json"))
         .expect("ipc_router.json is the native channel table")
 });
+static CORE: LazyLock<Channels> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../../core/src/ipc/channels.json"))
+        .expect("core/src/ipc/channels.json is the core channel table")
+});
 static MAIN: OnceLock<Channels> = OnceLock::new();
 
 /// What a native handler reads of the running shell.
@@ -75,13 +94,14 @@ pub(crate) struct Context<'a> {
 /// Who made a call, as the handler sees it. `Page`: the shell's own app page, after the URL, registry and
 /// document-generation checks (its window, webContents and document generation). `Main`: a caller main admitted after
 /// its own checks (a paired page's grant and quota, an agent's `ompdesk_app` risk): its lane key (`w<wcId>`,
-/// `c<connId>`), its window (negative for a paired device's) and a paired page's connection.
+/// `c<connId>`), its window (negative for a paired device's), a paired page's connection and its paired device id.
 pub(crate) enum Caller {
     Page(Identity),
     Main {
         key: String,
         window: Option<i64>,
         conn_id: Option<String>,
+        device_id: Option<String>,
     },
 }
 
@@ -99,7 +119,8 @@ impl Caller {
                 key,
                 window,
                 conn_id,
-            } => json!({"key":key,"window":window,"connId":conn_id}),
+                device_id,
+            } => json!({"key":key,"window":window,"connId":conn_id,"deviceId":device_id}),
         }
     }
 }
@@ -110,20 +131,30 @@ pub(crate) type Handler = fn(&Context, &Caller, &Value) -> Result<Value, Value>;
 
 pub(crate) enum Route {
     Native(Handler),
+    Core,
     Main,
     Refused(Value),
 }
 
 /// The owner of `channel` called in `dir`.
 pub(crate) fn route(dir: Dir, channel: &str) -> Route {
-    route_in(&NATIVE, MAIN.get(), dir, channel)
+    route_in(&NATIVE, &CORE, MAIN.get(), dir, channel)
 }
 
-fn route_in(native: &Channels, main: Option<&Channels>, dir: Dir, channel: &str) -> Route {
+fn route_in(
+    native: &Channels,
+    core: &Channels,
+    main: Option<&Channels>,
+    dir: Dir,
+    channel: &str,
+) -> Route {
     if native.has(dir, channel)
         && let Some(handler) = handler(channel)
     {
         return Route::Native(handler);
+    }
+    if core.has(dir, channel) {
+        return Route::Core;
     }
     match main {
         Some(main) if main.has(dir, channel) => Route::Main,
@@ -184,32 +215,75 @@ pub(crate) fn run(
     result
 }
 
-/// `ipc.routes {invoke, send}`: the channels main serves, handed over once. Refused when main names a native channel
-/// (two owners) or hands over a second time.
-pub(crate) fn hand_over(params: &Value) -> Result<(), String> {
-    hand_over_to(&MAIN, &NATIVE, params)
+/// Calls a core-owned channel directly through `core_ipc`, logging any refusal with caller details.
+pub(crate) fn call_core(
+    caller: &Caller,
+    dir: Dir,
+    channel: &str,
+    args: &Value,
+) -> Result<Option<Value>, Value> {
+    let result = core_ipc::call(caller, dir, channel, args);
+    if let Err(error) = &result {
+        let caller = caller.describe();
+        log(
+            "ipc.core.failed",
+            json!({"channel":channel,"caller":caller,"error":error}),
+        );
+    }
+    result
+}
+
+/// Shapes an invoke answer for `omp_ipc` / `ipc.call`: `Some(v)` carries `{"value": v}`, `None` omits `"value"` so JS
+/// receives `undefined`.
+pub(crate) fn wrap_answer(value: Option<Value>) -> Value {
+    match value {
+        Some(value) => Value::from_iter([("value", value)]),
+        None => json!({}),
+    }
+}
+
+/// `ipc.routes {invoke, send, policy?}`: the channels main serves, handed over once, plus `IPC_POLICY` for
+/// `ompdesk-core`. Refused when main names a native or core channel (two owners) or hands over a second time.
+pub(crate) fn hand_over(params: &Value, user_data: &Path) -> Result<(), String> {
+    let policy = hand_over_to(&MAIN, &NATIVE, &CORE, params)?;
+    if let Some(policy) = policy {
+        core_ipc::set_policy(policy, user_data);
+    }
+    Ok(())
 }
 
 fn hand_over_to(
     slot: &OnceLock<Channels>,
     native: &Channels,
+    core: &Channels,
     params: &Value,
-) -> Result<(), String> {
-    let main = Channels::deserialize(params).map_err(|error| error.to_string())?;
+) -> Result<Option<Value>, String> {
+    let HandOver {
+        invoke,
+        send,
+        policy,
+    } = HandOver::deserialize(params).map_err(|error| error.to_string())?;
+    let main = Channels { invoke, send };
     let both: Vec<&str> = main
         .entries()
-        .filter(|(_, channel)| native.has(Dir::Invoke, channel) || native.has(Dir::Send, channel))
+        .filter(|(_, channel)| {
+            native.has(Dir::Invoke, channel)
+                || native.has(Dir::Send, channel)
+                || core.has(Dir::Invoke, channel)
+                || core.has(Dir::Send, channel)
+        })
         .map(|(_, channel)| channel)
         .collect();
     if !both.is_empty() {
         return Err(format!("main and the shell both serve {}", both.join(", ")));
     }
     slot.set(main)
-        .map_err(|_| "main already handed over its IPC channels".to_owned())
+        .map_err(|_| "main already handed over its IPC channels".to_owned())?;
+    Ok(policy)
 }
 
-/// `ipc.call {channel, dir, args, caller: {key, window, connId}}` from main: a native channel's call by a caller main
-/// admitted.
+/// `ipc.call {channel, dir, args, caller: {key, window, connId, deviceId?}}` from main: a shell-native or core-owned
+/// channel's call by a caller main admitted.
 pub(crate) fn call_from_main(ctx: &Context, params: &Value) -> Result<Value, Value> {
     let invalid = |message: &str| json!({"code":"invalid","message":message});
     let channel = params["channel"]
@@ -225,21 +299,30 @@ pub(crate) fn call_from_main(ctx: &Context, params: &Value) -> Result<Value, Val
         key: key.to_owned(),
         window: caller["window"].as_i64(),
         conn_id: caller["connId"].as_str().map(str::to_owned),
+        device_id: caller["deviceId"].as_str().map(str::to_owned),
     };
-    let Route::Native(handler) = route(dir, channel) else {
-        return Err(invalid(&format!(
+    match route(dir, channel) {
+        Route::Native(handler) => {
+            let value = run(handler, ctx, &caller, channel, &params["args"])?;
+            Ok(json!({ "value": value }))
+        }
+        Route::Core => {
+            let value = call_core(&caller, dir, channel, &params["args"])?;
+            Ok(wrap_answer(value))
+        }
+        Route::Main | Route::Refused(_) => Err(invalid(&format!(
             "'{channel}' ({}) is not the shell's",
             dir.name()
-        )));
-    };
-    let value = run(handler, ctx, &caller, channel, &params["args"])?;
-    Ok(json!({ "value": value }))
+        ))),
+    }
 }
 
-/// The native channels for `hello`'s facts (`nativeIpc`), so main registers them for its own callers and nowhere else.
+/// The shell-routed channels (shell-native + core-owned) for `hello`'s facts (`nativeIpc`), so main registers them for
+/// its own callers and nowhere else.
 pub(crate) fn native_facts() -> Value {
     NATIVE
         .entries()
+        .chain(CORE.entries())
         .map(|(dir, channel)| json!({"channel":channel,"dir":dir.name()}))
         .collect()
 }
@@ -257,11 +340,15 @@ mod tests {
     }
 
     #[test]
-    fn every_native_channel_has_its_handler() {
+    fn every_native_channel_has_its_handler_and_is_disjoint_from_core() {
         for (_, channel) in NATIVE.entries() {
             assert!(
                 handler(channel).is_some(),
                 "{channel} is listed but has no handler"
+            );
+            assert!(
+                !CORE.has(Dir::Invoke, channel) && !CORE.has(Dir::Send, channel),
+                "{channel} is listed in both ipc_router.json and core/src/ipc/channels.json"
             );
         }
     }
@@ -269,19 +356,32 @@ mod tests {
     #[test]
     fn one_owner_per_direction_and_channel() {
         let native = channels(&["runtime:log-path"], &[]);
+        let core = channels(&["draft-pictures:read"], &["core:ping"]);
         let main = channels(&["prefs:get"], &["app:quit"]);
-        let owner =
-            |main: Option<&Channels>, dir, channel| match route_in(&native, main, dir, channel) {
-                Route::Native(_) => "native".to_owned(),
-                Route::Main => "main".to_owned(),
-                Route::Refused(error) => error["message"].as_str().unwrap().to_owned(),
-            };
+        let owner = |main: Option<&Channels>, dir, channel| match route_in(
+            &native, &core, main, dir, channel,
+        ) {
+            Route::Native(_) => "native".to_owned(),
+            Route::Core => "core".to_owned(),
+            Route::Main => "main".to_owned(),
+            Route::Refused(error) => error["message"].as_str().unwrap().to_owned(),
+        };
         assert_eq!(
             owner(Some(&main), Dir::Invoke, "runtime:log-path"),
             "native"
         );
-        // A native channel answers before main handed over: it never needed main.
+        // Native and core channels route before main handed over: neither goes through main.
         assert_eq!(owner(None, Dir::Invoke, "runtime:log-path"), "native");
+        assert_eq!(owner(None, Dir::Invoke, "draft-pictures:read"), "core");
+        assert_eq!(
+            owner(Some(&main), Dir::Invoke, "draft-pictures:read"),
+            "core"
+        );
+        assert_eq!(owner(Some(&main), Dir::Send, "core:ping"), "core");
+        assert_eq!(
+            owner(Some(&main), Dir::Send, "draft-pictures:read"),
+            "No handler registered for 'draft-pictures:read' (send)"
+        );
         assert_eq!(owner(Some(&main), Dir::Invoke, "prefs:get"), "main");
         assert_eq!(owner(Some(&main), Dir::Send, "app:quit"), "main");
         assert_eq!(
@@ -305,14 +405,16 @@ mod tests {
     #[test]
     fn a_listed_channel_without_handler_is_refused_not_sent_to_main() {
         let native = channels(&["no:handler"], &[]);
+        let core = channels(&[], &[]);
         let main = channels(&["no:handler"], &[]);
         assert!(matches!(
-            route_in(&native, Some(&main), Dir::Invoke, "no:handler"),
+            route_in(&native, &core, Some(&main), Dir::Invoke, "no:handler"),
             Route::Main
         ));
         assert!(matches!(
             route_in(
                 &native,
+                &core,
                 Some(&channels(&[], &[])),
                 Dir::Invoke,
                 "no:handler"
@@ -324,25 +426,40 @@ mod tests {
     #[test]
     fn hand_over_refuses_two_owners_and_a_second_hand_over() {
         let native = channels(&["runtime:log-path"], &[]);
+        let core = channels(&["draft-pictures:read"], &[]);
         let slot = OnceLock::new();
         let clash = json!({"invoke": [], "send": ["runtime:log-path"]});
         assert_eq!(
-            hand_over_to(&slot, &native, &clash),
+            hand_over_to(&slot, &native, &core, &clash),
             Err("main and the shell both serve runtime:log-path".into())
         );
-        assert!(hand_over_to(&slot, &native, &json!({"invoke": ["prefs:get"]})).is_err());
+        let core_clash = json!({"invoke": ["draft-pictures:read"], "send": []});
+        assert_eq!(
+            hand_over_to(&slot, &native, &core, &core_clash),
+            Err("main and the shell both serve draft-pictures:read".into())
+        );
+        assert!(hand_over_to(&slot, &native, &core, &json!({"invoke": ["prefs:get"]})).is_err());
         assert!(slot.get().is_none());
-        hand_over_to(
+        let policy = hand_over_to(
             &slot,
             &native,
-            &json!({"invoke": ["prefs:get"], "send": []}),
+            &core,
+            &json!({"invoke": ["prefs:get"], "send": [], "policy": {"prefs:get": {"dir": "invoke"}}}),
         )
         .unwrap();
+        assert_eq!(policy, Some(json!({"prefs:get": {"dir": "invoke"}})));
         assert_eq!(
-            hand_over_to(&slot, &native, &json!({"invoke": [], "send": []})),
+            hand_over_to(&slot, &native, &core, &json!({"invoke": [], "send": []})),
             Err("main already handed over its IPC channels".into())
         );
         assert!(slot.get().unwrap().has(Dir::Invoke, "prefs:get"));
+    }
+
+    #[test]
+    fn wrap_answer_preserves_undefined_vs_null() {
+        assert_eq!(wrap_answer(None), json!({}));
+        assert_eq!(wrap_answer(Some(Value::Null)), json!({"value": null}));
+        assert_eq!(wrap_answer(Some(json!(42))), json!({"value": 42}));
     }
 
     #[test]
