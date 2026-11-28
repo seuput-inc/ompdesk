@@ -862,13 +862,22 @@ describe("AgentControlRuntime", () => {
 		await runtime.run(win, "main0001", T.open, { device: "dev-1" });
 		expect(spawned[1]).toEqual({ device: "dev-1" });
 		const wsl = String.raw`\\wsl.localhost\Ubuntu\home\me\repo`;
-		await runtime.run(win, "main0001", T.open, { device: "dev-1", folder: wsl });
-		expect(spawned[2]).toEqual({ cwd: wsl, device: "dev-1" });
+		for (const folder of [
+			wsl,
+			"//wsl.localhost/Ubuntu/home/me/repo",
+			String.raw`/\wsl.localhost/Ubuntu\home/me/repo`,
+		]) {
+			await runtime.run(win, "main0001", T.open, { device: "dev-1", folder });
+			expect(spawned.at(-1)).toEqual({ cwd: wsl, device: "dev-1" });
+		}
 		for (const folder of [
 			"rel",
 			"C:work",
 			String.raw`\work`,
 			String.raw`\\server\share`,
+			"//server/share",
+			String.raw`/\server\share`,
+			String.raw`\/server/share`,
 			String.raw`\\wsl.localhost`,
 			String.raw`\\wsl.localhost.evil\Ubuntu`,
 			String.raw`\\?\UNC\wsl.localhost\Ubuntu`,
@@ -881,7 +890,7 @@ describe("AgentControlRuntime", () => {
 		expect((await runtime.run(win, "main0001", T.open, { device: "dev-1", worktree: true })).text).toMatch(
 			/needs that device's repository/,
 		);
-		expect(spawned).toHaveLength(3);
+		expect(spawned).toHaveLength(5);
 	});
 
 	it("keeps a paired caller's WSL folder as typed on its own device", async () => {
@@ -890,6 +899,16 @@ describe("AgentControlRuntime", () => {
 		const folder = String.raw`\\wsl$\Debian\home\repo`;
 		await runtime.run(win, "main0001", T.open, { folder });
 		expect(spawned).toEqual([{ cwd: folder, device: "dev-1" }]);
+	});
+
+	it("keeps a single POSIX root on a paired Mac and refuses two leading separators", async () => {
+		const { runtime, win, spawned } = setup({
+			remote: { hosts: () => [{ deviceId: "mac-1", name: "Mac", state: "online" }], request: vi.fn() },
+		});
+		await runtime.run(win, "main0001", T.open, { device: "mac-1", folder: "/work" });
+		const denied = await runtime.run(win, "main0001", T.open, { device: "mac-1", folder: "//x" });
+		expect(denied.isError).toBe(true);
+		expect(spawned).toEqual([{ cwd: "/work", device: "mac-1" }]);
 	});
 
 	it("lists a paired computer's saved session that a tab there holds as open there, which a tab here does not hold", async () => {

@@ -143,12 +143,15 @@ const OPENING_MAX_MS = 5 * 60_000;
 const BOTS_COMMAND_TIMEOUT_MS = 60_000;
 
 /** A WSL share belongs to the destination Windows host; never widen this to arbitrary SMB servers. */
-function absoluteSessionFolder(folder: string, device: string | undefined): boolean {
-	if (/^[\\/]{2}[?.](?:[\\/]|$)/.test(folder)) return false;
-	return (
-		/^([a-zA-Z]:[\\/]|\/)/.test(folder) ||
-		(!!device && /^\\\\(?:wsl\.localhost|wsl\$)\\(?!\.{1,2}(?:[\\/]|$))[^\\/:*?"<>|]+(?:[\\/]|$)/i.test(folder))
-	);
+function absoluteSessionFolder(folder: string | undefined, device: string | undefined): string | undefined {
+	if (!folder) return undefined;
+	if (/^[\\/]{2}/.test(folder)) {
+		const unc = folder.replaceAll("/", "\\");
+		return device && /^\\\\(?:wsl\.localhost|wsl\$)\\(?!\.{1,2}(?:\\|$))[^\\:*?"<>|]+(?:\\|$)/i.test(unc)
+			? unc
+			: undefined;
+	}
+	return /^(?:[a-zA-Z]:[\\/]|\/)/.test(folder) ? folder : undefined;
 }
 
 async function localPathIs(path: string, kind: "file" | "directory"): Promise<boolean> {
@@ -991,7 +994,8 @@ export class AgentControlRuntime {
 	async #folder(caller: { cwd: string; device?: string }, folder: string | undefined): Promise<string> {
 		if (!folder) return caller.cwd;
 		if (caller.device) {
-			if (absoluteSessionFolder(folder, caller.device)) return folder;
+			const absolute = absoluteSessionFolder(folder, caller.device);
+			if (absolute !== undefined) return absolute;
 			if (/^(?:[\\/]|[a-zA-Z]:)/.test(folder)) throw new Error(`Not an absolute session folder: "${folder}".`);
 			return posix.join(caller.cwd, folder);
 		}
@@ -1016,9 +1020,7 @@ export class AgentControlRuntime {
 		const cwd = request.sessionPath
 			? undefined
 			: elsewhere
-				? request.folder && absoluteSessionFolder(request.folder, device)
-					? request.folder
-					: undefined
+				? absoluteSessionFolder(request.folder, device)
 				: await this.#folder(caller, request.folder);
 		if (elsewhere && request.folder && cwd === undefined)
 			throw new Error(`On another device the folder must be absolute (got "${request.folder}").`);
