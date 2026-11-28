@@ -38,6 +38,7 @@ import { readFileSync } from "node:fs";
 import { basename, isAbsolute, normalize, relative } from "node:path";
 import { z } from "zod";
 import type { LeftProcess, LeftProcesses, OutputPeer } from "../../resources/gui-bridge/restart-core";
+import { SESSION_TAG_PATTERN } from "../../resources/gui-bridge/runtime-identifiers";
 import type { SessionUse } from "../shared/ipc-types";
 import type { SessionPortProcess } from "../shared/rpc-types";
 import { writeFileAtomicDeferred } from "./atomic-file";
@@ -210,7 +211,7 @@ export interface SessionProcessFacts {
 
 /** One tab's tag in the file. A record of another shape (a damaged file, a tag that is no tag) is dropped. */
 const TagRecordSchema = z.object({
-	tag: z.string().regex(/^[0-9a-f]{32}$/),
+	tag: z.string().regex(SESSION_TAG_PATTERN),
 	cwd: z.string(),
 	sessionPath: z.string().optional(),
 	device: z.string().optional(),

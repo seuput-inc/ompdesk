@@ -4,6 +4,7 @@
  * `proxy.resolve` picks; `updateFeed.resolve` validates the release. The lookup rechecks this OS before it answers.
  */
 import { release as osRelease } from "node:os";
+import { NUMERIC_VERSION } from "../../resources/gui-bridge/runtime-identifiers";
 import appCompatibility from "../shared/app-compatibility.json";
 import type { UnsupportedSystemUpdate } from "../shared/ipc-types";
 import { compareVersions } from "../shared/version";
@@ -158,8 +159,6 @@ export function macosForDarwin(darwin: string): string | null {
 	return String(major <= 24 ? major - 9 : major + 1);
 }
 
-const SYSTEM_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
-
 /** One platform's update, ready for the updater. */
 interface ResolvedRelease {
 	version: string;
@@ -236,7 +235,7 @@ export function assertUpdateSupported(release: PlatformRelease, systemVersion: s
 	const minimum = release.minimumSystemVersion;
 	if (minimum === undefined) return;
 	const valid =
-		SYSTEM_VERSION.test(systemVersion) && systemVersion.split(".").every(n => Number.isSafeInteger(Number(n)));
+		NUMERIC_VERSION.test(systemVersion) && systemVersion.split(".").every(n => Number.isSafeInteger(Number(n)));
 	const order = valid ? compareVersions(systemVersion, minimum) : null;
 	if (order === null || order < 0) {
 		const macos = order === null ? null : macosForDarwin(minimum);

@@ -16,6 +16,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, normalize, relative } from "node:path";
 import { z } from "zod";
+import { SESSION_TAG_PATTERN } from "../../resources/gui-bridge/runtime-identifiers";
 import { writeFileAtomicDeferred } from "./atomic-file";
 
 /** The file in userData that names every scratch folder's sessions. */
@@ -35,10 +36,8 @@ export function defaultScratchRoot(
 		: join(home, ".cache", "ompdesk", "scratch");
 }
 
-/** A scratch folder's name: its tab's process tag. */
-export const SCRATCH_TAG = /^[0-9a-f]{32}$/;
 const ScratchRecordSchema = z.object({
-	tag: z.string().regex(SCRATCH_TAG),
+	tag: z.string().regex(SESSION_TAG_PATTERN),
 	/** When the folder was made. */
 	since: z.number(),
 	/** Every session file the tab was on while it had this folder, less the deleted ones. */
@@ -80,7 +79,7 @@ export class SessionScratch {
 	 * files). Null when it cannot be made; the omp then starts without one.
 	 */
 	open(tag: string, sessionPath?: string): string | null {
-		if (!SCRATCH_TAG.test(tag)) return null;
+		if (!SESSION_TAG_PATTERN.test(tag)) return null;
 		const dir = this.dir(tag);
 		if (!this.#records.has(tag)) {
 			this.#records.set(tag, { tag, since: (this.#deps.now ?? Date.now)(), sessions: [] });
@@ -116,7 +115,7 @@ export class SessionScratch {
 	sessionsOf(folder: string): string[] | null {
 		const inside = relative(this.root, folder);
 		const tag = inside.split(/[\\/]/)[0] ?? "";
-		if (!inside || isAbsolute(inside) || !SCRATCH_TAG.test(tag)) return null;
+		if (!inside || isAbsolute(inside) || !SESSION_TAG_PATTERN.test(tag)) return null;
 		return [...(this.#records.get(tag)?.sessions ?? [])];
 	}
 
