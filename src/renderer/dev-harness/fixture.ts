@@ -16,6 +16,7 @@ import type {
 import type { SidebarProjectsState } from "../../shared/sidebar-projects";
 import { BOARD_BUSY, boardTurnMessages, CHILDREN_WAIT } from "./fixture-board";
 import { cardTurnMessages } from "./fixture-card";
+import { CHAT_WAVE_VISUAL_FILE, CHAT_WAVE_VISUAL_HTML, chatWaveMessages } from "./fixture-chat-wave";
 import { quietMessages, quietScenario } from "./fixture-quiet-bot";
 import { REPLY_SHOWCASE } from "./reply-showcase";
 
@@ -556,19 +557,21 @@ export function entriesFor(tabId: string): Entry[] {
 			message,
 		}));
 	}
-	if (!quietScenario && !params.has("stress") && !params.has("mail") && !BOARD_BUSY && !card)
+	const chatwave = params.get("chatwave");
+	if (!quietScenario && !params.has("stress") && !params.has("mail") && !BOARD_BUSY && !card && !chatwave)
 		return entriesFixture(tabId);
 	const all = quietScenario
 		? quietMessages(NOW - 8 * MINUTE)
 		: [
 				...entriesFixture(tabId).map(entry => entry.message),
 				...(params.has("stress") ? stressMessages(NOW - 20 * MINUTE) : []),
-				...(card
+				...(card || chatwave === "stream"
 					? cardTurnMessages(
 							card === "live" ? Date.now() - 50_000 : NOW - 30 * MINUTE,
 							card === "fail" || card === "cmd" || card === "one" || card === "live" ? card : "pass",
 						)
 					: []),
+				...(chatwave ? chatWaveMessages(NOW - 5 * MINUTE) : []),
 				...(params.has("mail") ? mailMessages(NOW - 10 * MINUTE) : []),
 				// The live wait (`&children=wait`) is the turn running now: its clock reads from real time, not the fixture's day.
 				...(BOARD_BUSY ? boardTurnMessages(CHILDREN_WAIT ? Date.now() - 3 * MINUTE : NOW - 8 * MINUTE) : []),
@@ -723,6 +726,9 @@ export const FILE_CONTENTS: Record<string, string> = {
 	"README.md": "# OMPdesk\n\nA desktop for the omp agent.\n",
 	"page.html":
 		'<!doctype html><html><body style="margin:0;font:16px sans-serif"><h1>Report</h1><p style="height:2000px">A page an agent wrote.</p></body></html>\n',
+	"src/renderer/components/chat/CodeBlock.tsx": "export function CodeBlock() { return null; }\n",
+	"src/renderer/components/tools/ToolCard.tsx": "export function ToolCard() { return null; }\n",
+	[CHAT_WAVE_VISUAL_FILE]: CHAT_WAVE_VISUAL_HTML,
 };
 
 /** The first screen of the harness terminal. */
