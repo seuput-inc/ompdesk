@@ -1,8 +1,10 @@
 {
   "invoke": [
+    "disk-full:get",
     "runtime:log-path",
     "runtime:log-tail",
     "session:consume-pending",
+    "system:desktop-away",
     "system:open-dialog",
     "system:save-dialog",
     "system:save-image",

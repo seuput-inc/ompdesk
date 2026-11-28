@@ -18,13 +18,14 @@
 use crate::core_ipc;
 use crate::log::log;
 use crate::native_services::diagnostic_logs::FeedbackRead;
+use crate::native_services::power;
 use crate::registry::Identity;
 use crate::{page_dialogs, tray};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::path::Path;
-use std::sync::{LazyLock, OnceLock};
+use std::sync::{LazyLock, Mutex, OnceLock, PoisonError};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -83,6 +84,8 @@ static CORE: LazyLock<Channels> = LazyLock::new(|| {
         .expect("core/src/ipc/channels.json is the core channel table")
 });
 static MAIN: OnceLock<Channels> = OnceLock::new();
+/// Latest validated list of file basenames waiting for disk space, pushed by main via `diskFull.state`.
+static DISK_FULL: LazyLock<Mutex<Vec<String>>> = LazyLock::new(Mutex::default);
 
 /// What a native handler reads of the running shell.
 pub(crate) struct Context<'a> {
@@ -170,6 +173,7 @@ fn route_in(
 
 fn handler(channel: &str) -> Option<Handler> {
     Some(match channel {
+        "disk-full:get" => |_, _, _| Ok(disk_full_snapshot()),
         "runtime:log-path" => |ctx, _, _| Ok(FeedbackRead::Path.read(ctx.feedback_profile)),
         "runtime:log-tail" => {
             |ctx, _, args| Ok(FeedbackRead::tail(args).read(ctx.feedback_profile))
@@ -177,6 +181,7 @@ fn handler(channel: &str) -> Option<Handler> {
         "updater:version" => |ctx, _, _| Ok(Value::String(app_version(ctx.app_package))),
         // A desktop window starts its tab on its session, so nothing is pending; a paired page reads its own link.
         "session:consume-pending" => |_, _, _| Ok(Value::Null),
+        "system:desktop-away" => |_, _, _| Ok(desktop_away()),
         "system:save-dialog" => |_, caller, args| page_dialogs::save_dialog(caller, args),
         "system:open-dialog" => |_, caller, args| page_dialogs::open_dialog(caller, args),
         "system:save-image" => |_, caller, args| page_dialogs::save_image(caller, args),
@@ -185,6 +190,51 @@ fn handler(channel: &str) -> Option<Handler> {
         "progress:set" => |_, caller, args| Ok(tray::progress_push(caller, &args[0])),
         _ => return None,
     })
+}
+
+fn parse_disk_full_files(data: &Value) -> Option<Vec<String>> {
+    fn file_name(value: &Value) -> Option<String> {
+        let name = value.as_str()?;
+        let ok = !name.contains(['/', '\\'])
+            && !matches!(name.as_bytes(), [b'a'..=b'z' | b'A'..=b'Z', b':', ..]);
+        ok.then(|| name.to_owned())
+    }
+    if data.as_object()?.len() != 1 {
+        return None;
+    }
+    data["files"]
+        .as_array()?
+        .iter()
+        .map(file_name)
+        .collect::<Option<Vec<_>>>()
+}
+
+/// Records the validated file basenames from `diskFull.state` so `disk-full:get` answers directly from the shell.
+pub(crate) fn set_disk_full(data: &Value) {
+    if let Some(files) = parse_disk_full_files(data) {
+        *DISK_FULL.lock().unwrap_or_else(PoisonError::into_inner) = files;
+    }
+}
+
+fn disk_full_snapshot() -> Value {
+    let files = DISK_FULL
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    json!({ "files": files })
+}
+
+fn desktop_away_from(forced: Option<&str>, native: Option<bool>) -> Value {
+    match forced {
+        Some("0") => Value::Bool(false),
+        Some("1") => Value::Bool(true),
+        _ => native.map_or(Value::Null, Value::Bool),
+    }
+}
+
+fn desktop_away() -> Value {
+    let forced = std::env::var("OMP_GUI_TEST_DESKTOP_AWAY").ok();
+    desktop_away_from(forced.as_deref(), power::desktop_away())
 }
 
 /// Main's `appVersion()`: `package.json`'s `version` when it is a string, else `0.0.0` (its `readPackage`).
@@ -460,6 +510,43 @@ mod tests {
         assert_eq!(wrap_answer(None), json!({}));
         assert_eq!(wrap_answer(Some(Value::Null)), json!({"value": null}));
         assert_eq!(wrap_answer(Some(json!(42))), json!({"value": 42}));
+    }
+
+    #[test]
+    fn disk_full_snapshot_validates_basenames_and_updates_snapshot() {
+        assert_eq!(
+            parse_disk_full_files(&json!({"files": ["prefs.json", "journal.json"]})),
+            Some(vec!["prefs.json".into(), "journal.json".into()])
+        );
+        assert_eq!(
+            parse_disk_full_files(&json!({"files": []})),
+            Some(Vec::new())
+        );
+        for bad in [
+            json!({"files": ["a/b"]}),
+            json!({"files": ["a\\b"]}),
+            json!({"files": ["C:x"]}),
+            json!({"files": ["ok"], "extra": 1}),
+            json!({"files": [123]}),
+        ] {
+            assert_eq!(parse_disk_full_files(&bad), None, "{bad}");
+        }
+        set_disk_full(&json!({"files": ["prefs.json"]}));
+        assert_eq!(disk_full_snapshot(), json!({"files": ["prefs.json"]}));
+        // Invalid payload leaves the last valid snapshot untouched.
+        set_disk_full(&json!({"files": ["../escape"]}));
+        assert_eq!(disk_full_snapshot(), json!({"files": ["prefs.json"]}));
+        set_disk_full(&json!({"files": []}));
+        assert_eq!(disk_full_snapshot(), json!({"files": []}));
+    }
+
+    #[test]
+    fn desktop_away_respects_test_override_and_falls_back_to_native() {
+        assert_eq!(desktop_away_from(Some("0"), Some(true)), json!(false));
+        assert_eq!(desktop_away_from(Some("1"), Some(false)), json!(true));
+        assert_eq!(desktop_away_from(Some("other"), Some(true)), json!(true));
+        assert_eq!(desktop_away_from(None, Some(false)), json!(false));
+        assert_eq!(desktop_away_from(None, None), Value::Null);
     }
 
     #[test]

@@ -999,7 +999,6 @@ app.whenReady().then(async () => {
 	// Before any window opens: the shell serves a page only the channels it, the core (H(c)), or main owns.
 	await ipc.routeShell(shellIpc, IPC_POLICY);
 	ipc.handle(IPC_COMMANDS.BRIDGE_HEALTH_TAKE, () => bridgeHealth.take());
-	ipc.handle(IPC_COMMANDS.DISK_FULL_GET, () => ({ files: diskFull.names() }));
 	// The first local tab boots alone: the stats server and machine setup's optional installs (gh, Node;
 	// winget on Windows) wait until a tab's session is ready, or FIRST_TAB_GRACE_MS when none comes (only
 	// paired-host tabs, an omp that cannot start). Measured by e2e/first-run-no-omp.e2e.ts.
@@ -2698,7 +2697,6 @@ app.whenReady().then(async () => {
 		onTabSeen: tabId => webHost?.tabSeen(tabId),
 		closeTabBanners,
 		pageVisible: win => webHost?.pageVisible(win) ?? false,
-		desktopAway,
 		testPush: deviceId => webHost?.testPush(deviceId),
 		sessionWake,
 		sessionNote,

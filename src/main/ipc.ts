@@ -396,8 +396,6 @@ export interface IpcDeps {
 	closeTabBanners?: (tabId: string) => void;
 	/** A paired page's window is in the foreground (`WebHost.pageVisible`). */
 	pageVisible?: (win: ClientWindow) => boolean;
-	/** Whether the person is away from this computer (the shell's `power.desktopAway`). */
-	desktopAway?: () => boolean | undefined;
 	/** One test push to a paired device's own subscription (`WebHost.testPush`); undefined while there is no web host. */
 	testPush?: (deviceId: string) => Promise<IpcPushTestResult> | undefined;
 }
@@ -2295,7 +2293,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		if (!(await notifyHandler(caller, payload))) return "dropped";
 		return failing ? "blocked" : "shown";
 	});
-	ipc.handle(IPC_COMMANDS.SYSTEM_DESKTOP_AWAY, () => deps.desktopAway?.() ?? null);
 	// Settings › General's test banner. Windows reports a refused banner (`failed`); macOS reports nothing and Electron
 	// cannot read its permission there, so no word within the wait reads as shown and the page points at the settings.
 	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY_TEST, (): IpcNotifyTestResult | Promise<IpcNotifyTestResult> => {

@@ -1550,7 +1550,10 @@ fn node_event(name: &str, data: Value, bin: Option<Vec<u8>>) {
             *runtime().relaunch.lock().expect("relaunch") = Some(args);
         }
         "wc.send" => page_push::wc_send(&data),
-        "diskFull.state" => page_push::disk_full_state(data),
+        "diskFull.state" => {
+            ipc_router::set_disk_full(&data);
+            page_push::disk_full_state(data);
+        }
         "app.closeToTray" => last_close::prefs_pushed(&data),
         "app.language" => match data["language"].as_str().and_then(labels::Lang::parse) {
             Some(lang) => {
