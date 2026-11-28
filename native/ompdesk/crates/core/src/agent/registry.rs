@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use super::adapter::AgentAdapter;
 use super::backends::{
-    ClaudeCliAdapter, CodexCliAdapter, DirectApiAdapter, NoopToolExecutor, ToolExecutor,
+    AntigravityCliAdapter, ClaudeCliAdapter, CodexCliAdapter, DirectApiAdapter, NoopToolExecutor,
+    ToolExecutor,
 };
 use super::omp_contract::OmpAdapterContract;
 use super::tools::LocalToolExecutor;
@@ -163,9 +164,10 @@ impl AdapterRegistry {
         }
     }
 
-    /// Builds a registry pre-populated with every concrete Stage 2A backend adapter
-    /// (`ClaudeCliAdapter`, `CodexCliAdapter`, all four `DirectApiAdapter` providers backed by
-    /// [`NoopToolExecutor`], and the [`OmpAdapterContract`] slot).
+    /// Builds a registry pre-populated with every concrete backend adapter
+    /// (`ClaudeCliAdapter`, `CodexCliAdapter`, `AntigravityCliAdapter`, all four
+    /// `DirectApiAdapter` providers backed by [`NoopToolExecutor`], and the
+    /// [`OmpAdapterContract`] slot).
     pub fn with_default_backends() -> Self {
         Self::with_default_backends_and_tools(Arc::new(NoopToolExecutor))
     }
@@ -177,11 +179,12 @@ impl AdapterRegistry {
     }
 
     /// Builds a default backend registry wired with a custom [`ToolExecutor`] for Direct LLM API
-    /// sessions (Stage 2B local/MCP tool execution hook).
+    /// sessions (Stage 2B/2C local/MCP tool execution hook).
     pub fn with_default_backends_and_tools(tool_executor: Arc<dyn ToolExecutor>) -> Self {
         let mut registry = Self::new();
         registry.register(Arc::new(ClaudeCliAdapter::new()));
         registry.register(Arc::new(CodexCliAdapter::new()));
+        registry.register(Arc::new(AntigravityCliAdapter::new()));
         registry.register(Arc::new(OmpAdapterContract::new()));
         for provider in [
             DirectApiProvider::Anthropic,
@@ -574,15 +577,17 @@ mod tests {
         let reg = AdapterRegistry::with_default_backends();
         let claude = BackendId::ProviderCli(ProviderCliKind::ClaudeCode);
         let codex = BackendId::ProviderCli(ProviderCliKind::Codex);
+        let antigravity = BackendId::ProviderCli(ProviderCliKind::Antigravity);
         let anthropic = BackendId::DirectApi(DirectApiProvider::Anthropic);
         let openai = BackendId::DirectApi(DirectApiProvider::OpenAi);
         let openrouter = BackendId::DirectApi(DirectApiProvider::OpenRouter);
         let compat = BackendId::DirectApi(DirectApiProvider::OpenAiCompatible);
 
-        assert_eq!(reg.len(), 7);
+        assert_eq!(reg.len(), 8);
         for id in [
             claude,
             codex,
+            antigravity,
             BackendId::Omp,
             anthropic,
             openai,

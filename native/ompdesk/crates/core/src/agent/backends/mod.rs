@@ -1,10 +1,15 @@
-//! Concrete backend adapters for Momo's agent-neutral Rust runtime (Stage 2A).
+//! Concrete backend adapters for Momo's agent-neutral Rust runtime (Stage 2A + 2C).
 
+pub mod antigravity;
 pub mod claude_cli;
 pub mod codex_cli;
 pub mod detect;
 pub mod direct_api;
 
+pub use antigravity::{
+    AntigravityCliAdapter, AntigravityStreamParser, antigravity_approval_args,
+    build_antigravity_command, pump_antigravity_stream,
+};
 pub use claude_cli::{
     ClaudeCliAdapter, build_claude_command, claude_permission_mode, pump_claude_stream,
 };
