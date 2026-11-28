@@ -1929,6 +1929,7 @@ export const ko: Record<string, string> = {
 	"toast.failedRetry": "문제가 생겨 마치지 못했어요. 다시 시도해 보세요.",
 	"prefs.unreadable": "저장된 설정을 읽지 못해서 이 변경은 저장하지 않았어요.",
 	"ipcError.invalid_session_path": "올바른 세션 파일이 아니에요.",
+	"ipcError.wsl_session_unavailable": "이 세션에는 WSL 호스트가 필요해요. Windows에서는 열지 않았어요.",
 	"ipcError.session_running": "세션이 아직 실행 중이에요. 먼저 중단한 뒤 다시 시도해 보세요.",
 	"ipcError.handoff_project_missing":
 		"그 컴퓨터에 이 프로젝트 폴더가 없어요. 먼저 그 컴퓨터에서 프로젝트를 열어 주세요.",

@@ -11,6 +11,7 @@
  */
 import { codedError, ipcErrorCode } from "../shared/ipc-error-codes";
 import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
+import { requireFileSession } from "../shared/wsl-session-ref";
 import { deletedSessions, type PendingHandoff } from "./deleted-sessions";
 import type { RpcClient } from "./rpc-client";
 import type { SidecarPool } from "./sidecar-pool";
@@ -50,6 +51,7 @@ export async function deleteSession(
 	deleteStored: () => Promise<unknown>,
 	deviceTabs?: DeviceSessionTabs,
 ): Promise<void> {
+	requireFileSession(sessionPath);
 	const key = JSON.stringify([device ?? null, sessionPath]);
 	deleting.set(key, (deleting.get(key) ?? 0) + 1);
 	try {
@@ -134,6 +136,7 @@ export async function renameSession(
 	rawName: unknown,
 	options: RenameSessionOptions,
 ): Promise<void> {
+	requireFileSession(sessionPath);
 	const name = typeof rawName === "string" ? rawName.trim() : "";
 	if (!name) throw codedError("session_name_empty", "Session name cannot be empty");
 	const { device } = options;
@@ -281,6 +284,7 @@ export async function handOffSession(
 	deps: HandOffDeps,
 	deviceTabs?: DeviceSessionTabs,
 ): Promise<{ sessionPath: string; cwd: string }> {
+	requireFileSession(sessionPath);
 	const key = JSON.stringify([null, sessionPath]);
 	deleting.set(key, (deleting.get(key) ?? 0) + 1);
 	const session = fileName(sessionPath);

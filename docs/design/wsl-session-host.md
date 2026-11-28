@@ -16,6 +16,12 @@ Windows creates the conversation key and records its parent, registered distribu
 
 The Windows copy is read-only to viewers. Only the Windows host writes it. `sidecar/lane.rs` must return the host's key both to its observer of `get_state` and to the RPC caller. `src/main/tab-spawn.ts` must reopen by the host's record of the key, parent and project, not by the guest journal header. The host must never launch Windows stock on a viewer's copy. Existing Windows files, keys and parent relationships do not change.
 
+### Windows-side identity
+
+`ompdesk-wsl:<key>` is a session reference, not a file, URI to open, or command argument. The spelling after the reserved prefix must be exactly 32 lowercase hex digits. Unknown or malformed references fail closed; neither a missing registration nor a disconnected distro is a new conversation. An ordinary Windows session continues to use its original path. New tabs do not select WSL from their cwd.
+
+Only a Windows-created registration supplies the visible reference, workspace and opening parent. `Registration.cwd` is the Windows spelling used by project filters (including a registered WSL UNC folder), not the `cwd` in the guest journal. `Registration.parent` names the host opening session, not a stock fork. For an admitted guest spawn the stock ID is private binding evidence; list rows and outward session identity use the host reference, so even identical stock IDs from different distros cannot collapse rows. The guest file reported by `get_state` must name a direct child of the assigned guest session directory. It is never opened on Windows. If no admitted guest transport exists, the host keeps the reference and refuses direct execution; it never passes the reference or a copy slot to Windows stock.
+
 ### What a viewer sees
 
 A connected viewer receives live turn events. The saved transcript shows the last **verified** copy. It can lag behind the live view for a whole turn and for the time it takes to copy that turn's journal. An offline viewer sees the verified transcript and its checkpoint time, not a claim that it contains everything the guest wrote. Before the first checkpoint it sees the assigned tab with an unsynced transcript, not a new empty conversation.

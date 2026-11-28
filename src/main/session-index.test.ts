@@ -120,6 +120,44 @@ it("searches only listed candidates, in caller order, and quotes original conver
 	}
 });
 
+it("lists the host key in its registered project and never opens that key with stock storage", async () => {
+	const ref = `ompdesk-wsl:${"a".repeat(32)}`;
+	const cwd = path.resolve("registered-project");
+	const row = {
+		path: ref,
+		id: ref,
+		cwd,
+		title: "Guest",
+		openedBySession: "host-parent",
+		status: "complete",
+		created: "",
+		modified: "",
+		messageCount: 2,
+		size: 48,
+		firstMessage: "Hello",
+	};
+	const stock = vi.spyOn(StockSessionStore.prototype, "list").mockResolvedValue([]);
+	const directory = vi.spyOn(StockSessionStore.prototype, "listDirectory").mockRejectedValue(new Error("not a file"));
+	const deleted = vi.spyOn(deletedSessions(), "which").mockImplementation(paths => paths.map(() => false));
+	const rpc = vi.spyOn(core(), "call");
+	try {
+		const index = new SessionIndex("stock", cwd, null, undefined, "host-profile");
+		rpc.mockResolvedValueOnce({ result: { rows: [row] }, generation: 1, bin: null });
+		expect(await index.list("local")).toEqual([row]);
+		rpc.mockResolvedValueOnce({ result: { cwd, parent: "host-parent" }, generation: 1, bin: null });
+		expect(await index.recordedCwd(ref)).toBe(cwd);
+		rpc.mockRejectedValueOnce(new Error("unknown registration"));
+		await expect(index.recordedCwd(ref)).rejects.toThrow("unknown registration");
+		await expect(index.moveSession(ref, cwd)).rejects.toThrow("[wsl_session_unavailable]");
+		expect(directory).not.toHaveBeenCalled();
+	} finally {
+		rpc.mockRestore();
+		deleted.mockRestore();
+		directory.mockRestore();
+		stock.mockRestore();
+	}
+});
+
 it("publishes a person-closed child until a real holder or newer conversation supersedes its close", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "session-person-close-"));
 	tempDirs.push(root);

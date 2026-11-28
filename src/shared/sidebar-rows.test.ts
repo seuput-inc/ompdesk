@@ -144,6 +144,12 @@ function placements(rows: SidebarRows): Map<string, string[]> {
 	return at;
 }
 
+it("does not fold a WSL session under an agent based on guest-authored prompt text", () => {
+	const path = `ompdesk-wsl:${"a".repeat(32)}`;
+	const facts = world([{ folder: "app", holder: "none", origin: "brief", path }]);
+	expect(placements(sidebarRows(facts)).get(path)).toEqual([`group:${APP}`]);
+});
+
 /** A small seeded generator: the same seed draws the same worlds on every run. */
 function draw(seed: number): () => number {
 	let state = seed >>> 0;

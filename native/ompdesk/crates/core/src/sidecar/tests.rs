@@ -17,6 +17,8 @@ use crate::server::{registry, serve};
 const FAKE: &str = "OMPDESK_FAKE_OMP";
 const LIMITS: &str = "{\"type\":\"ready\",\"supportedProtocolVersions\":[1,2],\"maxFrameBytes\":1048576,\"maxReassembledFrameBytes\":67108864}";
 
+mod wsl_state;
+
 #[test]
 fn parameterless_gui_commands_keep_the_bridge_method_and_absent_params() {
     for (command, method) in [
@@ -185,6 +187,14 @@ fn fake_omp(mode: &str) {
                     "\n",
                     r#"{"type":"host_tool_call","id":"held"}"#,
                 ));
+                reply(json!({}));
+            }
+            "stray_state" => {
+                say(&json!({
+                    "type":"response", "id":"not-pending", "command":"get_state", "success":true,
+                    "data":{"sessionFile":command["claimedFile"], "sessionId":"stray"}
+                })
+                .to_string());
                 reply(json!({}));
             }
             "slot_on_stdout" => {
@@ -745,6 +755,9 @@ fn answer(behaviour: &Behaviour, event: &Event) -> Option<(&'static str, Value)>
             ];
             args.push(json!(format!("open={}", event.data["open"])));
             args.push(json!(format!("model={}", event.data["model"])));
+            if behaviour.mode == "reserved-flag" {
+                args.push(json!("--session=OMPDESK-WSL:malformed"));
+            }
             Some((
                 "sidecar.launched",
                 json!({ "tab": tab, "ask": ask, "hostTools": [{ "name": "terminal_read" }], "start": {

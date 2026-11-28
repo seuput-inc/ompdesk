@@ -34,6 +34,16 @@ function tabs(closes: boolean, running = false) {
 }
 
 describe("deleteSession", () => {
+	it("refuses a WSL reference before closing its tab or touching a stock file", async () => {
+		const { fake, calls } = tabs(true);
+		const remove = vi.fn();
+		await expect(deleteSession(fake, "ompdesk-wsl:not-a-file.jsonl", undefined, remove)).rejects.toThrow(
+			"[wsl_session_unavailable]",
+		);
+		expect(calls).toEqual([]);
+		expect(remove).not.toHaveBeenCalled();
+	});
+
 	it("closes the tab holding the session (and waits for its omp), then deletes the stored file: no new session", async () => {
 		const { fake, calls } = tabs(true);
 		const deleteStored = vi.fn(async () => {

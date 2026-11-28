@@ -1,7 +1,9 @@
-//! Host-only checkpoint store. No guest RPC, session-index entry, execution route or Windows stock journal.
+//! Host-only checkpoint store and read catalog. No guest RPC, execution route or Windows stock journal.
 //! The caller owns the profile directory and its ACLs. This is not a sandbox against a distro with DrvFS/interop.
 
+pub(crate) mod catalog;
 mod files;
+pub mod reference;
 mod wire;
 
 use std::fs::{self, File};
@@ -16,6 +18,22 @@ pub struct Registration {
     pub distro: String,
     pub parent: Option<String>,
     pub cwd: String,
+}
+
+impl Registration {
+    fn validate(&self) -> io::Result<()> {
+        let valid = |s: &str| !s.trim().is_empty() && !s.chars().any(char::is_control);
+        if !valid(&self.cwd)
+            || reference::parse_ref(&self.cwd).is_some()
+            || !valid(&self.distro)
+            || self.parent.as_deref().is_some_and(|p| {
+                !valid(p) || reference::parse_ref(p).is_some_and(|key| key.is_err())
+            })
+        {
+            return Err(invalid("invalid host registration"));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +120,8 @@ struct State {
     registration: Registration,
     stock_id: Option<String>,
     verified: Option<Stored<Checkpoint>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    published: Option<catalog::Published>,
     pending: Option<Stored<Span>>,
     turn: Option<Turn>,
 }
@@ -117,17 +137,18 @@ pub struct Store {
     root: PathBuf,
 }
 
+#[derive(Clone)]
 pub struct Session {
     dir: PathBuf,
     key: String,
     registration: Registration,
 }
 
-pub struct Writer<'a> {
-    session: &'a Session,
+pub struct Writer {
+    session: Session,
     spawn: String,
     stock: Option<String>,
-    _lease: File,
+    lease: File,
 }
 
 fn invalid(reason: &'static str) -> io::Error {
@@ -141,21 +162,26 @@ fn random_id() -> io::Result<String> {
 }
 
 fn state(dir: &Path) -> io::Result<State> {
-    Ok(serde_json::from_reader(BufReader::new(files::open(
-        &dir.join("journal"),
-    )?))?)
+    let s: State = serde_json::from_reader(BufReader::new(files::open(&dir.join("journal"))?))?;
+    s.registration.validate()?;
+    if (s.published.is_some() && s.verified.is_none())
+        || (s.verified.is_some() && s.stock_id.as_deref().is_none_or(str::is_empty))
+    {
+        return Err(invalid("incomplete host checkpoint record"));
+    }
+    Ok(s)
 }
 
 impl Store {
     /// Takes the existing trusted host profile, never a path from a checkpoint or an RPC caller.
     pub fn open(profile: &Path) -> io::Result<Self> {
-        files::directory(profile, false)?;
-        let root = profile.canonicalize()?.join("wsl-session-copies");
+        let root = catalog::root(profile)?;
         files::directory(&root, true)?;
         Ok(Self { root })
     }
 
     pub fn register(&self, registration: Registration) -> io::Result<Session> {
+        registration.validate()?;
         let key = random_id()?;
         let dir = self.root.join(&key);
         // Exclusive creation, including in the (improbable) event of a random key collision.
@@ -170,6 +196,7 @@ impl Store {
             registration,
             stock_id: None,
             verified: None,
+            published: None,
             pending: None,
             turn: None,
         };
@@ -183,11 +210,7 @@ impl Store {
 
     /// Reopen an existing host key; never create an empty journal when its original/registration is missing.
     pub fn session(&self, key: &str) -> io::Result<Session> {
-        if key.len() != 32
-            || !key
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-        {
+        if !reference::valid_key(key) {
             return Err(invalid("invalid session key"));
         }
         let dir = self.root.join(key);
@@ -211,13 +234,13 @@ impl Session {
     }
 
     /// The host must reconcile the previous guest process before admission; this lease fences host writers only.
-    pub fn admit(&self) -> io::Result<Writer<'_>> {
+    pub fn admit(&self) -> io::Result<Writer> {
         let lease = files::lease(&self.dir.join("lease"))?;
         Ok(Writer {
-            session: self,
+            session: self.clone(),
             spawn: random_id()?,
             stock: None,
-            _lease: lease,
+            lease,
         })
     }
 
@@ -253,7 +276,15 @@ impl Session {
     }
 }
 
-impl Writer<'_> {
+impl Writer {
+    pub fn session_key(&self) -> &str {
+        self.session.key()
+    }
+
+    pub fn registration(&self) -> &Registration {
+        self.session.registration()
+    }
+
     pub fn spawn_id(&self) -> &str {
         &self.spawn
     }
@@ -298,7 +329,14 @@ impl Writer<'_> {
             stock_id: stock.clone(),
             baseline: baseline.info.clone(),
         });
-        files::commit(dir, &s)
+        files::commit(dir, &s)?;
+        if s.published
+            .as_ref()
+            .is_some_and(|p| p.summary.message_count != 0)
+        {
+            crate::sessions::wsl_changed(dir);
+        }
+        Ok(())
     }
 
     /// The reader and exit callback must belong to the host-selected distro/key/spawn subprocess. On protocol
@@ -367,7 +405,7 @@ impl Writer<'_> {
             }
             _ => None,
         };
-        let witnessed = wire::records(&mut file, stock, witness)?;
+        let (witnessed, mut summary) = wire::records(&mut file, stock, witness)?;
         let recovery = match previous_span {
             None => Recovery::NoPriorSpan,
             Some(p) if wire::matches_span(files::open(&dir.join(p.name()))?, &mut file)? => {
@@ -375,6 +413,7 @@ impl Writer<'_> {
             }
             Some(_) => Recovery::Divergent,
         };
+        drop(file);
         let turn_resolved = witnessed && recovery != Recovery::Divergent;
         if turn_resolved {
             s.turn = None;
@@ -421,11 +460,44 @@ impl Writer<'_> {
         if repaired_host_copy && let Some(verified) = &mut s.verified {
             verified.slot = slot;
         }
-        let _gate = files::lock(&dir.join("gate"), true)?;
+        let listed_before = s
+            .published
+            .as_ref()
+            .is_some_and(|p| p.summary.message_count != 0);
+        let list_changed = (listed_before || summary.message_count != 0)
+            && (change != Change::Unchanged
+                || repaired_host_copy
+                || s.published.is_none()
+                || turn_resolved);
+        if summary.created.is_none() {
+            // A v1 header need not carry a date. The untouched lease was created at host registration.
+            let registered = self
+                .lease
+                .metadata()?
+                .modified()?
+                .duration_since(UNIX_EPOCH)
+                .map_err(io::Error::other)?;
+            summary.created = Some(registered.as_millis() as i64);
+        }
+        let pinned = s
+            .verified
+            .as_ref()
+            .ok_or_else(|| invalid("no verified slot"))?;
+        s.published = Some(catalog::Published {
+            summary,
+            mtime: files::open(&dir.join(pinned.slot.name()))?
+                .metadata()?
+                .modified()?,
+        });
+        let gate = files::lock(&dir.join("gate"), true)?;
         files::commit(dir, &s)?;
         // Only after the journal commit. If interrupted, even repeated failures leave at most the three fixed slots.
         for unused in Slot::ALL.into_iter().filter(|&n| s.unused(n)) {
             let _ = fs::remove_file(dir.join(unused.name()));
+        }
+        drop(gate);
+        if list_changed {
+            crate::sessions::wsl_changed(dir);
         }
         Ok(Receipt {
             change,

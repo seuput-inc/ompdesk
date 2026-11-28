@@ -42,7 +42,7 @@ fn framed(h: Value, data: &[u8], seal: &str) -> Vec<u8> {
     input
 }
 
-fn bytes(w: &Writer<'_>, data: &[u8], source: &str) -> Vec<u8> {
+fn bytes(w: &Writer, data: &[u8], source: &str) -> Vec<u8> {
     framed(
         header(w.session.key(), w.spawn_id(), data, source),
         data,
@@ -50,13 +50,258 @@ fn bytes(w: &Writer<'_>, data: &[u8], source: &str) -> Vec<u8> {
     )
 }
 
-fn receive(w: &mut Writer<'_>, data: &str, source: &str, turn: TurnDisposition<'_>) -> Receipt {
+fn receive(w: &mut Writer, data: &str, source: &str, turn: TurnDisposition<'_>) -> Receipt {
     let input = bytes(w, data.as_bytes(), source);
     w.receive(input.as_slice(), || Ok(true), turn).unwrap()
 }
 
-fn snapshot(w: &mut Writer<'_>, data: &str) -> Receipt {
+fn snapshot(w: &mut Writer, data: &str) -> Receipt {
     receive(w, data, SOURCE, TurnDisposition::SnapshotOnly)
+}
+
+#[test]
+fn ordinary_linked_profile_is_empty_but_a_store_under_it_is_not_trusted() {
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("profile");
+    let link = dir.path().join("alias");
+    fs::create_dir(&target).unwrap();
+    #[cfg(windows)]
+    crate::sys::junction(&target, &link).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert!(catalog::rows(&link).unwrap().is_empty());
+    assert_eq!(fs::read_dir(&target).unwrap().count(), 0);
+    let session = Store::open(&target)
+        .unwrap()
+        .register(registration())
+        .unwrap();
+    let key = reference::format_ref(session.key());
+    assert!(catalog::rows(&link).is_err());
+    assert!(catalog::lookup(&link, &key).is_err());
+}
+
+#[test]
+fn catalog_lists_only_published_content_with_host_identity() {
+    let profile = tempdir().unwrap();
+    let profile = profile.path();
+    let ordinary = profile.join("ordinary.jsonl");
+    fs::write(&ordinary, journal("ordinary")).unwrap();
+    let rows = || serde_json::to_value(catalog::rows(profile).unwrap()).unwrap();
+    assert_eq!(rows(), json!([]));
+    for value in [
+        ordinary.to_str().unwrap(),
+        "ompdesk-wsl:../ordinary.jsonl",
+        "ompdesk-wsl:00000000000000000000000000000000",
+    ] {
+        assert!(catalog::lookup(profile, value).is_err());
+    }
+    assert_eq!(fs::read_dir(profile).unwrap().count(), 1);
+    let store = Store::open(profile).unwrap();
+    let mut registration = registration();
+    registration.cwd = r"\\wsl.localhost\Test\workspace".into();
+    let first = store.register(registration.clone()).unwrap();
+    let key = reference::format_ref(first.key());
+    assert_eq!(catalog::lookup(profile, &key).unwrap(), registration);
+    let mut w = first.admit().unwrap();
+    assert_eq!(w.session_key(), first.key());
+    assert_eq!(w.registration(), &registration);
+    w.bind_stock_id(STOCK).unwrap();
+    let header = format!(
+        "{}\n{}\n",
+        json!({"type":"title","title":"first\u{001b}"}),
+        json!({"type":"session","id":STOCK,"timestamp":"2026-01-01T00:00:00.000Z",
+            "cwd":"guest","parentSession":"guest","openedBySession":"guest","kind":"chat"})
+    );
+    snapshot(&mut w, &header);
+    assert_eq!(rows(), json!([]));
+    let prompt = format!(
+        "{header}{}\n",
+        json!({"type":"message","id":"u","message":{"role":"user","timestamp":1767225601000_i64,
+            "content":[{"type":"text","text":"synthetic"},{"type":"image","path":"forged"},
+                {"type":"text","text":"prompt"}]}})
+    );
+    assert_eq!(snapshot(&mut w, &prompt).change, Change::Append);
+    assert_eq!(
+        rows(),
+        json!([{
+            "path":key, "id":key, "title":"first", "cwd":registration.cwd,
+            "openedBySession":"host-parent", "created":"2026-01-01T00:00:00.000Z",
+            "modified":"2026-01-01T00:00:01.000Z", "size":prompt.len(), "messageCount":1,
+            "firstMessage":"synthetic prompt", "status":"pending"
+        }])
+    );
+    let renamed = prompt.replace("first", "other") + &entry("a", "assistant");
+    assert_eq!(snapshot(&mut w, &renamed).change, Change::Replacement);
+    let listed = rows();
+    assert_eq!(listed[0]["title"], "other");
+    assert_eq!(listed[0]["messageCount"], 2);
+    assert_eq!(listed[0]["status"], "complete");
+    assert_eq!(listed[0]["path"], key);
+    assert_eq!(catalog::lookup(profile, &key).unwrap(), registration);
+
+    // A later registration with the same private stock ID is another row, not a cache hit for the first.
+    let later = store
+        .register(Registration {
+            parent: Some(key.clone()),
+            ..registration
+        })
+        .unwrap();
+    let mut next = later.admit().unwrap();
+    next.bind_stock_id(STOCK).unwrap();
+    snapshot(&mut next, &prompt);
+    let listed = rows();
+    let later_ref = reference::format_ref(later.key());
+    let child = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == later_ref)
+        .unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 2);
+    assert_eq!(child["openedBySession"], key);
+    assert_eq!(child["path"], later_ref);
+    assert_eq!(fs::read_to_string(ordinary).unwrap(), journal("ordinary"));
+}
+
+#[test]
+fn legacy_checkpoint_backfills_on_retry_and_corrupt_copies_cannot_reopen() {
+    let profile = tempdir().unwrap();
+    let store = Store::open(profile.path()).unwrap();
+    let s = store.register(registration()).unwrap();
+    let key = reference::format_ref(s.key());
+    let mut w = s.admit().unwrap();
+    w.bind_stock_id(STOCK).unwrap();
+    let input = journal("legacy") + &entry("a", "assistant");
+    let checkpoint = snapshot(&mut w, &input).checkpoint;
+    let mut old = state(&s.dir).unwrap();
+    old.published = None;
+    files::commit(&s.dir, &old).unwrap();
+    assert_eq!(
+        catalog::lookup(profile.path(), &key).unwrap(),
+        registration()
+    );
+    assert!(catalog::rows(profile.path()).unwrap().is_empty());
+    assert_eq!(snapshot(&mut w, &input).checkpoint, checkpoint);
+    let listed = || serde_json::to_value(catalog::rows(profile.path()).unwrap()).unwrap();
+    let restored = listed();
+    assert_eq!(restored[0]["title"], "legacy");
+    let slot = s.dir.join(old.verified.unwrap().slot.name());
+    fs::write(&slot, vec![b'x'; input.len()]).unwrap();
+    File::options()
+        .write(true)
+        .open(&slot)
+        .unwrap()
+        .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000))
+        .unwrap();
+    assert!(catalog::rows(profile.path()).is_err());
+    assert!(catalog::lookup(profile.path(), &key).is_err());
+    let receipt = snapshot(&mut w, &input);
+    assert!(receipt.repaired_host_copy);
+    assert_eq!(receipt.checkpoint, checkpoint);
+    assert_eq!(listed(), restored);
+    fs::write(s.dir.join("journal"), b"{}").unwrap();
+    assert!(catalog::lookup(profile.path(), &key).is_err());
+    assert!(catalog::rows(profile.path()).is_err());
+}
+
+#[tokio::test]
+async fn list_and_lookup_wire_invalidate_only_the_matching_open_index() {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufStream, DuplexStream};
+
+    async fn call(
+        client: &mut BufStream<DuplexStream>,
+        method: &str,
+        params: Value,
+    ) -> (Value, Vec<Value>) {
+        let frame = json!({"id":1,"method":method,"params":params});
+        client
+            .write_all(format!("{frame}\n").as_bytes())
+            .await
+            .unwrap();
+        client.flush().await.unwrap();
+        let mut changes = Vec::new();
+        loop {
+            let mut line = String::new();
+            assert_ne!(client.read_line(&mut line).await.unwrap(), 0);
+            let frame: Value = serde_json::from_str(&line).unwrap();
+            if frame["id"] == 1 {
+                return (frame, changes);
+            }
+            if frame["event"] == "sessions.changed" {
+                changes.push(frame["data"].clone());
+            }
+        }
+    }
+    let profile = tempdir().unwrap();
+    let other = tempdir().unwrap();
+    let (client, server) = tokio::io::duplex(1 << 16);
+    let mut client = BufStream::new(client);
+    let (read, write) = tokio::io::split(server);
+    let server = tokio::spawn(crate::serve(read, write, crate::registry()));
+    let root = profile.path().join("ordinary");
+    for (index, p) in [("catalog-wire", &profile), ("catalog-unrelated", &other)] {
+        let params = json!({"index":index,"root":root,"wslProfile":p.path()});
+        assert_eq!(
+            call(&mut client, "sessions.watch", params).await.0["ok"],
+            true
+        );
+    }
+    let params = json!({"profile":profile.path()});
+    let (empty, changes) = call(&mut client, "sessions.wslRows", params.clone()).await;
+    assert_eq!(empty["result"], json!({"rows":[]}));
+    assert!(changes.is_empty());
+    assert_eq!(fs::read_dir(profile.path()).unwrap().count(), 0);
+    let s = Store::open(profile.path())
+        .unwrap()
+        .register(registration())
+        .unwrap();
+    let key = reference::format_ref(s.key());
+    let mut w = s.admit().unwrap();
+    w.bind_stock_id(STOCK).unwrap();
+    let input = journal("synthetic") + &entry("a", "assistant");
+    let refused = bytes(&w, input.as_bytes(), SOURCE);
+    assert!(
+        w.receive(&refused[..], || Ok(false), TurnDisposition::SnapshotOnly)
+            .is_err()
+    );
+    let (unsealed, changes) = call(&mut client, "sessions.wslRows", params.clone()).await;
+    assert_eq!(unsealed["result"], json!({"rows":[]}));
+    assert!(changes.is_empty());
+    snapshot(&mut w, &input);
+    let changed = vec![json!({"index":"catalog-wire","names":null})];
+    let (listed, changes) = call(&mut client, "sessions.wslRows", params.clone()).await;
+    assert_eq!(listed["result"]["rows"][0]["path"], key);
+    assert_eq!(changes, changed);
+    let lookup = json!({"profile":profile.path(),"sessionRef":key});
+    let (found, changes) = call(&mut client, "sessions.wslLookup", lookup).await;
+    assert_eq!(
+        found["result"],
+        json!({"cwd":"/project","parent":"host-parent"})
+    );
+    assert!(changes.is_empty());
+    w.begin_turn().unwrap();
+    let (pending, changes) = call(&mut client, "sessions.wslRows", params.clone()).await;
+    assert_eq!(pending["result"]["rows"][0]["status"], "pending");
+    assert_eq!(changes, changed);
+    snapshot(&mut w, &input);
+    let (_, changes) = call(&mut client, "sessions.wslRows", params.clone()).await;
+    assert!(changes.is_empty());
+    for index in ["catalog-wire", "catalog-unrelated"] {
+        let (closed, _) = call(&mut client, "sessions.close", json!({"index":index})).await;
+        assert_eq!(closed["ok"], true);
+    }
+    let end = input + &entry("done", "assistant");
+    receive(
+        &mut w,
+        &end,
+        SOURCE,
+        TurnDisposition::ConfirmedJournalTurn("done"),
+    );
+    let (closed, changes) = call(&mut client, "sessions.wslRows", params).await;
+    assert_eq!(closed["result"]["rows"][0]["status"], "complete");
+    assert!(changes.is_empty());
+    drop(client);
+    server.await.unwrap().unwrap();
 }
 
 fn contents(mut file: File) -> String {

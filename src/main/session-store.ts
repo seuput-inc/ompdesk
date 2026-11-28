@@ -24,6 +24,14 @@ const sessionRows = z.array(
 	}),
 );
 
+export const wslListedAnswer = z.object({
+	rows: z.array(
+		sessionRows.element.omit({ parentSessionPath: true, promptOriginDevice: true }).extend({
+			openedBySession: z.string().nullable(),
+		}),
+	),
+});
+
 const patches = z.array(z.object({ row: z.number(), at: z.number().optional(), autoTitle: z.string().optional() }));
 
 const movedSession = z.object({ sessionPath: z.string() });

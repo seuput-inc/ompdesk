@@ -21,6 +21,7 @@ use super::bot::BotChat;
 use super::bridge::{Bridge, CONNECT_TIMEOUT, Out, Sink, new_address, remove_address};
 use super::chips::{Chips, Lane as ChipLane};
 use super::frames::{Decoder, Frame, head_of, js_trim, strip_vt_control_characters, supports_v2};
+use super::guest_state::{self, Probe};
 use super::held_queue;
 use super::launch::{
     MAX_RESTART_ATTEMPTS, Open, WINDOWS_SESSION_END_EXIT_CODE, file_exists, restart_delay,
@@ -107,6 +108,7 @@ pub enum Command {
         bridge_connected: bool,
         reply: QueueReply,
     },
+    Refused,
     Send(Box<RawValue>),
     BotQuery {
         spawn_id: Option<u64>,
@@ -186,6 +188,12 @@ pub struct Stopped {
 
 pub enum Msg {
     Seq(u64, Command),
+    OfferGuest {
+        reference: String,
+        offer: oneshot::Sender<Result<(u64, bool), Fault>>,
+    },
+    GuestAnswer(Box<guest_state::Answer>),
+    CancelGuest(u64),
     Resolved {
         ask: u64,
         outcome: String,
@@ -369,6 +377,7 @@ struct Identity {
     session_id: Option<String>,
     session_file: Option<String>,
     session_name: Option<String>,
+    guest_project: Option<(String, Option<String>)>,
 }
 
 /// A command omp has not answered, and who waits for the answer.
@@ -531,6 +540,7 @@ pub struct Lane {
     run_messages: Vec<Value>,
     barriers: Vec<(u64, oneshot::Sender<()>)>,
     running: Option<Running>,
+    guest_probe: Option<Probe>,
     ask_counter: u64,
     asks: Vec<(u64, Ask)>,
     ready: Option<ReadyProgress>,
@@ -656,6 +666,7 @@ impl Lane {
             run_messages: Vec::new(),
             barriers: Vec::new(),
             running: None,
+            guest_probe: None,
             ask_counter: 0,
             asks: Vec::new(),
             ready: None,
@@ -752,6 +763,10 @@ impl Lane {
                     if let Some(value) = value {
                         map.insert(key.into(), json!(value));
                     }
+                }
+                if let Some((cwd, parent)) = &identity.guest_project {
+                    map.insert("cwd".into(), json!(cwd));
+                    map.insert("openedBySession".into(), json!(parent));
                 }
                 Value::Object(map)
             });
@@ -865,6 +880,25 @@ impl Lane {
             Msg::Seq(seq, command) => {
                 self.applied = seq;
                 self.command(command);
+            }
+            Msg::OfferGuest { reference, offer } => {
+                if !self.disposed
+                    && !self.quit
+                    && self.running.is_none()
+                    && self.session_path.as_deref() == Some(reference.as_str())
+                    && (self.guest_probe.is_none()
+                        || matches!(&self.guest_probe, Some(Probe::Offered(tx)) if tx.is_closed()))
+                {
+                    self.guest_probe = Some(Probe::Offered(offer));
+                } else {
+                    let _ = offer.send(Err(disconnected()));
+                }
+            }
+            Msg::GuestAnswer(answer) => self.guest_answer(*answer),
+            Msg::CancelGuest(seq) => {
+                if matches!(&self.guest_probe, Some(Probe::Asked { seq: at, .. }) if *at == seq) {
+                    self.guest_probe = None;
+                }
             }
             Msg::Resolved {
                 ask,
@@ -1037,15 +1071,18 @@ impl Lane {
             }
             Command::Dispose { stdin_grace } => self.dispose(stdin_grace),
             Command::Cwd(cwd) => {
-                if self.cwd != cwd {
-                    self.revoke_bot();
+                if !self.on_reserved_session() {
+                    if self.cwd != cwd {
+                        self.revoke_bot();
+                    }
+                    self.cwd = cwd;
                 }
-                self.cwd = cwd;
             }
             Command::Gate => {
                 self.revoke_bot();
                 self.start_gate = true;
             }
+            Command::Refused => {}
             Command::Stock {
                 seq,
                 command,
@@ -1229,6 +1266,26 @@ impl Lane {
     }
 
     // ---- start, resolve, spawn, launch ----------------------------------------------------------------------------
+    fn on_reserved_session(&self) -> bool {
+        self.session_path
+            .as_deref()
+            .is_some_and(|p| crate::wsl_copy::reference::parse_ref(p).is_some())
+    }
+
+    fn refuse_reserved_start(&mut self) -> bool {
+        if let Some(fault) = self.session_path.as_deref().and_then(guest_state::refusal) {
+            if self
+                .session
+                .as_ref()
+                .is_some_and(|s| s.session_file != self.session_path)
+            {
+                self.set_session(None);
+            }
+            self.set_status("error", Detail::message(fault.message));
+            return true;
+        }
+        false
+    }
 
     fn start(&mut self) {
         if self.disposed || self.quit {
@@ -1237,11 +1294,15 @@ impl Lane {
         if self.start_seq != 0 {
             self.revoke_bot();
         }
-        self.set_status("starting", Detail::default());
         // omp + env resolution takes up to a few seconds. A restart()/start() landing inside that window supersedes
         // this pending spawn — it already killed whatever child existed (nothing yet) — so spawning on its answer
         // would orphan the newer child and tear it down with the session it just opened.
         self.start_seq += 1;
+        if self.refuse_reserved_start() {
+            self.guest_probe = None;
+            return;
+        }
+        self.set_status("starting", Detail::default());
         let seq = self.start_seq;
         let ask = self.ask(Ask::Resolve { seq });
         self.emit(
@@ -1385,6 +1446,10 @@ impl Lane {
 
     /// The launch ask: how this spawn opens its session, then main assembles it (its settings are read now).
     fn launch(&mut self, generation: u64) {
+        if self.refuse_reserved_start() {
+            self.release_slot = None;
+            return;
+        }
         self.last_stderr.clear();
         self.slow_log.clear();
         self.spawned_at_ms = now_ms();
@@ -1553,6 +1618,19 @@ impl Lane {
         item_bridge_proof: Option<String>,
     ) {
         let bot = self.bot_launch.take().filter(|_| start.cwd == self.cwd);
+        // Main assembles argv. Keep an opaque reference out even if its launch flags name a second session.
+        for arg in &start.args {
+            let value = arg.trim_matches('"');
+            let value = value
+                .strip_prefix("--session=")
+                .unwrap_or(value)
+                .trim_matches('"');
+            if let Some(fault) = guest_state::refusal(value) {
+                self.release_slot = None;
+                self.set_status("error", Detail::message(fault.message));
+                return;
+            }
+        }
         self.spawn_counter += 1;
         let spawn_id = self.spawn_counter;
         let inbox = self.inbox.clone();
@@ -1738,7 +1816,7 @@ impl Lane {
         timeout: Option<Duration>,
         reply: StockReply,
     ) {
-        if self.running.is_none() {
+        if self.running.is_none() && self.guest_probe.is_none() {
             let _ = reply.send(Err(disconnected()));
             return;
         }
@@ -1751,6 +1829,10 @@ impl Lane {
             )));
             return;
         };
+        if let Some(fault) = guest_state::command_refusal(|key| map.get(key).map(Box::as_ref)) {
+            let _ = reply.send(Err(fault));
+            return;
+        }
         let text = |key: &str| {
             map.get(key)
                 .and_then(|raw| serde_json::from_str::<String>(raw.get()).ok())
@@ -1760,11 +1842,79 @@ impl Lane {
             name: text("name"),
             session_path: text("sessionPath"),
         };
+        if self.running.is_none() {
+            if info.ty == "get_state"
+                && matches!(self.guest_probe, Some(Probe::Offered(_)))
+                && let Some(Probe::Offered(offer)) = self.guest_probe.take()
+            {
+                let brief = map.get("brief").is_some_and(|v| v.get() == "true");
+                if offer.send(Ok((seq, brief))).is_ok() {
+                    self.guest_probe = Some(Probe::Asked {
+                        seq,
+                        reply,
+                        deadline: timeout.map(|t| Instant::now() + t),
+                    });
+                    return;
+                }
+            }
+            let _ = reply.send(Err(disconnected()));
+            return;
+        }
         if let Err(Waiter::Caller(_, reply)) =
             self.send_command(map, info, Waiter::Caller(seq, reply), timeout)
         {
             let _ = reply.send(Err(disconnected()));
         }
+    }
+
+    fn guest_answer(&mut self, mut answer: guest_state::Answer) {
+        if !matches!(&self.guest_probe, Some(Probe::Asked { seq, .. }) if *seq == answer.seq) {
+            let _ = answer.done.send(Err(disconnected()));
+            return;
+        }
+        let Some(Probe::Asked {
+            seq,
+            reply,
+            deadline,
+        }) = self.guest_probe.take()
+        else {
+            return;
+        };
+        if reply.is_closed()
+            || answer.done.is_closed()
+            || deadline.is_some_and(|d| Instant::now() >= d)
+        {
+            let _ = reply.send(Err(disconnected()));
+            let _ = answer.done.send(Err(disconnected()));
+            return;
+        }
+        let state = match answer.project() {
+            Ok(state) => state,
+            Err(fault) => {
+                let _ = reply.send(Err(fault.clone()));
+                let _ = answer.done.send(Err(fault));
+                return;
+            }
+        };
+        let text = state.to_string();
+        let registration = answer.writer.registration();
+        self.cwd.clone_from(&registration.cwd);
+        if let Err(fault) = self.observe(
+            &CommandInfo {
+                ty: "get_state".into(),
+                name: None,
+                session_path: None,
+            },
+            &text,
+            true,
+        ) {
+            let _ = reply.send(Err(fault.clone()));
+            let _ = answer.done.send(Err(fault));
+            return;
+        }
+        self.answer_event(seq, Some(text.into_bytes()));
+        let _ = reply.send(Ok(()));
+        let _ = answer.done.send(Ok(answer.writer));
     }
 
     fn queue_step(&mut self, step: Step, reply: QueueReply) {
@@ -2016,13 +2166,13 @@ impl Lane {
     fn on_response(&mut self, frame: &Frame) -> bool {
         let text = frame.text();
         let Some((_, Some(id))) = head_of(&text) else {
-            return false;
+            return guest_state::unclaimed_reference(&text);
         };
         let Some(running) = self.running.as_mut() else {
-            return false;
+            return guest_state::unclaimed_reference(&text);
         };
         let Some(at) = running.pending.iter().position(|pending| pending.id == id) else {
-            return false;
+            return guest_state::unclaimed_reference(&text);
         };
         let expired = running.pending[at]
             .deadline
@@ -2031,11 +2181,27 @@ impl Lane {
             matches!(&running.pending[at].waiter, Waiter::Caller(_, reply) if reply.is_closed());
         if expired || abandoned {
             Self::expire_queue(running.pending.remove(at));
-            return false;
+            return guest_state::unclaimed_reference(&text);
         }
         let pending = running.pending.remove(at);
         let initial = matches!(pending.waiter, Waiter::Answered(_));
-        let state = self.observe(&pending.command, &text);
+        let state = match self.observe(&pending.command, &text, false) {
+            Ok(state) => state,
+            Err(fault) => {
+                match pending.waiter {
+                    Waiter::Caller(_, reply) => {
+                        let _ = reply.send(Err(fault.clone()));
+                    }
+                    Waiter::Queue { reply, .. } => {
+                        let _ = reply.send(Err(fault.clone()));
+                    }
+                    _ => {}
+                }
+                self.stop_child(None);
+                self.set_status("error", Detail::message(fault.message));
+                return true;
+            }
+        };
         if pending.command.ty == "get_state"
             && let Some(r) = &mut self.running
             && let Some(bot) = &mut r.bot
@@ -2083,7 +2249,7 @@ impl Lane {
 
     /// Track the session identity through the responses every hydrate already requests.
     // formal/tab-session `Observe`, `Switch(f)`, `NewSession` (findings F1, F2; CORRESPONDENCE A5).
-    fn observe(&mut self, command: &CommandInfo, response: &str) -> bool {
+    fn observe(&mut self, command: &CommandInfo, response: &str, guest: bool) -> Result<bool, Fault> {
         #[derive(Deserialize)]
         struct Response<'a> {
             success: Option<bool>,
@@ -2093,34 +2259,50 @@ impl Lane {
             data: Option<&'a RawValue>,
         }
         let Ok(response) = serde_json::from_str::<Response>(response) else {
-            return false;
+            if !guest && command.ty == "get_state" && guest_state::unclaimed_reference(response) {
+                return Err(Fault::new(
+                    "invalid_guest_state",
+                    "Stock reported a reserved session.",
+                ));
+            }
+            return Ok(false);
         };
         if response.success != Some(true) {
-            return false;
+            return Ok(false);
         }
         if command.ty == "get_state" {
             use std::collections::BTreeMap;
             let Some(raw) = response.data else {
-                return false;
+                return Ok(false);
             };
             // Like JSON.parse, duplicate keys keep the last value; arrays have no named identity fields.
             let fields = match raw.get().as_bytes().first() {
                 Some(b'{') => {
                     let Ok(map) = serde_json::from_str::<BTreeMap<String, &RawValue>>(raw.get())
                     else {
-                        return false;
+                        return Ok(false);
                     };
                     map
                 }
                 Some(b'[') => Default::default(),
-                _ => return false,
+                _ => return Ok(false),
             };
             let text = |key: &str| serde_json::from_str::<String>(fields.get(key)?.get()).ok();
             let next = Identity {
                 session_id: text("sessionId"),
                 session_file: text("sessionFile"),
                 session_name: text("sessionName"),
+                guest_project: guest
+                    .then(|| (text("cwd").unwrap_or_default(), text("openedBySession"))),
             };
+            if !guest
+                && let Some(fault) = [next.session_file.as_deref(), next.session_id.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .find_map(guest_state::refusal)
+            {
+                return Err(fault);
+            }
             // The tab is on that session now: every later spawn reopens it, or starts a new one while stock has not
             // written it (`session_open`). Only then is the tab no longer new: an omp that crashes after `ready` but
             // before this answer must not leave the next spawn to stock's autoResume (formal/tab-session F1).
@@ -2129,9 +2311,9 @@ impl Lane {
             if let Some(file) = file {
                 self.set_tab_session(Some(file), false);
             }
-            return response
+            return Ok(response
                 .command
-                .is_some_and(|ty| ty.get() == "\"get_state\"");
+                .is_some_and(|ty| ty.get() == "\"get_state\""));
         } else if SESSION_CHANGING_COMMANDS.contains(&command.ty.as_str()) {
             self.set_session(None);
             self.run_messages.clear();
@@ -2145,7 +2327,7 @@ impl Lane {
                 .and_then(|data| data.get("cancelled"))
                 .is_some_and(|cancelled| cancelled == &Value::Bool(true));
             if cancelled {
-                return false;
+                return Ok(false);
             }
             if command.ty == "switch_session"
                 && let Some(path) = &command.session_path
@@ -2163,7 +2345,7 @@ impl Lane {
             let frame = json!({ "type": "session_info_update", "title": js_trim(name) });
             self.route_frame(value_frame(&frame), None);
         }
-        false
+        Ok(false)
     }
 
     // ---- ready ----------------------------------------------------------------------------------------------------
@@ -2655,6 +2837,7 @@ impl Lane {
     fn cleanup(&mut self) -> Option<Running> {
         // Main drops what the lane sent before the command that tears this down: nothing after leans on it.
         self.revoke_bot();
+        self.guest_probe = None;
         self.stream.reset();
         self.generation += 1;
         self.slow_epoch += 1;
@@ -2707,7 +2890,11 @@ impl Lane {
     // formal/tab-session `Restart`, `Open(f)`, `Move`: synchronous in the lane: kill, state, start.
     fn restart(&mut self, cwd: Option<String>, resume_session_path: Option<String>) {
         self.stop_child(None);
-        let cwd = cwd.filter(|cwd| !cwd.is_empty());
+        let pinned = self.on_reserved_session()
+            && resume_session_path
+                .as_ref()
+                .is_none_or(|path| Some(path) == self.session_path.as_ref());
+        let cwd = cwd.filter(|cwd| !pinned && !cwd.is_empty());
         let moved = cwd.is_some();
         if let Some(cwd) = cwd {
             self.cwd = cwd;

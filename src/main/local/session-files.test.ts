@@ -111,6 +111,7 @@ it("rejects an empty name, wrong extension or missing session without starting s
 	const { file, calls, rename } = await fixture();
 	await expect(rename(" \ufeff ", `${file}.txt`)).rejects.toThrow("Session name cannot be empty");
 	await expect(rename("name", `${file}.JSONL`)).rejects.toThrow("Invalid session path");
+	await expect(rename("name", "OMPDESK-WSL:bad.jsonl")).rejects.toThrow("Invalid session path");
 	await expect(rename("name")).rejects.toThrow("Session file not found");
 	await expect(stat(file)).rejects.toMatchObject({ code: "ENOENT" });
 	expect(await calls()).toEqual([]);

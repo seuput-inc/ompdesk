@@ -282,6 +282,16 @@ describe("spawnTabForWindow refusal contracts", () => {
 });
 
 describe("spawnTabForWindow reopening a stored session", () => {
+	it("never opens an offline WSL copy as a fresh Windows tab in the caller’s folder", async () => {
+		const { deps, acquire, recordedCwd } = harness();
+		recordedCwd.mockResolvedValue("//wsl.localhost/Ubuntu/work");
+		await expect(
+			spawnTabForWindow(deps, fakeWindow(), { cwd: "/caller", sessionPath: `ompdesk-wsl:${"a".repeat(32)}` }),
+		).rejects.toThrow("[wsl_session_unavailable]");
+		expect(recordedCwd).not.toHaveBeenCalled();
+		expect(acquire).not.toHaveBeenCalled();
+	});
+
 	it("opens it in the folder its file records, whatever folder the caller or the app is in", async () => {
 		// Its real path, as stock records a session's cwd: os.tmpdir() can be an 8.3 short name on Windows runners.
 		const home = await realpath(await mkdtemp(join(tmpdir(), "omp-spawn-home-")));
@@ -361,6 +371,15 @@ describe("spawnTabForWindow reopening a stored session", () => {
 });
 
 describe("spawnTabForWindow on a paired host", () => {
+	it("never sends a WSL session reference to a peer as a Windows file", async () => {
+		const { deps, acquire, remoteKindFor } = harness();
+		await expect(
+			spawnTabForWindow(deps, fakeWindow(), { device: "older-host", sessionPath: "OMPDESK-WSL:bad.jsonl" }),
+		).rejects.toThrow("[wsl_session_unavailable]");
+		expect(remoteKindFor).not.toHaveBeenCalled();
+		expect(acquire).not.toHaveBeenCalled();
+	});
+
 	it("checks F-OWN and the file kind on the host, and runs a host chat in the host's default workspace", async () => {
 		const { deps, acquire, kindFor, remoteKindFor, sessionOwner } = harness();
 		remoteKindFor.mockResolvedValue("chat");

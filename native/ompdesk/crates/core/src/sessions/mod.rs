@@ -2,9 +2,9 @@
 //! `src/main/session-index.ts`): the one recursive watch of the sessions tree with its settle and its change events,
 //! the legacy chat label read from a session file's head once per session id, which rows are kept, and content search.
 //!
-//! The list itself is not read here: main asks stock omp for it (`listAllSessions` in the stock helper) and hands this
-//! side each row's path and id, in the list's order. Main also keeps the tombstones, the folder filter of a window's
-//! list and the shared numbered copy, whose order and diff are the page's own code (`src/shared`).
+//! Main asks stock omp for its rows (`listAllSessions` in the stock helper) and hands this side each row's path and id.
+//! WSL rows are read separately from host registration records, never by passing their references to stock.
+//! Main keeps the tombstones, per-window folder filter and shared numbered copy (`src/shared`).
 //!
 //! An index is named by main (`index`); its state here is made on first use and dropped by `sessions.close`. Events:
 //! `sessions.watching` `{index, watching, missed}` when the tree's watch starts or ends, `sessions.changed`
@@ -59,6 +59,7 @@ struct Index {
     /// Only paths in stock's last deduplicated list are eligible; the caller can narrow, never widen, that list.
     searchable: Option<(PathBuf, HashSet<String>)>,
     watch: Option<Watch>,
+    wsl: Option<(PathBuf, crate::server::Events)>,
 }
 
 static INDEXES: LazyLock<Mutex<HashMap<String, Index>>> = LazyLock::new(Default::default);
@@ -82,6 +83,43 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("sessions.listed", |call| {
         Box::pin(blocking(move || listed(call.params()?)))
+    });
+    registry.add("sessions.wslRows", |call| {
+        Box::pin(blocking(move || {
+            #[derive(Deserialize)]
+            struct Params {
+                profile: PathBuf,
+            }
+            #[derive(Serialize)]
+            struct Rows {
+                rows: Vec<crate::wsl_copy::catalog::Row>,
+            }
+            let p: Params = call.params()?;
+            let rows = crate::wsl_copy::catalog::rows(&p.profile).map_err(wsl_fault)?;
+            Reply::json(&Rows { rows })
+        }))
+    });
+    registry.add("sessions.wslLookup", |call| {
+        Box::pin(blocking(move || {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Params {
+                profile: PathBuf,
+                session_ref: String,
+            }
+            #[derive(Serialize)]
+            struct Lookup {
+                cwd: String,
+                parent: Option<String>,
+            }
+            let p: Params = call.params()?;
+            let r =
+                crate::wsl_copy::catalog::lookup(&p.profile, &p.session_ref).map_err(wsl_fault)?;
+            Reply::json(&Lookup {
+                cwd: r.cwd,
+                parent: r.parent,
+            })
+        }))
     });
     registry.add("sessions.search", |call| Box::pin(search(call)));
     registry.add("sessions.journalWait", |call| {
@@ -120,6 +158,8 @@ struct WatchParams {
     index: String,
     /// The sessions root, absolute, as main's `path.resolve` spells it.
     root: String,
+    #[serde(rename = "wslProfile")]
+    wsl_profile: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -138,12 +178,39 @@ struct Changed<'a> {
 #[derive(Serialize)]
 struct Done {}
 
+fn wsl_fault(e: std::io::Error) -> Fault {
+    Fault::new("wsl_session", e.to_string())
+}
+
+/// Called only after a durable change. Each watch owns its subscription; closing the index drops both.
+pub(crate) fn wsl_changed(session_dir: &Path) {
+    for (name, index) in locked(&INDEXES).iter() {
+        if let Some((root, events)) = &index.wsl
+            && Some(root.as_path()) == session_dir.parent()
+        {
+            events.send(
+                "sessions.changed",
+                &Changed {
+                    index: name,
+                    names: None,
+                },
+            );
+        }
+    }
+}
+
 /// Starts the index's watch of `root` (in place of the one it had). It answers at once; the watch says when it began
 /// (`sessions.watching`), which for a root that is not there yet is when it is made.
 fn watch(call: &Call) -> Result<Reply, Fault> {
     let params: WatchParams = call.params()?;
+    // The stock watch is independent of WSL eligibility (e.g. userData may be a junction).
+    let wsl_root = params
+        .wsl_profile
+        .as_deref()
+        .and_then(|profile| crate::wsl_copy::catalog::root(profile).ok());
     let mut indexes = locked(&INDEXES);
     let index = indexes.entry(params.index.clone()).or_default();
+    index.wsl = wsl_root.map(|root| (root, call.events.clone()));
     let legacy = Arc::clone(&index.legacy);
     let text = Arc::clone(&index.search);
     let events = call.events.clone();
@@ -559,7 +626,7 @@ mod tests {
         let request = serde_json::json!({
             "id": 1,
             "method": "sessions.watch",
-            "params": { "index": "unit-wire", "root": root.to_string_lossy() },
+            "params": { "index": "unit-wire", "root": root, "wslProfile": root.join("missing-profile") },
         });
         client_write
             .write_all(format!("{request}\n").as_bytes())

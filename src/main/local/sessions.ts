@@ -8,6 +8,7 @@ import type {
 	RpcSessionTreeResult,
 	RpcSwitchLeafResult,
 } from "../../shared/rpc-types";
+import { requireFileSession } from "../../shared/wsl-session-ref";
 import { handlers as extraHandlers } from "./session-extras";
 import { renameStoredSession } from "./session-files";
 import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
@@ -209,6 +210,7 @@ export const handlers: Record<string, LocalHandler> = {
 	/** The live session renames through stock; any other stored session through a short-lived omp. */
 	set_session_name: async (command, ctx) => {
 		const name = requiredString(command, "name", "Session name");
+		if (typeof command.sessionPath === "string") requireFileSession(command.sessionPath);
 		const target = typeof command.sessionPath === "string" ? resolve(command.sessionPath) : undefined;
 		if (target === undefined || (ctx.sessionFile !== undefined && target === resolve(ctx.sessionFile))) {
 			await ctx.send({ type: "set_session_name", name });

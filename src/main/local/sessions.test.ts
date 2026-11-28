@@ -325,6 +325,16 @@ describe("get_transcript", () => {
 	});
 });
 
+it("refuses a WSL key before resolving a stored rename against a Windows directory", async () => {
+	const { ctx } = pagedBridge([], () => "");
+	await expect(
+		handlers.set_session_name!(
+			{ type: "set_session_name", name: "renamed", sessionPath: "ompdesk-wsl:bad.jsonl" },
+			ctx,
+		),
+	).rejects.toThrow("[wsl_session_unavailable]");
+});
+
 describe("switch_session", () => {
 	it("binds the explicit model in the switch itself", async () => {
 		const sent: Record<string, unknown>[] = [];

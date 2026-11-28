@@ -10,6 +10,7 @@ import type { SessionInfo, SessionKind } from "./ipc-types";
 import { isOmpdeskWorktreeFolder, type WorktreeKind } from "./project-origin";
 import type { SessionSort } from "./sidebar-prefs";
 import type { SidebarProject } from "./sidebar-projects";
+import { isWslSessionRef } from "./wsl-session-ref";
 
 /**
  * How long a row does nothing before it sleeps: Orca stops an idle chat's agent after 30 minutes
@@ -451,7 +452,8 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 	for (const session of code) {
 		const opener = session.openedBySession ?? session.restoredFamily;
 		if (typeof opener === "string") recorded.set(session.path, opener);
-		if (session.openedBySession !== undefined && !session.promptOriginDevice) briefed.add(session.path);
+		if (session.openedBySession !== undefined && !session.promptOriginDevice && !isWslSessionRef(session.path))
+			briefed.add(session.path);
 	}
 	const rootOf = openerOfSessions(
 		facts.tabs,

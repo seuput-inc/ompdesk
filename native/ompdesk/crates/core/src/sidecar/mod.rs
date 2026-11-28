@@ -29,6 +29,8 @@ mod bot;
 pub mod bridge;
 mod chips;
 mod frames;
+mod guest_state;
+pub use guest_state::serve_guest_state;
 mod held_queue;
 mod lane;
 mod launch;
@@ -76,9 +78,7 @@ pub fn register(registry: &mut Registry) {
         plain(call, |params: CwdParams| Command::Cwd(params.cwd))
     });
     registry.add("sidecar.gate", |call| plain(call, |_: Seq| Command::Gate));
-    registry.add("sidecar.send", |call| {
-        plain(call, |params: SendParams| Command::Send(params.frame))
-    });
+    registry.add("sidecar.send", send);
     registry.add("sidecar.command", command);
     registry.add("sidecar.bridge", bridge_request::<BridgeParams>);
     registry.add("sidecar.queue", queue_command);
@@ -353,6 +353,22 @@ struct CommandParams {
     seq: u64,
     command: Box<RawValue>,
     timeout_ms: Option<u64>,
+}
+
+fn send(call: Call) -> Answer {
+    let params: SendParams = match call.params() {
+        Ok(params) => params,
+        Err(fault) => return failed(fault),
+    };
+    let fields = serde_json::from_str::<BTreeMap<String, &RawValue>>(params.frame.get());
+    if let Ok(fields) = fields
+        && let Some(fault) = guest_state::command_refusal(|key| fields.get(key).copied())
+    {
+        deliver(&params.tab, params.seq, Command::Refused);
+        return failed(fault);
+    }
+    deliver(&params.tab, params.seq, Command::Send(params.frame));
+    done()
 }
 
 /// A stock command: omp's correlated response, after every frame it sent before it went out as an event.

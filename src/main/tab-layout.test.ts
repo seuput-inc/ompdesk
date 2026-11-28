@@ -378,6 +378,13 @@ describe("persisted tab layout", () => {
 		expect(restored?.activeIndex).toBe(11);
 	});
 
+	it("retains an offline WSL reference once, without turning it into a new session", () => {
+		const tab = { cwd: "//wsl.localhost/Ubuntu/work", kind: "agent", sessionPath: `ompdesk-wsl:${"a".repeat(32)}` };
+		const invalid = { ...tab, sessionPath: "OMPDESK-WSL:bad" };
+		const layout = { version: 1, activeIndex: 0, tabs: [tab, tab, invalid] };
+		expect(sanitizePersistedTabLayout(layout, pathChecks([], []))?.tabs).toEqual([tab, invalid]);
+	});
+
 	it("keeps remote descriptors without checking this disk, and dedupes sessions per device", () => {
 		const value = {
 			version: 1,

@@ -12,6 +12,7 @@
 
 export const IPC_ERROR_CODES = [
 	"invalid_session_path",
+	"wsl_session_unavailable",
 	"session_running",
 	"session_deleted",
 	"session_folder_missing",

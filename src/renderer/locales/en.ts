@@ -1940,6 +1940,7 @@ export const en: Record<string, string> = {
 	"toast.failedRetry": "Something went wrong. Try again.",
 	"prefs.unreadable": "Your saved settings couldn't be read, so this change was not saved.",
 	"ipcError.invalid_session_path": "That session file isn't valid.",
+	"ipcError.wsl_session_unavailable": "This session needs its WSL host. It hasn’t been opened on Windows.",
 	"ipcError.session_running": "The session is still running. Stop it first, then try again.",
 	"ipcError.handoff_project_missing": "That computer has no folder for this project. Open the project there first.",
 	"ipcError.handoff_pending":

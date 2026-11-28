@@ -1191,7 +1191,13 @@ app.whenReady().then(async () => {
 	]);
 	const initialCwd = startup.cwd;
 	const explicitStartupCwd = startup.explicit ? initialCwd : undefined;
-	sessionIndex = new SessionIndex(undefined, initialCwd, sessionKinds.file, bridgeDir);
+	sessionIndex = new SessionIndex(
+		undefined,
+		initialCwd,
+		sessionKinds.file,
+		bridgeDir,
+		process.platform === "win32" ? app.getPath("userData") : undefined,
+	);
 	const sidebarPrefsChanged = () => {
 		for (const win of [...BrowserWindow.getAllWindows(), ...(webHost?.windows.all() ?? [])])
 			if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.PREFS_CHANGED, { key: SIDEBAR_PREFS_KEY });

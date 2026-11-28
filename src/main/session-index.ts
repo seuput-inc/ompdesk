@@ -13,6 +13,7 @@ import { codedError } from "../shared/ipc-error-codes";
 import type { SessionContentMatch, SessionInfo, SessionKind } from "../shared/ipc-types";
 import type { AgentMessage } from "../shared/rpc-types";
 import { compareSessionRows, type SessionListDelta, type VersionedSessionList } from "../shared/session-list-delta";
+import { isWslSessionRef, requireFileSession } from "../shared/wsl-session-ref";
 import { agentDir } from "./agent-paths";
 import { directoryExists } from "./canonical-cwd";
 import { core } from "./core/process";
@@ -20,7 +21,7 @@ import { deletedSessions } from "./deleted-sessions";
 import { OmpUnavailableError } from "./omp-availability";
 import { SessionListShare } from "./session-list-share";
 import { type Pace, readPace } from "./session-pace";
-import { StockSessionStore } from "./session-store";
+import { StockSessionStore, wslListedAnswer } from "./session-store";
 
 /**
  * The OS starts delivering a moment after the watch is made: a file written in that moment is never reported, so the
@@ -33,6 +34,7 @@ const watchingEvent = z.object({ index: z.string(), watching: z.boolean(), misse
 const changedEvent = z.object({ index: z.string(), names: z.array(z.string()).nullable() });
 const listedAnswer = z.object({ listed: z.array(z.object({ row: z.number(), chat: z.boolean() })) });
 const kindAnswer = z.object({ chat: z.boolean().nullable() });
+const wslRegistration = z.object({ cwd: z.string().min(1) });
 
 let indexes = 0;
 
@@ -58,6 +60,7 @@ export class SessionIndex {
 	/** The record of the GUI's chat sessions (`session-kinds.ts`), which the core reads while it labels rows; null: none. */
 	#kindsFile: string | null;
 	#store: StockSessionStore;
+	readonly #wslProfile?: string;
 	/** The global list, read once per change while the tree is watched and shared by every asker. */
 	readonly #share = new SessionListShare(() => this.#readAll());
 	#warmup: NodeJS.Timeout | undefined;
@@ -84,10 +87,12 @@ export class SessionIndex {
 		cwd: string,
 		kindsFile: string | null = null,
 		bridgeDir = resolve("resources/gui-bridge"),
+		wslProfile?: string,
 	) {
 		this.#sessionsDir = sessionsDir ?? join(agentDir(), "sessions");
 		this.#cwd = resolve(cwd);
 		this.#kindsFile = kindsFile;
+		this.#wslProfile = wslProfile;
 		this.#store = new StockSessionStore(this.#sessionsDir, bridgeDir, this.#id);
 		this.#share.onChange = delta => this.onListChange?.(delta);
 	}
@@ -124,7 +129,11 @@ export class SessionIndex {
 		this.#missed ||= this.#asked;
 		this.#asked = true;
 		this.#watching = false;
-		const asked = core().call("sessions.watch", { index: this.#id, root: resolve(this.#sessionsDir) });
+		const asked = core().call("sessions.watch", {
+			index: this.#id,
+			root: resolve(this.#sessionsDir),
+			wslProfile: this.#wslProfile,
+		});
 		const generation = core().generation;
 		this.#watchCore = generation;
 		asked.catch((error: unknown) => {
@@ -284,13 +293,25 @@ export class SessionIndex {
 		if (changed) this.relist();
 	}
 
+	async #readAll(): Promise<SessionInfo[]> {
+		if (!this.#wslProfile) return this.#readStock();
+		const [stock, answer] = await Promise.all([
+			this.#readStock(),
+			core().call("sessions.wslRows", { profile: this.#wslProfile }),
+		]);
+		const { rows } = wslListedAnswer.parse(answer.result);
+		if (!rows.length) return stock;
+		const deleted = deletedSessions().which(rows.map(row => row.path));
+		return stock.concat(rows.filter((_, index) => !deleted[index])).sort(compareSessionRows);
+	}
+
 	/**
 	 * Every session file once (deleted ones never), chat-labelled, newest first, one row per session id: stock moves
 	 * sessions between its old and new directory names for a cwd (`-AiProject-x` → `home-x-<hash>`), and meanwhile one
 	 * id is a file in both; the core keeps the first, which in this order is the newest copy, and reads each kept
 	 * file's legacy chat flag.
 	 */
-	async #readAll(): Promise<SessionInfo[]> {
+	async #readStock(): Promise<SessionInfo[]> {
 		const stored = await this.#store.list();
 		const deleted = deletedSessions().which(stored.map(info => info.path));
 		const infos = stored.filter((_, at) => !deleted[at]);
@@ -332,6 +353,7 @@ export class SessionIndex {
 	 * Only this presentation overlay is read there, never stock metadata or lifecycle.
 	 */
 	async kindFor(sessionPath: string): Promise<SessionKind> {
+		if (isWslSessionRef(sessionPath)) return "agent";
 		try {
 			const infos = await this.#store.listDirectory(sessionPath);
 			const info = infos.find(row => resolve(row.path) === resolve(sessionPath));
@@ -353,56 +375,54 @@ export class SessionIndex {
 	 * checkout), the one thing a reopen must never do.
 	 */
 	async recordedCwd(sessionPath: string): Promise<string | null> {
+		if (isWslSessionRef(sessionPath)) {
+			if (!this.#wslProfile) throw codedError("wsl_session_unavailable", "WSL host unavailable");
+			const answer = await core().call("sessions.wslLookup", { profile: this.#wslProfile, sessionRef: sessionPath });
+			return wslRegistration.parse(answer.result).cwd;
+		}
 		const infos = await this.#store.listDirectory(sessionPath);
 		return infos.find(row => resolve(row.path) === resolve(sessionPath))?.cwd || null;
 	}
 
 	async deleteSession(sessionPath: string): Promise<void> {
-		const target = resolve(sessionPath);
-		const root = `${resolve(this.#sessionsDir)}${sep}`;
-		if (!target.startsWith(root) || !target.endsWith(".jsonl")) {
-			throw codedError("invalid_session_path", "Invalid session path");
-		}
+		const target = this.#stockFile(sessionPath);
 		await this.#store.delete(target);
 		this.#forgetText([target]);
 		this.#notifyChange();
 	}
 
-	/** A stored session's transcript, read-only (the control tools' `ompdesk_session_read` of a session no tab holds). */
 	/** Whether another live omp process owns this computer's stored session (stock's ownership lease). */
 	async ownedElsewhere(sessionPath: string, requireFreeLease = false): Promise<boolean> {
+		requireFileSession(sessionPath);
 		const target = resolve(sessionPath);
 		const root = `${resolve(this.#sessionsDir)}${sep}`;
 		if (!target.startsWith(root) || !target.endsWith(".jsonl")) return requireFreeLease;
 		return this.#store.owned(target, requireFreeLease);
 	}
 
+	/** A stored session's transcript, read-only (the control tools' `ompdesk_session_read` of a session no tab holds). */
 	async readMessages(sessionPath: string, imageRefs?: boolean): Promise<AgentMessage[]> {
-		const target = resolve(sessionPath);
-		const root = `${resolve(this.#sessionsDir)}${sep}`;
-		if (!target.startsWith(root) || !target.endsWith(".jsonl")) {
-			throw codedError("invalid_session_path", "Invalid session path");
-		}
-		return this.#store.messages(target, imageRefs);
+		return this.#store.messages(this.#stockFile(sessionPath), imageRefs);
 	}
 
 	/** The pace of a stored session's journal (session-pace.ts); undefined when it cannot be read. */
 	async pace(sessionPath: string): Promise<Pace | undefined> {
+		return readPace(this.#stockFile(sessionPath));
+	}
+
+	#stockFile(sessionPath: string): string {
+		requireFileSession(sessionPath);
 		const target = resolve(sessionPath);
 		const root = `${resolve(this.#sessionsDir)}${sep}`;
 		if (!target.startsWith(root) || !target.endsWith(".jsonl")) {
 			throw codedError("invalid_session_path", "Invalid session path");
 		}
-		return readPace(target);
+		return target;
 	}
 
 	/** Move a stored session to another project folder (stock `SessionManager.moveTo`); returns its new path. */
 	async moveSession(sessionPath: string, cwd: string): Promise<string> {
-		const source = resolve(sessionPath);
-		const root = `${resolve(this.#sessionsDir)}${sep}`;
-		if (!source.startsWith(root) || !source.endsWith(".jsonl")) {
-			throw codedError("invalid_session_path", "Invalid session path");
-		}
+		const source = this.#stockFile(sessionPath);
 		const target = resolve(cwd);
 		if (!(await directoryExists(target))) throw codedError("not_a_directory", `Not a directory: ${target}`);
 		const moved = await this.#store.move(source, target);

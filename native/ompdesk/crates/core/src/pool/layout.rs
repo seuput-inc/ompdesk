@@ -21,6 +21,7 @@ use crate::fs::order::js_trim;
 use crate::hub::{self, Kind, Out, Outcome};
 use crate::json::utf16_prefix;
 use crate::server::Fault;
+use crate::wsl_copy::reference::parse_ref;
 
 pub const KIND: Kind = Kind {
     name: "layout",
@@ -257,12 +258,14 @@ async fn sanitize(
             continue;
         };
         let stored = non_empty_string(candidate.get("sessionPath"));
+        // An offline host reference is not a missing local file. Keep it for an explicit reopen or refusal.
+        let host_reference = stored.as_deref().is_some_and(|s| parse_ref(s).is_some());
         let drop = |reason: &'static str| Drop {
             reason,
             cwd: cwd.clone(),
             session_path: stored.clone(),
         };
-        if device.is_none() && !checks.directory_exists(&cwd).await? {
+        if device.is_none() && !host_reference && !checks.directory_exists(&cwd).await? {
             drops.push(drop("folder"));
             continue;
         }
@@ -275,7 +278,9 @@ async fn sanitize(
             continue;
         }
         let session_path = match &stored {
-            Some(stored) if device.is_some() || checks.file_exists(stored).await? => {
+            Some(stored)
+                if device.is_some() || host_reference || checks.file_exists(stored).await? =>
+            {
                 Some(stored.clone())
             }
             _ => None,
@@ -308,6 +313,7 @@ async fn sanitize(
             && source_index == 0
             && kind == "chat"
             && device.is_none()
+            && !host_reference
             && match &session_path {
                 None => true,
                 Some(path) => checks.session_has_content(path).await? == Some(false),

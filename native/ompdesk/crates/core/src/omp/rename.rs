@@ -74,7 +74,9 @@ pub(super) async fn run(call: Call) -> Result<Reply, Fault> {
     if name.is_empty() {
         return Err(failure("Session name cannot be empty"));
     }
-    if !params.session_path.ends_with(".jsonl") {
+    if crate::wsl_copy::reference::parse_ref(&params.session_path).is_some()
+        || !params.session_path.ends_with(".jsonl")
+    {
         return Err(failure("Invalid session path"));
     }
     // Stock runs in the temp directory. Check and pass the same file even for a relative path.

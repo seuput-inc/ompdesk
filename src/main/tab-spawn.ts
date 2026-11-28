@@ -33,6 +33,7 @@
 
 import type { SavedWorktree } from "../shared/disk-care";
 import type { IpcSavedFolder, IpcSpawnTabPayload, IpcSpawnTabResult, SessionKind } from "../shared/ipc-types";
+import { requireFileSession } from "../shared/wsl-session-ref";
 import { canonicalCwd, directoryExists } from "./canonical-cwd";
 import type { SessionIndex } from "./session-index";
 import type { SidecarPool } from "./sidecar-pool";
@@ -66,6 +67,7 @@ export async function sessionFolderState(
 	sessionPath: string,
 	restore: boolean,
 ): Promise<SessionFolderState> {
+	requireFileSession(sessionPath);
 	const folder = await sources.recordedCwd(sessionPath);
 	if (!folder) return { folder: null, missing: false, saved: null };
 	if (await directoryExists(folder)) return { folder, missing: false, saved: null };
@@ -153,6 +155,8 @@ export async function spawnTabForWindow(
 			view.dispose();
 			return null;
 		}
+		// Older peers can interpret a missing file as a new conversation.
+		if (device) requireFileSession(sessionPath);
 		// F-KIND: the file's stamped kind is authoritative. Refuse a mismatched
 		// explicit request; defer to the file when the payload omits kind.
 		const fileKind = device

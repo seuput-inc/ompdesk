@@ -1,11 +1,16 @@
+use std::borrow::Cow;
+use std::fmt;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Seek, Write};
 
-use serde::Deserialize;
+use serde::de::{SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 
+use super::catalog::{Status, Summary};
 use super::{Checkpoint, invalid};
+use crate::schedules::rules::{Local, date_parse};
 
 const FRAME: usize = 4096;
 const MAX_BYTES: u64 = 512 * 1024 * 1024;
@@ -139,6 +144,10 @@ struct Row<'a> {
     id: Option<&'a RawValue>,
     #[serde(borrow)]
     message: Option<&'a RawValue>,
+    #[serde(borrow)]
+    title: Option<&'a RawValue>,
+    #[serde(borrow)]
+    timestamp: Option<&'a RawValue>,
 }
 
 fn equals(raw: Option<&RawValue>, expected: &str) -> bool {
@@ -174,22 +183,173 @@ fn record<'a>(
     Ok((row, n as u64))
 }
 
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct Text<'a>(#[serde(borrow)] Cow<'a, str>);
+
+fn text(raw: Option<&RawValue>) -> Option<Cow<'_, str>> {
+    serde_json::from_str::<Text<'_>>(raw?.get())
+        .ok()
+        .map(|s| s.0)
+}
+
+fn date(raw: Option<&RawValue>) -> Option<i64> {
+    let raw = raw?.get();
+    let ms = raw.parse().ok().or_else(|| {
+        let iso = raw.strip_prefix('"')?.strip_suffix('"')?;
+        if iso.len() > 32 || !iso.ends_with('Z') {
+            return None;
+        }
+        date_parse(iso, &Local)
+    })?;
+    (-62_167_219_200_000..=253_402_300_799_999)
+        .contains(&ms)
+        .then_some(ms)
+}
+
+// Render text only, never paths, nested tool input, image data or guest-provided host labels.
+fn display(out: &mut String, s: &str, limit: usize) {
+    for ch in s.trim().chars() {
+        if out.len() + ch.len_utf8() > limit {
+            break;
+        }
+        if ch.is_whitespace() {
+            if !out.is_empty() && !out.ends_with(' ') {
+                out.push(' ');
+            }
+        } else if !ch.is_control()
+            && !matches!(ch, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        {
+            out.push(ch);
+        }
+    }
+}
+
+fn title(raw: Option<&RawValue>) -> Option<String> {
+    let mut out = String::new();
+    display(&mut out, text(raw)?.lines().next()?, 256);
+    (!out.is_empty()).then_some(out)
+}
+
+// A single message may contain a large attachment. Borrow each block, retain only the bounded text.
+struct Blocks<'a> {
+    prompt: Option<&'a mut String>,
+}
+
+impl<'de> Visitor<'de> for Blocks<'_> {
+    type Value = bool;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("message content blocks")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(mut self, mut seq: A) -> Result<bool, A::Error> {
+        #[derive(Deserialize)]
+        struct Block<'a> {
+            #[serde(rename = "type", borrow)]
+            kind: Option<&'a RawValue>,
+            #[serde(borrow)]
+            text: Option<&'a RawValue>,
+        }
+        let mut tool_call = false;
+        while let Some(raw) = seq.next_element::<&RawValue>()? {
+            let Ok(block) = serde_json::from_str::<Block<'_>>(raw.get()) else {
+                continue;
+            };
+            tool_call |= equals(block.kind, "toolCall");
+            if let Some(out) = self.prompt.as_deref_mut()
+                && out.len() < 1024
+                && equals(block.kind, "text")
+                && let Some(s) = text(block.text)
+            {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                display(out, &s, 1024);
+            }
+        }
+        Ok(tool_call)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Message<'a> {
+    #[serde(borrow)]
+    role: Option<&'a RawValue>,
+    #[serde(borrow)]
+    stop_reason: Option<&'a RawValue>,
+    #[serde(borrow)]
+    timestamp: Option<&'a RawValue>,
+    #[serde(borrow)]
+    content: Option<&'a RawValue>,
+}
+
+fn observe(row: &Row<'_>, s: &mut Summary) -> bool {
+    let Some(m) = row
+        .message
+        .filter(|m| m.get().starts_with('{'))
+        .and_then(|m| serde_json::from_str::<Message<'_>>(m.get()).ok())
+        .filter(|m| m.role.is_some_and(|r| r.get().starts_with('"')))
+    else {
+        return false;
+    };
+    s.message_count += 1;
+    if let Some(at) = date(m.timestamp).or_else(|| date(row.timestamp)) {
+        s.modified = Some(at);
+    }
+    let user = equals(m.role, "user");
+    let assistant = equals(m.role, "assistant");
+    let prompt = user && s.first_message.is_empty();
+    let mut tool_call = false;
+    if let Some(content) = m.content
+        && (prompt || assistant)
+    {
+        if content.get().starts_with('[') {
+            let visitor = Blocks {
+                prompt: prompt.then_some(&mut s.first_message),
+            };
+            tool_call = serde_json::Deserializer::from_str(content.get())
+                .deserialize_seq(visitor)
+                .unwrap_or(false);
+        } else if prompt && let Some(value) = text(Some(content)) {
+            display(&mut s.first_message, &value, 1024);
+        }
+    }
+    s.status = if assistant {
+        if equals(m.stop_reason, "error") {
+            Status::Error
+        } else if equals(m.stop_reason, "aborted") {
+            Status::Aborted
+        } else if equals(m.stop_reason, "length") || tool_call {
+            Status::Interrupted
+        } else {
+            Status::Complete
+        }
+    } else if user {
+        Status::Pending
+    } else if equals(m.role, "toolResult") {
+        Status::Interrupted
+    } else {
+        Status::Unknown
+    };
+    assistant
+}
+
 pub(super) fn records(
     file: &mut File,
     stock: &str,
     witness: Option<(&str, u64)>,
-) -> io::Result<bool> {
-    #[derive(Deserialize)]
-    struct Message<'a> {
-        #[serde(borrow)]
-        role: Option<&'a RawValue>,
-    }
+) -> io::Result<(bool, Summary)> {
     file.rewind()?;
     let mut input = BufReader::new(file);
     let mut buf = Vec::new();
     let header_limit = 64 * 1024;
     let (first, mut offset) = record(&mut input, &mut buf, header_limit)?;
-    let header = if equals(first.kind, "title") {
+    let has_slot = equals(first.kind, "title");
+    let mut summary = Summary::default();
+    let header = if has_slot {
+        summary.title = title(first.title);
         let (header, n) = record(&mut input, &mut buf, header_limit - offset)?;
         offset += n;
         header
@@ -199,6 +359,10 @@ pub(super) fn records(
     if !equals(header.kind, "session") || !equals(header.id, stock) {
         return Err(invalid("wrong stock session header"));
     }
+    if !has_slot {
+        summary.title = title(header.title);
+    }
+    summary.created = date(header.timestamp);
     let mut witnessed = false;
     let mut seen_id = false;
     while !input.fill_buf()?.is_empty() {
@@ -206,19 +370,14 @@ pub(super) fn records(
         if equals(row.kind, "session") {
             return Err(invalid("second stock session header"));
         }
+        let assistant = equals(row.kind, "message") && observe(&row, &mut summary);
         if let Some((wanted, baseline)) = witness
             && equals(row.id, wanted)
         {
-            witnessed = !seen_id
-                && offset >= baseline
-                && equals(row.kind, "message")
-                && row
-                    .message
-                    .and_then(|m| serde_json::from_str::<Message<'_>>(m.get()).ok())
-                    .is_some_and(|m| equals(m.role, "assistant"));
+            witnessed = !seen_id && offset >= baseline && assistant;
             seen_id = true;
         }
         offset += n;
     }
-    Ok(witnessed)
+    Ok((witnessed, summary))
 }
