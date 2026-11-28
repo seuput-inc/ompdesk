@@ -116,6 +116,12 @@ interface MockOmp {
 	tabs: {
 		list: Mock<() => Promise<unknown[]>>;
 		spawn: Mock<(payload: unknown) => Promise<{ tabId: string; cwd?: string } | null>>;
+		openBotChat: Mock<
+			(
+				botId: string,
+				sessionPath?: string | null,
+			) => Promise<{ tabId: string | null; refusal?: string; ownerTabId?: string } | null>
+		>;
 		setActive: Mock<(tabId: string) => Promise<boolean>>;
 		close: Mock<(tabId: string) => Promise<boolean>>;
 		getSessionOwner: Mock<(path: string) => Promise<null>>;
@@ -173,6 +179,12 @@ function installMockOmp(sessionList: SessionInfo[]): MockOmp {
 				tabId: "t-new",
 				...((payload as { defaultWorkspace?: boolean }).defaultWorkspace ? { cwd: "/default/work" } : {}),
 			})),
+			openBotChat: vi.fn(async (_botId, sessionPath) => {
+				const held = sessionPath
+					? useTabsStore.getState().tabs.find(tab => tab.sessionPath === sessionPath && !tab.device)
+					: undefined;
+				return held ? { tabId: null, refusal: "owned", ownerTabId: held.id } : { tabId: "t-new" };
+			}),
 			setActive: vi.fn(async () => true),
 			close: vi.fn(async () => true),
 			getSessionOwner: vi.fn(async () => null),
