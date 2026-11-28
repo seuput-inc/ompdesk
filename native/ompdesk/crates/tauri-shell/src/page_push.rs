@@ -1,3 +1,6 @@
+#[path = "page_push_coalesce.rs"]
+mod coalesce;
+
 use crate::registry::{Identity, Registry};
 use crate::{WireError, failed, log, runtime, window_for_wc};
 use serde::Serialize;
@@ -31,6 +34,7 @@ impl Push {
         }
     }
 
+    #[cfg(test)]
     fn submit(self, eval: impl FnOnce(String) -> Result<(), WireError>) -> Result<(), WireError> {
         let result = eval(self.script);
         if let Some(receipt) = self.submitted {
@@ -43,6 +47,7 @@ impl Push {
 #[derive(Default)]
 pub(super) struct Outbox {
     ready: bool,
+    drain_scheduled: bool,
     pending: VecDeque<Push>,
 }
 
@@ -52,18 +57,26 @@ fn gone() -> WireError {
 
 fn admit(registry: &mut Registry, id: Identity, push: Push) -> Result<bool, WireError> {
     let outbox = registry.outbox(id).ok_or_else(gone)?;
-    if !outbox.ready && outbox.pending.len() >= PRE_READY_LIMIT {
-        outbox.pending.clear();
-        outbox.pending.push_back(Push {
-            script: format!(
-                "window.__ompTauriPush({}, {{\"stream\":\"reset\"}});",
-                id.generation
-            ),
-            submitted: None,
-        });
-    }
-    outbox.pending.push_back(push);
+    let limit = if outbox.ready {
+        coalesce::POST_READY_LIMIT
+    } else {
+        PRE_READY_LIMIT
+    };
+    coalesce::push_bounded(&mut outbox.pending, id, push, limit);
     Ok(outbox.ready)
+}
+
+fn admit_for_drain(registry: &mut Registry, id: Identity, push: Push) -> Result<bool, WireError> {
+    let live = admit(registry, id, push)?;
+    if !live {
+        return Ok(false);
+    }
+    let outbox = registry.outbox(id).ok_or_else(gone)?;
+    if outbox.drain_scheduled {
+        return Ok(false);
+    }
+    outbox.drain_scheduled = true;
+    Ok(true)
 }
 
 fn ready(registry: &mut Registry, id: Identity) -> Result<Option<VecDeque<Push>>, WireError> {
@@ -71,8 +84,54 @@ fn ready(registry: &mut Registry, id: Identity) -> Result<Option<VecDeque<Push>>
     Ok((!std::mem::replace(&mut outbox.ready, true)).then(|| std::mem::take(&mut outbox.pending)))
 }
 
+#[cfg(test)]
 fn next(registry: &mut Registry, id: Identity) -> Option<Push> {
     registry.outbox(id)?.pending.pop_front()
+}
+
+fn take_drain_batch(
+    registry: &mut Registry,
+    id: Identity,
+) -> (Option<coalesce::CoalescedBatch>, bool) {
+    let Some(outbox) = registry.outbox(id) else {
+        return (None, false);
+    };
+    let batch = coalesce::take_batch(&mut outbox.pending);
+    let more = !outbox.pending.is_empty();
+    if !more {
+        outbox.drain_scheduled = false;
+    }
+    (batch, more)
+}
+
+fn schedule_drain(id: Identity) -> Result<(), WireError> {
+    runtime()
+        .app
+        .run_on_main_thread(move || {
+            let (batch, more) =
+                take_drain_batch(&mut runtime().registry.lock().expect("registry"), id);
+            if let Some(batch) = batch
+                && let Err(error) =
+                    batch.submit(|script| window_for_wc(id.wc)?.eval(script).map_err(failed))
+            {
+                log_failure(id, error);
+            }
+            if more && let Err(error) = schedule_drain(id) {
+                if let Some(outbox) = runtime().registry.lock().expect("registry").outbox(id) {
+                    outbox.drain_scheduled = false;
+                    outbox.pending.clear();
+                }
+                log_failure(id, error);
+            }
+        })
+        .map_err(|error| {
+            // The event loop closed. Release receipts that no UI turn can now complete.
+            if let Some(outbox) = runtime().registry.lock().expect("registry").outbox(id) {
+                outbox.drain_scheduled = false;
+                outbox.pending.clear();
+            }
+            failed(error)
+        })
 }
 
 /// A native invoke passes a oneshot sender and awaits its receiver before replying. The UI never waits.
@@ -85,37 +144,20 @@ pub(super) fn enqueue(
     submitted: Option<Submitted>,
 ) -> Result<(), WireError> {
     let push = Push::new(id, channel, args, submitted);
-    let live = admit(&mut runtime().registry.lock().expect("registry"), id, push)?;
-    if live {
-        // Workers may post their UI turns in reverse. Each turn submits the FIFO head, not its own event.
-        runtime()
-            .app
-            .run_on_main_thread(move || {
-                let push = next(&mut runtime().registry.lock().expect("registry"), id);
-                if let Some(push) = push
-                    && let Err(error) =
-                        push.submit(|script| window_for_wc(id.wc)?.eval(script).map_err(failed))
-                {
-                    log_failure(id, error);
-                }
-            })
-            .map_err(|error| {
-                // The event loop closed. Release receipts that no UI turn can now complete.
-                if let Some(outbox) = runtime().registry.lock().expect("registry").outbox(id) {
-                    outbox.pending.clear();
-                }
-                failed(error)
-            })?;
+    let should_schedule =
+        admit_for_drain(&mut runtime().registry.lock().expect("registry"), id, push)?;
+    if should_schedule {
+        schedule_drain(id)?;
     }
     Ok(())
 }
 
 pub(super) fn document_ready(id: Identity, webview: &tauri::Webview) -> Result<bool, WireError> {
-    let Some(queued) = ready(&mut runtime().registry.lock().expect("registry"), id)? else {
+    let Some(mut queued) = ready(&mut runtime().registry.lock().expect("registry"), id)? else {
         return Ok(false);
     };
-    for push in queued {
-        push.submit(|script| webview.eval(script).map_err(failed))?;
+    while let Some(batch) = coalesce::take_batch(&mut queued) {
+        batch.submit(|script| webview.eval(script).map_err(failed))?;
     }
     Ok(true)
 }
@@ -331,6 +373,54 @@ mod tests {
         let failure = failed("webview ended");
         assert_eq!(push.submit(|_| Err(failure.clone())), Err(failure.clone()));
         assert_eq!(receipt.try_recv(), Ok(Err(failure)));
+    }
+
+    #[test]
+    fn post_ready_burst_schedules_one_drain_until_emptied() {
+        let (mut registry, id) = document();
+        ready(&mut registry, id).unwrap();
+
+        let (ack1, mut r1) = oneshot::channel();
+        let (ack2, mut r2) = oneshot::channel();
+        assert!(
+            admit_for_drain(
+                &mut registry,
+                id,
+                Push::new(id, "a", &[json!(1)], Some(ack1))
+            )
+            .unwrap()
+        );
+        assert!(
+            !admit_for_drain(
+                &mut registry,
+                id,
+                Push::new(id, "b", &[json!(2)], Some(ack2))
+            )
+            .unwrap()
+        );
+        assert!(
+            !admit_for_drain(&mut registry, id, Push::new(id, "c", &[json!(3)], None)).unwrap()
+        );
+
+        let (batch, more) = take_drain_batch(&mut registry, id);
+        assert!(!more);
+        let batch = batch.expect("coalesced batch");
+        assert_eq!(batch.count, 3);
+        let mut evaluated = String::new();
+        batch
+            .submit(|script| {
+                evaluated = script;
+                Ok(())
+            })
+            .unwrap();
+        assert!(evaluated.contains("\"channel\":\"a\""));
+        assert!(evaluated.contains("\"channel\":\"b\""));
+        assert!(evaluated.contains("\"channel\":\"c\""));
+        assert_eq!(r1.try_recv(), Ok(Ok(())));
+        assert_eq!(r2.try_recv(), Ok(Ok(())));
+
+        // Drain flag cleared once empty, so the next post-ready push schedules a fresh UI turn.
+        assert!(admit_for_drain(&mut registry, id, Push::new(id, "d", &[json!(4)], None)).unwrap());
     }
 
     #[test]
