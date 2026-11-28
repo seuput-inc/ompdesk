@@ -69,6 +69,9 @@ void import("./lib/focus-modality").then(({ installFocusModality }) => installFo
 // What moves a list, a disclosure's height or a leaving overlay (lib/motion-play.ts); loaded after the first screen,
 // where nothing moves before a person acts.
 void loadMotionPlay();
+// Background/hibernated tab store dehydration & lazy focus re-hydration (lib/tab-dehydration.ts); loaded after the
+// first screen so the paired phone's static closure pays zero extra weight.
+void import("./lib/tab-dehydration").then(({ installTabDehydration }) => installTabDehydration());
 
 const container = document.getElementById("root");
 if (!container) {

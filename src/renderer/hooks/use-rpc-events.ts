@@ -43,6 +43,7 @@ import { describeTurnError, messageText, turnErrorToast } from "../lib/messages"
 import { noticeToast } from "../lib/notice-toast";
 import { playNotificationSound } from "../lib/notification-sound";
 import { handleAutoOpenEvents, installPanelAutoOpen } from "../lib/panel-auto-open";
+import { backgroundThrottle } from "../lib/tab-dehydration-state";
 import { useUsageSignal } from "../lib/usage-reports";
 import { useAutopilotStore } from "../stores/autopilot";
 import { useDesktopSlotStore } from "../stores/desktop-slot";
@@ -52,7 +53,7 @@ import {
 	isUserBlockingRequest,
 	useExtensionUiStore,
 } from "../stores/extension-ui";
-import { useMessagesStore } from "../stores/messages";
+import { type MessagesStore, useMessagesStore } from "../stores/messages";
 import { useModelStore } from "../stores/model";
 import { useNextPromptStore } from "../stores/next-prompt";
 import { useQueueStore } from "../stores/queue";
@@ -400,6 +401,11 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 		/** When each tab's omp last sent a frame, and how many liveness probes in a row it has missed since. */
 		const lastEventAt = new Map<string, number>();
 		const missedProbes = new Map<string, number>();
+		const isHiddenTab = (tabId: string): boolean => {
+			if (!tabId) return false;
+			const state = useTabsStore.getState();
+			return state.tabs.some(tab => tab.id === tabId) && !visibleTabIds(state).includes(tabId);
+		};
 		const unsubscribe = window.omp.events.onTabBatch(reduceEvents);
 		function reduceEvents(events: AgentSessionEvent[], tabId: string): void {
 			// Any frame from the tab's omp proves its loop runs: a probe that timed out meanwhile was slow, not wedged, and a
@@ -413,10 +419,17 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 			// during an in-place session switch, but never suppress the other pane.
 			if (sessionRuntimeStore<SessionStore>(tabId, "session")?.getState().switchPending) return;
 			if (!openTabFrame(tabId)) return;
+			const hidden = isHiddenTab(tabId);
+			const throttle = hidden ? backgroundThrottle() : null;
+			const { storeEvents, controlEvents } = throttle
+				? throttle.partitionBatch(tabId, events, true)
+				: { storeEvents: events, controlEvents: events };
 			withSessionRuntime(tabId, () => {
-				useMessagesStore.getState().applyEvents(events);
-				useToolsStore.getState().applyEvents(events);
-				handleAutoOpenEvents(tabId, events);
+				if (storeEvents.length > 0) {
+					useMessagesStore.getState().applyEvents(storeEvents);
+					useToolsStore.getState().applyEvents(storeEvents);
+				}
+				if (!hidden) handleAutoOpenEvents(tabId, events);
 
 				// eventVersion lets an async snapshot (get_state, hydrate) tell whether
 				// events landed after it was taken. One bump per batch covers every
@@ -424,7 +437,7 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 				// the batch needs one more bump if any event follows it. Frames no
 				// snapshot reports never bump.
 				let bumpVersion = true;
-				for (const event of events) {
+				for (const event of controlEvents) {
 					if (bumpVersion && !SNAPSHOT_NEUTRAL_EVENTS[event.type]) {
 						useSessionStore.setState(state => ({ eventVersion: state.eventVersion + 1 }));
 						bumpVersion = false;
@@ -849,14 +862,19 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 				if (payload.reconnecting && statusTabId !== "") reattaching.add(statusTabId);
 				else if (!boot) {
 					reattaching.delete(statusTabId);
+					const wakingSeeded =
+						sessionRuntimeStore<SessionStore>(statusTabId, "session")?.getState().status === "asleep" &&
+						sessionRuntimeStore<MessagesStore>(statusTabId, "messages")?.getState().restoredAt !== null;
 					withSessionRuntime(statusTabId, () => {
-						useMessagesStore.getState().reset();
+						if (!wakingSeeded) {
+							useMessagesStore.getState().reset();
+							useToolsStore.getState().reset();
+						}
 						useModelStore.getState().reset();
 						useSessionStore.getState().reset();
 						useSettingsStore.getState().reset();
 						useSubagentsStore.getState().reset();
 						useTodoStore.getState().reset();
-						useToolsStore.getState().reset();
 						useExtensionUiStore.getState().clearAll();
 					});
 				}
@@ -960,7 +978,18 @@ export function useRpcEvents(heartbeatMs = 15_000): void {
 
 		const handleSubagent = (frame: SubagentFrame, tabId: string) => {
 			if (!openTabFrame(tabId)) return;
-			withSessionRuntime(tabId, () => useSubagentsStore.getState().applyFrame(frame));
+			const hidden = isHiddenTab(tabId);
+			const throttle = hidden ? backgroundThrottle() : null;
+			if (!throttle) {
+				withSessionRuntime(tabId, () => useSubagentsStore.getState().applyFrame(frame));
+				return;
+			}
+			const consumers =
+				sessionRuntimeStore<ReturnType<typeof useSubagentsStore.getState>>(tabId, "subagents")?.getState()
+					.eventConsumers ?? 0;
+			throttle.dispatchSubagent(tabId, frame, true, consumers > 0, next => {
+				withSessionRuntime(tabId, () => useSubagentsStore.getState().applyFrame(next));
+			});
 		};
 		const unsubSubagent = window.omp.events.onTabSubagentFrame(handleSubagent);
 
