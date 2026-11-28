@@ -792,11 +792,34 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     let plan = app_window::plan(options);
     let bounds =
         screen::with_displays(|snapshot| window_bounds::for_create(&plan.geometry, snapshot));
-    let mut builder = WebviewWindowBuilder::new(
-        &runtime().app,
-        &label,
-        WebviewUrl::External("about:blank".parse().map_err(failed)?),
-    )
+    let initial_url = WebviewUrl::External("about:blank".parse().map_err(failed)?);
+    let mut builder = {
+        #[cfg(target_os = "macos")]
+        {
+            use tauri::utils::config::{LogicalPosition, WindowConfig};
+            // A child WKWebView ignores its own traffic-light inset. The NSWindow keeps this
+            // one across resizes and restores it after fullscreen (12 pt high, 36 pt row).
+            WebviewWindowBuilder::from_config(
+                &runtime().app,
+                &WindowConfig {
+                    label: label.clone(),
+                    url: initial_url,
+                    title_bar_style: tauri::TitleBarStyle::Overlay,
+                    hidden_title: true,
+                    traffic_light_position: Some(LogicalPosition { x: 16.0, y: 12.0 }),
+                    ..Default::default()
+                },
+            )
+            .map_err(|error| {
+                runtime().registry.lock().expect("registry").remove(wc);
+                failed(error)
+            })?
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            WebviewWindowBuilder::new(&runtime().app, &label, initial_url)
+        }
+    }
     .title(options["title"].as_str().unwrap_or("OMPdesk"))
     .inner_size(bounds.width, bounds.height)
     .visible(false)
@@ -854,12 +877,6 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         builder = builder.background_color(colour);
     }
     builder = builder.min_inner_size(window_state::MIN_WIDTH, window_state::MIN_HEIGHT);
-    #[cfg(target_os = "macos")]
-    {
-        builder = builder
-            .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .hidden_title(true);
-    }
     // The renderer paints the buttons. The shaped HWND handles the real Windows non-client input.
     #[cfg(windows)]
     {
