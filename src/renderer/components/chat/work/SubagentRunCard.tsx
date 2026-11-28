@@ -4,7 +4,6 @@
  * elapsed/telemetry cluster, live activity line, and a collapsible output or transcript peek.
  */
 
-import { ChevronRight } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { cx } from "../../../lib/format";
 import { DisclosureButton } from "../../common";
@@ -103,20 +102,13 @@ export function SubagentRunCard({
 					{hasBody && (
 						<DisclosureButton
 							aria-label={toggleLabel ?? name}
-							chevron={false}
-							className="size-6 justify-center rounded-(--sc-radius-sm) text-(--sc-text-muted) hover:bg-(--sc-hover) hover:text-(--sc-text)"
+							chevron="start"
+							className="size-6 shrink-0 justify-center rounded-(--sc-radius-sm) text-(--sc-text-muted) hover:bg-(--sc-hover) hover:text-(--sc-text)"
 							data-subagent-toggle
+							inline
 							onToggle={() => setOpen(value => !value)}
 							open={open}
-						>
-							<ChevronRight
-								aria-hidden
-								className={cx(
-									"size-3.5 transition-transform duration-(--sc-duration-fast) ease-(--sc-ease-standard)",
-									open && "rotate-90",
-								)}
-							/>
-						</DisclosureButton>
+						/>
 					)}
 				</div>
 			</div>

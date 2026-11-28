@@ -53,29 +53,31 @@ interface StatOpts {
 	resolvedModel?: string;
 }
 
-/** Per-agent stats: `12 🔧 · 3 req · 5.1%/1M · $0.42 · model` (TUI appendAgentStats). */
+/** Per-agent stats: compact `8 🔧 · 3 req · 7.1% · $0.14` (full window & model in hover title). */
 function AgentStats({ stats }: { stats: StatOpts }) {
 	const t = useT();
-	const context =
+	const contextShort =
 		stats.contextTokens != null && stats.contextTokens > 0
 			? stats.contextWindow != null && stats.contextWindow > 0
-				? `${((stats.contextTokens / stats.contextWindow) * 100).toFixed(1)}%/${formatTokens(stats.contextWindow)}`
+				? `${((stats.contextTokens / stats.contextWindow) * 100).toFixed(1)}%`
 				: formatTokens(stats.contextTokens)
 			: null;
-	const model = stats.resolvedModel
-		? stats.resolvedModel.length > 26
-			? `${stats.resolvedModel.slice(0, 25)}…`
-			: stats.resolvedModel
-		: null;
+	const contextFull =
+		stats.contextTokens != null && stats.contextTokens > 0 && stats.contextWindow != null && stats.contextWindow > 0
+			? `${formatTokens(stats.contextTokens)} / ${formatTokens(stats.contextWindow)}`
+			: undefined;
 	const hasAny =
 		(stats.toolCount != null && stats.toolCount > 0) ||
 		(stats.requests != null && stats.requests > 0) ||
-		Boolean(context) ||
-		(stats.cost != null && stats.cost > 0) ||
-		Boolean(model);
+		Boolean(contextShort) ||
+		(stats.cost != null && stats.cost > 0);
 	if (!hasAny) return null;
+	const tooltipParts = [contextFull, stats.resolvedModel].filter(Boolean).join(" · ");
 	return (
-		<span className="flex min-w-0 items-center gap-1.5 truncate font-mono text-sc-xs text-(--sc-text-muted) tabular-nums">
+		<span
+			className="flex shrink-0 items-center gap-1.5 font-mono text-sc-xs text-(--sc-text-muted) tabular-nums"
+			title={tooltipParts || undefined}
+		>
 			{stats.toolCount != null && stats.toolCount > 0 && (
 				<span className="inline-flex shrink-0 items-center gap-0.5">
 					{stats.toolCount}
@@ -85,14 +87,9 @@ function AgentStats({ stats }: { stats: StatOpts }) {
 			{stats.requests != null && stats.requests > 0 && (
 				<span className="shrink-0">{t("tools.task.requests", { count: stats.requests })}</span>
 			)}
-			{context && <span className="shrink-0">{context}</span>}
+			{contextShort && <span className="shrink-0">{contextShort}</span>}
 			{stats.cost != null && stats.cost > 0 && (
 				<span className="shrink-0 text-(--sc-warning)">${stats.cost.toFixed(2)}</span>
-			)}
-			{model && (
-				<span className="truncate text-(--sc-text-subtle)" title={stats.resolvedModel}>
-					{model}
-				</span>
 			)}
 		</span>
 	);
