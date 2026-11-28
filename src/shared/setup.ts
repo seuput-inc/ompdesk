@@ -48,8 +48,9 @@ export function isGitAslrAction(value: unknown): value is GitAslrAction {
 
 /**
  * What detection found. `path` is the executable (or install root) it found. `gitAslrOverride`: Windows holds a
- * Mandatory ASLR override for this Git's sh.exe. `gitAslrUndoable`: OMPdesk recorded what its Fix changed there
- * (each image's prior state), so Undo can put back exactly that; an override without a record is not undone.
+ * Mandatory ASLR override for this Git's MSYS executables. `gitAslrUndoable`: OMPdesk recorded what its Fix changed
+ * there (each image's prior state) and at least one recorded override is still active, so Undo can put back exactly
+ * that; an override without an active record is not undone.
  */
 export type SetupPresence =
 	| {

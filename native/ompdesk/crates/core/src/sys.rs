@@ -3,7 +3,7 @@
 //! tree, physical memory and process reads, a junction, reading and ending other processes (their environment and
 //! command line, `WM_CLOSE`, SIGKILL), `ReadDirectoryChangesW`, the system random generator, and (POSIX) a supervised
 //! command's session and process group and the stop signals its supervisor waits for, and (Windows) a loopback
-//! dial that fails at once when refused.
+//! dial that fails at once when refused and read-only HKLM registry reads for Mandatory ASLR / IFEO mitigations.
 #![allow(unsafe_code)]
 
 #[cfg(windows)]
@@ -2886,6 +2886,227 @@ mod zone {
 
 #[cfg(windows)]
 pub use zone::{local_day, local_instant};
+
+/// Read-only 64-bit HKLM registry queries for Windows Mandatory ASLR (`kernel\MitigationOptions`) and per-image
+/// Image File Execution Options (`IFEO\<exe>`). Never writes to the registry and never touches unrelated IFEO keys.
+#[cfg(windows)]
+pub mod win_reg {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr;
+
+    const HKEY_LOCAL_MACHINE: isize = 0x8000_0002u32 as usize as isize;
+    const KEY_READ: u32 = 0x0002_0019;
+    const KEY_WOW64_64KEY: u32 = 0x0100;
+    const SAM: u32 = KEY_READ | KEY_WOW64_64KEY;
+    const REG_SZ: u32 = 1;
+    const REG_BINARY: u32 = 3;
+    const REG_DWORD: u32 = 4;
+    const ERROR_SUCCESS: i32 = 0;
+    const MAX_VALUE_BYTES: usize = 64 * 1024;
+
+    const KERNEL_KEY: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\kernel";
+    const IFEO_KEY: &str =
+        r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options";
+
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        fn RegOpenKeyExW(
+            hkey: isize,
+            sub_key: *const u16,
+            options: u32,
+            sam: u32,
+            result: *mut isize,
+        ) -> i32;
+        fn RegQueryValueExW(
+            hkey: isize,
+            value_name: *const u16,
+            reserved: *const u32,
+            kind: *mut u32,
+            data: *mut u8,
+            data_len: *mut u32,
+        ) -> i32;
+        fn RegEnumKeyExW(
+            hkey: isize,
+            index: u32,
+            name: *mut u16,
+            name_len: *mut u32,
+            reserved: *const u32,
+            class: *mut u16,
+            class_len: *mut u32,
+            last_write: *mut u8,
+        ) -> i32;
+        fn RegCloseKey(hkey: isize) -> i32;
+    }
+
+    struct RegKey(isize);
+
+    impl Drop for RegKey {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is an open registry key handle returned by `RegOpenKeyExW`.
+            unsafe {
+                RegCloseKey(self.0);
+            }
+        }
+    }
+
+    /// Raw mitigation entries read from one `IFEO\<exe>` key in HKLM's 64-bit view.
+    pub struct IfeoKey {
+        pub use_filter: bool,
+        pub direct_options: Option<Vec<u8>>,
+        pub filtered: Vec<(String, Vec<u8>)>,
+    }
+
+    fn wide(text: &str) -> Vec<u16> {
+        OsStr::new(text).encode_wide().chain(Some(0)).collect()
+    }
+
+    fn open_key(root: isize, sub_key: &str) -> Option<RegKey> {
+        let path = wide(sub_key);
+        let mut handle: isize = 0;
+        // SAFETY: `path` is NUL-terminated UTF-16 and `handle` is a valid out-pointer.
+        let status = unsafe { RegOpenKeyExW(root, path.as_ptr(), 0, SAM, &mut handle) };
+        (status == ERROR_SUCCESS && handle != 0).then_some(RegKey(handle))
+    }
+
+    fn query_raw(key: &RegKey, name: &str) -> Option<(u32, Vec<u8>)> {
+        let name = wide(name);
+        let mut kind: u32 = 0;
+        let mut len: u32 = 0;
+        // SAFETY: querying value size with a null data buffer is documented Win32 usage.
+        let status = unsafe {
+            RegQueryValueExW(
+                key.0,
+                name.as_ptr(),
+                ptr::null(),
+                &mut kind,
+                ptr::null_mut(),
+                &mut len,
+            )
+        };
+        if status != ERROR_SUCCESS || len as usize > MAX_VALUE_BYTES {
+            return None;
+        }
+        let mut buf = vec![0u8; len as usize];
+        // SAFETY: `buf` has capacity and length `len`, matching `lpcbData`.
+        let status = unsafe {
+            RegQueryValueExW(
+                key.0,
+                name.as_ptr(),
+                ptr::null(),
+                &mut kind,
+                buf.as_mut_ptr(),
+                &mut len,
+            )
+        };
+        if status != ERROR_SUCCESS {
+            return None;
+        }
+        buf.truncate(len as usize);
+        Some((kind, buf))
+    }
+
+    fn query_binary(key: &RegKey, name: &str) -> Option<Vec<u8>> {
+        let (kind, buf) = query_raw(key, name)?;
+        (kind == REG_BINARY).then_some(buf)
+    }
+
+    fn query_dword(key: &RegKey, name: &str) -> Option<u32> {
+        let (kind, buf) = query_raw(key, name)?;
+        if kind != REG_DWORD || buf.len() < 4 {
+            return None;
+        }
+        Some(u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]))
+    }
+
+    fn query_string(key: &RegKey, name: &str) -> Option<String> {
+        let (kind, buf) = query_raw(key, name)?;
+        if kind != REG_SZ || buf.len() < 2 {
+            return None;
+        }
+        let mut units: Vec<u16> = buf
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        while units.last() == Some(&0) {
+            units.pop();
+        }
+        Some(String::from_utf16_lossy(&units))
+    }
+
+    fn subkey_names(key: &RegKey) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut index = 0u32;
+        loop {
+            let mut buf = [0u16; 260];
+            let mut len = buf.len() as u32;
+            // SAFETY: `buf` holds `len` UTF-16 code units and all optional pointers are null.
+            let status = unsafe {
+                RegEnumKeyExW(
+                    key.0,
+                    index,
+                    buf.as_mut_ptr(),
+                    &mut len,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                )
+            };
+            if status != ERROR_SUCCESS {
+                break;
+            }
+            names.push(String::from_utf16_lossy(&buf[..len as usize]));
+            index += 1;
+        }
+        names
+    }
+
+    pub fn read_kernel_mitigation_options() -> Option<Vec<u8>> {
+        let key = open_key(HKEY_LOCAL_MACHINE, KERNEL_KEY)?;
+        query_binary(&key, "MitigationOptions")
+    }
+
+    pub fn read_ifeo_keys(exe_names: &[&str]) -> Vec<(String, IfeoKey)> {
+        let Some(ifeo_root) = open_key(HKEY_LOCAL_MACHINE, IFEO_KEY) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for name in exe_names {
+            let Some(parent) = open_key(ifeo_root.0, name) else {
+                continue;
+            };
+            let use_filter = query_dword(&parent, "UseFilter").is_some_and(|v| v != 0);
+            let mut filtered = Vec::new();
+            let mut direct_options = None;
+            if use_filter {
+                for sub_name in subkey_names(&parent) {
+                    let Some(sub) = open_key(parent.0, &sub_name) else {
+                        continue;
+                    };
+                    let (Some(path), Some(opts)) = (
+                        query_string(&sub, "FilterFullPath"),
+                        query_binary(&sub, "MitigationOptions"),
+                    ) else {
+                        continue;
+                    };
+                    filtered.push((path, opts));
+                }
+            } else {
+                direct_options = query_binary(&parent, "MitigationOptions");
+            }
+            out.push((
+                (*name).to_owned(),
+                IfeoKey {
+                    use_filter,
+                    direct_options,
+                    filtered,
+                },
+            ));
+        }
+        out
+    }
+}
 #[cfg(test)]
 mod priority_tests {
     use std::process::Stdio;

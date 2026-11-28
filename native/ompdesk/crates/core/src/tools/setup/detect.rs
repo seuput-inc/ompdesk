@@ -21,6 +21,13 @@ use crate::tools::spawn::{
 /// `AGENT_DESKTOP_MIN_VERSION`: no `agent-desktop mcp` before it.
 pub const AGENT_DESKTOP_MIN_VERSION: &str = "1.2.0";
 
+/// What Windows detection observed for Git's Mandatory ASLR state (real detection or a test seam).
+#[derive(Clone, Debug)]
+pub struct GitAslrDetection {
+    pub images: Vec<String>,
+    pub os: git_aslr::OsState,
+}
+
 /// What detection found (`Detection`), and the PATH it looked along.
 #[derive(Clone, Debug, Default)]
 pub struct Detection {
@@ -30,6 +37,7 @@ pub struct Detection {
     pub brew: Option<String>,
     pub winget: Option<String>,
     pub path_env: String,
+    pub git_aslr: Option<GitAslrDetection>,
 }
 
 impl Detection {
@@ -90,15 +98,6 @@ async fn probe_git_shell(root: &str, env: &BTreeMap<String, String>) -> Option<V
         output
     };
     git_shell_problem(ran.code, &output)
-}
-
-/// `readGitAslrOverride`: the override's state from the registry (no elevation needed to read).
-async fn read_git_aslr_override(root: &str, env: &BTreeMap<String, String>) -> bool {
-    const IFEO: &str =
-        r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\sh.exe";
-    let args = ["query".to_owned(), IFEO.to_owned(), "/s".to_owned()];
-    let ran = exec("reg.exe", &args, false, env, 15_000).await;
-    ran.code == Some(0) && git_aslr::overridden(&ran.stdout, root)
 }
 
 /// `versionOf`: `setup.toolVersion` of `bin`, as a presence at `bin`.
@@ -238,13 +237,15 @@ fn present_at(path: &str) -> Presence {
     }
 }
 
-/// `detectGit`.
+/// `detectGit`: on Windows also audits every MSYS executable under `<root>\usr` against actual OS Mandatory ASLR
+/// mitigations (kernel system setting + HKLM IFEO) so missing overrides (e.g. `grep.exe`) are caught even when
+/// `sh.exe` itself is overridden and `git-aslr.json` already lists them.
 async fn detect_git(
     tools: &Tools,
     platform: &str,
     path_env: &str,
     env: &BTreeMap<String, String>,
-) -> Presence {
+) -> (Presence, Option<GitAslrDetection>) {
     if platform == "win32" {
         let (path_env, env_vars) = (path_env.to_owned(), env.clone());
         let found = off_hub(move || {
@@ -260,13 +261,24 @@ async fn detect_git(
             let bash = find_git_bash(&lookup, &|file| Path::new(file).exists())?;
             let root = dirname(true, &dirname(true, &bash));
             let git = host_join(&[&root, "cmd", "git.exe"]);
-            let has_sh = Path::new(&host_join(&[&root, "usr", "bin", "sh.exe"])).exists();
+            let sh = host_join(&[&root, "usr", "bin", "sh.exe"]);
+            let has_sh = Path::new(&sh).exists();
             let has_git = Path::new(&git).exists();
-            Some((root, git, has_sh, has_git))
+            let aslr = if has_sh {
+                let mut images = git_aslr::usr_executables(&root);
+                if images.is_empty() {
+                    images.push(sh);
+                }
+                let os = git_aslr::read_os_state(&images);
+                Some(GitAslrDetection { images, os })
+            } else {
+                None
+            };
+            Some((root, git, has_sh, has_git, aslr))
         })
         .await;
-        let Some((root, git, has_sh, has_git)) = found else {
-            return Presence::Missing;
+        let Some((root, git, has_sh, has_git, aslr)) = found else {
+            return (Presence::Missing, None);
         };
         let found = async {
             if has_git {
@@ -282,25 +294,44 @@ async fn detect_git(
                 None
             }
         };
-        let overridden = async { has_sh && read_git_aslr_override(&root, env).await };
-        let (found, git_shell, overridden) = tokio::join!(found, shell, overridden);
+        let (found, mut git_shell) = tokio::join!(found, shell);
         let Presence::Present { version, .. } = found else {
-            return found;
+            return (found, aslr);
         };
+        let audit = aslr
+            .as_ref()
+            .map(|state| git_aslr::audit(&state.images, &state.os));
+        let overridden = audit.as_ref().is_some_and(|audit| audit.overridden);
         if let Some(problem) = &git_shell {
             let mut details = json!({"level": "warn", "root": root});
             if let (Some(details), Some(problem)) = (details.as_object_mut(), problem.as_object()) {
                 details.extend(problem.clone());
             }
             tools.log("setup", "Git's sh cannot start a child process", details);
+        } else if let Some(audit) = audit.as_ref().filter(|audit| audit.incomplete) {
+            git_shell = Some(json!({"kind": "mandatory-aslr"}));
+            let sample: Vec<&str> = audit.missing.iter().take(20).map(String::as_str).collect();
+            tools.log(
+                "setup",
+                "Git's Mandatory ASLR overrides are incomplete",
+                json!({
+                    "level": "warn",
+                    "root": root,
+                    "missingCount": audit.missing.len(),
+                    "missing": sample,
+                }),
+            );
         }
-        return Presence::Present {
-            version,
-            path: Some(root),
-            git_shell,
-            git_aslr_override: overridden.then_some(true),
-            git_aslr_undoable: None,
-        };
+        return (
+            Presence::Present {
+                version,
+                path: Some(root),
+                git_shell,
+                git_aslr_override: overridden.then_some(true),
+                git_aslr_undoable: None,
+            },
+            aslr,
+        );
     }
     // /usr/bin/git is a stub until the Command Line Tools exist; running it then opens Apple's install dialog.
     let names = ["git".to_owned()];
@@ -313,10 +344,10 @@ async fn detect_git(
     let lookup_platform = platform.to_owned();
     if let Some(git) = off_hub(move || find_on_path(&names, &path_env, &lookup_platform, &[])).await
     {
-        return version_of(&git, env).await;
+        return (version_of(&git, env).await, None);
     }
     if platform != "darwin" {
-        return Presence::Missing;
+        return (Presence::Missing, None);
     }
     let cwd = std::env::current_dir()
         .map(|dir| dir.to_string_lossy().into_owned())
@@ -326,10 +357,11 @@ async fn detect_git(
         crate::setup::developer_dir(&cwd, probe_env, 15_000, Scope::detached()).await
     })
     .await;
-    match selected {
+    let presence = match selected {
         Ok(Some(_)) => version_of("/usr/bin/git", env).await,
         _ => Presence::Missing,
-    }
+    };
+    (presence, None)
 }
 
 /// `detectAgentDesktop`: the managed copy, or the bundle the app ships while it is the one a session would run.
@@ -497,7 +529,7 @@ pub async fn machine(tools: &Rc<Tools>) -> Detection {
             }
         }
     };
-    let (found_bun, omp, git, gh_presence, node_presence, agent_desktop, tailscale) = tokio::join!(
+    let (found_bun, omp, (git, git_aslr), gh_presence, node_presence, agent_desktop, tailscale) = tokio::join!(
         found(bun.clone()),
         detect_omp(tools),
         detect_git(tools, platform, &path_env, &env),
@@ -550,5 +582,6 @@ pub async fn machine(tools: &Rc<Tools>) -> Detection {
         brew,
         winget,
         path_env,
+        git_aslr,
     }
 }
