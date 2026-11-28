@@ -197,6 +197,7 @@ src/main/bridge-todo-stale.test.ts	tooling	-	Vitest suite: todoStaleness.
 src/main/bridge-todo-stock-rig.ts	tooling	-	startProvider, fakeAgent and startOmp supply stock todo tests with provider responses, isolated config and a live bridge.
 src/main/bridge-todo-wait-stock.test.ts	tooling	-	Vitest suite: still reminds a session that stopped with an item it can act on.
 src/main/bridge-todo-wait.test.ts	tooling	-	Vitest suite: a session waiting on a child's reply is not woken by the todo reminder.
+src/main/bridge-turn-clock-stock.test.ts	tooling	-	Checks the executing host's time and stable request prefix on stock omp.
 src/main/bridge-turn-origin-stock.test.ts	tooling	-	Vitest suite: is the person only for a run their typed message started, while it runs and after.
 src/main/bridge-turn-origin.test.ts	tooling	-	Vitest suite: who started the main agent's run.
 src/main/bridge-turn-stages-stock.test.ts	tooling	-	Vitest suite: writes no line for a normal turn and names the stage of each way a turn waits.

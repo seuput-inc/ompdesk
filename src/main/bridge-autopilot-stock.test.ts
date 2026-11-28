@@ -32,17 +32,18 @@ import { removeWhenFree } from "./test-folders";
  * cycles in a row do not stop the run; disarm restores the tool set.
  */
 
+const PLAIN_QUESTION = "plain question";
+
 interface ProviderRequest {
 	system: string;
 	tools: string[];
 	/** Tool results the request carried, newest last. */
 	toolResults: string[];
-	/** How many user/developer messages the conversation holds: the turn number. */
+	/** How many user/developer messages the conversation holds, including prompt companions. */
 	turn: number;
 	/** Tool results since the latest such message: how far into the turn the model is. */
 	inTurn: number;
-	/** The latest user/developer message, cut: which turn this request belongs to. */
-	lastUser: string;
+	hasPlainQuestion: boolean;
 }
 
 type ToolStep = { tool: string; args: Record<string, unknown> };
@@ -135,7 +136,9 @@ async function startProvider(script: (requests: readonly ProviderRequest[]) => S
 				toolResults: results,
 				turn: starts.filter(index => index >= 0).length,
 				inTurn: parsed.messages.slice(lastStart + 1).filter(message => message.role === "tool").length,
-				lastUser: lastStart >= 0 ? textOf(parsed.messages[lastStart]?.content) : "",
+				hasPlainQuestion: parsed.messages.some(
+					m => m.role === "user" && textOf(m.content).includes(PLAIN_QUESTION),
+				),
 			});
 			res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
 			const step = script(requests);
@@ -491,13 +494,14 @@ describe.skipIf(!existsSync(omp))("autopilot on stock omp", () => {
 		}
 		// The same top-level tools and the same `xd://` devices as before arm (`debug` a device again, not top level).
 		await vi.waitFor(async () => expect(await presentation()).toEqual(before), { timeout: 10_000 });
-		const promptResponse = await h.send({ type: "prompt", message: "plain question" });
-		const asked = () => provider.requests.findLast(request => request.lastUser.includes("plain question"));
+		const promptResponse = await h.send({ type: "prompt", message: PLAIN_QUESTION });
+		// A side request can quote the question; only the main conversation carries the cycles' tool results.
+		const asked = () => provider.requests.find(request => request.hasPlainQuestion && request.toolResults.length > 0);
 		const until = Date.now() + 20_000;
 		while (!asked() && Date.now() < until) await new Promise(wake => setTimeout(wake, 200));
 		const plain = asked();
 		const recent = JSON.stringify(
-			provider.requests.slice(-4).map(request => [request.turn, request.inTurn, request.lastUser]),
+			provider.requests.slice(-4).map(request => [request.turn, request.inTurn, request.hasPlainQuestion]),
 		);
 		expect(plain, `${JSON.stringify(promptResponse)} ${recent}`).toBeDefined();
 		expect(plain?.system).not.toContain("<autopilot>");
