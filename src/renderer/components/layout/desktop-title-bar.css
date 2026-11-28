@@ -7,7 +7,7 @@
 	user-select: none;
 	color: var(--sc-text);
 	background: var(--sc-surface-1);
-	box-shadow: inset 0 -1px var(--sc-divider);
+	box-shadow: inset 0 calc(-1 * var(--sc-hairline)) 0 var(--sc-divider);
 }
 
 .desktop-title-bar .desktop-title-middle {
@@ -29,6 +29,7 @@
 	position: relative;
 	z-index: 2147483647; /* Window controls stay above app dialogs; the rest of the row does not. */
 	background: var(--sc-surface-1);
+	box-shadow: inset 0 calc(-1 * var(--sc-hairline)) 0 var(--sc-divider);
 }
 
 .desktop-title-bar [data-caption] {

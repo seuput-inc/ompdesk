@@ -2,7 +2,7 @@
 
 **Base commit**: `9bb8924cc4` (`orca/line-v0155`, sitting on `v0.154.0` + 27 pending dev commits)  
 **Reference audited**: Orca renderer source (`/tmp/orca-src-research/src/renderer/src/**`) vs OMPdesk (`src/renderer/**`)  
-**Status**: Waves 1–4 implemented on `orca/design-overhaul-w1`; post-`#76` top-bar handoff checklist ready below.
+**Status**: Waves 1–4 and post-`#76` top-bar alignment implemented on `orca/v0155-unified` (Windows caption-band & hit-test e2e specs to run on Windows CI).
 
 ---
 
@@ -83,10 +83,10 @@
 - **Exact files**:
   - `src/renderer/components/settings/SettingsPage.tsx`, `SettingsLayout.tsx`, `src/renderer/styles/global.css` (deep-link target highlight fade matching Orca's `.settings-target-highlight`, nav item hover/active refinement, consistent section heading rhythm while preserving `.omp/rules/settings-layout-look.md` minimal-settings & density pins).
   - `src/renderer/components/common/Modal.tsx`, `Sheet.tsx`, `ConfirmDialog.tsx` (align modal size presets and footer spacing with Orca's unified `confirm` / `form` / `list` / `review` rhythm; consistent dark-mode `--dialog-surface` translucency where GPU compositing is active).
-  - **`#76` Top-Bar Handoff Section** *(do NOT edit until `#76` merges from `hold/titlebar76`)*:
-    - Files owned by `#76`: `src/renderer/components/layout/DesktopTitleBar.tsx` (if introduced), `src/renderer/components/layout/DesktopChrome.tsx`, `src/renderer/lib/chrome-layout.ts`, `src/renderer/components/layout/TitleBar.tsx` (coordinate seam), `native/ompdesk/crates/tauri-shell/src/{chrome_hit,windows_chrome,window_activation,main}.rs`, `src/preload/tauri.ts`.
+  - **`#76` Top-Bar Handoff Section** *(completed in `orca/v0155-unified`)*:
+    - Files owned by `#76`: `src/renderer/components/layout/DesktopTitleBar.tsx`, `src/renderer/components/layout/DesktopChrome.tsx`, `src/renderer/components/layout/desktop-title-bar.css`, `src/renderer/lib/chrome-layout.ts`, `native/ompdesk/crates/tauri-shell/src/{chrome_hit,windows_chrome,window_activation,main}.rs`, `src/preload/tauri.ts`.
     - Post-merge alignment checklist:
-      1. Ensure titlebar bottom seam uses `var(--sc-hairline) solid var(--sc-divider)` (matching `PanelContainer` and `StatusBar`).
-      2. Align sidebar header surface (`--sc-surface-1`) and main titlebar surface (`--sc-bg`) seamlessly across the 36 px `--sc-topbar-h` band with inset shadow (`inset 0 -1px 0`) so traffic-light vertical centering (`y = 18px`) never shifts by 1 px.
-      3. Verify Windows caption-band (`--sc-caption-buttons`, `--sc-caption-band`) clearance in `e2e/windows-caption.e2e.ts` and `e2e/window-chrome-hit.e2e.ts` after visual polish.
+      1. [x] Titlebar bottom seam uses `box-shadow: inset 0 calc(-1 * var(--sc-hairline)) 0 var(--sc-divider)` on `.desktop-title-bar` and `[data-caption-buttons]` (matching `PanelContainer` and `StatusBar` without adding 1 px to the 36 px bar).
+      2. [x] Unified `--sc-surface-1` across the 36 px `--sc-topbar-h` band and caption buttons with inset hairline shadow so macOS traffic-light vertical centering (`y = 18px`) never shifts by 1 px.
+      3. [x] Audited `--sc-caption-buttons`, `--sc-caption-band`, and `--sc-dialog-room` clearance across `global.css`, `components.css`, `Sheet.tsx`, and `Modal.tsx` (full Windows HWND verification runs in `e2e/windows-caption.e2e.ts` and `e2e/window-chrome-hit.e2e.ts` on Windows CI).
 - **Bundle budget impact**: **≤ 0 B on first screen** (Settings is lazy-loaded; `Modal`/`Sheet` edits are class/CSS-only).
