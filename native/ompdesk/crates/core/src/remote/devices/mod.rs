@@ -101,7 +101,7 @@ struct Inner {
     /// Whether each known host's node was online in the last poll.
     node_online: HashMap<String, bool>,
     computers: Vec<Map<String, Value>>,
-    watchers: HashSet<u64>,
+    watchers: HashSet<i64>,
     poll_timer: Option<AbortHandle>,
     scan_timer: Option<AbortHandle>,
 }
@@ -1266,7 +1266,7 @@ async fn rebind(call: Call) -> Result<Reply, Fault> {
 #[derive(Deserialize)]
 struct WatchParams {
     devices: u64,
-    watcher: u64,
+    watcher: i64,
     on: bool,
 }
 

@@ -273,6 +273,66 @@ const OWNED: &[Owned] = &[
         handler: crate::git::project::ipc_project_origin_get,
     },
     Owned {
+        channel: "remote:block-peer",
+        handler: crate::remote::ipc_block_peer,
+    },
+    Owned {
+        channel: "remote:connect",
+        handler: crate::remote::ipc_connect,
+    },
+    Owned {
+        channel: "remote:dismiss-forgotten",
+        handler: crate::remote::ipc_dismiss_forgotten,
+    },
+    Owned {
+        channel: "remote:get-state",
+        handler: crate::remote::ipc_get_state,
+    },
+    Owned {
+        channel: "remote:list-dirs",
+        handler: crate::remote::ipc_list_dirs,
+    },
+    Owned {
+        channel: "remote:remove-host",
+        handler: crate::remote::ipc_remove_host,
+    },
+    Owned {
+        channel: "remote:rename-host",
+        handler: crate::remote::ipc_rename_host,
+    },
+    Owned {
+        channel: "remote:rename-peer",
+        handler: crate::remote::ipc_rename_peer,
+    },
+    Owned {
+        channel: "remote:revoke-peer",
+        handler: crate::remote::ipc_revoke_peer,
+    },
+    Owned {
+        channel: "remote:set-device-name",
+        handler: crate::remote::ipc_set_device_name,
+    },
+    Owned {
+        channel: "remote:set-device-section-order",
+        handler: crate::remote::ipc_set_device_section_order,
+    },
+    Owned {
+        channel: "remote:set-host-enabled",
+        handler: crate::remote::ipc_set_host_enabled,
+    },
+    Owned {
+        channel: "remote:set-peer-limits",
+        handler: crate::remote::ipc_set_peer_limits,
+    },
+    Owned {
+        channel: "remote:tailscale-action",
+        handler: crate::remote::ipc_tailscale_action,
+    },
+    Owned {
+        channel: "remote:watch-tailnet",
+        handler: crate::remote::ipc_watch_tailnet,
+    },
+    Owned {
         channel: "resume:cancel-wait",
         handler: crate::resume::ipc_cancel_wait,
     },

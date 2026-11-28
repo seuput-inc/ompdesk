@@ -41,6 +41,8 @@ use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
 use tokio::sync::oneshot;
 
+use crate::ipc::{Handled, IpcContext};
+use crate::ports::Port;
 use crate::server::{Call, Events, Fault, PushCall, Registry, Reply};
 use handshake::{Expected, Failure, Probe};
 use identity::Identity;
@@ -174,6 +176,111 @@ pub fn register(registry: &mut Registry) {
             .unwrap_or(Reason::Local);
         on_link(&push, Command::Destroy(reason));
     });
+    registry.add("remote.ipcPort", |call| {
+        Box::pin(async move {
+            let IpcPortParams { port } = call.params()?;
+            let opened = Port::open(&call.events, port, Value::Null)?;
+            *IPC_PORT.lock().unwrap_or_else(|p| p.into_inner()) = Some(opened);
+            Reply::json(&Value::Null)
+        })
+    });
+}
+
+#[derive(Deserialize)]
+struct IpcPortParams {
+    port: u64,
+}
+
+static IPC_PORT: LazyLock<Mutex<Option<Arc<Port<Value>>>>> = LazyLock::new(Default::default);
+
+async fn ask_ipc(method: &'static str, ctx: IpcContext, args: Vec<Value>) -> Result<Value, Fault> {
+    let port = IPC_PORT.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    let Some(port) = port else {
+        return Err(Fault::new(
+            "remote_unavailable",
+            "Remote devices service is not connected",
+        ));
+    };
+    let has_arg = !args.is_empty();
+    let arg = args.into_iter().next().unwrap_or(Value::Null);
+    let val: Value = port
+        .ask(
+            method,
+            &json!({
+                "arg": arg,
+                "hasArg": has_arg,
+                "window": ctx.caller.window,
+            }),
+        )
+        .await?;
+    Ok(val)
+}
+
+fn ipc_value(method: &'static str, ctx: IpcContext, args: Vec<Value>) -> Handled {
+    Box::pin(async move { Ok(Some(ask_ipc(method, ctx, args).await?)) })
+}
+
+pub(crate) fn ipc_get_state(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("state", ctx, args)
+}
+
+pub(crate) fn ipc_set_device_section_order(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let _ = ask_ipc("setDeviceSectionOrder", ctx, args).await?;
+        Ok(None)
+    })
+}
+
+pub(crate) fn ipc_set_host_enabled(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("setHostEnabled", ctx, args)
+}
+
+pub(crate) fn ipc_set_device_name(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("setDeviceName", ctx, args)
+}
+
+pub(crate) fn ipc_revoke_peer(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("revokePeer", ctx, args)
+}
+
+pub(crate) fn ipc_block_peer(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("blockPeer", ctx, args)
+}
+
+pub(crate) fn ipc_set_peer_limits(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("setPeerLimits", ctx, args)
+}
+
+pub(crate) fn ipc_rename_host(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("renameHost", ctx, args)
+}
+
+pub(crate) fn ipc_rename_peer(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("renamePeer", ctx, args)
+}
+
+pub(crate) fn ipc_watch_tailnet(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("watchTailnet", ctx, args)
+}
+
+pub(crate) fn ipc_connect(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("connect", ctx, args)
+}
+
+pub(crate) fn ipc_tailscale_action(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("tailscaleAction", ctx, args)
+}
+
+pub(crate) fn ipc_dismiss_forgotten(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("dismissForgotten", ctx, args)
+}
+
+pub(crate) fn ipc_remove_host(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("removeHost", ctx, args)
+}
+
+pub(crate) fn ipc_list_dirs(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_value("listDirs", ctx, args)
 }
 
 fn params<T: serde::de::DeserializeOwned>(push: &PushCall) -> Option<T> {

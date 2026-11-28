@@ -168,6 +168,7 @@ import {
 import { type ConnectorAccounts, connectorCommand } from "./connector-accounts";
 import { createControlBackend } from "./control-socket/backend";
 import { controlSocketFailure, startControlSocket } from "./control-socket/index";
+import { CorePort } from "./core/ports";
 import { core } from "./core/process";
 import { defaultWorkspace } from "./default-workspace";
 import { deliverOnce } from "./delivery-ledger";
@@ -3108,42 +3109,59 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 
 	// ========================================================================
 	// Remote devices — this computer as a host, and the hosts it is paired with.
+	// `remote:*` channels route directly from tauri-shell to ompdesk-core (`crates/core/src/remote/mod.rs`).
 	// ========================================================================
-	ipc.handle(IPC_COMMANDS.REMOTE_GET_STATE, () => remoteDevices.state());
-	ipc.handle(IPC_COMMANDS.REMOTE_SET_DEVICE_SECTION_ORDER, (_caller, order: unknown) =>
-		remoteDevices.setDeviceSectionOrder(order),
-	);
-	ipc.handle(IPC_COMMANDS.REMOTE_SET_HOST_ENABLED, (_caller, enabled: unknown) =>
-		remoteDevices.setHostEnabled(enabled === true),
-	);
-	ipc.handle(IPC_COMMANDS.REMOTE_SET_DEVICE_NAME, (_caller, name: unknown) => remoteDevices.setDeviceName(name));
-	ipc.handle(IPC_COMMANDS.REMOTE_REVOKE_PEER, (_caller, deviceId: unknown) => remoteDevices.revokePeer(deviceId));
-	ipc.handle(IPC_COMMANDS.REMOTE_BLOCK_PEER, (_caller, deviceId: unknown) => remoteDevices.blockPeer(deviceId));
-	ipc.handle(IPC_COMMANDS.REMOTE_SET_PEER_LIMITS, (_caller, payload: unknown) => remoteDevices.setPeerLimits(payload));
-	ipc.handle(IPC_COMMANDS.REMOTE_RENAME_HOST, (_caller, payload: unknown) => remoteDevices.renameHost(payload));
-	ipc.handle(IPC_COMMANDS.REMOTE_RENAME_PEER, (_caller, payload: unknown) => remoteDevices.renamePeer(payload));
 	const tailnetWatchers = new Set<number>();
-	ipc.handle(IPC_COMMANDS.REMOTE_WATCH_TAILNET, (caller, on: unknown) => {
-		const id = caller.sender.id;
-		// A window that closes while watching stops counting (one hook per window, however often it asks).
-		if (on === true && !tailnetWatchers.has(id)) {
-			tailnetWatchers.add(id);
-			caller.sender.once("destroyed", () => {
-				tailnetWatchers.delete(id);
-				void remoteDevices.watchTailnet(id, false);
-			});
-		}
-		return remoteDevices.watchTailnet(id, on);
+	interface RemotePortCall {
+		arg?: unknown;
+		hasArg?: boolean;
+		window?: number | null;
+	}
+	const argOf = (call: RemotePortCall): unknown => (call.hasArg ? call.arg : undefined);
+	const remotePort = new CorePort({
+		state: () => remoteDevices.state(),
+		setDeviceSectionOrder: (call: RemotePortCall) => remoteDevices.setDeviceSectionOrder(argOf(call)),
+		setHostEnabled: (call: RemotePortCall) => remoteDevices.setHostEnabled(argOf(call) === true),
+		setDeviceName: (call: RemotePortCall) => remoteDevices.setDeviceName(argOf(call)),
+		revokePeer: (call: RemotePortCall) => remoteDevices.revokePeer(argOf(call)),
+		blockPeer: (call: RemotePortCall) => remoteDevices.blockPeer(argOf(call)),
+		setPeerLimits: (call: RemotePortCall) => remoteDevices.setPeerLimits(argOf(call)),
+		renameHost: (call: RemotePortCall) => remoteDevices.renameHost(argOf(call)),
+		renamePeer: (call: RemotePortCall) => remoteDevices.renamePeer(argOf(call)),
+		watchTailnet: (call: RemotePortCall) => {
+			const id = typeof call.window === "number" ? call.window : 0;
+			const on = argOf(call);
+			// A window that closes while watching stops counting (one hook per window, however often it asks).
+			if (on === true && !tailnetWatchers.has(id)) {
+				const win = [...windowManager.getAllWindows(), ...(deps.webPages?.() ?? [])].find(
+					w => !w.isDestroyed() && w.webContents.id === id,
+				);
+				if (win) {
+					tailnetWatchers.add(id);
+					win.webContents.once("destroyed", () => {
+						tailnetWatchers.delete(id);
+						void remoteDevices.watchTailnet(id, false);
+					});
+				}
+			}
+			return remoteDevices.watchTailnet(id, on);
+		},
+		connect: (call: RemotePortCall) => remoteDevices.connect(argOf(call)),
+		tailscaleAction: (call: RemotePortCall) => remoteDevices.tailscaleAction(argOf(call)),
+		dismissForgotten: () => remoteDevices.dismissForgotten(),
+		removeHost: (call: RemotePortCall) => remoteDevices.removeHost(argOf(call)),
+		listDirs: (call: RemotePortCall) => {
+			const payload = argOf(call) as IpcRemoteListDirsPayload | undefined;
+			return remoteDevices.listDirs(payload?.deviceId, payload?.path, payload?.query);
+		},
 	});
-	ipc.handle(IPC_COMMANDS.REMOTE_CONNECT, (_caller, nodeId: unknown) => remoteDevices.connect(nodeId));
-	ipc.handle(IPC_COMMANDS.REMOTE_TAILSCALE_ACTION, (_caller, action: unknown) =>
-		remoteDevices.tailscaleAction(action),
-	);
-	ipc.handle(IPC_COMMANDS.REMOTE_DISMISS_FORGOTTEN, () => remoteDevices.dismissForgotten());
-	ipc.handle(IPC_COMMANDS.REMOTE_REMOVE_HOST, (_caller, deviceId: unknown) => remoteDevices.removeHost(deviceId));
-	ipc.handle(IPC_COMMANDS.REMOTE_LIST_DIRS, (_caller, payload: IpcRemoteListDirsPayload) =>
-		remoteDevices.listDirs(payload?.deviceId, payload?.path, payload?.query),
-	);
+	const connectRemotePort = () => {
+		void core()
+			.call("remote.ipcPort", { port: remotePort.id })
+			.catch(() => {});
+	};
+	connectRemotePort();
+	core().on("ready", connectRemotePort);
 
 	// External-editor round trip ($VISUAL/$EDITOR, temp file, exit-0 read-back)
 	// for the composer editor dialog. Result shape carries availability +
