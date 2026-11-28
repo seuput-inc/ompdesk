@@ -2,6 +2,8 @@
 
 `cards.answer` remains unavailable to agents in this implementation. A registered bot chat can answer an ordinary work question routed to it. That answer is not the person's approval. A host-routed message identifies a session and registry membership, not who authorized its contents.
 
+The work-question journal records submissions on a best-effort basis, not successful delivery or approval. If the receiving sidecar exits or its journal write fails, a submitted answer can have no entry. A missing record does not mean nobody answered. Any view of these receipts must make that clear, including when it shows no records.
+
 The 2026-11-28 design review identified two prerequisites for an exclusive delegation guarantee:
 
 1. A protected designation and revocation path that requires the person's confirmation. Neither an agent tool nor a process running with the agent's OS privileges may grant or widen it. Revocation must apply to open cards. The current [same-user threat model](../../.omp/rules/multi-viewer-web.md) does not provide that isolation.
