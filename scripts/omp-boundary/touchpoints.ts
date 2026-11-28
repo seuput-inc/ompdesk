@@ -119,7 +119,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"Starts a session with `omp --mode rpc-ui -e <extension> --session --config --model` plus extra extension roots.",
 		files: ["src/main/omp-launch.ts", "src/main/sidecar.ts"],
 		stock: ["omp://rpc.md", "--mode rpc-ui", "-e", "--session", "--config", "--model"],
-		tests: ["src/main/omp-launch.test.ts", "src/main/sidecar.test.ts"],
+		tests: ["src/main/omp-launch.test.ts", "src/main/sidecar.test.ts", "scripts/matt-stock.test.ts"],
 	},
 	{
 		id: "L07",
