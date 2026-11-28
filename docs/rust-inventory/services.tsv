@@ -69,6 +69,7 @@ src/main/core/hub.bench.ts	exception	Benchmark of a synchronous hub call that pu
 src/main/core/hub.test.ts	exception	Exercises nested calls, synchronous questions and asynchronous answers on the hub connection.
 src/main/core/hub.ts	port	Starts a socket worker, blocks synchronous calls on Atomics, dispatches nested questions and rejects pending calls on connection loss.
 src/main/core/ports.ts	port	Assigns port IDs and snapshot sequence numbers, retries timed-out held calls, and fences callback answers to the originating generation.
+src/main/core/process-ready.test.ts	exception	Verifies CoreProcess.waitReady against a mock core owner socket across cold start, early exit, and timeout.
 src/main/core/process.test.ts	exception	Exercises real core startup, requests, exit handling and generation fencing.
 src/main/core/process.ts	port	Spawns and stops ompdesk-core, frames binary and JSON traffic, times out or cancels requests and waits for process-group exit.
 src/main/core/reopen.ts	port	Retries a failed core open while wanted, backing off from one second to thirty seconds.
