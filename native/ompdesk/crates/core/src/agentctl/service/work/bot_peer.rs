@@ -106,7 +106,7 @@ impl AgentControl {
             })
             .map_or("", |tab| tab.tab_id.as_str());
         let mut context =
-            super::bots::bot_context(bot, self.items().all(now), &state.tabs, tab, now);
+            super::bots::bot_context(bot, &self.items().v1(now), &state.tabs, tab, now);
         context["bot"]["firstRun"] = json!(!pending.is_null());
         drop(bots);
         if changed || (has_routines && installed.is_ok()) {

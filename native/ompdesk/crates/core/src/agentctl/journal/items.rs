@@ -1,6 +1,6 @@
 //! A bot's items (`src/shared/bots.ts` `Item`): what it works on for its owner and what it needs from them. Kept in
-//! `<userData>/items.json` (mode 0o600, one JSON array, written whole on every change); a closed item leaves it
-//! `CLOSED_KEPT_MS` after it closed.
+//! `<userData>/items.json` (mode 0o600, one JSON array, written whole on every change). The age and event limits
+//! below apply to the v1 view, not the stored history.
 //!
 //! Every event has an id, counted across all items (Orca's `e<n>`, `bot-items.ts`): an item's question names the
 //! event that asked it, an answer the question it answers, and a bot's Items tab is seen up to an id. The store
@@ -33,9 +33,9 @@ pub const STATUSES: [&str; 6] = [
 ];
 /// `ITEM_OPEN_STATUSES`.
 pub const OPEN_STATUSES: [&str; 4] = ["planned", "working", "waiting", "needs_you"];
-/// Days a closed item stays (`ITEM_CLOSED_KEPT_DAYS`), in ms.
+/// How long a closed item appears in v1.
 pub const CLOSED_KEPT_MS: f64 = 7.0 * 24.0 * 60.0 * 60_000.0;
-/// Newest events an item keeps.
+/// Newest events shown in v1.
 pub const EVENTS_KEPT: usize = 50;
 
 pub fn is_open(status: &str) -> bool {
@@ -263,7 +263,43 @@ impl ItemRecord {
                 .is_some_and(|until| until > now)
     }
 
-    /// Records one event (newest last, `EVENTS_KEPT` kept); the caller may fill its other fields.
+    pub fn visible_at(&self, now: f64) -> bool {
+        self.closed
+            .is_none_or(|closed| now - closed < CLOSED_KEPT_MS)
+    }
+
+    /// Clone only the v1 window, not an unbounded history that its reader would discard.
+    /// Shared board snapshots also omit authority-only `work` and `mail`.
+    pub fn v1(&self) -> Self {
+        Self {
+            id: self.id.clone(),
+            bot: self.bot.clone(),
+            number: self.number,
+            session: self.session.clone(),
+            work: None,
+            mail: BTreeMap::new(),
+            title: self.title.clone(),
+            description: self.description.clone(),
+            done_means: self.done_means.clone(),
+            status: self.status.clone(),
+            question: self.question.clone(),
+            wait: self.wait.clone(),
+            links: self.links.clone(),
+            snoozed_until: self.snoozed_until.clone(),
+            created_at: self.created_at.clone(),
+            updated_at: self.updated_at.clone(),
+            touched: self.touched,
+            closed_at: self.closed_at.clone(),
+            closed: self.closed,
+            close_note: self.close_note.clone(),
+            events: self.events[self.events.len().saturating_sub(EVENTS_KEPT)..].to_vec(),
+            version: self.version,
+            stale: self.stale,
+            limit_until: self.limit_until.clone(),
+        }
+    }
+
+    /// Records one event (newest last); the caller may fill its other fields.
     pub fn event(
         &mut self,
         at: &str,
@@ -278,8 +314,6 @@ impl ItemRecord {
             text: text.map(str::to_owned),
             ..ItemEvent::default()
         });
-        let extra = self.events.len().saturating_sub(EVENTS_KEPT);
-        self.events.drain(..extra);
         self.events.last_mut().expect("an event was just pushed")
     }
 
@@ -292,8 +326,11 @@ impl ItemRecord {
 }
 
 /// Gives every unsaved event of `item` the next id, and a question asked by this change the id of its ask.
-fn stamp(item: &mut ItemRecord, next: &mut u64) {
-    for event in item.events.iter_mut().filter(|event| event.id == 0) {
+fn stamp(item: &mut ItemRecord, start: usize, next: &mut u64) {
+    for event in item.events[start..]
+        .iter_mut()
+        .filter(|event| event.id == 0)
+    {
         *next += 1;
         event.id = *next;
     }
@@ -355,7 +392,7 @@ impl Items {
             .unwrap_or(0);
         // A file written before events had ids: each gets one, in the order they are kept.
         for item in &mut items {
-            stamp(item, &mut last_event);
+            stamp(item, 0, &mut last_event);
         }
         Items {
             file,
@@ -386,25 +423,19 @@ impl Items {
         })
     }
 
-    /// Every item, closed ones past `CLOSED_KEPT_MS` dropped first.
-    pub fn all(&mut self, now: f64) -> &[ItemRecord] {
-        let before = self.items.len();
-        self.items.retain(|item| {
-            item.closed
-                .is_none_or(|closed| now - closed < CLOSED_KEPT_MS)
-        });
-        if self.items.len() != before {
-            self.save();
-        }
-        &self.items
+    pub fn visible(&self, now: f64) -> impl Iterator<Item = &ItemRecord> {
+        self.items.iter().filter(move |item| item.visible_at(now))
+    }
+
+    pub fn v1(&self, now: f64) -> Vec<ItemRecord> {
+        self.visible(now).map(ItemRecord::v1).collect()
     }
 
     /// The newest event id of `bot`'s items (0 when none): where its Items tab is seen up to once opened.
-    pub fn newest_event(&self, bot: &str) -> u64 {
-        self.items
-            .iter()
+    pub fn newest_event(&self, bot: &str, now: f64) -> u64 {
+        self.visible(now)
             .filter(|item| item.bot == bot)
-            .flat_map(|item| item.events.iter().map(|event| event.id))
+            .flat_map(|item| item.events.iter().rev().take(EVENTS_KEPT).map(|e| e.id))
             .max()
             .unwrap_or(0)
     }
@@ -461,9 +492,8 @@ impl Items {
     }
 
     /// Ids of the items that link `target` (a session's tab id or file).
-    pub fn linking(&self, targets: &[&str]) -> Vec<String> {
-        self.items
-            .iter()
+    pub fn linking(&self, targets: &[&str], now: f64) -> Vec<String> {
+        self.visible(now)
             .filter(|item| {
                 item.links
                     .iter()
@@ -479,7 +509,7 @@ impl Items {
             .checked_add(1)
             .ok_or("This board has used every item number.")?;
         let previous_event = self.last_event;
-        stamp(&mut item, &mut self.last_event);
+        stamp(&mut item, 0, &mut self.last_event);
         if let Some(last) = self.numbers.last_issued.get_mut(&item.bot) {
             *last = item.number;
         }
@@ -494,15 +524,16 @@ impl Items {
             self.last_event = previous_event;
             return Err(error);
         }
-        Ok(self.items.last().expect("item just added").clone())
+        Ok(self.items.last().expect("item just added").v1())
     }
 
     /// Changes item `id` and saves; its record as it is now.
     pub fn change(&mut self, id: &str, change: impl FnOnce(&mut ItemRecord)) -> Option<ItemRecord> {
         let item = self.items.iter_mut().find(|item| item.id == id)?;
+        let start = item.events.len();
         change(item);
-        stamp(item, &mut self.last_event);
-        let changed = item.clone();
+        stamp(item, start, &mut self.last_event);
+        let changed = item.v1();
         self.save();
         Some(changed)
     }

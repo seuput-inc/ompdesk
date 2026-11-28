@@ -294,10 +294,8 @@ impl AgentControl {
         item: &ItemRecord,
         now: f64,
     ) -> ItemRecord {
-        let mut read = item.clone();
-        // Shared board snapshots are not authority to address a worker.
-        read.work = None;
-        read.mail.clear();
+        // v1 strips authority-only work/mail and caps events to EVENTS_KEPT.
+        let mut read = item.v1();
         let mut limits: Vec<f64> = Vec::new();
         let mut live = 0;
         let mut working = false;
@@ -335,11 +333,10 @@ impl AgentControl {
     /// before its first message was written). Whether anything changed.
     pub(crate) fn settle_item_links(&self, state: &HostState) -> bool {
         let pending: Vec<(String, usize, String)> = {
-            let mut items = self.items();
+            let items = self.items();
             let now = self.now();
             items
-                .all(now)
-                .iter()
+                .visible(now)
                 .flat_map(|item| {
                     item.links.iter().enumerate().filter_map(|(at, link)| {
                         let tab = state.tabs.iter().find(|tab| tab.tab_id == link.target)?;
@@ -422,10 +419,9 @@ impl AgentControl {
         if args.action == "list" {
             let items: Vec<ItemRecord> = {
                 let state = self.host.state();
-                let mut store = self.items();
+                let store = self.items();
                 store
-                    .all(now)
-                    .iter()
+                    .visible(now)
                     .filter(|item| item.bot == bot.id)
                     .filter(|item| match args.status.as_deref() {
                         Some(status) => item.status == status,
@@ -448,14 +444,23 @@ impl AgentControl {
         };
         let found = {
             let store = self.items();
-            if args.action == "show" {
+            let found = if args.action == "show" {
                 store.find(&bot.id, key).ok_or_else(|| {
-                    Fail::Tool(format!("No item \"{key}\" of the bot {}.", bot.name))
+                    Fail::Tool(format!(
+                        "No item \"{key}\" of the bot {}. ompdesk_item {{\"action\":\"list\"}} lists them.",
+                        bot.name
+                    ))
                 })?
             } else {
                 store.write_address(&bot.id, key).map_err(Fail::Tool)?
+            };
+            if !found.visible_at(now) {
+                return fail(format!(
+                    "No item \"{key}\" of the bot {}. ompdesk_item {{\"action\":\"list\"}} lists them.",
+                    bot.name
+                ));
             }
-            .clone()
+            found.clone()
         };
         if args.action == "show" {
             let state = self.host.state();
@@ -805,7 +810,7 @@ impl AgentControl {
     /// The owner opened a bot's Items tab (`BotsRequest` `itemsOpened`): what its items hold now is seen.
     pub(crate) fn items_opened(&self, bot: &str) -> R<()> {
         let bot = self.bot_named(bot)?;
-        let newest = self.items().newest_event(&bot.id);
+        let newest = self.items().newest_event(&bot.id, self.now());
         if newest > bot.items_seen {
             self.bots()
                 .change(&bot.id, |record| record.items_seen = newest);
@@ -821,11 +826,11 @@ impl AgentControl {
         if let Some(path) = path.as_deref() {
             targets.push(path);
         }
-        let ids = self.items().linking(&targets);
+        let now = self.now();
+        let ids = self.items().linking(&targets, now);
         if ids.is_empty() {
             return;
         }
-        let now = self.now();
         let at = iso(now.max(0.0) as u64);
         let subject = cut(
             text.lines()
@@ -905,7 +910,7 @@ impl AgentControl {
         for id in &ids {
             // A change to an item that is gone mails nothing and asks nothing.
             let mut store = self.items();
-            let Some(found) = store.get(id).cloned() else {
+            let Some(found) = store.get(id).filter(|item| item.visible_at(now)) else {
                 continue;
             };
             if request_id
@@ -918,6 +923,7 @@ impl AgentControl {
                 refused = Some(QUESTION_CHANGED);
                 continue;
             }
+            let found = found.v1();
             if request.get("answer").is_some()
                 && found.question.is_none()
                 && found
@@ -1135,10 +1141,15 @@ impl AgentControl {
         let Some(bot) = self.bot_of_folder(&caller.cwd) else {
             return fail("item works only from a bot's chat.");
         };
-        let Some(found) = self.items().find(&bot.id, key).cloned() else {
+        let now = self.now();
+        let Some(found) = self
+            .items()
+            .find(&bot.id, key)
+            .filter(|item| item.visible_at(now))
+            .map(ItemRecord::v1)
+        else {
             return fail(format!("No item \"{key}\" of the bot {}.", bot.name));
         };
-        let now = self.now();
         let at = iso(now.max(0.0) as u64);
         self.items().change(&found.id, |item| {
             let before = item.status.clone();

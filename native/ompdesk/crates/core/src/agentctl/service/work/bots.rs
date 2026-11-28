@@ -209,7 +209,7 @@ impl AgentControl {
     fn own_bots_state(&self) -> Value {
         let now = self.now();
         let bots: Vec<BotRecord> = self.bots().all().to_vec();
-        let items: Vec<ItemRecord> = self.items().all(now).to_vec();
+        let items = self.items().v1(now);
         let state = self.host.state();
         let looks: Vec<Value> = {
             let looks = self.looks();
@@ -720,7 +720,7 @@ impl AgentControl {
         let state = self.host.state();
         let now = self.now();
         let bots: Vec<BotRecord> = self.bots().all().to_vec();
-        let items: Vec<ItemRecord> = self.items().all(now).to_vec();
+        let items = self.items().v1(now);
         let live: HashSet<String> = state.tabs.iter().map(|tab| tab.tab_id.clone()).collect();
         {
             let mut mem = self.mem();
@@ -1096,7 +1096,7 @@ impl AgentControl {
             return "No bots yet. ompdesk_bot {\"action\":\"create\",\"name\":…} makes one."
                 .to_owned();
         }
-        let items: Vec<ItemRecord> = self.items().all(now).to_vec();
+        let items = self.items().v1(now);
         let mut lines = vec!["Bots:".to_owned()];
         for bot in &bots {
             let open = items
@@ -1583,7 +1583,10 @@ impl AgentControl {
         };
         let mine = match kind {
             Kind::Bots => self.bots().all().iter().any(|bot| bot.id == id),
-            Kind::Items => self.items().get(id).is_some(),
+            Kind::Items => self
+                .items()
+                .get(id)
+                .is_some_and(|item| item.visible_at(self.now())),
         };
         if mine {
             return None;

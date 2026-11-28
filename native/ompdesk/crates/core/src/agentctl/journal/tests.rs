@@ -1068,7 +1068,7 @@ fn a_bot_s_folder_name_and_specialty() {
 }
 
 #[test]
-fn items_number_per_bot_and_closed_ones_leave_after_seven_days() {
+fn items_keep_closed_rows_and_history_outside_the_v1_window_across_reload() {
     let dir = Dir::new();
     let file = dir.file("items.json");
     let mut items = Items::new(Some(file.clone()));
@@ -1096,17 +1096,37 @@ fn items_number_per_bot_and_closed_ones_leave_after_seven_days() {
         item.closed = Some(1_000.0);
     });
     let week = 7.0 * 24.0 * 60.0 * 60_000.0;
-    assert_eq!(items.all(1_000.0 + week - 1.0).len(), 3);
-    assert_eq!(items.all(1_000.0 + week).len(), 2);
-    assert_eq!(Items::new(Some(file)).all(0.0).len(), 2);
-    items.change("i2", |item| item.closed = Some(1_000.0));
-    items.all(1_000.0 + week);
-    let mut items = Items::new(Some(dir.file("items.json")));
+    assert_eq!(items.visible(1_000.0 + week - 1.0).count(), 3);
+    let day_eight = 1_000.0 + week;
+    assert_eq!(items.visible(day_eight).count(), 2);
+    // Save another item after the closed row has aged out of the API.
+    items.change("i2", |item| {
+        for _ in 0..50 {
+            item.event("x", "bot", "commented", None);
+        }
+    });
+    items.change("i2", |item| {
+        item.event("y", "owner", "commented", Some("next"));
+    });
+    drop(items);
+    let mut items = Items::new(Some(file));
+    assert_eq!(items.get("i1").unwrap().status, "done");
+    assert_eq!(items.get("i2").unwrap().events.len(), 51);
+    assert_eq!(items.get("i2").unwrap().events[0].id, 1);
+    let shown = items.v1(day_eight);
+    assert_eq!(
+        shown.iter().map(|i| i.id.as_str()).collect::<Vec<_>>(),
+        ["i2", "i3"]
+    );
+    assert_eq!(
+        shown[0].events.iter().map(|e| e.id).collect::<Vec<_>>(),
+        (2..=51).collect::<Vec<_>>()
+    );
     assert_eq!(items.add(item("i4", "b1", 0)).unwrap().number, 3);
-    assert!(items.write_address("b1", "#2").is_err());
     assert_eq!(items.write_address("b1", "#3").unwrap().id, "i4");
+    assert!(items.write_address("b1", "#99").is_err());
     items.remove_bot("b1");
-    assert_eq!(items.all(0.0).len(), 1);
+    assert_eq!(items.visible(0.0).count(), 1);
 }
 
 #[test]
@@ -1161,8 +1181,8 @@ fn item_events_are_numbered_across_items_and_a_new_question_names_its_ask() {
         .unwrap();
     assert_eq!(changed.events.last().unwrap().id, 4);
     assert_eq!(changed.question.unwrap().id, 3, "the ask's own event");
-    assert_eq!(items.newest_event("b1"), 4);
-    assert_eq!(Items::new(Some(file)).newest_event("b1"), 4);
+    assert_eq!(items.newest_event("b1", 0.0), 4);
+    assert_eq!(Items::new(Some(file)).newest_event("b1", 0.0), 4);
 }
 
 #[test]

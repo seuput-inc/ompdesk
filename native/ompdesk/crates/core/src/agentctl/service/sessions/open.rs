@@ -1250,6 +1250,12 @@ impl AgentControl {
                 };
                 let store = self.items();
                 let found = store.write_address(&bot.id, key).map_err(Fail::Tool)?;
+                if !found.visible_at(self.now()) {
+                    return fail(format!(
+                        "No item \"{key}\" of the bot {}. ompdesk_item {{\"action\":\"list\"}} lists them.",
+                        bot.name
+                    ));
+                }
                 if !addressed.insert(found.id.clone()) {
                     return fail(
                         "Give each worker a different item; the same item cannot open two workers.",

@@ -3283,6 +3283,35 @@ async fn the_owners_create_carries_the_purpose_and_a_refused_seed_makes_no_bot()
 }
 
 #[tokio::test]
+async fn the_local_and_paired_v1_snapshots_show_only_recent_items_and_events() {
+    let root = Scratch::new();
+    let events: Vec<_> = (1..=51)
+        .map(|id| json!({"id":id,"actor":"bot","kind":"commented","at":"now"}))
+        .collect();
+    let recent = json!({"id":"open","bot":"b","number":1,"session":"chat","title":"Open","status":"working","events":events});
+    let expired = json!({"id":"old","bot":"b","number":2,"session":"chat","title":"Old","status":"done","closed":-1e15});
+    let file = root.0.join("items.json");
+    let bytes = json!([recent, expired]).to_string();
+    std::fs::write(&file, &bytes).unwrap();
+    let (control, _) = rig_files(
+        bot_world("demo"),
+        Caps::default(),
+        &bot_files(&root),
+        bots_main(Mails::default(), |_, _| None),
+    );
+    let local = control.bots_state();
+    let paired = control.bots_share();
+    for items in [&local["items"], &paired["state"]["items"]] {
+        assert_eq!(items.as_array().unwrap().len(), 1);
+        assert_eq!(items[0]["id"], "open");
+        assert_eq!(items[0]["events"].as_array().unwrap().len(), 50);
+        assert_eq!(items[0]["events"][0]["id"], 2);
+        assert_eq!(items[0]["events"][49]["id"], 51);
+    }
+    assert_eq!(std::fs::read_to_string(file).unwrap(), bytes);
+}
+
+#[tokio::test]
 async fn an_answer_names_its_question_and_a_resent_comment_posts_once() {
     let root = Scratch::new();
     let mails = Mails::default();
@@ -3535,7 +3564,7 @@ async fn a_move_of_several_items_is_one_mail_and_waiting_says_what_it_waits_on()
         .bots_command(json!({ "action": "itemsOpened", "id": bot_id }))
         .await
         .unwrap();
-    let newest = control.items().newest_event(&bot_id);
+    let newest = control.items().newest_event(&bot_id, control.now());
     assert!(newest > 0);
     assert_eq!(control.bot_named("Ada").unwrap().items_seen, newest);
 }
