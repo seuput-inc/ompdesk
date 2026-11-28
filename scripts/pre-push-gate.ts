@@ -398,18 +398,31 @@ async function copyChecks(root: string, tree: string, sha: string, plan: Plan): 
 	return Promise.all(staticChecks(plan, tree, link, tscCommand(link, ".gate.tsbuildinfo")));
 }
 
-async function checkRust(root: string, gateDir: string, sha: string, changed: string[]): Promise<StepResult[]> {
+async function checkRust(
+	root: string,
+	gateDir: string,
+	sha: string,
+	changed: string[],
+	skipped: string[],
+): Promise<StepResult[]> {
 	const dir = path.join(gateDir, "tree");
 	syncTree(root, dir, sha);
 	const workspace = path.join(dir, WORKSPACE);
 	const tool = pinnedClippy(workspace);
-	const fmt = await runStep(
-		`rustfmt (Rust ${tool.channel})`,
-		[tool.fmt, "fmt", "--all", "--check"],
-		workspace,
-		tool.env,
-	);
-	if (fmt.code !== 0) return [fmt];
+	const results: StepResult[] = [];
+	const missing = [tool.fmt, tool.env.RUSTFMT].find(binary => !Bun.which(binary));
+	if (missing) {
+		skipped.push(`rustfmt: Rust ${tool.channel} cannot run ${missing}`);
+	} else {
+		const fmt = await runStep(
+			`rustfmt (Rust ${tool.channel})`,
+			[tool.fmt, "fmt", "--all", "--check"],
+			workspace,
+			tool.env,
+		);
+		results.push(fmt);
+		if (fmt.code !== 0) return results;
+	}
 	// git archive restores commit times. Even a changed file can be older than the previous build's fingerprint.
 	const target = path.join(gateDir, "clippy-target");
 	const stamp = path.join(target, ".gate-sha");
@@ -455,7 +468,7 @@ async function checkRust(root: string, gateDir: string, sha: string, changed: st
 		"warnings",
 	];
 	return [
-		fmt,
+		...results,
 		await runStep(
 			`clippy (${names.join(", ")}; Rust ${tool.channel})`,
 			[process.execPath, path.join(import.meta.dirname, "build-lock.ts"), "--kind", "other", "--", ...command],
@@ -548,7 +561,7 @@ async function gate(root: string, gitDir: string, ref: PushRef): Promise<Verdict
 			results.push(
 				...(await withMutex(
 					path.join(gateDir, "lock"),
-					() => checkRust(root, gateDir, ref.localSha, rust),
+					() => checkRust(root, gateDir, ref.localSha, rust, skipped),
 					() => say("waiting for the pushed-tree copy"),
 				)),
 			);

@@ -305,6 +305,15 @@ process.exit(await gatePush(process.cwd(), process.cwd() + "/.git", process.env.
 		const bad = push(older);
 		expect(bad.status, bad.stdout).toBe(1);
 		expect(bad.stderr).toContain("lint in older candidate");
+		for (const name of ["cargo-fmt", "rustfmt"]) {
+			const binary = path.join(installed, name);
+			fs.renameSync(binary, `${binary}.absent`);
+			const noFmt = push(clean);
+			expect(noFmt.status, noFmt.stderr).toBe(0);
+			expect(noFmt.stdout).toContain("SKIPPED rustfmt:");
+			expect(noFmt.stdout).toContain("ok     clippy");
+			fs.renameSync(`${binary}.absent`, binary);
+		}
 		expect(fs.readdirSync(shared)).toEqual([]);
 		const unavailable = push(checkout);
 		expect(unavailable.status).toBe(0);
