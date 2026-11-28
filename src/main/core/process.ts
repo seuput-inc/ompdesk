@@ -130,6 +130,8 @@ interface Running {
 	stderr: string[];
 	/** Its process ended (`core.ended`), or never ran. */
 	ended: boolean;
+	/** Resolves once the owner reported `ready` (listeners bound); rejects if the start failed or the core ended first. */
+	ready: PromiseWithResolvers<void>;
 	/** Resolves once its process group is gone (true) or still holds a process past the owner's bound (false). */
 	gone: PromiseWithResolvers<boolean>;
 }
@@ -446,6 +448,35 @@ export class CoreProcess {
 	}
 
 	/**
+	 * Starts the core (when none runs) and resolves once its owner reported `ready` (its hub and client listeners are
+	 * bound). Keeps startup waits off the synchronous hub call path (`HUB_WAIT_LIMIT_MS`), so a cold post-update launch
+	 * under Windows Defender does not time out the first `hub.open` call or block main's event loop.
+	 */
+	waitReady(timeoutMs = this.#timeoutMs): Promise<void> {
+		let running: Running;
+		try {
+			running = this.#start();
+		} catch (error) {
+			return Promise.reject(error);
+		}
+		const { promise, resolve, reject } = Promise.withResolvers<void>();
+		const timer = setTimeout(() => {
+			reject(new CoreError("timeout", `ompdesk-core was not ready within ${timeoutMs} ms`));
+		}, timeoutMs);
+		running.ready.promise.then(
+			() => {
+				clearTimeout(timer);
+				resolve();
+			},
+			(error: unknown) => {
+				clearTimeout(timer);
+				reject(error);
+			},
+		);
+		return promise;
+	}
+
+	/**
 	 * The running core is dead to main's hub (it sent nothing past the liveness window, or its hub thread sat in one
 	 * job past it, `hub.ts`): it is killed with what it started, as a core
 	 * that died is, so every lane and hub instance is opened again on the next one.
@@ -620,6 +651,8 @@ export class CoreProcess {
 			OMPDESK_CLIENTS_TOKEN: clients.token,
 			...(this.leftBehindFile ? { OMPDESK_LEFT_BEHIND: this.leftBehindFile } : {}),
 		};
+		const ready = Promise.withResolvers<void>();
+		ready.promise.catch(() => undefined);
 		const reader = new FrameReader((frame, bin) => this.#receive(core, frame, bin), this.#log);
 		const core: Running = {
 			generation,
@@ -629,23 +662,38 @@ export class CoreProcess {
 			clients,
 			stderr: [],
 			ended: false,
+			ready,
 			gone: Promise.withResolvers<boolean>(),
 		};
 		this.#child = core;
 		this.#cores.set(generation, core);
-		owner.call<{ pid: number }>("core.start", { generation, binary: this.#binary(), cwd: process.cwd(), env }).then(
-			({ pid }) => {
-				core.pid = pid;
-				core.link.open();
-			},
-			(error: unknown) => {
-				// It never ran: nothing of it to wait for.
-				const message = error instanceof Error ? error.message : String(error);
-				this.#ended(core, new CoreError("core_unavailable", message), { code: null, signal: null });
-				this.#cores.delete(generation);
-				core.gone.resolve(true);
-			},
-		);
+		owner
+			.call<{ pid: number; ready?: boolean }>("core.start", {
+				generation,
+				binary: this.#binary(),
+				cwd: process.cwd(),
+				env,
+			})
+			.then(
+				({ pid, ready: announced }) => {
+					core.pid = pid;
+					core.link.open();
+					if (announced === false) {
+						core.ready.reject(new CoreError("core_exited", "ompdesk-core exited before announcing ready"));
+					} else {
+						core.ready.resolve();
+					}
+				},
+				(error: unknown) => {
+					// It never ran: nothing of it to wait for.
+					const message = error instanceof Error ? error.message : String(error);
+					const failure = new CoreError("core_unavailable", message);
+					core.ready.reject(failure);
+					this.#ended(core, failure, { code: null, signal: null });
+					this.#cores.delete(generation);
+					core.gone.resolve(true);
+				},
+			);
 		return core;
 	}
 
@@ -684,6 +732,7 @@ export class CoreProcess {
 	#ended(core: Running, error: CoreError, exit: { code: number | null; signal: string | null }): void {
 		if (core.ended) return;
 		core.ended = true;
+		core.ready.reject(error);
 		core.link.close();
 		for (const folder of [core.hub.folder, core.clients.folder])
 			if (folder) rmSync(folder, { recursive: true, force: true });

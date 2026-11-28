@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -63,10 +64,17 @@ pub enum PageEvent {
 /// Where a core's page pushes go: the shell's window outboxes, or `--own`'s stdout.
 pub type Pages = Arc<dyn Fn(PageEvent) + Send + Sync>;
 
+#[derive(Default)]
+struct State {
+    cores: HashMap<u64, Arc<Core>>,
+    /// Generations whose `Command::spawn` is still running off the reader thread, with a cancel flag for `stop`/`abandon`/`end_all`.
+    starting: HashMap<u64, Arc<AtomicBool>>,
+}
+
 pub struct Owner {
     sink: Sink,
     pages: Option<Pages>,
-    cores: Mutex<HashMap<u64, Arc<Core>>>,
+    state: Mutex<State>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -84,7 +92,7 @@ impl Owner {
         Arc::new(Owner {
             sink,
             pages,
-            cores: Mutex::default(),
+            state: Mutex::default(),
         })
     }
 
@@ -116,7 +124,18 @@ impl Owner {
                     reply(invalid("needs a generation"));
                     return true;
                 };
-                if let Some(core) = lock(&self.cores).get(&generation).cloned() {
+                let target = {
+                    let state = lock(&self.state);
+                    if let Some(core) = state.cores.get(&generation).cloned() {
+                        Some(core)
+                    } else {
+                        if let Some(flag) = state.starting.get(&generation) {
+                            flag.store(true, Ordering::SeqCst);
+                        }
+                        None
+                    }
+                };
+                if let Some(core) = target {
                     if method == "core.abandon" {
                         kill_tree(&core);
                     } else {
@@ -133,16 +152,32 @@ impl Owner {
     /// The owner's own end: closes every core's stdin and returns once each is gone (killed with its tree when it
     /// still ran 5 s later, so a core that stopped answering cannot outlive its owner with what it runs).
     pub fn end_all(&self) {
-        for core in lock(&self.cores).values() {
-            stop(Arc::clone(core));
+        let running: Vec<Arc<Core>> = {
+            let state = lock(&self.state);
+            for flag in state.starting.values() {
+                flag.store(true, Ordering::SeqCst);
+            }
+            state.cores.values().cloned().collect()
+        };
+        for core in running {
+            stop(core);
         }
-        while !lock(&self.cores).is_empty() {
+        loop {
+            let busy = {
+                let state = lock(&self.state);
+                !state.cores.is_empty() || !state.starting.is_empty()
+            };
+            if !busy {
+                break;
+            }
             thread::sleep(EXIT_POLL);
         }
     }
 
-    /// Spawns the core and answers `{pid}` once it said `ready` (its listeners are bound by then) or ended before;
-    /// a core that could not run is answered with why.
+    /// Spawns the core off the reader thread and answers `{pid, spawnMs, readyMs, ready}` once it said `ready` (its
+    /// listeners are bound by then) or ended before; a core that could not run is answered with why. Running `spawn` on
+    /// the start thread keeps `serve_lines` responsive to `core.stop`/`core.abandon` even if Windows Defender holds
+    /// `CreateProcessW` for seconds on a freshly updated binary.
     fn start(
         self: &Arc<Self>,
         generation: u64,
@@ -151,12 +186,19 @@ impl Owner {
         env: &[(String, String)],
         reply: Reply,
     ) {
-        if lock(&self.cores).contains_key(&generation) {
-            reply(Err((
-                "failed".into(),
-                format!("generation {generation} already runs"),
-            )));
-            return;
+        {
+            let mut state = lock(&self.state);
+            if state.cores.contains_key(&generation) || state.starting.contains_key(&generation) {
+                drop(state);
+                reply(Err((
+                    "failed".into(),
+                    format!("generation {generation} already runs"),
+                )));
+                return;
+            }
+            state
+                .starting
+                .insert(generation, Arc::new(AtomicBool::new(false)));
         }
         let mut command = Command::new(binary);
         command
@@ -180,37 +222,98 @@ impl Owner {
             &mut command,
             0x0800_0000 | 0x0000_0200,
         );
-        let mut child = match command.spawn() {
-            Ok(child) => child,
-            Err(error) => {
+        let owner = Arc::clone(self);
+        let pages = self.pages.clone();
+        thread::spawn(move || {
+            let started = Instant::now();
+            let mut child = match command.spawn() {
+                Ok(child) => child,
+                Err(error) => {
+                    let elapsed_ms =
+                        u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    lock(&owner.state).starting.remove(&generation);
+                    (owner.sink)(
+                        "core.startFailed",
+                        json!({"generation": generation, "error": error.to_string(), "elapsedMs": elapsed_ms}),
+                    );
+                    reply(Err((
+                        "failed".into(),
+                        format!("ompdesk-core could not run: {error}"),
+                    )));
+                    return;
+                }
+            };
+            let spawn_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let pid = child.id();
+            let (Some(stdin), Some(stdout), Some(stderr)) =
+                (child.stdin.take(), child.stdout.take(), child.stderr.take())
+            else {
+                let _ = child.kill();
+                let _ = child.wait();
+                lock(&owner.state).starting.remove(&generation);
+                reply(Err(("failed".into(), "ompdesk-core has no stdio".into())));
+                return;
+            };
+            let core = Arc::new(Core {
+                pid,
+                child: Mutex::new(child),
+                stdin: Mutex::new(Some(stdin)),
+            });
+            let cancelled = {
+                let mut state = lock(&owner.state);
+                let cancelled = state
+                    .starting
+                    .get(&generation)
+                    .is_none_or(|flag| flag.load(Ordering::SeqCst));
+                if !cancelled {
+                    state.starting.remove(&generation);
+                    state.cores.insert(generation, Arc::clone(&core));
+                }
+                cancelled
+            };
+            if cancelled {
+                kill_tree(&core);
+                let _ = lock(&core.child).wait();
+                let _ = group_gone(core.pid);
+                lock(&owner.state).starting.remove(&generation);
                 reply(Err((
-                    "failed".into(),
-                    format!("ompdesk-core could not run: {error}"),
+                    "cancelled".into(),
+                    format!("generation {generation} was stopped before it started"),
                 )));
                 return;
             }
-        };
-        let pid = child.id();
-        let (Some(stdin), Some(stdout), Some(stderr)) =
-            (child.stdin.take(), child.stdout.take(), child.stderr.take())
-        else {
-            let _ = child.kill();
-            reply(Err(("failed".into(), "ompdesk-core has no stdio".into())));
-            return;
-        };
-        let core = Arc::new(Core {
-            pid,
-            child: Mutex::new(child),
-            stdin: Mutex::new(Some(stdin)),
-        });
-        lock(&self.cores).insert(generation, Arc::clone(&core));
-        let pages = self.pages.clone();
-        thread::spawn(move || {
+            let sink = Arc::clone(&owner.sink);
+            thread::spawn(move || {
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    sink(
+                        "core.stderr",
+                        json!({"generation": generation, "line": line}),
+                    );
+                }
+            });
+            let watcher = Arc::clone(&owner);
+            thread::spawn(move || watcher.watch(generation, core));
             // Its first line is `ready`, written after its listeners are bound: main connects on this answer.
             let mut stdout = BufReader::new(stdout);
             let mut ready = String::new();
-            let _ = stdout.read_line(&mut ready);
-            reply(Ok(json!({ "pid": pid })));
+            let ready_ok = matches!(stdout.read_line(&mut ready), Ok(n) if n > 0);
+            let ready_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            (owner.sink)(
+                "core.started",
+                json!({
+                    "generation": generation,
+                    "pid": pid,
+                    "spawnMs": spawn_ms,
+                    "readyMs": ready_ms,
+                    "ready": ready_ok,
+                }),
+            );
+            reply(Ok(json!({
+                "pid": pid,
+                "spawnMs": spawn_ms,
+                "readyMs": ready_ms,
+                "ready": ready_ok,
+            })));
             match pages {
                 Some(pages) => read_pages(&mut stdout, generation, &pages),
                 None => {
@@ -218,17 +321,6 @@ impl Owner {
                 }
             }
         });
-        let sink = Arc::clone(&self.sink);
-        thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                sink(
-                    "core.stderr",
-                    json!({"generation": generation, "line": line}),
-                );
-            }
-        });
-        let owner = Arc::clone(self);
-        thread::spawn(move || owner.watch(generation, core));
     }
 
     /// Waits for the core's exit, reports it, then settles its process group and reports that.
@@ -254,7 +346,7 @@ impl Owner {
             json!({"generation": generation, "code": code, "signal": signal.map(signal_name)}),
         );
         let empty = group_gone(core.pid);
-        lock(&self.cores).remove(&generation);
+        lock(&self.state).cores.remove(&generation);
         (self.sink)(
             "core.gone",
             json!({"generation": generation, "empty": empty}),
@@ -472,6 +564,9 @@ pub fn serve_stdio() -> i32 {
     });
     let owner = Owner::with_pages(
         Arc::new(move |name: &str, data: Value| {
+            if matches!(name, "core.started" | "core.startFailed") {
+                return;
+            }
             let _ = events.send(Some(event(name, data)));
         }),
         Some(pages),
@@ -514,6 +609,34 @@ mod tests {
                 pushed(9, 2),
                 (7, 0, "ended".to_owned(), 0, Vec::new())
             ]
+        );
+    }
+
+    #[test]
+    fn start_reports_missing_binary_off_thread_and_cleans_up_starting_state() {
+        let events = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
+        let seen = Arc::clone(&events);
+        let owner = Owner::new(Arc::new(move |name, data| {
+            lock(&seen).push((name.to_owned(), data));
+        }));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handled = owner.handle(
+            "core.start",
+            &json!({ "generation": 1, "binary": "/nonexistent/ompdesk-core-missing-test" }),
+            Box::new(move |result| {
+                let _ = tx.send(result);
+            }),
+        );
+        assert!(handled);
+        let result = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("core.start reply");
+        assert!(matches!(result, Err((ref code, _)) if code == "failed"));
+        owner.end_all();
+        assert!(
+            lock(&events)
+                .iter()
+                .any(|(name, data)| name == "core.startFailed" && data["generation"] == 1)
         );
     }
 }

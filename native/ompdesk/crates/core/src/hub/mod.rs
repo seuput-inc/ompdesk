@@ -267,6 +267,11 @@ pub fn post(job: impl FnOnce() + Send + 'static) {
     let _ = JOBS.send(Box::new(job));
 }
 
+/// Starts the hub executor thread before the core announces `ready`, so the first `hub.open` never waits on lazy init.
+pub(super) fn warm() {
+    let _ = LazyLock::force(&JOBS);
+}
+
 /// Starts a task on the hub thread (call only from it); it first runs in this job's microtasks.
 pub fn spawn(task: impl Future<Output = ()> + 'static) {
     let id = TASKS.with(|tasks| {

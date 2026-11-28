@@ -18,25 +18,31 @@ pub type Serve = fn(Reader, Writer, String) -> Pin<Box<dyn Future<Output = ()> +
 
 /// Listens where `OMPDESK_HUB` names, if it does: from the core's start, so main's first call finds it.
 pub fn listen_from_env() {
-    from_env(
+    if from_env(
         "OMPDESK_HUB",
         "OMPDESK_HUB_TOKEN",
         "the hub",
         |reader, writer, token| Box::pin(serve_conn(reader, writer, Some(token))),
-    );
+    ) {
+        super::warm();
+    }
 }
 
 /// Listens where `address_var` names, with the token `token_var` holds, if both are set; `serve` takes each connection.
-/// The listener is bound when this returns.
-pub fn from_env(address_var: &str, token_var: &str, what: &'static str, serve: Serve) {
+/// The listener is bound when this returns; returns `true` when it bound.
+pub fn from_env(address_var: &str, token_var: &str, what: &'static str, serve: Serve) -> bool {
     let (Ok(address), Ok(token)) = (std::env::var(address_var), std::env::var(token_var)) else {
-        return;
+        return false;
     };
     match bind(&address) {
         Ok(listener) => {
             tokio::spawn(listen(listener, token, serve, what));
+            true
         }
-        Err(error) => eprintln!("ompdesk-core: {what} does not listen at {address}: {error}"),
+        Err(error) => {
+            eprintln!("ompdesk-core: {what} does not listen at {address}: {error}");
+            false
+        }
     }
 }
 

@@ -215,7 +215,10 @@ function connect(endpoint, deadline) {
 		});
 		candidate.once("error", error => {
 			if (socket === candidate) return;
-			if (Date.now() < deadline && (error.code === "ENOENT" || error.code === "ECONNREFUSED")) {
+			if (
+				Date.now() < deadline &&
+				(error.code === "ENOENT" || error.code === "ECONNREFUSED" || error.code === "EBUSY")
+			) {
 				setTimeout(attempt, 2);
 				return;
 			}

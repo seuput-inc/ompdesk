@@ -84,6 +84,12 @@ fn core_owner() -> &'static std::sync::Arc<owner::Owner> {
         std::sync::LazyLock::new(|| {
             owner::Owner::with_pages(
                 std::sync::Arc::new(|event: &str, data: Value| {
+                    if matches!(event, "core.started" | "core.startFailed" | "core.ended") {
+                        log::log(event, data.clone());
+                    }
+                    if matches!(event, "core.started" | "core.startFailed") {
+                        return;
+                    }
                     let frames = CORE_OWNER_FRAMES
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -104,6 +110,24 @@ fn core_owner() -> &'static std::sync::Arc<owner::Owner> {
             )
         });
     &OWNER
+}
+
+/// On Windows, start OS page-in and Defender on-access scanning of the freshly unpacked `ompdesk-core.exe` in
+/// parallel with Tauri and Node boot, before main's first `core.start` arrives.
+#[cfg(windows)]
+fn warm_core_binary(resources: &Path, packaged: bool) {
+    if !packaged {
+        return;
+    }
+    let path = resources.join("ompdesk-bin").join("ompdesk-core.exe");
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let Ok(mut file) = std::fs::File::open(&path) else {
+            return;
+        };
+        let mut buf = [0u8; 64 * 1024];
+        while matches!(file.read(&mut buf), Ok(n) if n > 0) {}
+    });
 }
 
 /// Serves main's core-owner connection (PROTOCOL.md › 12a): its first line is the host token, then owner requests, one
@@ -2083,6 +2107,8 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     .display()
     .to_string();
     serve_core_owner(conn::Listener::bind(&core_socket)?, token.clone());
+    #[cfg(windows)]
+    warm_core_binary(&resources, packaged);
     facts["coreOwner"] = Value::String(core_socket);
     let program = node::node_program(packaged, &resources);
     let profile = profile::Profile::open(&user_data).map_err(std::io::Error::other)?;

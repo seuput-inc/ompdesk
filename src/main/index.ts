@@ -117,7 +117,7 @@ import { ConnectorAccounts } from "./connector-accounts";
 import { CONSOLE_POLL_MS, ConsoleWindowWatch, listConsoleWindows } from "./console-window-watch";
 import { installCliLaunchers, removeCliLaunchers } from "./control-socket/cli-install";
 import { takeHubMinute } from "./core/hub";
-import { core, shutdownCore } from "./core/process";
+import { core, isCoreShutdown, shutdownCore } from "./core/process";
 import { routeCoreSaves } from "./core-saves";
 import { defaultWorkspace } from "./default-workspace";
 import { initDeletedSessions } from "./deleted-sessions";
@@ -750,7 +750,7 @@ async function openPath(path: string): Promise<{ focus: number } | { spawned: nu
 	return win ? { spawned: win.id } : null;
 }
 
-app.whenReady().then(async () => {
+const appStartup = app.whenReady().then(async () => {
 	installMainRuntimeLogging();
 	// Before the first core starts: the prefs below are main's first hub call, and the core it starts must be the
 	// packaged binary (a core started before this looked in the checkout's layout and failed ENOENT in every packaged
@@ -760,6 +760,11 @@ app.whenReady().then(async () => {
 		resourcesPath: app.isPackaged ? process.resourcesPath : devResourcesDir,
 	});
 	core().leftBehindFile = join(app.getPath("userData"), "left-behind-worktrees.json");
+	// Boot ompdesk-core asynchronously in parallel with launch protection so a slow cold start (e.g., Windows Defender
+	// scanning a freshly updated unsigned binary) completes before the first synchronous hub call (prefsStore) instead
+	// of hitting HUB_WAIT_LIMIT_MS (4 s).
+	const coreReady = core().waitReady();
+	coreReady.catch(() => undefined);
 	const { guard, safeMode, stableAfterMs } = await launch;
 	// A full disk is told once, by one notification that goes when the files are saved; the writers retry on their own.
 	bindDiskFullNotice(diskFull, {
@@ -781,6 +786,7 @@ app.whenReady().then(async () => {
 	onPairedPagePush(({ connId, channel, payload }) => webHost?.router.deliverToConnection(connId, channel, payload));
 	// The core's stores (web devices, paired computers, schedules, journals) join it.
 	routeCoreSaves(core(), diskFull);
+	await coreReady;
 	// A preference file that no longer parsed was moved aside and put back from its backup (the core's prefs): said once.
 	prefsStore();
 	for (const store of takeRecoveredPrefs()) {
@@ -3018,6 +3024,14 @@ app.whenReady().then(async () => {
 		for (const win of webHost?.windows.all() ?? [])
 			if (!win.isDestroyed()) win.webContents.send(IPC_EVENTS.UPDATER_STATUS, status);
 	});
+});
+appStartup.catch((error: unknown) => {
+	if (isCoreShutdown(error)) return;
+	const message = error instanceof Error ? error.message : String(error);
+	const stack = error instanceof Error ? error.stack : undefined;
+	writeRuntimeLog({ source: "main-uncaught", message, stack, details: { origin: "startup" } });
+	console.error("[startup]", error);
+	app.exit(1);
 });
 
 // Quit on all windows closed (except macOS)
