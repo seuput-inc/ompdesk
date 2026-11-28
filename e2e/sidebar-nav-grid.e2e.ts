@@ -158,6 +158,13 @@ test("Korean sidebar defaults before and after on desktop and at 390 px", async 
 			const labels = [/모든 세션/, /질문함/, ...(fresh ? [] : ["에이전트", "예약 실행"]), "통계"];
 			if (!fresh && !phone) labels.push("휴대폰");
 			await expect(page.locator("[data-sidebar-nav-row]:visible")).toHaveText(labels);
+			if (!phone) {
+				// The menu is ready before the board's session reads finish on a cold page.
+				const board = page.locator("[data-work-board-panel]:visible");
+				await expect(board.locator("[data-board-spend-cost]")).toBeVisible();
+				for (const row of ["unlanded", "check", "branch"])
+					await expect(board.locator(`[data-board-session="${row}"]`)).toBeVisible();
+			}
 			const name = `${phone ? "phone-390" : "desktop"}-ko-${fresh ? "after" : "before"}`;
 			await page.screenshot({ path: path.join(dir, `${name}.png`), animations: "disabled" });
 			await page.context().close();
