@@ -65,13 +65,12 @@ pub struct Caller {
 pub struct IpcContext {
     pub caller: Caller,
     /// `<userData>`, passed by the shell in `ipc.start` for user-scoped stores.
-    #[allow(dead_code)]
     pub user_data: Option<PathBuf>,
 }
 
 /// `Some(value)` serializes as `{"value": value}` (preserving JSON `null`), while `None` omits `"value"` so JS
 /// receives `undefined` (matching a `void` or missing-key Electron handler).
-type Handled = Pin<Box<dyn Future<Output = Result<Option<Value>, Fault>> + Send>>;
+pub(crate) type Handled = Pin<Box<dyn Future<Output = Result<Option<Value>, Fault>> + Send>>;
 type ChannelHandler = fn(IpcContext, Vec<Value>) -> Handled;
 
 struct Owned {
@@ -80,7 +79,20 @@ struct Owned {
 }
 
 /// The channels the core serves. Must match `channels.json` 1-to-1 (pinned by `channels_json_matches_owned`).
-const OWNED: &[Owned] = &[];
+const OWNED: &[Owned] = &[
+    Owned {
+        channel: "draft-pictures:put",
+        handler: crate::draft_pictures::ipc_put,
+    },
+    Owned {
+        channel: "draft-pictures:read",
+        handler: crate::draft_pictures::ipc_read,
+    },
+    Owned {
+        channel: "draft-pictures:remove",
+        handler: crate::draft_pictures::ipc_remove,
+    },
+];
 
 /// Plumbing channels for main's tests (as `core.echo` is the wire's), served only when `ipc.start` asks for them.
 const TEST_OWNED: &[Owned] = &[
@@ -415,7 +427,13 @@ mod tests {
         let server = tokio::spawn(crate::serve(server_read, server_write, crate::registry()));
         let (client_read, mut client_write) = tokio::io::split(client);
         let mut lines = tokio::io::BufReader::new(client_read);
-        let policy = r#"{"test:ipc.record":{"dir":"send"},"test:ipc.recorded":{"dir":"invoke"}}"#;
+        let policy = serde_json::json!({
+            "draft-pictures:put": {"dir": "invoke"},
+            "draft-pictures:read": {"dir": "invoke"},
+            "draft-pictures:remove": {"dir": "invoke"},
+            "test:ipc.record": {"dir": "send"},
+            "test:ipc.recorded": {"dir": "invoke"},
+        });
         let caller = r#"{"key":"order-test","window":1,"connId":null}"#;
         let input = format!(
             "{{\"id\":1,\"method\":\"ipc.start\",\"params\":{{\"policy\":{policy},\"testChannels\":true}}}}\n\

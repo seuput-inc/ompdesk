@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { IPC_COMMANDS } from "../shared/ipc-types";
-import { DRAFT_PICTURE_MAX_BYTES, DraftPictures, registerDraftPicturesIpc } from "./draft-pictures";
-import type { IpcCaller } from "./web/ipc-registry";
-import { WebClientWindow } from "./web/web-client-window";
+import { CoreProcess } from "./core/process";
+import { DRAFT_PICTURE_MAX_BYTES, DraftPictures } from "./draft-pictures";
+import { IPC_POLICY } from "./web/ipc-policy";
 
 const ID = "0b5c1e2a-7d4f-4c8e-9a1b-3f6e2d9c8a71";
 const OTHER = "9f3e2d1c-0b4a-4e5f-8a7b-6c5d4e3f2a10";
@@ -83,19 +83,43 @@ describe("draft pictures", () => {
 		await expect(pictures.read(null, ID)).resolves.toBeNull();
 	});
 
-	it("answers a desktop window from this computer's pictures and a paired page from its device's", async () => {
-		const handlers = new Map<string, (caller: IpcCaller, ...args: unknown[]) => unknown>();
-		registerDraftPicturesIpc(
-			{ handle: (channel, handler) => void handlers.set(channel, handler as never) },
-			pictures,
-		);
-		const page = new WebClientWindow("phone-a", -1, () => {});
-		const pageCaller = { win: page, browserWindow: null, sender: page.webContents } as IpcCaller;
-		const desktopCaller = { win: null, browserWindow: null, sender: { id: 1, once: () => {} } } as IpcCaller;
-		await handlers.get(IPC_COMMANDS.DRAFT_PICTURES_PUT)?.(pageCaller, ID, png("phone"));
-		await expect(handlers.get(IPC_COMMANDS.DRAFT_PICTURES_READ)?.(desktopCaller, ID)).resolves.toBeNull();
-		await expect(handlers.get(IPC_COMMANDS.DRAFT_PICTURES_READ)?.(pageCaller, ID)).resolves.toBe(b64("phone"));
-		await handlers.get(IPC_COMMANDS.DRAFT_PICTURES_REMOVE)?.(pageCaller, ID);
-		await expect(pictures.read("phone-a", ID)).resolves.toBeNull();
+	it("answers a desktop window from this computer's pictures and a paired page from its device's over core IPC", async () => {
+		const userData = join(root, "..");
+		const proc = new CoreProcess();
+		try {
+			await proc.call("ipc.start", { policy: IPC_POLICY, userData });
+			const pageCaller = { key: "c1", window: -1, connId: "1", deviceId: "phone-a" };
+			const desktopCaller = { key: "w1", window: 1, connId: null, deviceId: null };
+			const putRes = await proc.call<{ value?: unknown }>("ipc.call", {
+				caller: pageCaller,
+				channel: IPC_COMMANDS.DRAFT_PICTURES_PUT,
+				dir: "invoke",
+				args: [ID, png("phone")],
+			});
+			expect(putRes.result.value).toBeUndefined();
+			const desktopRead = await proc.call<{ value?: unknown }>("ipc.call", {
+				caller: desktopCaller,
+				channel: IPC_COMMANDS.DRAFT_PICTURES_READ,
+				dir: "invoke",
+				args: [ID],
+			});
+			expect(desktopRead.result.value).toBeNull();
+			const pageRead = await proc.call<{ value?: unknown }>("ipc.call", {
+				caller: pageCaller,
+				channel: IPC_COMMANDS.DRAFT_PICTURES_READ,
+				dir: "invoke",
+				args: [ID],
+			});
+			expect(pageRead.result.value).toBe(b64("phone"));
+			await proc.call("ipc.call", {
+				caller: pageCaller,
+				channel: IPC_COMMANDS.DRAFT_PICTURES_REMOVE,
+				dir: "invoke",
+				args: [ID],
+			});
+			await expect(pictures.read("phone-a", ID)).resolves.toBeNull();
+		} finally {
+			await proc.stop();
+		}
 	});
 });

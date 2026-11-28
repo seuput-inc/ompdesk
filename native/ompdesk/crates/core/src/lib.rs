@@ -14,6 +14,7 @@ pub mod clock;
 pub mod control;
 mod diagnostic_bundle;
 pub mod disk;
+pub mod draft_pictures;
 pub mod emulator;
 pub mod ext;
 pub mod fs;

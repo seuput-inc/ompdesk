@@ -1,4 +1,4 @@
 {
-  "invoke": [],
-  "send": []
+	"invoke": ["draft-pictures:put", "draft-pictures:read", "draft-pictures:remove"],
+	"send": []
 }

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CoreProcess } from "../core/process";
 import { nativeBinPath } from "../native-bin";
 import type { ClientWindow } from "./client-window";
+import { IPC_POLICY } from "./ipc-policy";
 import { type IpcCaller, IpcRegistry, type IpcShell } from "./ipc-registry";
 import { WebClientWindow } from "./web-client-window";
 
@@ -114,8 +115,9 @@ describe("IpcRegistry", () => {
 	});
 });
 
-/** The core's plumbing channels (`crates/core/src/ipc`), classified as `IPC_POLICY` classifies a channel. */
+/** The core's plumbing channels (`crates/core/src/ipc`), added alongside `IPC_POLICY` for test runs. */
 const TEST_POLICY = {
+	...IPC_POLICY,
 	"test:ipc.record": { dir: "send", permission: "workspace", mode: "pass" },
 	"test:ipc.recorded": { dir: "invoke", permission: "workspace", mode: "pass" },
 };

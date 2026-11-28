@@ -248,6 +248,7 @@ pub fn registry() -> Registry {
     crate::clock::register(&mut registry);
     crate::diagnostic_bundle::register(&mut registry);
     crate::disk::register(&mut registry);
+    crate::draft_pictures::register(&mut registry);
     crate::ext::register(&mut registry);
     crate::fs::register(&mut registry);
     crate::git::register(&mut registry);

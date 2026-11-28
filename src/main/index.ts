@@ -130,7 +130,7 @@ import { SavedWorktreeStore, setSavedWorktreeStore } from "./disk/saved-worktree
 import { ScratchCare } from "./disk/scratch";
 import { diskFull } from "./disk-full";
 import { bindDiskFullNotice, describeFiles } from "./disk-full-notice";
-import { DraftPictures, registerDraftPicturesIpc } from "./draft-pictures";
+import { DraftPictures } from "./draft-pictures";
 import { EMPTY_APPLY_PLAN } from "./extension-reload";
 import { createGithubAuthService, registerGithubAuthIpc } from "./github-auth/ipc";
 import type { GithubAuthService } from "./github-auth/service";
@@ -2669,9 +2669,8 @@ app.whenReady().then(async () => {
 	registerDiskCareIpc(ipc, care);
 	void care.start();
 
-	// A composer draft's pictures, per device, until the draft drops them (draft-pictures.ts).
+	// A composer draft's pictures, per device, until the draft drops them (draft-pictures.ts; IPC runs directly in ompdesk-core).
 	const draftPictures = new DraftPictures(join(app.getPath("userData"), "draft-pictures"));
-	registerDraftPicturesIpc(ipc, draftPictures);
 
 	// Register all handlers and sidecar listeners before loading the renderer.
 	// Paired pages' Files-edit reports live in the core's web router; main reads them for the control tools.
