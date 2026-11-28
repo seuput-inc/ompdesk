@@ -37,8 +37,7 @@ import {
 	privacyPaneUrl,
 	reviewFromDevice,
 } from "../shared/agent-control";
-import { BOT_CONNECTORS_COMMAND } from "../shared/bot-connector-channels";
-import { BOTS_COMMAND, BOTS_FOLDER, type BotsCall } from "../shared/bots";
+import { BOTS_FOLDER, type BotsCall } from "../shared/bots";
 import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
@@ -126,7 +125,7 @@ import {
 } from "../shared/ipc-types";
 import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
 import { isMacPermission } from "../shared/mac-permissions";
-import { MAIL_ACCOUNTS_COMMAND, type MailAccountDraft } from "../shared/mail-accounts";
+import type { MailAccountDraft } from "../shared/mail-accounts";
 import { type ModelSetupRequest, parseResearchPick } from "../shared/model-setup";
 import { PREVIEW_HOST_PORT, PREVIEW_OPEN_FILE, PREVIEW_VISUAL, type PreviewVisualEvent } from "../shared/preview";
 import { isReplyLanguagePref, REPLY_LANGUAGE_PREF } from "../shared/reply-language";
@@ -138,13 +137,10 @@ import type {
 	RpcSessionState,
 	SidecarStatus,
 } from "../shared/rpc-types";
-import { SCHEDULES_COMMAND, SCHEDULES_LOG } from "../shared/schedule-channels";
 import type { Schedule, SchedulesRequest } from "../shared/schedules";
 import { hostedSummaries, type SummariesChanged } from "../shared/session-summary";
 import { SIDEBAR_PREFS_KEY } from "../shared/sidebar-prefs";
-import { SIDEBAR_PROJECTS_COMMAND } from "../shared/sidebar-projects";
 import { SCRATCH_TERMINAL_TAB } from "../shared/terminal-types";
-import { TRACKERS_ACCOUNTS, TRACKERS_COMMAND } from "../shared/tracker-channels";
 import { isUiLanguage } from "../shared/ui-language";
 import {
 	findChromiumBrowsers,
@@ -2734,92 +2730,103 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	);
 	// The bridge self-check's latest result per omp version: this computer's, or the paired host's own (omp.bridge_health).
 	ipc.handle(BRIDGE_HEALTH_GET, (caller, device?: unknown) => machineFor(caller, device).bridgeHealth());
-	// Settings › Schedules on the machine the caller's focused tab runs on: a paired host runs its own schedules.
-	ipc.handle(SCHEDULES_COMMAND, (caller, request: unknown, device?: unknown) => {
-		if (typeof request !== "object" || request === null) throw new Error("Invalid schedules request");
-		return machineFor(caller, device).schedules(request as SchedulesRequest, undefined, !!caller.browserWindow);
-	});
-	// The Bots page: this computer's bots and their items (the owner's own; agents use ompdesk_bot and ompdesk_item).
-	ipc.handle(BOTS_COMMAND, async (caller, request: unknown) => {
-		if (typeof request !== "object" || request === null) throw new Error("Invalid bots request");
-		if ("action" in request && request.action === "pickPackage") {
-			const win = caller.browserWindow;
-			if (!win) throw new Error("Choose from this computer's package list.");
-			const name = "typeLabel" in request && typeof request.typeLabel === "string" ? request.typeLabel : "JSON";
-			const picked = await dialog.showOpenDialog(win, {
-				properties: ["openFile"],
-				filters: [{ name, extensions: ["json"] }],
+	// Schedules, bots, bot connectors, mail accounts, trackers, and sidebar projects route directly from
+	// tauri-shell to ompdesk-core (`crates/core/src/routines/ipc.rs`).
+	bindCorePort("routines.ipcPort", {
+		schedulesCommand: (call: CoreIpcPortCall) => {
+			const caller = callerFromPort(call);
+			const [request, device] = call.args ?? [];
+			if (typeof request !== "object" || request === null) throw new Error("Invalid schedules request");
+			return machineFor(caller, device).schedules(request as SchedulesRequest, undefined, !!caller.browserWindow);
+		},
+		schedulesLog: (call: CoreIpcPortCall) => {
+			const [runId, device] = call.args ?? [];
+			if (typeof runId !== "string") throw new Error("Invalid run id");
+			return machineFor(callerFromPort(call), device).scheduleLog(runId);
+		},
+		// The Bots page: this computer's bots and their items (the owner's own; agents use ompdesk_bot and ompdesk_item).
+		botsCommand: async (call: CoreIpcPortCall) => {
+			const caller = callerFromPort(call);
+			const request = call.args?.[0];
+			if (typeof request !== "object" || request === null) throw new Error("Invalid bots request");
+			if ("action" in request && request.action === "pickPackage") {
+				const win = caller.browserWindow;
+				if (!win) throw new Error("Choose from this computer's package list.");
+				const name = "typeLabel" in request && typeof request.typeLabel === "string" ? request.typeLabel : "JSON";
+				const picked = await dialog.showOpenDialog(win, {
+					properties: ["openFile"],
+					filters: [{ name, extensions: ["json"] }],
+				});
+				const file = picked.filePaths[0];
+				if (picked.canceled || !file) return null;
+				return (await core().call<string>("fs.offerPickedBotPackage", { caller: `w${caller.sender.id}`, file }))
+					.result;
+			}
+			if ("action" in request && request.action === "importPackage") {
+				const owner = caller.browserWindow ? `w${caller.sender.id}` : caller.connId;
+				if (!owner || "file" in request || !("selectionId" in request) || typeof request.selectionId !== "string")
+					throw new Error("Choose the bot package again.");
+				return agentControl.bots({ action: "importPackage", selectionId: request.selectionId, caller: owner });
+			}
+			if (!caller.browserWindow && "action" in request && request.action === "create" && "folder" in request)
+				throw new Error("This computer chooses the folder for a bot created from a paired device.");
+			if ("action" in request && request.action === "allowLegacyPeers" && !caller.browserWindow)
+				throw new Error("Set up legacy bot access on the owning computer.");
+			if ("action" in request && request.action === "createModels") {
+				const callerTabId = caller.win && sidecarPool.activeTabForWindow(caller.win);
+				if (!callerTabId) throw new Error("No session for the model catalog.");
+				const device = "device" in request ? request.device : undefined;
+				if (device !== undefined && typeof device !== "string") throw new Error("Invalid computer");
+				return agentControl.bots({ action: "createModels", callerTabId, device });
+			}
+			return agentControl.bots(request as BotsCall);
+		},
+		// One owner action: the host picks, reads and stores. No browser supplies a path or receives the file.
+		botConnectorsCommand: (call: CoreIpcPortCall) => {
+			const caller = callerFromPort(call);
+			const accounts = deps.connectorAccounts?.();
+			if (!accounts) throw new Error("Bot connectors are not available yet");
+			return connectorCommand(caller, call.args?.[0], accounts, async () => {
+				const win = caller.browserWindow;
+				if (!win) throw new Error("A native window is required");
+				const chosen = await dialog.showOpenDialog(win, { properties: ["openFile"] });
+				return chosen.canceled ? null : (chosen.filePaths[0] ?? null);
 			});
-			const file = picked.filePaths[0];
-			if (picked.canceled || !file) return null;
-			return (await core().call<string>("fs.offerPickedBotPackage", { caller: `w${caller.sender.id}`, file }))
-				.result;
-		}
-		if ("action" in request && request.action === "importPackage") {
-			const owner = caller.browserWindow ? `w${caller.sender.id}` : caller.connId;
-			if (!owner || "file" in request || !("selectionId" in request) || typeof request.selectionId !== "string")
-				throw new Error("Choose the bot package again.");
-			return agentControl.bots({ action: "importPackage", selectionId: request.selectionId, caller: owner });
-		}
-		if (!caller.browserWindow && "action" in request && request.action === "create" && "folder" in request)
-			throw new Error("This computer chooses the folder for a bot created from a paired device.");
-		if ("action" in request && request.action === "allowLegacyPeers" && !caller.browserWindow)
-			throw new Error("Set up legacy bot access on the owning computer.");
-		if ("action" in request && request.action === "createModels") {
-			const callerTabId = caller.win && sidecarPool.activeTabForWindow(caller.win);
-			if (!callerTabId) throw new Error("No session for the model catalog.");
-			const device = "device" in request ? request.device : undefined;
-			if (device !== undefined && typeof device !== "string") throw new Error("Invalid computer");
-			return agentControl.bots({ action: "createModels", callerTabId, device });
-		}
-		return agentControl.bots(request as BotsCall);
-	});
-	// One owner action: the host picks, reads and stores. No browser supplies a path or receives the file.
-	ipc.handle(BOT_CONNECTORS_COMMAND, (caller, request: unknown) => {
-		const accounts = deps.connectorAccounts?.();
-		if (!accounts) throw new Error("Bot connectors are not available yet");
-		return connectorCommand(caller, request, accounts, async () => {
-			const win = caller.browserWindow;
-			if (!win) throw new Error("A native window is required");
-			const chosen = await dialog.showOpenDialog(win, { properties: ["openFile"] });
-			return chosen.canceled ? null : (chosen.filePaths[0] ?? null);
-		});
-	});
-	// Settings › Schedules › Email accounts: this computer's own (a password goes in and never comes back out).
-	ipc.handle(MAIL_ACCOUNTS_COMMAND, async (_caller, request: unknown) => {
-		const accounts = deps.mailAccounts?.();
-		if (!accounts) throw new Error("Mail accounts are not available yet");
-		const { action, id, draft } = (typeof request === "object" && request !== null ? request : {}) as {
-			action?: unknown;
-			id?: unknown;
-			draft?: unknown;
-		};
-		if (action === "list") return accounts.state();
-		if (action === "save" && typeof draft === "object" && draft !== null)
-			return accounts.save(draft as MailAccountDraft, typeof id === "string" ? id : undefined);
-		if (action === "remove" && typeof id === "string") return accounts.remove(id);
-		if (action === "test" && typeof id === "string") return accounts.test(id);
-		throw new Error("Invalid mail accounts request");
-	});
-	// Agents › GitHub's Linear and Jira sources: this computer's accounts; a token goes in and never comes back out.
-	ipc.handle(TRACKERS_COMMAND, (_caller, request: unknown) => {
-		const trackers = deps.trackerAccounts?.();
-		if (!trackers) throw new Error("Trackers are not available yet");
-		return trackers.command(parseTrackersRequest(request));
-	});
-	ipc.handle(TRACKERS_ACCOUNTS, (_caller, request: unknown) => {
-		const trackers = deps.trackerAccounts?.();
-		if (!trackers) throw new Error("Trackers are not available yet");
-		return trackers.accounts(parseTrackersAccountsRequest(request));
-	});
-	ipc.handle(SCHEDULES_LOG, (caller, runId: unknown, device?: unknown) => {
-		if (typeof runId !== "string") throw new Error("Invalid run id");
-		return machineFor(caller, device).scheduleLog(runId);
-	});
-	// The sidebar's project list of the machine a section shows: this computer's, or a paired host's own.
-	ipc.handle(SIDEBAR_PROJECTS_COMMAND, (caller, request: unknown, device?: unknown) => {
-		const params = ProjectsCommandParams.parse({ request });
-		return machineFor(caller, device).sidebarProjects(params.request);
+		},
+		// Settings › Schedules › Email accounts: this computer's own (a password goes in and never comes back out).
+		mailAccountsCommand: async (call: CoreIpcPortCall) => {
+			const accounts = deps.mailAccounts?.();
+			if (!accounts) throw new Error("Mail accounts are not available yet");
+			const request = call.args?.[0];
+			const { action, id, draft } = (typeof request === "object" && request !== null ? request : {}) as {
+				action?: unknown;
+				id?: unknown;
+				draft?: unknown;
+			};
+			if (action === "list") return accounts.state();
+			if (action === "save" && typeof draft === "object" && draft !== null)
+				return accounts.save(draft as MailAccountDraft, typeof id === "string" ? id : undefined);
+			if (action === "remove" && typeof id === "string") return accounts.remove(id);
+			if (action === "test" && typeof id === "string") return accounts.test(id);
+			throw new Error("Invalid mail accounts request");
+		},
+		// Agents › GitHub's Linear and Jira sources: this computer's accounts; a token goes in and never comes back out.
+		trackersCommand: (call: CoreIpcPortCall) => {
+			const trackers = deps.trackerAccounts?.();
+			if (!trackers) throw new Error("Trackers are not available yet");
+			return trackers.command(parseTrackersRequest(call.args?.[0]));
+		},
+		trackersAccounts: (call: CoreIpcPortCall) => {
+			const trackers = deps.trackerAccounts?.();
+			if (!trackers) throw new Error("Trackers are not available yet");
+			return trackers.accounts(parseTrackersAccountsRequest(call.args?.[0]));
+		},
+		// The sidebar's project list of the machine a section shows: this computer's, or a paired host's own.
+		sidebarProjectsCommand: (call: CoreIpcPortCall) => {
+			const [request, device] = call.args ?? [];
+			const params = ProjectsCommandParams.parse({ request });
+			return machineFor(callerFromPort(call), device).sidebarProjects(params.request);
+		},
 	});
 
 	// `models:config-open` routes through `models.ipcPort` above.

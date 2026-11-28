@@ -191,6 +191,14 @@ const OWNED: &[Owned] = &[
         handler: crate::stats::ipc::ipc_bench_run,
     },
     Owned {
+        channel: "bot-connectors:command",
+        handler: crate::routines::ipc::ipc_bot_connectors_command,
+    },
+    Owned {
+        channel: "bots:command",
+        handler: crate::routines::ipc::ipc_bots_command,
+    },
+    Owned {
         channel: "cli-update:get-state",
         handler: crate::tools::ipc::ipc_cli_update_get_state,
     },
@@ -281,6 +289,10 @@ const OWNED: &[Owned] = &[
     Owned {
         channel: "log:snapshot",
         handler: crate::logs::ipc_snapshot,
+    },
+    Owned {
+        channel: "mail-accounts:command",
+        handler: crate::routines::ipc::ipc_mail_accounts_command,
     },
     Owned {
         channel: "model-setup:abort",
@@ -427,6 +439,14 @@ const OWNED: &[Owned] = &[
         handler: crate::resume::ipc_stop,
     },
     Owned {
+        channel: "schedules:command",
+        handler: crate::routines::ipc::ipc_schedules_command,
+    },
+    Owned {
+        channel: "schedules:log",
+        handler: crate::routines::ipc::ipc_schedules_log,
+    },
+    Owned {
         channel: "setup:cancel",
         handler: crate::tools::ipc::ipc_setup_cancel,
     },
@@ -437,6 +457,10 @@ const OWNED: &[Owned] = &[
     Owned {
         channel: "setup:retry",
         handler: crate::tools::ipc::ipc_setup_retry,
+    },
+    Owned {
+        channel: "sidebar-projects:command",
+        handler: crate::routines::ipc::ipc_sidebar_projects_command,
     },
     Owned {
         channel: "ssh-tools:agent",
@@ -453,6 +477,14 @@ const OWNED: &[Owned] = &[
     Owned {
         channel: "stats:fetch",
         handler: crate::stats::ipc::ipc_stats_fetch,
+    },
+    Owned {
+        channel: "trackers:accounts",
+        handler: crate::routines::ipc::ipc_trackers_accounts,
+    },
+    Owned {
+        channel: "trackers:command",
+        handler: crate::routines::ipc::ipc_trackers_command,
     },
 ];
 
