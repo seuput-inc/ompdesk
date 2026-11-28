@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import { STREAM_FORMAT_FLUSH_MS, useThrottledText } from "../../hooks/use-throttled-text";
-import { MarkdownRenderer } from "../../lib/markdown";
 import { renderableTail, segmentStreamingMarkdown } from "../../lib/streaming-markdown";
 import { useMessagesStore } from "../../stores/messages";
+import { ChatMarkdown } from "./ChatMarkdown";
+import { withoutPendingVisualDirectiveTail } from "./inline-visual-directive";
 
 /**
  * Live tail of the assistant's in-flight reply. The store accumulates
@@ -17,14 +18,14 @@ export function StreamingText() {
 	const streamingText = useMessagesStore(s => s.streamingText);
 	const text = useThrottledText(streamingText, STREAM_FORMAT_FLUSH_MS);
 	const segments = useMemo(() => segmentStreamingMarkdown(text), [text]);
-	const tail = segments.mathOpen ? segments.tail : renderableTail(segments.tail);
+	const tail = segments.mathOpen ? segments.tail : withoutPendingVisualDirectiveTail(renderableTail(segments.tail));
 	if (!streamingText) return null;
 
 	return (
 		<div className="omp-streaming">
 			{segments.blocks.map(block => (
 				<div className="omp-streaming-block" key={block.end}>
-					<MarkdownRenderer content={block.content} />
+					<ChatMarkdown content={block.content} />
 				</div>
 			))}
 			{segments.mathOpen ? (
@@ -34,7 +35,7 @@ export function StreamingText() {
 				</div>
 			) : (
 				<div className="omp-streaming-tail omp-streaming-tail--markdown">
-					{tail.trim() ? <MarkdownRenderer content={tail} streaming /> : null}
+					{tail.trim() ? <ChatMarkdown content={tail} streaming /> : null}
 					<span aria-hidden className="omp-caret" />
 				</div>
 			)}

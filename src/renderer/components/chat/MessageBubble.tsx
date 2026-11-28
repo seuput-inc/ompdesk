@@ -44,9 +44,11 @@ import { ToolImage } from "../tools/media/ToolImage";
 import { type RunningIndicator, ToolCard } from "../tools/ToolCard";
 import { ItemNote, isBotMail, QuietReply, useBotChat } from "./bots/bot-card-kind";
 import { quietMarker } from "./bots/quiet-turns";
+import { ChatMarkdown } from "./ChatMarkdown";
 import { CiNote } from "./CiNote";
 import { ComputerUseNote } from "./ComputerUseNote";
 import { CustomMessageCard, isCustomMessageCardType, MailNote, MemoryRecallNote, RecapCard } from "./CustomMessageCard";
+import { stripVisualDirectiveLines } from "./inline-visual-directive";
 import { type PromptFile, PromptFiles, ReplyFiles } from "./ReplyFiles";
 import { isRestartNote, RestartNote } from "./RestartNote";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -609,7 +611,8 @@ export const MessageBubble = memo(function MessageBubble({
 	const messageText = () =>
 		content
 			.filter((block): block is Extract<MessageContent, { type: "text" }> => block.type === "text")
-			.map(block => (isUser ? promptDisplayText(block.text) : block.text))
+			.map(block => (isUser ? promptDisplayText(block.text) : stripVisualDirectiveLines(block.text)))
+			.filter(Boolean)
 			.join("\n\n");
 
 	const handleBranch = async () => {
@@ -704,7 +707,7 @@ export const MessageBubble = memo(function MessageBubble({
 		switch (block.type) {
 			case "text": {
 				if (isRenderableMessageText(block.text)) {
-					blocks.push(<MarkdownRenderer key={blocks.length} content={block.text} />);
+					blocks.push(<ChatMarkdown key={blocks.length} content={block.text} />);
 				}
 				break;
 			}
