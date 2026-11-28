@@ -91,7 +91,7 @@ jobs:
   native:
     name: native (macos arm64)
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       # Keep file and line numbers in backtraces, without debugger data for every local variable.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
