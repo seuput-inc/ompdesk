@@ -1,4 +1,4 @@
-//! Agent-neutral Rust multi-agent runtime (Stage 1 + Stage 2A concrete adapters).
+//! Agent-neutral Rust multi-agent runtime (Stage 1 + Stage 2A/2B/2C isolated core runtime).
 //!
 //! Defines a uniform contract across three first-class execution backend families:
 //! - **Provider CLI** (`claude`, `codex`, `agy`, generic PTY)
@@ -14,6 +14,7 @@ pub mod journal;
 pub mod omp_contract;
 pub mod parsers;
 pub mod registry;
+pub mod service;
 pub mod tools;
 pub mod types;
 
@@ -43,6 +44,12 @@ pub use parsers::direct_sse::{DirectSseParser, SseFrame, SseFrameDecoder};
 pub use registry::{
     AdapterRegistry, DEFAULT_PREFERENCE_ORDER, ResolutionOutcome, ResolutionRequest, SkipReason,
     SkippedCandidate, discovery_status_for, select_preferred_install,
+};
+pub use service::{
+    AgentBackendService, AuthReadiness, BackendSummary, DetectBackendsRequest,
+    DetectBackendsResponse, HealthCheckResponse, HealthStatus, ListBackendsResponse,
+    ResolveBackendRequest, ResolveBackendResponse, SkipReasonDto, SkippedBackendReport,
+    backend_display_name, redact_secrets,
 };
 pub use tools::{LocalToolExecutor, LocalToolPolicy, builtin_tool_schemas, resolve_confined_path};
 pub use types::{

@@ -251,7 +251,7 @@ impl AgentCapabilities {
 
 /// Capabilities a caller requires when resolving a backend from [`crate::agent::AdapterRegistry`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct CapabilityRequirements {
     pub streaming_text: bool,
     pub streaming_thinking: bool,
