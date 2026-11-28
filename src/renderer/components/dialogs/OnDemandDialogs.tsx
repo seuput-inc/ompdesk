@@ -6,6 +6,7 @@
  */
 import { useUiStore } from "../../stores/ui";
 import { BotDialogs } from "../bots/BotDialogs";
+import { RemoteFolderPickerHost } from "../remote/RemoteFolderPicker";
 import { ActiveToolsDialog } from "./ActiveToolsDialog";
 import { BranchPickerDialog } from "./BranchPickerDialog";
 import { BtwDialog } from "./BtwDialog";
@@ -32,6 +33,7 @@ export function OnDemandDialogs() {
 			<CommandPalette />
 			<BtwDialog />
 			<ModelPicker />
+			<RemoteFolderPickerHost />
 			<RenameSessionDialog />
 			<WorktreeDialog />
 			<WorktreeCloseDialog />

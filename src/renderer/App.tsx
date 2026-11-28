@@ -14,7 +14,6 @@ import { AppShell } from "./components/layout/AppShell";
 import { DesktopSlotIndicator } from "./components/layout/DesktopSlotIndicator";
 import { FirstRunGate } from "./components/onboarding/FirstRunGate";
 import { SetupTakeoverHost } from "./components/onboarding/SetupTakeover";
-import { RemoteFolderPickerHost } from "./components/remote/RemoteFolderPicker";
 import { SshPromptDialog } from "./components/settings/SshPromptDialog";
 import { useExtensionUi } from "./hooks/use-extension-ui";
 import { useHostAppearance } from "./hooks/use-host-appearance";
@@ -35,7 +34,7 @@ import { loadDeferredChunk } from "./lib/deferred-chunk";
 import { subscribeDiskFull } from "./lib/disk-full";
 import { hydrateDisplayPreferences, readDisplayPreference, setDisplayPreference } from "./lib/display-preferences";
 import { exportSessionHtml } from "./lib/export-session";
-import { useT } from "./lib/i18n";
+import { translate, useT } from "./lib/i18n";
 import { isImeKeyEvent } from "./lib/ime";
 import { chordFromEvent, compileKeymap, KEYMAP_ACTION_BY_ID, KEYMAP_ACTIONS, type KeymapActionId } from "./lib/keymap";
 import { restoreQueuedMessages, stopFromEscape } from "./lib/messages";
@@ -82,7 +81,7 @@ import { useHostedSessionsSync } from "./stores/hosted-sessions";
 import { useMachineSetupStore } from "./stores/machine-setup";
 import { useModelWaitTogetherSync } from "./stores/model-wait-together";
 import { usePreviewVisualEvents } from "./stores/preview-visuals";
-import { useRemoteStateSync } from "./stores/remote";
+import { settleRemoteDirectory, useRemotePickerStore, useRemoteStateSync } from "./stores/remote";
 import { useSessionStore } from "./stores/session";
 import { focusedRuntimeTabId } from "./stores/session-runtime-context";
 import { useSettingsStore } from "./stores/settings";
@@ -303,6 +302,10 @@ export function App() {
 				// What it would have shown closes, so nothing waits on a dialog that is not there (Esc, the chords).
 				onFailed: retry => {
 					setRetryOnDemand(() => retry);
+					if (useRemotePickerStore.getState().request) {
+						settleRemoteDirectory(undefined);
+						toast({ variant: "error", message: translate("common.loadFailed") });
+					}
 					useUiStore.setState({
 						commandPaletteOpen: false,
 						modelPickerOpen: false,
@@ -1009,7 +1012,6 @@ export function App() {
 						<SurfaceTour />
 					</Suspense>
 				)}
-				<RemoteFolderPickerHost />
 				<WebPairingDialog />
 				<WebDeviceNotice />
 				<WebHostUi />

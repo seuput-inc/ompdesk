@@ -7,7 +7,7 @@
  * filter asks the host again with the query: a folder past the bound in a
  * crowded directory (a temp folder with thousands of entries) stays reachable.
  *
- * `RemoteFolderPickerHost` (mounted once in App) serves the imperative
+ * `RemoteFolderPickerHost` (mounted with the on-demand dialogs) serves the imperative
  * `pickRemoteDirectory(deviceId)` that every "choose a folder" flow uses for
  * a remote tab.
  */
