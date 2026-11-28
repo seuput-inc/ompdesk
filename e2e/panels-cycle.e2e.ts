@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { type ElectronApplication, _electron as electron } from "playwright";
-import { exitApp, fixtureOmp, openSidebarFamily } from "./harness";
+import { exitApp, fixtureOmp, openDestination, openSidebarFamily } from "./harness";
 import { capturer, type Finding, resize } from "./shell-capture";
 
 // Opt-in audit of the sidebar and right-panel views through interaction flows that cross
@@ -776,7 +776,7 @@ for (const [language, theme] of RUNS) {
 				await step("pages", async () => {
 					await setSize(app, page, WIDE);
 					for (const destination of ["insights", "agents"] as const) {
-						await page.locator(`[data-sidebar-destinations] button[data-destination="${destination}"]`).click();
+						await openDestination(page, destination);
 						await page.waitForTimeout(700);
 						const tabs = page.locator(`section[data-destination="${destination}"]`).getByRole("tab");
 						for (let index = 0; index < (await tabs.count()); index++) {

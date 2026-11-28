@@ -61,6 +61,22 @@ describe("remembered folds", () => {
 		expect(get).not.toHaveBeenCalled();
 	});
 
+	it("remembers an enabled Agents row in both the first frame and the saved preference", async () => {
+		const first = await launch();
+		await first.folds.getState().hydrate();
+		expect(first.folds.getState().navHidden).toEqual({ agents: true, schedules: true, phone: true });
+		first.folds.getState().setNavHidden("agents", false);
+
+		const expected = { agents: false, schedules: true, phone: true };
+		const mirrored = await launch();
+		expect(mirrored.folds.getState().navHidden).toEqual(expected);
+
+		local.clear();
+		const fromPref = await launch();
+		await fromPref.folds.getState().hydrate();
+		expect(fromPref.folds.getState().navHidden).toEqual(expected);
+	});
+
 	it("takes the saved pref over the mirror once read, unless the user already edited", async () => {
 		saved.set("sidebarFolds", { groups: { "/from/pref": true } });
 		const first = await launch();

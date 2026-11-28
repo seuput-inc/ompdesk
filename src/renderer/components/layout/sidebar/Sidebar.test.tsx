@@ -527,11 +527,11 @@ describe("Sidebar menus and pinned ordering", () => {
 		const nav = container.querySelector("[data-sidebar-nav]");
 		const navRows = () =>
 			[...container.querySelectorAll("[data-sidebar-nav-row]")].map(row => row.getAttribute("data-sidebar-nav-row"));
-		expect(navRows()).toEqual(["board", "questions", "agents", "schedules", "stats", "phone"]);
+		expect(navRows()).toEqual(["board", "questions", "stats"]);
 		expect(container.querySelector("[data-sidebar-bots]")).toBeNull();
 		await act(async () => useBotsFeature.setState({ available: true }));
 		// No Bots nav row, as in Orca: the section pinned atop the lists is the entry.
-		expect(navRows()).toEqual(["board", "questions", "agents", "schedules", "stats", "phone"]);
+		expect(navRows()).toEqual(["board", "questions", "stats"]);
 		const list = container.querySelector('[data-tour="sessions"]');
 		const first = list?.querySelector("[data-sidebar-bots], [data-workspace-group]");
 		expect(first?.getAttribute("data-sidebar-bots")).not.toBeNull();
@@ -548,6 +548,14 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(container.querySelector("[data-sidebar-bots-toggle]")?.getAttribute("aria-expanded")).toBe("false");
 		await fire(container.querySelector("[data-sidebar-bots-toggle]"), "onClick");
 		await act(async () => useBotsFeature.setState({ available: false }));
+		await fire(container.querySelector('[data-sidebar-destinations] [aria-label="Help"]'), "onClick");
+		await fire(menuItem("Customize sidebar…"), "onClick");
+		for (const row of ["agents", "schedules", "phone"]) {
+			const toggle = document.body.querySelector(`#sidebar-nav-${row}`);
+			expect(toggle?.getAttribute("aria-checked")).toBe("false");
+			await fire(toggle, "onClick");
+		}
+		await fire(document.body.querySelector("[data-dialog-close]"), "onClick");
 		// The Agents shortcut is the cell's tooltip and aria-keyshortcuts: a half-width cell has no room for it.
 		expect(nav?.textContent).not.toContain("⌥A");
 		expect(container.querySelector('[data-sidebar-nav-row="agents"]')?.getAttribute("aria-keyshortcuts")).toBe(
@@ -572,7 +580,6 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(menuItemLabels()).toEqual(["Hide from sidebar"]);
 		await fire(menuItem("Hide from sidebar"), "onClick");
 		expect(navRows()).toEqual(["board", "questions", "agents", "schedules", "phone"]);
-		expect(useSidebarFolds.getState().navHidden).toEqual({ stats: true });
 
 		const footer = container.querySelector("[data-sidebar-destinations]");
 		expect(

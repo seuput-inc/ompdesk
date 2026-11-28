@@ -92,8 +92,8 @@ async function openHarness(browser: Browser, device: Device, look: Look, extra =
 	page.on("pageerror", error => {
 		throw error;
 	});
-	// Agents and Stats are the sidebar's nav rows, so the drawer reaches every page; `rail=all` pins the usage block too.
-	await page.goto(`${origin}/harness.html?theme=${look.theme}&lang=${look.lang}&rail=all${extra}`);
+	// This suite opens Agents through a customized drawer and checks the pinned usage block.
+	await page.goto(`${origin}/harness.html?theme=${look.theme}&lang=${look.lang}&rail=all&nav=all${extra}`);
 	await reassertTouch(page);
 	await expect(page.locator("[data-titlebar-session-name]")).toBeVisible({ timeout: 30_000 });
 	// A touch device whose page reads `mouse` gets the 24 px desktop controls, which fails the size checks far from the
@@ -115,7 +115,7 @@ async function openHarness(browser: Browser, device: Device, look: Look, extra =
 const menuButton = (page: Page): Locator => page.locator("button:visible:has(svg.lucide-menu)").first();
 const drawer = (page: Page): Locator => page.locator("[data-drawer]");
 
-/** A destination page (Settings, Agents, Insights) through the drawer's footer. */
+/** A destination page (Settings, Agents, Insights) through the customized sidebar. */
 async function openDestination(page: Page, id: "settings" | "agents" | "insights"): Promise<void> {
 	// A phone keeps the sidebar behind a menu button; from 800 px (a portrait tablet too) it is docked beside the page.
 	if ((await page.locator("button:visible:has(svg.lucide-menu)").count()) === 0) {

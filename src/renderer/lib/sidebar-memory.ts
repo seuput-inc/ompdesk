@@ -90,7 +90,7 @@ export const EMPTY_FOLDS: SidebarFolds = {
 	starterOpen: false,
 	usageCollapsed: false,
 	usageGroups: {},
-	navHidden: {},
+	navHidden: { agents: true, schedules: true, phone: true },
 	statusHidden: {},
 	knownHosts: [],
 };
@@ -118,6 +118,9 @@ export function withFlag(record: Record<string, boolean>, key: string, value: bo
 export function parseSidebarFolds(value: unknown): SidebarFolds {
 	if (typeof value !== "object" || value === null) return EMPTY_FOLDS;
 	const record = value as Record<string, unknown>;
+	const navHidden = parseFlags(record.navHidden);
+	// Bots is a separate section. Any other saved flag, even false, records a customized menu.
+	if (Object.keys(navHidden).every(row => row === "bots")) Object.assign(navHidden, EMPTY_FOLDS.navHidden);
 	return {
 		groups: parseFlags(record.groups),
 		devices: parseFlags(record.devices),
@@ -129,7 +132,7 @@ export function parseSidebarFolds(value: unknown): SidebarFolds {
 		starterOpen: record.starterOpen === true,
 		usageCollapsed: record.usageCollapsed === true,
 		usageGroups: parseFlags(record.usageGroups),
-		navHidden: parseFlags(record.navHidden),
+		navHidden,
 		statusHidden: parseFlags(record.statusHidden),
 		knownHosts: parseKnownHosts(record.knownHosts),
 	};

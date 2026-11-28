@@ -1,10 +1,10 @@
 /**
- * The sidebar's nav rows (Agents, Schedules, Stats, Phone; settings-layout-look.md › Nav rows) sit two to a row at
- * every width (the owner's request, 26 Nov 2026, restated 27 Nov 2026), on the dev harness (`vite.harness.config.ts`):
+ * The default top menu and the customized sidebar's two-column grid (settings-layout-look.md › Nav rows),
+ * on the dev harness (`vite.harness.config.ts`):
  * at the default 280 px sidebar and at 260 px every label reads whole in English and Korean, at the 220 px minimum a
  * cut label keeps its icon and is named whole in its tooltip, an odd count leaves its last cell at a column's width,
  * and a phone's drawer keeps 44 px cells.
- * `OMP_GUI_SIDEBAR_NAV_SHOTS=<dir>` also writes captures.
+ * `OMP_GUI_SIDEBAR_NAV_SHOTS=<dir>` writes all captures there. The Korean before/after case otherwise writes to test-results.
  */
 import * as fs from "node:fs/promises";
 import { createServer as createNetServer } from "node:net";
@@ -58,7 +58,10 @@ test.afterAll(async () => {
 	await server?.close();
 });
 
-async function openHarness(lang: "en" | "ko", options: { sidebarWidth?: number; phone?: boolean }): Promise<Page> {
+async function openHarness(
+	lang: "en" | "ko",
+	options: { sidebarWidth?: number; phone?: boolean; fresh?: boolean },
+): Promise<Page> {
 	if (!browser) throw new Error("no browser");
 	const context = await browser.newContext(
 		options.phone
@@ -71,7 +74,8 @@ async function openHarness(lang: "en" | "ko", options: { sidebarWidth?: number; 
 			options.sidebarWidth,
 		);
 	const page = await context.newPage();
-	await page.goto(`${origin}/harness.html?theme=light&lang=${lang}`);
+	const view = options.phone ? "host=1" : "platform=darwin";
+	await page.goto(`${origin}/harness.html?theme=light&lang=${lang}&${view}${options.fresh ? "" : "&nav=all"}`);
 	if (options.phone) await reassertTouch(page);
 	await expect(page.locator("[data-titlebar-session-name]")).toBeVisible({ timeout: 30_000 });
 	if (options.phone) {
@@ -80,6 +84,7 @@ async function openHarness(lang: "en" | "ko", options: { sidebarWidth?: number; 
 		// The drawer slides in: measure and capture where it comes to rest.
 		await animationsDone(page.locator("[data-drawer] [data-sidebar-nav]"));
 	}
+	if (!options.fresh) await expect(page.locator('[data-sidebar-nav-row="agents"]:visible')).toBeVisible();
 	return page;
 }
 
@@ -143,6 +148,22 @@ function expectTwoPerRow(all: Cell[]): void {
 			expect(cell.top, `${cell.row} sits under the row before`).toBeGreaterThan(list[index - 2]?.top ?? 0);
 	});
 }
+
+test("Korean sidebar defaults before and after on desktop and at 390 px", async () => {
+	const dir = SHOTS ?? test.info().outputDir;
+	await fs.mkdir(dir, { recursive: true });
+	for (const phone of [false, true]) {
+		for (const fresh of [false, true]) {
+			const page = await openHarness("ko", { phone, fresh });
+			const labels = [/모든 세션/, /질문함/, ...(fresh ? [] : ["에이전트", "예약 실행"]), "통계"];
+			if (!fresh && !phone) labels.push("휴대폰");
+			await expect(page.locator("[data-sidebar-nav-row]:visible")).toHaveText(labels);
+			const name = `${phone ? "phone-390" : "desktop"}-ko-${fresh ? "after" : "before"}`;
+			await page.screenshot({ path: path.join(dir, `${name}.png`), animations: "disabled" });
+			await page.context().close();
+		}
+	}
+});
 
 for (const lang of ["en", "ko"] as const)
 	for (const width of [undefined, GRID_MIN_SIDEBAR_WIDTH])

@@ -457,9 +457,8 @@ export async function dragTabToPane(page: Page, tabId: string, targetIndex: numb
 }
 
 /**
- * Open a sidebar destination page. The footer's Agents and Stats entries are off by default, so without them the
- * page opens the way a user without the pins does: ⌥A for Agents, the command palette for Stats. Both shortcuts
- * repeat until their target shows, since one pressed while the renderer still mounts is lost.
+ * Open Settings through its footer button, Agents via ⌥A even when its row is hidden, or the requested Stats
+ * scope through the palette. Repeat the shortcut if it was pressed before the renderer mounted.
  */
 export async function openDestination(
 	page: Page,

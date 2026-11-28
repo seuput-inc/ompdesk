@@ -40,10 +40,10 @@ if (platform === "win32") {
 	document.body.appendChild(buttons);
 }
 
-// `?rail=all` pins the usage block and the Jobs shortcut in the footer, the way the Customize sidebar switches do
-// (Agents, Schedules and Stats are always nav rows).
+// `?rail=all` pins the usage block and Jobs in the footer; `?nav=all` restores the old all-shown top menu.
 const prefs: Record<string, unknown> = {};
 if (query.get("rail") === "all") prefs.sidebar = { railPins: ["usage", "jobs"] };
+if (query.get("nav") === "all") prefs.sidebarFolds = { navHidden: { agents: false } };
 // No first-visit tour or feature tip over a capture or an audit (stores/starter-guide.ts `seenAll`) unless `?tours=1`.
 if (query.get("tours") !== "1") prefs.starterGuide = { seenAll: true };
 // Bot faces stay at rest over a capture (common/BotFace.tsx) unless `?faces=1`.

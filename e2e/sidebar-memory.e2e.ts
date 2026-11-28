@@ -3,9 +3,9 @@
  * itself, the fold of each project group and the rest (`stores/sidebar-folds.ts`, device-local prefs
  * `sidebarVisible` / `sidebarFolds`, mirrored in localStorage for the first frame).
  *
- * Collapse the sidebar and fold two project groups, quit, relaunch: the boot shell and the React shell's first
- * frame already show the sidebar collapsed (no open sidebar for a frame), and once it is shown again both groups are
- * folded; a second relaunch with the sidebar open sees each group folded the first time it is painted.
+ * Show Agents, collapse the sidebar and fold two projects, then relaunch. From the first frame the sidebar is
+ * collapsed; showing it brings back the folded projects and the customized top menu. A second relaunch with
+ * the sidebar open sees each group folded the first time it is painted.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -200,6 +200,15 @@ test("a collapsed sidebar and two folded projects come back on the first frame a
 		.toBe(spawned);
 	await say("hello two");
 	await expect.poll(async () => await savedSessions(desktop)).toBeGreaterThanOrEqual(2);
+	await first.page.locator("[data-sidebar-destinations]").getByRole("button", { name: "Help", exact: true }).click();
+	await first.page.getByRole("menuitem", { name: "Customize sidebar…" }).click();
+	const sheet = first.page.getByRole("dialog", { name: "Customize sidebar…" });
+	const agents = sheet.getByRole("switch", { name: "Agents", exact: true });
+	await expect(agents).not.toBeChecked();
+	await agents.click();
+	await expect(agents).toBeChecked();
+	await sheet.locator("[data-dialog-close]").click();
+	await expect(first.page.locator('[data-sidebar-nav-row="agents"]')).toBeVisible();
 	const group = (page: Page, cwd: string) => page.locator(`[data-workspace-group=${cssString(cwd)}]`);
 	const toggle = (page: Page, cwd: string) => group(page, cwd).locator("button[aria-expanded]").first();
 	for (const cwd of [project, second]) {
@@ -225,6 +234,9 @@ test("a collapsed sidebar and two folded projects come back on the first frame a
 	await expect(again.page.locator(".omp-shell .omp-session-sidebar")).toHaveCount(0);
 	await again.page.getByRole("button", { name: "Toggle sidebar" }).first().click();
 	for (const cwd of [project, second]) await expect(toggle(again.page, cwd)).toHaveAttribute("aria-expanded", "false");
+	await expect(again.page.locator('[data-sidebar-nav-row="agents"]')).toBeVisible();
+	for (const hidden of ["schedules", "phone"])
+		await expect(again.page.locator(`[data-sidebar-nav-row="${hidden}"]`)).toHaveCount(0);
 	await expect.poll(async () => (await savedSidebar(desktop)).visible).toBe(true);
 	await quit();
 

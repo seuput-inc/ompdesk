@@ -74,6 +74,19 @@ describe("fold records", () => {
 		});
 	});
 
+	it("uses the smaller menu only when no top row was customized", () => {
+		const defaults = { agents: true, schedules: true, phone: true };
+		for (const folds of [null, {}, { navHidden: {} }]) {
+			expect(parseSidebarFolds(folds).navHidden).toEqual(defaults);
+		}
+		for (const bots of [false, true]) {
+			expect(parseSidebarFolds({ navHidden: { bots } }).navHidden).toEqual({ ...defaults, bots });
+		}
+		for (const navHidden of [{ board: false }, { stats: true, bots: false }]) {
+			expect(parseSidebarFolds({ navHidden }).navHidden).toEqual(navHidden);
+		}
+	});
+
 	it("keeps only the newest entries of a record", () => {
 		let record: Record<string, boolean> = {};
 		for (let index = 0; index < FOLD_LIMIT + 25; index++) record = withFlag(record, `/p/${index}`, true);
