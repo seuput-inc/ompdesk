@@ -101,7 +101,7 @@ describe("SelectionQuotePopover helpers", () => {
 		vi.useFakeTimers();
 		try {
 			useTabsStore.setState({
-				tabs: [{ id: "tab-1", label: "Main", cwd: "/repo", status: "ready", title: "Main" }],
+				tabs: [{ id: "tab-1", cwd: "/repo", status: "ready", kind: "agent", unreadDone: false, title: "Main" }],
 				activeTabId: "tab-1",
 			});
 
