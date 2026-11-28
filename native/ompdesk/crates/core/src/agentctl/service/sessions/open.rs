@@ -86,6 +86,7 @@ impl AgentControl {
             .and_then(|item| Some((item.bot.clone(), item.work.clone()?)))
             .ok_or_else(|| Fail::Tool("No such managed open.".into()))?;
         if !self.item_assigner(caller, &bot)
+            || work.released
             || Some(&work.requested_by) != caller.session_path.as_ref()
             || work.generation != effect.generation
             || work.effect_key != effect.effect_key
@@ -443,6 +444,31 @@ impl AgentControl {
             }
             _ => None,
         };
+        let paired_item = args.item.is_some() && device.as_ref().is_some_and(Option::is_some);
+        if paired_item {
+            let Some(bot) = owner
+                .as_deref()
+                .filter(|bot| self.item_assigner(caller, bot))
+            else {
+                return fail("Only a registered chat of this bot can assign its items.");
+            };
+            let on_board = args.item.as_deref().is_some_and(|id| {
+                self.items()
+                    .get(id)
+                    .is_some_and(|item| item.bot == bot && item.is_open())
+            });
+            if !on_board {
+                return fail("No open item with that address on this board.");
+            }
+            if !self
+                .host
+                .ask::<bool>("itemHostReady", json!({"device":device}))
+                .await
+                .unwrap_or(false)
+            {
+                return fail("This worker host has not confirmed item fencing support.");
+            }
+        }
         let assignment = if let Some(id) = &owner {
             let guard = self.bot_moves.lock().await;
             if self
@@ -470,9 +496,6 @@ impl AgentControl {
             if !self.item_assigner(caller, bot) {
                 return fail("Only a registered chat of this bot can assign its items.");
             }
-            if device.as_ref().is_some_and(Option::is_some) {
-                return fail("This worker host has not confirmed item fencing support.");
-            }
             let request = crate::agentctl::service::ITEM_OPEN_REQUEST
                 .try_with(Clone::clone)
                 .ok();
@@ -484,7 +507,28 @@ impl AgentControl {
                     .ok_or_else(|| {
                         Fail::Tool("No open item with that address on this board.".into())
                     })?;
-                if let Some(work) = &item.work {
+                let current = item.work.as_ref();
+                if let Some((incoming, _)) = &request
+                    && current.is_some_and(|w| {
+                        w.retired
+                            .iter()
+                            .any(|(who, key)| who == sender && key == &incoming.id)
+                    })
+                {
+                    return fail("This open request belongs to a released generation.");
+                }
+                if let Some(work) = current.filter(|w| {
+                    !w.released
+                        && !w.session.as_deref().is_some_and(|path| {
+                            self.host
+                                .state()
+                                .deleted_at_path(path, w.device.as_deref())
+                                .is_some()
+                        })
+                }) {
+                    if work.requested_by != sender {
+                        return fail(work.receipt(id));
+                    }
                     let retry = request.as_ref().zip(work.request.as_ref()).filter(
                         |((incoming, _), saved)| {
                             sender == work.requested_by && incoming.id == saved.id
@@ -498,6 +542,7 @@ impl AgentControl {
                         );
                     }
                     if retry.is_some()
+                        && work.device.as_ref() == device.as_ref().and_then(Option::as_ref)
                         && work.accepted_tab.is_none()
                         && !self.mem().item_opens.contains_key(id)
                     {
@@ -512,17 +557,36 @@ impl AgentControl {
                 } else if request.as_ref().is_some_and(|(_, resent)| *resent) {
                     return fail("No durable item reservation matches this resent open.");
                 } else {
+                    if let Some(w) = current
+                        && w.requested_by == sender
+                        && w.request
+                            .as_ref()
+                            .zip(request.as_ref())
+                            .is_some_and(|(old, (new, _))| old.id == new.id)
+                    {
+                        return fail("This open request belongs to a released generation.");
+                    }
+                    let generation = current
+                        .map_or(Some(1), |w| w.generation.checked_add(1))
+                        .ok_or_else(|| Fail::Tool("No more item generations.".into()))?;
+                    let mut retired = current.map(|w| w.retired.clone()).unwrap_or_default();
+                    if let Some((w, r)) = current.and_then(|w| Some((w, w.request.as_ref()?))) {
+                        retired.push((w.requested_by.clone(), r.id.clone()));
+                    }
                     let mut random = [0; 16];
                     crate::sys::random(&mut random).map_err(|e| Fail::other(e.to_string()))?;
                     let effect = ItemOpen {
                         item: id.clone(),
-                        generation: 1,
+                        generation,
                         effect_key: crate::hex(&random),
                     };
                     store
                         .commit_work(
                             id,
                             ItemWork {
+                                device: device.clone().flatten(),
+                                released: false,
+                                retired,
                                 generation: effect.generation,
                                 effect_key: effect.effect_key.clone(),
                                 accepted_tab: None,
@@ -555,7 +619,7 @@ impl AgentControl {
                     && let Some(accepted) = &work.accepted_tab
                 {
                     let mut matches = state.tabs.iter().filter(|tab| {
-                        tab.device.is_none()
+                        tab.device == work.device
                             && !tab.viewing
                             && !tab.session_moved
                             && tab.opened_by_session.as_ref() == Some(&work.requested_by)
@@ -568,6 +632,9 @@ impl AgentControl {
                         work.session = Some(path.clone());
                         store.commit_work(id, work.clone()).map_err(Fail::Tool)?;
                     }
+                }
+                if work.requested_by != sender {
+                    return fail(work.receipt(id));
                 }
                 return Ok(OpenResult {
                     held: Some(work.receipt(id)),
@@ -582,6 +649,13 @@ impl AgentControl {
             })
         } else {
             None
+        };
+        // A paired spawn waits on the network. Recheck the assigning chat under the bot lock after it returns.
+        let assignment = if paired_item {
+            drop(assignment);
+            None
+        } else {
+            assignment
         };
         let spawned = self
             .host
@@ -632,7 +706,8 @@ impl AgentControl {
                 .get(open.id)
                 .and_then(|item| item.work.as_ref())
                 .is_some_and(|work| {
-                    work.effect_key == open.effect.effect_key
+                    !work.released
+                        && work.effect_key == open.effect.effect_key
                         && work.accepted_tab.as_ref() == Some(&tab_id)
                 })
         {
@@ -640,6 +715,18 @@ impl AgentControl {
                 "The worker host did not confirm the reserved open; no first message was sent.",
             );
         }
+        let assignment = if paired_item {
+            let guard = self.bot_moves.lock().await;
+            if !owner
+                .as_deref()
+                .is_some_and(|bot| self.item_assigner(caller, bot))
+            {
+                return fail("The assigning bot chat changed during the paired open.");
+            }
+            Some(guard)
+        } else {
+            assignment
+        };
         let worktree = spawned.worktree.clone();
         let bot_spawn = match owner.as_deref() {
             Some(id) => Some((
@@ -829,6 +916,9 @@ impl AgentControl {
             let mut worker = json!({ "type": "agent_control_worker", "from": from });
             if args.item.is_some() {
                 worker["managed"] = true.into();
+                if tab_id.starts_with("item-") {
+                    worker["itemTab"] = tab_id.into();
+                }
             }
             setup.push(("Marking the session as a worker", worker));
         }
@@ -860,7 +950,7 @@ impl AgentControl {
             .filter(|message| !message.is_empty());
         // The first message as the child gets it: a goal's objective goes as stock's `set_goal`, which starts the
         // objective turn itself; anything else as a prompt carrying its dispatch.
-        let first = message.map(|message| {
+        let mut first = message.map(|message| {
             if args.mode.as_deref() == Some("goal") {
                 let prompt = caller.wrap_message(message, &caller.title, None);
                 return (
@@ -919,11 +1009,18 @@ impl AgentControl {
                 .filter(|item| item.is_open())
                 .and_then(|item| item.work.clone())
                 .filter(|work| {
-                    work.accepted_tab.as_deref() == Some(tab_id)
+                    !work.released
+                        && work.accepted_tab.as_deref() == Some(tab_id)
+                        && child.as_ref().is_some_and(|tab| work.device == tab.device)
                         && work.session.is_none()
                         && Some(&work.requested_by) == caller.session_path.as_ref()
                 })
                 .ok_or_else(|| Fail::Tool("The item's reservation changed.".into()))?;
+            if work.device.is_some()
+                && let Some((_, command)) = &mut first
+            {
+                command["itemFirst"] = tab_id.into();
+            }
             work.session = Some(path);
             receipt = Some(work.receipt(id));
             store.commit_work(id, work).map_err(Fail::Tool)?;

@@ -112,6 +112,7 @@ import type { LocalHostServices } from "./host-services";
 import { HostSessionList } from "./host-session-list";
 import type { Identity } from "./identity";
 import { ImageBlobCache } from "./image-blob-cache";
+import { ItemChallenge, type PeerItemAsk } from "./item-work";
 import { type KeepAwakeBlocker, KeepAwakePolicy } from "./keep-awake";
 import { LinkRelaySocket } from "./link-relay-socket";
 import { PeerQuota, type QuotaReservation } from "./peer-quota";
@@ -423,6 +424,27 @@ export class RemoteDevices {
 		const peer = this.#peer(deviceId);
 		if (!peer) return false;
 		return !this.#deps.blocks()?.check({ nodeId: peer.nodeId, login: peer.login });
+	}
+
+	allowsItemPeer(peer: PeerInfo): boolean {
+		const pinned = this.#peer(peer.deviceId);
+		const blocks = this.#deps.blocks();
+		return (
+			!!pinned &&
+			this.#deps.prefs.get(HOST_ENABLED_KEY) === true &&
+			blocks !== null &&
+			!!peer.nodeId &&
+			!!peer.login &&
+			pinned.staticPub === peer.staticPub &&
+			pinned.nodeId === peer.nodeId &&
+			pinned.login === peer.login &&
+			allowedLogin(this.#deps.allowedUsers(), peer.login) &&
+			!blocks.check({ nodeId: peer.nodeId, login: peer.login })
+		);
+	}
+
+	checkPeerItem(ask: PeerItemAsk): Promise<boolean> {
+		return this.#deps.services.checkPeerItem(ask);
 	}
 
 	/** The hosts this computer is connected to now. */
@@ -1019,6 +1041,24 @@ export class RemoteDevices {
 			for (const listener of this.#hostOnline) listener(deviceId);
 		});
 		client.on("event", (event, data) => {
+			if (event === "host.item.check") {
+				const challenge = ItemChallenge.safeParse(data);
+				const current = () =>
+					this.#links.get(deviceId) === link &&
+					client.state === "online" &&
+					this.#snapshot()?.hosts.some(h => h.deviceId === deviceId && h.staticPub === paired.staticPub);
+				if (challenge.success && current()) {
+					const { request, tab, check } = challenge.data;
+					void this.#deps
+						.bots?.()
+						?.ownerGrantsPeerItem(deviceId, tab, check)
+						.then(verdict =>
+							current() ? client.request("host.item.verdict", { request, ...verdict }) : undefined,
+						)
+						.catch(() => {});
+				}
+				return;
+			}
 			if (event === DEVICE_ORDER_CHANGED) {
 				void this.#exchangeDeviceOrder(deviceId, link);
 				return;

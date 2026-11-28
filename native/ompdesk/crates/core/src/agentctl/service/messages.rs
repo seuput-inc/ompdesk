@@ -46,6 +46,8 @@ use crate::agentctl::rules::mail::{
     Mail, MailCheck, MailKind, Posted, delivery_for, mail_details, mail_text,
 };
 
+mod item_mail;
+
 pub(super) fn sender<'a>(bots: &'a Bots, caller: &'a ControlTab) -> (&'a str, Option<&'a str>) {
     if caller.device.is_none()
         && caller.session_path.is_some()
@@ -172,10 +174,17 @@ impl OwedDeps for Owed<'_> {
         // An open's first message to an omp that never had it (a relaunch cut the open short): its setup first, then
         // a goal's objective or the prompt. A step the child refuses keeps it queued and tells the opener once.
         let mut steps: Vec<Value> = entry.before.clone();
+        let peer_item = steps
+            .iter()
+            .find_map(|command| command["itemTab"].as_str())
+            .map(str::to_owned);
         if entry.goal {
-            steps.push(
-                json!({ "type": "set_goal", "objective": entry.body, "message": entry.message }),
-            );
+            let mut goal =
+                json!({ "type": "set_goal", "objective": entry.body, "message": entry.message });
+            if let Some(tab) = &peer_item {
+                goal["itemFirst"] = tab.clone().into();
+            }
+            steps.push(goal);
         }
         for command in &steps {
             let deadline = Deadline::Ms(self.ctl.tuning.prompt_ms);
@@ -224,7 +233,15 @@ impl OwedDeps for Owed<'_> {
         let Ok(command) = self.ctl.owed_command(tab_id, entry).await else {
             return HandOver::Refused;
         };
-        let sent = self.ctl.hand_over(tab_id, &command, true).await;
+        let sent = if let Some(tab) = peer_item {
+            let first = json!({"type":"prompt", "streamingBehavior":"followUp", "message":entry.message, "itemFirst":tab});
+            self.ctl
+                .host
+                .command(tab_id, &first, Deadline::Ms(self.ctl.tuning.prompt_ms))
+                .await
+        } else {
+            self.ctl.hand_over(tab_id, &command, true).await
+        };
         let (handed, taken) = match sent {
             Ok(response) => (response.success || response.unanswered(), response.success),
             Err(error) => (error.unanswered(), false),
@@ -887,6 +904,7 @@ impl AgentControl {
                 fixed: None,
             };
             redeliver_sends(outbox, &owed).await;
+            self.redeliver_item_mail(outbox).await?;
         }
         Ok(())
     }

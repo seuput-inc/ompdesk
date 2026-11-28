@@ -4,6 +4,7 @@
 //! captured from the TypeScript (`captured.json`).
 
 mod bot_provenance;
+mod item_mail;
 mod peer_create;
 
 use std::path::Path;
@@ -2104,6 +2105,9 @@ async fn managed_item_open_recovers_only_a_tab_accepted_by_the_assigner() {
     let id = control.items().find(&bot, "#1").unwrap().id.clone();
     let reservation = ItemWork {
         generation: 1,
+        device: None,
+        released: false,
+        retired: Vec::new(),
         effect_key: "accepted-effect".into(),
         request: None,
         requested_by: "/s/bot.jsonl".into(),
@@ -2159,6 +2163,58 @@ async fn managed_item_open_recovers_only_a_tab_accepted_by_the_assigner() {
                 .iter()
                 .any(|(method, args)| method == "spawn" || args["command"]["type"] == "prompt")
         );
+        if proven {
+            // Quit has no released session. A hidden or disconnected tab is not proof of exit.
+            assert!(restarted.released("work1", None).is_none());
+            state["tabs"].as_array_mut().unwrap().pop();
+            crate::ports::apply_state(restarted.host.port(), 2, &state.to_string()).unwrap();
+            let release = serde_json::from_value(json!({
+                "path": "/s/work.jsonl", "formerIds": ["before-restart"]
+            }))
+            .unwrap();
+            restarted
+                .released("work1", Some(&release))
+                .unwrap()
+                .await
+                .unwrap();
+            drop(restarted);
+            let (next, calls) = rig_files(
+                state.clone(),
+                Caps::default(),
+                &files,
+                bots_main(Mails::default(), |_, _| None),
+            );
+            let view = next
+                .run(
+                    "bot1",
+                    "ompdesk_item",
+                    json!({"action":"show","item":"#1"}),
+                    None,
+                )
+                .await;
+            assert!(
+                !view.is_error && view.text.contains("generation 1 has no holder"),
+                "{}",
+                view.text
+            );
+            // This host declines the new spawn; the durable intent is already the next generation.
+            let refused = next
+                .run(
+                    "bot1",
+                    "ompdesk_session_open",
+                    json!({"item":"#1","message":"new work"}),
+                    None,
+                )
+                .await;
+            assert!(refused.is_error);
+            let calls = calls.lock().unwrap();
+            let mut spawns = calls.iter().filter(|(method, _)| method == "spawn");
+            assert_eq!(
+                spawns.next().unwrap().1["request"]["itemOpen"]["generation"],
+                2
+            );
+            assert!(spawns.next().is_none());
+        }
     }
 }
 
@@ -2293,7 +2349,20 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
         control.run("bot2", tool, open.clone(), Some(super::super::CallId { id:"another-call".into(), resent:false }))
     );
     assert!(!a.is_error && !b.is_error, "{} / {}", a.text, b.text);
-    for receipt in [&a.text, &b.text, &contender.text] {
+    assert!(contender.is_error, "{}", contender.text);
+    assert!(
+        contender
+            .text
+            .contains("held on this computer: /s/work.jsonl")
+            || contender
+                .text
+                .contains("reserved by /s/bot.jsonl on this computer"),
+        "{}",
+        contender.text
+    );
+    let held = control.run("bot2", tool, open.clone(), None).await;
+    assert!(held.is_error);
+    for receipt in [&a.text, &b.text, &held.text] {
         assert!(
             receipt.contains(&format!("Item {id} generation 1")),
             "{receipt}"

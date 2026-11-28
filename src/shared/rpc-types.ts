@@ -182,6 +182,15 @@ export type RpcCommand =
 			triggerTurn: boolean;
 			deliverAs?: "aside";
 	  }
+	| {
+			id?: string;
+			type: "agent_control_item_mail";
+			item: string;
+			generation: number;
+			session: string;
+			key: string;
+			message: string;
+	  }
 	// Another session's message to this one while it works (main/agent-control, gui-bridge agent-control.ts): stock's
 	// aside, read at the next step boundary with every other one waiting; `{idle: true}` when it sent nothing.
 	| { id?: string; type: "agent_control_aside"; message: string; images?: ImageContent[] }

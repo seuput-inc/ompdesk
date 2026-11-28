@@ -42,6 +42,13 @@ const botCommand = z.object({
 	kickoff: z.string().min(1).max(100).optional(),
 });
 const sentCommand = z.object({ marks: z.array(z.string().min(1).max(200)).min(1).max(100) });
+const itemMailCommand = z.object({
+	item: z.string().min(1).max(200),
+	generation: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+	session: z.string().min(1).max(4096),
+	key: z.string().regex(/^[0-9a-f]{64}$/),
+	message: z.string().min(1).max(200_000),
+});
 const judgeCommand = z.object({ system: z.string().min(1).max(20_000), user: z.string().min(1).max(200_000) });
 const attachmentCommand = z
 	.object({ path: z.string().trim().min(1).max(4096).optional(), image: z.number().int().min(1).optional() })
@@ -116,6 +123,9 @@ export const handlers: Record<string, LocalHandler> = {
 	agent_control_mail: async (command, ctx) => {
 		const mail = mailCommand.parse(command);
 		return ctx.bridge.request("agent_control.mail", mail);
+	},
+	agent_control_item_mail: async (command, ctx) => {
+		return ctx.bridge.request("agent_control.item_mail", itemMailCommand.parse(command));
 	},
 	/**
 	 * Another session's message to this one (`ompdesk_session_send`) while it works: its bridge hands it to stock as an

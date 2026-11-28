@@ -23,6 +23,7 @@ pub mod host;
 pub mod js;
 pub mod messages;
 pub mod pace;
+pub(crate) mod paired_item;
 pub mod resolve;
 pub mod route;
 pub mod schedules;
@@ -78,6 +79,10 @@ tokio::task_local! {
 
 tokio::task_local! {
     static ITEM_OPEN_REQUEST: (crate::agentctl::journal::items::OpenRequest, bool);
+}
+
+tokio::task_local! {
+    static ITEM_MAIL_RESENT: bool;
 }
 
 /// The key of the recorded call the running work belongs to, if any.
@@ -219,6 +224,7 @@ pub struct Inner {
     /// The owner's rename and a bot pass may try to move the same directory concurrently.
     bot_moves: tokio::sync::Mutex<()>,
     items: Mutex<Items>,
+    peer_receipts: Mutex<paired_item::Receipts>,
     /// The bot groups and their rooms (`rooms.json` beside `items.json`); never held with `bots` or `items`.
     rooms: Mutex<Rooms>,
     /// What this computer shares of its bots with paired devices, and its hosts' bots as last heard (`bots_share`);
@@ -390,6 +396,7 @@ impl AgentControl {
             bots: Mutex::new(Bots::new(files.bots.clone())),
             bot_moves: Default::default(),
             items: Mutex::new(Items::new(files.items.clone())),
+            peer_receipts: Mutex::new(paired_item::Receipts::new(files.items.as_deref())),
             rooms: Mutex::new(Rooms::new(
                 files
                     .items
@@ -536,7 +543,50 @@ impl AgentControl {
                 .retain(|key, _| !key.split('\n').any(|part| part == tab_id));
         }
         self.mailbox.forget(tab_id);
-        told
+        let Some(session) = session.filter(|s| s.device.is_none()) else {
+            return told;
+        };
+        let bound = {
+            let store = self.items();
+            store
+                .bound_worker(None, Some(&session.path))
+                .and_then(|(id, generation)| {
+                    let accepted = store.get(id)?.work.as_ref()?.accepted_tab.as_ref()?;
+                    (accepted == tab_id || session.former_ids.contains(accepted))
+                        .then(|| (id.to_owned(), generation))
+                })
+        };
+        let Some((id, generation)) = bound else {
+            return told;
+        };
+        let ctl = self.clone();
+        let tab = tab_id.to_owned();
+        let path = session.path.clone();
+        Some(tokio::spawn(async move {
+            // A window releasing its view and a process actually exiting are separate facts.
+            if ctl.host.exited(&tab).await.is_ok()
+                && !ctl
+                    .host
+                    .state()
+                    .tabs
+                    .iter()
+                    .any(|t| t.device.is_none() && t.session_path.as_deref() == Some(&path))
+            {
+                let mut store = ctl.items();
+                if let Some(mut work) = store.get(&id).and_then(|item| item.work.clone())
+                    && work.generation == generation
+                    && !work.released
+                {
+                    work.released = true;
+                    if let Err(error) = store.commit_work(&id, work) {
+                        eprintln!("[items] worker release not saved: {error}");
+                    }
+                }
+            }
+            if let Some(told) = told {
+                let _ = told.await;
+            }
+        }))
     }
 
     /// `openTarget`: the open session `session` names for `caller_tab_id`, by the tools' own name rules, refused when
@@ -628,6 +678,15 @@ impl AgentControl {
         }
         self.name_untitled(&mut tabs).await;
         let caller = tabs.iter().find(|tab| tab.tab_id == caller_tab_id).cloned();
+        // Item mail reconciles its own durable intent and checks current authorization even on replay.
+        if known_tool == Tool::Send && args.get("item").is_some() {
+            return ITEM_MAIL_RESENT
+                .scope(
+                    call.is_some_and(|c| c.resent),
+                    self.outcome(caller_tab_id, &tabs, known_tool, args),
+                )
+                .await;
+        }
         if known_tool == Tool::Open
             && (args.get("item").is_some()
                 || args["sessions"]
@@ -1035,6 +1094,9 @@ impl AgentControl {
             Tool::Open => self.open_tool(&caller, tabs, typed(parsed, tool)?).await,
             Tool::Send => {
                 let args: types::SendArgs = typed(parsed, tool)?;
+                if let Some(address) = &args.item {
+                    return self.send_item_mail(&caller, address, &args).await;
+                }
                 match &args.sessions {
                     Some(names) => self.send_group(&caller, tabs, names, &args).await,
                     None => {
@@ -1346,6 +1408,31 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
             let given = args.get("args").cloned().unwrap_or(Value::Null);
             Reply::json(&control.run(&caller, &tool, given, call_id).await)
         }
+        "peerItemReceipt" => {
+            let peer = text_arg(&args, "peer", method)?;
+            let tab = text_arg(&args, "tab", method)?;
+            let state = control.host.state();
+            if !state.enabled {
+                return reply::<Value>(fail("Agent control is disabled."));
+            }
+            reply(lock(&control.peer_receipts).apply(
+                &peer,
+                &tab,
+                args_of(args["step"].clone(), method)?,
+                |path| state.deleted_at_path(path, None).is_some(),
+            ))
+        }
+        "ownerGrantsPeerItem" => {
+            let check: paired_item::Check = args_of(args["check"].clone(), method)?;
+            let allowed = control.owner_grants(
+                &text_arg(&args, "device", method)?,
+                &text_arg(&args, "tab", method)?,
+                &check,
+            );
+            Reply::json(
+                &json!({"allowed":allowed,"mailKey":check.mail.filter(|_| allowed).map(|m| m.key)}),
+            )
+        }
         "acceptItemOpen" => reply(control.accept_item_open(
             &text_arg(&args, "callerTabId", method)?,
             &args_of(args["effect"].clone(), method)?,
@@ -1594,6 +1681,7 @@ impl AgentControl {
         Some(
             state.enabled
                 && tabs.next().is_none()
+                && tab.device.is_none()
                 && tab.session_path.as_deref() == Some(session)
                 && self.holds_item(tab, item, generation),
         )
@@ -1601,10 +1689,11 @@ impl AgentControl {
 }
 
 /// Only the core's live bridge lane supplies the process id. A copied path or a peer's tab is not a lease.
-pub(crate) fn permits_item_tool(pid: u32, item: &str, generation: u64, session: &str) -> bool {
+pub(crate) fn permits_item_tool(pid: u32, check: &paired_item::Check) -> bool {
     let instances = lock(&INSTANCES);
-    let mut matches = instances
-        .values()
-        .filter_map(|ctl| ctl.worker_lease(pid, item, generation, session));
+    let mut matches = instances.values().filter_map(|ctl| {
+        ctl.worker_lease(pid, &check.item, check.generation, &check.session)
+            .map(|held| held && ctl.mail_granted(check, None))
+    });
     matches.next() == Some(true) && matches.next().is_none()
 }

@@ -9,6 +9,7 @@ import type { z } from "zod";
 import type { BotContext } from "../../resources/gui-bridge/modes/bots-contracts";
 import type { Bot, BotsState, SharedBots } from "../shared/bots";
 import type { BotsRoomPostSchema, SharedBotsDeltaSchema, SharedBotsSchema } from "./remote/app-protocol";
+import type { PeerItemCheck, PeerItemStep, PeerItemVerdict } from "./remote/item-work";
 
 /** What this computer heard of a paired host's bots: a copy or a change of it, its link up or down, or that it is gone. */
 export interface HostBotsUpdate {
@@ -31,6 +32,8 @@ export type PeerBotIntent = { context: BotContext; mail: { id: string; text: str
  * hears of theirs. Set once the control tools exist.
  */
 export interface HostBots {
+	peerItemReceipt(peer: string, tab: string, step: PeerItemStep): Promise<unknown>;
+	ownerGrantsPeerItem(device: string, tab: string, check: PeerItemCheck): Promise<PeerItemVerdict>;
 	/** A device's agent asks one of this computer's bots by name (`host.bots.home`): refused unless it may reach it. */
 	home(name: string, deviceId: string, deviceName: string, fromBot?: boolean): Promise<{ path: string; name: string }>;
 	/** This computer's bots and items as its paired devices get them (`host.bots.list`). */

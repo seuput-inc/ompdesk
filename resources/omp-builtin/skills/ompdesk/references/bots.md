@@ -41,6 +41,8 @@ From a bot's chat, open one worker for one item: `ompdesk_session_open {"item":"
 
 Only the assigned worker can confirm its own assignment with `ompdesk_item {"action":"claim","item":"<immutable id>","generation":1}`. Use the generation returned by the open. Linking an existing session or sending it a message does not assign it.
 
+To reach its current worker from the assigning board, send `ompdesk_session_send {"item":"#9","message":"The build is green.","request_id":"build-green-9"}`. Retry the same message with the same ID. If the board predates permanent numbering, use the immutable item ID from `list` instead. Use `show` to see whether there is a holder. Restarting the app does not give the work to another session.
+
 While every linked session waits for a usage limit the item says until when. Activity shows each linked session's done or blocked report. Owner edits arrive as quiet notes; a move of several items produces one note, a snooze alone none.
 
 ## `ompdesk_room` (a bot's chat only)

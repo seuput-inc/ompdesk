@@ -302,6 +302,7 @@ pub struct OpenParams {
     pub bridge: bool,
     pub ledger_file: Option<String>,
     pub item_worker_tab: Option<String>,
+    pub item_worker_peer: Option<String>,
     pub items_file: Option<String>,
     /// The journal of the person's queued messages (`held_queue.rs`); absent: kept in memory only (tests).
     pub held_queue_file: Option<String>,
@@ -483,6 +484,7 @@ pub struct Lane {
     bridge_enabled: bool,
     ledger_file: Option<String>,
     item_worker_tab: Option<String>,
+    item_worker_peer: Option<String>,
     items_file: Option<String>,
     held_queue_file: Option<std::path::PathBuf>,
     start_slow: Duration,
@@ -609,6 +611,7 @@ impl Lane {
             bridge_enabled: params.bridge,
             ledger_file: params.ledger_file,
             item_worker_tab: params.item_worker_tab,
+            item_worker_peer: params.item_worker_peer,
             items_file: params.items_file,
             held_queue_file: params.held_queue_file.map(Into::into),
             start_slow: params
@@ -1434,13 +1437,22 @@ impl Lane {
             (Some(mut start), None) => {
                 start.env.remove("OMP_GUI_ITEM_WORK");
                 let mut proof = None;
-                if let Some(file) = &self.items_file
-                    && let Some((item, generation)) = crate::agentctl::service::launch_assignment(
-                        file.as_ref(),
-                        self.item_worker_tab.as_deref(),
-                        self.session_path.as_deref(),
-                    )
-                {
+                let assignment = self.items_file.as_deref().and_then(|file| {
+                    let tab = self.item_worker_tab.as_deref();
+                    let session = self.session_path.as_deref();
+                    match self.item_worker_peer.as_deref() {
+                        Some(peer) => crate::agentctl::service::paired_item::assignment(
+                            file.as_ref(),
+                            peer,
+                            tab,
+                            session,
+                        ),
+                        None => {
+                            crate::agentctl::service::launch_assignment(file.as_ref(), tab, session)
+                        }
+                    }
+                });
+                if let Some((item, generation)) = assignment {
                     let mut random = [0u8; 32];
                     if crate::sys::random(&mut random).is_ok() {
                         let secret = crate::hex(&random);
@@ -1473,9 +1485,8 @@ impl Lane {
         #[derive(serde::Deserialize)]
         struct Check {
             request: String,
-            item: String,
-            generation: u64,
-            session: String,
+            #[serde(flatten)]
+            work: crate::agentctl::service::paired_item::Check,
         }
         let Some(run) = self
             .running
@@ -1487,23 +1498,46 @@ impl Lane {
         let Ok(check) = serde_json::from_slice::<Check>(&frame.raw) else {
             return;
         };
-        if check.request.len() != 36 || check.item.len() > 200 {
+        if check.request.len() != 36 || check.work.item.len() > 200 {
             return;
         }
-        let granted = run.proc.pid.is_some_and(|pid| {
-            self.held_session().as_ref() == Some(&check.session)
-                && crate::agentctl::service::permits_item_tool(
-                    pid,
-                    &check.item,
-                    check.generation,
-                    &check.session,
-                )
+        let Some(pid) = run
+            .proc
+            .pid
+            .filter(|_| self.held_session().as_ref() == Some(&check.work.session))
+        else {
+            return;
+        };
+        let peer = self.item_worker_peer.as_ref().map(|peer| {
+            (
+                peer.clone(),
+                self.items_file.clone(),
+                self.item_worker_tab.clone(),
+            )
         });
         let bridge = run.bridge.clone();
         tokio::spawn(async move {
-            let params = serde_json::value::to_raw_value(
-                &json!({"request":check.request,"validMs":if granted { 2_000 } else { 0 }}),
-            )
+            let granted = match peer {
+                Some((peer, Some(file), Some(tab))) => tokio::time::timeout(
+                    Duration::from_millis(1500),
+                    crate::agentctl::service::paired_item::permitted(
+                        file.as_ref(),
+                        &peer,
+                        &tab,
+                        pid,
+                        &check.work,
+                    ),
+                )
+                .await
+                .unwrap_or(false),
+                Some(_) => false,
+                None => crate::agentctl::service::permits_item_tool(pid, &check.work),
+            };
+            let params = serde_json::value::to_raw_value(&json!({
+                "request":check.request,
+                "validMs":if granted { 2_000 } else { 0 },
+                "mailKey":check.work.mail.filter(|_| granted).map(|mail| mail.key)
+            }))
             .ok();
             let _ = bridge
                 .request("item_work.verdict", params, Some(Duration::from_secs(2)))

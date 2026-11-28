@@ -7,6 +7,7 @@
  * progress report or a note never does. The installed omp's side of it: bridge-agent-mail-stock.test.ts and
  * bridge-steer-now-stock.test.ts.
  */
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { install, methods } from "../../resources/gui-bridge/agent-control";
 import { MAIL_CUSTOM_TYPE } from "../../resources/gui-bridge/agent-control-contracts";
@@ -227,6 +228,56 @@ describe("agent_control.mail", () => {
 			);
 		expect(await agent.hasIrcInterrupts?.()).toBe(true);
 	});
+});
+
+it("fences item mail, preserves its queued aside, and acknowledges the flushed session journal on retry", async () => {
+	const receive = methods["agent_control.item_mail"]!;
+	const entries: unknown[] = [];
+	const flush = vi.fn(async () => {});
+	const receiver = env({ entries, isStreaming: true, flush });
+	const command = {
+		item: "item-a",
+		generation: 3,
+		session: "/sessions/s1.jsonl",
+		key: "a".repeat(64),
+		message: "log",
+	};
+	await expect(receive(command, receiver)).rejects.toThrow("does not authorize");
+	const check = vi.fn(async () => false);
+	receiver.itemFence = { check };
+	await expect(receive(command, receiver)).rejects.toThrow("does not authorize");
+	check.mockResolvedValue(true);
+	await expect(receive({ ...command, session: "/wrong" }, receiver)).rejects.toThrow();
+	expect(sendMessage).not.toHaveBeenCalled();
+	for (let i = 0; i < 2; i++)
+		await expect(receive(command, receiver)).resolves.toEqual({ key: command.key, journaled: false });
+	expect(check).toHaveBeenLastCalledWith(command.session, {
+		item: command.item,
+		generation: 3,
+		key: command.key,
+		fingerprint: createHash("sha256").update(command.message).digest("hex"),
+	});
+	expect(sendMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ content: "log" }), {
+		triggerTurn: true,
+		deliverAs: "aside",
+	});
+	const probe = methods["agent_control.sent"]!;
+	const mark = `item-mail:${command.key}:${createHash("sha256").update(command.session).digest("hex")}`;
+	await expect(probe({ marks: [mark] }, receiver)).resolves.toMatchObject({
+		matches: true,
+		queued: true,
+		journaled: [],
+	});
+	await expect(probe({ marks: [`item-mail:${command.key}:${"0".repeat(64)}`] }, receiver)).resolves.toMatchObject({
+		matches: false,
+		queued: false,
+		journaled: [],
+	});
+	entries.push({ type: "custom_message", customType: MAIL_CUSTOM_TYPE, details: { id: `item-mail:${command.key}` } });
+	await expect(receive(command, receiver)).resolves.toEqual({ key: command.key, journaled: true });
+	expect(flush).toHaveBeenCalledOnce();
+	expect(sendMessage).toHaveBeenCalledOnce();
+	await expect(probe({ marks: [mark] }, receiver)).resolves.toMatchObject({ matches: true, journaled: [mark] });
 });
 
 describe("agent_control.sent", () => {

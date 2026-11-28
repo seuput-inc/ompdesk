@@ -1357,6 +1357,8 @@ pub struct SendArgs {
     /// Several sessions, each a name or `@children` / `@idle` (the caller's open children, or those of them idle).
     #[serde(default)]
     pub sessions: Option<Vec<String>>,
+    #[serde(default)]
+    pub item: Option<String>,
     pub message: String,
     #[serde(default)]
     pub attachments: Option<Vec<Attachment>>,

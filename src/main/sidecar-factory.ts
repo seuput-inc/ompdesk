@@ -180,6 +180,7 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 			: deps.sessionFree;
 		const sc: SidecarManager = new SidecarManager({
 			itemWorkerTab,
+			itemWorkerPeer: origin?.deviceId,
 			itemsFile: deps.itemsFile,
 			reportPriorityFailure: reason => {
 				if (reportedPriorityFailure) return;

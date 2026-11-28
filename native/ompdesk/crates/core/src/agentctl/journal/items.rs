@@ -19,6 +19,9 @@ use serde::{Deserialize, Serialize};
 use super::read_array;
 use crate::disk::saves::{SAVES, Saves};
 
+mod mail;
+pub(crate) use mail::{ItemMail, ItemMailState};
+
 /// `ITEM_STATUSES`.
 pub const STATUSES: [&str; 6] = [
     "planned",
@@ -156,6 +159,13 @@ pub struct ItemWork {
     pub generation: u64,
     pub requested_by: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(default)]
+    pub released: bool,
+    /// A late request from an older generation cannot start a new one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retired: Vec<(String, String)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<OpenRequest>,
     pub effect_key: String,
     /// Receipt for the open effect, not the holder address. Written before main creates a worktree or tab.
@@ -166,13 +176,17 @@ pub struct ItemWork {
 
 impl ItemWork {
     pub fn receipt(&self, item: &str) -> String {
+        if self.released {
+            return format!("Item {item} generation {} has no holder.", self.generation);
+        }
+        let host = self.device.as_deref().unwrap_or("this computer");
         match &self.session {
             Some(path) => format!(
-                "Item {item} generation {} held on this computer: {path}.",
+                "Item {item} generation {} held on {host}: {path}.",
                 self.generation
             ),
             None => format!(
-                "Item {item} generation {} reserved by {} on this computer.",
+                "Item {item} generation {} reserved by {} on {host}.",
                 self.generation, self.requested_by
             ),
         }
@@ -191,6 +205,9 @@ pub struct ItemRecord {
     pub session: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work: Option<ItemWork>,
+    /// Acceptance records stay on the authority, never in a shared board snapshot.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) mail: BTreeMap<String, ItemMail>,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -360,6 +377,9 @@ impl Items {
     ) -> Option<(&str, u64)> {
         self.items.iter().find_map(|item| {
             let work = item.work.as_ref()?;
+            if work.released || work.device.is_some() {
+                return None;
+            }
             let bound = session.is_some_and(|s| work.session.as_deref() == Some(s))
                 || tab.is_some_and(|t| work.accepted_tab.as_deref() == Some(t));
             bound.then_some((item.id.as_str(), work.generation))
@@ -390,6 +410,12 @@ impl Items {
     }
 
     pub fn new_board(&mut self, bot: &str) {
+        // Another call can publish the first item between bot registration and this notification.
+        if self.numbers.last_issued.contains_key(bot)
+            || self.items.iter().any(|item| item.bot == bot)
+        {
+            return;
+        }
         self.numbers.last_issued.insert(bot.to_owned(), 0);
         self.save();
     }

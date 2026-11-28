@@ -248,9 +248,11 @@ import {
 	type TabScheduledRetryArg,
 	type TabSignInArg,
 	type TabStatusArg,
+	WorktreeCreateReply,
 } from "./app-protocol";
 import type { HostConnection, HostServices } from "./host-server";
 import { HostedTabView, labelForViewer } from "./hosted-view";
+import { ItemEffect, ItemTab, type PeerItemAsk, type PeerItemStep } from "./item-work";
 import { KEPT_CALL_PREFIX, type KeptCall, KeptCalls } from "./kept-calls";
 import { createLinkEventSender, createReadEncoder, encodedReadKey, type LinkEventSender } from "./link-events";
 import { DuplicateReservation, machineModelNotStarted, type PeerQuota, type QuotaReservation } from "./peer-quota";
@@ -327,7 +329,14 @@ export interface HostServicesDeps {
 	 * names the device the tab runs for, so its prompts are journalled as that
 	 * device's (A85, resources/gui-bridge/prompt-origin.ts).
 	 */
-	createSidecar: (cwd: string, kind: "agent" | "chat", fresh: boolean, origin: PromptOriginEnv) => SidecarLike;
+	createSidecar: (
+		cwd: string,
+		kind: "agent" | "chat",
+		fresh: boolean,
+		origin: PromptOriginEnv,
+		tab: string,
+	) => SidecarLike;
+	allowsItemPeer?: (peer: PeerInfo) => boolean;
 	/** This computer's device name (Settings › Devices), for prompts typed on it. */
 	hostName: () => string;
 	sessionIndex: Pick<
@@ -434,6 +443,8 @@ interface PendingHostCall {
 interface HostTab extends RunTracking {
 	peerId: string;
 	rtab: string;
+	/** The accepted open key survives this tab being adopted under a new rtab. */
+	itemTab?: string;
 	/** The tab's id for this computer's resume coordinator; kept when a relaunched device re-keys the tab. */
 	resumeId: string;
 	sidecar: SidecarLike;
@@ -706,6 +717,9 @@ const GitWorktreeCreateParams = z.object({
 	// The device's id for this one create: its retry gets the same worktree (createWorktree).
 	requestId: z.string().min(1).max(100).optional(),
 });
+const ItemWorktree = GitWorktreeCreateParams.extend({ itemTab: ItemTab });
+const ItemAccept = z.object({ effect: ItemEffect });
+const ItemVerdict = z.object({ request: z.string().uuid(), allowed: z.boolean(), mailKey: z.string().nullable() });
 /** `runChargesFile`: Autopilot runs devices started here, by worktree root (the run's session, when known). */
 const RunChargesSchema = z.record(
 	z.string(),
@@ -777,6 +791,10 @@ export class LocalHostServices implements HostServices {
 	readonly #conns = new Set<HostConnection>();
 	/** Each connected device's latest connection, for events meant for one device. */
 	readonly #connOf = new Map<string, HostConnection>();
+	readonly #itemChecks = new Map<
+		string,
+		{ conn: HostConnection; mailKey: string | null; answer: (allowed: boolean) => void }
+	>();
 	/** Each tab's browser relay (`browser_relay_start`'s answer), tunnelled to the device's Preview page (`host.previewRelay.*`). */
 	readonly #relays = new PreviewRelayTunnels();
 	/** Each device connection to a tab's dev server (`host.portTunnel.*`), dialed only to the tab's own ports. */
@@ -1018,7 +1036,7 @@ export class LocalHostServices implements HostServices {
 	/** The resume rules' inputs for the tabs this computer runs for paired devices. */
 	resumeFacts(): ResumeFact[] {
 		return [...this.#tabs.values()].flatMap(tab => {
-			if (tab.viewing) return [];
+			if (tab.viewing || tab.itemTab) return [];
 			const fact: ResumeFact = {
 				tabId: tab.resumeId,
 				winId: 0,
@@ -1085,7 +1103,7 @@ export class LocalHostServices implements HostServices {
 	/** Spawn a hosted tab's omp if it has not run yet (a revived tab); its sidecar, or null when it is gone. */
 	startTab(id: string): SidecarLike | null {
 		const tab = this.#byResumeId(id);
-		if (!tab) return null;
+		if (!tab || tab.itemTab) return null;
 		this.#start(tab);
 		return tab.sidecar;
 	}
@@ -1372,6 +1390,8 @@ export class LocalHostServices implements HostServices {
 		const prefix = resumeId(peer.deviceId, "");
 		const rtab = marker.tab.startsWith(prefix) ? marker.tab.slice(prefix.length) : "";
 		if (!Rtab.safeParse(rtab).success) return null;
+		// A managed process only resumes after its owner reconnects and presents its saved receipt.
+		if (ItemTab.safeParse(rtab).success) return null;
 		const existing = this.#tabs.get(this.#key(peer.deviceId, rtab));
 		if (existing) return this.#continuesIn(existing);
 		const holder = marker.sessionPath ? this.#holderView(peer, marker.sessionPath) : null;
@@ -1400,18 +1420,86 @@ export class LocalHostServices implements HostServices {
 		if (!this.#conns.has(conn)) {
 			const counts = this.#deps.localTabs.modelWait?.snapshot.local;
 			if (counts && Object.keys(counts).length > 0) emitSafely(conn, MODEL_WAIT_EVENT, { counts });
+			this.#connOf.set(peer.deviceId, conn);
 		}
 		this.#conns.add(conn);
-		this.#connOf.set(peer.deviceId, conn);
 		switch (method) {
-			case "tab.open":
-				return this.#open(peer, parse(OpenParams, method, params), conn);
-			case "tab.start":
-				this.#start(this.#tab(peer, parse(RtabParams, method, params).rtab));
+			case "host.item.fence":
+				await this.#itemReceipt(peer, conn, "capability", { op: "ready" });
+				return 1;
+			case "host.item.accept": {
+				const { effect } = parse(ItemAccept, method, params);
+				return this.#itemReceipt(peer, conn, `item-${effect.effectKey}`, { op: "accept", effect });
+			}
+			case "host.item.worktree": {
+				const { itemTab, ...input } = parse(ItemWorktree, method, params);
+				const fingerprint = createHash("sha256")
+					.update(JSON.stringify([input.baseCwd, input.name, input.baseRef, input.branchPrefix]))
+					.digest("hex");
+				const receipt = await this.#itemReceipt(peer, conn, itemTab, { op: "worktree", fingerprint });
+				if (receipt !== true) return WorktreeCreateReply.parse(receipt);
+				this.#requireItemPeer(peer, conn);
+				const made = await createWorktree(
+					input.baseCwd,
+					{ ...input, request: { caller: peer.deviceId, id: itemTab } },
+					this.#deps.worktreeLocation ?? tablessWorktreeBridge,
+				);
+				const { path, branch, baseCwd } = made;
+				await this.#itemReceipt(peer, conn, itemTab, {
+					op: "treeCreated",
+					fingerprint,
+					tree: { path, branch, baseCwd },
+				});
+				return made;
+			}
+			case "host.item.verdict": {
+				this.#requireItemPeer(peer, conn);
+				const { request, allowed, mailKey } = parse(ItemVerdict, method, params);
+				const waiting = this.#itemChecks.get(request);
+				if (waiting?.conn === conn) waiting.answer(allowed && waiting.mailKey === mailKey);
 				return null;
+			}
+			case "host.item.open":
+			case "host.item.start":
+			case "host.item.restart": {
+				const { rtab } = parse(RtabParams, method, params);
+				this.#requireItemPeer(peer, conn);
+				ItemTab.parse(rtab);
+				if (method === "host.item.open") return this.#open(peer, parse(OpenParams, method, params), conn);
+				const tab = this.#tab(peer, rtab);
+				if (tab.conn !== conn || tab.itemTab !== rtab || tab.viewing)
+					throw codedError("remote_blocked", "This connection does not own the managed tab.");
+				if (method === "host.item.restart") {
+					const { sessionPath, cwd } = parse(RestartParams, method, params);
+					if (!tab.sessionFile || sessionPath !== tab.sessionFile || (cwd && cwd !== tab.sidecar.cwd))
+						throw codedError("remote_blocked", "A managed restart requires the bound saved session.");
+					await this.#itemReceipt(peer, conn, rtab, { op: "open", session: sessionPath });
+					if (this.#tab(peer, rtab) !== tab || tab.conn !== conn || tab.sessionFile !== sessionPath)
+						throw codedError("unknown_tab", "The managed worker changed.");
+					tab.sidecar.restart(undefined, sessionPath);
+				} else {
+					await this.#itemReceipt(peer, conn, rtab, { op: "read" });
+					if (tab.conn !== conn || this.#tab(peer, rtab) !== tab)
+						throw codedError("unknown_tab", "The managed worker changed.");
+					this.#start(tab);
+				}
+				return null;
+			}
+			case "tab.open": {
+				const open = parse(OpenParams, method, params);
+				if (ItemTab.safeParse(open.rtab).success) throw codedError("unsupported", "Use the managed open protocol.");
+				return this.#open(peer, open, conn);
+			}
+			case "tab.start": {
+				const tab = this.#tab(peer, parse(RtabParams, method, params).rtab);
+				if (tab.itemTab) throw codedError("unsupported", "Use the managed start protocol.");
+				this.#start(tab);
+				return null;
+			}
 			case "tab.restart": {
 				const { rtab, cwd, sessionPath } = parse(RestartParams, method, params);
 				const tab = this.#tab(peer, rtab);
+				if (tab.itemTab) throw codedError("unsupported", "Use the managed restart protocol.");
 				const target = cwd ? await directory(cwd) : undefined;
 				tab.resumeSessionPath = undefined;
 				tab.sidecar.restart(target, sessionPath);
@@ -1451,12 +1539,27 @@ export class LocalHostServices implements HostServices {
 					this.#closeTab(key);
 					return true;
 				}
-				if (!this.#tabs.has(key) && this.#opening.has(key)) this.#closedWhileOpening.add(key);
+				if (this.#opening.has(key) && (!this.#tabs.has(key) || ItemTab.safeParse(close.rtab).success))
+					this.#closedWhileOpening.add(key);
 				this.#closeTab(key);
 				return null;
 			}
-			case "tab.command":
-				return this.#command(peer, parse(CommandParams, method, params), requestId);
+			case "host.item.command":
+			case "tab.command": {
+				const input = parse(CommandParams, method, params);
+				const tab = this.#tab(peer, input.rtab);
+				if (
+					method === "host.item.command" ||
+					tab.itemTab ||
+					input.command.itemFirst !== undefined ||
+					input.command.itemTab !== undefined
+				) {
+					this.#requireItemPeer(peer, conn);
+					if (tab.conn !== conn)
+						throw codedError("remote_blocked", "The managed worker belongs to another connection.");
+				}
+				return this.#command(peer, input, requestId);
+			}
 			case "tab.sideChannel": {
 				const { rtab, frame } = parse(SideChannelParams, method, params);
 				await this.#answer(this.#tab(peer, rtab), frame, "device");
@@ -1973,6 +2076,7 @@ export class LocalHostServices implements HostServices {
 
 	disconnected(peer: PeerInfo, conn: HostConnection): void {
 		this.#conns.delete(conn);
+		for (const check of this.#itemChecks.values()) if (check.conn === conn) check.answer(false);
 		if (this.#connOf.get(peer.deviceId) === conn) this.#connOf.delete(peer.deviceId);
 		if (this.#connOf.get(peer.deviceId) === undefined) this.#deps.presence?.forget(peer.deviceId);
 		// Nobody is left to read the result.
@@ -2207,6 +2311,67 @@ export class LocalHostServices implements HostServices {
 			sent = true;
 		}
 		return sent;
+	}
+
+	#requireItemPeer(peer: PeerInfo, conn: HostConnection | null): void {
+		if (
+			!conn ||
+			conn.peer.deviceId !== peer.deviceId ||
+			this.#connOf.get(peer.deviceId) !== conn ||
+			!this.#deps.allowsItemPeer?.(peer) ||
+			!this.#deps.bots?.()?.peerItemReceipt
+		)
+			throw codedError("remote_blocked", "This connection cannot run managed items.");
+	}
+
+	async #itemReceipt(peer: PeerInfo, conn: HostConnection | null, tab: string, step: PeerItemStep): Promise<unknown> {
+		this.#requireItemPeer(peer, conn);
+		const result = await this.#bots().peerItemReceipt(peer.deviceId, tab, step);
+		this.#requireItemPeer(peer, conn);
+		if (step.op === "read") ItemEffect.parse(result);
+		else if (step.op === "worktree" && result !== true) WorktreeCreateReply.parse(result);
+		else if (result !== true && !(step.op === "first" && result === false))
+			throw codedError("unsupported", "No durable receipt for the managed worker.");
+		return result;
+	}
+
+	async checkPeerItem({ peer, tab, pid, check }: PeerItemAsk): Promise<boolean> {
+		const runner = this.#runner(check.session);
+		const conn = runner?.conn;
+		if (
+			!runner ||
+			!conn ||
+			runner.peerId !== peer ||
+			runner.sidecar.pid !== pid ||
+			(runner.itemTab && runner.itemTab !== tab)
+		)
+			return false;
+		const active = () =>
+			conn === this.#connOf.get(peer) &&
+			runner.conn === conn &&
+			this.#runner(check.session) === runner &&
+			runner.sidecar.pid === pid &&
+			runner.sidecar.processAlive &&
+			!deletedSessions().has(check.session) &&
+			!sessionDeleteInProgress(check.session) &&
+			this.#deps.agentHidden?.().has(check.session) === false &&
+			this.#deps.allowsItemPeer?.(conn.peer) === true;
+		if (!active()) return false;
+		const request = randomUUID();
+		const started = performance.now();
+		const { promise, resolve } = Promise.withResolvers<boolean>();
+		const timer = setTimeout(() => resolve(false), 1250);
+		this.#itemChecks.set(request, { conn, mailKey: check.mail?.key ?? null, answer: resolve });
+		try {
+			conn.emit("host.item.check", { request, tab, check });
+			if (!(await promise) || performance.now() - started >= 1250 || !active()) return false;
+			// A saved session may have reopened under a different local tab id after either app restarted.
+			runner.itemTab = tab;
+			return true;
+		} finally {
+			clearTimeout(timer);
+			this.#itemChecks.delete(request);
+		}
 	}
 
 	#bots(): HostBots {
@@ -2513,8 +2678,28 @@ export class LocalHostServices implements HostServices {
 	async #open(peer: PeerInfo, params: z.infer<typeof OpenParams>, conn: HostConnection): Promise<TabOpenResult> {
 		this.#checkOpenSession(params.sessionPath);
 		const key = this.#key(peer.deviceId, params.rtab);
-		const held = this.#tabs.get(key);
-		const existing = held ?? this.#adopt(peer, params, conn);
+		const managed = ItemTab.safeParse(params.rtab).success;
+		if (managed) {
+			this.#opening.set(key, (this.#opening.get(key) ?? 0) + 1);
+			try {
+				const row = await this.#itemReceipt(peer, conn, params.rtab, { op: "read" });
+				const bound = z.object({ session: z.string().nullable() }).parse(row).session;
+				if (params.sessionPath && params.sessionPath !== bound)
+					throw codedError("remote_blocked", "This is not the accepted worker session.");
+				if (this.#closedWhileOpening.has(key)) throw codedError("unknown_tab", "The device closed this tab.");
+			} finally {
+				const remaining = (this.#opening.get(key) ?? 1) - 1;
+				if (remaining > 0) this.#opening.set(key, remaining);
+				else {
+					this.#opening.delete(key);
+					this.#closedWhileOpening.delete(key);
+				}
+			}
+		}
+		const existing = this.#tabs.get(key) ?? this.#adopt(peer, params, conn);
+		if (existing?.itemTab) this.#requireItemPeer(peer, conn);
+		if (managed && existing && existing.itemTab !== params.rtab)
+			throw codedError("remote_blocked", "Another worker holds that session.");
 		if (!existing && this.#endedViews.delete(key))
 			throw codedError("view_ended", "The tab this one showed was closed on the host");
 		if (existing) {
@@ -2567,6 +2752,10 @@ export class LocalHostServices implements HostServices {
 		const holder = params.sessionPath ? this.#holderView(peer, params.sessionPath) : null;
 		if (holder && params.sessionPath) {
 			const view = holder.sidecar;
+			if (managed) {
+				view.dispose();
+				throw codedError("remote_blocked", "A managed worker cannot adopt a view.");
+			}
 			try {
 				this.#checkOpenSession(params.sessionPath);
 			} catch (error) {
@@ -2617,6 +2806,10 @@ export class LocalHostServices implements HostServices {
 					})
 				: await directory(params.cwd);
 			this.#checkOpenSession(params.sessionPath);
+			if (managed) {
+				await this.#itemReceipt(peer, conn, params.rtab, { op: "open", session: params.sessionPath });
+				this.#requireItemPeer(peer, conn);
+			}
 		} finally {
 			opens.delete(params);
 			if (opens.size === 0) this.#opening.delete(key);
@@ -2651,6 +2844,8 @@ export class LocalHostServices implements HostServices {
 			entry => entry.sessionFile === params.sessionPath && entry.peerId === peer.deviceId,
 		);
 		if (!tab) return undefined;
+		if (tab.itemTab) this.#requireItemPeer(peer, conn);
+		if (ItemTab.safeParse(params.rtab).success && tab.itemTab !== params.rtab) throw heldBy(tab);
 		if (tab.conn === conn) throw heldBy(tab);
 		this.#stopRelay(this.#key(tab.peerId, tab.rtab));
 		this.#tabs.delete(this.#key(tab.peerId, tab.rtab));
@@ -2783,10 +2978,11 @@ export class LocalHostServices implements HostServices {
 		view?: { sidecar: SidecarLike; of: "window" | HostTab },
 	): HostTab {
 		const origin: PromptOriginEnv = { deviceId: peer.deviceId, name: peer.name, hostName: this.#deps.hostName() };
-		const sidecar = view?.sidecar ?? this.#deps.createSidecar(cwd, kind, fresh, origin);
+		const sidecar = view?.sidecar ?? this.#deps.createSidecar(cwd, kind, fresh, origin, rtab);
 		const tab: HostTab = {
 			peerId: peer.deviceId,
 			rtab,
+			...(ItemTab.safeParse(rtab).success ? { itemTab: rtab } : {}),
 			resumeId: resumeId(peer.deviceId, rtab),
 			sidecar,
 			omp: randomUUID(),
@@ -3323,6 +3519,55 @@ export class LocalHostServices implements HostServices {
 						},
 					}
 				: undefined;
+		const managed =
+			params.command.itemFirst ?? params.command.itemTab ?? (commandUsesModel(command) ? runs?.itemTab : undefined);
+		let first: { tab: string; fingerprint: string } | undefined;
+		let checkedSession: string | undefined;
+		let checkedConn: HostConnection | null = null;
+		let beforeSend: (() => void) | undefined;
+		if (managed !== undefined) {
+			const itemTab = ItemTab.parse(managed);
+			const session = tab.sessionFile;
+			const conn = tab.conn;
+			const pid = tab.sidecar.pid;
+			if (tab.viewing || !session || pid === undefined || tab.itemTab !== itemTab)
+				throw codedError("unknown_tab", "No live managed worker at this address.");
+			const started = performance.now();
+			const effect = ItemEffect.parse(await this.#itemReceipt(peer, conn, itemTab, { op: "read" }));
+			if (!(await this.checkPeerItem({ peer: peer.deviceId, tab: itemTab, pid, check: { ...effect, session } })))
+				throw codedError("remote_blocked", "The item owner did not grant this session a lease.");
+			if (params.command.itemFirst !== undefined) {
+				if (command.type !== "prompt" && command.type !== "set_goal")
+					throw codedError("unsupported", "Not an item start");
+				const fingerprint = hash(
+					"sha256",
+					JSON.stringify([command.type, params.command.message, params.command.objective]),
+				);
+				const receipt = await this.#itemReceipt(peer, conn, itemTab, { op: "first", session, fingerprint });
+				if (receipt === false) return { type: "response", command: command.type, success: true } as RpcResponse;
+				if (receipt !== true) throw codedError("unsupported", "No first prompt receipt");
+				first = { tab: itemTab, fingerprint };
+			} else if (params.command.itemTab !== undefined) {
+				if (command.type !== "agent_control_worker" || !command.managed)
+					throw codedError("unsupported", "Not a managed worker marker");
+				await this.#itemReceipt(peer, conn, itemTab, { op: "bind", session });
+			}
+			checkedSession = session;
+			checkedConn = conn;
+			beforeSend = () => {
+				this.#requireItemPeer(peer, conn);
+				if (
+					performance.now() - started >= 1500 ||
+					this.#runner(session) !== tab ||
+					tab.conn !== conn ||
+					tab.sidecar.pid !== pid ||
+					!tab.sidecar.processAlive ||
+					this.#deps.agentHidden?.().has(session)
+				)
+					throw codedError("remote_blocked", "The managed worker lease expired.");
+			};
+			beforeSend();
+		}
 		const rejected =
 			runs && (command.type === "prompt" || command.type === "follow_up" || command.type === "steer")
 				? expectHostStart(runs)
@@ -3334,13 +3579,15 @@ export class LocalHostServices implements HostServices {
 							peer.deviceId,
 							requestId ?? randomUUID(),
 							1,
-							() => this.#run(tab, client, command, params.timeoutMs),
+							() => this.#run(tab, client, command, params.timeoutMs, beforeSend),
 							result => !replayMail && !result.success && result[MODEL_NOT_STARTED] === true,
 							undefined,
 							replayMail,
 						)
-					: this.#run(tab, client, command, params.timeoutMs),
+					: this.#run(tab, client, command, params.timeoutMs, beforeSend),
 			);
+			if (first && response.success && checkedSession === tab.sessionFile)
+				await this.#itemReceipt(peer, checkedConn, first.tab, { op: "confirm", fingerprint: first.fingerprint });
 			if (!response.success) rejected?.();
 			if (!response.success) signInError = response.error ?? "";
 			if (command.type === "browser_relay_stop") this.#relays.forget(this.#key(tab.peerId, tab.rtab));
@@ -3395,6 +3642,7 @@ export class LocalHostServices implements HostServices {
 		client: NonNullable<SidecarLike["rpcClient"]>,
 		command: RpcCommand,
 		timeoutMs: number | undefined,
+		beforeSend?: () => void,
 	): Promise<RpcResponse> {
 		// Another device's tab here answers for its view: its run, its omp.
 		const runs = typeof tab.viewing === "object" ? tab.viewing : tab;
@@ -3418,6 +3666,7 @@ export class LocalHostServices implements HostServices {
 		// for it here, even in an Autopilot run's tab, and one that joins the running turn is answered first. Only for a
 		// prompt that goes in (one past the device's daily limit never reaches this).
 		await noteTypedPrompt(client, command, () => runs.run.running);
+		beforeSend?.();
 		return client.command(command, timeoutMs);
 	}
 

@@ -57,6 +57,7 @@ import {
 	TabWorktreeWaitArg,
 } from "./app-protocol";
 import type { ImageBlobCache } from "./image-blob-cache";
+import { ItemTab } from "./item-work";
 import { createLinkEventDecoder, createReadDecoder, encodedReadKey, type WireSubagentFrame } from "./link-events";
 import { tabHolderOf } from "./protocol";
 import { type SignInRelay, type SignInRelayOptions, startSignInRelay } from "./sign-in-relay";
@@ -169,6 +170,7 @@ export class PendingTabCloses {
 export class RemoteSidecar extends EventEmitter implements SidecarLike {
 	#link: RemoteLink;
 	readonly #rtab: string;
+	readonly #tabPrefix: "host.item" | "tab";
 	readonly #linkEvents = createLinkEventDecoder();
 	/** One per read that crosses as deltas (`encodedReadKey`). */
 	readonly #reads = new Map<string, (wire: unknown) => unknown>();
@@ -235,6 +237,7 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 		super();
 		this.#link = options.link;
 		this.#rtab = options.rtab;
+		this.#tabPrefix = ItemTab.safeParse(options.rtab).success ? "host.item" : "tab";
 		this.#cwd = options.cwd;
 		this.#kind = options.kind;
 		this.#fresh = options.fresh;
@@ -679,6 +682,10 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 		this.#link.request(method, params).catch(() => {});
 	}
 
+	#tabMethod(operation: string): string {
+		return `${this.#tabPrefix}.${operation}`;
+	}
+
 	async #bringUp(restart: { cwd?: string; sessionPath?: string } | null): Promise<void> {
 		this.#begin();
 		if (this.#link.state !== "online") {
@@ -699,7 +706,7 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 						this.#setStatus("starting", {}, false);
 					}
 					this.#advance("start");
-					await this.#link.request("tab.start", { rtab: this.#rtab });
+					await this.#link.request(this.#tabMethod("start"), { rtab: this.#rtab });
 					this.#note("start", {});
 					this.#advance("ready");
 					return;
@@ -712,12 +719,12 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 			}
 			this.#advance("start");
 			if (restart) {
-				await this.#link.request("tab.restart", {
+				await this.#link.request(this.#tabMethod("restart"), {
 					rtab: this.#rtab,
 					...(restart.cwd ? { cwd: restart.cwd } : {}),
 					...(restart.sessionPath ? { sessionPath: restart.sessionPath } : {}),
 				});
-			} else await this.#link.request("tab.start", { rtab: this.#rtab });
+			} else await this.#link.request(this.#tabMethod("start"), { rtab: this.#rtab });
 			this.#note("start", {});
 			this.#advance("ready");
 		} catch (error) {
@@ -808,7 +815,7 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 		this.#acceptedClose = undefined;
 		this.#openedOnce = true;
 		const opening = this.#link
-			.request<unknown>("tab.open", {
+			.request<unknown>(this.#tabMethod("open"), {
 				rtab: this.#rtab,
 				cwd: this.#cwd,
 				kind: this.#kind,
@@ -846,7 +853,9 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 			await this.#open();
 			const ask = (sent: RpcCommand, fresh: boolean) =>
 				this.#link.request<RpcResponse>(
-					"tab.command",
+					"itemTab" in sent || "itemFirst" in sent || sent.type === "agent_control_item_mail"
+						? "host.item.command"
+						: this.#tabMethod("command"),
 					{
 						rtab: this.#rtab,
 						command: sent,

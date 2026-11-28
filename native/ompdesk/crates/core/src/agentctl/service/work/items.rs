@@ -263,7 +263,7 @@ impl AgentControl {
         let Some(path) = tab.session_path.as_deref().filter(|s| !s.is_empty()) else {
             return false;
         };
-        if tab.hidden || tab.viewing || tab.device.is_some() {
+        if tab.hidden || tab.viewing || tab.session_moved {
             return false;
         }
         let board = {
@@ -272,7 +272,10 @@ impl AgentControl {
                 return false;
             };
             if !item.work.as_ref().is_some_and(|work| {
-                work.generation == generation && work.session.as_deref() == Some(path)
+                !work.released
+                    && work.generation == generation
+                    && work.device == tab.device
+                    && work.session.as_deref() == Some(path)
             }) {
                 return false;
             }
@@ -294,6 +297,7 @@ impl AgentControl {
         let mut read = item.clone();
         // Shared board snapshots are not authority to address a worker.
         read.work = None;
+        read.mail.clear();
         let mut limits: Vec<f64> = Vec::new();
         let mut live = 0;
         let mut working = false;
@@ -454,8 +458,28 @@ impl AgentControl {
             .clone()
         };
         if args.action == "show" {
-            let read = self.read_item(&self.host.state(), Some(&bot), &found, now);
+            let state = self.host.state();
+            let read = self.read_item(&state, Some(&bot), &found, now);
             let mut lines = vec![item_line(&read)];
+            if let Some(work) = &found.work
+                && self.item_assigner(caller, &bot.id)
+            {
+                lines.push(work.receipt(&found.id));
+                if !work.released
+                    && let Some(id) = work.device.as_deref()
+                {
+                    match state.device(id) {
+                        Some(host) => lines.push(format!(
+                            "Worker host: {} ({} at {at}).",
+                            host.name,
+                            host.state.as_str()
+                        )),
+                        None => lines.push(format!(
+                            "Worker host unavailable at {at}; the claim is retained."
+                        )),
+                    }
+                }
+            }
             if let Some(description) = &read.description {
                 lines.push(format!("description: {description}"));
             }

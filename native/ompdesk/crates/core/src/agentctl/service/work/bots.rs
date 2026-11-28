@@ -1848,12 +1848,14 @@ impl AgentControl {
                     }
                     return Err(error);
                 }
+                let board = bot.id.clone();
                 if bot.creation_receipt.is_some() {
                     bots.add_peer(bot).map_err(super::super::fail::Fail::Tool)?;
                 } else {
                     bots.add(bot);
                 }
                 drop(bots);
+                self.items().new_board(&board);
                 self.bots_changed();
             }
             // One of the bot's own files, read or written (`BotFileRequest`): its answer, not the state.

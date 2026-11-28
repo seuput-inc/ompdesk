@@ -25,6 +25,7 @@
  */
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { ItemToolFence } from "./item-work";
 
 /** A frame pushed to the GUI. It reaches the renderer exactly as if omp had written it on stdout. */
 export interface BridgeEvent {
@@ -33,6 +34,7 @@ export interface BridgeEvent {
 }
 
 export interface BridgeEnv {
+	itemFence?: ItemToolFence;
 	/** The extension API omp passed to the bridge factory. `pi.pi` is the live package index. */
 	pi: ExtensionAPI;
 	/** The live main AgentSession (`AgentRegistry.global().get(MAIN_AGENT_ID).session`); throws when none is attached. */

@@ -26,7 +26,7 @@ import {
 	sniffImageType,
 } from "./agent-control-contracts";
 import { crossFamily, JUDGE_ROLES, modelFamily } from "./agent-control-judge-core";
-import { ITEM_WORK, managedWorkerEntry, WORKER_ENTRY } from "./item-work";
+import { ITEM_WORK, type ItemToolFence, managedWorkerEntry, WORKER_ENTRY } from "./item-work";
 import { BOT_HOME_OBSERVATION, type BotHomeManager, botHomeOf, requireBotHome } from "./modes/bots-contracts";
 import { latestBot } from "./modes/bots-core";
 import { completeOnSmol, type ModelLike, type NextPromptSession } from "./modes/next-prompt-engine";
@@ -63,6 +63,7 @@ interface ControlSession {
 	};
 }
 interface ControlEnv {
+	itemFence?: Pick<ItemToolFence, "check">;
 	session(): ControlSession;
 	context(): {
 		ui: { confirm(title: string, message: string): Promise<unknown>; notify(message: string, type: "info"): void };
@@ -373,6 +374,7 @@ export const methods: BridgeMethods = {
 		if (!mailHost) throw new Error("This omp cannot receive reports (no extension sendMessage).");
 		const { peerBotHome, quotaRecipient, ...details } = (record.details ?? {}) as Record<string, unknown>;
 		const id = typeof details.id === "string" ? details.id : undefined;
+		if (id?.startsWith("item-mail:")) throw new Error("Item mail requires its receiver fence.");
 		// Idempotent across restarts of either side: the journal is the record of what arrived, and until stock's loop
 		// takes a queued aside this process remembers it. `journaled` tells main which of the two it is: main keeps a
 		// report until the receiver's journal holds it (a killed omp loses an aside it still queued).
@@ -416,6 +418,41 @@ export const methods: BridgeMethods = {
 		mailHost.sendMessage(message, { triggerTurn, ...(deliverAs ? { deliverAs } : {}) });
 		if (id) queuedMail.add(id);
 		return {};
+	},
+	"agent_control.item_mail": async (params, env) => {
+		const { item, generation, session, key, message } = (params ?? {}) as Record<string, unknown>;
+		if (
+			typeof item !== "string" ||
+			typeof generation !== "number" ||
+			typeof session !== "string" ||
+			typeof key !== "string" ||
+			!/^[0-9a-f]{64}$/.test(key) ||
+			typeof message !== "string" ||
+			!message ||
+			!mailHost
+		)
+			throw new Error("Invalid item mail.");
+		const manager = env.session().sessionManager;
+		const proof = { item, generation, key, fingerprint: createHash("sha256").update(message).digest("hex") };
+		if (
+			manager.getSessionFile() !== session ||
+			!(await env.itemFence?.check(session, proof)) ||
+			env.session().sessionManager.getSessionFile() !== session
+		)
+			throw new Error("The current assignment does not authorize this item mail.");
+		const id = `item-mail:${key}`;
+		if (!hasMailEntry(manager.getEntries(), id) && !queuedMail.has(id)) {
+			const live = env.session();
+			if (live.isStreaming) interruptFor(live.agent, `mail:${id}`);
+			mailHost.sendMessage(
+				{ customType: MAIL_CUSTOM_TYPE, content: message, details: { id, kind: "note" }, display: true },
+				{ triggerTurn: true, ...(live.isStreaming && { deliverAs: "aside" }) },
+			);
+			queuedMail.add(id);
+		}
+		const journaled = hasMailEntry(manager.getEntries(), id);
+		if (journaled) await manager.flush();
+		return { key, journaled };
 	},
 	/**
 	 * `{message, images?}` → `{}`, or `{idle: true}` with nothing sent: a message another session sends one that works
@@ -484,6 +521,25 @@ export const methods: BridgeMethods = {
 		const marks = (params as { marks?: unknown } | null)?.marks;
 		if (!Array.isArray(marks) || !marks.every(mark => typeof mark === "string" && mark.length > 0))
 			throw new Error("agent_control.sent needs marks");
+		const mark = marks[0];
+		const item =
+			typeof mark === "string" && marks.length === 1 ? /^item-mail:([0-9a-f]{64}):([0-9a-f]{64})$/.exec(mark) : null;
+		if (item) {
+			const manager = env.session().sessionManager;
+			const session = manager.getSessionFile();
+			const matches = !!session && createHash("sha256").update(session).digest("hex") === item[2];
+			const id = `item-mail:${item[1]}`;
+			const journaled = matches && hasMailEntry(manager.getEntries(), id);
+			if (journaled) await manager.flush();
+			if (env.session().sessionManager.getSessionFile() !== session) throw new Error("The receiver moved.");
+			return {
+				instance: OMP_INSTANCE,
+				itemMail: mark,
+				matches,
+				journaled: journaled ? [mark] : [],
+				queued: matches && queuedMail.has(id),
+			};
+		}
 		return { instance: OMP_INSTANCE, journaled: journaledMarks(env.session().sessionManager.getBranch(), marks) };
 	},
 	/** `{title, message}` → `{approved}`: a dismissed or cancelled card is a refusal. */

@@ -1636,6 +1636,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		remote: {
 			hosts: () => remoteDevices.state().hosts,
 			request: (device, method, params, timeoutMs) => remoteDevices.request(device, method, params, timeoutMs),
+			checkPeerItem: ask => remoteDevices.checkPeerItem(ask),
 		},
 		summaries: device => (device ? remoteDevices.summaries(device) : deps.summaries.current()),
 		// The desktop banner and paired phones (Web Push), as an Autopilot run's notice reaches them.
@@ -1709,6 +1710,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	deps.sessionNote.current = (session, text) => agentControl.noteSession(session, text);
 	deps.hostBots.current = {
 		home: (name, deviceId, deviceName, fromBot) => agentControl.botHome(name, deviceId, deviceName, fromBot),
+		peerItemReceipt: (peer, tab, step) => agentControl.control.peerItemReceipt(peer, tab, step),
+		ownerGrantsPeerItem: (device, tab, check) => agentControl.control.ownerGrantsPeerItem(device, tab, check),
 		share: () => agentControl.botsShare(),
 		from: (request, deviceId, deviceName, createKey) =>
 			agentControl.botsFrom(request, deviceId, deviceName, createKey),

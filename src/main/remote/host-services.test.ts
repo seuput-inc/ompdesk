@@ -100,6 +100,7 @@ import {
 import type { HostConnection } from "./host-server";
 import { HOST_WAIT_NOTICE_MS, type HostServicesDeps, LocalHostServices } from "./host-services";
 import type { HostedTabView } from "./hosted-view";
+import { ItemChallenge } from "./item-work";
 import { KeptCalls } from "./kept-calls";
 import { createLinkEventDecoder, createReadDecoder, type WireSubagentFrame } from "./link-events";
 import { linkSlimFixture } from "./link-slim-fixture";
@@ -111,6 +112,7 @@ import { FrameTooLargeError } from "./wire";
 /** A SidecarManager stand-in for the host side. */
 class FakeHostSidecar extends EventEmitter {
 	status: SidecarStatus = "asleep";
+	pid?: number;
 	processAlive = false;
 	bridgeRequest?: SidecarLike["bridgeRequest"];
 	disposed = false;
@@ -435,6 +437,8 @@ function setup(graceMs = 60_000, extra: Partial<HostServicesDeps> = {}) {
 
 function fakeBots() {
 	return {
+		peerItemReceipt: vi.fn<HostBots["peerItemReceipt"]>(),
+		ownerGrantsPeerItem: vi.fn<HostBots["ownerGrantsPeerItem"]>(),
 		created: vi.fn(),
 		from: vi.fn(),
 		share: vi.fn(),
@@ -447,6 +451,129 @@ function fakeBots() {
 		limited: vi.fn<HostBots["limited"]>(),
 	};
 }
+
+describe("managed item receiver", () => {
+	const effect = { item: "immutable-9", generation: 1, effectKey: "a".repeat(32) };
+	const rtab = `item-${effect.effectKey}`;
+
+	it("rejects unknown and revoked peers and never constructs a tab before a committed open", async () => {
+		const bots = fakeBots();
+		const conn = new FakeConnection(peer("owner"));
+		let allowed = false;
+		const { services, sidecars } = setup(60_000, { bots: () => bots, allowsItemPeer: () => allowed });
+		onTestFinished(() => services.disposeAll());
+		const call = (method: string, input: unknown) => services.call(conn.peer, method, input, conn);
+		const open = () => call("host.item.open", { rtab, cwd: workDir });
+		await expect(call("host.item.accept", { effect })).rejects.toThrow();
+		expect(bots.peerItemReceipt).not.toHaveBeenCalled();
+		allowed = true;
+		bots.peerItemReceipt.mockImplementation(async (_peer, _tab, step) => {
+			if (step.op === "read") return { ...effect, session: null };
+			if (step.op === "open") throw new Error("disk full");
+			return true;
+		});
+		await expect(call("host.item.accept", { effect })).resolves.toBe(true);
+		await expect(call("tab.open", { rtab, cwd: workDir })).rejects.toThrow();
+		await expect(open()).rejects.toThrow("disk full");
+		expect(sidecars).toHaveLength(0);
+		bots.peerItemReceipt.mockImplementation(async (_peer, _tab, step) => {
+			if (step.op === "read") return { ...effect, session: null };
+			allowed = false;
+			return true;
+		});
+		await expect(open()).rejects.toThrow();
+		expect(sidecars).toHaveLength(0);
+	});
+
+	it("requires the current connection, live receiver process and a mail-specific owner verdict", async () => {
+		const bots = fakeBots();
+		const conn = new FakeConnection(peer("owner"));
+		const stranger = new FakeConnection(peer("stranger"));
+		let allowed = true;
+		const { services, sidecars } = setup(60_000, {
+			bots: () => bots,
+			allowsItemPeer: p => allowed && p.deviceId === conn.peer.deviceId,
+		});
+		onTestFinished(() => services.disposeAll());
+		bots.peerItemReceipt.mockImplementation(async (_peer, _tab, step) =>
+			step.op === "read" ? { ...effect, session: null } : true,
+		);
+		await services.call(conn.peer, "host.item.open", { rtab, cwd: workDir }, conn);
+		await services.call(conn.peer, "host.item.start", { rtab }, conn);
+		const worker = sidecars[0]!;
+		worker.pid = 35;
+		const session = join(workDir, "worker.jsonl");
+		worker.emit("session", { sessionId: "worker", sessionFile: session });
+		worker.setStatus("ready");
+		const ask = {
+			peer: "owner",
+			tab: rtab,
+			pid: worker.pid,
+			check: { ...effect, session, mail: { key: "k", fingerprint: "a".repeat(64) } },
+		};
+		const request = () => ItemChallenge.parse(conn.events.findLast(e => e.event === "host.item.check")?.data).request;
+		const verdict = (link: FakeConnection, mailKey: string | null) =>
+			services.call(link.peer, "host.item.verdict", { request: request(), allowed: true, mailKey }, link);
+		await expect(services.checkPeerItem({ ...ask, pid: 999 })).resolves.toBe(false);
+		const wrong = services.checkPeerItem(ask);
+		await expect(verdict(stranger, "k")).rejects.toThrow();
+		await verdict(conn, null);
+		await expect(wrong).resolves.toBe(false);
+		const held = services.checkPeerItem(ask);
+		await verdict(conn, "k");
+		await expect(held).resolves.toBe(true);
+		const cut = services.checkPeerItem(ask);
+		services.disconnected(conn.peer, conn);
+		await expect(cut).resolves.toBe(false);
+		allowed = false;
+		await expect(services.checkPeerItem(ask)).resolves.toBe(false);
+		expect(
+			worker.commands.filter(command => command.type === "prompt" || command.type === "agent_control_item_mail"),
+		).toHaveLength(0);
+	});
+
+	it("hands the first prompt to the host process once, only after both durable boundaries", async () => {
+		const bots = fakeBots();
+		const conn = new FakeConnection(peer("owner"));
+		const { services, sidecars } = setup(60_000, { bots: () => bots, allowsItemPeer: p => p === conn.peer });
+		onTestFinished(() => services.disposeAll());
+		const call = (method: string, params: unknown) => services.call(conn.peer, method, params, conn);
+		const saved = join(workDir, "worker.jsonl");
+		const order: string[] = [];
+		let confirmed = false;
+		bots.peerItemReceipt.mockImplementation(async (_peer, _tab, step) => {
+			order.push(step.op);
+			if (step.op === "read") return { ...effect, session: saved };
+			if (step.op === "first") return !confirmed;
+			if (step.op === "confirm") confirmed = true;
+			return true;
+		});
+		await call("host.item.accept", { effect });
+		await call("host.item.open", { rtab, cwd: workDir });
+		await call("host.item.start", { rtab });
+		const worker = sidecars[0]!;
+		worker.pid = 71;
+		worker.emit("session", { sessionId: "worker", sessionFile: saved });
+		worker.setStatus("ready");
+		const emit = conn.emit.bind(conn);
+		vi.spyOn(conn, "emit").mockImplementation((name, data) => {
+			emit(name, data);
+			if (name === "host.item.check") {
+				const { request } = ItemChallenge.parse(data);
+				void call("host.item.verdict", { request, allowed: true, mailKey: null });
+			}
+		});
+		await call("host.item.command", {
+			rtab,
+			command: { type: "agent_control_worker", from: "board", managed: true, itemTab: rtab },
+		});
+		const first = { rtab, command: { type: "prompt", message: "Synthetic item", itemFirst: rtab } };
+		await call("host.item.command", first);
+		await call("host.item.command", first);
+		expect(order.filter(op => op !== "read")).toEqual(["accept", "open", "bind", "first", "confirm", "first"]);
+		expect(worker.commands.filter(command => command.type === "prompt")).toHaveLength(1);
+	});
+});
 
 describe("peer bot homes", () => {
 	async function fixture() {

@@ -82,6 +82,7 @@ import {
 	WorktreeCreateReply,
 } from "../remote/app-protocol";
 import { uploadToHost } from "../remote/host-upload";
+import type { PeerItemAsk } from "../remote/item-work";
 import type { RunProcess, ScheduleService, ThreadWake } from "../schedules";
 import type { Pace } from "../session-pace";
 import { SUPERVISOR_STOPPED_CODE } from "../setup/supervisor";
@@ -230,6 +231,7 @@ export interface AgentControlHostDeps {
 	remote?: {
 		hosts(): HostView[];
 		request<T>(deviceId: string, method: string, params: unknown, timeoutMs?: number): Promise<T>;
+		checkPeerItem?(ask: PeerItemAsk): Promise<boolean>;
 	};
 	/**
 	 * The session summaries of this computer (no device) or of a paired host as this computer holds them: what every
@@ -1061,26 +1063,33 @@ export class AgentControlRuntime {
 			);
 		let reservedTabId: string | undefined;
 		if (request.itemOpen) {
-			if (elsewhere || outside) throw new Error("This host cannot accept a managed open for another computer.");
-			reservedTabId = nextSnowflake();
+			if (outside || caller.device) throw new Error("Only a local board chat can assign this item.");
+			reservedTabId = device ? `item-${request.itemOpen.effectKey}` : nextSnowflake();
+			if (
+				device &&
+				(await this.#remote().request(device, "host.item.accept", { effect: request.itemOpen })) !== true
+			)
+				throw new Error("The worker host did not acknowledge the item reservation.");
 			if (!(await this.control.acceptItemOpen(callerTabId, request.itemOpen, reservedTabId)))
 				throw new Error("This managed open was already accepted. No second worker was started.");
 		}
 		let worktree: IpcTabWorktree | undefined;
 		let prepared: string | null = null;
 		if (request.worktree && cwd !== undefined) {
-			const slug = `agent-${Math.random().toString(36).slice(2, 8)}`;
+			const slug = `agent-${request.itemOpen?.effectKey.slice(0, 8) ?? Math.random().toString(36).slice(2, 8)}`;
 			const { branchPrefix, name } = splitBranch(request.worktree.branch, slug);
 			const input = { name, baseCwd: cwd, baseRef: request.worktree.base ?? null, branchPrefix } as const;
 			// The worktree is made on the computer the new session runs on: the caller's own through its tab,
 			// another one without a tab of the caller there.
 			const made =
 				elsewhere || outside
-					? await this.#worktreeOn(device, input).catch((error: unknown) => {
-							throw new Error(
-								`Creating the worktree failed: ${error instanceof Error ? error.message : String(error)}`,
-							);
-						})
+					? await this.#worktreeOn(device, input, request.itemOpen && device ? reservedTabId : undefined).catch(
+							(error: unknown) => {
+								throw new Error(
+									`Creating the worktree failed: ${error instanceof Error ? error.message : String(error)}`,
+								);
+							},
+						)
 					: await this.#worktreeThroughCaller(win, this.#sidecar(callerTabId), callerTabId, input);
 			worktree = { name, branch: made.branch, baseCwd: made.baseCwd, path: made.path };
 			prepared = describePreparation(made);
@@ -1100,8 +1109,8 @@ export class AgentControlRuntime {
 			reservedTabId,
 		);
 		if (!result?.tabId) {
-			// The worktree made for a session that never started goes with it (git's own commands, never forced).
-			if (worktree) {
+			// A paired managed tab's missing reply does not prove its host never opened the worktree.
+			if (worktree && !(request.itemOpen && device)) {
 				const made = worktree;
 				await this.#git<WorktreeRemoval>(device, GIT_METHODS.discardWorktree, { worktree: gitRef(made) }, () =>
 					discardOpenedWorktree(made, { openFolders: sessionOpenFolders }),
@@ -1137,12 +1146,16 @@ export class AgentControlRuntime {
 	}
 
 	/** A worktree on `device` (a paired host, or this computer when undefined) for a caller running elsewhere. */
-	async #worktreeOn(device: string | undefined, input: WorktreeInput): Promise<RpcWorktreeCreateResult> {
+	async #worktreeOn(
+		device: string | undefined,
+		input: WorktreeInput,
+		itemTab?: string,
+	): Promise<RpcWorktreeCreateResult> {
 		if (!device) return createWorktree(input.baseCwd, input, tablessWorktreeBridge);
 		const reply = await this.#remote().request<unknown>(
 			device,
-			GIT_METHODS.worktreeCreate,
-			input,
+			itemTab ? "host.item.worktree" : GIT_METHODS.worktreeCreate,
+			itemTab ? { ...input, itemTab } : input,
 			WORKTREE_COMMAND_BUDGETS_MS.worktree_create,
 		);
 		const parsed = WorktreeCreateReply.safeParse(reply);
@@ -1511,6 +1524,8 @@ export class AgentControlRuntime {
 					);
 				return sent;
 			},
+			itemHostReady: async device => (await this.#remote().request(device, "host.item.fence", {})) === 1,
+			checkPeerItem: async ask => (await deps.remote?.checkPeerItem?.(ask)) === true,
 			spawn: (callerTabId, request) => this.#spawn(callerTabId, request),
 			autopilot: this.#autopilotSource(),
 			start: tabId => void deps.pool.startTab(tabId),

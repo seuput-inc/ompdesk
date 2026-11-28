@@ -68,6 +68,7 @@ import type { FamilyEdits } from "../../shared/turn-edits";
 import type { HostBotsRoomPost, HostBotsUpdate, PeerBotHome, PeerBotIntent } from "../bots";
 import { CorePort } from "../core/ports";
 import { CoreError, core } from "../core/process";
+import type { PeerItemAsk, PeerItemCheck, PeerItemStep, PeerItemVerdict } from "../remote/item-work";
 import { RpcTimeoutError } from "../rpc-client";
 import type { Pace } from "../session-pace";
 import type { FileEdits } from "../web/file-edit-reports";
@@ -408,6 +409,8 @@ export interface AgentControlHost {
 	sessionPace?(session: { path: string; device?: string }): Promise<Pace | undefined>;
 	/** A command through the GUI's RPC dispatcher for `tabId` (local handlers, host link, quota). */
 	command(tabId: string, command: RpcCommand, timeoutMs?: number): Promise<RpcResponse>;
+	itemHostReady?(device: string): Promise<boolean>;
+	checkPeerItem?(ask: PeerItemAsk): Promise<boolean>;
 	/**
 	 * Spawn a fresh tab in the caller's window on the caller's machine. Throws a readable error. `prepared`: what
 	 * `.worktreeinclude` and `.ompdesk/worktree-setup` did in a new worktree (`describePreparation`).
@@ -915,6 +918,14 @@ export class AgentControl {
 		return this.#call("acceptItemOpen", { callerTabId, effect, tabId });
 	}
 
+	peerItemReceipt(peer: string, tab: string, step: PeerItemStep): Promise<unknown> {
+		return this.#call("peerItemReceipt", { peer, tab, step });
+	}
+
+	ownerGrantsPeerItem(device: string, tab: string, check: PeerItemCheck): Promise<PeerItemVerdict> {
+		return this.#call("ownerGrantsPeerItem", { device, tab, check });
+	}
+
 	/**
 	 * Run one control-tool call. `call` is the host tool call: its id (stock's, the same when a paired host re-sends the
 	 * call after this computer relaunched) and whether the host says it re-sends one it had handed a connection before
@@ -1259,6 +1270,8 @@ export class AgentControl {
 					if (answerBot && command.type === "agent_control_answer") answeringBot.set(command.response, answerBot);
 					return host.command(tabId, command, noDeadline ? NO_DEADLINE : timeoutMs);
 				}),
+			itemHostReady: ({ device }: { device: string }) => host.itemHostReady?.(device) ?? false,
+			checkPeerItem: (ask: PeerItemAsk) => host.checkPeerItem?.(ask) ?? false,
 			spawn: ({ callerTabId, request }: { callerTabId: string; request: SpawnRequest }) =>
 				coded(async () => {
 					try {

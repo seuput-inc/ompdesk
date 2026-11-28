@@ -238,6 +238,11 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 					description:
 						"Several sessions at once, instead of session: each gets the message and its own receipt line. @children names every open session you opened, @idle those of them that are idle (not running, no card waiting).",
 				},
+				item: {
+					type: "string",
+					description:
+						"Instead of session(s): send text to this bot board item's current holder. Use its immutable id (or #number on a new board) and a request_id. Does not assign new work or answer a question.",
+				},
 				message: { type: "string" },
 				request_id: {
 					type: "string",
@@ -844,7 +849,19 @@ export const AGENT_CONTROL_DEFINITIONS: readonly HostToolDefinition[] = [
 			properties: {
 				action: {
 					type: "string",
-					enum: ["add", "set", "withdraw", "self_decide", "comment", "done", "cancel", "link", "list", "show", "claim"],
+					enum: [
+						"add",
+						"set",
+						"withdraw",
+						"self_decide",
+						"comment",
+						"done",
+						"cancel",
+						"link",
+						"list",
+						"show",
+						"claim",
+					],
 				},
 				item: { type: "string", description: "Its number (3 or #3) or id." },
 				generation: { type: "integer", minimum: 1, description: "claim: the generation assigned by the board." },
@@ -1076,13 +1093,17 @@ export const ARGS = {
 		.object({
 			session: sessionArg.optional(),
 			sessions: z.array(sessionArg).min(1).optional(),
+			item: sessionArg.optional(),
 			message: z.string().trim().min(1).max(MESSAGE_MAX_CHARS),
 			request_id: z.string().trim().min(1).max(200).optional(),
 			attachments: attachmentsArg.optional(),
 		})
 		.strict()
-		.refine(args => (args.session === undefined) !== (args.sessions === undefined), {
-			message: "give session or sessions (one of them)",
+		.refine(args => [args.session, args.sessions, args.item].filter(value => value !== undefined).length === 1, {
+			message: "give exactly one of session, sessions or item",
+		})
+		.refine(args => args.item === undefined || (args.request_id !== undefined && args.attachments === undefined), {
+			message: "item mail needs request_id and carries text only",
 		}),
 	[T.report]: z
 		.object({
@@ -1347,7 +1368,19 @@ export const ARGS = {
 		.strict(),
 	[T.item]: z
 		.object({
-			action: z.enum(["add", "set", "withdraw", "self_decide", "comment", "done", "cancel", "link", "list", "show", "claim"]),
+			action: z.enum([
+				"add",
+				"set",
+				"withdraw",
+				"self_decide",
+				"comment",
+				"done",
+				"cancel",
+				"link",
+				"list",
+				"show",
+				"claim",
+			]),
 			generation: z.number().int().positive().optional(),
 			question: z.number().int().nonnegative().optional(),
 			item: z.string().trim().min(1).max(100).optional(),

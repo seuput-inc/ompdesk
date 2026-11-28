@@ -1449,7 +1449,9 @@ app.whenReady().then(async () => {
 	]);
 	sidecarPool.summaries = sessionSummaries;
 	const hostServices = new LocalHostServices({
-		createSidecar: createLocalSidecar,
+		createSidecar: (cwd, kind, fresh, origin, tab) =>
+			createLocalSidecar(cwd, kind, fresh, origin, undefined, undefined, tab),
+		allowsItemPeer: peer => devices.allowsItemPeer(peer),
 		// A paired computer's attached files land in the phones' upload folder (24 h); `webHost` is made later.
 		get uploads() {
 			return hostUploads();

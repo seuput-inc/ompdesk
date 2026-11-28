@@ -59,6 +59,7 @@ export const MODEL_COMMAND_TYPES = [
 	"agent_control_judge",
 	// A report from another session (bridge agent-control.ts): `triggerTurn` wakes the receiver for a turn.
 	"agent_control_mail",
+	"agent_control_item_mail",
 	// Another session's message joining a running turn (bridge agent-control.ts): read at its next model request.
 	"agent_control_aside",
 	// The new task sheet's name from its first prompt (bridge auto-title-engine.ts `suggest_title`): one title request.

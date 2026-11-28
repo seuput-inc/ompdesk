@@ -21,7 +21,7 @@ import { isMainThread } from "node:worker_threads";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { ALL_FEATURES, type AreaFailure, type FeatureId, mergeAreaFailures, UnsupportedOmpError } from "./capabilities";
 import { probe } from "./health";
-import { installItemToolFence, ITEM_WORK, ItemToolFence } from "./item-work";
+import { ITEM_WORK, ItemToolFence, installItemToolFence } from "./item-work";
 import { A2UI_ENABLED } from "./modes/a2ui-contracts";
 import { bindEnv } from "./modes/shared";
 import type { RoleSettings } from "./ompdesk-roles";
@@ -440,6 +440,7 @@ export default async function guiBridge(pi: ExtensionAPI): Promise<void> {
 
 	const env: BridgeEnv = {
 		pi,
+		itemFence: fence,
 		session() {
 			const session = pi.pi.AgentRegistry.global().get(pi.pi.MAIN_AGENT_ID)?.session;
 			if (!session) throw new Error("No live omp session");

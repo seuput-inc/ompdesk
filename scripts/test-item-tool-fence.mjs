@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mock, test } from "node:test";
-import { installItemToolFence, ItemToolFence, WORKER_ENTRY } from "../resources/gui-bridge/item-work.ts";
+import { ItemToolFence, installItemToolFence, WORKER_ENTRY } from "../resources/gui-bridge/item-work.ts";
 
 const proof = "synthetic-core";
 const descriptor = JSON.stringify({
@@ -52,20 +52,47 @@ test("only the attached core can grant this tool call; disconnect and a late ans
 	assert.equal(new ItemToolFence("invalid").attach(link, proof), false);
 });
 
+test("a generic tool lease or different generation never authorizes item mail", async () => {
+	const fence = new ItemToolFence(descriptor);
+	let event;
+	const link = {
+		write: frame => {
+			event = JSON.parse(frame).event;
+		},
+	};
+	assert.equal(fence.attach(link, proof), true);
+	const mail = { item: "item-a", generation: 3, key: "receipt", fingerprint: "body-hash" };
+	const check = wanted => fence.check("/synthetic/a.jsonl", wanted);
+	assert.equal(await check({ ...mail, generation: 2 }), false);
+	assert.equal(event, undefined);
+	for (const mailKey of [undefined, "wrong", mail.key]) {
+		const pending = check(mail);
+		assert.deepEqual(event.mail, { key: mail.key, fingerprint: mail.fingerprint });
+		fence.answer(link, { request: event.request, validMs: 2000, mailKey });
+		assert.equal(await pending, mailKey === mail.key);
+	}
+});
+
 test("ordinary tools run unchanged; a resumed managed journal without its owner refuses tools", async () => {
 	const handlers = new Map();
 	const api = { on: (event, fn) => handlers.set(event, fn) };
-	const call = data =>
-		handlers.get("tool_call")({}, {
-			sessionManager: {
-				getSessionFile: () => "/synthetic/a.jsonl",
-				getEntries: () => [{ type: "custom", customType: WORKER_ENTRY, data }],
+	const call = (data, event = "tool_call") =>
+		handlers.get(event)(
+			{},
+			{
+				ui: { notify() {} },
+				sessionManager: {
+					getSessionFile: () => "/synthetic/a.jsonl",
+					getEntries: () => [{ type: "custom", customType: WORKER_ENTRY, data }],
+				},
 			},
-		});
+		);
 	installItemToolFence(api, undefined);
 	assert.equal(await call({ from: "ordinary opener" }), undefined);
+	assert.equal(await call({}, "input"), undefined);
 	handlers.get("session_switch")();
 	assert.equal((await call({ managed: true })).block, true);
+	assert.deepEqual(await call({ managed: true }, "input"), { action: "handled" });
 	handlers.get("session_start")();
 	assert.equal(await call({}), undefined);
 	installItemToolFence(api, new ItemToolFence(descriptor));

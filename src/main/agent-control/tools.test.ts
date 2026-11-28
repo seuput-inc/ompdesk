@@ -143,6 +143,19 @@ describe("arguments a model wrote as JSON text", () => {
 	});
 });
 
+it("accepts item mail only with one address, text and a request id", () => {
+	const send = ARGS[AGENT_CONTROL_TOOLS.send];
+	const mail = { item: "#9", message: "here is the log", request_id: "log-1" };
+	expect(send.parse(mail)).toEqual(mail);
+	for (const bad of [
+		{ session: "abc" },
+		{ sessions: ["abc"] },
+		{ request_id: undefined },
+		{ attachments: [{ image: 1 }] },
+	])
+		expect(send.safeParse({ ...mail, ...bad }).success).toBe(false);
+});
+
 describe("attachments of ompdesk_session_send and ompdesk_report", () => {
 	interface ItemSchema {
 		items: { properties: { image: { minimum: number }; path: object }; additionalProperties: boolean };

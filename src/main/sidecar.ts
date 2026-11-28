@@ -355,6 +355,7 @@ export interface SidecarOptions {
 	controlEnv?: () => Record<string, string>;
 	/** Pool's tab id, not this process's private lane id. */
 	itemWorkerTab?: string;
+	itemWorkerPeer?: string;
 	itemsFile?: string;
 	/**
 	 * The delegation strength this tab starts with (prefs `delegationMode`, the
@@ -905,6 +906,7 @@ export class SidecarManager extends EventEmitter {
 					sessionPath: this.#sessionPath,
 					eventFilter: Object.keys(AGENT_EVENT_TYPES),
 					itemWorkerTab: options.itemWorkerTab,
+					itemWorkerPeer: options.itemWorkerPeer,
 					itemsFile: options.itemsFile,
 					bridge: Boolean(options.bridgeDir),
 					...(options.ledgerFile ? { ledgerFile: options.ledgerFile } : {}),

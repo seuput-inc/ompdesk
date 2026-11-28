@@ -1083,6 +1083,7 @@ fn items_number_per_bot_and_closed_ones_leave_after_seven_days() {
     };
     items.new_board("b1");
     assert_eq!(items.add(item("i1", "b1", 0)).unwrap().number, 1);
+    items.new_board("b1");
     assert_eq!(items.add(item("i2", "b1", 0)).unwrap().number, 2);
     assert_eq!(items.add(item("i3", "b2", 0)).unwrap().number, 1);
     assert!(items.write_address("b2", "#1").is_err(), "legacy board");
