@@ -318,7 +318,13 @@ pub fn register(registry: &mut Registry) {
         Box::pin(async move {
             let CarePortParams { port } = call.params()?;
             let opened = Port::open(&call.events, port, Value::Null)?;
-            *CARE_PORT.lock().unwrap_or_else(|p| p.into_inner()) = Some(opened);
+            if let Some(prev) = CARE_PORT
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .replace(opened)
+            {
+                prev.close();
+            }
             Reply::json(&())
         })
     });
@@ -344,11 +350,79 @@ async fn ask_care(method: &str) -> Result<Option<Value>, Fault> {
 }
 
 /// Direct core IPC `disk-care:get-state`.
+/// Uses `"getState"` (not `"state"`, which `CorePort` reserves for snapshot refreshes).
 pub(crate) fn ipc_get_state(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
-    Box::pin(async move { ask_care("state").await })
+    Box::pin(async move { ask_care("getState").await })
 }
 
 /// Direct core IPC `disk-care:run`.
 pub(crate) fn ipc_run(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
     Box::pin(async move { ask_care("run").await })
+}
+
+#[cfg(test)]
+mod ipc_tests {
+    use super::*;
+    use crate::ipc::Caller;
+    use crate::ports::apply_answer;
+    use crate::server::Events;
+
+    fn ctx() -> IpcContext {
+        IpcContext {
+            caller: Caller {
+                key: "w1".into(),
+                window: Some(1),
+                conn_id: None,
+                device_id: None,
+            },
+            user_data: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn ipc_disk_care_forwards_get_state_and_run_over_port() {
+        let _guard = crate::ipc::TEST_LOCK.lock().await;
+        if let Some(prev) = CARE_PORT.lock().unwrap().take() {
+            prev.close();
+        }
+        let fault = ipc_get_state(ctx(), vec![]).await.err().unwrap();
+        assert_eq!(fault.code, "disk_care_unavailable");
+
+        let (events, _tx, mut frames) = Events::capture();
+        let port = Port::open(&events, 91_001, Value::Null).unwrap();
+        *CARE_PORT.lock().unwrap() = Some(Arc::clone(&port));
+
+        let get_state = tokio::spawn(ipc_get_state(ctx(), vec![]));
+        let frame = frames.recv().await.unwrap();
+        let parsed: Value = serde_json::from_slice(frame.parts().0).unwrap();
+        assert_eq!(parsed["event"], "port");
+        assert_eq!(parsed["data"]["method"], "getState");
+        apply_answer(
+            &port,
+            parsed["data"]["ask"].as_u64().unwrap(),
+            Ok(r#"{"running":false}"#),
+        );
+        assert_eq!(
+            get_state.await.unwrap().unwrap(),
+            Some(json!({"running": false}))
+        );
+
+        let run = tokio::spawn(ipc_run(ctx(), vec![]));
+        let frame = frames.recv().await.unwrap();
+        let parsed: Value = serde_json::from_slice(frame.parts().0).unwrap();
+        assert_eq!(parsed["data"]["method"], "run");
+        apply_answer(
+            &port,
+            parsed["data"]["ask"].as_u64().unwrap(),
+            Ok(r#"{"freedBytes":123}"#),
+        );
+        assert_eq!(
+            run.await.unwrap().unwrap(),
+            Some(json!({"freedBytes": 123}))
+        );
+
+        if let Some(prev) = CARE_PORT.lock().unwrap().take() {
+            prev.close();
+        }
+    }
 }

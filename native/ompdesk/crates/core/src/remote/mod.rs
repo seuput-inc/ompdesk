@@ -180,7 +180,13 @@ pub fn register(registry: &mut Registry) {
         Box::pin(async move {
             let IpcPortParams { port } = call.params()?;
             let opened = Port::open(&call.events, port, Value::Null)?;
-            *IPC_PORT.lock().unwrap_or_else(|p| p.into_inner()) = Some(opened);
+            if let Some(prev) = IPC_PORT
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .replace(opened)
+            {
+                prev.close();
+            }
             Reply::json(&Value::Null)
         })
     });
@@ -220,8 +226,9 @@ fn ipc_value(method: &'static str, ctx: IpcContext, args: Vec<Value>) -> Handled
     Box::pin(async move { Ok(Some(ask_ipc(method, ctx, args).await?)) })
 }
 
+/// Uses `"getState"` (not `"state"`, which `CorePort` reserves for snapshot refreshes).
 pub(crate) fn ipc_get_state(ctx: IpcContext, args: Vec<Value>) -> Handled {
-    ipc_value("state", ctx, args)
+    ipc_value("getState", ctx, args)
 }
 
 pub(crate) fn ipc_set_device_section_order(ctx: IpcContext, args: Vec<Value>) -> Handled {
@@ -529,4 +536,78 @@ async fn test_link(call: Call) -> Result<Reply, Fault> {
     );
     state().links.insert(id, link);
     Reply::json(&json!({"link": id}))
+}
+
+#[cfg(test)]
+mod ipc_tests {
+    use super::*;
+    use crate::ipc::Caller;
+    use crate::ports::apply_answer;
+
+    fn ctx(window: Option<i64>) -> IpcContext {
+        IpcContext {
+            caller: Caller {
+                key: format!("w{}", window.unwrap_or(0)),
+                window,
+                conn_id: None,
+                device_id: None,
+            },
+            user_data: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn ipc_remote_forwards_get_state_void_and_window_id_over_port() {
+        let _guard = crate::ipc::TEST_LOCK.lock().await;
+        if let Some(prev) = IPC_PORT.lock().unwrap().take() {
+            prev.close();
+        }
+        let fault = ipc_get_state(ctx(Some(1)), vec![]).await.err().unwrap();
+        assert_eq!(fault.code, "remote_unavailable");
+
+        let (events, _tx, mut frames) = Events::capture();
+        let port = Port::open(&events, 91_002, Value::Null).unwrap();
+        *IPC_PORT.lock().unwrap() = Some(Arc::clone(&port));
+
+        let get_state = tokio::spawn(ipc_get_state(ctx(Some(7)), vec![]));
+        let frame = frames.recv().await.unwrap();
+        let parsed: Value = serde_json::from_slice(frame.parts().0).unwrap();
+        assert_eq!(parsed["data"]["method"], "getState");
+        assert_eq!(parsed["data"]["args"]["hasArg"], false);
+        assert_eq!(parsed["data"]["args"]["window"], 7);
+        apply_answer(
+            &port,
+            parsed["data"]["ask"].as_u64().unwrap(),
+            Ok(r#"{"enabled":true}"#),
+        );
+        assert_eq!(
+            get_state.await.unwrap().unwrap(),
+            Some(json!({"enabled": true}))
+        );
+
+        let set_order = tokio::spawn(ipc_set_device_section_order(
+            ctx(Some(7)),
+            vec![json!(["a", "b"])],
+        ));
+        let frame = frames.recv().await.unwrap();
+        let parsed: Value = serde_json::from_slice(frame.parts().0).unwrap();
+        assert_eq!(parsed["data"]["method"], "setDeviceSectionOrder");
+        assert_eq!(parsed["data"]["args"]["hasArg"], true);
+        assert_eq!(parsed["data"]["args"]["arg"], json!(["a", "b"]));
+        apply_answer(&port, parsed["data"]["ask"].as_u64().unwrap(), Ok("null"));
+        assert_eq!(set_order.await.unwrap().unwrap(), None);
+
+        let watch = tokio::spawn(ipc_watch_tailnet(ctx(Some(-3)), vec![json!(true)]));
+        let frame = frames.recv().await.unwrap();
+        let parsed: Value = serde_json::from_slice(frame.parts().0).unwrap();
+        assert_eq!(parsed["data"]["method"], "watchTailnet");
+        assert_eq!(parsed["data"]["args"]["window"], -3);
+        assert_eq!(parsed["data"]["args"]["arg"], true);
+        apply_answer(&port, parsed["data"]["ask"].as_u64().unwrap(), Ok("[]"));
+        assert_eq!(watch.await.unwrap().unwrap(), Some(json!([])));
+
+        if let Some(prev) = IPC_PORT.lock().unwrap().take() {
+            prev.close();
+        }
+    }
 }

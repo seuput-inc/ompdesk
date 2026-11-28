@@ -531,7 +531,13 @@ pub fn register(registry: &mut Registry) {
         Box::pin(async move {
             let PortParams { port } = call.params()?;
             let opened = Port::open(&call.events, port, Value::Null)?;
-            *AUTH_PORT.lock().unwrap_or_else(|p| p.into_inner()) = Some(opened);
+            if let Some(prev) = AUTH_PORT
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .replace(opened)
+            {
+                prev.close();
+            }
             Reply::json(&())
         })
     });
@@ -831,6 +837,65 @@ mod tests {
                 .err()
                 .unwrap();
             assert_eq!(fault.message, "token ***");
+        }
+    }
+
+    #[tokio::test]
+    async fn ipc_github_auth_forwards_methods_and_normalizes_arguments() {
+        let _guard = crate::ipc::TEST_LOCK.lock().await;
+        if let Some(prev) = AUTH_PORT.lock().unwrap().take() {
+            prev.close();
+        }
+        let ctx = || IpcContext {
+            caller: crate::ipc::Caller {
+                key: "w1".into(),
+                window: Some(1),
+                conn_id: None,
+                device_id: None,
+            },
+            user_data: None,
+        };
+        assert_eq!(
+            ipc_refresh(ctx(), vec![]).await.err().unwrap().code,
+            "github_auth_unavailable"
+        );
+
+        let (events, _tx, mut frames) = crate::server::Events::capture();
+        let port = Port::open(&events, 91_003, Value::Null).unwrap();
+        *AUTH_PORT.lock().unwrap() = Some(Arc::clone(&port));
+
+        let login = tokio::spawn(ipc_login_start(ctx(), vec![json!("other")]));
+        let frame = frames.recv().await.unwrap();
+        let parsed: Value = serde_json::from_slice(frame.parts().0).unwrap();
+        assert_eq!(parsed["data"]["method"], "startLogin");
+        assert_eq!(parsed["data"]["args"], json!({ "scopes": null }));
+        crate::ports::apply_answer(
+            &port,
+            parsed["data"]["ask"].as_u64().unwrap(),
+            Ok(r#"{"ok":true}"#),
+        );
+        assert_eq!(login.await.unwrap().unwrap(), Some(json!({"ok": true})));
+
+        let switch = tokio::spawn(ipc_switch(ctx(), vec![]));
+        let frame = frames.recv().await.unwrap();
+        let parsed: Value = serde_json::from_slice(frame.parts().0).unwrap();
+        assert_eq!(parsed["data"]["method"], "switchAccount");
+        assert_eq!(
+            parsed["data"]["args"],
+            json!({ "login": null, "hasLogin": false })
+        );
+        crate::ports::apply_answer(
+            &port,
+            parsed["data"]["ask"].as_u64().unwrap(),
+            Ok(r#"{"switched":true}"#),
+        );
+        assert_eq!(
+            switch.await.unwrap().unwrap(),
+            Some(json!({"switched": true}))
+        );
+
+        if let Some(prev) = AUTH_PORT.lock().unwrap().take() {
+            prev.close();
         }
     }
 }

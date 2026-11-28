@@ -3119,7 +3119,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	}
 	const argOf = (call: RemotePortCall): unknown => (call.hasArg ? call.arg : undefined);
 	const remotePort = new CorePort({
-		state: () => remoteDevices.state(),
+		getState: () => remoteDevices.state(),
 		setDeviceSectionOrder: (call: RemotePortCall) => remoteDevices.setDeviceSectionOrder(argOf(call)),
 		setHostEnabled: (call: RemotePortCall) => remoteDevices.setHostEnabled(argOf(call) === true),
 		setDeviceName: (call: RemotePortCall) => remoteDevices.setDeviceName(argOf(call)),
@@ -3138,7 +3138,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				);
 				if (win) {
 					tailnetWatchers.add(id);
-					win.webContents.once("destroyed", () => {
+					win.once("closed", () => {
 						tailnetWatchers.delete(id);
 						void remoteDevices.watchTailnet(id, false);
 					});

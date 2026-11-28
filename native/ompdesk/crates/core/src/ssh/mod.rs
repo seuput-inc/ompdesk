@@ -89,7 +89,9 @@ pub fn register(registry: &mut Registry) {
         Box::pin(async move {
             let ToolsPortParams { port } = params(&call)?;
             let opened = Port::open(&call.events, port, serde_json::Value::Null)?;
-            *locked(&TOOLS_PORT) = Some(opened);
+            if let Some(prev) = locked(&TOOLS_PORT).replace(opened) {
+                prev.close();
+            }
             Reply::json(&Done {})
         })
     });
@@ -1353,5 +1355,63 @@ esac",
         let active = ipc_prompts(ctx(), vec![]).await.unwrap().unwrap();
         assert_eq!(active, json!([]));
         end("ipc-prompts-test");
+    }
+
+    #[tokio::test]
+    async fn ipc_command_and_agent_forward_over_port() {
+        let _guard = crate::ipc::TEST_LOCK.lock().await;
+        if let Some(prev) = locked(&TOOLS_PORT).take() {
+            prev.close();
+        }
+        let ctx = || IpcContext {
+            caller: crate::ipc::Caller {
+                key: "w1".into(),
+                window: Some(1),
+                conn_id: None,
+                device_id: None,
+            },
+            user_data: None,
+        };
+        assert_eq!(
+            ipc_agent(ctx(), vec![]).await.err().unwrap().code,
+            "ssh_tools_unavailable"
+        );
+
+        let (events, _tx, mut frames) = Events::capture();
+        let port = Port::open(&events, 91_004, serde_json::Value::Null).unwrap();
+        *locked(&TOOLS_PORT) = Some(Arc::clone(&port));
+
+        let cmd = tokio::spawn(ipc_command(ctx(), vec![json!({"op": "list"})]));
+        let frame = frames.recv().await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(frame.parts().0).unwrap();
+        assert_eq!(parsed["data"]["method"], "command");
+        assert_eq!(
+            parsed["data"]["args"],
+            json!({ "request": { "op": "list" }, "hasRequest": true })
+        );
+        crate::ports::apply_answer(
+            &port,
+            parsed["data"]["ask"].as_u64().unwrap(),
+            Ok(r#"{"ok":true}"#),
+        );
+        assert_eq!(cmd.await.unwrap().unwrap(), Some(json!({"ok": true})));
+
+        let agent_call = tokio::spawn(ipc_agent(ctx(), vec![]));
+        let frame = frames.recv().await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(frame.parts().0).unwrap();
+        assert_eq!(parsed["data"]["method"], "agent");
+        crate::ports::apply_answer(
+            &port,
+            parsed["data"]["ask"].as_u64().unwrap(),
+            Ok(r#"{"keys":[]}"#),
+        );
+        assert_eq!(
+            agent_call.await.unwrap().unwrap(),
+            Some(json!({"keys": []}))
+        );
+
+        if let Some(prev) = locked(&TOOLS_PORT).take() {
+            prev.close();
+        }
     }
 }

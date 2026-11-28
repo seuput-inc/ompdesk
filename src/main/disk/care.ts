@@ -500,7 +500,7 @@ export class DiskCare {
 /** IPC for the renderer: `disk-care:get-state` and `disk-care:run` route directly from tauri-shell to ompdesk-core. */
 export function registerDiskCareIpc(_ipc: IpcRegistry, care: Pick<DiskCare, "state" | "run">): void {
 	const port = new CorePort({
-		state: () => care.state(),
+		getState: () => care.state(),
 		run: () => care.run("user"),
 	});
 	const connect = () => {
