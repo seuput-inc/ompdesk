@@ -37,6 +37,7 @@ import {
 	Suspense,
 	useCallback,
 	useEffect,
+	useLayoutEffect,
 	useMemo,
 	useRef,
 	useState,
@@ -440,7 +441,7 @@ function focusRovingItem(item: HTMLElement) {
  * (oldest first, a new session at the bottom; status as icon + text; every open tab keeps a row),
  * and a footer with the three destinations plus help.
  */
-export function Sidebar() {
+export function Sidebar({ desktopChrome = false }: { desktopChrome?: boolean } = {}) {
 	const tabRpc = useTabRpc();
 	const t = useT();
 	const keymapOverrides = useUiStore(state => state.keymapOverrides);
@@ -476,6 +477,9 @@ export function Sidebar() {
 	// Resizable docked column; the width persists like every other chrome pref.
 	const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
 	const sidebarWidthRef = useRef(sidebarWidth);
+	useLayoutEffect(() => {
+		if (desktopChrome) document.documentElement.style.setProperty("--boot-sidebar-w", `${sidebarWidth}px`);
+	}, [desktopChrome, sidebarWidth]);
 	useEffect(() => {
 		void window.omp.prefs
 			.get("sidebarWidth")
@@ -2925,6 +2929,17 @@ export function Sidebar() {
 		</>
 	);
 
+	const palette = (
+		<IconButton
+			className="omp-sidebar-search no-drag"
+			data-command-center-entry
+			icon={<Search />}
+			label={t("help.palette")}
+			onClick={() => useUiStore.getState().openCommandPalette()}
+			shortcut={actionKbd("palette", keymapOverrides)}
+			size="sm"
+		/>
+	);
 	return (
 		<>
 			<aside
@@ -2932,32 +2947,23 @@ export function Sidebar() {
 				className="omp-session-sidebar relative flex h-full min-h-0 shrink-0 flex-col border-r border-(--sc-border-subtle) bg-(--sc-surface-1)"
 				style={{ width: sidebarWidth }}
 			>
-				{/* Traffic-light safe (global.css): on macOS the brand yields its
-				    slot to the window controls and the collapse toggle follows
-				    them; elsewhere the brand leads and the toggle closes the row. */}
-				<div className="omp-sidebar-header drag-region flex h-(--sc-topbar-h) shrink-0 items-center gap-1 pr-2">
-					<span className="omp-sidebar-brand flex min-w-0 flex-1 items-center gap-2 pl-1.5 text-sc-md font-semibold text-(--sc-text)">
-						<BrandMark size={18} />
-						<span className="truncate">OMPdesk</span>
-					</span>
-					<IconButton
-						className="omp-sidebar-search no-drag"
-						data-command-center-entry
-						icon={<Search />}
-						label={t("help.palette")}
-						onClick={() => useUiStore.getState().openCommandPalette()}
-						shortcut={actionKbd("palette", keymapOverrides)}
-						size="sm"
-					/>
-					<IconButton
-						className="omp-sidebar-collapse no-drag"
-						icon={<PanelLeftClose />}
-						label={t("sidebar.collapse")}
-						onClick={() => useUiStore.getState().toggleSidebar()}
-						shortcut={actionKbd("sidebar.toggle", keymapOverrides)}
-						size="sm"
-					/>
-				</div>
+				{!desktopChrome && (
+					<div className="omp-sidebar-header flex h-(--sc-topbar-h) shrink-0 items-center gap-1 px-3">
+						<span className="omp-sidebar-brand flex min-w-0 flex-1 items-center gap-2 pl-1.5 text-sc-md font-semibold text-(--sc-text)">
+							<BrandMark size={18} />
+							<span className="truncate">OMPdesk</span>
+						</span>
+						{palette}
+						<IconButton
+							className="omp-sidebar-collapse no-drag"
+							icon={<PanelLeftClose />}
+							label={t("sidebar.collapse")}
+							onClick={() => useUiStore.getState().toggleSidebar()}
+							shortcut={actionKbd("sidebar.toggle", keymapOverrides)}
+							size="sm"
+						/>
+					</div>
+				)}
 
 				<div className="omp-sidebar-controls flex shrink-0 flex-col gap-2 px-2 pt-1 pb-2">
 					{/* One line: the search over every session (projects and chats), then the open-or-create project
@@ -2990,6 +2996,7 @@ export function Sidebar() {
 								value={filter}
 							/>
 						</div>
+						{desktopChrome && palette}
 						{/* How the lists sort and whether sleeping rows fold (Orca's Workspace options beside its search). */}
 						<SidebarOptions />
 						{/* Once a host is paired every device header ends in its own project button, so the search row's

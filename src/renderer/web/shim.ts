@@ -440,8 +440,6 @@ export function createWebOmp(env: ShimEnv): WebOmp {
 			if (hook) hook(progress);
 			else env.chrome.applyProgress(progress);
 		},
-		[E.WINDOW_CHROME_SET]: (colors: unknown) =>
-			env.chrome.applyColors(colors as Parameters<WebChrome["applyColors"]>[0]),
 	};
 
 	const pageChannels: readonly string[] = [E.MENU_ACTION, E.DEEP_LINK, E.NOTIFICATION_CLICK];
@@ -475,6 +473,7 @@ export function createWebOmp(env: ShimEnv): WebOmp {
 	};
 
 	const shared = createOmpApi(shimTransport);
+	shared.windowChrome.setThemeColor = color => env.chrome.setThemeColor(color);
 	shared.bots.pickPackage = async typeLabel => {
 		const paths = await shared.system.showOpenDialog([{ name: typeLabel, extensions: ["json"] }]);
 		const file = paths?.[0];

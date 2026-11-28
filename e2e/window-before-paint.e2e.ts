@@ -95,7 +95,11 @@ test("a window whose page paints late shows before it, and the late paint is mea
 			const scheme = boot?.dark ? "dark" : "light";
 			const colours = { bg: windowBackground[scheme], ...windowBackground.bootShell[scheme] };
 			const middle = (height ?? 0) / scale / 2;
-			expect(at(SIDEBAR_WIDTH + 24, 12), "the main pane").toBe(colours.bg.toLowerCase());
+			for (const x of [SIDEBAR_WIDTH - 1, SIDEBAR_WIDTH, SIDEBAR_WIDTH + 24]) {
+				expect(at(x, 12), `the title bar at ${x}`).toBe(colours.surface.toLowerCase());
+				expect(at(x, 35), `the title bar's bottom edge at ${x}`).toBe(colours.border.toLowerCase());
+			}
+			expect(at(SIDEBAR_WIDTH + 24, middle), "the main pane").toBe(colours.bg.toLowerCase());
 			expect(at(SIDEBAR_WIDTH - 1, middle), "the sidebar's border").toBe(colours.border.toLowerCase());
 			// Under the Mica backdrop the band is its surface colour over the backdrop, as the page draws it.
 			if (boot?.mica) expect(at(SIDEBAR_WIDTH / 2, middle), "the tinted band").not.toBe(colours.bg.toLowerCase());

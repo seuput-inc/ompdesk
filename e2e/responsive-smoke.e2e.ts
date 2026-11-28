@@ -660,7 +660,7 @@ test("responsive smoke 1280 desktop: the model picker sits on the composer and d
 			.locator(selector)
 			.first()
 			.evaluate(node => getComputedStyle(node).getPropertyValue("-webkit-app-region"));
-	expect(await region(".omp-topbar")).toBe("drag");
+	expect(await region("[data-desktop-titlebar]")).toBe("drag");
 	expect(await region(".omp-dialog-overlay")).toBe("no-drag");
 	await page.context().close();
 });
@@ -669,10 +669,6 @@ test("responsive smoke 1280 Windows window: the side panel's buttons sit below t
 	if (!browser) throw new Error("the browser is not up");
 	const look: Look = { width: 1280, height: 800, dpr: 1, orientation: "landscape", theme: "light", lang: "en" };
 	const page = await openLook(browser, look, { origin, query: "&platform=win32" });
-	// The page marks its platform from navigator.platform, which is the machine running the test: say Windows.
-	await page.evaluate(() => {
-		document.documentElement.dataset.platform = "win32";
-	});
 	await show(page, look, "panel-files");
 	const header = page.locator(".omp-panel-topbar").first();
 	const [close, views, title, box] = await Promise.all([
@@ -682,11 +678,13 @@ test("responsive smoke 1280 Windows window: the side panel's buttons sit below t
 		header.boundingBox(),
 	]);
 	if (!close || !views || !title || !box) throw new Error("expected the panel header, its title, views and close");
-	// Windows draws minimize, maximize and close in the top 36 px (the caption band, one Orca top bar) over the
-	// header's right end: the panel's own buttons are on the row below, the title alone in the caption band.
-	expect(title.y).toBeLessThan(box.y + 36);
-	expect(close.y).toBeGreaterThanOrEqual(box.y + 36);
-	expect(views.y).toBeGreaterThanOrEqual(box.y + 36);
+	const caption = await page.locator("[data-caption-buttons]").boundingBox();
+	if (!caption) throw new Error("expected Windows caption buttons");
+	expect(box.y).toBeGreaterThanOrEqual(caption.y + caption.height);
+	for (const control of [title, close, views]) {
+		expect(control.y).toBeGreaterThanOrEqual(box.y);
+		expect(control.y).toBeLessThan(box.y + 36);
+	}
 	expect(close.x + close.width).toBeGreaterThan(views.x + views.width);
 	await page.context().close();
 });

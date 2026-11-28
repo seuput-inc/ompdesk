@@ -217,7 +217,8 @@ async function restartSlowStart(page: Page): Promise<void> {
 }
 
 /** The title bar's status as the tab reads while it waits for its turn to start (the words are its accessible name on a phone). */
-const WAITING_TO_START = '.omp-titlebar-status[aria-label="Waiting to start"]';
+const WAITING_TO_START =
+	'[role="tab"]:has(.omp-titlebar-status[aria-label="Waiting to start"]), .omp-titlebar .omp-titlebar-status[aria-label="Waiting to start"]';
 
 /**
  * Restarts the omp while its fake ignores the stop (`holdExit`): the replacement waits for the old omp to exit, which

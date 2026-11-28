@@ -316,7 +316,6 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		web: "App badge and document title",
 	},
 	[E.PROGRESS_SET]: { dir: "send", permission: "device-self", mode: "web", web: "Top progress bar and app badge" },
-	[E.WINDOW_CHROME_SET]: { dir: "send", permission: "device-self", mode: "web", web: "<meta name=theme-color>" },
 	[C.EDITOR_OPEN_EXTERNAL]: {
 		dir: "invoke",
 		permission: "workspace",

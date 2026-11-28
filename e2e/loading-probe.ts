@@ -57,7 +57,7 @@ export const LOADING_PROBE = `(() => {
 	};
 	const GEOMETRY = [
 		[".boot-shell .omp-session-sidebar", ".omp-shell .omp-session-sidebar"],
-		[".boot-shell .omp-topbar", ".omp-shell .omp-topbar"],
+		[".boot-shell > header, .boot-shell .omp-topbar", "[data-desktop-titlebar], .omp-shell .omp-topbar"],
 		[".boot-shell .omp-composer-box", ".omp-shell .omp-composer-box"],
 	];
 	const rectOf = selector => { const el = document.querySelector(selector); if (!el) return null; const b = el.getBoundingClientRect(); return b.width > 0 || b.height > 0 ? [b.x, b.y, b.width, b.height] : null; };
@@ -74,7 +74,7 @@ export const LOADING_PROBE = `(() => {
 		if (boot && nl.bootAt === null) nl.bootAt = t;
 		if (boot) bootRects = GEOMETRY.map(([b]) => rectOf(b));
 		if (shell && nl.shellAt === null) { nl.shellAt = t; nl.shellFrame = nl.frames; }
-		if (shell && nl.titleAt === null) { const id = document.querySelector(".omp-shell .omp-titlebar-identity"); if (id && (id.textContent || "").trim()) { nl.titleAt = t; nl.titleFrame = nl.frames; } }
+		if (shell && nl.titleAt === null) { const id = document.querySelector("[data-titlebar-session-name]"); if (id && (id.textContent || "").trim()) { nl.titleAt = t; nl.titleFrame = nl.frames; } }
 		if (shell && nl.selectedAt === null && document.querySelector(".omp-shell .omp-session-sidebar [data-session-path][data-current]")) { nl.selectedAt = t; nl.selectedFrame = nl.frames; }
 		if (shell && nl.bootShift === null && bootRects) {
 			const reactRects = GEOMETRY.map(([, r]) => rectOf(r));

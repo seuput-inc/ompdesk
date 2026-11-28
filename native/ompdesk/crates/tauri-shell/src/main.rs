@@ -7,6 +7,7 @@ mod assets;
 mod automation;
 #[cfg(windows)]
 mod boot_paint;
+mod chrome_document;
 #[cfg(any(windows, test))]
 mod chrome_hit;
 mod core_pages;
@@ -20,6 +21,8 @@ mod labels;
 mod last_close;
 mod launch_protection;
 mod legacy_user_data;
+#[cfg(target_os = "macos")]
+mod mac_drag;
 mod migrate_watch;
 mod native_chrome;
 mod native_services;
@@ -55,6 +58,7 @@ mod web_view_keys;
 #[cfg(windows)]
 mod window_activation;
 mod window_bounds;
+mod window_control;
 mod window_state;
 #[cfg(windows)]
 mod windows_chrome;
@@ -766,12 +770,25 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             "app windows must use the app session",
         ));
     }
-    let label = runtime()
-        .registry
-        .lock()
-        .expect("registry")
-        .create(win, wc)
-        .map_err(|e| WireError::new("invalid", e))?;
+    #[cfg(target_os = "macos")]
+    mac_drag::install().map_err(failed)?;
+    let mut secret = [0; 24];
+    getrandom::fill(&mut secret).map_err(failed)?;
+    let key = hex(&secret);
+    // A lexical binding shared only with this preload invocation, never a window global or a ready reply.
+    let dev_origin = json!(registry::dev_server_origin());
+    let preload = format!(
+        "if (window === window.top) {{ const OMP_WINDOW_KEY = ['app://ompdesk', 'http://app.localhost', {dev_origin}].includes(location.protocol + '//' + location.host) && ['', '/', '/index.html'].includes(location.pathname) ? '{key}' : undefined;\n{}\n}}",
+        runtime().preload
+    );
+    let label = {
+        let mut registry = runtime().registry.lock().expect("registry");
+        let label = registry
+            .create(win, wc)
+            .map_err(|e| WireError::new("invalid", e))?;
+        registry.page_mut(wc).expect("created app").chrome_key = Some(key);
+        label
+    };
     let plan = app_window::plan(options);
     let bounds =
         screen::with_displays(|snapshot| window_bounds::for_create(&plan.geometry, snapshot));
@@ -786,7 +803,7 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
     .focused(false)
     .disable_drag_drop_handler()
     .theme(theme::for_new_window())
-    .initialization_script(&runtime().preload)
+    .initialization_script(&preload)
     .on_navigation(move |url| {
         let allowed = url.as_str() == "about:blank"
             || (trusted_url(url.as_str())
@@ -843,8 +860,7 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true);
     }
-    // No OS caption: the page draws the caption buttons and its own top bar is the drag area (`-webkit-app-region`,
-    // which WebView2 serves as a non-client region).
+    // The renderer paints the buttons. The shaped HWND handles the real Windows non-client input.
     #[cfg(windows)]
     {
         builder = builder.decorations(false);
@@ -931,6 +947,7 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
         }
     });
     let observer = window.clone();
+    let last_chrome = Mutex::new(None);
     window.on_window_event(move |event| match event {
         WindowEvent::CloseRequested { api, .. } => {
             api.prevent_close();
@@ -963,7 +980,25 @@ fn create_window(params: &Value) -> Result<Value, WireError> {
             }
         }
         WindowEvent::Resized(_) => {
-            let _ = win_state(&observer, win);
+            if let Ok(state) = win_state(&observer, win) {
+                let current = (state["maximized"] == true, state["fullscreen"] == true);
+                let changed =
+                    last_chrome.lock().expect("window chrome").replace(current) != Some(current);
+                if changed {
+                    let id = runtime()
+                        .registry
+                        .lock()
+                        .expect("registry")
+                        .app_document(wc);
+                    if let Some(id) = id {
+                        page_push::detached(
+                            id,
+                            "window-chrome:state",
+                            &[json!({"maximized":current.0,"fullscreen":current.1})],
+                        );
+                    }
+                }
+            }
             win_event(win, "resize");
         }
         WindowEvent::Moved(_) => {
@@ -1064,11 +1099,6 @@ fn win_op(params: &Value) -> Result<Value, WireError> {
                 op == "setContentSize",
             )?;
             Ok(())
-        }
-        "setTitleBarOverlay" => {
-            // The page draws the caption buttons (src/preload/tauri.ts): their colors are its to repaint.
-            let colors = json!({"color":a["color"],"symbolColor":a["symbolColor"]});
-            window.eval(format!("window.__ompTauriCaption?.({colors});"))
         }
         "setPosition" => window.set_position(tauri::LogicalPosition::new(
             coordinate(a, "x")?,
@@ -1643,6 +1673,9 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
         .filter(|p| trusted_url(&p.url))
         .map(|p| p.identity)
         .ok_or_else(|| json!({"code":"denied","message":"unregistered native caller"}))?;
+    if kind == "windowControl" && payload.len() > 128 * 1024 {
+        return Err(json!({"code":"invalid","message":"window control payload too large"}));
+    }
     let value: Value = serde_json::from_str(&payload)
         .map_err(|e| json!({"code":"invalid","message":e.to_string()}))?;
     if kind != "ready"
@@ -1699,51 +1732,7 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
                 .await
                 .map_err(|e| json!({"code":"failed","message":e.to_string()}))?
         }
-        "windowControl" => {
-            #[cfg(windows)]
-            if value["action"] == "regions" {
-                let (send, receive) = tokio::sync::oneshot::channel();
-                runtime()
-                    .app
-                    .run_on_main_thread(move || {
-                        let result = (|| {
-                            ensure_current(identity)?;
-                            let hwnd = window_for_wc(identity.wc)
-                                .map_err(|e| json!({"code":e.code,"message":e.message}))?
-                                .hwnd()
-                                .map_err(|e| json!({"code":"gone","message":e.to_string()}))?;
-                            windows_chrome::layout(hwnd.0, identity, &value)
-                                .map_err(|message| json!({"code":"invalid","message":message}))?;
-                            Ok(json!({}))
-                        })();
-                        let _ = send.send(result);
-                    })
-                    .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
-                return receive
-                    .await
-                    .map_err(|e| json!({"code":"gone","message":e.to_string()}))?;
-            }
-            let action = value["action"].as_str().unwrap_or_default().to_owned();
-            let wc = identity.wc;
-            runtime()
-                .app
-                .run_on_main_thread(move || {
-                    let Ok(window) = window_for_wc(wc) else {
-                        return;
-                    };
-                    let _ = match action.as_str() {
-                        "minimize" => window.minimize(),
-                        "maximize" => match window.is_maximized() {
-                            Ok(true) => window.unmaximize(),
-                            _ => window.maximize(),
-                        },
-                        "close" => window.close(),
-                        _ => Ok(()),
-                    };
-                })
-                .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
-            Ok(json!({}))
-        }
+        "windowControl" => window_control::run(identity, webview, value).await,
         "preloadError" => {
             if profile_bootstrap(url.as_str()) {
                 // The page shows its error and Retry; its Retry starts a new round.

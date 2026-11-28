@@ -194,10 +194,10 @@ for (const language of ["en", "ko"] as const)
 				await expect(palette).toHaveCount(0);
 
 				// Titlebar popovers, the context popover and the help menu.
-				const main = page.getByRole("main");
+				const actions = page.locator("[data-session-tab-menu]");
 				for (const [name, trigger] of [
-					["titlebar-status", main.getByRole("button", { name: /Session status|세션 상태/ })],
-					["titlebar-actions", main.getByRole("button", { name: /Session actions|세션 메뉴/ })],
+					["status-bar-session", page.locator("[data-status-bar] .omp-session-status-trigger")],
+					["session-tab-actions", actions],
 					["context-usage", page.locator(".omp-context-usage-trigger")],
 					["help-menu", page.getByRole("complementary").getByRole("button", { name: /^(Help|도움말)$/ })],
 				] as const) {
@@ -216,7 +216,6 @@ for (const language of ["en", "ko"] as const)
 						await page.waitForTimeout(200);
 					}
 				};
-				const actions = main.getByRole("button", { name: /Session actions|세션 메뉴/ }).first();
 				const help = page.getByRole("complementary").getByRole("button", { name: /^(Help|도움말)$/ });
 				for (const [opener, items] of [
 					[actions, [1, 2, 3, 4, 5]],
@@ -232,15 +231,13 @@ for (const language of ["en", "ko"] as const)
 						await closeDialogs();
 					}
 				}
-				await main
-					.getByRole("button", { name: /Session actions|세션 메뉴/ })
-					.first()
-					.click();
-				await page.getByRole("menuitem").first().click();
+				await actions.click();
+				await page.getByRole("menuitem", { name: COPY[language].rename, exact: true }).click();
 				await page.waitForTimeout(150);
 				await shoot("titlebar-rename");
 				await page.keyboard.press("Escape");
-				await main.locator("nav button").first().click();
+				await actions.click();
+				await page.getByRole("menuitem", { name: language === "ko" ? "프로젝트 전환" : "Switch project" }).click();
 				await page.waitForTimeout(300);
 				await shoot("dialog-workspace");
 				await closeDialogs();

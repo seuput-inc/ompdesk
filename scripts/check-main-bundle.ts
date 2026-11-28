@@ -668,11 +668,11 @@ const addChunk = async (name: string, followDynamic: boolean): Promise<void> => 
 };
 await addChunk(webEntry, true);
 const firstScreenBytes = [...firstScreen.values()].reduce((total, size) => total + size, 0);
-const panelChunk = [...firstScreen.keys()].find(name => name.startsWith("PanelViews-"));
-if (panelChunk || firstScreenBytes > WEB_FIRST_SCREEN_JS_BYTES) {
+const desktopOnlyChunk = [...firstScreen.keys()].find(name => /^(PanelViews|DesktopChrome)-/.test(name));
+if (desktopOnlyChunk || firstScreenBytes > WEB_FIRST_SCREEN_JS_BYTES) {
 	console.error(
 		`The paired phone's first screen loads ${firstScreenBytes.toLocaleString("en-US")} bytes of JavaScript in ${firstScreen.size} files ` +
-			`(budget ${WEB_FIRST_SCREEN_JS_BYTES.toLocaleString("en-US")})${panelChunk ? `, the side panel's views (${panelChunk}) among them` : ""}. ` +
+			`(budget ${WEB_FIRST_SCREEN_JS_BYTES.toLocaleString("en-US")})${desktopOnlyChunk ? `, including ${desktopOnlyChunk}` : ""}. ` +
 			"Load what the first screen does not show lazily (React.lazy / import()), or raise the budget in scripts/check-main-bundle.ts with numbers from e2e/web-perf.e2e.ts.\n" +
 			`Chunks, largest first: ${[...firstScreen]
 				.sort((a, b) => b[1] - a[1])

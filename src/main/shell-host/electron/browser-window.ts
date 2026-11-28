@@ -426,10 +426,6 @@ export function createWindowClasses(host: Host, app: AppEvents, sessionFor: (par
 			this.#op("setFocusable", { focusable });
 		}
 
-		setTitleBarOverlay(options: { color?: string; symbolColor?: string; height?: number }): void {
-			this.#op("setTitleBarOverlay", { ...options });
-		}
-
 		setTitle(title: string): void {
 			this.#state = { ...this.#state, title };
 			this.#op("setTitle", { title });

@@ -132,7 +132,6 @@ pub static CHANNELS: &[(&str, Risk)] = &[
     ("web-push:test", Risk::Never(DENY)),
     ("tray:state-push", Risk::Never(DENY)),
     ("progress:set", Risk::Never(DENY)),
-    ("window-chrome:set", Risk::Never(DENY)),
     ("editor:open-external", Risk::Never(OWN_TOOLS)),
     ("prefs:get", Risk::Tier(Read, &["settings.get"])),
     ("prefs:set", Risk::SettingsWrite),

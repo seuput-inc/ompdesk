@@ -1,8 +1,7 @@
 /**
- * What the desktop shows in the dock and window chrome, as a web page shows it (ipc-policy: `TRAY_STATE_PUSH`,
- * `PROGRESS_SET`, `WINDOW_CHROME_SET` → "app badge and document title", "top progress bar", `theme-color`).
+ * The paired page owns its dock badge, progress bar and browser theme color.
  */
-import type { RunProgressState, TrayState, WindowChromeColors } from "../../shared/ipc-types";
+import type { RunProgressState, TrayState } from "../../shared/ipc-types";
 
 interface BadgeNavigator {
 	setAppBadge?: (count?: number) => Promise<void>;
@@ -60,7 +59,7 @@ export class WebChrome {
 	}
 
 	/** The status-bar color of an installed page follows the app's top bar. */
-	applyColors(colors: WindowChromeColors): void {
+	setThemeColor(color: string): void {
 		const doc = this.#deps.document;
 		// The page ships a light and a dark `theme-color` chosen by the OS scheme; the app's own top bar wins
 		// over both once it reports its color.
@@ -73,7 +72,7 @@ export class WebChrome {
 		}
 		for (const meta of metas) {
 			meta.removeAttribute("media");
-			meta.content = colors.color;
+			meta.content = color;
 		}
 	}
 }

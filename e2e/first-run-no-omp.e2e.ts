@@ -180,10 +180,12 @@ async function recordTrouble(page: Page): Promise<void> {
 		const scan = () => {
 			const takeover = document.querySelector('[data-testid="setup-takeover"]');
 			const outside = (element: Element) => !takeover?.contains(element);
-			for (const region of document.querySelectorAll(".omp-session-sidebar, .omp-titlebar")) {
-				const where = region.classList.contains("omp-titlebar") ? "title bar" : "sidebar";
+			for (const region of document.querySelectorAll(
+				".omp-session-sidebar, .omp-titlebar, [data-desktop-titlebar]",
+			)) {
+				const where = region.classList.contains("omp-session-sidebar") ? "sidebar" : "title bar";
 				for (const alert of region.querySelectorAll('[role="alert"]')) note(`${where} alert: ${alert.textContent}`);
-				for (const badge of region.querySelectorAll(".omp-titlebar-status-label")) {
+				for (const badge of region.querySelectorAll(".omp-titlebar-status-label, [data-tone][role=status]")) {
 					if (STATUS.test(badge.textContent?.trim() ?? "")) note(`${where} status: ${badge.textContent}`);
 				}
 				const text = region.textContent ?? "";

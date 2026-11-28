@@ -603,7 +603,8 @@ for (const [language, theme] of VARIANTS) {
 					name: language === "ko" ? "프로젝트" : "Projects",
 					exact: true,
 				});
-				await page.locator(".omp-titlebar-project").click();
+				await page.locator("[data-session-tab-menu]").click();
+				await page.getByRole("menuitem", { name: language === "ko" ? "프로젝트 전환" : "Switch project" }).click();
 				await expect(projectPicker.getByRole("option").first()).toBeVisible();
 				const projectFilter = projectPicker.locator("input").first();
 				await projectFilter.fill("__no_such_project__");

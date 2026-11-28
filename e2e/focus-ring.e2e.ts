@@ -67,8 +67,9 @@ test("a click then a modifier alone leaves no ring on the transcript, title bar,
 	const transcript = page.locator(".omp-transcript-scroll").first();
 	await expect(transcript).toBeVisible();
 	await expectNoRingAfterModifiers(transcript);
-	// A toggle that keeps focus: the side panel opens and its button stays focused.
-	await expectNoRingAfterModifiers(page.getByRole("button", { name: "Side panel" }));
+	// The sidebar toggle stays focused while the layout changes.
+	await expectNoRingAfterModifiers(page.getByRole("button", { name: "Toggle sidebar", exact: true }));
+	await page.getByRole("button", { name: "Side panel", exact: true }).click();
 	// The panel's resize handle (a focusable separator).
 	await expectNoRingAfterModifiers(page.getByRole("separator", { name: "Resize side panel" }));
 	// A Settings section row (ListRow: a ring on the button and on its ::after).
@@ -102,25 +103,25 @@ test("a click then a modifier alone leaves no focus highlight on a resize handle
 });
 
 test("Tab and the arrow keys still ring what they reach after a click", async () => {
-	const panelButton = page.getByRole("button", { name: "Side panel" });
-	await panelButton.click();
+	const sidebarButton = page.getByRole("button", { name: "Toggle sidebar", exact: true });
+	await sidebarButton.click();
 	await page.keyboard.press("Shift");
 	expect((await ring()).outline).toBe("none");
-	// Shift+Tab from the button moves by keyboard: the control it reaches shows its ring.
-	await page.keyboard.press("Shift+Tab");
-	const reached = await ring();
-	expect(reached.focused).not.toBe("Side panel");
-	expect(reached.outline).not.toBe("none");
-	// Tab back to the button: its ring shows.
+	// Tab to the next title-bar control, then back to the toggle.
 	await page.keyboard.press("Tab");
-	expect(await ring()).toEqual({ focused: "Side panel", outline: expect.not.stringMatching(/^none$/) });
+	const reached = await ring();
+	expect(reached.focused).not.toBe("Toggle sidebar");
+	expect(reached.outline).not.toBe("none");
+	await page.keyboard.press("Shift+Tab");
+	expect(await ring()).toEqual({ focused: "Toggle sidebar", outline: expect.not.stringMatching(/^none$/) });
+	await page.getByRole("button", { name: "Side panel", exact: true }).click();
 	// An arrow key on a separator a click focused counts as keyboard use too.
 	await page.getByRole("separator", { name: "Resize side panel" }).click();
 	expect((await ring()).outline).toBe("none");
 	await page.keyboard.press("ArrowLeft");
 	expect(await ring()).toEqual({ focused: "Resize side panel", outline: expect.not.stringMatching(/^none$/) });
 	// A menu opened by a click: Shift alone rings no item, an arrow key rings the item it moves to.
-	await page.getByRole("button", { name: "Session actions" }).click();
+	await page.locator("[data-session-tab-menu]").click();
 	await expect(page.getByRole("menu")).toBeVisible();
 	await page.keyboard.press("Shift");
 	expect((await ring()).outline).toBe("none");

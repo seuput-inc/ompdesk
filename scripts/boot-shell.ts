@@ -22,20 +22,26 @@ const bar = (width: string, height: string, extra = "") =>
 
 const SIDEBAR_ROWS = [62, 48, 70, 40, 56, 66, 44, 58];
 
-function sidebar(): string {
+function sidebar(desktop = false): string {
 	const rows = SIDEBAR_ROWS.map(
 		width =>
 			`<div class="flex h-8 items-center gap-2.5 px-2.5">${bar("14px", "14px", ";border-radius:4px")}${bar(`${width}%`, "10px", ";border-radius:9999px")}</div>`,
 	).join("");
-	return `<aside class="boot-sidebar omp-session-sidebar relative flex h-full min-h-0 shrink-0 flex-col border-r border-(--sc-border-subtle) bg-(--sc-surface-1)"><div class="omp-sidebar-header flex h-(--sc-topbar-h) shrink-0 items-center gap-1 pr-2"><span class="flex min-w-0 flex-1 items-center gap-2 pl-1.5">${bar("18px", "18px", ";border-radius:5px")}${bar("72px", "10px", ";border-radius:9999px")}</span></div><div class="min-h-0 flex-1 overflow-hidden px-1.5 pt-2">${rows}</div></aside>`;
+	const header = desktop
+		? ""
+		: `<div class="omp-sidebar-header flex h-(--sc-topbar-h) shrink-0 items-center gap-1 pr-2"><span class="flex min-w-0 flex-1 items-center gap-2 pl-1.5">${bar("18px", "18px", ";border-radius:5px")}${bar("72px", "10px", ";border-radius:9999px")}</span></div>`;
+	return `<aside class="boot-sidebar omp-session-sidebar relative flex h-full min-h-0 shrink-0 flex-col border-r border-(--sc-border-subtle) bg-(--sc-surface-1)">${header}<div class="min-h-0 flex-1 overflow-hidden px-1.5 pt-2">${rows}</div></aside>`;
 }
 
 function mark(): string {
 	return `<svg class="boot-mark-svg" width="48" height="48" viewBox="${BRAND_MARK.viewBox}" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path class="boot-ink" d="${BRAND_MARK.full.ink}"/><path class="boot-accent" d="${BRAND_MARK.full.accent}"/></svg>`;
 }
 
-function main(): string {
-	return `<main class="omp-workspace-main relative flex min-w-0 flex-1 flex-col"><div class="flex min-h-0 flex-1 flex-col"><header class="omp-titlebar omp-topbar flex h-(--sc-topbar-h) min-w-0 shrink-0 items-center gap-1 px-3">${bar("160px", "12px", ";border-radius:9999px")}</header><div class="omp-split-workspace relative grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"><section class="omp-session-pane relative flex min-h-0 min-w-0 flex-col overflow-hidden"><div class="relative flex min-h-0 flex-1 flex-col"><div class="boot-mark flex min-h-0 flex-1 items-center justify-center">${mark()}</div><div class="omp-composer-region relative shrink-0 bg-transparent pt-2"><div class="omp-composer-shell relative w-full"></div></div></div><div class="omp-composer-region relative shrink-0 bg-transparent pb-3"><div class="omp-composer-shell relative w-full"><div class="boot-composer-box omp-composer-box relative flex flex-col rounded-(--sc-radius-xl) border border-(--sc-border-subtle) bg-(--sc-field)"><div class="px-4 pt-3 pb-1">${bar("38%", "10px", ";margin-top:7px;border-radius:9999px")}</div></div></div></div></section></div></div></main>`;
+function main(desktop = false): string {
+	const header = desktop
+		? ""
+		: `<header class="omp-titlebar omp-topbar flex h-(--sc-topbar-h) min-w-0 shrink-0 items-center gap-1 px-3">${bar("160px", "12px", ";border-radius:9999px")}</header>`;
+	return `<main class="omp-workspace-main relative flex min-w-0 flex-1 flex-col"><div class="flex min-h-0 flex-1 flex-col">${header}<div class="omp-split-workspace relative grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]"><section class="omp-session-pane relative flex min-h-0 min-w-0 flex-col overflow-hidden"><div class="relative flex min-h-0 flex-1 flex-col"><div class="boot-mark flex min-h-0 flex-1 items-center justify-center">${mark()}</div><div class="omp-composer-region relative shrink-0 bg-transparent pt-2"><div class="omp-composer-shell relative w-full"></div></div></div><div class="omp-composer-region relative shrink-0 bg-transparent pb-3"><div class="omp-composer-shell relative w-full"><div class="boot-composer-box omp-composer-box relative flex flex-col rounded-(--sc-radius-xl) border border-(--sc-border-subtle) bg-(--sc-field)"><div class="px-4 pt-3 pb-1">${bar("38%", "10px", ";margin-top:7px;border-radius:9999px")}</div></div></div></div></section></div></div></main>`;
 }
 
 /** The page's own CSS for the shell: what the app's classes cannot say (the width the sidebar was left at, the scheme's mark colours). */
@@ -47,8 +53,7 @@ function style(variant: BootShellVariant): string {
 				// a phone has no sidebar and a short bar, a narrow window no docked list.
 				`.boot-shell .omp-sidebar-header{padding-left:var(--sc-space-3)}.boot-shell .omp-topbar{box-sizing:content-box;padding-top:env(safe-area-inset-top,0px)}@media (max-width:999px){.boot-sidebar{display:none}}@media (max-width:599px),(max-height:499px) and (orientation:landscape){.boot-shell .omp-topbar{height:36px;padding-inline:var(--sc-space-1)}.boot-shell .omp-workspace-main{--omp-column-pad:var(--sc-space-3)}.boot-shell .omp-composer-region.pb-3{padding-bottom:calc(var(--sc-space-1) + env(safe-area-inset-bottom,0px))}.boot-composer-box{height:${COMPOSER_BOX_PX.phone}px}}@media (max-width:599px) and (pointer:coarse),(max-height:499px) and (orientation:landscape) and (pointer:coarse){.boot-shell{--omp-scrollbar-size:0px}}`
 			: "";
-	// A sidebar left collapsed (pre-paint.js sets `data-boot-sidebar` from lib/sidebar-memory.ts' mirror): the shell paints it collapsed on the first frame, the top bar clear of the traffic lights like `.omp-shell[data-sidebar="hidden"]`.
-	const collapsed = `html[data-boot-sidebar="hidden"] .boot-sidebar{display:none}${variant === "web" ? "" : 'html[data-boot-sidebar="hidden"] .boot-shell .omp-topbar{padding-left:max(var(--sc-space-2),var(--sc-traffic-lights))}'}`;
+	const collapsed = 'html[data-boot-sidebar="hidden"] .boot-sidebar{display:none}';
 	return `<style>.boot-shell{display:flex;position:fixed;inset:0;min-width:0}.boot-sidebar{width:clamp(${min}px,var(--boot-sidebar-w,${initial}px),${max}px)}${collapsed}.boot-shell .omp-workspace-main{background:var(--omp-bg-primary)}.boot-shell .omp-topbar{padding-right:calc(var(--sc-space-2) + var(--sc-caption-buttons))}.boot-composer-box{height:${COMPOSER_BOX_PX.desktop}px}.boot-ink{fill:${LIGHT.ink}}.boot-accent{fill:${LIGHT.accent}}[data-theme="dark"] .boot-ink{fill:${DARK.ink}}[data-theme="dark"] .boot-accent{fill:${DARK.accent}}${web}</style>`;
 }
 
@@ -57,6 +62,6 @@ export function bootShell(variant: BootShellVariant): { style: string; html: str
 	// A desktop window ends in the 24 px status bar (layout/status-bar/StatusBar.tsx); a web page has none.
 	return {
 		style: style(variant),
-		html: `<div class="boot-shell flex-col"><div class="flex min-h-0 min-w-0 flex-1">${sidebar()}${main()}</div><footer class="omp-status-bar flex h-(--sc-statusbar-h) shrink-0 items-center border-t border-(--sc-border-subtle) bg-(--sc-surface-1) px-2"></footer></div>`,
+		html: `<div class="boot-shell flex-col"><header class="flex h-(--sc-topbar-h) shrink-0 items-center border-b border-(--sc-border-subtle) bg-(--sc-surface-1) px-3">${bar("160px", "12px", ";border-radius:9999px")}</header><div class="flex min-h-0 min-w-0 flex-1">${sidebar(true)}${main(true)}</div><footer class="omp-status-bar flex h-(--sc-statusbar-h) shrink-0 items-center border-t border-(--sc-border-subtle) bg-(--sc-surface-1) px-2"></footer></div>`,
 	};
 }

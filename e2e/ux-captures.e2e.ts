@@ -130,7 +130,10 @@ for (const language of ["en", "ko"] as const)
 					await shot(`${mode}-02-plus-menu`);
 					await page.keyboard.press("Escape");
 
-					await page.getByRole("button", { name: label.actions, exact: true }).first().click();
+					const sessionActions = page
+						.getByRole("button", { name: label.actions, exact: true })
+						.and(page.locator("[data-session-tab-menu]"));
+					await sessionActions.click();
 					await expect(page.getByRole("menu")).toBeVisible();
 					await shot(`${mode}-03-session-menu`);
 					await page.keyboard.press("Escape");

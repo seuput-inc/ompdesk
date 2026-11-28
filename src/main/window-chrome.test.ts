@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nativeThemeSource, sanitizeChromeColors } from "./window-chrome";
+import { nativeThemeSource } from "./window-chrome";
 
 describe("nativeThemeSource", () => {
 	it("follows the saved scheme, not the OS", () => {
@@ -29,21 +29,5 @@ describe("nativeThemeSource", () => {
 		expect(nativeThemeSource(undefined, undefined)).toBe("system");
 		expect(nativeThemeSource(3, "Graphite")).toBe("system");
 		expect(nativeThemeSource("Porcelain", undefined)).toBe("system");
-	});
-});
-
-describe("sanitizeChromeColors", () => {
-	it("accepts hex and rgb colors", () => {
-		expect(sanitizeChromeColors({ color: " #f7f7f8 ", symbolColor: "rgb(27, 27, 31)" })).toEqual({
-			color: "#f7f7f8",
-			symbolColor: "rgb(27, 27, 31)",
-		});
-	});
-
-	it("rejects anything else", () => {
-		expect(sanitizeChromeColors(null)).toBeNull();
-		expect(sanitizeChromeColors({ color: "red", symbolColor: "#fff" })).toBeNull();
-		expect(sanitizeChromeColors({ color: "#fff", symbolColor: "url(x)" })).toBeNull();
-		expect(sanitizeChromeColors({ color: "#fff" })).toBeNull();
 	});
 });

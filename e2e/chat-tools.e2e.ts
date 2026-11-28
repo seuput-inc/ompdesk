@@ -107,7 +107,10 @@ test("a chat tab runs omp with every tool in the default workspace", async () =>
 	expect(chatLaunch.cwd).toBe(workspace);
 
 	// Chat chrome: no project name, the no-project placeholder.
+	await page.locator("[data-session-tab-menu]").click();
+	await page.getByRole("menuitem", { name: "Session details" }).click();
 	await expect(page.locator(".omp-titlebar-project")).toHaveText("Chats");
+	await page.keyboard.press("Escape");
 	await expect(page.getByPlaceholder("Ask anything", { exact: true })).toBeVisible();
 
 	// Every tool surface an agent session has.

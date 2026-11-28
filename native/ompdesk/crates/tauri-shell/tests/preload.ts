@@ -38,6 +38,10 @@ context.__TAURI_INTERNALS__ = {
 		frames.push({ kind: args.kind, payload });
 		if (args.kind === "ready") return ready.promise;
 		assert.equal(payload.generation, 7);
+		if (args.kind === "windowControl") {
+			assert.equal(payload.key, "private-to-this-app-window");
+			return payload.action === "state" ? { maximized: true, fullscreen: false } : null;
+		}
 		if (payload.channel === IPC_COMMANDS.FS_UPLOAD_TO_HOST) {
 			const upload = payload.args[0];
 			uploads.push(upload);
@@ -46,7 +50,9 @@ context.__TAURI_INTERNALS__ = {
 		return { value: { $bin: "AQID" } };
 	},
 };
-vm.runInNewContext(await built.outputs[0].text(), context);
+const script = await built.outputs[0].text();
+vm.runInNewContext(`{const OMP_WINDOW_KEY = "private-to-this-app-window";\n${script}\n}`, context);
+assert.equal(context.OMP_WINDOW_KEY, undefined);
 const page = context as unknown as {
 	omp: OmpApi;
 	__ompTauriPush(generation: number, message: unknown): Promise<void>;
@@ -60,6 +66,25 @@ assert.deepEqual(
 );
 ready.resolve({ generation: 7 });
 assert.deepEqual(Array.from((await pending) as Uint8Array), [1, 2, 3]);
+const chrome = page.omp.windowChrome.native;
+assert.ok(chrome);
+const state = await chrome.getState();
+assert.equal(state.maximized, true);
+assert.equal(state.fullscreen, false);
+const transitions: boolean[] = [];
+const offState = chrome.onStateChanged(s => transitions.push(s.fullscreen));
+await page.__ompTauriPush(7, { channel: "window-chrome:state", args: [{ maximized: false, fullscreen: true }] });
+await page.__ompTauriPush(6, { channel: "window-chrome:state", args: [{ maximized: false, fullscreen: false }] });
+offState();
+await page.__ompTauriPush(7, { channel: "window-chrome:state", args: [{ maximized: false, fullscreen: false }] });
+assert.deepEqual(transitions, [true]);
+await chrome.minimize();
+await chrome.toggleMaximize();
+await chrome.close();
+await chrome.showMenu(12, 36);
+assert.deepEqual(frames.filter(f => f.kind === "windowControl").map(f => f.payload.action), ["state", "minimize", "maximize", "close", "menu"]);
+assert.equal(frames.at(-1)?.payload.x, 12);
+assert.equal(frames.at(-1)?.payload.y, 36);
 let pushed: unknown;
 const off = page.omp.prefs.onChanged((data: unknown) => {
 	pushed = data;
@@ -120,10 +145,14 @@ subframe.__TAURI_INTERNALS__ = {
 		throw new Error("Tauri invoke is unavailable");
 	},
 };
-vm.runInNewContext(await built.outputs[0].text(), subframe);
+vm.runInNewContext(script, subframe);
 assert.equal(subframe.omp, undefined);
 assert.equal(subframe.__ompTauriPush, undefined);
 assert.deepEqual(subframeCalls, []);
+const unkeyed: Record<string, unknown> = { ...context, omp: undefined };
+unkeyed.top = unkeyed.window = unkeyed;
+vm.runInNewContext(script, unkeyed);
+assert.equal((unkeyed.omp as OmpApi).windowChrome.native, undefined);
 console.log(
 	"PASS preload readiness fencing, binary decode, shared API push, stream reset, pathless picker/drop/clipboard bytes fallback, subframes untouched",
 );

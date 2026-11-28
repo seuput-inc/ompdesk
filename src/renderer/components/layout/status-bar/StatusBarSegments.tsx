@@ -18,16 +18,18 @@ import { useUpdaterStore } from "../../../stores/updater";
 import { anchorFromEvent, Button, ContextMenu, type ContextMenuAnchor, Popover, StatusDot } from "../../common";
 import { quotaLimits } from "../../settings/providers/AccountQuota";
 import { shortProviderName } from "../../settings/providers/provider-groups";
+import { SessionUsage } from "../SessionUsage";
 import { accountStanding, SidebarUsage, sourceOf } from "../sidebar/SidebarUsage";
 import { usageAccountGroups } from "../sidebar/usage-groups";
 
-export const STATUS_ITEMS = ["usage", "link", "update"] as const;
+const STATUS_ITEMS = ["usage", "link", "update", "session"] as const;
 type StatusItem = (typeof STATUS_ITEMS)[number];
 
 const ITEM_LABEL_KEY: Record<StatusItem, string> = {
 	usage: "sidebar.pin.usage",
 	link: "statusBar.link",
 	update: "statusBar.update",
+	session: "sessionStatus.title",
 };
 
 const SEGMENT = "h-5 gap-1 rounded-(--sc-radius-sm) px-1.5 text-sc-xs font-normal text-(--sc-text-muted)";
@@ -139,7 +141,7 @@ function UpdateItem() {
 	);
 }
 
-export function StatusBarSegments() {
+export function StatusBarSegments({ sessionStats }: { sessionStats: boolean }) {
 	const t = useT();
 	const hidden = useSidebarFolds(s => s.statusHidden);
 	const [menu, setMenu] = useState<ContextMenuAnchor | null>(null);
@@ -156,13 +158,14 @@ export function StatusBarSegments() {
 	return (
 		<div className="flex min-w-0 flex-1 items-center gap-3" onContextMenu={openMenu} onKeyDown={onKeyDown}>
 			{hidden.usage !== true && <UsageItem />}
+			{sessionStats && hidden.session !== true && <SessionUsage inFooter />}
 			<span className="flex-1" />
 			{hidden.link !== true && <LinkItem />}
 			{hidden.update !== true && <UpdateItem />}
 			{menu && (
 				<ContextMenu
 					ariaLabel={t("statusBar.menu")}
-					items={STATUS_ITEMS.map(item => ({
+					items={STATUS_ITEMS.filter(item => sessionStats || item !== "session").map(item => ({
 						id: `status-${item}`,
 						label: t(ITEM_LABEL_KEY[item]),
 						checked: hidden[item] !== true,

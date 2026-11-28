@@ -176,8 +176,6 @@ export const IPC_EVENTS = {
 	TRAY_STATE_PUSH: "tray:state-push",
 	/** Renderer → main fire-and-forget run-progress state (dock badge + progress bar) */
 	PROGRESS_SET: "progress:set",
-	/** Renderer → main fire-and-forget window-controls colors (Windows title-bar overlay follows the theme). */
-	WINDOW_CHROME_SET: "window-chrome:set",
 	/** Auto-update status machine push (idle/checking/available/downloading/downloaded/not-available/error) */
 	UPDATER_STATUS: "updater:status",
 	/** New gui-bridge compatibility warnings are waiting; the renderer takes them with BRIDGE_HEALTH_TAKE. */
@@ -1021,14 +1019,6 @@ export type DeepLinkPayload = { action: "new-session" } | { action: "switch-sess
 
 /** Run-progress state pushed by the renderer (terminal.showProgress): dock badge + window progress bar. */
 export type RunProgressState = "working" | "waiting" | "idle";
-
-/** Theme colors for the native window controls (Windows title-bar overlay): CSS hex/rgb strings. */
-export interface WindowChromeColors {
-	/** Background behind the caption buttons (the top bar's surface). */
-	color: string;
-	/** Glyph color of minimize / maximize / close. */
-	symbolColor: string;
-}
 
 export type IpcBenchmarkProfile = "mix" | "chat" | "prefill" | "generation";
 
@@ -2459,6 +2449,20 @@ export interface WslProjectHost {
 	distributions: Array<{ id: string; name: string; version: number; isDefault: boolean }>;
 }
 
+export interface NativeWindowState {
+	maximized: boolean;
+	fullscreen: boolean;
+}
+
+export interface NativeWindowChrome {
+	getState(): Promise<NativeWindowState>;
+	onStateChanged(listener: (state: NativeWindowState) => void): () => void;
+	minimize(): Promise<void>;
+	toggleMaximize(): Promise<void>;
+	close(): Promise<void>;
+	showMenu(x: number, y: number): Promise<void>;
+}
+
 export interface OmpApi {
 	terminal: TerminalApi;
 	preview: PreviewApi;
@@ -2943,8 +2947,10 @@ export interface OmpApi {
 		set(state: RunProgressState): void;
 	};
 	windowChrome: {
-		/** Windows: recolor the native caption buttons drawn over the title bar. No-op elsewhere. */
-		setColors(colors: WindowChromeColors): void;
+		/** Local desktop window only; never routed through a paired device. */
+		native?: NativeWindowChrome;
+		/** The paired browser's theme-color. */
+		setThemeColor?(color: string): void;
 	};
 	/** The agent's models.yml on `device` (a paired host; absent = this device). */
 	models: {

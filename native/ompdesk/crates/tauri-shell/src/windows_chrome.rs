@@ -38,16 +38,26 @@ fn error() -> String {
     std::io::Error::last_os_error().to_string()
 }
 
-fn parse(value: &Value) -> Result<(i32, i32, Vec<Cell>), String> {
+pub(super) fn page_zoom(view: &tauri::webview::PlatformWebview) -> Result<f64, String> {
+    let mut zoom = 0.0;
+    // SAFETY: with_webview supplies the live controller on its owning thread. Read its current
+    // factor, including keyboard zoom, not the last factor Node requested.
+    unsafe { view.controller().ZoomFactor(&mut zoom) }.map_err(|e| e.to_string())?;
+    (zoom.is_finite() && zoom > 0.0)
+        .then_some(zoom)
+        .ok_or_else(|| "invalid WebView2 zoom".into())
+}
+
+fn parse(value: &Value, row: &chrome_hit::RowBounds) -> Result<(i32, i32, Vec<Cell>), String> {
     let coord = |n: &Value| n.as_u64().filter(|n| *n <= 65535).map(|n| n as i32);
     let width = coord(&value["width"]).ok_or("invalid title bar width")?;
-    let height = coord(&value["height"])
-        .filter(|h| *h <= 1024)
-        .ok_or("invalid title bar height")?;
+    let height = coord(&value["height"]).ok_or("invalid title bar height")?;
     let raw = value["cells"]
         .as_array()
-        .filter(|r| r.len() <= 2048)
         .ok_or("invalid title bar regions")?;
+    if !row.accepts(width, height, raw.len()) {
+        return Err("regions exceed the native title bar".into());
+    }
     let mut cells = Vec::with_capacity(raw.len());
     for item in raw {
         let hit = match item[0].as_str() {
@@ -61,19 +71,34 @@ fn parse(value: &Value) -> Result<(i32, i32, Vec<Cell>), String> {
         let [Some(l), Some(t), Some(r), Some(b)] = [1, 2, 3, 4].map(|i| coord(&item[i])) else {
             return Err("invalid title bar bounds".into());
         };
-        if l >= r || t >= b || r > width || b > height {
-            return Err("title bar region outside row".into());
-        }
-        cells.push(Cell {
+        let cell = Cell {
             hit,
-            bounds: [l, t, r, b],
-        });
+            bounds: [l, t, r.min(row.width), b],
+        };
+        if r > width || !row.contains(&cell) {
+            return Err("title bar region outside its cell".into());
+        }
+        cells.push(cell);
     }
-    Ok((width, height, cells))
+    Ok((row.width, height, cells))
 }
 
-pub(super) fn layout(parent: HWND, identity: Identity, value: &Value) -> Result<(), String> {
-    let (width, height, cells) = parse(value)?;
+pub(super) fn layout(
+    parent: HWND,
+    identity: Identity,
+    value: &Value,
+    zoom: f64,
+) -> Result<(), String> {
+    let (actual, _, _) = geometry(parent);
+    // SAFETY: the calling app's actual window, on its owning UI thread.
+    let scale = f64::from(unsafe { GetDpiForWindow(parent) }) / 96.0 * zoom;
+    let (width, height, cells) = parse(
+        value,
+        &chrome_hit::RowBounds {
+            width: actual,
+            scale,
+        },
+    )?;
     let existing = ROWS.with_borrow(|rows| rows.get(&parent).map(|r| r.child));
     // SAFETY: created on the owning thread. The parent owns the child through WM_DESTROY.
     let child = match existing {
@@ -340,5 +365,29 @@ unsafe extern "system" fn input(child: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -
             _ => {}
         }
         DefWindowProcW(child, msg, wp, lp)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn invalid_payloads_never_install_a_partial_input_mask() {
+        let row = chrome_hit::RowBounds {
+            width: 1000,
+            scale: 1.5,
+        };
+        let payload = |cells| json!({"width": 1000, "height": 54, "cells": cells});
+        assert!(parse(&payload(json!([["close", 931, 0, 1000, 54]])), &row).is_ok());
+        let mut cells = vec![json!(["drag", 0, 0, 1000, 54]); 2048];
+        cells.push(json!(["close", 931, 0, 1000, 54]));
+        assert!(parse(&payload(Value::Array(cells)), &row).is_err());
+        for invalid in [
+            json!(["drag", 0, 0, 1000, 55]),
+            json!(["close", 0, 0, 1000, 54]),
+            json!(["client", 5, 1, 3, 4]),
+        ] {
+            assert!(parse(&payload(json!([["drag", 0, 0, 1000, 54], invalid])), &row).is_err());
+        }
     }
 }

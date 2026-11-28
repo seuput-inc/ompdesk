@@ -44,10 +44,10 @@ import { StatusBar } from "./status-bar/StatusBar";
 import "../../styles/sidebar.css";
 import { MailReentryNoticeGate } from "./MailReentryNoticeGate";
 import { MissingFolderSheetHost } from "./MissingFolderSheetHost";
+import { WebLinkStatus, WebSessionBar } from "./SessionChrome";
 import { SplitWorkspace } from "./SplitWorkspace";
 import { loadSidebar, useSidebar } from "./sidebar-chunk";
 import { TabHousekeeping } from "./TabHousekeeping";
-import { TitleBar, WebLinkStatus } from "./TitleBar";
 import { UpdateBanner } from "./UpdateBanner";
 import { ViewSheetHost } from "./ViewSheetHost";
 import { WhatsNewCard } from "./WhatsNewCard";
@@ -365,7 +365,7 @@ function useDrawerSidebarSync(drawer: boolean): boolean {
 	return syncedFor === drawer;
 }
 
-export function AppShell() {
+export function AppShell({ desktopChrome }: { desktopChrome: boolean }) {
 	const t = useT();
 	const destination = useUiStore(s => s.destination);
 	const sidebarVisible = useUiStore(s => s.sidebarVisible);
@@ -405,7 +405,7 @@ export function AppShell() {
 	useLayoutEffect(() => {
 		markChromePlatform();
 	}, []);
-	// Windows caption buttons sit over the top-right corner: match its surface.
+	// The paired browser's theme-color follows the surface at the top-right.
 	const panelAtRight = panelDocked && panelSide === "right";
 	useEffect(() => syncWindowControls(panelAtRight ? "--sc-surface-1" : "--sc-bg"), [panelAtRight]);
 
@@ -487,12 +487,12 @@ export function AppShell() {
 								<EdgeSwipeZone />
 							</>
 						)
-					: sidebarVisible && Sidebar && <Sidebar />}
+					: sidebarVisible && Sidebar && <Sidebar desktopChrome={desktopChrome} />}
 				{panel.mounted && panelSide === "left" && <PanelContainer closing={panel.closing} />}
 
 				<main aria-label={t("shell.main")} className="omp-workspace-main relative flex min-w-0 flex-1 flex-col">
 					<div className={onPage ? "hidden" : "flex min-h-0 flex-1 flex-col"} data-session-view>
-						<TitleBar />
+						{!desktopChrome && <WebSessionBar />}
 						<TabHousekeeping />
 						<UpdateBanner />
 						<MailReentryNoticeGate />
@@ -510,7 +510,7 @@ export function AppShell() {
 							ref={pageRef}
 							tabIndex={-1}
 						>
-							<PageTopBar showSidebarToggle={!sidebarVisible} />
+							{!desktopChrome && <PageTopBar showSidebarToggle={!sidebarVisible} />}
 							<Suspense fallback={<PageFrameSkeleton />}>
 								<DestinationPage destination={destination} key={destination} />
 							</Suspense>
@@ -527,7 +527,7 @@ export function AppShell() {
 					<LegacyPeerRequests />
 				</Suspense>
 			)}
-			<StatusBar />
+			<StatusBar sessionStats={desktopChrome} />
 		</div>
 	);
 }

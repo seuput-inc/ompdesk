@@ -320,6 +320,46 @@ pub fn install(lang: Lang) {
     }
 }
 
+/// Use the accelerator menu's own model, but bind the choice to the window that opened this popup.
+#[cfg(windows)]
+pub(super) fn popup(
+    id: crate::Identity,
+    window: &tauri::WebviewWindow,
+    at: (f64, f64),
+) -> Result<(), shell_core::wire::WireError> {
+    let win = id.win.ok_or_else(|| crate::failed("no app window"))?;
+    let mut choices = Vec::new();
+    let items = build(tray::language(), template(false), &mut choices);
+    let popup = shell_core::menu_model::build_popup(&items, false);
+    let chosen = platform::popup(
+        window.hwnd().map_err(crate::failed)?.0 as isize,
+        &popup.entries,
+        Some(at),
+        || {},
+        || {},
+    )
+    .map_err(crate::failed)?;
+    if let Some(action) = chosen
+        .and_then(|cmd| popup.id_of(cmd))
+        .and_then(|s| s.parse::<usize>().ok())
+        .and_then(|n| choices.get(n)?.1)
+    {
+        if !runtime().registry.lock().expect("registry").current(id) {
+            return Ok(());
+        }
+        match action {
+            Action::Page(name) => {
+                crate::page_push::detached(id, "menu:action", &[json!({"action":name})])
+            }
+            Action::NewWindow => entry::push(entry::Open::Window(win)),
+            Action::CloseWindow => window.close().map_err(crate::failed)?,
+            Action::Role(role) => window_role(role, win, window),
+            other => perform(other),
+        }
+    }
+    Ok(())
+}
+
 /// An item chosen, or its accelerator pressed. UI thread.
 fn hit(hit: Hit) {
     let action = CHOICES.with(|c| {
@@ -390,6 +430,10 @@ fn focused_role(role: &'static str) {
     else {
         return;
     };
+    window_role(role, win, &window);
+}
+
+fn window_role(role: &'static str, win: u64, window: &tauri::WebviewWindow) {
     let Some((wc, zoom)) = runtime()
         .registry
         .lock()

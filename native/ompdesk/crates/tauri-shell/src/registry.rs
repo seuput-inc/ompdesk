@@ -33,6 +33,7 @@ pub struct Page {
     pub loading: bool,
     pub zoom: f64,
     outbox: Outbox,
+    pub(super) chrome_key: Option<String>,
     /// The responsiveness watch of an app window's page (page_watch); a Preview page has none.
     pub watch: Option<Watch>,
 }
@@ -81,6 +82,7 @@ impl Registry {
                 loading: false,
                 zoom: 1.0,
                 outbox: Outbox::default(),
+                chrome_key: None,
                 watch: (kind == Kind::App).then(Watch::default),
             },
         );
@@ -110,6 +112,7 @@ impl Registry {
                 loading: false,
                 zoom: 1.0,
                 outbox: Outbox::default(),
+                chrome_key: None,
                 watch: None,
             },
         );
@@ -266,6 +269,10 @@ impl Registry {
 /// The Vite dev server's origin `bun run dev` (scripts/dev.ts) loads the app page from; set only in a checkout's run.
 static DEV_ORIGIN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
+pub(super) fn dev_server_origin() -> Option<&'static str> {
+    DEV_ORIGIN.get().map(String::as_str)
+}
+
 /// `ELECTRON_RENDERER_URL` as the dev server's origin: `http` on a loopback host with an explicit port, nothing else.
 pub fn dev_origin(renderer_url: &str) -> Option<url::Url> {
     let parsed = url::Url::parse(renderer_url).ok()?;
@@ -291,7 +298,7 @@ pub fn allow_dev_origin(origin: &url::Url) {
 }
 
 pub fn trusted_url(url: &str) -> bool {
-    trusted_under(url, DEV_ORIGIN.get().map(String::as_str))
+    trusted_under(url, dev_server_origin())
 }
 
 fn trusted_under(url: &str, dev_origin: Option<&str>) -> bool {

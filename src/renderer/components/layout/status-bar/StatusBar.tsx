@@ -8,12 +8,13 @@ import { useShellMode } from "../../../hooks/use-shell-mode";
 import { loadChunk } from "../../../lib/chunk-load";
 import { useT } from "../../../lib/i18n";
 
-let loaded: ComponentType | null = null;
+type SegmentsComponent = ComponentType<{ sessionStats: boolean }>;
+let loaded: SegmentsComponent | null = null;
 
-export function StatusBar() {
+export function StatusBar({ sessionStats }: { sessionStats: boolean }) {
 	const t = useT();
 	const desktop = useShellMode() === null;
-	const [Segments, setSegments] = useState<ComponentType | null>(() => loaded);
+	const [Segments, setSegments] = useState<SegmentsComponent | null>(() => loaded);
 	useEffect(() => {
 		if (!desktop || Segments) return;
 		let live = true;
@@ -34,7 +35,7 @@ export function StatusBar() {
 			className="omp-status-bar flex h-(--sc-statusbar-h) shrink-0 items-center border-t border-(--sc-border-subtle) bg-(--sc-surface-1) px-2"
 			data-status-bar
 		>
-			{Segments && <Segments />}
+			{Segments && <Segments sessionStats={sessionStats} />}
 		</footer>
 	);
 }

@@ -202,7 +202,7 @@ for (const language of variants(["en", "ko"] as const))
 				});
 
 				await test.step("media plays over the link, capped; file cards read the host", async () => {
-					await a.getByRole("button", { name: t("titlebar.sidePanel"), exact: true }).click();
+					await a.locator("aside[data-docked] [data-panel-close]").click();
 					await expect(a.locator("aside[data-docked]")).toHaveCount(0);
 					const input = a.locator("textarea").first();
 					await input.fill("fixture media");

@@ -1,10 +1,4 @@
-/**
- * Renderer half of the frameless window chrome (src/main/window-chrome.ts).
- * `html[data-platform]` lets CSS reserve room for the OS controls drawn over
- * the 48px top bar: the macOS traffic lights (top-left) and the Windows
- * caption buttons (top-right, `env(titlebar-area-*)`). On Windows the caption
- * buttons are recolored to match whatever surface sits under them.
- */
+/** Platform of the viewing window and the paired page's browser chrome. */
 
 export type ChromePlatform = "darwin" | "win32" | "other" | "web";
 
@@ -37,25 +31,18 @@ export function markChromePlatform(root: HTMLElement = document.documentElement)
 }
 
 /**
- * Windows and the mobile web page: push the window-control colors whenever the theme or the
- * surface under the top bar changes (side panel docked → surface-1, otherwise the canvas).
- * Windows recolors the caption buttons; a web page's `theme-color` metas (the installed PWA's
- * status bar and browser chrome) take the same color. Returns the cleanup.
+ * The web page's theme-color metas follow the surface behind its browser chrome.
  */
 export function syncWindowControls(surfaceToken: "--sc-bg" | "--sc-surface-1"): () => void {
-	const platform = chromePlatform();
-	if ((platform !== "win32" && platform !== "web") || typeof window.omp?.windowChrome?.setColors !== "function") {
-		return () => {};
-	}
+	const setThemeColor = window.omp?.windowChrome?.setThemeColor;
+	if (!setThemeColor) return () => {};
 	let last = "";
 	const push = () => {
 		const style = getComputedStyle(document.documentElement);
 		const color = style.getPropertyValue(surfaceToken).trim();
-		const symbolColor = style.getPropertyValue("--sc-text").trim();
-		const key = `${color}|${symbolColor}`;
-		if (!color || !symbolColor || key === last) return;
-		last = key;
-		window.omp.windowChrome.setColors({ color, symbolColor });
+		if (!color || color === last) return;
+		last = color;
+		setThemeColor(color);
 	};
 	push();
 	// Theme switches rewrite inline custom properties / classes on <html>.

@@ -11,7 +11,7 @@ import { useReviewNotesStore } from "../stores/review-notes";
 import { useSessionStore } from "../stores/session";
 import { type SessionTab, useTabsStore } from "../stores/tabs";
 import { useUiStore } from "../stores/ui";
-import { closeActiveTab, closeOtherTabs, performTabClose, tabNeedsCloseConfirm } from "./tab-close";
+import { closeActiveTab, closeOtherTabs, closeSessionTab, performTabClose, tabNeedsCloseConfirm } from "./tab-close";
 
 interface MockOmp {
 	tabs: {
@@ -87,6 +87,8 @@ describe("closeActiveTab", () => {
 	it("hands ⌘W to the window at the single-tab floor", async () => {
 		useTabsStore.setState({ tabs: [tab("only")], activeTabId: "only" });
 
+		expect(closeSessionTab("only")).toBe("nothing");
+		expect(window.close).not.toHaveBeenCalled();
 		expect(closeActiveTab()).toBe("window");
 		expect(window.close).toHaveBeenCalledTimes(1);
 		expect(omp.tabs.close).not.toHaveBeenCalled();

@@ -17,7 +17,8 @@ import { useTabsStore } from "../../stores/tabs";
 import { useToastStore } from "../../stores/toast";
 import { useToolsStore } from "../../stores/tools";
 import { useUiStore } from "../../stores/ui";
-import { TitleBar } from "./TitleBar";
+import { DesktopSessionTabs } from "./DesktopSessionTabs";
+import { WebSessionBar } from "./SessionChrome";
 
 /** What the computer running tab `tabId` says of its session (main's `SessionSummaries`), its only session there. */
 function summarize(tabId: string, fields: Partial<SessionSummary>, device?: string): void {
@@ -106,19 +107,13 @@ const regenerateSessionTitle = vi.fn(
 let container: TestElement;
 let root: Root;
 
-async function mount(tabId?: string): Promise<void> {
+async function mount(tabId?: string, bar = <WebSessionBar />): Promise<void> {
 	container = document.createElement("div") as unknown as TestElement;
 	document.body.appendChild(container as never);
 	root = createRoot(container as unknown as globalThis.Element);
-	const bar = tabId ? (
-		<SessionRuntimeProvider runtime={ensureTabRuntime(tabId)}>
-			<TitleBar />
-		</SessionRuntimeProvider>
-	) : (
-		<TitleBar />
-	);
+	const view = tabId ? <SessionRuntimeProvider runtime={ensureTabRuntime(tabId)}>{bar}</SessionRuntimeProvider> : bar;
 	await act(async () => {
-		root.render(<I18nProvider>{bar}</I18nProvider>);
+		root.render(<I18nProvider>{view}</I18nProvider>);
 	});
 }
 
@@ -134,13 +129,14 @@ afterEach(async () => {
 	useToolsStore.getState().reset();
 	useUiStore.getState().closeSessionOverlays();
 	useRemoteStore.getState().reset();
+	useTabsStore.getState().reset();
 	useHostedSessionsStore.setState({ summaries: {} });
 	getSessionStats.mockRestore();
 	vi.clearAllMocks();
 	sessions.list.mockResolvedValue([]);
 });
 
-describe("TitleBar", () => {
+describe("WebSessionBar", () => {
 	it("shows authoritative session usage and merged execution wall time", async () => {
 		useSessionStore.setState({ status: "ready", sessionId: "session-1", cwd: "/tmp/project" });
 		useMessagesStore.setState({
@@ -176,6 +172,7 @@ describe("TitleBar", () => {
 		);
 		expect(trigger).toBeDefined();
 		await act(async () => trigger?.click());
+		await act(async () => vi.dynamicImportSettled());
 		const popover = document.querySelector('[role="dialog"][aria-label="Session status"]');
 		expect(popover?.textContent).toContain("1.5k");
 		expect(popover?.textContent).toContain("$0.1234");
@@ -640,5 +637,144 @@ describe("TitleBar", () => {
 		await act(async () => summarize("t1", {}));
 		expect(container.textContent).toContain(translate("titlebar.status.ready"));
 		deleteSessionRuntime("t1");
+	});
+});
+
+describe("DesktopSessionTabs", () => {
+	const click = async (node: unknown) => {
+		if (!(node instanceof HTMLElement)) throw new Error("Expected a mounted control");
+		await act(async () => node.click());
+	};
+
+	const start = async () => {
+		useTabsStore.setState({
+			tabs: [
+				{ id: "one", title: "First task", cwd: "/w", status: "running", kind: "agent", unreadDone: false },
+				{ id: "two", title: "Second task", cwd: "/w", status: "ready", kind: "agent", unreadDone: false },
+				{
+					id: "old",
+					title: "Restored",
+					cwd: "/w",
+					status: "starting",
+					kind: "agent",
+					unreadDone: false,
+					ghost: true,
+				},
+			],
+			activeTabId: "one",
+		});
+		useSessionStore.setState({ sessionId: "session-1", sessionName: "First task", status: "ready" });
+		await mount(undefined, <DesktopSessionTabs />);
+	};
+
+	it("lists real tabs, guards Delete on running work, and never fetches usage in the strip", async () => {
+		await start();
+		const active = document.querySelector('[role="tab"][aria-selected="true"]');
+		expect(active?.textContent).toContain("First task");
+		expect(active?.textContent).toContain(translate("titlebar.status.ready"));
+		expect(active?.getAttribute("aria-keyshortcuts")).toBe("Shift+F10 Delete");
+		expect(document.querySelector('[role="tab"][data-tab-id="old"]')?.hasAttribute("disabled")).toBe(true);
+		await act(async () => summarize("one", { status: "running", ask: "approval" }));
+		expect(active?.textContent).toContain(translate("attention.approval"));
+		await act(async () => summarize("one", { status: "running" }));
+		expect(active?.textContent).toContain(translate("titlebar.status.working"));
+		const pick = vi.spyOn(useTabsStore.getState(), "switchTab").mockResolvedValue(undefined);
+		try {
+			await click(document.querySelector('[role="tab"][data-tab-id="two"]'));
+			expect(pick).toHaveBeenCalledWith("two");
+		} finally {
+			pick.mockRestore();
+		}
+		const press = new Event("keydown", { bubbles: true, cancelable: true });
+		Object.defineProperty(press, "key", { value: "Delete" });
+		await act(async () => {
+			active?.dispatchEvent(press);
+		});
+		expect(useUiStore.getState().armedCloseTab?.tabId).toBe("one");
+		expect(useTabsStore.getState().tabs.map(tab => tab.id)).toContain("one");
+		expect(getSessionStats).not.toHaveBeenCalled();
+		useUiStore.getState().cancelCloseTab();
+	});
+
+	it("opens the active tab's actions using Shift+F10 or the visible menu button", async () => {
+		await start();
+		await act(async () => {
+			useSessionStore.setState({ cwd: "/work/route" });
+			useRemoteStore.setState({
+				state: { hosts: [{ deviceId: "studio", name: "Studio", state: "offline" }] } as unknown as RemoteState,
+			});
+			useTabsStore.setState(state => ({
+				tabs: state.tabs.map(tab =>
+					tab.id === "one"
+						? {
+								...tab,
+								device: "studio",
+								worktree: {
+									baseCwd: "/work/project",
+									path: "/work/route",
+									branch: "feature/route",
+									name: "route",
+								},
+							}
+						: tab,
+				),
+			}));
+		});
+		const active = document.querySelector('[role="tab"][aria-selected="true"]');
+		const press = new Event("keydown", { bubbles: true, cancelable: true });
+		Object.defineProperties(press, { key: { value: "F10" }, shiftKey: { value: true } });
+		await act(async () => {
+			active?.dispatchEvent(press);
+		});
+		expect(press.defaultPrevented).toBe(true);
+		const menu = document.querySelector('[role="menu"]');
+		const item = (key: string) =>
+			Array.from(document.querySelectorAll('[role="menuitem"]')).find(row =>
+				row.textContent?.includes(translate(key)),
+			);
+		expect(menu?.getAttribute("aria-label")).toBe(translate("titlebar.actions"));
+		for (const key of [
+			"titlebar.rename",
+			"titlebar.switchProject",
+			"cmd.branch",
+			"cmd.tree",
+			"cmd.share",
+			"cmd.tools",
+			"cmd.import",
+			"sessionStatus.openInsights",
+		]) {
+			expect(item(key), key).toBeDefined();
+		}
+		await click(item("titlebar.details"));
+		const details = document.querySelector("[data-session-tab-details]");
+		expect(details?.querySelector(".omp-titlebar-project")?.textContent).toBe("project");
+		expect(details?.querySelector("[data-titlebar-worktree]")?.textContent).toBe("feature/route");
+		expect(details?.querySelector('[data-device-chip="studio"]')?.getAttribute("data-link-state")).toBe("offline");
+		await act(async () => useRemoteStore.setState({ state: { hosts: [] } as unknown as RemoteState }));
+		expect(active?.textContent).toContain(translate("remote.tab.statusRemoved"));
+		await click(document.querySelector("[data-session-tab-menu]"));
+		await click(item("cmd.import"));
+		expect(useUiStore.getState().importDialogOpen).toBe(true);
+	});
+
+	it("offers automatic titling in the rename dialog's tab order", async () => {
+		await start();
+		Reflect.defineProperty(HTMLElement.prototype, "select", { configurable: true, value: () => {} });
+		try {
+			await click(document.querySelector("[data-session-tab-menu]"));
+			const rename = Array.from(document.querySelectorAll('[role="menuitem"]')).find(
+				item => item.textContent === translate("titlebar.rename"),
+			);
+			await click(rename);
+			const field = document.querySelector('[role="dialog"] input');
+			const auto = document.querySelector('[role="dialog"] [data-auto-title]');
+			expect(field?.getAttribute("aria-label")).toBe(translate("titlebar.rename"));
+			expect(auto?.getAttribute("tabindex")).toBe("0");
+			await click(auto);
+			expect(useSessionStore.getState().sessionName).toBe("Generated");
+			expect(setSessionName).not.toHaveBeenCalled();
+		} finally {
+			Reflect.deleteProperty(HTMLElement.prototype, "select");
+		}
 	});
 });

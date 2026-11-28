@@ -77,13 +77,18 @@ async function runTurn(page: Page, replies: number, message = "hello there"): Pr
 const titleButton = (page: Page) => page.locator("[data-titlebar-session-name]");
 const titleName = (page: Page) => titleButton(page).locator("[data-title-name]");
 const titleAuto = (page: Page) => titleButton(page).locator("[data-title-auto]");
-const renameField = (page: Page) => page.locator(".omp-titlebar-identity input");
-const autoButton = (page: Page) => page.locator(".omp-titlebar-identity [data-auto-title]");
+const renameField = (page: Page) => page.getByRole("textbox", { name: "Rename session" });
+const autoButton = (page: Page) => page.getByRole("dialog", { name: "Rename session" }).locator("[data-auto-title]");
 const sidebarRow = (page: Page, name: string) =>
 	page.locator(".omp-session-sidebar [data-title-name]", { hasText: name }).locator("xpath=..");
 
+async function openRename(page: Page): Promise<void> {
+	await page.locator("[data-session-tab-menu]").click();
+	await page.getByRole("menuitem", { name: "Rename session", exact: true }).click();
+}
+
 async function typeTitle(page: Page, name: string): Promise<void> {
-	await titleButton(page).click();
+	await openRename(page);
 	await renameField(page).fill(name);
 	await renameField(page).press("Enter");
 	await expect(titleName(page)).toHaveText(name);
@@ -116,7 +121,7 @@ test("names the session from the first prompt, keeps naming it beside a typed na
 		expect(await recordsOfType(record, "set_session_name")).toHaveLength(1);
 
 		// The editor's auto button names it again, saves it, and closes the editor: one automatic title, alone.
-		await titleButton(page).click();
+		await openRename(page);
 		await expect(autoButton(page)).toBeVisible();
 		await expect(autoButton(page)).toHaveAccessibleName("Generate title automatically");
 		await autoButton(page).click();

@@ -1,5 +1,6 @@
 import type { SplitNode } from "../../shared/split-layout";
 import { useTabsStore } from "../stores/tabs";
+import { useUiStore } from "../stores/ui";
 import { isDrawerMode } from "./shell-queries";
 import { useShellMode } from "./use-shell-mode";
 
@@ -11,5 +12,6 @@ import { useShellMode } from "./use-shell-mode";
 export function useShownSplit(): SplitNode | null {
 	const split = useTabsStore(state => state.split);
 	const drawer = isDrawerMode(useShellMode());
-	return drawer ? null : split;
+	const expanded = useUiStore(state => state.paneExpanded);
+	return drawer || expanded ? null : split;
 }

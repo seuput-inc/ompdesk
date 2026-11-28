@@ -67,7 +67,7 @@ async function mount(): Promise<void> {
 	await act(async () =>
 		root.render(
 			<I18nProvider>
-				<StatusBarSegments />
+				<StatusBarSegments sessionStats />
 			</I18nProvider>,
 		),
 	);
@@ -100,13 +100,18 @@ describe("the desktop status bar", () => {
 		expect(container.querySelector("[data-status-link]")?.getAttribute("data-status-link")).toBe("warning");
 		expect(container.querySelector("[data-status-link]")?.textContent).toContain("1/2");
 		expect(container.querySelector("[data-status-update]")?.textContent).toContain("0.144.0");
+		const stats = container.querySelector<HTMLButtonElement>("[data-status-session]");
+		expect(stats?.getAttribute("aria-label")).toContain("Session status");
+		await act(async () => stats?.click());
+		expect(document.body.querySelector('[role="dialog"][aria-label="Session status"]')).not.toBeNull();
+		await act(async () => stats?.click());
 
 		const bar = container.firstElementChild as unknown as Record<string, unknown>;
 		const propsKey = Object.getOwnPropertyNames(bar).find(name => name.startsWith("__reactProps$")) ?? "";
 		const props = bar[propsKey] as { onContextMenu: (event: unknown) => void };
 		await act(async () => props.onContextMenu({ preventDefault: () => {}, clientX: 10, clientY: 10 }));
 		const items = [...document.body.querySelectorAll('[role="menuitemcheckbox"]')];
-		expect(items.map(item => item.getAttribute("aria-checked"))).toEqual(["true", "true", "true"]);
+		expect(items.map(item => item.getAttribute("aria-checked"))).toEqual(["true", "true", "true", "true"]);
 		await act(async () => (items[1] as unknown as { click: () => void }).click());
 		expect(useSidebarFolds.getState().statusHidden).toEqual({ link: true });
 		expect(container.querySelector("[data-status-link]")).toBeNull();

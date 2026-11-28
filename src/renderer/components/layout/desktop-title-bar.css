@@ -1,0 +1,51 @@
+.desktop-title-bar {
+	display: flex;
+	align-items: center;
+	flex: none;
+	height: var(--sc-topbar-h);
+	min-width: 0;
+	user-select: none;
+	color: var(--sc-text);
+	background: var(--sc-surface-1);
+	box-shadow: inset 0 -1px var(--sc-divider);
+}
+
+.desktop-title-bar .desktop-title-middle {
+	display: flex;
+	align-items: center;
+	flex: 1 1 0;
+	min-width: 0;
+}
+
+.desktop-title-bar [data-titlebar-drag] {
+	align-self: stretch;
+	flex: 0 0 36px;
+}
+
+.desktop-title-bar [data-caption-buttons] {
+	display: flex;
+	height: 100%;
+	flex: none;
+	position: relative;
+	z-index: 2147483647; /* Window controls stay above app dialogs; the rest of the row does not. */
+	background: var(--sc-surface-1);
+}
+
+.desktop-title-bar [data-caption] {
+	width: 46px;
+	height: 100%;
+	border-radius: 0;
+	outline-offset: -3px;
+}
+
+html[data-caption-hover="minimize"] [data-caption="minimize"],
+html[data-caption-hover="maximize"] [data-caption="maximize"] {
+	color: var(--sc-text);
+	background: var(--sc-hover);
+}
+
+.desktop-title-bar [data-caption="close"]:is(:hover, :focus-visible),
+html[data-caption-hover="close"] [data-caption="close"] {
+	color: var(--sc-danger-fg);
+	background: var(--sc-danger);
+}

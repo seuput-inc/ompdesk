@@ -17,7 +17,7 @@ import { useSessionStore } from "../../stores/session";
 import { setFocusedSessionRuntime } from "../../stores/session-runtime-context";
 import { useSidebarFolds } from "../../stores/sidebar-folds";
 import { useTabsStore } from "../../stores/tabs";
-import { TitleBar } from "../layout/TitleBar";
+import { WebSessionBar } from "../layout/SessionChrome";
 import { RemoteTabBanner } from "./RemoteTabBanner";
 
 const { document, window, Event, HTMLElement, Element, Node } = parseHTML("<html><body></body></html>");
@@ -94,7 +94,7 @@ describe("remote tab chip", () => {
 	it("names the host in the title bar of a remote tab", async () => {
 		useRemoteStore.getState().apply(remoteState([{ deviceId: "dev-studio", name: "studio", state: "online" }]));
 		seedTab("dev-studio");
-		await mount(<TitleBar />);
+		await mount(<WebSessionBar />);
 
 		const chip = document.body.querySelector('[data-device-chip="dev-studio"]');
 		expect(chip?.textContent).toContain("studio");
@@ -107,7 +107,7 @@ describe("remote tab chip", () => {
 		useRemoteStore.getState().apply(remoteState([{ deviceId: "dev-studio", name: "studio", state: "offline" }]));
 		seedTab("dev-studio");
 		useSessionStore.setState({ status: "error" });
-		await mount(<TitleBar />);
+		await mount(<WebSessionBar />);
 
 		expect(document.body.querySelector('[data-device-chip="dev-studio"]')?.getAttribute("data-link-state")).toBe(
 			"offline",
@@ -119,7 +119,7 @@ describe("remote tab chip", () => {
 
 	it("does not read Reconnecting before the device list has loaded", async () => {
 		seedTab("dev-studio");
-		await mount(<TitleBar />);
+		await mount(<WebSessionBar />);
 
 		expect(document.body.querySelector('[role="status"]')?.textContent).toContain(translate("titlebar.status.ready"));
 		expect(document.body.querySelector('[role="status"]')?.textContent).not.toContain(
@@ -130,7 +130,7 @@ describe("remote tab chip", () => {
 	it("wears the device's color, the automatic one or the one chosen on its sidebar header", async () => {
 		useRemoteStore.getState().apply(remoteState([{ deviceId: "dev-studio", name: "studio", state: "online" }]));
 		seedTab("dev-studio");
-		await mount(<TitleBar />);
+		await mount(<WebSessionBar />);
 		const chip = () => document.body.querySelector('[data-device-chip="dev-studio"]');
 		expect(chip()?.getAttribute("data-device-color")).toBe(autoDeviceColor("dev-studio"));
 		await act(async () => useSidebarFolds.getState().setDeviceColor("dev-studio", "pink"));
@@ -142,7 +142,7 @@ describe("remote tab chip", () => {
 	it("shows no chip on a local tab", async () => {
 		useRemoteStore.getState().apply(remoteState([{ deviceId: "dev-studio", name: "studio", state: "online" }]));
 		seedTab();
-		await mount(<TitleBar />);
+		await mount(<WebSessionBar />);
 
 		expect(document.body.querySelector("[data-device-chip]")).toBeNull();
 	});
@@ -168,7 +168,7 @@ describe("a remote tab's lost link", () => {
 		seedTab("dev-studio");
 		return mount(
 			<>
-				<TitleBar />
+				<WebSessionBar />
 				<RemoteTabBanner deviceId="dev-studio" />
 			</>,
 		);

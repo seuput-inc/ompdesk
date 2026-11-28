@@ -46,6 +46,7 @@ type DataAttributes = { [key: `data-${string}`]: string | number | boolean | und
 export type TabItem = {
 	id: string;
 	label: string;
+	labelContent?: ReactNode;
 	/** Optional badge count or marker rendered after the label. */
 	badge?: string | number;
 	disabled?: boolean;
@@ -279,7 +280,7 @@ export function Tabs({
 							type="button"
 						>
 							{tab.leading !== undefined && <span className="inline-flex shrink-0">{tab.leading}</span>}
-							<span className="min-w-0 truncate">{tab.label}</span>
+							<span className="min-w-0 truncate">{tab.labelContent ?? tab.label}</span>
 							{tab.badge !== undefined && (
 								<span className="ml-0.5 rounded-(--sc-radius-full) bg-(--sc-surface-3) px-1.5 text-sc-2xs tabular-nums text-(--sc-text-muted)">
 									{tab.badge}

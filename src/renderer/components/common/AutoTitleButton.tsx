@@ -13,11 +13,12 @@ import { IconButton } from "./IconButton";
 interface AutoTitleButtonProps {
 	pending: boolean;
 	onClick: () => void;
+	tabIndex?: number;
 	/** Why there is nothing to ask (no open tab); the button is inert and says so. */
 	unavailableReason?: string;
 }
 
-export function AutoTitleButton({ pending, onClick, unavailableReason }: AutoTitleButtonProps) {
+export function AutoTitleButton({ pending, onClick, tabIndex = -1, unavailableReason }: AutoTitleButtonProps) {
 	const t = useT();
 	const unavailable = unavailableReason !== undefined;
 	return (
@@ -31,7 +32,7 @@ export function AutoTitleButton({ pending, onClick, unavailableReason }: AutoTit
 			onClick={unavailable ? undefined : onClick}
 			onMouseDown={event => event.preventDefault()}
 			size="sm"
-			tabIndex={-1}
+			tabIndex={tabIndex}
 		/>
 	);
 }

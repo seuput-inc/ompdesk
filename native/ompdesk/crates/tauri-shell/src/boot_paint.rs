@@ -105,6 +105,7 @@ impl Geometry {
 enum Fill {
     Background,
     Surface,
+    TitleBar,
     Border,
     Field,
     Ink,
@@ -141,12 +142,15 @@ impl Shape {
 /// width, `None` when it was left collapsed.
 fn layout(g: &Geometry, width: f64, height: f64, sidebar: Option<f64>) -> Vec<Shape> {
     let mut shapes = vec![Shape::rect(0.0, 0.0, width, height, Fill::Background)];
+    let top = g.topbar_px.min(height);
+    shapes.push(Shape::rect(0.0, 0.0, width, top, Fill::TitleBar));
+    shapes.push(Shape::rect(0.0, top - 1.0, width, 1.0, Fill::Border));
     let main_x = match sidebar {
         Some(w) => {
             let w = w.clamp(g.sidebar_width.min, g.sidebar_width.max).min(width);
-            shapes.push(Shape::rect(0.0, 0.0, w, height, Fill::Surface));
+            shapes.push(Shape::rect(0.0, top, w, height - top, Fill::Surface));
             // `border-r` inside the sidebar's width (border-box).
-            shapes.push(Shape::rect(w - 1.0, 0.0, 1.0, height, Fill::Border));
+            shapes.push(Shape::rect(w - 1.0, top, 1.0, height - top, Fill::Border));
             w
         }
         None => 0.0,
@@ -266,7 +270,7 @@ fn sidebar_from_prefs(prefs: &Value, g: &Geometry) -> Option<f64> {
 /// `COLORREF`s of each fill in one scheme.
 #[derive(Clone, Copy)]
 struct Palette {
-    fills: [u32; 6],
+    fills: [u32; 7],
     /// Opacity of the sidebar band: under the Mica backdrop the page tints it over the backdrop (`micaSidebarShare`).
     sidebar_alpha: u8,
 }
@@ -280,6 +284,7 @@ impl Palette {
         Some(Self {
             fills: [
                 colour(&colours[scheme])?,
+                colour(&boot["surface"])?,
                 colour(&boot["surface"])?,
                 colour(&boot["border"])?,
                 colour(&boot["field"])?,
@@ -672,13 +677,13 @@ unsafe fn render(
             .find(|shape| shape.fill == Fill::Surface)
             .map(|shape| {
                 let px = |v: f64| (v * scale).round() as usize;
-                px(shape.x)..px(shape.x + shape.w - 1.0)
+                (px(shape.x)..px(shape.x + shape.w - 1.0), px(shape.y))
             });
         let pixels = std::slice::from_raw_parts_mut(bits.cast::<u32>(), (w * h) as usize);
         for (i, pixel) in pixels.iter_mut().enumerate() {
-            let in_band = band
-                .as_ref()
-                .is_some_and(|band| band.contains(&(i % w as usize)));
+            let in_band = band.as_ref().is_some_and(|(band, top)| {
+                i >= *top * w as usize && band.contains(&(i % w as usize))
+            });
             let alpha = if in_band { palette.sidebar_alpha } else { 255 };
             *pixel = premultiplied(*pixel, alpha);
         }
@@ -764,7 +769,11 @@ mod tests {
         );
         let shapes = layout(&g, 1400.0, 900.0, Some(9999.0));
         assert_eq!(find(&shapes, Fill::Surface)[0].w, g.sidebar_width.max);
-        assert_eq!(find(&shapes, Fill::Border)[0].x, g.sidebar_width.max - 1.0);
+        assert_eq!(find(&shapes, Fill::Surface)[0].y, 36.0);
+        let lines = find(&shapes, Fill::Border);
+        assert_eq!((lines[0].x, lines[0].w, lines[0].y), (0.0, 1400.0, 35.0));
+        assert_eq!((lines[1].x, lines[1].y), (g.sidebar_width.max - 1.0, 36.0));
+        assert_eq!(find(&shapes, Fill::TitleBar)[0].w, 1400.0);
         let collapsed = layout(&g, 1400.0, 900.0, None);
         assert!(find(&collapsed, Fill::Surface).is_empty());
     }

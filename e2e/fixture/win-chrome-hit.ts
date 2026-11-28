@@ -1,10 +1,11 @@
 /** Playwright runs under Node. This short-lived Bun process queries only its fixture's top-level HWND. */
-import { dlopen, FFIType as T, ptr } from "bun:ffi";
+import { dlopen, ptr, FFIType as T } from "bun:ffi";
 
 const { symbols: win } = dlopen("user32.dll", {
 	GetWindowThreadProcessId: { args: [T.u64, T.ptr], returns: T.u32 },
 	SetThreadDpiAwarenessContext: { args: [T.i64], returns: T.i64 },
 	ClientToScreen: { args: [T.u64, T.ptr], returns: T.i32 },
+	IsIconic: { args: [T.u64], returns: T.i32 },
 	IsZoomed: { args: [T.u64], returns: T.i32 },
 	SendMessageTimeoutW: { args: [T.u64, T.u32, T.u64, T.i64, T.u32, T.u32, T.ptr], returns: T.i64 },
 });
@@ -12,12 +13,16 @@ const { hwnd, pid, scale, points } = JSON.parse(process.argv[2]) as {
 	hwnd: number;
 	pid: number;
 	scale: number;
-	points: Record<string, { x: number; y: number }>;
+	points?: Record<string, { x: number; y: number }>;
 };
 const handle = BigInt(hwnd);
 const owner = Buffer.alloc(4);
 if (!win.GetWindowThreadProcessId(handle, ptr(owner)) || owner.readUInt32LE() !== pid)
 	throw new Error(`HWND ${hwnd} does not belong to the test shell PID ${pid}`);
+if (!points) {
+	process.stdout.write(win.IsIconic(handle) ? "minimized" : win.IsZoomed(handle) ? "maximized" : "normal");
+	process.exit(0);
+}
 // Per-monitor V2 prevents ClientToScreen from returning virtualized coordinates on scaled monitors.
 if (!win.SetThreadDpiAwarenessContext(-4n)) throw new Error("Cannot set per-monitor DPI awareness");
 const origin = Buffer.alloc(8);

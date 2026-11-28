@@ -1,9 +1,11 @@
-import type { OmpApi } from "../shared/ipc-types";
+import type { NativeWindowChrome, NativeWindowState, OmpApi } from "../shared/ipc-types";
 import { createOmpApi, type OmpTransport } from "../shared/omp-api";
 import { describePreloadFailure } from "../shared/preload-failure";
 
 type Kind = "invoke" | "send" | "ready" | "preloadError" | "profileRead" | "profileAck" | "windowControl";
 type NativeInvoke = (command: string, args: { kind: Kind; payload: string }) => Promise<unknown>;
+// A lexical binding provided by the host around the top frame's initialization script.
+declare const OMP_WINDOW_KEY: string;
 
 const nativeWindow = window as unknown as { __TAURI_INTERNALS__?: { invoke?: NativeInvoke }; omp: OmpApi };
 const invoke = nativeWindow.__TAURI_INTERNALS__?.invoke;
@@ -219,42 +221,80 @@ async function migrateProfile(): Promise<void> {
 // HWND-backed WebView2 handles CSS drag regions, but CSS cannot mark a Windows maximize button.
 // Report only the top row, in client physical pixels (including the page's current zoom).
 function watchCaptionRegions(): void {
-	const layers = ".omp-dialog-overlay,.omp-action-sheet-overlay,[data-sheet-placement],.omp-pop-in,dialog[open],[popover]:popover-open,[role=dialog],[role=menu]";
+	const layers =
+		".omp-dialog-overlay,.omp-action-sheet-overlay,[data-sheet-placement],.omp-pop-in,dialog[open],[popover]:popover-open,[role=dialog],[role=menu]";
 	const controls = "button,a,input,textarea,select,[role=button],[role=tab],[contenteditable=true]";
-	const chrome = `.drag-region,.no-drag,[data-caption],${layers}`;
+	const rowSelector = "[data-desktop-titlebar]";
+	const changes = new MutationObserver(schedule);
 	const watched = new Set<Element>();
 	let frame = 0;
 	let sent = "";
 	let sending = false;
-	const schedule = () => {
-		if (!frame) frame = requestAnimationFrame(sync);
-	};
+	let dirty = false;
+	let bar: Element | null = null;
+	function schedule(): void {
+		if (sending) dirty = true;
+		else if (!frame) frame = requestAnimationFrame(sync);
+	}
 	const resize = new ResizeObserver(schedule);
 	function sync(): void {
 		frame = 0;
-		if (sending) return;
+		if (!bar?.isConnected) bar = document.querySelector(rowSelector);
+		// DesktopChrome marks the document when its title bar mounts. Watch the row and the
+		// containers that own overlay portals, never transcript descendants.
+		changes.disconnect();
+		changes.observe(document.documentElement, { attributes: true, attributeFilter: ["data-desktop-chrome"] });
+		if (bar)
+			changes.observe(bar, {
+				subtree: true,
+				childList: true,
+				attributes: true,
+				attributeFilter: ["class", "style", "hidden", "inert"],
+			});
+		const shells = new Set<Element>([document.body]);
+		if (bar?.parentElement) {
+			shells.add(bar.parentElement);
+			for (const el of bar.parentElement.children) if (el.classList.contains("contents")) shells.add(el);
+		}
+		const overlays: Element[] = [];
+		for (const shell of shells) {
+			changes.observe(shell, { childList: true });
+			for (const el of shell.children)
+				if (el.matches(layers)) {
+					overlays.push(el);
+					changes.observe(el, { attributes: true, attributeFilter: ["class", "style", "open", "inert"] });
+				}
+		}
 		const dpr = window.devicePixelRatio;
 		const width = Math.round(window.innerWidth * dpr);
 		const height = Math.round(36 * dpr);
 		const cells: Array<[string, number, number, number, number]> = [];
 		const current = new Set<Element>();
 		const add = (el: Element, kind: string) => {
-			current.add(el);
-			if (!watched.has(el)) resize.observe(el);
+			if (el.hasAttribute("inert")) return;
 			const rect = el.getBoundingClientRect();
 			const l = Math.max(0, Math.round(rect.left * dpr));
 			const t = Math.max(0, Math.round(rect.top * dpr));
 			const r = Math.min(width, Math.round(rect.right * dpr));
 			const b = Math.min(height, Math.round(rect.bottom * dpr));
-			if (l >= r || t >= b || getComputedStyle(el).visibility !== "visible") return;
+			if (l >= r || t >= b) return;
+			const style = getComputedStyle(el);
+			if (style.visibility !== "visible" || style.pointerEvents === "none") return;
+			current.add(el);
+			if (!watched.has(el)) resize.observe(el);
 			const cell: [string, number, number, number, number] = [kind, l, t, r, b];
 			cells.push(cell);
 			return cell;
 		};
-		for (const el of document.querySelectorAll(".drag-region")) add(el, "drag");
-		for (const el of document.querySelectorAll(`.no-drag,.drag-region :is(${controls})`)) add(el, "client");
+		if (bar) {
+			add(bar, "drag");
+			for (const el of bar.querySelectorAll(`.no-drag,${controls}`)) {
+				// A no-drag tab strip already covers its clipped/scrolled children.
+				if (!el.parentElement?.closest(".no-drag")) add(el, "client");
+			}
+		}
 		const buttons = new Map<Element, (typeof cells)[number]>();
-		for (const el of document.querySelectorAll<HTMLElement>("[data-caption]")) {
+		for (const el of bar?.querySelectorAll<HTMLElement>("[data-caption]") ?? []) {
 			const action = el.dataset.caption;
 			if (action === "minimize" || action === "maximize" || action === "close") {
 				const cell = add(el, action);
@@ -262,13 +302,19 @@ function watchCaptionRegions(): void {
 			}
 		}
 		const front: typeof cells = [];
-		for (const el of document.querySelectorAll(layers)) {
+		for (const el of overlays) {
 			const layer = add(el, "client");
 			if (!layer) continue;
 			for (const [button, cell] of buttons) {
-				const l = Math.max(cell[1], layer[1]), t = Math.max(cell[2], layer[2]);
-				const r = Math.min(cell[3], layer[3]), b = Math.min(cell[4], layer[4]);
-				if (l < r && t < b && button.contains(document.elementFromPoint((l + r) / (2 * dpr), (t + b) / (2 * dpr)))) {
+				const l = Math.max(cell[1], layer[1]),
+					t = Math.max(cell[2], layer[2]);
+				const r = Math.min(cell[3], layer[3]),
+					b = Math.min(cell[4], layer[4]);
+				if (
+					l < r &&
+					t < b &&
+					button.contains(document.elementFromPoint((l + r) / (2 * dpr), (t + b) / (2 * dpr)))
+				) {
 					front.push([cell[0], l, t, r, b]);
 				}
 			}
@@ -281,84 +327,108 @@ function watchCaptionRegions(): void {
 		const key = JSON.stringify(payload);
 		if (key === sent) return;
 		sending = true;
-		void call("windowControl", payload).then(() => {
-			sent = key;
-			schedule(); // A reflow during the call must publish the newest geometry last.
-		}).catch(error => note("window hit regions", error)).finally(() => { sending = false; });
+		void windowControl(payload)
+			.then(() => {
+				sent = key;
+			})
+			.catch(error => note("window hit regions", error))
+			.finally(() => {
+				sending = false;
+				if (dirty) {
+					dirty = false;
+					schedule();
+				}
+			});
 	}
-	new MutationObserver(records => {
-		for (const record of records) {
-			const target = record.target;
-			if (target instanceof Element && (watched.has(target) || target.closest(chrome))) return schedule();
-			for (const node of [...record.addedNodes, ...record.removedNodes]) {
-				if (node instanceof Element && (node.matches(chrome) || node.querySelector(chrome))) return schedule();
-			}
-		}
-	}).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "style", "hidden", "open", "data-state"] });
 	window.addEventListener("resize", schedule);
-	document.addEventListener("scroll", event => {
-		if (event.target instanceof Element && event.target.closest(".drag-region")) schedule();
-	}, true);
+	document.addEventListener(
+		"animationend",
+		event => {
+			if (event.target instanceof Element && event.target.matches(layers)) schedule();
+		},
+		true,
+	);
 	transport.on("window-chrome:hover", action => {
-		if (action === "minimize" || action === "maximize" || action === "close") document.documentElement.dataset.captionHover = action;
+		if (action === "minimize" || action === "maximize" || action === "close")
+			document.documentElement.dataset.captionHover = action;
 		else delete document.documentElement.dataset.captionHover;
 	});
 	schedule();
 }
 
-/**
- * Windows: the host's windows have no OS caption (`decorations` off, as Electron's `titleBarStyle: "hidden"` with a
- * `titleBarOverlay`), so the three caption buttons are drawn here, over the top-right corner, in the colors main last
- * set (`__ompTauriCaption`, from `setTitleBarOverlay`; the theme's own until then). Their room is the Window Controls
- * Overlay's `env(titlebar-area-*)` that WebView2 does not have, so the stylesheet's two variables are set to it.
- */
-const CAPTION_BUTTON_WIDTH = 46;
-function installCaptionButtons(): void {
-	// At once, before the first paint: the top bars' room for the buttons must not arrive after it (a layout shift).
-	const style = document.createElement("style");
-	style.textContent = `html[data-platform="win32"]:root{--sc-caption-buttons:${CAPTION_BUTTON_WIDTH * 3}px!important;--sc-caption-band:36px!important}
-[data-caption-buttons]{position:fixed;top:0;right:0;height:36px;z-index:2147483647;display:flex;-webkit-app-region:no-drag;app-region:no-drag;background:var(--omp-caption-bg,var(--sc-bg,#fff));color:var(--omp-caption-fg,var(--sc-text,#1b1b1f));font:10px "Segoe MDL2 Assets","Segoe Fluent Icons",system-ui}
-[data-caption-buttons] button{all:unset;box-sizing:border-box;width:${CAPTION_BUTTON_WIDTH}px;height:100%;display:grid;place-items:center;cursor:default;-webkit-app-region:no-drag;app-region:no-drag}
-[data-caption-buttons] button:hover,html[data-caption-hover=minimize] [data-caption=minimize],html[data-caption-hover=maximize] [data-caption=maximize]{background:color-mix(in srgb,currentColor 12%,transparent)}
-[data-caption-buttons] button[data-caption="close"]:hover,html[data-caption-hover=close] [data-caption=close]{background:#c42b1c;color:#fff}`;
-	document.documentElement.appendChild(style);
-	const build = () => {
-		const bar = document.createElement("div");
-		bar.dataset.captionButtons = "";
-		const maximize = document.createElement("button");
-		const glyphs: Array<[string, string, string]> = [
-			["minimize", "\uE921", "Minimize"],
-			["maximize", "\uE922", "Maximize"],
-			["close", "\uE8BB", "Close"],
-		];
-		for (const [action, glyph, label] of glyphs) {
-			const button = action === "maximize" ? maximize : document.createElement("button");
-			button.dataset.caption = action;
-			button.type = "button";
-			button.tabIndex = -1;
-			button.setAttribute("aria-label", label);
-			button.textContent = glyph;
-			button.addEventListener("click", () => void call("windowControl", { action }).catch(() => undefined));
-			bar.appendChild(button);
-		}
-		const sync = () => {
-			const filled = window.outerWidth >= screen.availWidth && window.outerHeight >= screen.availHeight;
-			maximize.textContent = filled ? "\uE923" : "\uE922";
-			maximize.setAttribute("aria-label", filled ? "Restore" : "Maximize");
-		};
-		window.addEventListener("resize", sync);
-		sync();
-		document.body.appendChild(bar);
-		watchCaptionRegions();
-		Object.defineProperty(window, "__ompTauriCaption", {
-			value: (colors: { color?: string; symbolColor?: string }) => {
-				if (colors.color) bar.style.setProperty("--omp-caption-bg", colors.color);
-				if (colors.symbolColor) bar.style.setProperty("--omp-caption-fg", colors.symbolColor);
-			},
-		});
+function windowControl(payload: { action: string; x?: number; y?: number }): Promise<unknown> {
+	return call("windowControl", { ...payload, key: OMP_WINDOW_KEY });
+}
+
+function windowState(value: unknown): NativeWindowState {
+	if (
+		!value ||
+		typeof value !== "object" ||
+		!("maximized" in value) ||
+		typeof value.maximized !== "boolean" ||
+		!("fullscreen" in value) ||
+		typeof value.fullscreen !== "boolean"
+	)
+		throw new Error("Invalid native window state");
+	return { maximized: value.maximized, fullscreen: value.fullscreen };
+}
+
+const nativeChrome: NativeWindowChrome = {
+	getState: async () => windowState(await windowControl({ action: "state" })),
+	onStateChanged: listener => transport.on("window-chrome:state", value => listener(windowState(value))),
+	minimize: async () => {
+		await windowControl({ action: "minimize" });
+	},
+	toggleMaximize: async () => {
+		await windowControl({ action: "maximize" });
+	},
+	close: async () => {
+		await windowControl({ action: "close" });
+	},
+	showMenu: async (x, y) => {
+		await windowControl({ action: "menu", x, y });
+	},
+};
+
+function watchMacDrag(): void {
+	const blank = (event: MouseEvent) => {
+		const target = event.target;
+		return (
+			event.isTrusted &&
+			!event.defaultPrevented &&
+			event.button === 0 &&
+			!event.ctrlKey &&
+			event.clientY >= 0 &&
+			event.clientY < 36 &&
+			target instanceof Element &&
+			target.closest("[data-desktop-titlebar]") &&
+			!target.closest(
+				".no-drag,button,a,input,select,textarea,[contenteditable=true],[role=button],[role=tab],[role=dialog],[role=menu]",
+			)
+		);
 	};
-	if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", build, { once: true });
-	else build();
+	let second: { x: number; y: number } | undefined;
+	document.addEventListener("mousedown", event => {
+		second = undefined;
+		if (!blank(event)) return;
+		if (event.detail === 2) {
+			second = { x: event.clientX, y: event.clientY };
+		} else if (event.detail === 1) {
+			event.preventDefault();
+			void windowControl({ action: "drag", x: event.clientX, y: event.clientY }).catch(error =>
+				note("window drag", error),
+			);
+		}
+	});
+	document.addEventListener("mouseup", event => {
+		const down = second;
+		second = undefined;
+		if (down && event.detail === 2 && event.clientX === down.x && event.clientY === down.y && blank(event)) {
+			void windowControl({ action: "doubleClick", x: event.clientX, y: event.clientY }).catch(error =>
+				note("title bar double-click", error),
+			);
+		}
+	});
 }
 
 const location = window.location;
@@ -369,8 +439,7 @@ const profileBootstrap =
 
 // Tauri adds an initialization script to every subframe on Windows (its docs: "scripts are always added to subframes"),
 // and Electron's preload ran in the top frame only. A frame inside the page (a document viewer, a sandboxed reply
-// frame) gets no `window.omp`, no caption buttons and no readiness handshake: it would throw "Tauri invoke is
-// unavailable" there, as a page error of the window that holds it.
+// frame) gets no `window.omp` or readiness handshake.
 if (window.top !== window) {
 	// Subframe: nothing to install.
 } else if (profileBootstrap) {
@@ -411,7 +480,7 @@ if (window.top !== window) {
 					.catch(() => undefined);
 			},
 		});
-		const shared = createOmpApi(transport);
+		const shared = createOmpApi(transport, typeof OMP_WINDOW_KEY === "string" ? nativeChrome : undefined);
 		const api: OmpApi = {
 			...shared,
 			fs: {
@@ -421,10 +490,16 @@ if (window.top !== window) {
 			},
 		};
 		nativeWindow.omp = api;
-		try {
-			if (navigator.platform.toLowerCase().startsWith("win")) installCaptionButtons();
-		} catch (error) {
-			console.error("Tauri caption buttons failed", error);
+		const platform = navigator.platform?.toLowerCase();
+		if (typeof OMP_WINDOW_KEY === "string") {
+			const install = platform?.startsWith("win")
+				? watchCaptionRegions
+				: platform?.startsWith("mac")
+					? watchMacDrag
+					: undefined;
+			if (install && document.readyState === "loading")
+				document.addEventListener("DOMContentLoaded", install, { once: true });
+			else install?.();
 		}
 		void nativeCall("ready", encode({ userAgent: navigator.userAgent }))
 			.then(answer => {

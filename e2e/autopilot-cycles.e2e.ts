@@ -132,8 +132,13 @@ for (const language of variants(["en", "ko"] as const))
 				// The worktree's folder (`gui-<date>-<hash>`) never shows: the project and the kind do, the path is the tooltip.
 				const project = path.basename(profile.project);
 				const worktreeName = `${project} · ${TEXT[language].autopilot}`;
+				await page.locator("[data-session-tab-menu]").click();
+				await page
+					.getByRole("menuitem", { name: language === "en" ? "Session details" : "세션 상세 정보" })
+					.click();
 				await expect(page.locator("[data-titlebar-worktree]")).toHaveText(TEXT[language].autopilot);
 				await expect(page.locator(".omp-titlebar-project").first()).toHaveText(project);
+				await page.keyboard.press("Escape");
 				await expect(page.locator("[data-board-project]")).toHaveText(worktreeName);
 				// The run is a row of its project's own group, marked as a run; no group of its own.
 				const runRow = page.locator(".omp-sidebar-session-row").filter({

@@ -13,7 +13,6 @@ type Geometry = {
 	height: number;
 	screen: { width: number; height: number };
 	scale: number;
-	rendererBar: boolean;
 	visibleCaptions: number;
 	points: Points;
 };
@@ -26,7 +25,8 @@ function geometry(page: Page, beforeFullscreen?: Geometry): Promise<Geometry> {
 			const { x, y } = rectCenter(el.getBoundingClientRect());
 			return el.contains(document.elementFromPoint(x, y)) ? { x, y } : undefined;
 		};
-		const desktopBar = document.querySelector("[data-desktop-titlebar]");
+		const bar = document.querySelector("[data-desktop-titlebar]");
+		if (!bar) throw new Error("No desktop session title bar");
 		const points: Points = {};
 		if (previous) {
 			// The buttons disappear. Probe where their measured centers would be at the new right edge.
@@ -35,8 +35,6 @@ function geometry(page: Page, beforeFullscreen?: Geometry): Promise<Geometry> {
 				points[name] = { x: innerWidth - (previous.width - x), y };
 			}
 		} else {
-			const bar = desktopBar ?? document.querySelector("header.omp-titlebar");
-			if (!bar) throw new Error("No desktop session title bar");
 			for (const name of ["minimize", "maximize", "close"]) {
 				const buttons = document.querySelectorAll(`button[data-caption="${name}"]`);
 				const center = buttons.length === 1 && visibleCenter(buttons[0]);
@@ -49,22 +47,9 @@ function geometry(page: Page, beforeFullscreen?: Geometry): Promise<Geometry> {
 			if (!control) throw new Error("No exposed interactive title bar control");
 			points.control = control;
 			const drag = bar.querySelector("[data-titlebar-drag]");
-			if (drag) {
-				const center = visibleCenter(drag);
-				if (!center) throw new Error("The drag area is covered");
-				points.drag = center;
-			} else {
-				// The preceding renderer has no drag spacer. Its exposed header between controls is draggable.
-				const rect = bar.getBoundingClientRect();
-				const { y } = rectCenter(rect);
-				for (let x = Math.ceil(rect.left) + 12; x < rect.right - 12; x += 4) {
-					if ([-3, 0, 3].every(dx => document.elementFromPoint(x + dx, y) === bar)) {
-						points.drag = { x, y };
-						break;
-					}
-				}
-				if (!points.drag) throw new Error("No exposed draggable header between controls");
-			}
+			const center = drag && visibleCenter(drag);
+			if (!center) throw new Error("The drag area is missing or covered");
+			points.drag = center;
 			points.top = { x: points.drag.x, y: 1 };
 		}
 		return {
@@ -72,7 +57,6 @@ function geometry(page: Page, beforeFullscreen?: Geometry): Promise<Geometry> {
 			height: innerHeight,
 			screen: { width: screen.width, height: screen.height },
 			scale: devicePixelRatio,
-			rendererBar: !!desktopBar,
 			visibleCaptions: [...document.querySelectorAll("button[data-caption]")].filter(el => el.checkVisibility())
 				.length,
 			points,
@@ -125,8 +109,7 @@ test("@smoke Windows title bar returns native hit codes for the rendered control
 						expect(Math.abs(dom.width - dom.screen.width)).toBeLessThanOrEqual(1);
 						expect(Math.abs(dom.height - dom.screen.height)).toBeLessThanOrEqual(1);
 						expect(native.hits).toEqual({ minimize: HT.client, maximize: HT.client, close: HT.client });
-						// The native-only change predates the renderer taking ownership of the visible buttons.
-						if (previous?.rendererBar) expect(dom.visibleCaptions).toBe(0);
+						expect(dom.visibleCaptions).toBe(0);
 					} else {
 						expect(native.maximized).toBe(state === "maximized");
 						const { top, ...hits } = native.hits;

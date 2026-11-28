@@ -286,6 +286,8 @@ interface UiStore {
 	toolsExpandAll: { expanded: boolean; seq: number };
 	/** Show / hide the docked sidebar (only ever by the user). */
 	toggleSidebar: () => void;
+	paneExpanded: boolean;
+	togglePaneExpanded: () => void;
 	togglePanel: () => void;
 	toggleToolsExpandAll: () => void;
 	setPanelTab: (tab: InspectorTab) => void;
@@ -520,6 +522,8 @@ export const useUiStore = create<UiStore>()((set, get) => ({
 	workBoardReveal: null,
 	transcriptDetail: "compact",
 	toggleSidebar: () => set({ sidebarVisible: !get().sidebarVisible }),
+	paneExpanded: false,
+	togglePaneExpanded: () => set(state => ({ paneExpanded: !state.paneExpanded })),
 	// The editor's own dialog (Files view) asks first, so a switch that would unmount it waits in `pendingFileSwitch`.
 	togglePanel: () => {
 		const next = { panelVisible: !get().panelVisible };

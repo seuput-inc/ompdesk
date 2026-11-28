@@ -234,7 +234,7 @@ function deletionPreview(preview: BotDeletePreview | undefined): BotDeletePrevie
 /** `window.omp` without `fs.pathForFile`, which only the Electron preload can answer. */
 export type TransportOmpApi = Omit<OmpApi, "fs"> & { fs: Omit<OmpApi["fs"], "pathForFile"> };
 
-export function createOmpApi(transport: OmpTransport): TransportOmpApi {
+export function createOmpApi(transport: OmpTransport, native?: OmpApi["windowChrome"]["native"]): TransportOmpApi {
 	const rpcCommand = (cmd: RpcCommand, timeoutMs?: number): Promise<RpcResponse> =>
 		transport.invoke(IPC_COMMANDS.RPC_COMMAND, {
 			command: cmd,
@@ -886,7 +886,7 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 		},
 
 		windowChrome: {
-			setColors: colors => transport.send(IPC_EVENTS.WINDOW_CHROME_SET, colors),
+			native,
 		},
 
 		models: {

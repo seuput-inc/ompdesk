@@ -90,13 +90,12 @@ async function controlsUnderCaption(page: Page): Promise<string[]> {
 				if (control.closest("[data-caption-buttons]") || control.getAttribute("aria-hidden") === "true") continue;
 				const box = control.getBoundingClientRect();
 				if (box.width === 0 || box.height === 0) continue;
-				if (box.right <= band.left || box.top >= band.bottom) continue;
-				// The part inside the band must be what the person sees there: a control under a layer (a sheet's backdrop
-				// over the title bar) is covered, not offered.
-				const x = Math.min(box.right, innerWidth) - Math.min(8, box.width / 2);
-				const y = Math.max(box.top, 0) + Math.min(8, box.height / 2);
-				const top = document.elementFromPoint(x, y);
-				if (!top || (top !== control && !control.contains(top))) continue;
+				if (box.right <= band.left || box.left >= innerWidth || box.top >= band.bottom || box.bottom <= 0) continue;
+				const x = (Math.max(box.left, band.left) + Math.min(box.right, innerWidth)) / 2;
+				const y = (Math.max(box.top, 0) + Math.min(box.bottom, band.bottom)) / 2;
+				// Ignore the caption cells, not the control they cover (for example a sheet's close button).
+				const underneath = document.elementsFromPoint(x, y).find(el => !el.closest("[data-caption-buttons]"));
+				if (!underneath || !control.contains(underneath)) continue;
 				const label = (control.getAttribute("aria-label") ?? control.textContent ?? "").trim().slice(0, 40);
 				const id = control.id ? `#${control.id}` : "";
 				const cls =
@@ -117,7 +116,7 @@ for (const { look, surfaces } of SURFACE_LOOKS) {
 	test(`a Windows window ${look.width}×${look.height} keeps every control out from under the caption buttons`, async () => {
 		if (!browser) throw new Error("the browser is not up");
 		const page = await openLook(browser, look, { origin, query: "&platform=win32" });
-		expect(await page.locator("[data-caption-buttons]").count(), "the harness paints the caption buttons").toBe(1);
+		await expect(page.locator("[data-caption-buttons] [data-caption]")).toHaveCount(3);
 		const found = surfaces.map(id => SURFACES.find(surface => surface.id === id));
 		expect(found.map(surface => surface?.id)).toEqual(surfaces);
 		const failures: string[] = [];

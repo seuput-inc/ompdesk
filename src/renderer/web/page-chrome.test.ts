@@ -55,7 +55,7 @@ describe("WebChrome", () => {
 	it("sets every theme-color to the top bar's color, whatever the OS scheme", () => {
 		const doc = page();
 		const chrome = new WebChrome({ document: doc, navigator: {} });
-		chrome.applyColors({ color: "#123456", symbolColor: "#fff" });
+		chrome.setThemeColor("#123456");
 		const metas = Array.from(doc.querySelectorAll('meta[name="theme-color"]'));
 		expect(metas.map(meta => meta.getAttribute("content"))).toEqual(["#123456", "#123456"]);
 		expect(metas.some(meta => meta.hasAttribute("media"))).toBe(false);

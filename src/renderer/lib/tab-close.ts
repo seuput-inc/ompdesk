@@ -65,13 +65,20 @@ export function performTabClose(tab: SessionTab): TabCloseOutcome {
 /** ⌘W / File → Close Tab: close the active tab under the shared rules. */
 export function closeActiveTab(): TabCloseOutcome {
 	const { tabs, activeTabId } = useTabsStore.getState();
-	const session = useSessionStore.getState();
-	const target = tabs.find(tab => tab.id === activeTabId);
-	if (!target) return "nothing";
-	if (tabs.length <= 1) {
+	if (!activeTabId || !tabs.some(tab => tab.id === activeTabId)) return "nothing";
+	if (tabs.length === 1) {
 		window.close();
 		return "window";
 	}
+	return closeSessionTab(activeTabId);
+}
+
+/** A tab's own close control never closes the window. */
+export function closeSessionTab(tabId: string): TabCloseOutcome {
+	const { tabs, activeTabId } = useTabsStore.getState();
+	const target = tabs.find(tab => tab.id === tabId);
+	if (!target || tabs.length < 2) return "nothing";
+	const session = useSessionStore.getState();
 	const live: LiveTabRuntime = {
 		activeTabId,
 		streaming: session.isStreaming,

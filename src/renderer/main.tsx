@@ -1,14 +1,17 @@
-import { Suspense } from "react";
+import { type ReactNode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import type { ShellStreamReset } from "../preload/shell";
 import { App } from "./App";
 import { RootErrorBoundary } from "./components/common/RootErrorBoundary";
 import { loadSidebar, sessionListBeforeFirstRender } from "./components/layout/sidebar-chunk";
 import { installTranscriptSeeding } from "./hooks/session-hydration";
-import { lazyChunk, watchChunkFailures } from "./lib/chunk-load";
+import { currentShellMode } from "./hooks/use-shell-mode";
+import { chromeLayout, chromeViewer } from "./lib/chrome-layout";
+import { lazyChunk, loadChunk, watchChunkFailures } from "./lib/chunk-load";
 import { getCurrentLanguage, I18nProvider, loadLocale } from "./lib/i18n";
 import { loadMotionPlay } from "./lib/motion";
 import { installGlobalRuntimeErrorHandlers, reportRuntimeError } from "./lib/runtime-errors";
+import { chromePlatform } from "./lib/window-chrome";
 import { useUiStore } from "./stores/ui";
 import "./styles/global.css";
 import "./styles/tokens.css";
@@ -93,21 +96,41 @@ const root = createRoot(container, {
 // text ever paints as its key; a chunk that fails to load still renders (English keys) rather than nothing. The
 // session list's chunk joins it where the list is in the first frame or the next touch must not wait on the network
 // (components/layout/sidebar-chunk.ts).
-const render = () =>
+const render = (desktopBar: ReactNode) =>
 	root.render(
 		<RootErrorBoundary>
 			<I18nProvider>
 				{window.location.hash === "#/styleguide" ? (
-					<Suspense fallback={null}>
-						<StyleGuide />
-					</Suspense>
+					<>
+						{desktopBar}
+						<Suspense fallback={null}>
+							<StyleGuide />
+						</Suspense>
+					</>
 				) : (
-					<App />
+					<App desktopBar={desktopBar} />
 				)}
 			</I18nProvider>
 		</RootErrorBoundary>,
 	);
-void Promise.all([loadLocale(getCurrentLanguage()), sessionListBeforeFirstRender() ? loadSidebar() : null]).then(
-	render,
-	render,
+const viewer = chromeViewer(chromePlatform(), currentShellMode());
+function FailedBoot({ error }: { error: unknown }): never {
+	throw error;
+}
+void Promise.all([
+	chromeLayout(viewer, false).bar === "desktop"
+		? loadChunk(() => import("./components/layout/DesktopChrome")).then(({ DesktopChrome }) => (
+				<DesktopChrome viewer={viewer} />
+			))
+		: null,
+	Promise.allSettled([loadLocale(getCurrentLanguage()), sessionListBeforeFirstRender() ? loadSidebar() : null]),
+]).then(
+	([bar]) => render(bar),
+	error => {
+		root.render(
+			<RootErrorBoundary>
+				<FailedBoot error={error} />
+			</RootErrorBoundary>,
+		);
+	},
 );

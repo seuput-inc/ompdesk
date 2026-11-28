@@ -171,7 +171,10 @@ test("@smoke connects two computers over the tailnet with no code, runs a prompt
 			.toBe("ready");
 		const remoteTab = (await a.evaluate(() => window.omp.tabs.list())).find(tab => tab.device === deviceId);
 		expect(remoteTab).toMatchObject({ cwd: host.project, active: true });
-		await expect(a.locator(`[data-device-chip="${deviceId}"]`).first()).toBeVisible();
+		await a.locator("[data-session-tab-menu]").click();
+		await a.getByRole("menuitem", { name: "Session details" }).click();
+		await expect(a.locator(`[data-session-tab-details] [data-device-chip="${deviceId}"]`)).toBeVisible();
+		await a.keyboard.press("Escape");
 
 		await a.locator("textarea").first().fill("remote hello");
 		await a.getByRole("button", { name: "Send", exact: true }).click();

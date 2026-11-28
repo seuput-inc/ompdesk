@@ -51,7 +51,7 @@ function setup(replies: Record<string, unknown> = {}, overrides: Partial<ShimEnv
 	const answers = { confirm: true, prompt: null as string | null, pick: [] as File[], tabId: "t1" as string | null };
 	const chrome = {
 		applyTray: (state: unknown) => log.tray.push(state),
-		applyColors: (colors: unknown) => log.colors.push(colors),
+		setThemeColor: (color: string) => log.colors.push(color),
 		applyProgress: (state: unknown) => log.progress.push(state),
 	} as unknown as WebChrome;
 	const channels = new LocalChannels();
@@ -549,10 +549,10 @@ describe("the web shim", () => {
 			const { web, log, sent } = setup();
 			web.api.tray.pushState({ status: "approval" } as never);
 			web.api.progress.set("working");
-			web.api.windowChrome.setColors({ color: "#111", symbolColor: "#fff" });
+			web.api.windowChrome.setThemeColor?.("#111");
 			expect(log.tray).toEqual([{ status: "approval" }]);
 			expect(log.progress).toEqual(["working"]);
-			expect(log.colors).toEqual([{ color: "#111", symbolColor: "#fff" }]);
+			expect(log.colors).toEqual(["#111"]);
 			expect(sent).toEqual([]);
 		});
 

@@ -273,27 +273,23 @@ html[data-focus-modality="pointer"] :focus-visible::after {
 	-webkit-app-region: no-drag;
 }
 
-/* Frameless chrome (src/main/window-chrome.ts): the OS draws its window
-   controls over the 36px top bars (--sc-topbar-h), so the bar that sits under them makes
-   room. macOS traffic lights sit top-left (over the sidebar header, or over
-   the title bar when the sidebar is hidden / a 56px rail); the Windows
-   caption buttons sit top-right (over the side panel header when docked,
-   else over the main top bar) — their width comes from the Window Controls
-   Overlay env() variables. */
+/* Desktop columns start below the window row. Only overlays that reach the window edge reserve its buttons. */
 :root {
-	--sc-traffic-lights: 0px;
 	--sc-caption-buttons: 0px;
 	/* The height of the band the caption buttons take at the window's top edge (0 where there are none). */
 	--sc-caption-band: 0px;
 }
 
-html[data-platform="darwin"] {
-	--sc-traffic-lights: 80px;
+html[data-desktop-chrome="caption"] {
+	--sc-caption-band: var(--sc-topbar-h);
 }
 
-html[data-platform="win32"] {
-	--sc-caption-buttons: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
-	--sc-caption-band: env(titlebar-area-height, 0px);
+html[data-desktop-chrome] [data-testid="setup-takeover"] {
+	top: var(--sc-topbar-h);
+}
+
+html[data-desktop-chrome] [data-testid="setup-takeover"] > .drag-region {
+	display: none;
 }
 
 /* Overlays that reach the window's top edge: a right or full-screen sheet's header holds its close ✕ at the top-right
@@ -305,65 +301,14 @@ html[data-platform="win32"] {
 	padding-right: calc(var(--sc-space-3) + var(--sc-caption-buttons));
 }
 
-html[data-platform="win32"] body > .omp-dialog-overlay {
-	padding-top: calc(var(--sc-space-4) + var(--sc-caption-band));
-}
-
-.omp-sidebar-header {
-	padding-left: max(var(--sc-space-3), var(--sc-traffic-lights));
-}
-
-.omp-shell[data-sidebar="hidden"] .omp-topbar {
-	padding-left: max(var(--sc-space-2), var(--sc-traffic-lights));
-}
-
-/* `data-panel` (AppShell) names the side a docked panel takes, so no rule asks the shell `:has(> .omp-inspector)`: a
-   `:has()` on the root put the whole shell under Blink's `:has` invalidation, so each node streaming output inserted
-   restyled its matching descendants (live-session audit, 27 Oct 2026). */
-.omp-shell:not([data-panel]) .omp-topbar,
-.omp-panel-topbar {
+html[data-desktop-chrome="caption"] [data-sheet-placement] .omp-panel-topbar {
 	padding-right: calc(var(--sc-space-2) + var(--sc-caption-buttons));
 }
 
-/* On Windows the caption buttons (minimize, maximize, close) sit over a right-docked panel's header. The header's
-   first row is the caption band, the panel's title on its left and the window's buttons on its right; the panel's
-   own view buttons and close sit on a row below it, so the two ✕ never stand side by side (the user closed the
-   window reaching for the panel's, 22 Oct 2026). */
-html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-topbar {
-	padding-right: var(--sc-space-2);
-	padding-bottom: var(--sc-space-1);
+html[data-desktop-chrome="caption"] body > .omp-dialog-overlay {
+	padding-top: calc(var(--sc-space-4) + var(--sc-caption-band));
 }
 
-html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-topbar [data-panel-title] {
-	flex-basis: 100%;
-	height: var(--sc-topbar-h);
-	line-height: var(--sc-topbar-h);
-	padding-right: var(--sc-caption-buttons);
-}
-
-/* The band exists to keep the caption buttons clear; the title the pressed view icon names for the eye elsewhere is
-   shown in it, so the band is not an empty strip. */
-html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-topbar [data-panel-title] > .sr-only {
-	position: static;
-	width: auto;
-	height: auto;
-	margin: 0;
-	overflow: visible;
-	clip-path: none;
-	clip: auto;
-	white-space: nowrap;
-}
-
-html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-topbar :is([data-panel-views], [data-panel-title] + [data-panel-close]) {
-	margin-inline-start: auto;
-}
-
-/* A named view needs only its switcher. Keep its controls below the actual native caption band, not a second title. */
-html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-topbar[data-view-header] {
-	padding-top: var(--sc-caption-band);
-	min-height: calc(var(--sc-caption-band) + var(--sc-topbar-h));
-	padding-bottom: 0;
-}
 
 .omp-panel-topbar[data-view-header] [data-panel-title] {
 	position: absolute;
@@ -374,9 +319,6 @@ html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-to
 	clip-path: inset(50%);
 }
 
-html[data-platform="win32"] .omp-inspector:not([data-side="left"]) .omp-panel-topbar[data-view-header] [data-panel-views] {
-	margin-inline-start: 0;
-}
 
 /* The side panel's views (Orca's activity bar marker): the shown view is the full text colour over a 2 px line along
    its bottom, the others muted; no wash. `box-shadow`, never `::after`, which carries a touch control's hit area. */
@@ -516,24 +458,6 @@ html:not([data-input="touch"]) .omp-inspector .omp-explorer [data-files-search-m
 	font-weight: 400;
 }
 
-/* Side panel docked left (Settings › General › Window): it takes the
-   top-left corner from the session view when the sidebar is hidden, and
-   gives the top-right corner (Windows caption buttons) back to it. */
-.omp-shell[data-sidebar="hidden"] .omp-inspector[data-side="left"] .omp-panel-topbar {
-	padding-left: max(var(--sc-space-2), var(--sc-traffic-lights));
-}
-
-.omp-shell[data-sidebar="hidden"][data-panel="left"] .omp-topbar {
-	padding-left: var(--sc-space-2);
-}
-
-.omp-shell[data-panel="left"] .omp-topbar {
-	padding-right: calc(var(--sc-space-2) + var(--sc-caption-buttons));
-}
-
-.omp-inspector[data-side="left"] .omp-panel-topbar {
-	padding-right: var(--sc-space-2);
-}
 
 /* ============================================================================
    Motion system (docs/motion-design.md). Every duration, curve and distance is
@@ -844,20 +768,6 @@ html[data-gpu="software"] .omp-updating-hint {
 	--sc-sidebar-row-selected: color-mix(in srgb, var(--sc-text) 9%, transparent);
 }
 
-/* macOS: the traffic lights own the header's leading edge (padding above), so
-   the brand yields its slot, the collapse toggle follows the lights, and
-   search closes the row — the Claude/Codex arrangement. */
-html[data-platform="darwin"] .omp-sidebar-brand {
-	display: none;
-}
-
-html[data-platform="darwin"] .omp-sidebar-collapse {
-	order: -1;
-}
-
-html[data-platform="darwin"] .omp-sidebar-search {
-	margin-left: auto;
-}
 
 /* Rows rest one step quieter; hover and the current session lift to full text. */
 .omp-sidebar-session-row button[data-roving-item] {

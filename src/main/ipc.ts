@@ -274,7 +274,6 @@ import type { UploadStore } from "./web/uploads";
 import { WebClientWindow } from "./web/web-client-window";
 import type { WsRouter } from "./web/ws-router";
 import type { SpawnWindow, WindowManager } from "./window";
-import { sanitizeChromeColors, TOP_BAR_HEIGHT } from "./window-chrome";
 import {
 	FS_BINARY_LOCAL_MAX_BYTES,
 	listWorkspace,
@@ -957,15 +956,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	ipc.on(IPC_COMMANDS.RUNTIME_STARTUP_MARK, (_caller, mark: unknown) => markStartupFromRenderer(mark));
 
 	ipc.handle(IPC_COMMANDS.LOG_SNAPSHOT, () => logWatcher.getSnapshot());
-
-	// Windows title-bar overlay: the caption buttons repaint in the theme's top-bar colors.
-	ipc.on(IPC_EVENTS.WINDOW_CHROME_SET, (caller, value: unknown) => {
-		if (process.platform !== "win32") return;
-		const colors = sanitizeChromeColors(value);
-		const win = caller.browserWindow;
-		if (!colors || !win || win.isDestroyed()) return;
-		win.setTitleBarOverlay({ ...colors, height: TOP_BAR_HEIGHT });
-	});
 
 	/** Composer modes with no stock event: the other windows that show the tab re-read them (`noteModeChanged`). */
 	const MODE_TOGGLE_COMMANDS: Record<string, true> = {

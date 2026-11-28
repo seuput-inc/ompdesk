@@ -1,4 +1,4 @@
-import { type ComponentType, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { type ComponentType, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { MenuAction, RunProgressState } from "../shared/ipc-types";
 import { TRANSCRIPT_FIND_EVENT } from "./components/chat/TranscriptFind";
 import { Button, InlineNotice, Modal, ToastStack } from "./components/common";
@@ -229,12 +229,7 @@ const PANE_DIRECTION: Record<"pane.focusUp" | "pane.focusDown" | "pane.focusLeft
 		"pane.focusRight": "right",
 	};
 
-/**
- * Shell: Sidebar | (TitleBar / ChatStream / InputArea) | PanelContainer,
- * with command palette, extension dialogs, and the model picker overlaid.
- * useRpcEvents() wires the IPC event stream into the stores exactly once.
- */
-export function App() {
+export function App({ desktopBar }: { desktopBar: ReactNode }) {
 	useRpcEvents();
 	useModelWaitTogetherSync();
 	// ⌃⇥ / tab overview order and ⌘[ ⌘] history.
@@ -947,7 +942,8 @@ export function App() {
 	}, [t]);
 
 	const surface = (
-		<div className="omp-app-root flex h-screen w-screen overflow-hidden text-(--sc-text)">
+		<div className="omp-app-root flex h-screen w-screen flex-col overflow-hidden text-(--sc-text)">
+			{desktopBar}
 			<div className="contents" inert={setupTakeover}>
 				{activeTabId && <FocusedSessionEffects />}
 				<DesktopSlotEffects />
@@ -955,7 +951,7 @@ export function App() {
 				<OutputStyleEffects />
 				<IdleCompactionDraftEffects />
 				<HostAppearanceEffects />
-				<AppShell />
+				<AppShell desktopChrome={Boolean(desktopBar)} />
 
 				{visibleTabIds({ activeTabId, split }).map(tabId => (
 					<TabRuntimeProvider key={tabId} tabId={tabId}>
