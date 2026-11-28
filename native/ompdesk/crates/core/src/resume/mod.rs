@@ -212,6 +212,37 @@ where
 
 /// Direct core IPC `resume:stop`: ignores non-string args, otherwise stops the resumed turn on the active hub instance.
 pub(crate) fn ipc_stop(_ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_tab_op(args, |inst, tab| async move {
+        inst.stop_resumed_direct(&tab).await
+    })
+}
+
+/// Direct core IPC `resume:cancel-wait`: ignores non-string args, otherwise cancels the wait on the active hub instance.
+pub(crate) fn ipc_cancel_wait(_ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_tab_op(args, |inst, tab| async move {
+        inst.cancel_wait_direct(&tab).await
+    })
+}
+
+/// Direct core IPC `resume:continue`: ignores non-string args, otherwise continues the cut-off turn on the active hub instance.
+pub(crate) fn ipc_continue(_ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_tab_op(args, |inst, tab| async move {
+        inst.continue_cut_direct(&tab).await
+    })
+}
+
+/// Direct core IPC `resume:dismiss`: ignores non-string args, otherwise dismisses the cut-off turn on the active hub instance.
+pub(crate) fn ipc_dismiss(_ctx: IpcContext, args: Vec<Value>) -> Handled {
+    ipc_tab_op(args, |inst, tab| async move {
+        inst.dismiss_cut_direct(&tab).await
+    })
+}
+
+fn ipc_tab_op<F, Fut>(args: Vec<Value>, op: F) -> Handled
+where
+    F: FnOnce(Rc<Inst>, String) -> Fut + Send + 'static,
+    Fut: Future<Output = Result<(), Fault>> + 'static,
+{
     Box::pin(async move {
         let Some(tab_id) = args.first().and_then(Value::as_str).map(str::to_owned) else {
             return Ok(None);
@@ -223,7 +254,30 @@ pub(crate) fn ipc_stop(_ctx: IpcContext, args: Vec<Value>) -> Handled {
                 return;
             };
             hub::spawn(async move {
-                let _ = tx.send(inst.stop_resumed_direct(&tab_id).await);
+                let _ = tx.send(op(inst, tab_id).await);
+            });
+        });
+        rx.await
+            .map_err(|_| Fault::new("internal", "The hub thread ended before answering"))??;
+        Ok(None)
+    })
+}
+
+/// Direct core IPC `connectivity:report`: ignores non-boolean args, otherwise reports online state to the active
+/// `connectivity` hub instance.
+pub(crate) fn ipc_connectivity_report(_ctx: IpcContext, args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let Some(online) = args.first().and_then(Value::as_bool) else {
+            return Ok(None);
+        };
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        hub::post(move || {
+            let Some(monitor) = connectivity::active_instance() else {
+                let _ = tx.send(Ok(()));
+                return;
+            };
+            hub::spawn(async move {
+                let _ = tx.send(monitor.report_direct(online).await);
             });
         });
         rx.await
@@ -237,9 +291,8 @@ mod ipc_tests {
     use super::*;
     use crate::ipc::Caller;
 
-    #[tokio::test]
-    async fn ipc_stop_ignores_non_string_and_handles_absent_instance() {
-        let ctx = || IpcContext {
+    fn ctx() -> IpcContext {
+        IpcContext {
             caller: Caller {
                 key: "w1".into(),
                 window: Some(1),
@@ -247,10 +300,36 @@ mod ipc_tests {
                 device_id: None,
             },
             user_data: None,
-        };
-        for args in [vec![], vec![Value::Null], vec![json!(42)], vec![json!({})]] {
-            assert_eq!(ipc_stop(ctx(), args).await.unwrap(), None);
         }
-        assert_eq!(ipc_stop(ctx(), vec![json!("tab-1")]).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn ipc_resume_and_connectivity_ignore_bad_args_and_handle_absent_instance() {
+        for handler in [ipc_stop, ipc_cancel_wait, ipc_continue, ipc_dismiss] {
+            for args in [vec![], vec![Value::Null], vec![json!(42)], vec![json!({})]] {
+                assert_eq!(handler(ctx(), args).await.unwrap(), None);
+            }
+            assert_eq!(handler(ctx(), vec![json!("tab-1")]).await.unwrap(), None);
+        }
+        for args in [
+            vec![],
+            vec![Value::Null],
+            vec![json!("true")],
+            vec![json!(1)],
+        ] {
+            assert_eq!(ipc_connectivity_report(ctx(), args).await.unwrap(), None);
+        }
+        assert_eq!(
+            ipc_connectivity_report(ctx(), vec![json!(true)])
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            ipc_connectivity_report(ctx(), vec![json!(false)])
+                .await
+                .unwrap(),
+            None
+        );
     }
 }

@@ -764,6 +764,7 @@ mod tests {
 
     #[tokio::test]
     async fn ipc_channels_route_desktop_vs_paired_device_and_preserve_undefined_vs_null() {
+        let _guard = crate::ipc::TEST_LOCK.lock().await;
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
         let user_data =
@@ -777,11 +778,18 @@ mod tests {
         let (client_read, mut client_write) = tokio::io::split(client);
         let mut lines = tokio::io::BufReader::new(client_read);
 
-        let policy = json!({
-            "draft-pictures:put": {"dir": "invoke"},
-            "draft-pictures:read": {"dir": "invoke"},
-            "draft-pictures:remove": {"dir": "invoke"},
-        });
+        // `ipc.start` refuses a policy that omits any channel the core serves, so list them all.
+        let manifest: Value = serde_json::from_str(include_str!("ipc/channels.json")).unwrap();
+        let policy: serde_json::Map<String, Value> = ["invoke", "send"]
+            .into_iter()
+            .flat_map(|dir| {
+                manifest[dir]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(move |channel| (channel.as_str().unwrap().to_owned(), json!({"dir": dir})))
+            })
+            .collect();
         let phone = json!({"key": "c1", "window": -1, "connId": "1", "deviceId": "phone-a"});
         let desktop = json!({"key": "w1", "window": 1, "connId": null, "deviceId": null});
         let frames = [

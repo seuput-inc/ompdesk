@@ -181,6 +181,10 @@ const OWNED: &[Owned] = &[
         handler: crate::tools::ipc::ipc_cli_update_now,
     },
     Owned {
+        channel: "connectivity:report",
+        handler: crate::resume::ipc_connectivity_report,
+    },
+    Owned {
         channel: "draft-pictures:put",
         handler: crate::draft_pictures::ipc_put,
     },
@@ -213,12 +217,32 @@ const OWNED: &[Owned] = &[
         handler: crate::tools::ipc::ipc_omp_update_now,
     },
     Owned {
+        channel: "preview:device",
+        handler: crate::emulator::ipc_device,
+    },
+    Owned {
         channel: "preview:history",
         handler: crate::browsing::ipc_history,
     },
     Owned {
         channel: "preview:visuals",
         handler: crate::visuals::ipc_visuals,
+    },
+    Owned {
+        channel: "project-origin:get",
+        handler: crate::git::project::ipc_project_origin_get,
+    },
+    Owned {
+        channel: "resume:cancel-wait",
+        handler: crate::resume::ipc_cancel_wait,
+    },
+    Owned {
+        channel: "resume:continue",
+        handler: crate::resume::ipc_continue,
+    },
+    Owned {
+        channel: "resume:dismiss",
+        handler: crate::resume::ipc_dismiss,
     },
     Owned {
         channel: "resume:stop",
@@ -359,10 +383,13 @@ fn start(call: &Call) -> Result<Reply, Fault> {
     channels.sort_by_key(|served| served.channel);
     let mut guard = state();
     guard.table = Some(table);
-    guard.user_data = params
+    if let Some(dir) = params
         .user_data
         .filter(|p| !p.is_empty())
-        .map(PathBuf::from);
+        .map(PathBuf::from)
+    {
+        guard.user_data = Some(dir);
+    }
     Reply::json(&StartResult { channels })
 }
 
@@ -499,6 +526,9 @@ async fn recorded(caller: Caller) -> Result<Option<Value>, Fault> {
 }
 
 #[cfg(test)]
+pub(crate) static TEST_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(Default::default);
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -569,6 +599,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_callers_sends_run_in_the_order_its_lines_came() {
+        let _guard = TEST_LOCK.lock().await;
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
         let (client, server_io) = tokio::io::duplex(1 << 16);
         let (server_read, server_write) = tokio::io::split(server_io);

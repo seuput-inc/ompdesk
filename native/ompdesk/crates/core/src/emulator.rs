@@ -11,11 +11,13 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
+use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use crate::ipc::{Handled, IpcContext};
 use crate::server::{Call, Fault, Registry, Reply};
 
 /// A screen is a few MB at most; a listing or an input answers in a few KB.
@@ -293,6 +295,110 @@ async fn key(call: Call) -> Result<Reply, Fault> {
     Reply::json(&Value::Null)
 }
 
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "camelCase")]
+enum IpcDeviceRequest {
+    List,
+    Screen { platform: String, id: String },
+    Tap { id: String, x: i64, y: i64 },
+    Key { id: String, key: String },
+}
+
+fn validate_ipc_device_id(id: &str) -> Result<&str, Fault> {
+    if id.is_empty() || id.len() > 200 {
+        return Err(Fault::new("invalid_params", "Invalid device request"));
+    }
+    device_id(id)
+}
+
+/// Direct core IPC `preview:device`: lists booted iOS simulators and ready Android devices, captures PNG screens as
+/// base64, and sends Android tap/key events using main's login-shell `PATH`.
+pub(crate) fn ipc_device(_ctx: IpcContext, args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let raw = args.into_iter().next().unwrap_or(Value::Null);
+        let req: IpcDeviceRequest = serde_json::from_value(raw)
+            .map_err(|error| Fault::new("invalid_params", error.to_string()))?;
+        let path = crate::tools::ipc::spawn_path().await;
+        match req {
+            IpcDeviceRequest::List => {
+                let mut list = Vec::new();
+                if cfg!(target_os = "macos")
+                    && let Ok(listed) = run(
+                        "xcrun",
+                        &["simctl", "list", "devices", "booted", "-j"],
+                        &path,
+                        TEXT_MAX,
+                    )
+                    .await
+                {
+                    list.extend(booted_simulators(&String::from_utf8_lossy(&listed)));
+                }
+                list.extend(android_devices(&path, ADB_SERVER).await);
+                Ok(Some(Value::Array(list)))
+            }
+            IpcDeviceRequest::Screen { platform, id } => {
+                let id = validate_ipc_device_id(&id)?;
+                let png = match platform.as_str() {
+                    "ios" => {
+                        run(
+                            "xcrun",
+                            &["simctl", "io", id, "screenshot", "--type=png", "-"],
+                            &path,
+                            SCREEN_MAX,
+                        )
+                        .await?
+                    }
+                    "android" => {
+                        run_adb(
+                            &["-s", id, "exec-out", "screencap", "-p"],
+                            &path,
+                            SCREEN_MAX,
+                        )
+                        .await?
+                    }
+                    _ => return Err(Fault::new("invalid_params", "Unknown platform")),
+                };
+                if !png.starts_with(b"\x89PNG") {
+                    return Err(failed("The device sent no picture"));
+                }
+                Ok(Some(Value::String(
+                    base64::engine::general_purpose::STANDARD.encode(&png),
+                )))
+            }
+            IpcDeviceRequest::Tap { id, x, y } => {
+                let id = validate_ipc_device_id(&id)?;
+                if !(0..=100_000).contains(&x) || !(0..=100_000).contains(&y) {
+                    return Err(Fault::new("invalid_params", "Tap coordinates out of range"));
+                }
+                let (x, y) = (x.to_string(), y.to_string());
+                run_adb(
+                    &["-s", id, "shell", "input", "tap", &x, &y],
+                    &path,
+                    TEXT_MAX,
+                )
+                .await?;
+                Ok(Some(Value::Null))
+            }
+            IpcDeviceRequest::Key { id, key } => {
+                let id = validate_ipc_device_id(&id)?;
+                let code = match key.as_str() {
+                    "back" => "KEYCODE_BACK",
+                    "home" => "KEYCODE_HOME",
+                    "apps" => "KEYCODE_APP_SWITCH",
+                    _ => return Err(Fault::new("invalid_params", "Unknown key")),
+                };
+                run_adb(
+                    &["-s", id, "shell", "input", "keyevent", code],
+                    &path,
+                    TEXT_MAX,
+                )
+                .await?;
+                Ok(Some(Value::Null))
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,5 +457,44 @@ mod tests {
         assert!(device_id("emulator-5554").is_ok());
         assert!(device_id("-s").is_err());
         assert!(device_id("").is_err());
+    }
+
+    #[tokio::test]
+    async fn ipc_device_rejects_bad_requests() {
+        use crate::ipc::Caller;
+        let ctx = || IpcContext {
+            caller: Caller {
+                key: "w1".into(),
+                window: Some(1),
+                conn_id: None,
+                device_id: None,
+            },
+            user_data: None,
+        };
+        assert!(ipc_device(ctx(), vec![json!({})]).await.is_err());
+        assert!(
+            ipc_device(
+                ctx(),
+                vec![json!({"action": "tap", "id": "emu", "x": -1, "y": 0})]
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            ipc_device(
+                ctx(),
+                vec![json!({"action": "key", "id": "emu", "key": "power"})]
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            ipc_device(
+                ctx(),
+                vec![json!({"action": "screen", "platform": "web", "id": "emu"})]
+            )
+            .await
+            .is_err()
+        );
     }
 }

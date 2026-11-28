@@ -1,9 +1,11 @@
 //! The local project a checkout belongs to. A cache hit needs neither a git launch nor main's runner environment.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
 use tokio::sync::OnceCell;
 
 use super::{
@@ -12,17 +14,18 @@ use super::{
 };
 use crate::clock::now_ms;
 use crate::fs::disk::spelled;
+use crate::ipc::{Handled, IpcContext};
 use crate::run::Runner;
-use crate::server::{Fault, Registry, Reply};
+use crate::server::{Fault, Registry, Reply, Scope};
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct Project {
     root: String,
     project: String,
     worktree: Option<Worktree>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct Worktree {
     branch: Option<String>,
     folder: String,
@@ -150,6 +153,208 @@ pub(super) fn register(registry: &mut Registry) {
     });
 }
 
+fn worktree_kind_of(branch: Option<&str>) -> &'static str {
+    match branch {
+        Some(b) if b.starts_with("autopilot/") => "autopilot",
+        Some(b) if b.starts_with("omp/agent/") => "agent",
+        _ => "other",
+    }
+}
+
+fn path_base_name(file: &str) -> &str {
+    file.rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(file)
+}
+
+fn worktree_folder_slug(folder: &str) -> String {
+    let name = path_base_name(folder);
+    if let Some(rest) = name.strip_prefix("gui-")
+        && rest.len() > 8
+        && rest.as_bytes()[rest.len() - 8] == b'-'
+    {
+        let (slug, hash) = (&rest[..rest.len() - 8], &rest[rest.len() - 7..]);
+        if !slug.is_empty()
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return slug.to_owned();
+        }
+    }
+    name.to_owned()
+}
+
+fn project_origin_value(origin: &Project) -> Value {
+    json!({
+        "project": origin.project,
+        "root": origin.root,
+        "worktree": origin.worktree.as_ref().map(|tree| json!({
+            "branch": tree.branch,
+            "kind": worktree_kind_of(tree.branch.as_deref()),
+            "slug": worktree_folder_slug(&tree.folder),
+        })),
+    })
+}
+
+const GIT_SELECTOR_VARS: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_PREFIX",
+    "GIT_SUPER_PREFIX",
+];
+
+fn find_git_bin(path_env: &str) -> Option<String> {
+    let names: &[&str] = if cfg!(windows) {
+        &["git.exe", "git"]
+    } else {
+        &["git"]
+    };
+    for dir in std::env::split_paths(path_env) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        for name in names {
+            let candidate = dir.join(name);
+            if candidate.is_file() {
+                return Some(candidate.to_string_lossy().into_owned());
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    for extra in ["/opt/homebrew/bin/git", "/usr/local/bin/git"] {
+        if Path::new(extra).is_file() {
+            return Some(extra.to_owned());
+        }
+    }
+    None
+}
+
+async fn default_git_runner() -> Option<Runner> {
+    let mut env: BTreeMap<String, String> = crate::tools::ipc::spawn_env_map()
+        .await
+        .into_iter()
+        .filter(|(k, _)| !GIT_SELECTOR_VARS.iter().any(|s| k.eq_ignore_ascii_case(s)))
+        .collect();
+    let path_env = env
+        .get("PATH")
+        .or_else(|| env.get("Path"))
+        .cloned()
+        .unwrap_or_else(|| std::env::var("PATH").unwrap_or_default());
+    let bin = find_git_bin(&path_env)?;
+    env.insert("GIT_OPTIONAL_LOCKS".into(), "0".into());
+    env.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
+    env.insert("GCM_INTERACTIVE".into(), "never".into());
+    env.insert("GIT_PAGER".into(), "cat".into());
+    env.insert("LC_ALL".into(), "C".into());
+    Some(Runner {
+        bin,
+        args: vec![
+            "-c".into(),
+            "core.quotepath=false".into(),
+            "-c".into(),
+            "color.ui=false".into(),
+        ],
+        env,
+        timeout_ms: 60_000,
+        max_bytes: 8 * 1024 * 1024,
+    })
+}
+
+async fn resolve_one_origin(cwd: &str, now: u64, runner: Option<Runner>) -> Option<Value> {
+    if cwd.is_empty() {
+        return None;
+    }
+    let abs = if Path::new(cwd).is_absolute() {
+        cwd.to_owned()
+    } else {
+        std::env::current_dir()
+            .ok()?
+            .join(cwd)
+            .to_string_lossy()
+            .into_owned()
+    };
+    if tokio::fs::metadata(&abs).await.is_err() {
+        CACHE.lock().unwrap().remove(&abs);
+        return None;
+    }
+    let cell = CACHE.lock().unwrap().start(&abs, now);
+    let origin = cell
+        .get_or_init(|| async {
+            let mut origin =
+                project(facts(&Git::new(runner?, Scope::detached()), &abs, 10_000).await?)?;
+            if let Ok(root) = tokio::fs::canonicalize(&origin.root).await {
+                origin.root = spelled(&root);
+            }
+            Some(origin)
+        })
+        .await;
+    origin.as_ref().map(project_origin_value)
+}
+
+/// Direct core IPC `project-origin:get`: resolves up to 200 unique folder paths to their git `ProjectOrigin` (or null).
+pub(crate) fn ipc_project_origin_get(_ctx: IpcContext, args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let mut seen = HashSet::new();
+        let mut folders = Vec::new();
+        if let Some(items) = args.first().and_then(Value::as_array) {
+            for item in items {
+                if let Some(cwd) = item.as_str()
+                    && !cwd.is_empty()
+                    && seen.insert(cwd.to_owned())
+                {
+                    folders.push(cwd.to_owned());
+                    if folders.len() >= 200 {
+                        break;
+                    }
+                }
+            }
+        }
+        if folders.is_empty() {
+            return Ok(Some(Value::Object(Map::new())));
+        }
+        let now = now_ms();
+        let needs_git = {
+            let cache = CACHE.lock().unwrap();
+            folders.iter().any(|cwd| {
+                let abs = if Path::new(cwd).is_absolute() {
+                    cwd.clone()
+                } else {
+                    std::env::current_dir()
+                        .ok()
+                        .map(|d| d.join(cwd).to_string_lossy().into_owned())
+                        .unwrap_or_else(|| cwd.clone())
+                };
+                cache
+                    .fresh(&abs, now)
+                    .and_then(|c| c.get().cloned())
+                    .is_none()
+            })
+        };
+        let runner = if needs_git {
+            default_git_runner().await
+        } else {
+            None
+        };
+        let mut futures = Vec::with_capacity(folders.len());
+        for cwd in &folders {
+            let cwd = cwd.clone();
+            let runner = runner.clone();
+            futures.push(async move { resolve_one_origin(&cwd, now, runner).await });
+        }
+        let resolved = futures_util::future::join_all(futures).await;
+        let mut out = Map::with_capacity(folders.len());
+        for (cwd, origin) in folders.into_iter().zip(resolved) {
+            out.insert(cwd, origin.unwrap_or(Value::Null));
+        }
+        Ok(Some(Value::Object(out)))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +402,44 @@ mod tests {
         assert!(Arc::ptr_eq(&cell, &cache.start("repo", 5099)));
         assert!(cell.set(None).is_ok());
         assert!(!Arc::ptr_eq(&cell, &cache.start("repo", 5100)));
+    }
+
+    #[tokio::test]
+    async fn ipc_project_origin_get_deduplicates_and_formats_worktree_origin() {
+        use crate::ipc::Caller;
+        assert_eq!(worktree_kind_of(Some("autopilot/run-1")), "autopilot");
+        assert_eq!(worktree_kind_of(Some("omp/agent/fix")), "agent");
+        assert_eq!(worktree_kind_of(Some("main")), "other");
+        assert_eq!(worktree_kind_of(None), "other");
+        assert_eq!(
+            worktree_folder_slug("/Users/a/.omp/wt/gui-my-slug-1a2b3c4"),
+            "my-slug"
+        );
+        assert_eq!(
+            worktree_folder_slug("/Users/a/plain-folder"),
+            "plain-folder"
+        );
+        let ctx = || IpcContext {
+            caller: Caller {
+                key: "w1".into(),
+                window: Some(1),
+                conn_id: None,
+                device_id: None,
+            },
+            user_data: None,
+        };
+        assert_eq!(
+            ipc_project_origin_get(ctx(), vec![json!("not-an-array")])
+                .await
+                .unwrap(),
+            Some(json!({}))
+        );
+        let missing = "/no/such/ompdesk/folder/at/all";
+        assert_eq!(
+            ipc_project_origin_get(ctx(), vec![json!([missing, "", 42, missing])])
+                .await
+                .unwrap(),
+            Some(json!({ missing: null }))
+        );
     }
 }

@@ -33,13 +33,20 @@
 		"log:snapshot",
 		"omp-update:get-state",
 		"omp-update:now",
+		"preview:device",
 		"preview:history",
 		"preview:visuals",
+		"project-origin:get",
+		"resume:cancel-wait",
+		"resume:continue",
+		"resume:dismiss",
 		"resume:stop",
 		"setup:cancel",
 		"setup:get-state",
 		"setup:retry",
 		"ssh-tools:prompts"
 	],
-	"send": []
+	"send": [
+		"connectivity:report"
+	]
 }

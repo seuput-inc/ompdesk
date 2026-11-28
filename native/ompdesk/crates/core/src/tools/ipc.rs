@@ -53,6 +53,37 @@ async fn on_hub<T: Send + 'static>(
         .map_err(|_| Fault::new("internal", "The hub thread ended before answering"))
 }
 
+/// Main's spawn environment (`env`) from the active `tools` hub instance, falling back to `std::env::vars()`.
+pub(crate) async fn spawn_env_map() -> std::collections::BTreeMap<String, String> {
+    let (tx, rx) = oneshot::channel();
+    hub::post(move || {
+        let Some(tools) = active_instance() else {
+            let _ = tx.send(None);
+            return;
+        };
+        hub::spawn(async move {
+            let _ = tx.send(tools.base_env().await.ok());
+        });
+    });
+    if let Ok(Some(env)) = rx.await
+        && !env.is_empty()
+    {
+        return env;
+    }
+    std::env::vars().collect()
+}
+
+/// Main's login-shell `PATH` from the active `tools` hub instance (`env`), falling back to `std::env::var("PATH")`.
+pub(crate) async fn spawn_path() -> String {
+    let mut env = spawn_env_map().await;
+    if let Some(path) = env.remove("PATH").or_else(|| env.remove("Path"))
+        && !path.is_empty()
+    {
+        return path;
+    }
+    std::env::var("PATH").unwrap_or_default()
+}
+
 pub(crate) fn ipc_setup_get_state(_ctx: IpcContext, _args: Vec<Value>) -> Handled {
     Box::pin(async move {
         on_hub(|tools| match tools {

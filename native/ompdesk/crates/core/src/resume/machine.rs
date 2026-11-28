@@ -2489,6 +2489,44 @@ impl Inst {
         Ok(())
     }
 
+    /// Direct core IPC `resume:cancel-wait`: delegates to a paired host tab's `cancelHostWait` if present, else cancels
+    /// this computer's wait for `tab`.
+    pub async fn cancel_wait_direct(self: &Rc<Self>, tab: &str) -> R<()> {
+        let ans = self
+            .ask_later("hostWait", json!({"tab": tab, "op": "cancel"}))
+            .await?;
+        if ans["handled"] != Value::Bool(true) {
+            self.cancel_wait(tab).await?;
+        }
+        Ok(())
+    }
+
+    /// Direct core IPC `resume:continue`: delegates to a paired host tab's `continueHostCut` if present, else continues
+    /// this computer's cut-off turn for `tab`.
+    pub async fn continue_cut_direct(self: &Rc<Self>, tab: &str) -> R<()> {
+        let ans = self
+            .ask_later("hostWait", json!({"tab": tab, "op": "continue"}))
+            .await?;
+        if ans["handled"] != Value::Bool(true) {
+            let env = Self::parse_env(ans["env"].clone())?;
+            self.continue_cut(tab, env);
+        }
+        Ok(())
+    }
+
+    /// Direct core IPC `resume:dismiss`: delegates to a paired host tab's `dismissHostCut` if present, else dismisses
+    /// this computer's cut-off turn for `tab`.
+    pub async fn dismiss_cut_direct(self: &Rc<Self>, tab: &str) -> R<()> {
+        let ans = self
+            .ask_later("hostWait", json!({"tab": tab, "op": "dismiss"}))
+            .await?;
+        if ans["handled"] != Value::Bool(true) {
+            let env = Self::parse_env(ans["env"].clone())?;
+            self.dismiss_cut(tab, env);
+        }
+        Ok(())
+    }
+
     /// How a tab whose omp came up with work running in its journal goes on: after this launch's continuation of its
     /// cut-off turn (a launch marker waits for it, `goalSettled` follows), at once, or not at all.
     pub fn relaunch_continuation(&self, tab: &str, enabled: bool) -> &'static str {

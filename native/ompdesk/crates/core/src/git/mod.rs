@@ -26,7 +26,7 @@ mod nested;
 pub(crate) mod origin;
 mod orphans;
 pub(crate) mod parse;
-mod project;
+pub(crate) mod project;
 pub(crate) mod read;
 pub(crate) mod run;
 mod scm;

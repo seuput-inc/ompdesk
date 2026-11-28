@@ -177,7 +177,6 @@ import { openInExternalEditor } from "./editor";
 import { getMainLanguage, mainT } from "./i18n";
 import type { MainTextKey } from "./i18n-text";
 import { ghRunner, resolveBin } from "./local/git/exec";
-import { readProjectOrigin } from "./local/git/origin";
 import { WORKTREE_PREPARE_BUDGET_MS } from "./local/git/worktree-seed";
 import { removedModeRefusal } from "./local/modes";
 import { noteTypedPrompt } from "./local/prompt-origin";
@@ -2039,14 +2038,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		return deps.worktreePrompts.answer(win.webContents.id, payload.id, payload.accept === true);
 	});
 
-	// Where each folder comes from (a linked worktree's main checkout and what the worktree is for), from git.
-	ipc.handle(IPC_COMMANDS.PROJECT_ORIGINS_GET, async (_caller, cwds: unknown) => {
-		const folders = Array.isArray(cwds)
-			? [...new Set(cwds.filter((cwd): cwd is string => typeof cwd === "string" && cwd !== ""))].slice(0, 200)
-			: [];
-		const origins = await Promise.all(folders.map(cwd => readProjectOrigin(cwd)));
-		return Object.fromEntries(folders.map((cwd, index) => [cwd, origins[index] ?? null]));
-	});
+	// `project-origin:get` routes directly from tauri-shell to ompdesk-core (`crates/core/src/git/project.rs`).
 
 	/**
 	 * The person looks at the window's shown tabs: a focused, unminimized desktop window, or a paired page in the

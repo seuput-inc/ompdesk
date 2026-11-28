@@ -20,7 +20,6 @@ import {
 	EMPTY_PREVIEW_PAGE,
 	isLoopbackUrl,
 	PREVIEW_COMMAND,
-	PREVIEW_DEVICE,
 	PREVIEW_LOAD_STALL_MS,
 	PREVIEW_PAGE,
 	PREVIEW_PROBLEM_LIMIT,
@@ -34,8 +33,6 @@ import {
 	PREVIEW_TAB_LIMIT,
 	PREVIEW_VIEWPORTS,
 	type PreviewBounds,
-	type PreviewDevice,
-	type PreviewDeviceRequest,
 	type PreviewHistoryEntry,
 	type PreviewPageRequest,
 	type PreviewPageState,
@@ -46,7 +43,6 @@ import {
 } from "../../shared/preview";
 import { core } from "../core/process";
 import { tunnelledLoopback } from "../remote/port-tunnels";
-import { spawnPath } from "../shell-env";
 import { encodeImage, fitImage } from "../shell-host/image";
 import { applyAcceptLanguages, seedSpellchecker } from "../system-languages";
 import { type ClientWindow, isWebWindow } from "../web/client-window";
@@ -181,19 +177,6 @@ const pageRequestSchema: z.ZodType<PreviewPageRequest> = z.discriminatedUnion("a
 		query: z.string().max(500),
 		step: z.union([z.literal(-1), z.literal(0), z.literal(1)]),
 	}),
-]);
-
-const DeviceId = z.string().min(1).max(200);
-const deviceRequestSchema: z.ZodType<PreviewDeviceRequest> = z.discriminatedUnion("action", [
-	z.object({ action: z.literal("list") }),
-	z.object({ action: z.literal("screen"), platform: z.enum(["ios", "android"]), id: DeviceId }),
-	z.object({
-		action: z.literal("tap"),
-		id: DeviceId,
-		x: z.number().int().min(0).max(100_000),
-		y: z.number().int().min(0).max(100_000),
-	}),
-	z.object({ action: z.literal("key"), id: DeviceId, key: z.enum(["back", "home", "apps"]) }),
 ]);
 
 /** One tab of a window's preview: its own sandboxed page in the window's web or visual session. */
@@ -1249,23 +1232,8 @@ export function registerPreviewHost(
 		await writeFile(choice.filePath, await contents.printToPDF({ printBackground: true }));
 		return choice.filePath;
 	});
-	// `preview:visuals` routes directly from tauri-shell to ompdesk-core (`crates/core/src/visuals/store.rs`).
-	// This computer's running mobile devices (Orca's emulator pane): the core runs `simctl`/`adb` on the login shell's
-	// PATH; nothing is booted here (the `ompdesk-mobile-emulator` skill does that).
-	ipc.handle(PREVIEW_DEVICE, async (_caller, raw: unknown) => {
-		const request = deviceRequestSchema.parse(raw);
-		const path = await spawnPath();
-		if (request.action === "list")
-			return (await core().call<{ devices: PreviewDevice[] }>("emulator.devices", { path })).result.devices;
-		if (request.action === "screen") {
-			const { bin } = await core().call("emulator.screen", { path, platform: request.platform, id: request.id });
-			if (!bin) throw new Error("The device sent no picture");
-			return Buffer.from(bin).toString("base64");
-		}
-		const { action, ...params } = request;
-		await core().call(`emulator.${action}`, { path, ...params });
-		return null;
-	});
+	// `preview:visuals` (`crates/core/src/visuals/store.rs`) and `preview:device` (`crates/core/src/emulator.rs`) route
+	// directly from tauri-shell to ompdesk-core.
 	ipc.handle(PREVIEW_PAGE, async (caller, raw: unknown) => {
 		const request = pageRequestSchema.parse(raw);
 		const page = hosts.get(caller.sender.id)?.active;

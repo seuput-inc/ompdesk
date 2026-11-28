@@ -42,7 +42,7 @@ import type { RpcCommand, RpcResponse } from "../shared/rpc-types";
 import { writeFileAtomicDeferred } from "./atomic-file";
 import { canonicalCwd } from "./canonical-cwd";
 import { type HubItem, hub, sharedInstance } from "./core/hub";
-import { type CoreError, isCoreShutdown, isHubGivenUp } from "./core/process";
+import { type CoreError, core, isCoreShutdown, isHubGivenUp } from "./core/process";
 import { deletedSessionsOpen } from "./deleted-sessions";
 import { RpcTimeoutError } from "./rpc-client";
 import type { SidecarLike } from "./sidecar-types";
@@ -392,6 +392,8 @@ export interface ResumePool {
 	setScheduledRetry(tabId: string, retry: IpcScheduledRetry | undefined): void;
 	/** Spawn a deferred tab's process; the sidecar, or null when the tab is gone. */
 	startTab(tabId: string): SidecarLike | null;
+	/** Look up an open tab's sidecar without spawning a deferred tab (`cancelHostWait`, `continueHostCut`, `dismissHostCut`). */
+	sidecarOf?(tabId: string): SidecarLike | null | undefined;
 	/** The tab attached to `sessionPath`: this computer's own, or with `peer` the one it hosts for that device. */
 	tabForSession(sessionPath: string, peer?: string): string | null;
 	/** Resolves once no move of the tab is on its way (`MovesInFlight`): its `touched` is final for a continuation to judge. */
@@ -565,6 +567,9 @@ export class TurnResume {
 
 	constructor(deps: ResumeDeps) {
 		this.#deps = deps;
+		core().on("ready", () => {
+			if (this.#launched) this.#atQuit(() => this.#instance());
+		});
 	}
 
 	/**
@@ -877,6 +882,33 @@ export class TurnResume {
 				return { markers: deps.store.read(), enabled: deps.enabled() };
 			case "canonical":
 				return (item.paths as string[]).map(path => canonicalCwd(path));
+			case "hostWait": {
+				const tab = item.tab as string;
+				const op = item.op as "cancel" | "continue" | "dismiss";
+				const sidecar = deps.pool.sidecarOf?.(tab);
+				const hostFn =
+					op === "cancel"
+						? sidecar?.cancelHostWait
+						: op === "continue"
+							? sidecar?.continueHostCut
+							: sidecar?.dismissHostCut;
+				if (hostFn && sidecar) {
+					return (async () => {
+						await hostFn.call(sidecar);
+						return { handled: true };
+					})();
+				}
+				const want: Want =
+					op === "continue"
+						? ["facts", "fact", "network", "enabled", "now"]
+						: op === "dismiss"
+							? ["facts", "fact", "enabled", "now"]
+							: [];
+				return Promise.resolve({
+					handled: false,
+					...(want.length > 0 ? { env: this.#env(want, tab) } : {}),
+				});
+			}
 			default:
 				throw new Error(`turn resume has no question ${q}`);
 		}

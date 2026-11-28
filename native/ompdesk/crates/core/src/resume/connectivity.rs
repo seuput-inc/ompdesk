@@ -14,7 +14,7 @@
 //! What main reads (`net.isOnline()`, the clock) comes with the call that needs it; the probe, the timers and the
 //! `changed` hook are main's: the probe is a question main answers later, a timer is one main runs and calls back.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -67,6 +67,21 @@ pub struct Monitor {
 
 thread_local! {
     static MONITORS: RefCell<HashMap<u64, Rc<Monitor>>> = RefCell::default();
+    static ACTIVE: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
+pub fn active_instance() -> Option<Rc<Monitor>> {
+    MONITORS.with(|all| {
+        let all = all.borrow();
+        if let Some(id) = ACTIVE.with(Cell::get)
+            && let Some(monitor) = all.get(&id)
+        {
+            return Some(Rc::clone(monitor));
+        }
+        all.iter()
+            .max_by_key(|(id, _)| *id)
+            .map(|(_, monitor)| Rc::clone(monitor))
+    })
 }
 
 #[derive(Deserialize)]
@@ -103,11 +118,19 @@ pub fn open(id: u64, opts: &RawValue, out: Out) -> Result<(), Fault> {
         }),
     };
     MONITORS.with(|all| all.borrow_mut().insert(id, Rc::new(monitor)));
+    ACTIVE.with(|active| active.set(Some(id)));
     Ok(())
 }
 
 pub fn close(id: u64) {
-    MONITORS.with(|all| all.borrow_mut().remove(&id));
+    MONITORS.with(|all| {
+        let mut all = all.borrow_mut();
+        all.remove(&id);
+        if ACTIVE.with(Cell::get) == Some(id) {
+            let next = all.keys().max().copied();
+            ACTIVE.with(|active| active.set(next));
+        }
+    });
 }
 
 pub fn call(id: u64, method: &str, params: &RawValue) -> Outcome {
@@ -196,6 +219,27 @@ impl Monitor {
         } else {
             self.set(true);
         }
+    }
+
+    /// Direct core IPC `connectivity:report`: updates online state immediately, asking main for `isOnline` only while
+    /// recovering from sleep.
+    pub async fn report_direct(self: &Rc<Self>, online: bool) -> Result<(), Fault> {
+        if !online {
+            self.set(false);
+            return Ok(());
+        }
+        let is_online = if self.st.borrow().recovering {
+            self.out
+                .ask_later("isOnline", &json!({}))
+                .await
+                .ok()
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true)
+        } else {
+            true
+        };
+        self.report(true, is_online);
+        Ok(())
     }
 
     /// Edge-triggered `net.isOnline()` sampling: only a real change reports, so a window's event is not overruled.

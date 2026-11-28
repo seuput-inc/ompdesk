@@ -104,11 +104,15 @@ export class ConnectivityMonitor {
 	readonly #tokens = new Map<number, (reachable: boolean) => void>();
 	/** A token settled before its caller had it (an item that came inside the call). */
 	readonly #settled = new Map<number, boolean>();
+	readonly #offReady: () => void;
 
 	constructor(deps: ConnectivityDeps) {
 		this.#deps = deps;
 		// The state starts as the link says; a core lost later opens its next instance the same way.
 		this.#instance();
+		this.#offReady = core().on("ready", () => {
+			if (!this.#stopped) this.#event(() => this.#instance());
+		});
 	}
 
 	#instance(): number {
@@ -141,6 +145,7 @@ export class ConnectivityMonitor {
 	stop(): void {
 		if (this.#stopped) return;
 		this.#stopped = true;
+		this.#offReady();
 		const id = this.#id;
 		this.#id = null;
 		for (const cancel of this.#timers.values()) cancel();
@@ -211,6 +216,7 @@ export class ConnectivityMonitor {
 	}
 
 	#ask(q: string, item: HubItem): unknown {
+		if (q === "isOnline") return Promise.resolve(this.#deps.isOnline());
 		if (q !== "probe") throw new Error(`the connectivity monitor has no question ${q}`);
 		return this.#deps.probe((item.host ?? undefined) as string | undefined).catch(() => false);
 	}

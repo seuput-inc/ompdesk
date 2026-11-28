@@ -2439,6 +2439,7 @@ app.whenReady().then(async () => {
 				turnWait.noteRetry(tabId, retry);
 			},
 			startTab: tabId => sidecarPool.startTab(tabId) ?? hostServices.startTab(tabId),
+			sidecarOf: tabId => sidecarPool.sidecarOf(tabId),
 			tabForSession: (sessionPath, peer) =>
 				peer ? hostServices.tabForSession(sessionPath, peer) : sidecarPool.tabForSession(sessionPath),
 			// A move's command may be on its way in this computer's pool or in a hosted tab: the rules judge `touched` after.
@@ -2517,35 +2518,13 @@ app.whenReady().then(async () => {
 			});
 		},
 	});
-	ipc.handle(IPC_COMMANDS.RESUME_CANCEL_WAIT, async (_caller, tabId: unknown) => {
-		if (typeof tabId !== "string") return;
-		// A paired host's tab: the host holds the wait, judged by its own connection.
-		const sidecar = sidecarPool.sidecarOf(tabId);
-		if (sidecar?.cancelHostWait) await sidecar.cancelHostWait();
-		else turnResume.cancelWait(tabId);
-	});
+	// `resume:cancel-wait`, `resume:stop`, `resume:continue`, `resume:dismiss` and `connectivity:report` route directly
+	// from tauri-shell to ompdesk-core (`crates/core/src/resume/mod.rs`).
 	// A paired device's Cancel on the wait or scheduled retry of a window's tab it views: this computer's own tab.
 	sidecarPool.onCancelWait = tabId => turnResume.cancelWait(tabId);
-	// `resume:stop` routes directly from tauri-shell to ompdesk-core (`crates/core/src/resume/mod.rs`).
-	// A tab viewing a paired host's window tab: that host holds the offer.
-	ipc.handle(IPC_COMMANDS.RESUME_CONTINUE, async (_caller, tabId: unknown) => {
-		if (typeof tabId !== "string") return;
-		const sidecar = sidecarPool.sidecarOf(tabId);
-		if (sidecar?.continueHostCut) await sidecar.continueHostCut();
-		else turnResume.continueCut(tabId);
-	});
-	ipc.handle(IPC_COMMANDS.RESUME_DISMISS, async (_caller, tabId: unknown) => {
-		if (typeof tabId !== "string") return;
-		const sidecar = sidecarPool.sidecarOf(tabId);
-		if (sidecar?.dismissHostCut) await sidecar.dismissHostCut();
-		else turnResume.dismissCut(tabId);
-	});
 	// A paired device's Continue or Dismiss on the cut-off row of a window's tab it views.
 	sidecarPool.onCutOff = (tabId, choice) =>
 		choice === "continue" ? turnResume.continueCut(tabId) : turnResume.dismissCut(tabId);
-	ipc.on(IPC_COMMANDS.CONNECTIVITY_REPORT, (_caller, online: unknown) => {
-		if (typeof online === "boolean") connectivity.report(online);
-	});
 	setQuitResumes(() => prefs.get(RESUME_INTERRUPTED_PREF) !== false);
 	powerMonitor.on("suspend", () => connectivity.suspend());
 	powerMonitor.on("resume", () => {
