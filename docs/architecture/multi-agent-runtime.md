@@ -1,6 +1,6 @@
 # Momo Rust-First Multi-Agent Runtime Architecture
 
-> **Status**: Stage 1 foundation (`orca/rust-multi-agent-s1`)
+> **Status**: Stage 1 + Stage 2A/2B/2C isolated core completeness (`orca/rust-multi-agent-s1`)
 > **Scope**: `native/ompdesk/crates/core/src/agent/`
 > **Related tracks**: `#12` (`sidecar::lane`, `memory`, `pool`, `procs`), `#11` (`hub`, `owner`), `#9` (`tools/setup`, `tauri-shell/src/ipc_router`), `#10`/`#76` (UI)
 
@@ -65,6 +65,17 @@ flowchart TD
   - `AdapterRegistry` with deterministic backend resolution, user-install-first discovery precedence, and capability fallback rules (`registry.rs`).
   - Pure-Rust, unit-tested streaming parsers (`parsers/claude_stream.rs`, `parsers/codex_stream.rs`, `parsers/direct_sse.rs`).
   - Executable OMP frame translation contract (`omp_contract.rs`) mapping stock `sidecar::frames` JSON payloads to `AgentEvent` and classifying OMP-only passthrough frames.
+
+### Stage 2A / 2B / 2C — Isolated Core Completeness (`orca/rust-multi-agent-s1`)
+
+Still strictly isolated inside `native/ompdesk/crates/core/src/agent/*` (zero overlap with `#12`, `#11`, `#9`, or `Cargo.lock`):
+
+- **Stage 2A (Concrete Backends & Discovery)**: `backends/detect.rs`, `backends/claude_cli.rs` (`ClaudeCliAdapter`), `backends/codex_cli.rs` (`CodexCliAdapter` for `exec --json` and `app-server`), and `backends/direct_api.rs` (`DirectApiAdapter` over `hyper` + `tokio-rustls`).
+- **Stage 2B (Direct API Local Tool Loop)**: `tools/local_executor.rs` (`LocalToolExecutor` with workspace-confined `read_file`, `write_file`, `list_dir`, `run_command`) closing the bounded multi-round tool loop in `DirectApiAdapter`.
+- **Stage 2C (Antigravity CLI, Direct API Journal & Backend Service)**:
+  - `backends/antigravity.rs`: `AntigravityCliAdapter` (`agy` stream-json + ACP parser, process lifecycle, cancellation, hibernate/resume) registered in `AdapterRegistry::with_default_backends*` (8 default backends).
+  - `journal.rs`: atomic JSONL `JournalStore` (`direct:<journal_id>`) persisting conversation messages, tool calls/results, token usage, and metadata with crash-safe corrupt-tail recovery and round-trip `DirectApiAdapter::resume`.
+  - `service.rs`: self-contained `AgentBackendService` exposing JSON-serializable `list_backends()`, `detect_backends()`, `resolve_backend(request)`, and secret-redacted `health_check(backend_id)` models ready for direct `Route::Core` and UI wiring.
 
 ### Stage 2 — Decoupling Core Orchestrators onto `agent::AgentAdapter`
 
