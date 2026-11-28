@@ -114,6 +114,7 @@ runs:
         src/main/routines/*.test.ts
         src/main/mail-accounts.test.ts
         src/main/local/autopilot*.test.ts
+        src/main/local/claude-api-route.test.ts
         src/main/local/composer.test.ts
         src/main/local/settings.test.ts
         src/main/local/git/changes.test.ts

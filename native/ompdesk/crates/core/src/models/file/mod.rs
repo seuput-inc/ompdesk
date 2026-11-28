@@ -44,12 +44,7 @@ const STOCK_TIMEOUT: Duration = Duration::from_secs(30);
 /// One edit at a time, its read and its write in one turn (an entry added meanwhile is never overwritten).
 static EDITS: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
-fn claude_key_id(id: &str) -> bool {
-    id == "anthropic-api-key"
-        || id
-            .strip_prefix("anthropic-api-key-")
-            .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
-}
+use super::claude_route::is_claude_key_id as claude_key_id;
 
 pub fn register(registry: &mut Registry) {
     registry.add("models.list", |call| {
