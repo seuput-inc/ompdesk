@@ -20,8 +20,9 @@ pub use detect::{
     detect_direct_api_in, is_windows_cmd_shim, probe_cli_version, quote_cmd_arg,
 };
 pub use direct_api::{
-    ConversationMessage, ConversationRole, DirectApiAdapter, DirectApiHttpRequest,
-    NoopToolExecutor, SecretHeader, ToolExecutionResult, ToolExecutor, ToolInvocation, ToolSchema,
-    build_http_request, default_api_key_env, default_model, drive_sse_byte_chunks,
-    resolve_endpoint_url,
+    ConversationMessage, ConversationRole, DEFAULT_MAX_TOOL_ROUNDS, DirectApiAdapter,
+    DirectApiHttpRequest, HyperSseTransport, NoopToolExecutor, RecordedToolCall, RoundCollector,
+    RoundOutcome, SecretHeader, SseTransport, ToolExecutionResult, ToolExecutor, ToolInvocation,
+    ToolSchema, build_http_request, default_api_key_env, default_model, drive_sse_byte_chunks,
+    drive_sse_round, resolve_endpoint_url,
 };

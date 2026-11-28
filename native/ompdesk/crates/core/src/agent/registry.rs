@@ -9,6 +9,7 @@ use super::backends::{
     ClaudeCliAdapter, CodexCliAdapter, DirectApiAdapter, NoopToolExecutor, ToolExecutor,
 };
 use super::omp_contract::OmpAdapterContract;
+use super::tools::LocalToolExecutor;
 use super::types::{
     AgentError, BackendId, BackendKind, CapabilityRequirements, DirectApiProvider, DiscoverySource,
     InstallStatus, InstalledBackend, ProviderCliKind,
@@ -167,6 +168,12 @@ impl AdapterRegistry {
     /// [`NoopToolExecutor`], and the [`OmpAdapterContract`] slot).
     pub fn with_default_backends() -> Self {
         Self::with_default_backends_and_tools(Arc::new(NoopToolExecutor))
+    }
+
+    /// Builds a default backend registry whose Direct LLM API adapters are wired to the built-in
+    /// workspace-rooted [`LocalToolExecutor`].
+    pub fn with_local_tools() -> Self {
+        Self::with_default_backends_and_tools(Arc::new(LocalToolExecutor::new()))
     }
 
     /// Builds a default backend registry wired with a custom [`ToolExecutor`] for Direct LLM API

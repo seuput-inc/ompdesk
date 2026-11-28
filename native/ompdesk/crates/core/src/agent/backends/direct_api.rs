@@ -3,7 +3,9 @@
 //! Uses `ompdesk-core`'s existing `hyper` + `hyper-util` + `http-body-util` + `tokio-rustls` +
 //! `crate::http::machine_tls()` stack (zero external CLI, zero `Cargo.lock` additions), streams
 //! response chunks incrementally through [`DirectSseParser`], redacts secrets from all `Debug`
-//! surfaces, and exposes a [`ToolExecutor`] hook for Stage 2B local/MCP tool execution.
+//! surfaces, and executes a bounded multi-round [`ToolExecutor`] loop appending provider-native
+//! tool calls and tool results across Anthropic Messages, OpenAI Responses, and OpenRouter /
+//! OpenAI-compatible Chat Completions.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -36,6 +38,10 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 const MAX_ERROR_BODY_BYTES: usize = 16 * 1024;
 const ANTHROPIC_API_VERSION: &str = "2023-06-01";
 const DEFAULT_ANTHROPIC_MAX_TOKENS: u32 = 4096;
+
+/// Default maximum model-to-tool execution rounds per turn when `DirectApiConfig::max_tool_rounds`
+/// is omitted.
+pub const DEFAULT_MAX_TOOL_ROUNDS: u32 = 16;
 
 /// JSON Schema description of one local or MCP tool exposed to a Direct LLM API turn.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -75,7 +81,7 @@ pub trait ToolExecutor: Send + Sync {
     ) -> BoxFuture<'_, Result<ToolExecutionResult, AgentError>>;
 }
 
-/// Default zero-tool [`ToolExecutor`] used until Stage 2B binds workspace and `mcp_hub` tools.
+/// Default zero-tool [`ToolExecutor`] for sessions without local/MCP tools enabled.
 #[derive(Debug, Default)]
 pub struct NoopToolExecutor;
 
@@ -106,14 +112,32 @@ impl ToolExecutor for NoopToolExecutor {
 pub enum ConversationRole {
     User,
     Assistant,
+    Tool,
 }
 
-/// One persisted conversation message sent on subsequent Direct API turns.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One tool call recorded on an assistant turn in conversation history.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordedToolCall {
+    pub call_id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+/// One persisted conversation message sent on subsequent Direct API turns and tool rounds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationMessage {
     pub role: ConversationRole,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<RecordedToolCall>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(default)]
+    pub is_error: bool,
 }
 
 impl ConversationMessage {
@@ -121,6 +145,10 @@ impl ConversationMessage {
         Self {
             role: ConversationRole::User,
             content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+            tool_name: None,
+            is_error: false,
         }
     }
 
@@ -128,6 +156,40 @@ impl ConversationMessage {
         Self {
             role: ConversationRole::Assistant,
             content: content.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: None,
+            tool_name: None,
+            is_error: false,
+        }
+    }
+
+    pub fn assistant_with_tools(
+        content: impl Into<String>,
+        tool_calls: Vec<RecordedToolCall>,
+    ) -> Self {
+        Self {
+            role: ConversationRole::Assistant,
+            content: content.into(),
+            tool_calls,
+            tool_call_id: None,
+            tool_name: None,
+            is_error: false,
+        }
+    }
+
+    pub fn tool_result(
+        call_id: impl Into<String>,
+        name: impl Into<String>,
+        output: impl Into<String>,
+        is_error: bool,
+    ) -> Self {
+        Self {
+            role: ConversationRole::Tool,
+            content: output.into(),
+            tool_calls: Vec::new(),
+            tool_call_id: Some(call_id.into()),
+            tool_name: Some(name.into()),
+            is_error,
         }
     }
 }
@@ -359,18 +421,71 @@ fn build_anthropic_body(
     if let Some(system) = system_prompt.filter(|s| !s.is_empty()) {
         obj.insert("system".to_owned(), Value::String(system.to_owned()));
     }
-    let msg_values: Vec<Value> = messages
-        .iter()
-        .map(|msg| {
-            json!({
-                "role": match msg.role {
-                    ConversationRole::User => "user",
-                    ConversationRole::Assistant => "assistant",
-                },
-                "content": msg.content,
-            })
-        })
-        .collect();
+
+    let mut msg_values: Vec<Value> = Vec::new();
+    let mut pending_tool_results: Vec<Value> = Vec::new();
+
+    let flush_tool_results = |pending: &mut Vec<Value>, out: &mut Vec<Value>| {
+        if !pending.is_empty() {
+            out.push(json!({
+                "role": "user",
+                "content": std::mem::take(pending),
+            }));
+        }
+    };
+
+    for msg in messages {
+        match msg.role {
+            ConversationRole::Tool => {
+                let mut block = Map::new();
+                block.insert("type".to_owned(), Value::String("tool_result".to_owned()));
+                block.insert(
+                    "tool_use_id".to_owned(),
+                    Value::String(msg.tool_call_id.clone().unwrap_or_default()),
+                );
+                block.insert("content".to_owned(), Value::String(msg.content.clone()));
+                if msg.is_error {
+                    block.insert("is_error".to_owned(), Value::Bool(true));
+                }
+                pending_tool_results.push(Value::Object(block));
+            }
+            ConversationRole::User => {
+                flush_tool_results(&mut pending_tool_results, &mut msg_values);
+                msg_values.push(json!({
+                    "role": "user",
+                    "content": msg.content,
+                }));
+            }
+            ConversationRole::Assistant => {
+                flush_tool_results(&mut pending_tool_results, &mut msg_values);
+                if msg.tool_calls.is_empty() {
+                    msg_values.push(json!({
+                        "role": "assistant",
+                        "content": msg.content,
+                    }));
+                } else {
+                    let mut blocks = Vec::new();
+                    if !msg.content.is_empty() {
+                        blocks.push(json!({ "type": "text", "text": msg.content }));
+                    }
+                    for tc in &msg.tool_calls {
+                        blocks.push(json!({
+                            "type": "tool_use",
+                            "id": tc.call_id,
+                            "name": tc.name,
+                            "input": tc.arguments,
+                        }));
+                    }
+                    msg_values.push(json!({
+                        "role": "assistant",
+                        "content": blocks,
+                    }));
+                }
+            }
+        }
+    }
+    flush_tool_results(&mut pending_tool_results, &mut msg_values);
+
     obj.insert("messages".to_owned(), Value::Array(msg_values));
     if !tools.is_empty() {
         let tool_values: Vec<Value> = tools
@@ -404,18 +519,42 @@ fn build_openai_responses_body(
     if let Some(max) = max_output_tokens {
         obj.insert("max_output_tokens".to_owned(), Value::from(max));
     }
-    let input_values: Vec<Value> = messages
-        .iter()
-        .map(|msg| {
-            json!({
-                "role": match msg.role {
-                    ConversationRole::User => "user",
-                    ConversationRole::Assistant => "assistant",
-                },
-                "content": msg.content,
-            })
-        })
-        .collect();
+    let mut input_values = Vec::new();
+    for msg in messages {
+        match msg.role {
+            ConversationRole::User => {
+                input_values.push(json!({
+                    "role": "user",
+                    "content": msg.content,
+                }));
+            }
+            ConversationRole::Assistant => {
+                if !msg.content.is_empty() || msg.tool_calls.is_empty() {
+                    input_values.push(json!({
+                        "role": "assistant",
+                        "content": msg.content,
+                    }));
+                }
+                for tc in &msg.tool_calls {
+                    let args_str =
+                        serde_json::to_string(&tc.arguments).unwrap_or_else(|_| "{}".to_owned());
+                    input_values.push(json!({
+                        "type": "function_call",
+                        "call_id": tc.call_id,
+                        "name": tc.name,
+                        "arguments": args_str,
+                    }));
+                }
+            }
+            ConversationRole::Tool => {
+                input_values.push(json!({
+                    "type": "function_call_output",
+                    "call_id": msg.tool_call_id.clone().unwrap_or_default(),
+                    "output": msg.content,
+                }));
+            }
+        }
+    }
     obj.insert("input".to_owned(), Value::Array(input_values));
     if !tools.is_empty() {
         let tool_values: Vec<Value> = tools
@@ -456,13 +595,62 @@ fn build_chat_completions_body(
         msg_values.push(json!({ "role": "system", "content": system }));
     }
     for msg in messages {
-        msg_values.push(json!({
-            "role": match msg.role {
-                ConversationRole::User => "user",
-                ConversationRole::Assistant => "assistant",
-            },
-            "content": msg.content,
-        }));
+        match msg.role {
+            ConversationRole::User => {
+                msg_values.push(json!({
+                    "role": "user",
+                    "content": msg.content,
+                }));
+            }
+            ConversationRole::Assistant => {
+                if msg.tool_calls.is_empty() {
+                    msg_values.push(json!({
+                        "role": "assistant",
+                        "content": msg.content,
+                    }));
+                } else {
+                    let content_val = if msg.content.is_empty() {
+                        Value::Null
+                    } else {
+                        Value::String(msg.content.clone())
+                    };
+                    let tool_calls: Vec<Value> = msg
+                        .tool_calls
+                        .iter()
+                        .map(|tc| {
+                            let args_str = serde_json::to_string(&tc.arguments)
+                                .unwrap_or_else(|_| "{}".to_owned());
+                            json!({
+                                "id": tc.call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": tc.name,
+                                    "arguments": args_str,
+                                }
+                            })
+                        })
+                        .collect();
+                    msg_values.push(json!({
+                        "role": "assistant",
+                        "content": content_val,
+                        "tool_calls": tool_calls,
+                    }));
+                }
+            }
+            ConversationRole::Tool => {
+                let mut item = Map::new();
+                item.insert("role".to_owned(), Value::String("tool".to_owned()));
+                item.insert(
+                    "tool_call_id".to_owned(),
+                    Value::String(msg.tool_call_id.clone().unwrap_or_default()),
+                );
+                if let Some(name) = &msg.tool_name {
+                    item.insert("name".to_owned(), Value::String(name.clone()));
+                }
+                item.insert("content".to_owned(), Value::String(msg.content.clone()));
+                msg_values.push(Value::Object(item));
+            }
+        }
     }
     obj.insert("messages".to_owned(), Value::Array(msg_values));
     if !tools.is_empty() {
@@ -482,6 +670,194 @@ fn build_chat_completions_body(
         obj.insert("tools".to_owned(), Value::Array(tool_values));
     }
     Value::Object(obj)
+}
+
+/// Summary of one streamed LLM round returned by [`SseTransport::stream_round`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoundOutcome {
+    pub assistant_text: String,
+    pub tool_calls: Vec<RecordedToolCall>,
+    pub finish_reason: TurnFinishReason,
+    pub terminal_event: Option<AgentEvent>,
+}
+
+struct PendingToolCall {
+    name: String,
+    raw_args: String,
+    initial_args: Option<Value>,
+    already_executed: bool,
+}
+
+/// Accumulates normalized events for one streaming model round, collecting tool call arguments and
+/// holding back `TurnFinished` until the outer tool loop knows whether another round will run.
+pub struct RoundCollector {
+    round: u32,
+    assistant_text: String,
+    tool_order: Vec<String>,
+    pending_tools: HashMap<String, PendingToolCall>,
+    finish_reason: TurnFinishReason,
+    terminal_event: Option<AgentEvent>,
+}
+
+impl RoundCollector {
+    pub fn new(round: u32) -> Self {
+        Self {
+            round,
+            assistant_text: String::new(),
+            tool_order: Vec::new(),
+            pending_tools: HashMap::new(),
+            finish_reason: TurnFinishReason::Completed,
+            terminal_event: None,
+        }
+    }
+
+    /// Processes one event from [`DirectSseParser`], forwarding streaming deltas to `tx` and
+    /// returning `false` if the receiver has closed.
+    pub async fn accept(&mut self, event: AgentEvent, tx: &mpsc::Sender<AgentEvent>) -> bool {
+        match &event {
+            AgentEvent::TurnStarted { .. } => {
+                if self.round > 0 {
+                    return true;
+                }
+            }
+            AgentEvent::TextDelta { text, .. } => {
+                self.assistant_text.push_str(text);
+            }
+            AgentEvent::ToolCallStarted {
+                call_id,
+                name,
+                arguments,
+            } => {
+                if !self.pending_tools.contains_key(call_id) {
+                    self.tool_order.push(call_id.clone());
+                }
+                self.pending_tools.insert(
+                    call_id.clone(),
+                    PendingToolCall {
+                        name: name.clone(),
+                        raw_args: String::new(),
+                        initial_args: arguments.as_deref().cloned(),
+                        already_executed: false,
+                    },
+                );
+            }
+            AgentEvent::ToolCallDelta {
+                call_id,
+                arguments_delta: Some(delta),
+                ..
+            } => {
+                if let Some(pending) = self.pending_tools.get_mut(call_id) {
+                    pending.raw_args.push_str(delta);
+                }
+            }
+            AgentEvent::ToolCallFinished {
+                call_id, output, ..
+            } => {
+                if let Some(pending) = self.pending_tools.get_mut(call_id) {
+                    if output.is_some() {
+                        pending.already_executed = true;
+                    } else {
+                        // Tool call argument assembly finished without local execution output yet:
+                        // defer emitting ToolCallFinished until ToolExecutor runs.
+                        return true;
+                    }
+                }
+            }
+            AgentEvent::TurnFinished { reason, .. } => {
+                self.finish_reason = *reason;
+                self.terminal_event = Some(event);
+                return true;
+            }
+            _ => {}
+        }
+        tx.send(event).await.is_ok()
+    }
+
+    pub fn into_outcome(mut self) -> RoundOutcome {
+        let mut tool_calls = Vec::new();
+        for call_id in self.tool_order {
+            let Some(pending) = self.pending_tools.remove(&call_id) else {
+                continue;
+            };
+            if pending.already_executed {
+                continue;
+            }
+            let arguments = if !pending.raw_args.trim().is_empty() {
+                serde_json::from_str::<Value>(&pending.raw_args)
+                    .unwrap_or_else(|_| json!({ "_raw": pending.raw_args }))
+            } else {
+                pending.initial_args.unwrap_or_else(|| json!({}))
+            };
+            tool_calls.push(RecordedToolCall {
+                call_id,
+                name: pending.name,
+                arguments,
+            });
+        }
+        RoundOutcome {
+            assistant_text: self.assistant_text,
+            tool_calls,
+            finish_reason: self.finish_reason,
+            terminal_event: self.terminal_event,
+        }
+    }
+}
+
+/// Pluggable SSE round transport used by [`DirectApiAdapter`] (defaults to [`HyperSseTransport`]).
+pub trait SseTransport: Send + Sync {
+    fn stream_round<'a>(
+        &'a self,
+        provider: DirectApiProvider,
+        request: &'a DirectApiHttpRequest,
+        round: u32,
+        tx: &'a mpsc::Sender<AgentEvent>,
+    ) -> BoxFuture<'a, Result<RoundOutcome, AgentError>>;
+}
+
+/// Production [`SseTransport`] backed by `ompdesk-core`'s `hyper` 1 + `tokio-rustls` client.
+#[derive(Debug, Default)]
+pub struct HyperSseTransport;
+
+impl SseTransport for HyperSseTransport {
+    fn stream_round<'a>(
+        &'a self,
+        provider: DirectApiProvider,
+        request: &'a DirectApiHttpRequest,
+        round: u32,
+        tx: &'a mpsc::Sender<AgentEvent>,
+    ) -> BoxFuture<'a, Result<RoundOutcome, AgentError>> {
+        Box::pin(async move {
+            let mut parser = DirectSseParser::new(provider);
+            stream_http_sse(request, &mut parser, round, tx).await
+        })
+    }
+}
+
+/// Drives raw SSE byte chunks through [`DirectSseParser`] and [`RoundCollector`], returning the
+/// full [`RoundOutcome`] including assembled tool calls.
+pub async fn drive_sse_round<I>(
+    chunks: I,
+    parser: &mut DirectSseParser,
+    round: u32,
+    tx: &mpsc::Sender<AgentEvent>,
+) -> Result<RoundOutcome, AgentError>
+where
+    I: IntoIterator<Item = Vec<u8>>,
+{
+    let mut collector = RoundCollector::new(round);
+    for chunk in chunks {
+        for event in parser.feed_bytes(&chunk)? {
+            if !collector.accept(event, tx).await {
+                return Ok(collector.into_outcome());
+            }
+        }
+    }
+    for event in parser.finish()? {
+        if !collector.accept(event, tx).await {
+            break;
+        }
+    }
+    Ok(collector.into_outcome())
 }
 
 /// Feeds an iterator of raw SSE byte chunks through [`DirectSseParser`] into `tx`, returning the
@@ -523,8 +899,9 @@ impl<T: AsyncRead + AsyncWrite + Send + Unpin + 'static> StreamIo for T {}
 async fn stream_http_sse(
     request: &DirectApiHttpRequest,
     parser: &mut DirectSseParser,
+    round: u32,
     tx: &mpsc::Sender<AgentEvent>,
-) -> Result<String, AgentError> {
+) -> Result<RoundOutcome, AgentError> {
     let url = Url::parse(&request.url).map_err(|error| AgentError::InvalidSpec {
         message: format!("invalid Direct API URL: {error}"),
     })?;
@@ -662,7 +1039,7 @@ async fn stream_http_sse(
         });
     }
 
-    let mut assistant_text = String::new();
+    let mut collector = RoundCollector::new(round);
     while let Some(frame_result) = body.frame().await {
         let frame = frame_result.map_err(|error| AgentError::Transport {
             message: format!("SSE stream read failed: {error}"),
@@ -670,25 +1047,18 @@ async fn stream_http_sse(
         let Ok(chunk) = frame.into_data() else {
             continue;
         };
-        let events = parser.feed_bytes(&chunk)?;
-        for event in events {
-            if let AgentEvent::TextDelta { text, .. } = &event {
-                assistant_text.push_str(text);
-            }
-            if tx.send(event).await.is_err() {
-                return Ok(assistant_text);
+        for event in parser.feed_bytes(&chunk)? {
+            if !collector.accept(event, tx).await {
+                return Ok(collector.into_outcome());
             }
         }
     }
     for event in parser.finish()? {
-        if let AgentEvent::TextDelta { text, .. } = &event {
-            assistant_text.push_str(text);
-        }
-        if tx.send(event).await.is_err() {
+        if !collector.accept(event, tx).await {
             break;
         }
     }
-    Ok(assistant_text)
+    Ok(collector.into_outcome())
 }
 
 struct DirectSessionRuntime {
@@ -731,11 +1101,13 @@ impl DirectSessionRuntime {
 }
 
 /// Concrete [`AgentAdapter`] speaking Anthropic Messages, OpenAI Responses, OpenRouter, and
-/// OpenAI-compatible SSE endpoints natively from Rust with zero external CLI dependency.
+/// OpenAI-compatible SSE endpoints natively from Rust with zero external CLI dependency and a
+/// bounded multi-round [`ToolExecutor`] loop.
 pub struct DirectApiAdapter {
     provider: DirectApiProvider,
     api_key_override: Option<String>,
     tool_executor: Arc<dyn ToolExecutor>,
+    transport: Arc<dyn SseTransport>,
     sessions: Arc<StdMutex<HashMap<String, Arc<DirectSessionRuntime>>>>,
 }
 
@@ -754,6 +1126,7 @@ impl DirectApiAdapter {
             provider,
             api_key_override: None,
             tool_executor,
+            transport: Arc::new(HyperSseTransport),
             sessions: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
@@ -761,6 +1134,12 @@ impl DirectApiAdapter {
     /// Injects an explicit API key (for secret-store lookup or tests; never printed by `Debug`).
     pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key_override = Some(api_key.into());
+        self
+    }
+
+    /// Overrides the HTTP SSE transport (used by deterministic multi-round unit tests).
+    pub fn with_transport(mut self, transport: Arc<dyn SseTransport>) -> Self {
+        self.transport = transport;
         self
     }
 
@@ -882,7 +1261,9 @@ impl AgentAdapter for DirectApiAdapter {
     ) -> BoxFuture<'a, Result<(), AgentError>> {
         let runtime = self.lookup_session(session.id());
         let provider = self.provider;
-        let tools = self.tool_executor.list_tools();
+        let tool_executor = Arc::clone(&self.tool_executor);
+        let transport = Arc::clone(&self.transport);
+        let tools = tool_executor.list_tools();
         let api_key = runtime
             .as_ref()
             .ok()
@@ -898,7 +1279,7 @@ impl AgentAdapter for DirectApiAdapter {
                 history.clone()
             };
 
-            let http_req = build_http_request(
+            let initial_req = build_http_request(
                 provider,
                 &runtime.spec,
                 &messages,
@@ -906,6 +1287,13 @@ impl AgentAdapter for DirectApiAdapter {
                 api_key.as_deref(),
                 input.model_override.as_deref(),
             )?;
+            let max_rounds = runtime
+                .spec
+                .api_config
+                .as_ref()
+                .and_then(|cfg| cfg.max_tool_rounds)
+                .unwrap_or(DEFAULT_MAX_TOOL_ROUNDS)
+                .max(1);
 
             let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
             {
@@ -920,50 +1308,168 @@ impl AgentAdapter for DirectApiAdapter {
 
             let runtime_bg = Arc::clone(&runtime);
             tokio::spawn(async move {
-                let mut parser = DirectSseParser::new(provider);
                 let tx = runtime_bg.event_tx.clone();
-                tokio::select! {
-                    result = stream_http_sse(&http_req, &mut parser, &tx) => {
-                        match result {
-                            Ok(reply_text) => {
-                                if !reply_text.is_empty() {
-                                    runtime_bg
-                                        .history
-                                        .lock()
-                                        .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                        .push(ConversationMessage::assistant(reply_text));
+                let mut next_req = Some(initial_req);
+
+                for round in 0..max_rounds {
+                    let http_req = match next_req.take() {
+                        Some(req) => req,
+                        None => {
+                            let snapshot = runtime_bg
+                                .history
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .clone();
+                            match build_http_request(
+                                provider,
+                                &runtime_bg.spec,
+                                &snapshot,
+                                &tools,
+                                api_key.as_deref(),
+                                input.model_override.as_deref(),
+                            ) {
+                                Ok(req) => req,
+                                Err(error) => {
+                                    emit_turn_error(
+                                        &tx,
+                                        &error,
+                                        input.turn_id.clone(),
+                                        &runtime_bg,
+                                    )
+                                    .await;
+                                    break;
                                 }
                             }
-                            Err(error) => {
-                                let _ = tx
-                                    .send(AgentEvent::Error {
-                                        code: error.code().to_owned(),
-                                        message: error.to_string(),
-                                        retryable: error.is_retryable(),
-                                    })
-                                    .await;
-                                let _ = tx
-                                    .send(AgentEvent::TurnFinished {
-                                        turn_id: input.turn_id,
-                                        reason: TurnFinishReason::Error,
-                                        resume_handle: Some(Box::new(
-                                            runtime_bg.snapshot_resume_handle(),
-                                        )),
-                                    })
-                                    .await;
-                            }
                         }
-                    }
-                    _ = &mut cancel_rx => {
+                    };
+
+                    let round_result = tokio::select! {
+                        result = transport.stream_round(provider, &http_req, round, &tx) => Some(result),
+                        _ = &mut cancel_rx => None,
+                    };
+
+                    let Some(round_result) = round_result else {
                         let _ = tx
                             .send(AgentEvent::TurnFinished {
-                                turn_id: input.turn_id,
+                                turn_id: input.turn_id.clone(),
                                 reason: TurnFinishReason::Interrupted,
                                 resume_handle: Some(Box::new(runtime_bg.snapshot_resume_handle())),
                             })
                             .await;
+                        break;
+                    };
+
+                    let outcome = match round_result {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            emit_turn_error(&tx, &error, input.turn_id.clone(), &runtime_bg).await;
+                            break;
+                        }
+                    };
+
+                    if !outcome.tool_calls.is_empty() {
+                        runtime_bg
+                            .history
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(ConversationMessage::assistant_with_tools(
+                                outcome.assistant_text,
+                                outcome.tool_calls.clone(),
+                            ));
+                    } else if !outcome.assistant_text.is_empty() {
+                        runtime_bg
+                            .history
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(ConversationMessage::assistant(outcome.assistant_text));
+                    }
+
+                    if outcome.tool_calls.is_empty() || tools.is_empty() {
+                        let final_event =
+                            outcome
+                                .terminal_event
+                                .unwrap_or_else(|| AgentEvent::TurnFinished {
+                                    turn_id: input.turn_id.clone(),
+                                    reason: outcome.finish_reason,
+                                    resume_handle: Some(Box::new(
+                                        runtime_bg.snapshot_resume_handle(),
+                                    )),
+                                });
+                        let _ = tx.send(final_event).await;
+                        break;
+                    }
+
+                    if round + 1 >= max_rounds {
+                        let _ = tx
+                            .send(AgentEvent::Error {
+                                code: "max_tool_rounds".to_owned(),
+                                message: format!("reached maximum tool rounds ({max_rounds})"),
+                                retryable: false,
+                            })
+                            .await;
+                        let _ = tx
+                            .send(AgentEvent::TurnFinished {
+                                turn_id: input.turn_id.clone(),
+                                reason: TurnFinishReason::MaxTokens,
+                                resume_handle: Some(Box::new(runtime_bg.snapshot_resume_handle())),
+                            })
+                            .await;
+                        break;
+                    }
+
+                    let mut cancelled = false;
+                    for call in outcome.tool_calls {
+                        let invocation = ToolInvocation {
+                            call_id: call.call_id.clone(),
+                            name: call.name.clone(),
+                            arguments: call.arguments,
+                            cwd: runtime_bg.spec.cwd.clone(),
+                        };
+                        let exec_result = tokio::select! {
+                            res = tool_executor.execute(invocation) => Some(res),
+                            _ = &mut cancel_rx => None,
+                        };
+                        let Some(exec_result) = exec_result else {
+                            let _ = tx
+                                .send(AgentEvent::TurnFinished {
+                                    turn_id: input.turn_id.clone(),
+                                    reason: TurnFinishReason::Interrupted,
+                                    resume_handle: Some(Box::new(
+                                        runtime_bg.snapshot_resume_handle(),
+                                    )),
+                                })
+                                .await;
+                            cancelled = true;
+                            break;
+                        };
+                        let (output, is_error) = match exec_result {
+                            Ok(result) => (result.output, result.is_error),
+                            Err(error) => (error.to_string(), true),
+                        };
+                        let _ = tx
+                            .send(AgentEvent::ToolCallFinished {
+                                call_id: call.call_id.clone(),
+                                name: Some(call.name.clone()),
+                                output: Some(output.clone()),
+                                is_error,
+                            })
+                            .await;
+                        runtime_bg
+                            .history
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .push(ConversationMessage::tool_result(
+                                call.call_id,
+                                call.name,
+                                output,
+                                is_error,
+                            ));
+                    }
+                    if cancelled {
+                        break;
                     }
                 }
+
                 let _ = runtime_bg
                     .active_cancel
                     .lock()
@@ -1073,9 +1579,35 @@ impl AgentAdapter for DirectApiAdapter {
     }
 }
 
+async fn emit_turn_error(
+    tx: &mpsc::Sender<AgentEvent>,
+    error: &AgentError,
+    turn_id: Option<String>,
+    runtime: &DirectSessionRuntime,
+) {
+    let _ = tx
+        .send(AgentEvent::Error {
+            code: error.code().to_owned(),
+            message: error.to_string(),
+            retryable: error.is_retryable(),
+        })
+        .await;
+    let _ = tx
+        .send(AgentEvent::TurnFinished {
+            turn_id,
+            reason: TurnFinishReason::Error,
+            resume_handle: Some(Box::new(runtime.snapshot_resume_handle())),
+        })
+        .await;
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
+    use std::fs;
+
     use super::*;
+    use crate::agent::tools::LocalToolExecutor;
     use crate::agent::types::DirectApiConfig;
 
     struct MockEchoTool;
@@ -1106,10 +1638,68 @@ mod tests {
         }
     }
 
+    struct ScriptedSseTransport {
+        rounds: StdMutex<VecDeque<String>>,
+        captured_requests: StdMutex<Vec<DirectApiHttpRequest>>,
+    }
+
+    impl ScriptedSseTransport {
+        fn new(rounds: Vec<String>) -> Self {
+            Self {
+                rounds: StdMutex::new(rounds.into()),
+                captured_requests: StdMutex::new(Vec::new()),
+            }
+        }
+
+        fn captured(&self) -> Vec<DirectApiHttpRequest> {
+            self.captured_requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
+        }
+    }
+
+    impl SseTransport for ScriptedSseTransport {
+        fn stream_round<'a>(
+            &'a self,
+            provider: DirectApiProvider,
+            request: &'a DirectApiHttpRequest,
+            round: u32,
+            tx: &'a mpsc::Sender<AgentEvent>,
+        ) -> BoxFuture<'a, Result<RoundOutcome, AgentError>> {
+            self.captured_requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(request.clone());
+            let sse = self
+                .rounds
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .pop_front()
+                .unwrap_or_default();
+            Box::pin(async move {
+                let mut parser = DirectSseParser::new(provider);
+                let chunks: Vec<Vec<u8>> = sse.as_bytes().chunks(31).map(<[u8]>::to_vec).collect();
+                drive_sse_round(chunks, &mut parser, round, tx).await
+            })
+        }
+    }
+
     #[test]
-    fn builds_provider_payloads_and_redacts_secret_auth_headers_in_debug() {
+    fn builds_provider_payloads_including_tool_results_and_redacts_secrets() {
         let tools = MockEchoTool.list_tools();
-        let messages = [ConversationMessage::user("Explain Cargo.toml")];
+        let messages = [
+            ConversationMessage::user("Read Cargo.toml"),
+            ConversationMessage::assistant_with_tools(
+                "Reading now.",
+                vec![RecordedToolCall {
+                    call_id: "tc_1".to_owned(),
+                    name: "read_file".to_owned(),
+                    arguments: json!({ "path": "Cargo.toml" }),
+                }],
+            ),
+            ConversationMessage::tool_result("tc_1", "read_file", "[workspace]", false),
+        ];
         let mut spec = SessionSpec::new("tab-api", "/repo");
         spec.system_prompt = Some("Be terse.".to_owned());
 
@@ -1126,9 +1716,16 @@ mod tests {
         assert_eq!(anth.url, "https://api.anthropic.com/v1/messages");
         assert!(anth.has_auth_header("x-api-key"));
         assert_eq!(anth.auth_header_names(), ["x-api-key"]);
-        assert_eq!(anth.body["stream"], true);
-        assert_eq!(anth.body["system"], "Be terse.");
-        assert_eq!(anth.body["tools"][0]["name"], "read_file");
+        assert_eq!(anth.body["messages"][1]["content"][1]["type"], "tool_use");
+        assert_eq!(anth.body["messages"][2]["role"], "user");
+        assert_eq!(
+            anth.body["messages"][2]["content"][0]["type"],
+            "tool_result"
+        );
+        assert_eq!(
+            anth.body["messages"][2]["content"][0]["tool_use_id"],
+            "tc_1"
+        );
         let debug_text = format!("{anth:?}");
         assert!(!debug_text.contains(secret));
         assert!(debug_text.contains("[REDACTED]"));
@@ -1144,8 +1741,9 @@ mod tests {
         .unwrap();
         assert_eq!(openai.url, "https://api.openai.com/v1/responses");
         assert!(openai.has_auth_header("authorization"));
-        assert_eq!(openai.body["instructions"], "Be terse.");
-        assert_eq!(openai.body["tools"][0]["type"], "function");
+        assert_eq!(openai.body["input"][2]["type"], "function_call");
+        assert_eq!(openai.body["input"][3]["type"], "function_call_output");
+        assert_eq!(openai.body["input"][3]["call_id"], "tc_1");
         assert!(!format!("{openai:?}").contains("sk-openai-secret"));
 
         let mut compat_spec = SessionSpec::new("tab-local", "/repo");
@@ -1167,7 +1765,8 @@ mod tests {
         .unwrap();
         assert_eq!(local.url, "http://127.0.0.1:11434/v1/chat/completions");
         assert!(local.auth_header_names().is_empty());
-        assert_eq!(local.body["max_tokens"], 1024);
+        assert_eq!(local.body["messages"][3]["role"], "tool");
+        assert_eq!(local.body["messages"][3]["tool_call_id"], "tc_1");
 
         // Cloud provider without API key fails with NotInstalled.
         let missing = build_http_request(
@@ -1183,7 +1782,114 @@ mod tests {
     }
 
     #[tokio::test]
-    fn drives_mock_sse_chunks_through_parser_and_verifies_tool_executor_and_hibernation() {
+    fn executes_two_round_tool_loop_end_to_end_with_local_tool_executor() {
+        let ws = tempfile::tempdir().unwrap();
+        fs::write(ws.path().join("hello.txt"), "hello from momo workspace\n").unwrap();
+
+        let round1 = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_r1\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":20}}}\n\n",
+            "event: content_block_start\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_read_1\",\"name\":\"read_file\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"hello.txt\\\"}\"}}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":10}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        )
+        .to_owned();
+
+        let round2 = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_r2\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":50}}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"The file says: hello from momo workspace.\"}}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":14}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        )
+        .to_owned();
+
+        let transport = Arc::new(ScriptedSseTransport::new(vec![round1, round2]));
+        let executor = Arc::new(LocalToolExecutor::with_root(ws.path()));
+        let adapter = DirectApiAdapter::new(DirectApiProvider::Anthropic, executor)
+            .with_api_key("sk-ant-loop-test")
+            .with_transport(Arc::clone(&transport));
+
+        let mut session = adapter
+            .start(SessionSpec::new("tab-loop", ws.path()))
+            .await
+            .unwrap();
+        let mut rx = session.take_events().unwrap();
+
+        adapter
+            .send_turn(&session, TurnInput::text("Read hello.txt"))
+            .await
+            .unwrap();
+
+        let mut events = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            let done = matches!(ev, AgentEvent::TurnFinished { .. });
+            events.push(ev);
+            if done {
+                break;
+            }
+        }
+
+        // Exactly one TurnStarted and one final TurnFinished(Completed) across the 2 rounds.
+        let started_count = events
+            .iter()
+            .filter(|ev| matches!(ev, AgentEvent::TurnStarted { .. }))
+            .count();
+        assert_eq!(started_count, 1);
+
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            AgentEvent::ToolCallStarted { call_id, name, .. }
+                if call_id == "tu_read_1" && name == "read_file"
+        )));
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            AgentEvent::ToolCallFinished {
+                call_id,
+                output: Some(out),
+                is_error: false,
+                ..
+            } if call_id == "tu_read_1" && out.contains("hello from momo workspace")
+        )));
+        assert!(events.iter().any(|ev| matches!(
+            ev,
+            AgentEvent::TextDelta { text, .. } if text.contains("hello from momo workspace")
+        )));
+        assert!(matches!(
+            events.last(),
+            Some(AgentEvent::TurnFinished {
+                reason: TurnFinishReason::Completed,
+                ..
+            })
+        ));
+
+        // Round 2 request must contain the assistant tool_use and Anthropic user tool_result block.
+        let requests = transport.captured();
+        assert_eq!(requests.len(), 2);
+        let round2_msgs = &requests[1].body["messages"];
+        assert_eq!(round2_msgs[1]["role"], "assistant");
+        assert_eq!(round2_msgs[1]["content"][0]["type"], "tool_use");
+        assert_eq!(round2_msgs[2]["role"], "user");
+        assert_eq!(round2_msgs[2]["content"][0]["type"], "tool_result");
+        assert_eq!(round2_msgs[2]["content"][0]["tool_use_id"], "tu_read_1");
+        assert!(
+            round2_msgs[2]["content"][0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("hello from momo workspace")
+        );
+    }
+
+    #[tokio::test]
+    fn drives_mock_sse_chunks_and_preserves_hibernation_cursor() {
         let sse = concat!(
             "event: message_start\n",
             "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m_sse\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":12}}}\n\n",
@@ -1218,18 +1924,6 @@ mod tests {
         )));
 
         let executor = Arc::new(MockEchoTool);
-        let exec_res = executor
-            .execute(ToolInvocation {
-                call_id: "c1".to_owned(),
-                name: "read_file".to_owned(),
-                arguments: json!({ "path": "Cargo.toml" }),
-                cwd: PathBuf::from("/repo"),
-            })
-            .await
-            .unwrap();
-        assert!(!exec_res.is_error);
-        assert_eq!(exec_res.output, "executed read_file:c1");
-
         let adapter = DirectApiAdapter::new(DirectApiProvider::Anthropic, executor)
             .with_api_key("sk-ant-test-key");
         assert!(!format!("{adapter:?}").contains("sk-ant-test-key"));

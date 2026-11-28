@@ -19,9 +19,11 @@ pub mod types;
 pub use adapter::{AgentAdapter, AgentSession, BoxFuture};
 pub use backends::{
     ClaudeCliAdapter, CliCommandSpec, CliDescriptor, CodexCliAdapter, CodexTransportMode,
-    ConversationMessage, ConversationRole, DirectApiAdapter, DirectApiHttpRequest, DiscoveryEnv,
-    InstalledBackendInfo, NoopToolExecutor, SecretHeader, ToolExecutionResult, ToolExecutor,
-    ToolInvocation, ToolSchema, detect_all_clis, detect_cli, detect_direct_api,
+    ConversationMessage, ConversationRole, DEFAULT_MAX_TOOL_ROUNDS, DirectApiAdapter,
+    DirectApiHttpRequest, DiscoveryEnv, HyperSseTransport, InstalledBackendInfo, NoopToolExecutor,
+    RecordedToolCall, RoundCollector, RoundOutcome, SecretHeader, SseTransport,
+    ToolExecutionResult, ToolExecutor, ToolInvocation, ToolSchema, detect_all_clis, detect_cli,
+    detect_direct_api,
 };
 pub use omp_contract::{
     OMP_FRAME_MAPPINGS, OmpAdapterContract, OmpContractState, OmpFrameMappingSpec,
