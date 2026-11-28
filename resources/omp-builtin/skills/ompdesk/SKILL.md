@@ -5,7 +5,9 @@ description: Use when the user asks to split work across parallel OMPdesk sessio
 
 # OMPdesk sessions
 
-Each OMPdesk session is a tab in one of the user's windows, on this computer or on a paired device; saved sessions stay listed after their tab closes. These host tools let the main agent of a session see, open, reopen, steer, read, judge and answer sessions, show them and notify the user. Subagents (`task`) do not have them: without the ompdesk_* tools (a subagent, a terminal omp, a script) use the `ompdesk` CLI, see skill://ompdesk/references/cli.md. Reply to the user in their language.
+In an OMPdesk session, use `ompdesk_session_open` to open a child and `ompdesk_session_send` to send a message. These host tools record the calling session as the opener or sender. The `ompdesk` CLI is for people and scripts: even in a session shell, it acts as an outside caller with no opener or sender session. Subagents (`task`) have no host tools; for outside calls see skill://ompdesk/references/cli.md.
+
+Each OMPdesk session is a tab in one of the user's windows, on this computer or on a paired device; saved sessions stay listed after their tab closes. Reply to the user in their language.
 
 ## Tools
 

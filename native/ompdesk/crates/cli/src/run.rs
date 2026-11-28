@@ -283,6 +283,17 @@ pub fn run(argv: &[String], io: &mut Io) -> i32 {
     if method == "subscribe" {
         return follow(&mut conn, body, &command, io);
     }
+    match argv.first().map(String::as_str) {
+        Some("open") => put(
+            io.stderr,
+            "ompdesk: Outside CLI caller; no opener session. Use ompdesk_session_open inside a session to record the opener.\n",
+        ),
+        Some("send") => put(
+            io.stderr,
+            "ompdesk: Outside CLI caller; no sender session. Use ompdesk_session_send inside a session to record the sender.\n",
+        ),
+        _ => {}
+    }
     let response = conn.request(body);
     if !truthy(response.get("ok")) {
         return failure(io, command.json, response.get("error"));
@@ -645,7 +656,11 @@ mod end_to_end {
             ran.out,
             "{\"ok\":false,\"error\":{\"code\":\"agent_blocked\",\"message\":\"waits on the person\"}}\n"
         );
-        assert_eq!(ran.err, "ompdesk: agent_blocked: waits on the person\n");
+        assert!(ran.err.contains("ompdesk_session_send"));
+        assert!(
+            ran.err
+                .ends_with("ompdesk: agent_blocked: waits on the person\n")
+        );
     }
 
     #[test]
@@ -672,14 +687,25 @@ mod end_to_end {
     }
 
     #[test]
+    fn open_keeps_json_on_stdout_and_explains_the_missing_opener_on_stderr() {
+        let result = json!({ "text": "opened", "isError": false });
+        let fake = serve("tok", answer(result.clone()));
+        let ran = invoke(&["open", "--json"], &fake.dir, &[], me());
+        let seen = fake.finish();
+        assert_eq!(seen[1]["tool"], "ompdesk_session_open");
+        assert_eq!((ran.code, ran.out), (0, format!("{result}\n")));
+        assert_eq!(ran.err.lines().count(), 1);
+        assert!(ran.err.contains("ompdesk_session_open"));
+    }
+
+    #[test]
     fn reads_a_message_from_stdin() {
         let fake = serve("tok", answer(json!({ "receipt": "queued" })));
         let ran = invoke(&["send", "s1", "-"], &fake.dir.clone(), &[], me());
         let seen = fake.finish();
-        assert_eq!(
-            (ran.code, ran.out.as_str(), ran.err.as_str()),
-            (0, "queued\n", "")
-        );
+        assert_eq!((ran.code, ran.out.as_str()), (0, "queued\n"));
+        assert_eq!(ran.err.lines().count(), 1);
+        assert!(ran.err.contains("ompdesk_session_send"));
         assert_eq!(
             serde_json::to_string(&seen[1]).unwrap(),
             r#"{"method":"send","session":"s1","message":"from stdin","id":2}"#
