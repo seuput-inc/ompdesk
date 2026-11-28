@@ -9,12 +9,17 @@
 //! capability matrix, and Stage 2 wiring checklist.
 
 pub mod adapter;
+pub mod backends;
 pub mod omp_contract;
 pub mod parsers;
 pub mod registry;
 pub mod types;
 
 pub use adapter::{AgentAdapter, AgentSession, BoxFuture};
+pub use backends::detect::{
+    CliCommandSpec, CliDescriptor, DiscoveryEnv, InstalledBackendInfo, detect_all_clis, detect_cli,
+    detect_direct_api,
+};
 pub use omp_contract::{
     OMP_FRAME_MAPPINGS, OmpAdapterContract, OmpContractState, OmpFrameMappingSpec,
     OmpFrameTranslation, OmpPassthroughKind, map_sidecar_status, translate_omp_frame,
