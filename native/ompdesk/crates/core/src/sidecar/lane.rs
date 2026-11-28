@@ -11,7 +11,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -72,6 +72,17 @@ pub type StockReply = oneshot::Sender<Result<(), Fault>>;
 pub type BridgeReply = oneshot::Sender<Result<Option<Box<RawValue>>, Fault>>;
 type QueueReply = oneshot::Sender<Result<Box<RawValue>, Fault>>;
 
+/// Result of a transparent `sidecar.wake` request on a tab lane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WakeResult {
+    pub woke: bool,
+    pub status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_path: Option<String>,
+    pub cwd: String,
+}
+
 /// What main sent that the lane applies in `seq` order.
 pub enum Command {
     Start,
@@ -81,6 +92,7 @@ pub enum Command {
     },
     Kill,
     Sleep,
+    Wake(oneshot::Sender<WakeResult>),
     Dispose {
         stdin_grace: Duration,
     },
@@ -145,6 +157,14 @@ impl Command {
             }
             Command::Barrier(_, reply) | Command::WhenExited(reply) => {
                 let _ = reply.send(());
+            }
+            Command::Wake(reply) => {
+                let _ = reply.send(WakeResult {
+                    woke: false,
+                    status: "exited",
+                    session_path: None,
+                    cwd: String::new(),
+                });
             }
             _ => {}
         }
@@ -889,6 +909,10 @@ impl Lane {
             } => self.restart(cwd, resume_session_path),
             Command::Kill => self.stop_child(None),
             Command::Sleep => self.sleep(),
+            Command::Wake(reply) => {
+                let result = self.wake();
+                let _ = reply.send(result);
+            }
             Command::Dispose { stdin_grace } => self.dispose(stdin_grace),
             Command::Cwd(cwd) => self.cwd = cwd,
             Command::Gate => self.start_gate = true,
@@ -2365,14 +2389,37 @@ impl Lane {
     }
 
     /// Stop the omp of an idle tab and read `asleep`, as a restored tab reads before its first start: the pool restarts
-    /// it on its session file when it is shown or messaged (`idle-release.ts`). The omp stops as a restart stops it.
+    /// it on its session file when it is shown or messaged (`idle-release.ts`). The omp stops as a restart stops it,
+    /// and retained lane buffers are freed while `session_path` and `cwd` stay preserved for transparent wake.
     fn sleep(&mut self) {
         if self.disposed || self.running.is_none() {
             return;
         }
         self.stop_child(None);
+        self.last_stderr.clear();
+        self.last_stderr.shrink_to_fit();
+        self.slow_log.clear();
+        self.slow_log.shrink_to_fit();
+        self.run_messages.clear();
+        self.run_messages.shrink_to_fit();
         self.restart_count = 0;
         self.set_status("asleep", Detail::default());
+    }
+
+    /// Transparently wake a hibernated (`asleep`) lane on its preserved session handle (`session_path`, `cwd`).
+    /// Idempotent when already starting, ready, or disposed.
+    fn wake(&mut self) -> WakeResult {
+        let can_wake =
+            !self.disposed && !self.quit && self.status == "asleep" && self.running.is_none();
+        if can_wake {
+            self.start();
+        }
+        WakeResult {
+            woke: can_wake,
+            status: self.status,
+            session_path: self.session_path.clone(),
+            cwd: self.cwd.clone(),
+        }
     }
 
     // formal/session-processes `Close`: the tab's tag ends only after the omps it stopped have exited.

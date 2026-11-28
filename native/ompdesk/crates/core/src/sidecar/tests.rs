@@ -1083,6 +1083,38 @@ async fn sleep_stops_the_omp_and_reads_asleep_and_a_start_wakes_it() {
 }
 
 #[tokio::test]
+async fn wake_resumes_an_asleep_tab_preserving_session_path_and_is_idempotent_while_ready() {
+    let mut rig = Rig::new("wake", "ok").await;
+    let exe = std::env::current_exe()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    rig.behaviour.lock().unwrap().session_file = Some(exe.clone());
+    let _open = rig.open(no_queue());
+    rig.tab_call("sidecar.start", json!({})).await.unwrap();
+    rig.status("ready").await;
+
+    // Already ready: wake is a no-op returning woke = false with the live session handle.
+    let noop = rig.tab_call("sidecar.wake", json!({})).await.unwrap();
+    assert_eq!(noop["woke"], false);
+    assert_eq!(noop["status"], "ready");
+    assert_eq!(noop["sessionPath"], json!(exe));
+
+    // Sleep stops omp cleanly while keeping sessionPath for transparent resume.
+    rig.tab_call("sidecar.sleep", json!({})).await.unwrap();
+    rig.status("asleep").await;
+    rig.tab_call("sidecar.whenExited", json!({})).await.unwrap();
+
+    // Wake restarts the lane transparently on its preserved session handle.
+    let woke = rig.tab_call("sidecar.wake", json!({})).await.unwrap();
+    assert_eq!(woke["woke"], true);
+    assert_eq!(woke["status"], "starting");
+    assert_eq!(woke["sessionPath"], json!(exe));
+    rig.status("ready").await;
+    finish(rig).await;
+}
+
+#[tokio::test]
 async fn stderr_is_stripped_of_its_colors_before_main_reads_it() {
     let mut rig = Rig::new("stderr", "ok").await;
     let _open = rig.open(no_queue());

@@ -63,6 +63,7 @@ pub fn register(registry: &mut Registry) {
     });
     registry.add("sidecar.kill", |call| plain(call, |_: Seq| Command::Kill));
     registry.add("sidecar.sleep", |call| plain(call, |_: Seq| Command::Sleep));
+    registry.add("sidecar.wake", wake);
     registry.add("sidecar.dispose", |call| {
         plain(call, |params: DisposeParams| Command::Dispose {
             stdin_grace: Duration::from_millis(params.stdin_grace_ms.unwrap_or(0)),
@@ -339,6 +340,25 @@ fn waited(call: Call, build: impl FnOnce(u64, oneshot::Sender<()>) -> Command) -
         // A lane that ended without answering has nothing left to wait for.
         let _ = answer.await;
         Reply::json(&Done {})
+    })
+}
+
+/// Transparently wake a hibernated (`asleep`) tab on its preserved session handle; idempotent if already awake.
+fn wake(call: Call) -> Answer {
+    let params: Seq = match call.params() {
+        Ok(params) => params,
+        Err(fault) => return failed(fault),
+    };
+    let (reply, answer) = oneshot::channel();
+    deliver(&params.tab, params.seq, Command::Wake(reply));
+    Box::pin(async move {
+        let result = answer.await.unwrap_or(lane::WakeResult {
+            woke: false,
+            status: "exited",
+            session_path: None,
+            cwd: String::new(),
+        });
+        Reply::json(&result)
     })
 }
 

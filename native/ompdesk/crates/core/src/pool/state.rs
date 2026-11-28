@@ -427,6 +427,51 @@ impl Pool {
             })
     }
 
+    /// Pure quiet predicate shared by `memory_tabs` (batch facts) and `quiet` (single-tab check).
+    pub(super) fn is_quiet(&self, tab: &str, sleepable: bool) -> bool {
+        let Some(entry) = self.entry(tab) else {
+            return false;
+        };
+        if entry.hosted_view || entry.device.is_some() || entry.placeholder || entry.unstarted {
+            return false;
+        }
+        if entry.status != "ready" || !sleepable || entry.session_file.is_none() {
+            return false;
+        }
+        if entry.full.is_some() || !entry.device_views.is_empty() {
+            return false;
+        }
+        if entry.busy() {
+            return false;
+        }
+        if entry.opened_by.is_some() || entry.opened_by_session.is_some() {
+            return false;
+        }
+        if entry.awaiting_connection || entry.resuming {
+            return false;
+        }
+        if entry.unsaved_prompt.is_some()
+            || entry.scheduled_retry.is_some()
+            || entry.tracking.retry.is_some()
+        {
+            return false;
+        }
+        if entry.sign_ins != 0 || entry.omp_restart_pending || entry.extension_pending.is_some() {
+            return false;
+        }
+        if entry
+            .drafts
+            .get(&"set_next_prompt_draft".to_string())
+            .is_some_and(|reports| reports.values().any(|empty| !empty))
+        {
+            return false;
+        }
+        !self
+            .request_owners
+            .values()
+            .any(|owner| *owner == entry.seq)
+    }
+
     /// `TAB_STATUS` push / `GET_TABS` item: the full tab snapshot including cached session meta (`tabStatusPayload`).
     pub(super) fn tab_status(&self, entry: &Entry, cwd: &str) -> Map<String, Value> {
         let run = &entry.tracking.run;

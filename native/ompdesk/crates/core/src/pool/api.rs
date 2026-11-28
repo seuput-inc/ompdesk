@@ -954,25 +954,25 @@ impl Ctx {
         let mut list = Vec::new();
         let facts = self.facts(&tabs).await?;
         for tab in &tabs {
-            let quiet = self.quiet(tab).await?;
-            let label = self.with(|pool| {
-                pool.entry(tab).map(|entry| {
-                    entry
-                        .title
-                        .clone()
-                        .flatten()
-                        .filter(|title| !title.is_empty())
-                        .or_else(|| {
-                            entry
-                                .auto_title
-                                .clone()
-                                .flatten()
-                                .filter(|title| !title.is_empty())
-                        })
-                        .unwrap_or_else(|| entry.tab_id.clone())
-                })
-            });
-            let Some(label) = label else {
+            let sleepable = facts[tab.as_str()]["sleep"].as_bool() == Some(true);
+            let Some((quiet, label)) = self.with(|pool| {
+                let entry = pool.entry(tab)?;
+                let quiet = pool.is_quiet(tab, sleepable);
+                let label = entry
+                    .title
+                    .clone()
+                    .flatten()
+                    .filter(|title| !title.is_empty())
+                    .or_else(|| {
+                        entry
+                            .auto_title
+                            .clone()
+                            .flatten()
+                            .filter(|title| !title.is_empty())
+                    })
+                    .unwrap_or_else(|| entry.tab_id.clone());
+                Some((quiet, label))
+            }) else {
                 continue;
             };
             let mut item = Map::new();
@@ -993,50 +993,7 @@ impl Ctx {
     pub(super) async fn quiet(&self, tab: &str) -> R<bool> {
         let facts = self.facts(&[tab.to_string()]).await?;
         let sleepable = facts[tab]["sleep"].as_bool() == Some(true);
-        Ok(self.with(|pool| {
-            let Some(entry) = pool.entry(tab) else {
-                return false;
-            };
-            if entry.hosted_view || entry.device.is_some() || entry.placeholder || entry.unstarted {
-                return false;
-            }
-            if entry.status != "ready" || !sleepable || entry.session_file.is_none() {
-                return false;
-            }
-            if entry.full.is_some() || !entry.device_views.is_empty() {
-                return false;
-            }
-            if entry.busy() {
-                return false;
-            }
-            if entry.opened_by.is_some() || entry.opened_by_session.is_some() {
-                return false;
-            }
-            if entry.awaiting_connection || entry.resuming {
-                return false;
-            }
-            if entry.unsaved_prompt.is_some()
-                || entry.scheduled_retry.is_some()
-                || entry.tracking.retry.is_some()
-            {
-                return false;
-            }
-            if entry.sign_ins != 0 || entry.omp_restart_pending || entry.extension_pending.is_some()
-            {
-                return false;
-            }
-            if entry
-                .drafts
-                .get(&"set_next_prompt_draft".to_string())
-                .is_some_and(|reports| reports.values().any(|empty| !empty))
-            {
-                return false;
-            }
-            !pool
-                .request_owners
-                .values()
-                .any(|owner| *owner == entry.seq)
-        }))
+        Ok(self.with(|pool| pool.is_quiet(tab, sleepable)))
     }
 
     // ---- changes ----------------------------------------------------------------------------------------------
