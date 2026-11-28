@@ -884,6 +884,10 @@ export class AgentControl {
 		return this.#invoke("agentControl.call", { method: "personClosedChildren", args: {} }, true, false);
 	}
 
+	restoredSidebarFamilies(): Promise<Array<[path: string, opener: string | null]>> {
+		return this.#call("restoredSidebarFamilies", {});
+	}
+
 	/**
 	 * A tab closed. `session`: the saved session it held, when nobody closed it through the control tools (those record
 	 * who did): its ids keep naming that session.

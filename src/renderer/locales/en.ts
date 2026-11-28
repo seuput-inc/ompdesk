@@ -1153,7 +1153,6 @@ export const en: Record<string, string> = {
 	"sidebar.deleteGroupStreaming": "Stop the current turn before deleting project sessions.",
 	"sidebar.signal.running": "Running",
 	"sidebar.family.group": "Subagents and sessions opened from this session",
-	"sidebar.family.unassigned": "No parent in this list",
 	"sidebar.subagents.menu": "Subagent actions",
 	"sidebar.subagents.open": "View transcript",
 	"sidebar.subagents.stop": "Stop",

@@ -1140,7 +1140,6 @@ export const ko: Record<string, string> = {
 	"sidebar.deleteGroupStreaming": "프로젝트 세션을 삭제하기 전에 진행 중인 턴을 중단하세요.",
 	"sidebar.signal.running": "실행 중",
 	"sidebar.family.group": "이 세션에서 파생된 서브에이전트와 세션",
-	"sidebar.family.unassigned": "목록에 부모가 없는 세션",
 	"sidebar.subagents.menu": "서브에이전트 작업",
 	"sidebar.subagents.open": "기록 보기",
 	"sidebar.subagents.stop": "중단",

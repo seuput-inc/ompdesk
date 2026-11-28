@@ -63,8 +63,9 @@ export class SessionIndex {
 	#warmup: NodeJS.Timeout | undefined;
 	/** A read-only batch from agent control's close and open-call journals. */
 	personClosedChildren?: () => Promise<Array<[path: string, opener: string, at: number]>>;
+	readRestoredFamilies?: () => Promise<Array<[path: string, opener: string | null]>>;
+	readonly #restoredFamilies = new Map<string, string | null>();
 	#held: ReadonlySet<string> = new Set();
-	readonly #closedCandidates = new Set<string>();
 
 	/**
 	 * The watch reported a session file, or a project or session directory, that appeared, changed or vanished, once its
@@ -255,16 +256,32 @@ export class SessionIndex {
 		this.#share.changed();
 	}
 
+	/** The pool's explicit local openers span all windows. Receipts fill only missing parents. */
+	async restoreFamilies(localOpeners: () => ReadonlyMap<string, string>): Promise<void> {
+		if (!this.readRestoredFamilies || this.#held.size === 0) return;
+		const explicit = localOpeners();
+		for (const path of this.#held) this.#restoredFamilies.set(path, explicit.get(path) ?? null);
+		this.relist();
+		const remaining = new Map(await this.readRestoredFamilies());
+		for (const path of this.#restoredFamilies.keys()) {
+			const opener = remaining.get(path);
+			if (opener === undefined) this.#restoredFamilies.delete(path);
+			else this.#restoredFamilies.set(path, explicit.get(path) ?? opener);
+		}
+		this.relist();
+	}
+
 	/** A reopen can change a closed child's row before it writes its first new message. */
 	heldSessionsChanged(held: ReadonlySet<string>): void {
 		const before = this.#held;
 		this.#held = held;
-		for (const path of this.#closedCandidates) {
-			if (before.has(path) !== held.has(path)) {
-				this.relist();
-				return;
-			}
+		let changed = before.size !== held.size;
+		for (const path of before) {
+			if (held.has(path)) continue;
+			this.#restoredFamilies.delete(path);
+			changed = true;
 		}
+		if (changed) this.relist();
 	}
 
 	/**
@@ -290,17 +307,21 @@ export class SessionIndex {
 		});
 		const fates = await this.personClosedChildren?.();
 		const closed = new Map(fates?.map(([path, opener, at]) => [path, { opener, at }]));
-		this.#closedCandidates.clear();
 		this.#listedGeneration = generation;
 		return listedAnswer.parse(result).listed.flatMap(({ row, chat }) => {
 			const info = infos[row];
 			if (!info) return [];
-			if (chat) info.kind = "chat";
-			const fate = closed.get(info.path);
-			if (!chat && !info.promptOriginDevice && fate && Date.parse(info.modified) <= fate.at) {
-				this.#closedCandidates.add(info.path);
-				if (!this.#held.has(info.path)) return [{ ...info, openedBySession: fate.opener, personClosedChild: true }];
+			if (chat) {
+				info.kind = "chat";
+				return [info];
 			}
+			if (this.#held.has(info.path)) {
+				const opener = this.#restoredFamilies.get(info.path) ?? null;
+				return [{ ...info, restoredFamily: info.promptOriginDevice ? null : opener }];
+			}
+			const fate = closed.get(info.path);
+			if (!info.promptOriginDevice && fate && Date.parse(info.modified) <= fate.at)
+				return [{ ...info, openedBySession: fate.opener, personClosedChild: true }];
 			return [info];
 		});
 	}

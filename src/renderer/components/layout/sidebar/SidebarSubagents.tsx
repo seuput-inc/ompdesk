@@ -709,18 +709,10 @@ export const SidebarSubagentsToggle = memo(function SidebarSubagentsToggle({
  * picker); the ones that need a look (failed, unmerged work) are plain rows.
  */
 export function SidebarLooseChildren({ foldKey, opened }: { foldKey: string; opened: readonly FamilyOpened[] }) {
-	const t = useT();
 	const shown = useHeldList(opened.filter(isShownOpened), child => child.key, foldKey);
 	if (shown.length === 0) return null;
 	return (
-		<div
-			aria-label={t("sidebar.family.unassigned")}
-			className="space-y-px"
-			data-flip-key={`loose:${foldKey}`}
-			data-sidebar-loose-children={foldKey}
-			role="group"
-		>
-			<div className="px-2 pt-1 text-sc-xs text-(--sc-text-muted)">{t("sidebar.family.unassigned")}</div>
+		<div className="space-y-px" data-flip-key={`loose:${foldKey}`} data-sidebar-loose-children={foldKey}>
 			{shown.map(child => (
 				<OpenedRow child={child} key={child.key} />
 			))}

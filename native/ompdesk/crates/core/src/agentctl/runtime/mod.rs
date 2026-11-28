@@ -271,17 +271,23 @@ impl Runtime {
             let Some(calls) = self.control.calls() else {
                 return;
             };
+            let mut openers = None;
             state
                 .tabs
                 .iter()
                 .filter(|tab| {
-                    tab.device.is_none() && !tab.viewing && state.parent_of(&tab.tab_id).is_none()
+                    tab.device.is_none()
+                        && !tab.viewing
+                        && !tab.session_moved
+                        && tab.opened_by_session.is_none()
+                        && state.parent_of(&tab.tab_id).is_none()
                 })
                 .filter_map(|tab| {
-                    let ids: Vec<&str> = std::iter::once(tab.tab_id.as_str())
-                        .chain(tab.former_ids.iter().map(String::as_str))
-                        .collect();
-                    let file = calls.opener_of(&ids)?;
+                    let file = super::journal::call_journal::recorded_opener(
+                        openers.get_or_insert_with(|| calls.local_tab_openers()),
+                        std::iter::once(tab.tab_id.as_str())
+                            .chain(tab.former_ids.iter().map(String::as_str)),
+                    )?;
                     let opener = state.tabs.iter().find(|opener| {
                         opener.device.is_none()
                             && opener.tab_id != tab.tab_id

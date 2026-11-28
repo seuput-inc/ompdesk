@@ -23,6 +23,16 @@ use super::{
 pub const CALL_JOURNAL_MAX: usize = 500;
 pub const CALL_JOURNAL_TTL_MS: f64 = THREE_DAYS_MS;
 
+/// Current and former tab ids must agree. A remote or conflicting receipt is not a local parent.
+pub(crate) fn recorded_opener<'a, 'i>(
+    openers: &HashMap<&str, Option<&'a str>>,
+    ids: impl Iterator<Item = &'i str>,
+) -> Option<&'a str> {
+    let mut named = ids.filter_map(|id| openers.get(id).copied());
+    let opener = named.next()??;
+    named.all(|other| other == Some(opener)).then_some(opener)
+}
+
 /// What a pending call set out to do, enough to find its effect again after a relaunch.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CallIntent {
@@ -247,17 +257,8 @@ impl CallJournal {
             .cloned()
     }
 
-    /// The session file of this computer's session whose `ompdesk_session_open` opened a tab with one of `ids` (a tab
-    /// keeps its earlier ids across relaunches), by the newest such call; None when a paired device's session made it.
-    pub fn opener_of(&self, ids: &[&str]) -> Option<&str> {
-        self.opens()
-            .rev()
-            .find(|(opened, _)| opened.iter().any(|id| ids.contains(&id.as_str())))?
-            .1
-    }
-
     /// The saved list joins all closed tabs in one pass. Conflicting claims prove no local opener.
-    pub(super) fn local_tab_openers(&self) -> HashMap<&str, Option<&str>> {
+    pub(crate) fn local_tab_openers(&self) -> HashMap<&str, Option<&str>> {
         let mut openers = HashMap::new();
         for (tabs, opener) in self.opens() {
             for tab in tabs {
@@ -275,7 +276,7 @@ impl CallJournal {
     }
 
     /// Opened tab ids and their caller's local file. A foreign or unproven caller has no local file.
-    fn opens(&self) -> impl DoubleEndedIterator<Item = (&[String], Option<&str>)> {
+    fn opens(&self) -> impl Iterator<Item = (&[String], Option<&str>)> {
         self.records.iter().filter_map(|record| {
             if record.tool != "ompdesk_session_open" {
                 return None;
@@ -283,9 +284,11 @@ impl CallJournal {
             let opened = record.opened.as_deref()?;
             let mut parts = record.key.splitn(3, '\n');
             let device = parts.next();
-            let file = parts
-                .next()
-                .filter(|file| device == Some("") && !file.is_empty());
+            let file = parts.next().filter(|file| {
+                device == Some("")
+                    && !record.caller_tab_id.starts_with("outside:")
+                    && !file.is_empty()
+            });
             Some((opened, file))
         })
     }

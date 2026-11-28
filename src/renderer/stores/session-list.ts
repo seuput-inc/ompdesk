@@ -80,6 +80,7 @@ function sameRow(prev: SessionInfo, next: SessionInfo): boolean {
 		prev.autoTitle === next.autoTitle &&
 		prev.kind === next.kind &&
 		prev.openedBySession === next.openedBySession &&
+		prev.restoredFamily === next.restoredFamily &&
 		prev.personClosedChild === next.personClosedChild &&
 		prev.heldOnHost === next.heldOnHost &&
 		prev.childProblem === next.childProblem

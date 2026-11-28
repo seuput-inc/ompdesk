@@ -156,8 +156,18 @@ it("publishes a person-closed child until a real holder or newer conversation su
 		]);
 		const change = Promise.withResolvers<SessionInfo[]>();
 		index.onListChange = delta => delta && change.resolve(delta.set);
-		index.heldSessionsChanged(new Set([child]));
-		expect(await change.promise).toEqual([rows[0]]);
+		index.heldSessionsChanged(new Set([child, remote, unrelated]));
+		expect(await change.promise).toEqual(expect.arrayContaining(rows.map(row => ({ ...row, restoredFamily: null }))));
+		index.readRestoredFamilies = async () => [
+			[child, "receipt-parent"],
+			[remote, null],
+			[unrelated, null],
+		];
+		await index.restoreFamilies(() => new Map([[unrelated, "closed-local-parent"]]));
+		const inAnotherWindow = await index.list("global");
+		expect(inAnotherWindow.find(row => row.path === child)?.restoredFamily).toBe("receipt-parent");
+		expect(inAnotherWindow.find(row => row.path === unrelated)?.restoredFamily).toBe("closed-local-parent");
+		expect(inAnotherWindow.find(row => row.path === remote)?.restoredFamily).toBeNull();
 		rows[0]!.modified = new Date(closedAt + 1).toISOString();
 		index.heldSessionsChanged(new Set());
 		expect((await index.list("global")).find(row => row.path === child)).toEqual(rows[0]);

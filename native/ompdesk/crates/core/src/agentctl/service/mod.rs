@@ -1281,6 +1281,37 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
             let calls = control.calls();
             Reply::json(&fates.person_closed_children(calls.as_deref()))
         }
+        "restoredSidebarFamilies" => {
+            let state = control.host.state();
+            let calls = control.calls();
+            let openers = calls
+                .as_deref()
+                .map(CallJournal::local_tab_openers)
+                .unwrap_or_default();
+            let families: Vec<_> = state
+                .tabs
+                .iter()
+                .filter(|tab| tab.device.is_none() && !tab.viewing && !tab.hidden)
+                .filter_map(|tab| {
+                    let path = tab.session_path.as_deref()?;
+                    let parent = if tab.opened_by_session.is_none()
+                        && !tab.session_moved
+                        && state.parent_of(&tab.tab_id).is_none()
+                    {
+                        super::journal::call_journal::recorded_opener(
+                            &openers,
+                            std::iter::once(tab.tab_id.as_str())
+                                .chain(tab.former_ids.iter().map(String::as_str)),
+                        )
+                        .filter(|parent| *parent != path)
+                    } else {
+                        None
+                    };
+                    Some((path, parent))
+                })
+                .collect();
+            Reply::json(&families)
+        }
         "childAsked" => reply(
             control
                 .child_asked(

@@ -2192,6 +2192,8 @@ export interface SessionInfo {
 	 * Older hosts omit this field.
 	 */
 	openedBySession?: string | null;
+	/** Display only: a held tab's local parent recovered on restore, or null when none was recovered. */
+	restoredFamily?: string | null;
 	/** Display evidence only: this saved child was closed by the person, not held or active again since. */
 	personClosedChild?: true;
 	/**

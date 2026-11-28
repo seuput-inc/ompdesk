@@ -1680,6 +1680,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		},
 	});
 	sessionIndex.personClosedChildren = () => agentControl.control.personClosedChildren();
+	sessionIndex.readRestoredFamilies = () => agentControl.control.restoredSidebarFamilies();
 	const pruneSchedules = () =>
 		void deps
 			.schedules?.()

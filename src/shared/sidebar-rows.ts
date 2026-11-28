@@ -269,14 +269,15 @@ export function openerOfSessions(
 	}
 	const known = new Set(sessions.map(session => session.path));
 	const direct = new Map<string, string>();
-	const otherHost = new Set<string>();
+	const explicit = new Set<string>();
 	for (const [child, parent] of chosenParents)
 		if (known.has(child) && parent !== child && known.has(parent)) direct.set(child, parent);
 	for (const tab of tabs) {
 		const child = sessionOf.get(tab.id);
 		if (!child || chosenParents.has(child.path)) continue;
+		if (tab.openedBy || tab.openedBySession) explicit.add(child.path);
 		if (tab.openedByDevice && tab.openedByDevice !== tab.device) {
-			otherHost.add(child.path);
+			explicit.add(child.path);
 			continue;
 		}
 		const opener =
@@ -287,7 +288,7 @@ export function openerOfSessions(
 		if (path && path !== child.path) direct.set(child.path, path);
 	}
 	for (const session of sessions) {
-		if (direct.has(session.path) || chosenParents.has(session.path) || otherHost.has(session.path)) continue;
+		if (direct.has(session.path) || chosenParents.has(session.path) || explicit.has(session.path)) continue;
 		const opener = recordedOpeners.get(session.path);
 		if (opener && opener !== session.path && known.has(opener)) direct.set(session.path, opener);
 	}
@@ -448,7 +449,8 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 	const recorded = new Map<string, string>();
 	const briefed = new Set<string>();
 	for (const session of code) {
-		if (typeof session.openedBySession === "string") recorded.set(session.path, session.openedBySession);
+		const opener = session.openedBySession ?? session.restoredFamily;
+		if (typeof opener === "string") recorded.set(session.path, opener);
 		if (session.openedBySession !== undefined && !session.promptOriginDevice) briefed.add(session.path);
 	}
 	const rootOf = openerOfSessions(
@@ -490,8 +492,12 @@ export function sidebarRows(facts: SidebarFacts): SidebarRows {
 			finished(session)
 		)
 			continue;
+		const failed = session.status === "error" || session.status === "aborted";
+		if (!failed && !session.childProblem && (session.restoredFamily !== undefined || session.liveTabId !== undefined))
+			continue;
 		const folder = facts.folder(session.cwd);
 		if (
+			session.childProblem ||
 			facts.closed.has(session.path) ||
 			session.personClosedChild ||
 			(briefed.has(session.path) && agentMessageSender(session.firstMessage) !== null) ||

@@ -2920,6 +2920,9 @@ app.whenReady().then(async () => {
 			restoredLayouts.push(layout);
 		}
 	}
+	void sessionIndex
+		.restoreFamilies(() => sidecarPool.sessionOpeners())
+		.catch(error => console.warn("[session-index] restored families:", error));
 	// The sessions that come back keep what they started before the relaunch: the restored tabs, and the turns the
 	// markers below continue (read before `launch`, which drops the ones it settles).
 	const keptSessions = new Set(interruptedTurns.read().map(marker => marker.sessionPath));

@@ -814,11 +814,18 @@ export function Sidebar() {
 	const rowFacts = useMemo<SidebarFacts>(
 		() => ({
 			// What main recorded of who opened each, as a host says it of its rows to a device.
-			sessions: sessions.map(session => ({
-				...session,
-				openedBySession:
-					session.openedBySession ?? recordedOpeners.get(session.path) ?? workerOpeners.get(session.path) ?? null,
-			})),
+			sessions: sessions.map(session => {
+				const review = reviewOfPath.get(reviewKey(undefined, session.path));
+				return {
+					...session,
+					childProblem: review?.failed ? "failed" : reviewUnmerged(review) ? "unmerged" : session.childProblem,
+					openedBySession:
+						session.openedBySession ??
+						recordedOpeners.get(session.path) ??
+						workerOpeners.get(session.path) ??
+						null,
+				};
+			}),
 			tabs: rowTabs,
 			// A session this computer runs (a paired device's tab here, another window's tab) is in use, whatever its
 			// state: its summary says so though this window holds no tab of it.
@@ -898,6 +905,7 @@ export function Sidebar() {
 		[
 			sessions,
 			recordedOpeners,
+			reviewOfPath,
 			workerOpeners,
 			sidebarBots,
 			rowTabs,
@@ -1802,6 +1810,7 @@ export function Sidebar() {
 		const elsewhere = row.tab === undefined && row.summary === undefined ? review : undefined;
 		const failed =
 			row.failed ||
+			child.childProblem === "failed" ||
 			(child.personClosedChild === true && (child.status === "aborted" || child.status === "error")) ||
 			review?.failed === true ||
 			lastRun?.stopReason === "error" ||
@@ -1818,7 +1827,7 @@ export function Sidebar() {
 					(row.tab === undefined && row.summary === undefined) ||
 					(!row.busy && child.messageCount >= 2),
 			failed,
-			unmerged: reviewUnmerged(review),
+			unmerged: reviewUnmerged(review) || child.childProblem === "unmerged",
 		});
 		const statusLabel =
 			status === "failed"

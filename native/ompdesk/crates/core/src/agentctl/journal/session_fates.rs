@@ -215,13 +215,14 @@ impl SessionFates {
                         let calls = calls?;
                         let openers = by_tab.get_or_insert_with(|| calls.local_tab_openers());
                         let saved = crate::agentctl::service::text::saved_id_of_path(Some(path));
-                        let mut named = child
-                            .ids
-                            .iter()
-                            .take_while(|id| Some(id.as_str()) != saved.as_deref())
-                            .filter_map(|id| openers.get(id.as_str()).copied());
-                        let opener = named.next()??;
-                        named.all(|other| other == Some(opener)).then_some(opener)?
+                        super::call_journal::recorded_opener(
+                            openers,
+                            child
+                                .ids
+                                .iter()
+                                .map(String::as_str)
+                                .take_while(|id| Some(*id) != saved.as_deref()),
+                        )?
                     }
                     _ => return None,
                 };

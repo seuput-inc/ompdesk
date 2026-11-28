@@ -461,12 +461,18 @@ async fn a_tab_no_opener_names_gets_back_the_one_the_call_journal_names() {
     // or joined): a view is never anyone's child.
     let mut view = tab("joined-view", "/s/held.jsonl");
     view["viewing"] = json!(true);
+    let mut explicit = tab("has-parent", "/s/sibling.jsonl");
+    explicit["openedBySession"] = json!("/s/closed-parent.jsonl");
+    let mut disputed = tab("disputed", "/s/disputed.jsonl");
+    disputed["formerIds"] = json!(["kid-before", "remote-before"]);
     let st = state(vec![
         tab("boss-now", "/s/boss.jsonl"),
         kid,
         remote,
         tab("person", "/s/p.jsonl"),
         view,
+        explicit,
+        disputed,
     ]);
     let files = Files {
         calls: Some(JournalFile { file: None }),
@@ -480,6 +486,7 @@ async fn a_tab_no_opener_names_gets_back_the_one_the_call_journal_names() {
             // A paired device's session opened this one: no session here is its opener.
             ("dev\n/s/boss.jsonl\ncall-2", "remote-before"),
             ("\n/s/boss.jsonl\ncall-3", "joined-view"),
+            ("\n/s/boss.jsonl\ncall-4", "has-parent"),
         ] {
             calls
                 .begin(CallBegin {

@@ -98,6 +98,9 @@ describe("session list snapshot", () => {
 		current = child;
 		feed.refresh();
 		await vi.waitFor(() => expect(feed.store.getState().sessions[0]).toEqual(child));
+		current = { ...child, restoredFamily: null };
+		feed.refresh();
+		await vi.waitFor(() => expect(feed.store.getState().sessions[0]?.restoredFamily).toBeNull());
 		release();
 	});
 

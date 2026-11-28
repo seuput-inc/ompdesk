@@ -6278,6 +6278,37 @@ describe("an id keeps naming its session after its tab is gone, and says when th
 		return { host, service: control(host) };
 	};
 
+	it("projects a restored tab under the local caller's saved file without reopening or adopting it", async () => {
+		const { host, service } = launch();
+		host.tabsById.delete("boss0001");
+		host.add({ tabId: "restored", sessionPath: "/s/worker", formerIds: ["first"] });
+		host.add({ tabId: "ambiguous", sessionPath: "/s/ambiguous", formerIds: ["first", "other"] });
+		host.add({ tabId: "viewer", sessionPath: "/s/viewed", formerIds: ["first"], viewing: true });
+		host.add({ tabId: "peer", sessionPath: "/s/peer", formerIds: ["first"], device: "elsewhere" });
+		host.add({ tabId: "cli", sessionPath: "/s/outside", formerIds: ["external"] });
+		const calls = join(dir, "calls.json");
+		host.files.calls = calls;
+		writeFileSync(
+			calls,
+			JSON.stringify(
+				[
+					["\n/s/parent\nopen", "owner", "first"],
+					["elsewhere\n/s/parent\nopen", "peer-owner", "other"],
+					["\n/s/parent\noutside", "outside:cli", "external"],
+				].map(([key, callerTabId, id]) => ({ key, callerTabId, tool: T.open, opened: [id], at: 1 })),
+			),
+		);
+		const expected = [
+			["/s/worker", "/s/parent"],
+			["/s/ambiguous", null],
+			["/s/outside", null],
+		];
+		expect(await service.restoredSidebarFamilies()).toEqual(expected);
+		expect(await service.restoredSidebarFamilies()).toEqual(expected);
+		expect(host.parents.size).toBe(0);
+		expect(host.spawned).toEqual([]);
+	});
+
 	it.each([
 		["fate", "studio"],
 		["fate", undefined],

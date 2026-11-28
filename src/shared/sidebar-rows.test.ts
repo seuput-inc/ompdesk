@@ -249,6 +249,59 @@ describe("sidebarRows over every combination of folder, holder and opener", () =
 		expect(rows.groups.find(group => group.cwd === FOLDERS.scr)?.missing).toBe(true);
 	});
 
+	it("places restored CLI worktrees once as project rows and a proven child under its closed parent", () => {
+		const cli = ["amber", "violet", "indigo"];
+		const facts = world([
+			...cli.map(path => ({ path, folder: "wta" as const, holder: "asleep" as const, origin: "brief" as const })),
+			{ path: "child", folder: "wta", holder: "asleep", origin: "brief" },
+			{ path: "independent", folder: "app", holder: "used", origin: "person" },
+		]);
+		const sessions = facts.sessions.map(row =>
+			row.path === BOSS || row.path === "independent"
+				? row
+				: {
+						...row,
+						firstMessage: wrapAgentMessage("Same task", 'outside process "cli" (self-declared)'),
+						restoredFamily: row.path === "child" ? BOSS : null,
+					},
+		);
+		for (const tabs of [facts.tabs, []]) {
+			const draw = (rows: SessionInfo[], order = facts.order) =>
+				sidebarRows({ ...facts, sessions: rows, tabs, order });
+			const rows = draw(sessions);
+			expect(rows.children.get(BOSS)?.map(row => row.path)).toEqual(["child"]);
+			const where = placements(rows);
+			for (const path of [...cli, "independent"]) expect(where.get(path)).toEqual([`group:${APP}`]);
+			expect(where.get("child")).toEqual(["child"]);
+			expect(placements(draw(sessions.filter(row => row.path !== BOSS))).get("child")).toEqual([`group:${APP}`]);
+			expect(draw(sessions, { ...facts.order, sessionParents: { child: "independent" } }).rootOf.get("child")).toBe(
+				"independent",
+			);
+		}
+		const missing = facts.tabs.map(tab =>
+			tab.sessionPath === "child" ? { ...tab, openedBySession: "absent" } : tab,
+		);
+		expect(placements(sidebarRows({ ...facts, sessions, tabs: missing })).get("child")).toEqual([`group:${APP}`]);
+	});
+
+	it("shows a newly opened unindexed worktree once and keeps real review outcomes without requiring a parent", () => {
+		const facts = world([{ path: "fresh", folder: "wta", holder: "used", origin: "brief" }]);
+		const rows = sidebarRows({ ...facts, sessions: facts.sessions.filter(row => row.path !== "fresh") });
+		expect(placements(rows).get("fresh")).toEqual([`group:${APP}`]);
+		const failed = facts.sessions.map(row =>
+			row.path === "fresh" ? { ...row, restoredFamily: null, status: "error" as const } : row,
+		);
+		expect(placements(sidebarRows({ ...facts, sessions: failed })).get("fresh")).toEqual([`folded:${APP}`]);
+		for (const childProblem of ["failed", "unmerged"] as const) {
+			const sessions = facts.sessions.map(row =>
+				row.path === "fresh" ? { ...row, restoredFamily: null, childProblem } : row,
+			);
+			const reviewed = sidebarRows({ ...facts, sessions });
+			expect(placements(reviewed).get("fresh")).toEqual([`folded:${APP}`]);
+			expect(reviewed.groups.find(group => group.cwd === APP)?.folded[0]?.childProblem).toBe(childProblem);
+		}
+	});
+
 	it("drops a removed project after its last unassigned child is no longer held", () => {
 		const cell: Cell = { folder: "old", holder: "used", origin: "lost", path: "/s/child" };
 		const oldGroup = (holder: Holder) =>
