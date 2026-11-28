@@ -9,7 +9,9 @@ const worker =
 const ordinaryParent =
 	"e2e/remote-host-family.e2e.ts › a paired device reopens an ordinary host's saved child under its exact parent after reconnect, not its namesake";
 const deletion = "e2e/bot-delete.e2e.ts › deleting a bot keeps only the handed session (desktop, en)";
-const mandatory = [rename, worker, ordinaryParent, deletion];
+const remoteCreation =
+	"e2e/bot-create-remote.e2e.ts › creating a template bot writes only to the selected loopback profile (desktop, en)";
+const mandatory = [rename, worker, ordinaryParent, deletion, remoteCreation];
 const smoke = "e2e/feature.e2e.ts › @smoke another selected test";
 
 function selected(name, statuses = ["passed"], expectedStatus = "passed", annotations = []) {
@@ -51,11 +53,12 @@ test("reports actual passes, Windows N/A and runner wall time separately", () =>
 		selected(worker),
 		parent,
 		selected(deletion),
+		selected(remoteCreation),
 		selected(smoke),
 		...exceptions(),
 	]);
 	expect(receipt.status).toBe("passed");
-	expect(receipt.output).toContain("5 passed, 3 N/A, 8 discovered");
+	expect(receipt.output).toContain("6 passed, 3 N/A, 9 discovered");
 	expect(receipt.output).toContain(`${ordinaryParent}: passed in 317 ms`);
 	expect(receipt.output).toContain("Playwright wall time 1234 ms");
 	for (const [name, reason] of windowsNotApplicable)
