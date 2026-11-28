@@ -185,3 +185,140 @@ export function chatWaveMessages(base: number): Record<string, unknown>[] {
 		},
 	];
 }
+
+/** Dev-harness Wave B1 showcase (`?chatwave=waveb-cards`): bot offer + added connector cards in transcript. */
+export function chatWaveBCardMessages(base: number): Record<string, unknown>[] {
+	const offerArgs = {
+		action: "offer",
+		name: "Design QA Bot",
+		text: "Audits UI parity diffs across Dark and Light themes and flags contrast or layout regressions automatically.",
+	};
+	const mcpArgs = {
+		action: "extensions.install_mcp",
+		args: { name: "figma-design-tokens" },
+	};
+	return [
+		{
+			role: "assistant",
+			content: [
+				{
+					type: "text",
+					text: "I prepared a dedicated QA bot offer and connected the Figma MCP server so design parity checks can run continuously.",
+				},
+				{ type: "toolCall", id: "call-waveb-offer", name: "ompdesk_bot", arguments: offerArgs },
+				{ type: "toolCall", id: "call-waveb-mcp", name: "ompdesk_app", arguments: mcpArgs },
+			],
+			stopReason: "toolUse",
+			model: "claude-sonnet-5-5",
+			provider: "anthropic",
+			timestamp: base,
+		},
+		{
+			role: "toolResult",
+			toolCallId: "call-waveb-offer",
+			toolName: "ompdesk_bot",
+			content: [{ type: "text", text: "Offered bot Design QA Bot." }],
+			isError: false,
+			timestamp: base + 800,
+		},
+		{
+			role: "toolResult",
+			toolCallId: "call-waveb-mcp",
+			toolName: "ompdesk_app",
+			content: [{ type: "text", text: "Installed figma-design-tokens (needs a sign-in)." }],
+			isError: false,
+			timestamp: base + 1_400,
+		},
+	];
+}
+
+/** Dev-harness Wave B2 showcase (`?chatwave=waveb-subagents`): completed + review subagent runs in transcript. */
+export function chatWaveBSubagentMessages(base: number): Record<string, unknown>[] {
+	const taskArgs = {
+		agent: "explore",
+		name: "UI Parity Audit",
+		description: "Audit Wave B chat components and contrast tokens",
+		tasks: [
+			{ id: "Explore-UI", description: "Inspect PromptCard, BotCards, and composer popovers" },
+			{ id: "Audit-A11y", description: "Verify WCAG contrast & keyboard focus order" },
+		],
+	};
+	return [
+		{
+			role: "assistant",
+			content: [
+				{
+					type: "text",
+					text: "Dispatched parallel subagents to audit the chat cards and verify token contrast before running the approval-gated test suite.",
+				},
+				{ type: "toolCall", id: "call-waveb-task", name: "task", arguments: taskArgs },
+			],
+			stopReason: "toolUse",
+			model: "claude-sonnet-5-5",
+			provider: "anthropic",
+			timestamp: base,
+		},
+		{
+			role: "toolResult",
+			toolCallId: "call-waveb-task",
+			toolName: "task",
+			content: [{ type: "text", text: "2 subagents completed in 6.4s" }],
+			details: {
+				totalDurationMs: 6420,
+				results: [
+					{
+						id: "Explore-UI",
+						agent: "explore",
+						description: "Inspect PromptCard, BotCards, and composer popovers",
+						exitCode: 0,
+						durationMs: 4820,
+						requests: 3,
+						toolCount: 8,
+						contextTokens: 14_200,
+						contextWindow: 200_000,
+						resolvedModel: "claude-sonnet-5-5",
+						usage: { cost: { total: 0.14 } },
+						output:
+							"Audited 9 renderer components across dialogs/, chat/work/, and layout/composer/.\n- Migrated TaskRenderer from legacy --omp-* tokens to --sc-* tokens\n- Unified PromptCard & BotCards framing via ChatCardFrame\n- ContextUsagePopover preserves 16px ring geometry and zero textContent",
+					},
+					{
+						id: "Audit-A11y",
+						agent: "reviewer",
+						description: "Verify WCAG contrast & keyboard focus order",
+						exitCode: 0,
+						durationMs: 6420,
+						requests: 2,
+						toolCount: 5,
+						contextTokens: 9_800,
+						contextWindow: 200_000,
+						resolvedModel: "claude-sonnet-5-5",
+						usage: { cost: { total: 0.09 } },
+						extractedToolData: {
+							yield: [
+								{
+									type: "review",
+									data: {
+										correctness: "correct",
+										confidence: 0.96,
+										explanation:
+											"Keyboard roving focus, ARIA roles, and soft-surface text tokens pass across Light and Dark themes.",
+										findings: [
+											{
+												priority: "P2",
+												title: "Verify truncated completion paths on 360px mobile viewports",
+												filePath: "src/renderer/components/layout/composer/CompletionList.tsx",
+												lineStart: 138,
+											},
+										],
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+			isError: false,
+			timestamp: base + 6_420,
+		},
+	];
+}

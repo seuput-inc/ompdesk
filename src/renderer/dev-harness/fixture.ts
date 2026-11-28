@@ -16,7 +16,13 @@ import type {
 import type { SidebarProjectsState } from "../../shared/sidebar-projects";
 import { BOARD_BUSY, boardTurnMessages, CHILDREN_WAIT } from "./fixture-board";
 import { cardTurnMessages } from "./fixture-card";
-import { CHAT_WAVE_VISUAL_FILE, CHAT_WAVE_VISUAL_HTML, chatWaveMessages } from "./fixture-chat-wave";
+import {
+	CHAT_WAVE_VISUAL_FILE,
+	CHAT_WAVE_VISUAL_HTML,
+	chatWaveBCardMessages,
+	chatWaveBSubagentMessages,
+	chatWaveMessages,
+} from "./fixture-chat-wave";
 import { quietMessages, quietScenario } from "./fixture-quiet-bot";
 import { REPLY_SHOWCASE } from "./reply-showcase";
 
@@ -571,7 +577,13 @@ export function entriesFor(tabId: string): Entry[] {
 							card === "fail" || card === "cmd" || card === "one" || card === "live" ? card : "pass",
 						)
 					: []),
-				...(chatwave ? chatWaveMessages(NOW - 5 * MINUTE) : []),
+				...(chatwave === "waveb-cards"
+					? chatWaveBCardMessages(NOW - 5 * MINUTE)
+					: chatwave === "waveb-subagents"
+						? chatWaveBSubagentMessages(NOW - 5 * MINUTE)
+						: chatwave
+							? chatWaveMessages(NOW - 5 * MINUTE)
+							: []),
 				...(params.has("mail") ? mailMessages(NOW - 10 * MINUTE) : []),
 				// The live wait (`&children=wait`) is the turn running now: its clock reads from real time, not the fixture's day.
 				...(BOARD_BUSY ? boardTurnMessages(CHILDREN_WAIT ? Date.now() - 3 * MINUTE : NOW - 8 * MINUTE) : []),
