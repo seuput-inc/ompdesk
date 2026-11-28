@@ -17,6 +17,7 @@ import { Card, CopyButton, IconButton, Modal, Skeleton } from "../common";
 import { CodeBlock } from "./CodeBlock";
 import { type FigureMode, FigureModeToggle } from "./Figure";
 import { FigureHeader } from "./FigureHeader";
+import { FileLineChip } from "./FileLineChip";
 import type { InlineVisualSpec } from "./inline-visual-directive";
 import {
 	buildInertHtmlPreviewSrcDoc,
@@ -288,9 +289,11 @@ export const InlineVisualCard = memo(function InlineVisualCard({ spec, className
 						)}
 					</FigureHeader>
 					<div className="px-3.5 py-3 text-sc-sm text-(--sc-text-muted)">
-						<span className="font-mono text-sc-xs text-(--sc-text-secondary)">
-							{spec.kind === "file" ? spec.file : title}
-						</span>
+						{spec.kind === "file" ? (
+							<FileLineChip path={loaded.resolvedPath ?? spec.file} />
+						) : (
+							<span className="font-mono text-sc-xs text-(--sc-text-secondary)">{title}</span>
+						)}
 					</div>
 				</Card>
 			</div>

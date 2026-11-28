@@ -1,17 +1,26 @@
 import type { HLJSApi } from "highlight.js";
-import { SquareTerminal, WrapText } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { Code, Eye, SquareTerminal, WrapText } from "lucide-react";
+import { lazy, type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useScrollOverflow } from "../../hooks/use-scroll-overflow";
-import { cx, escapeHtml } from "../../lib/format";
+import { cx, escapeHtml, uiLocale } from "../../lib/format";
 import { getLoadedHljs, HIGHLIGHT_CHAR_CAP, loadHljs } from "../../lib/highlight";
 import { useT } from "../../lib/i18n";
 import { runInTerminal, SHELL_LANGUAGES } from "../../lib/run-in-terminal";
 import { useRuntimeTabId } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
 import { toastError } from "../../stores/toast";
-import { CopyButton, IconButton } from "../common";
+import { CopyButton, IconButton, Skeleton } from "../common";
 import { FigureHeader } from "./FigureHeader";
 import { LineNumberGutter } from "./LineNumberGutter";
+
+const LazyHtmlCodePreview = lazy(() => import("./InlineVisualCard").then(mod => ({ default: mod.HtmlCodePreview })));
+
+/** Complete HTML documents in ```html fences offer a lazy inert (`sandbox=""`) preview toggle. */
+function isPreviewableHtmlFence(lang: string, code: string | undefined): boolean {
+	if (lang !== "html" || !code) return false;
+	const trimmed = code.trim();
+	return trimmed.length >= 16 && (/^<!doctype\s+html\b/i.test(trimmed) || /^<html\b/i.test(trimmed));
+}
 
 export interface CodeBlockProps {
 	/** Raw source code (highlighted client-side). */
@@ -128,6 +137,9 @@ export function CodeBlock({
 	const t = useT();
 	const lang = normalizeLanguage(language);
 	const [wrap, setWrap] = useState(false);
+	const [htmlPreview, setHtmlPreview] = useState(false);
+	const htmlPreviewable = highlight && !headerActions && isPreviewableHtmlFence(lang, code);
+	const showingHtmlPreview = htmlPreviewable && htmlPreview;
 	const runtimeTabId = useRuntimeTabId();
 	const tabId = useTabsStore(state => {
 		const id = runtimeTabId ?? state.activeTabId;
@@ -197,6 +209,11 @@ export function CodeBlock({
 		wrap ? "whitespace-pre-wrap [overflow-wrap:anywhere]" : "overflow-x-auto",
 	);
 
+	const lineMeta =
+		showLanguage && !headerActions && !bare && lineCount > 1
+			? t("tools.write.lines", { count: lineCount.toLocaleString(uiLocale()), plural: lineCount === 1 ? "" : "s" })
+			: undefined;
+
 	return (
 		<div
 			className={cx(
@@ -205,8 +222,9 @@ export function CodeBlock({
 				className,
 			)}
 		>
-			{(showLanguage || showCopy || showWrap || runnable || headerActions || endActions) && (
+			{(showLanguage || showCopy || showWrap || runnable || htmlPreviewable || headerActions || endActions) && (
 				<FigureHeader
+					meta={lineMeta}
 					title={
 						showLanguage
 							? (title ?? (lang === "plaintext" ? t("codeblock.plainText") : languageLabel(lang)))
@@ -214,7 +232,32 @@ export function CodeBlock({
 					}
 				>
 					{headerActions}
-					{showWrap && (
+					{htmlPreviewable && (
+						<div
+							aria-label={t("svgPreview.mode")}
+							className="flex items-center gap-0.5"
+							data-code-html-mode
+							role="group"
+						>
+							<IconButton
+								data-code-html-preview-btn
+								icon={<Eye />}
+								label={t("svgPreview.preview")}
+								onClick={() => setHtmlPreview(true)}
+								pressed={showingHtmlPreview}
+								size="sm"
+							/>
+							<IconButton
+								data-code-html-source-btn
+								icon={<Code />}
+								label={t("svgPreview.code")}
+								onClick={() => setHtmlPreview(false)}
+								pressed={!showingHtmlPreview}
+								size="sm"
+							/>
+						</div>
+					)}
+					{showWrap && !showingHtmlPreview && (
 						<IconButton
 							data-code-wrap
 							icon={<WrapText />}
@@ -224,7 +267,7 @@ export function CodeBlock({
 							size="sm"
 						/>
 					)}
-					{runnable && tabId && (
+					{runnable && tabId && !showingHtmlPreview && (
 						<IconButton
 							data-code-run
 							icon={<SquareTerminal />}
@@ -241,25 +284,36 @@ export function CodeBlock({
 					{endActions}
 				</FigureHeader>
 			)}
-			<div className={cx("overflow-auto", maxHeightClass)} ref={scrollRef} {...scrollStop(box.y && !across.x)}>
-				{gutter ? (
-					<div className="flex">
-						<LineNumberGutter
-							lineCount={lineCount}
-							lineNumbers={lineNumbers}
-							startLine={startLine}
-							className={cx("px-2.5 py-3", codeType)}
-						/>
-						<pre className={cx("min-w-0 flex-1", preClass)} ref={preRef} {...scrollStop(across.x)}>
+			{showingHtmlPreview ? (
+				<Suspense fallback={<Skeleton className="m-3 h-48 rounded-(--sc-radius-md)" />}>
+					<LazyHtmlCodePreview code={code ?? ""} title={title ?? languageLabel(lang)} />
+				</Suspense>
+			) : (
+				<div className={cx("overflow-auto", maxHeightClass)} ref={scrollRef} {...scrollStop(box.y && !across.x)}>
+					{gutter ? (
+						<div className="flex">
+							<LineNumberGutter
+								lineCount={lineCount}
+								lineNumbers={lineNumbers}
+								startLine={startLine}
+								className={cx("px-2.5 py-3", codeType)}
+							/>
+							<pre className={cx("min-w-0 flex-1", preClass)} ref={preRef} {...scrollStop(across.x)}>
+								{codeElement}
+							</pre>
+						</div>
+					) : (
+						<pre
+							className={preClass}
+							data-code-wrapped={wrap || undefined}
+							ref={preRef}
+							{...scrollStop(across.x)}
+						>
 							{codeElement}
 						</pre>
-					</div>
-				) : (
-					<pre className={preClass} data-code-wrapped={wrap || undefined} ref={preRef} {...scrollStop(across.x)}>
-						{codeElement}
-					</pre>
-				)}
-			</div>
+					)}
+				</div>
+			)}
 		</div>
 	);
 }

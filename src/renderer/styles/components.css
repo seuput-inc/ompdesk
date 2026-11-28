@@ -516,6 +516,38 @@
 .markdown-body a:hover {
 	text-decoration-color: var(--sc-accent);
 }
+/* Clickable file & line-number chips in markdown replies (Wave A3, Orca parity). */
+.markdown-body a[data-path-link] {
+	display: inline-flex;
+	align-items: baseline;
+	gap: var(--sc-space-0-5);
+	padding: 0 0.38em;
+	border: var(--sc-hairline) solid var(--sc-code-border);
+	border-radius: var(--sc-radius-xs);
+	background: var(--sc-inline-code-bg);
+	color: var(--sc-text-secondary);
+	font-family: var(--sc-font-mono);
+	font-size: 0.875em;
+	line-height: 1.45;
+	text-decoration: none;
+	vertical-align: baseline;
+	transition:
+		background-color var(--sc-duration-instant) var(--sc-ease-standard),
+		border-color var(--sc-duration-instant) var(--sc-ease-standard),
+		color var(--sc-duration-instant) var(--sc-ease-standard);
+}
+.markdown-body a[data-path-link]:hover {
+	border-color: color-mix(in srgb, var(--sc-accent) 45%, var(--sc-code-border));
+	background: color-mix(in srgb, var(--sc-accent) 9%, var(--sc-inline-code-bg));
+	color: var(--sc-accent);
+}
+.markdown-body a[data-path-link] > code {
+	padding: 0;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font-size: inherit;
+}
 .markdown-body strong {
 	font-weight: 650;
 	color: var(--omp-text);
@@ -2661,12 +2693,69 @@ button.omp-children-at-work-row:hover {
 	min-width: 0;
 	min-height: var(--sc-control-sm);
 	padding: var(--sc-space-1) var(--sc-space-2);
-	border: var(--sc-hairline) solid var(--sc-divider);
+	border: var(--sc-hairline) solid var(--sc-code-border);
 	border-radius: var(--sc-radius-md);
+	background: var(--sc-code-bg);
 	color: var(--sc-text-muted);
 	font-size: var(--sc-font-xs);
 	justify-self: start;
 	vertical-align: middle;
+	transition:
+		border-color var(--sc-duration-instant) var(--sc-ease-standard),
+		background-color var(--sc-duration-instant) var(--sc-ease-standard);
+}
+
+.omp-file-chip:hover {
+	border-color: var(--sc-border-subtle);
+	background: var(--sc-hover);
+}
+
+/* Reusable clickable file-line pill (Wave A3, FileLineChip.tsx). */
+.omp-file-line-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--sc-space-1);
+	max-width: 100%;
+	min-width: 0;
+	padding: var(--sc-space-0-5) var(--sc-space-1-5);
+	border: var(--sc-hairline) solid var(--sc-code-border);
+	border-radius: var(--sc-radius-xs);
+	background: var(--sc-inline-code-bg);
+	color: var(--sc-text-secondary);
+	font-family: var(--sc-font-mono);
+	font-size: var(--sc-font-xs);
+	line-height: 1.4;
+	text-decoration: none;
+	vertical-align: middle;
+	transition:
+		background-color var(--sc-duration-instant) var(--sc-ease-standard),
+		border-color var(--sc-duration-instant) var(--sc-ease-standard),
+		color var(--sc-duration-instant) var(--sc-ease-standard);
+}
+
+.omp-file-line-chip:hover {
+	border-color: color-mix(in srgb, var(--sc-accent) 45%, var(--sc-code-border));
+	background: color-mix(in srgb, var(--sc-accent) 9%, var(--sc-inline-code-bg));
+	color: var(--sc-accent);
+}
+
+.omp-file-line-chip-icon {
+	flex: none;
+	width: 12px;
+	height: 12px;
+	color: var(--sc-text-subtle);
+}
+
+.omp-file-line-chip-name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.omp-file-line-chip-line {
+	flex: none;
+	color: var(--sc-text-subtle);
 }
 
 .omp-file-chip-icon {
@@ -3279,6 +3368,14 @@ button.omp-children-at-work-row:hover {
 }
 
 /* Inline sandboxed HTML visual card (Wave A1, Orca `NativeChatInlineVisual` parity). */
+.omp-figure-header {
+	background: var(--sc-surface-1);
+}
+
+.omp-figure-meta {
+	white-space: nowrap;
+}
+
 .omp-inline-visual {
 	min-width: 0;
 	margin: var(--sc-space-2) 0;

@@ -119,8 +119,8 @@ import { REVEAL_STEP_EVENT, type RevealStepRequest, revealStep, type StepReveal 
 import { StepGroups } from "./work/StepGroups";
 import { messageTimestampMs } from "./work/work-turn";
 
-/** "Add to chat" over the transcript (Orca's selection quotes), loaded off the phone's first screen. */
-const TranscriptQuote = lazy(() => import("../panels/notes/TranscriptQuote"));
+/** Selection-to-quote popover over the transcript (Wave A3, Orca parity), loaded off the first screen. */
+const SelectionQuotePopover = lazy(() => import("./SelectionQuotePopover"));
 /** A bot's Slack thread chat's mirror bar (`bots/SlackThreadBar.tsx`), loaded only in a bot's chat. */
 const SlackThreadBar = lazy(() => import("../bots/SlackThreadBar"));
 
@@ -1307,7 +1307,7 @@ function SessionTranscript() {
 				tabId={tabId}
 			/>
 			<Suspense fallback={null}>
-				<TranscriptQuote rootRef={parentRef} tabId={tabId} />
+				<SelectionQuotePopover rootRef={parentRef} tabId={tabId} />
 			</Suspense>
 			<ConversationNavigator
 				activeIndex={activeConversationIndex}

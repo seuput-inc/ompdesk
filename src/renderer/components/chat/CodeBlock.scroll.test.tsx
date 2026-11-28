@@ -89,4 +89,31 @@ describe("CodeBlock keyboard scrolling", () => {
 		// A later resize is measured on the <pre> now on screen, not the one the switch removed.
 		expect(pre && observed.has(pre)).toBe(true);
 	});
+
+	it("shows line-count metadata on multi-line blocks and offers inert preview for HTML documents", async () => {
+		// Pre-warm the lazy preview chunk so React.lazy resolves deterministically under act().
+		await import("./InlineVisualCard");
+		const htmlDoc = "<!doctype html>\n<html>\n<body><h1>Card</h1></body>\n</html>";
+		const host = document.createElement("div");
+		document.body.append(host);
+		root = createRoot(host);
+		await act(async () =>
+			root?.render(
+				<I18nProvider>
+					<CodeBlock code={htmlDoc} language="html" showWrap />
+				</I18nProvider>,
+			),
+		);
+		expect(host.querySelector("[data-figure-meta]")?.textContent).toBe("4 lines");
+		const previewBtn = host.querySelector("[data-code-html-preview-btn]") as HTMLElement | null;
+		expect(previewBtn).not.toBeNull();
+		await act(async () => {
+			previewBtn?.click();
+			await Promise.resolve();
+			await new Promise(resolve => setTimeout(resolve, 10));
+		});
+		const iframe = host.querySelector("iframe");
+		expect(iframe).not.toBeNull();
+		expect(iframe?.getAttribute("sandbox")).toBe("");
+	});
 });
