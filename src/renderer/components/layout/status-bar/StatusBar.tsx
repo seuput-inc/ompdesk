@@ -31,7 +31,7 @@ export function StatusBar() {
 	return (
 		<footer
 			aria-label={t("statusBar.label")}
-			className="omp-status-bar flex h-(--sc-statusbar-h) shrink-0 items-center border-t border-(--sc-border-subtle) bg-(--sc-surface-1) px-2"
+			className="omp-status-bar flex h-(--sc-statusbar-h) shrink-0 items-center border-t border-(--sc-divider) bg-(--sc-surface-1) px-3"
 			data-status-bar
 		>
 			{Segments && <Segments />}

@@ -366,3 +366,29 @@ describe("focus ring utilities", () => {
 		);
 	});
 });
+
+describe("design token integrity", () => {
+	it("defines every --sc-* custom property referenced across renderer stylesheets and components", () => {
+		const defined = new Set<string>();
+		for (const file of readdirSync(dir).filter(name => name.endsWith(".css"))) {
+			const css = readFileSync(join(dir, file), "utf8");
+			for (const match of css.matchAll(/(--sc-[a-z0-9-]+)\s*:/g)) defined.add(match[1] ?? "");
+		}
+		const missing: string[] = [];
+		const walk = (folder: string) => {
+			for (const entry of readdirSync(folder, { withFileTypes: true })) {
+				const path = join(folder, entry.name);
+				if (entry.isDirectory()) walk(path);
+				else if (/\.(?:tsx?|css)$/.test(entry.name) && !/\.test\.(?:tsx?|css)$/.test(entry.name)) {
+					const content = readFileSync(path, "utf8");
+					for (const match of content.matchAll(/(?:var\(|-)\((--sc-[a-z0-9-]+)\)/g)) {
+						const token = match[1] ?? "";
+						if (token && !defined.has(token)) missing.push(`${path}: ${token}`);
+					}
+				}
+			}
+		};
+		walk(join(dir, ".."));
+		expect(missing).toEqual([]);
+	});
+});

@@ -107,7 +107,7 @@ export const DialogSurface = forwardRef<HTMLDivElement, DialogSurfaceProps>(func
 	return (
 		<div
 			className={cx(
-				"flex flex-col overflow-hidden rounded-(--sc-radius-xl) border border-(--sc-border-subtle) bg-(--sc-elevated) text-(--sc-text) shadow-(--sc-shadow-lg)",
+				"flex flex-col overflow-hidden rounded-(--sc-radius-xl) border border-(--sc-dialog-border) bg-(--sc-elevated) text-(--sc-text) shadow-(--sc-shadow-lg)",
 				className,
 			)}
 			ref={ref}

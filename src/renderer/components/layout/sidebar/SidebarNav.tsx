@@ -122,6 +122,7 @@ export function SidebarNav() {
 						onClick={open}
 						onContextMenu={event => setMenu({ row, anchor: anchorFromEvent(event) })}
 						onKeyDown={onKeyDown(row)}
+						size="sm"
 						variant="ghost"
 					>
 						<span className="min-w-0 flex-1 truncate text-left">{t(labelKey)}</span>

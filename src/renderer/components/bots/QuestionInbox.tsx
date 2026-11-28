@@ -42,7 +42,7 @@ function QuestionField({
 		receipts.some(entry => entry.draft.key === row.key && entry.outcome === "changed");
 	return (
 		<fieldset
-			className="min-w-0 space-y-2 rounded-(--sc-radius-md) border border-(--sc-border-subtle) bg-(--sc-surface) p-3"
+			className="min-w-0 space-y-2 rounded-(--sc-radius-lg) border border-(--sc-border-subtle) bg-(--sc-surface-1) p-3"
 			data-item-id={row.source === "item" ? row.item.id : undefined}
 			data-question-row={row.source}
 			onKeyDown={event => {

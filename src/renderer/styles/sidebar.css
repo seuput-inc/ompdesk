@@ -406,11 +406,18 @@ html[data-input="touch"] .omp-session-sidebar [data-device-group] > div:first-ch
 }
 
 .omp-sidebar-controls {
-	padding-bottom: var(--sc-space-3);
+	padding-bottom: var(--sc-space-2);
 }
 
 .omp-session-sidebar [data-sidebar-destinations] {
-	padding-block: var(--sc-space-3);
+	padding-block: var(--sc-space-2);
+}
+
+/* Orca's Bots/Projects split seam: a quiet hairline under the pinned Bots section. */
+.omp-session-sidebar [data-sidebar-bots] {
+	padding-bottom: var(--sc-space-1-5);
+	margin-bottom: var(--sc-space-1-5);
+	border-bottom: var(--sc-hairline) solid var(--sc-sidebar-section-divider);
 }
 
 @media (prefers-reduced-motion: reduce) {

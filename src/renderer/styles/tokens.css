@@ -191,6 +191,18 @@
 	--sc-floating-mix: 86%;
 	/* A toast: Orca's notice shadow, deeper than a menu's, so a notice reads above whatever it covers. */
 	--sc-shadow-notice: 0 16px 40px -8px rgb(0 0 0 / 0.28), 0 3px 8px rgb(0 0 0 / 0.12);
+	/* Derived Orca-parity surface & hairline tokens: follow every theme automatically via color-mix. */
+	--sc-code-bg: color-mix(in srgb, var(--sc-text) 2.5%, var(--sc-bg));
+	--sc-code-border: color-mix(in srgb, var(--sc-text) 8%, transparent);
+	--sc-inline-code-bg: color-mix(in srgb, var(--sc-text) 4%, var(--sc-bg));
+	--sc-inline-code-border: color-mix(in srgb, var(--sc-text) 9%, transparent);
+	--sc-composer-bg: var(--sc-field);
+	--sc-composer-border: color-mix(in srgb, var(--sc-text) 12%, transparent);
+	--sc-composer-border-focus: color-mix(in srgb, var(--sc-text) 20%, transparent);
+	--sc-dialog-border: color-mix(in srgb, var(--sc-text) 14%, transparent);
+	--sc-sidebar-section-divider: color-mix(in srgb, var(--sc-text) 12%, var(--sc-divider));
+	--sc-scrollbar-thumb: color-mix(in srgb, var(--sc-text-muted) 28%, transparent);
+	--sc-scrollbar-thumb-hover: color-mix(in srgb, var(--sc-text-muted) 48%, transparent);
 
 	/* ── --omp-* compatibility aliases ──────────────────────────────────
 	   Unmigrated surfaces keep reading --omp-*; each resolves to its --sc-*
@@ -313,10 +325,17 @@
 	--omp-streaming-cursor: var(--omp-accent);
 }
 
-/* A dark page swallows a light shadow: the notice deepens and takes a top highlight, as Orca's does. */
+/* A dark page swallows a light shadow: the notice deepens and takes a top highlight, as Orca's does.
+   Code, inline code and composer surfaces also step slightly stronger on near-black dark canvases. */
 :root[data-theme="dark"] {
 	--sc-shadow-notice:
 		0 18px 48px -8px rgb(0 0 0 / 0.7), 0 4px 12px rgb(0 0 0 / 0.35), inset 0 1px 0 rgb(255 255 255 / 0.08);
+	--sc-code-bg: color-mix(in srgb, var(--sc-text) 4%, var(--sc-bg));
+	--sc-inline-code-bg: color-mix(in srgb, var(--sc-text) 6%, var(--sc-bg));
+	--sc-inline-code-border: color-mix(in srgb, var(--sc-text) 8%, transparent);
+	--sc-composer-bg: color-mix(in srgb, var(--sc-text) 4%, var(--sc-bg));
+	--sc-composer-border: color-mix(in srgb, var(--sc-text) 10%, transparent);
+	--sc-composer-border-focus: color-mix(in srgb, var(--sc-text) 18%, transparent);
 }
 
 @media (min-resolution: 2dppx) {
