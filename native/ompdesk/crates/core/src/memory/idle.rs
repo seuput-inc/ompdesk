@@ -23,6 +23,14 @@ enum Children {
 }
 
 impl<'a> WatchProcesses<'a> {
+    pub(super) fn busy_parents(&self) -> Option<&[u32]> {
+        self.busy_parents.as_deref()
+    }
+
+    pub(super) fn quiet_trees(&self) -> &[(u32, u64)] {
+        &self.quiet_trees
+    }
+
     pub(super) fn new(rows: &'a [ProcessRow], windows: bool) -> Self {
         let mut children = HashMap::<u32, Children>::new();
         for row in rows {

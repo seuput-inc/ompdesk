@@ -17,14 +17,14 @@
 //! `timeoutMs` is main's (`SAMPLE_TIMEOUT_MS`): how long `sysctl` or `ps` may run. A read that fails is a fault, which
 //! main counts as no sample, never as memory being fine.
 
+pub mod hibernate;
 mod idle;
 
 use serde::{Deserialize, Serialize};
 
 use crate::server::{Fault, Registry, Reply, Scope};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-#[cfg_attr(test, derive(Deserialize))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Pressure {
     Normal,
@@ -32,57 +32,54 @@ pub enum Pressure {
     Critical,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
-#[cfg_attr(test, derive(Deserialize))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Reading {
-    total_bytes: u64,
+    pub total_bytes: u64,
     /// What the OS can hand out without paging: macOS `kern.memorystatus_level` % of RAM, Windows' available
     /// physical memory.
-    available_bytes: u64,
-    pressure: Pressure,
-    #[serde(flatten)]
-    machine: Machine,
+    pub available_bytes: u64,
+    pub pressure: Pressure,
+    #[serde(flatten, default)]
+    pub machine: Machine,
 }
 
 /// What the reading says beyond memory's level; each value absent where the system has none.
-#[derive(Debug, Default, PartialEq, Serialize)]
-#[cfg_attr(test, derive(Deserialize))]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Machine {
     /// Windows: the memory promised to processes, and the most that can be (RAM plus page files).
     #[serde(skip_serializing_if = "Option::is_none")]
-    commit_bytes: Option<u64>,
+    pub commit_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    commit_limit_bytes: Option<u64>,
+    pub commit_limit_bytes: Option<u64>,
     /// macOS: the swap in use, and its size now.
     #[serde(skip_serializing_if = "Option::is_none")]
-    swap_bytes: Option<u64>,
+    pub swap_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    swap_total_bytes: Option<u64>,
+    pub swap_total_bytes: Option<u64>,
     /// Windows: threads ready to run with no processor free, requests waiting on the disks, and the share of time
     /// the disks were busy since the reading before.
     #[serde(skip_serializing_if = "Option::is_none")]
-    run_queue: Option<f64>,
+    pub run_queue: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    disk_queue: Option<f64>,
+    pub disk_queue: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    disk_busy_pct: Option<f64>,
+    pub disk_busy_pct: Option<f64>,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
-#[cfg_attr(test, derive(Deserialize))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProcessRow {
-    pid: u32,
-    ppid: u32,
+    pub pid: u32,
+    pub ppid: u32,
     /// Resident bytes; on macOS the footprint of a process this user may read (`with_footprints`).
-    bytes: u64,
+    pub bytes: u64,
     /// Image name (`conhost.exe`), Windows only: `ps` names none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
+    pub name: Option<String>,
     /// Processor time used so far, kernel and user, in ms; absent where the system would not say.
     #[serde(rename = "cpuMs", default, skip_serializing_if = "Option::is_none")]
-    cpu_ms: Option<u64>,
+    pub cpu_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -111,6 +108,7 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&idle::WatchProcesses::new(&rows, cfg!(windows)))
         })
     });
+    hibernate::register(registry);
 }
 
 /// A number as `sysctl`, `ps` and `/proc/meminfo` print one: decimal digits. `Number()` also read `1e3`, `0x10`,
