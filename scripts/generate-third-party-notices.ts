@@ -309,6 +309,8 @@ function vendoredSections(): string {
 			"poteto-help, make-bot-ui, Bugbot triage, the orchestrate playbook, the watch-pr and orch tools) are left out;",
 			"the three formal-verification skills (create-/maintain-formal-verification-skill, statechart) are folded into",
 			"the ompdesk-formal-verify skill.",
+			"OMPdesk maintains the translated why and reflect skills and playbook descriptions from pstack 0.15.36",
+			"(cursor/plugins commit c742dd61706fbacc1b95f1a20b7b988cf096ce6c) under the same MIT license.",
 			"The license text is also in resources/omp-builtin/pstack/UPSTREAM-LICENSE.",
 			"",
 			pstackLicense,

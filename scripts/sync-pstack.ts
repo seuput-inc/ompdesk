@@ -7,8 +7,8 @@
  *   bun run sync:pstack -- --check pin vs the newest upstream (scripts/skill-packs.ts check pstack)
  *
  * Owned by OMPdesk and never touched here: `pstack-config.json` (the one version pin), `adapter.md`,
- * `agents/pstack-agent.md`, `README.md`. Everything else under the pack is generated; `pstack-manifest.json` holds its
- * sha256 list, which `src/main/pstack/pack-drift.test.ts` checks, so a hand edit of a generated file fails there.
+ * `agents/pstack-agent.md`, `README.md`, and the translated `skills/why/` and `skills/reflect/` from 0.15.36.
+ * `pstack-manifest.json` holds every pack file's sha256, checked by `src/main/pstack/pack-drift.test.ts`.
  * Every translation rule must match at least once: when upstream rewords a line a rule hung on, this script fails
  * instead of quietly shipping an untranslated Cursor name.
  */
@@ -51,8 +51,15 @@ const SKIPPED_PATHS: RegExp[] = [
 ];
 /** Skills renamed so none collides with a stock or common user skill (`tdd`, `teach`). */
 const RENAMED_SKILLS: Record<string, string> = { tdd: "pstack-tdd", teach: "pstack-teach" };
-/** OMPdesk-owned files: kept as they are and never regenerated. */
-const OWNED = ["pstack-config.json", "adapter.md", "agents/pstack-agent.md", "README.md"];
+/** The complete 0.15.36 investigations and reviewer prompts are OMPdesk-owned, not upstream's replacements. */
+const OWNED_SKILLS = ["why", "reflect"];
+const OWNED = [
+	"pstack-config.json",
+	"adapter.md",
+	"agents/pstack-agent.md",
+	"README.md",
+	...OWNED_SKILLS.map(name => `skills/${name}/`),
+];
 
 interface Rule {
 	id: string;
@@ -84,42 +91,35 @@ const RULES: Rule[] = [
 		"Bundled skills live at `../<name>/SKILL.md` from this file, so put this file's absolute path in every `poteto-agent` prompt.",
 		"Bundled skills are read as `skill://<name>`. Tell every `pstack-agent` you spawn to read `skill://poteto-mode` first.",
 	),
-	rule("mode-askquestion", /^poteto-mode\/SKILL\.md$/, "About to `AskQuestion` on", "About to `ask` on"),
 	rule(
-		"mode-create-skill",
+		"mode-worker",
 		/^poteto-mode\/SKILL\.md$/,
-		"Agent-facing prose also follows the **create-skill** skill (Cursor's built-in for authoring SKILL.md files).",
-		"Agent-facing prose also follows the user's skill-writing skill when one is installed (`writing-great-skills`), else the **authoring-a-skill** playbook.",
+		/- Starting any agent, whether a Task subagent or a Project worker → [^\n]*? for a `poteto-agent`\./,
+		"- Starting a subagent or an OMPdesk worktree session → tell it to read `skill://poteto-mode/worker.md` before starting its task. Give it the operator's goal and its assignment. A `pstack-agent` reads `skill://poteto-mode` first.",
+	),
+	rule(
+		"worker-kickoff",
+		/^poteto-mode\/worker\.md$/,
+		"the first line of its kickoff is `Read <path>/worker.md before anything else.`, with `<path>` the absolute path of the folder that holds this file.",
+		"tell it to read `skill://poteto-mode/worker.md` before starting its task.",
 	),
 	rule(
 		"mode-deslop",
 		/^poteto-mode\/SKILL\.md$/,
-		"- Before commit → the `deslop` skill from the `cursor-team-kit` plugin (`/deslop`).",
-		"- Before commit → the user's `ponytail-review` skill when it is installed, else the **unslop** skill with **principle-laziness-protocol** over the diff.",
+		"- Before commit → `/deslop` from the `cursor-team-kit` plugin.",
+		"- Before commit → the user's `ponytail-review` skill when installed, else **unslop** with **principle-laziness-protocol**.",
 	),
 	rule(
 		"mode-control",
 		/^poteto-mode\/SKILL\.md$/,
-		"`cursor-team-kit` publishes `control-cli` (CLIs and TUIs) and `control-ui` (browser / Electron / web UIs).",
-		"Drive a CLI or TUI through `bash` (or `debug`), a browser or Electron UI through the `ego-browser` skill or the OMPdesk preview, a desktop app through `computer` when it exists.",
+		"Shipping UI / IDE / CLI → `control-ui` or `control-cli` from `cursor-team-kit`.",
+		"Shipping a UI → drive it through the `ego-browser` skill or the OMPdesk preview. For a CLI or TUI, use `bash` or `debug`.",
 	),
 	rule(
 		"mode-babysit",
 		/^poteto-mode\/SKILL\.md$/,
-		", not Cursor's built-in babysit skill, whose description matches the same words",
-		", not any other babysit skill whose description matches the same words",
-	),
-	rule(
-		"mode-bugbot",
-		/^poteto-mode\/SKILL\.md$/,
-		/- Bugbot or the agentic security review commented → skeptical posture\..*\n/,
-		"- A review bot or an automated security review commented → skeptical posture. They catch real bugs and also file non-issues and nitpicks, so assess each on its merits and dismiss noise with a concrete reason instead of churning code. Fix, dismiss or ask per comment.\n",
-	),
-	rule(
-		"mode-loop",
-		/^poteto-mode\/SKILL\.md$/,
-		'"trust it when i\'m back", "/loop until X")',
-		'"trust it when i\'m back", "keep looping until X")',
+		"not Cursor's built-in babysit skill",
+		"not any other babysit skill",
 	),
 	rule(
 		"mode-subagents",
@@ -128,38 +128,12 @@ const RULES: Rule[] = [
 		'## Subagents\n\nSubagents run through omp\'s `task` tool. Pass `agent: "pstack-agent"` for code-writing delegates and ad-hoc helpers (it reads this skill first), leave `agent` out for the default `task` agent, use `scout` or `reviewer` for read-only work. The chat that runs the playbook never delegates the playbook itself. Routed workflow skills (`how`, `why`, `interrogate`, `reflect`, `swarm`) set their own spawns, so respect what they prescribe.\n\n' +
 			`${MODEL_ROLES} Hand a hard change to \`@slow\` through the task call's model override. File pointers beat inlined context. You own every subagent's work: review the diff and write your own summary. A second opinion is the same prompt on a different model, and agreement is high-signal. Give new work to a fresh subagent with the consolidated brief, every later directive and the prior report. Reuse one only when the new work strictly needs state that lives in it (its checkout, uncommitted changes, a running process). A session you opened with \`ompdesk_session_open\` is the exception: continue it with \`ompdesk_session_send\`.\n`,
 	),
-	rule(
-		"mode-todolist",
-		/^poteto-mode\/SKILL\.md$/,
-		"Open a todolist whose first items are the matched playbook's steps, copied in verbatim, before any task-specific todos.",
-		PLAYBOOK_TODOS,
-	),
-	rule(
-		"mode-internal-skips",
-		/^poteto-mode\/SKILL\.md$/,
-		"A step you choose not to do stays in the list with a one-line `skip: <reason>`. ",
-		"",
-	),
-	rule(
-		"mode-todolist-copy",
-		/^poteto-mode\/SKILL\.md$/,
-		"Copy its steps in verbatim.",
-		"Follow its steps internally.",
-	),
+	rule("mode-todolist", /^poteto-mode\/SKILL\.md$/, "Copy its steps into the todolist tool first.", PLAYBOOK_TODOS),
 	rule(
 		"mode-playbooks-file",
 		/^poteto-mode\/SKILL\.md$/,
-		/and open its full steps at `playbooks\/<title>\.md`, with the title in kebab case, hyphens kept and other punctuation dropped, unless the entry gives its file\./,
-		"and open its full steps at the `skill://poteto-mode/playbooks/<file>.md` path printed after the entry.",
-	),
-	// An OMPdesk relaunch continues running turns by itself (adapter.md): Pause safely is never for one.
-	rule("mode-pause-cursor", /^poteto-mode\/SKILL\.md$/, "a Cursor restart", "an omp restart you start yourself"),
-	rule("mode-orchestrate-entry", /^poteto-mode\/SKILL\.md$/, /- \*\*Orchestrate\.\*\*.*\n/, ""),
-	rule(
-		"mode-orchestrate-route",
-		/^poteto-mode\/SKILL\.md$/,
-		/ A standing project-scale program \(multi-day[^\n]*?\. figure-it-out designs one bespoke run, orchestrate runs the program\./,
-		" A standing project-scale program (multi-day, many stacked PRs) routes to **figure-it-out** too, with each unit as an OMPdesk session (`ompdesk_session_open`).",
+		"open its steps at `playbooks/<title>.md`, with the title in kebab case.",
+		"read its steps. The Playbooks section of `skill://pstack-adapter` gives each description and path.",
 	),
 	// ── skills that spawn model-specific subagents ───────────────────────────────────────────────
 	rule(
@@ -190,98 +164,20 @@ const RULES: Rule[] = [
 	rule(
 		"mode-fanout-size",
 		/^poteto-mode\/SKILL\.md$/,
-		"- Parallel fan-out → the **swarm** skill",
-		"- Parallel fan-out of items that each take minutes → the **swarm** skill (a few small edits go as parallel tool calls in one response instead)",
-	),
-	rule(
-		"why-models",
-		/^why\/SKILL\.md$/,
-		/Each spawn below names a role line in the `pstack-models\.mdc` rule and a default\.[\s\S]*?(?=\n\nEvery spawn is `generalPurpose`)/,
-		"Each spawn below names a model role: `@task` for investigators, `@slow` for the synthesizer. If the `task` tool rejects a model, use the role's default and say so.",
-	),
-	rule(
-		"why-readonly",
-		/^why\/SKILL\.md$/,
-		/Every spawn is `generalPurpose` with `readonly: false` \(agent mode\)\.[^\n]*/,
-		"Every spawn is the default `task` agent, because `scout` has no MCP access and the MCP-backed investigators and the synthesizer's citation spot-checks need it. Investigators still shouldn't write anything.",
-	),
-	rule(
-		"why-discovery",
-		/^why\/SKILL\.md$/,
-		/list the available MCPs from the Cursor environment\. Use the available-tools map when present\. Otherwise inspect the `mcps\/` directory Cursor exposes for enabled MCP servers\./,
-		"list the available MCPs: the `mcp__` tools in your tool list, and `mcp_search` when it exists.",
-	),
-	rule(
-		"why-investigators",
-		/^why\/SKILL\.md$/,
-		"`model`: the `why investigators` line, default `grok-4.7-xhigh-fast`.",
-		"`model`: `@task`.",
-	),
-	rule(
-		"why-synth",
-		/^why\/SKILL\.md$/,
-		"`model`: the `why synthesizer` line, default `claude-opus-5-5-xhigh`.",
-		"`model`: `@slow`.",
+		"Fan-out → **swarm**.",
+		"Fan-out of items that each take minutes → **swarm**. A few small edits go as parallel tool calls in one response instead.",
 	),
 	rule(
 		"how-spawn",
 		/^how\/SKILL\.md$/,
-		/Every spawn is a Task subagent with `subagent_type: generalPurpose` and `readonly: true`\.[\s\S]*?(?= Pick each subagent's reasoning level)/,
-		'Every spawn is a `task` subagent with `agent: "scout"` (read-only). Explorers run on `@task`, and every explainer on `@slow`. If the `task` tool rejects a model, use that default and say so.',
-	),
-	rule(
-		"reflect-agents",
-		/^reflect\/SKILL\.md$/,
-		/One message, three `Task` calls, `subagent_type: generalPurpose`, agent mode \(`readonly: false`\)\. Reviewers need MCP access[^\n]*/,
-		"One `task` call with three `tasks[]` entries, the default `task` agent (not `scout`: reviewers need MCP access to look up the tickets, chat threads, and observability traces the transcript references).",
-	),
-	rule(
-		"reflect-models",
-		/^reflect\/SKILL\.md$/,
-		/Each reviewer and the synthesizer name a role line in the `pstack-models\.mdc` rule and a default\.[^\n]*/,
-		"Each reviewer and the synthesizer name a model role. If the `task` tool rejects a model, use the role's default and say so.",
-	),
-	rule(
-		"reflect-table",
-		/^reflect\/SKILL\.md$/,
-		"| Lens | Role line | Default `model` | Prompt template |\n|---|---|---|---|\n| Judgment | `reflect judgment, divergent, synthesizer` | `claude-opus-5-5-xhigh` | `references/judgment-reviewer.md` |\n| Tooling | `reflect tooling` | `grok-4.7-xhigh-fast` | `references/tooling-reviewer.md` |\n| Divergent | `reflect judgment, divergent, synthesizer` | `claude-opus-5-5-xhigh` | `references/divergent-reviewer.md` |",
-		"| Lens | `model` | Prompt template |\n|---|---|---|\n| Judgment | `@slow` | `references/judgment-reviewer.md` |\n| Tooling | `@task` | `references/tooling-reviewer.md` |\n| Divergent | `@slow` | `references/divergent-reviewer.md` |",
-	),
-	rule(
-		"reflect-synth",
-		/^reflect\/SKILL\.md$/,
-		/One `Task` call, `subagent_type: generalPurpose`, `model` from the `reflect judgment, divergent, synthesizer` line \(default `claude-opus-5-5-xhigh`\), agent mode \(`readonly: false`\)\. It spot-verifies citations through MCP, and readonly strips MCPs\./,
-		"One `task` call on `@slow` with the default `task` agent. It spot-verifies citations through MCP, which `scout` cannot reach.",
-	),
-	rule(
-		"reflect-create-skill",
-		/^reflect\/SKILL\.md$/,
-		"hand to Cursor's built-in `create-skill` skill and run its draft / test / iterate loop.",
-		"hand to the user's skill-writing skill (`writing-great-skills`) when installed, else the `manage_skill` tool, and run its draft / test / iterate loop.",
-	),
-	rule(
-		"reflect-skill-copy",
-		/^reflect\/SKILL\.md$/,
-		"Never edit a skill under `plugins/cache/`. Before approval, show its destination, `.cursor/skills/<skill>/` or `~/.cursor/skills/<skill>/`. After approval, copy the skill folder there and edit the copy.",
-		"Never edit a skill in a built-in or installed pack (OMPdesk's `resources/omp-builtin/`, an omp plugin). Before approval, show its destination, `.omp/skills/<skill>/` or `~/.omp/agent/skills/<skill>/`. After approval, copy the skill folder there and edit the copy.",
-	),
-	rule(
-		"reflect-synth-example",
-		/^reflect\/references\/synthesizer\.md$/,
-		'"Bugbot flagged regex backtracking on May 2"',
-		'"A review bot flagged regex backtracking on May 2"',
-	),
-	rule(
-		"reflect-used-skill",
-		/^reflect\/references\/(judgment|tooling|divergent)-reviewer\.md$/,
-		/\(under `\.cursor\/skills\/`, `~\/\.cursor\/skills\/`, or `~\/\.cursor\/plugins\/`\), a `Task` prompt naming its path, or a tool call \(Shell, Grep, MCP, etc\.\)/,
-		"(under `.omp/skills/`, `.agents/skills/`, `~/.omp/agent/skills/`, `~/.agents/skills/`, or as `skill://<name>`), a `task` prompt naming its path, or a tool call (`bash`, `grep`, an MCP tool, etc.)",
+		"Spawn one Task subagent with `subagent_type: generalPurpose` and `readonly: true`",
+		'Spawn one read-only `task` subagent (`agent: "scout"`) on `@slow`',
 	),
 	rule(
 		"arena-runners",
 		/^arena\/SKILL\.md$/,
-		/3\. Pick the runners\. Use the `arena runners` line[\s\S]*?Spawn more runners when/,
-		"3. Pick the runners. Default to one `@slow` and one on a different model family from the parent (the `advisor` role, or another configured provider). If the `task` tool rejects a model, run that seat on `@slow` and say so. Spawn more runners when",
+		/3\. Pick the runners from the `arena runners` line in `~\/\.cursor\/rules\/pstack-models\.mdc`[^\n]*? Spawn more for multiple design directions/,
+		"3. Pick at least two runners. Default to one `@slow` and one on a different model family (the `advisor` role, or another configured provider). If a model is unavailable, use another configured model and say so. Spawn more for multiple design directions",
 	),
 	rule(
 		"arena-bg",
@@ -292,14 +188,8 @@ const RULES: Rule[] = [
 	rule(
 		"arena-judge",
 		/^arena\/SKILL\.md$/,
-		/choose one model from the `arena cross-judge pool` line in `~\/\.cursor\/rules\/pstack-models\.mdc`\.[^\n]*? say that the family check did not run\./,
-		'choose a judge model from a different family than the parent\'s (the `advisor` role, or another configured provider). Spawn one read-only judge (`agent: "reviewer"`) on that model. If no model of another family runs, skip the judge, pick the base alone in Phase D, and say so.',
-	),
-	rule(
-		"architect-runners",
-		/^architect\/SKILL\.md$/,
-		/Take the runners from the `architect runners` line in the `pstack-models\.mdc` rule, in place of the `arena runners` line\. If the rule or that line is missing, use `claude-opus-5-5-xhigh` and `grok-4\.7-xhigh-fast`\. /,
-		"Take the runners as the **arena** skill's Phase A says. ",
+		/spawn one readonly judge from the `arena cross-judge pool` line in `~\/\.cursor\/rules\/pstack-models\.mdc`[^\n]*? or skip the judge, and say so\./,
+		'spawn one read-only judge (`agent: "reviewer"`) on a different vendor from the parent (the `advisor` role or another configured provider). If no such model runs, skip the judge, pick the base alone in Phase D, and say so.',
 	),
 	rule(
 		"no-comments-spawn",
@@ -311,7 +201,7 @@ const RULES: Rule[] = [
 	rule(
 		"playbook-model",
 		/^poteto-mode\/playbooks\/(bug-fix|feature|perf-issue|hillclimb|refactoring)\.md$/,
-		/ using your configured [a-z-]+ model \(default `grok-4\.7-xhigh-fast`\)/,
+		/ using your configured [a-z-]+ model \(default `claude-opus-5-5-xhigh-fast`\)/,
 		" on `@task` (`@slow` for the hardest change)",
 	),
 	rule(
@@ -327,40 +217,10 @@ const RULES: Rule[] = [
 		"When program state is unclear, add instrumentation or logging and read it as the code runs. Don't guess. A race, ordering, retry, lease or state-machine bug, or a claim that something can never happen, is a class tests reach poorly: read `skill://ompdesk-formal-verify` before you fix it.",
 	),
 	rule(
-		"multi-explore",
-		/^poteto-mode\/playbooks\/multi-phase-plan\.md$/,
-		'Explore in subagents with `subagent_type: "poteto-agent"` and an explicit model per the Subagents section',
-		'Explore in subagents with `agent: "pstack-agent"` and an explicit model role per the Subagents section',
-	),
-	rule(
-		"multi-loop",
-		/^poteto-mode\/playbooks\/multi-phase-plan\.md$/,
-		"arm the audit tick as `/loop 1h` with the tick prompt below",
-		"arm the audit tick as a recurring check (`/loop 1h` in the omp TUI, or an OMPdesk schedule via `ompdesk_schedule`) with the tick prompt below",
-	),
-	rule(
-		"multi-lanes",
-		/^poteto-mode\/playbooks\/multi-phase-plan\.md$/,
-		"Each live lane runs on its own cloud VM at the PR head. Drive through `control-ui` or `control-cli` from `cursor-team-kit`.",
-		"Each live lane runs in its own OMPdesk session on a worktree at the PR head (`ompdesk_session_open` with `worktree: true`). Drive a browser or Electron UI through the `ego-browser` skill or the OMPdesk preview, a CLI through `bash`.",
-	),
-	rule(
-		"multi-control",
-		/^poteto-mode\/playbooks\/multi-phase-plan\.md$/,
-		"Browser, Electron, and web UIs use `control-ui` from `cursor-team-kit`. CLIs and TUIs use `control-cli` from `cursor-team-kit`.",
-		"Browser, Electron, and web UIs use the `ego-browser` skill or the OMPdesk preview. CLIs and TUIs use `bash` or `debug`.",
-	),
-	rule(
-		"multi-bugbot",
-		/^poteto-mode\/playbooks\/multi-phase-plan\.md$/,
-		"- [ ] Triage every Bugbot and security-reviewer comment per `../references/bugbot-triage.md`.",
-		"- [ ] Triage every review-bot and security-reviewer comment on its merits (fix with a red-first proof, or dismiss with a concrete reason).",
-	),
-	rule(
-		"multi-bugbot-done",
-		/^poteto-mode\/playbooks\/multi-phase-plan\.md$/,
-		"- [ ] Bugbot triage done.",
-		"- [ ] Review-bot triage done.",
+		"eval-dispatch-model",
+		/^poteto-mode\/playbooks\/eval\.md$/,
+		"An agent that only dispatches, polls, or packs results runs on `claude-opus-5-5-medium-fast`.",
+		"An agent that only dispatches, waits, or collects results runs on `@smol`.",
 	),
 	rule(
 		"auto-wake",
@@ -385,12 +245,6 @@ const RULES: Rule[] = [
 		"Repeat per component until the diff is zero.",
 	),
 	rule(
-		"pr-worktree",
-		/^poteto-mode\/playbooks\/opening-a-pr\.md$/,
-		"Multiple `Task` calls on the same branch",
-		"Multiple `task` calls on the same branch",
-	),
-	rule(
 		"pr-deslop",
 		/^poteto-mode\/playbooks\/opening-a-pr\.md$/,
 		"Run `/deslop` from `cursor-team-kit` over the diff before commit",
@@ -408,35 +262,35 @@ const RULES: Rule[] = [
 		"arm `/loop 1h` to audit",
 		"arm a recurring audit (`/loop 1h` in the omp TUI, or an OMPdesk schedule) to audit",
 	),
-	// ── PR playbooks: Bugbot, watch-pr, Origin ───────────────────────────────────────────────────
 	rule(
-		"babysit-replaces",
-		/^poteto-mode\/playbooks\/babysit\.md$/,
-		"This playbook replaces Cursor's built-in babysit skill for these requests, so do not route there even though i",
-		"This playbook owns these requests, so do not route to any other babysit skill even though i",
+		"autofull-rebase-gate",
+		/^poteto-mode\/playbooks\/autopilot-full\.md$/,
+		"Where that playbook says to report a rebase, the owner rebases its own branch and publishes it with `git push --force-with-lease`.",
+		"When Babysit reports a required rebase, stop and report it. Do not rewrite the published branch without the operator's explicit approval of the reviewed change.",
 	),
+	rule(
+		"autofull-approved-push",
+		/^poteto-mode\/playbooks\/autopilot-full\.md$/,
+		"Force-push only your own branch, with `--force-with-lease` pinned to the SHA you last pushed or took over",
+		"Only after the operator approves publishing the reviewed rewrite, force-push your own branch with `--force-with-lease` pinned to the SHA you last pushed or took over",
+	),
+	// ── PR playbooks: Bugbot, watch-pr, Origin ───────────────────────────────────────────────────
 	rule(
 		"babysit-watch",
 		/^poteto-mode\/playbooks\/babysit\.md$/,
-		/On GitHub, status comes from `scripts\/watch-pr\/watch-pr`\. Run it directly\. It emits JSON by default and accepts `--pretty` for humans\. In `check` mode pass `--status-only`\. The bare command polls until a terminal verdict, which is `drive` behavior\./,
-		"On GitHub, status comes from `gh pr view <pr> --json mergeable,mergeStateStatus,reviewDecision,statusCheckRollup`, `gh pr checks <pr>` (add `--watch` for `drive`), and the review threads via `gh api`. In `check` mode read once and stop. Watching until a terminal verdict is `drive` behavior.",
-	),
-	rule(
-		"babysit-public-watcher",
-		/^poteto-mode\/playbooks\/babysit\.md$/,
-		/ The public watcher remains GitHub-specific, so do not pretend it covers Origin or add an Origin implementation just to run this playbook\./,
-		"",
+		"On GitHub, status comes from the mode's watcher at `scripts/watch-pr/watch-pr`. In `check` mode pass `--status-only`. The watcher covers GitHub only.",
+		"On GitHub, read `gh pr view <pr> --json mergeable,mergeStateStatus,reviewDecision,statusCheckRollup`, `gh pr checks <pr>`, and the review threads via `gh api`. In `check` mode read once and stop; only `drive` waits with `gh pr checks <pr> --watch`.",
 	),
 	rule(
 		"babysit-bugbot",
 		/^poteto-mode\/playbooks\/babysit\.md$/,
-		/8\. \*\*Bugbot is triaged skeptically, always\.\*\* Verify each claim against the code per `\.\.\/references\/bugbot-triage\.md`\./,
-		"8. **Review bots are triaged skeptically, always.** Verify each claim against the code before acting: a bot's finding is a hypothesis, and unused-export or stack-local usage claims are often wrong when a later PR in the stack uses the code.",
+		"Verify each claim against the code per `../references/bugbot-triage.md`.",
+		"Verify each claim against the code before acting.",
 	),
 	rule(
 		"ship-watch",
 		/^poteto-mode\/playbooks\/shipping\.md$/,
-		/On GitHub, watch the run with the queued watcher from `playbooks\/babysit\.md` \(`scripts\/watch-pr\/watch-pr --queued-stack --stack-prs <bottom-to-top>`\) under `\/loop` until it reports `COMPLETE` at the ceiling\./,
+		"On GitHub, watch the run with `scripts/watch-pr/watch-pr --queued-stack` under `/loop` until it reports `COMPLETE` at the ceiling. Pass the run's PR numbers, bottom-to-top, in `--stack-prs`, and pass the same list each time you restart the watcher.",
 		"On GitHub, watch the run with `gh pr view <pr> --json state,mergeStateStatus` for each PR, bottom to top, re-reading after every `gh pr checks <pr> --watch` return, until the ceiling reads merged.",
 	),
 	rule(
@@ -445,19 +299,7 @@ const RULES: Rule[] = [
 		"run `scripts/worktree-audit.sh",
 		"run `skill://poteto-mode/scripts/worktree-audit.sh",
 	),
-	rule(
-		"plan-check",
-		/^poteto-mode\/playbooks\/multi-phase-plan\.md$/,
-		"Run `node pstack/skills/poteto-mode/scripts/check-plan.mjs <plan.md>`",
-		"Run `node <path of skill://poteto-mode>/scripts/check-plan.mjs <plan.md>`",
-	),
 	// ── transcripts ──────────────────────────────────────────────────────────────────────────────
-	rule(
-		"transcript-dir",
-		ANY,
-		/the `agent-transcripts\/` directory the system prompt names/g,
-		"the omp session folder `~/.omp/agent/sessions/<cwd-slug>/` (the current session's `.jsonl`)",
-	),
 	rule(
 		"transcript-active",
 		ANY,
@@ -539,12 +381,6 @@ const RULES: Rule[] = [
 		"each a `task` subagent (or an OMPdesk worktree session),",
 	),
 	rule(
-		"multi-swarm-model",
-		/^poteto-mode\/playbooks\/multi-phase-plan\.md$/,
-		"on the `swarm workers` model (default `grok-4.7-xhigh-fast`)",
-		"on `@task`",
-	),
-	rule(
 		"pickup-trail",
 		/^poteto-mode\/playbooks\/session-pickup\.md$/,
 		/under the active workspace's `agent-transcripts\/` directory \(the system prompt names the path\. Do not glob across `~\/\.cursor\/projects\/\*\/`, that crosses workspace boundaries and reads private chats from unrelated projects\), a cloud-agent URL/,
@@ -569,25 +405,11 @@ const RULES: Rule[] = [
 		"Each owner is an OMPdesk worktree session (`ompdesk_session_open` with `worktree: true`) that builds,",
 	),
 	rule(
-		"babysit-rubric",
-		/^poteto-mode\/playbooks\/babysit\.md$/,
-		" as a candidate entry in the shared rubric (`../references/bugbot-triage.md`) and its own PR",
-		" to the user as a candidate for the project's review rules",
+		"autofull-session",
+		/^poteto-mode\/playbooks\/autopilot-full\.md$/,
+		"Assume the VM dies.",
+		"Plan for the owner's session to end.",
 	),
-	rule(
-		"babysit-loop",
-		/^poteto-mode\/playbooks\/babysit\.md$/,
-		/Run `drive` and `background` under `\/loop` in dynamic mode\. Rearm the watcher after every push wave and every verdict you act on\. Watcher output drives wakeups\./,
-		"Run `drive` and `background` as a loop of `gh pr checks <pr> --watch` waits (Goal mode keeps the session going). Re-run the check after every push wave and every verdict you act on. Check output drives wakeups.",
-	),
-	rule("bugbot-lower", ANY, /the bugbot comments/g, "the review-bot comments"),
-	rule(
-		"mode-loop-until",
-		/^poteto-mode\/SKILL\.md$/,
-		'("run until done", "/loop until X")',
-		'("run until done", "keep going until X")',
-	),
-	rule("mode-cloud-url", /^poteto-mode\/SKILL\.md$/, "cloud-agent URL", "hosted-agent URL"),
 	rule(
 		"automate-transcripts",
 		/^automate-me\/SKILL\.md$/,
@@ -595,13 +417,6 @@ const RULES: Rule[] = [
 		"Use only this workspace's folder in `~/.omp/agent/sessions/`.",
 	),
 	rule("automate-cursor-dir", /^automate-me\/SKILL\.md$/, /\.cursor\/skills\//g, ".agents/skills/"),
-	rule(
-		"reflect-ls",
-		/^reflect\/SKILL\.md$/,
-		"ls -t <agent-transcripts>/*.jsonl <agent-transcripts>/*/*.jsonl <agent-transcripts>/*/subagents/*.jsonl 2>/dev/null | head -10",
-		"ls -t ~/.omp/agent/sessions/<cwd-slug>/*.jsonl 2>/dev/null | head -10",
-	),
-	rule("reflect-task-body", /^reflect\/SKILL\.md$/, "in the `Task` response body", "in the `task` result"),
 	rule(
 		"audit-transcripts",
 		/^poteto-mode\/scripts\/worktree-audit\.sh$/,
@@ -612,17 +427,11 @@ const RULES: Rule[] = [
 	rule(
 		"pick-level",
 		ANY,
-		/ Pick each subagent's reasoning level and fast or standard speed for the job, per the Subagents section( of the \*\*poteto-mode\*\* skill)?\./g,
+		/ Pick each subagent's reasoning level(?: for the job,)? per the Subagents section( of the \*\*poteto-mode\*\* skill)?\./g,
 		" Pick each subagent's model role per the Subagents section$1.",
 	),
 	rule("askquestion", ANY, /`AskQuestion`/g, "`ask`"),
 	rule("todolist", ANY, /todolist/g, "`todo` list"),
-	rule(
-		"internal-architect",
-		/^architect\/SKILL\.md$/,
-		"Open a `todo` list with one entry per phase before starting.",
-		"Follow the phases below before completing the requested outcome.",
-	),
 	rule(
 		"internal-swarm",
 		/^swarm\/SKILL\.md$/,
@@ -653,7 +462,7 @@ const RULES: Rule[] = [
 		"Add its steps to the `todo` list as concrete items between the Phase C and Phase D entries.",
 		"Track execution against the requested outcomes.",
 	),
-	rule("bugbot-generic", ANY, /\bBugbot\b/g, "review-bot"),
+	rule("bugbot-generic", ANY, /\bBugbot\b/g, "review bots"),
 ];
 
 interface Counted {
@@ -716,11 +525,19 @@ function main(): void {
 
 		// Skills.
 		const skillsOut = path.join(PACK, "skills");
-		fs.rmSync(skillsOut, { recursive: true, force: true });
+		for (const skill of OWNED_SKILLS) fs.accessSync(path.join(skillsOut, skill, "SKILL.md"));
+		for (const skill of fs.readdirSync(skillsOut)) {
+			if (!OWNED_SKILLS.includes(skill)) fs.rmSync(path.join(skillsOut, skill), { recursive: true, force: true });
+		}
 		const upstreamSkills = path.join(upstream, "skills");
 		for (const rel of walk(upstreamSkills)) {
 			const [skill] = rel.split("/");
-			if (SKIPPED_SKILLS.has(skill) || SKIPPED_PATHS.some(pattern => pattern.test(rel))) continue;
+			if (
+				OWNED_SKILLS.includes(skill) ||
+				SKIPPED_SKILLS.has(skill) ||
+				SKIPPED_PATHS.some(pattern => pattern.test(rel))
+			)
+				continue;
 			const renamed = RENAMED_SKILLS[skill];
 			const destRel = renamed ? `${renamed}${rel.slice(skill.length)}` : rel;
 			const dest = path.join(skillsOut, destRel);

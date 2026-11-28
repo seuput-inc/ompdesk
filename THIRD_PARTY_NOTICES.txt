@@ -6348,12 +6348,14 @@ also shipped as agent-desktop-bin/LICENSE). Upstream publishes no NOTICE file.
 
 pstack engineering skills (https://github.com/cursor/plugins/tree/main/pstack)
 Copyright (c) 2026 Lauren Tan, licensed under the MIT License. Skills, playbooks and agent text copied from
-pstack 0.15.36 (cursor/plugins commit c742dd61706fbacc1b95f1a20b7b988cf096ce6c) into resources/omp-builtin/pstack/ by
+pstack 0.15.48 (cursor/plugins commit 9e278fe4d4ecd8bfe98b1b79bf4be662efb338cc) into resources/omp-builtin/pstack/ by
 scripts/sync-pstack.ts. Changes: Cursor and Claude tool, agent and model names are replaced by omp and
 OMPdesk ones, tdd and teach are renamed pstack-tdd and pstack-teach, and the Cursor-only parts (setup-pstack,
 poteto-help, make-bot-ui, Bugbot triage, the orchestrate playbook, the watch-pr and orch tools) are left out;
 the three formal-verification skills (create-/maintain-formal-verification-skill, statechart) are folded into
 the ompdesk-formal-verify skill.
+OMPdesk maintains the translated why and reflect skills and playbook descriptions from pstack 0.15.36
+(cursor/plugins commit c742dd61706fbacc1b95f1a20b7b988cf096ce6c) under the same MIT license.
 The license text is also in resources/omp-builtin/pstack/UPSTREAM-LICENSE.
 
 MIT License

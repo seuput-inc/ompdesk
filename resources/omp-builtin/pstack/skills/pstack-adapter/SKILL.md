@@ -38,6 +38,31 @@ Everything else needs a playbook, even a one-line edit or a request to reproduce
 
 Formal verification: a race, ordering, retry, lease or state-machine bug, or a question like "are we sure this can never happen", reads `skill://ompdesk-formal-verify` before you fix or answer it.
 
+## Playbooks
+
+- **Investigation.** Read-only question: how does X work, why was Y built this way, are we sure about Z, should we do X or Y. → skill://poteto-mode/playbooks/investigation.md
+- **Bug fix.** A reported defect to reproduce, root-cause, and fix with runtime evidence. → skill://poteto-mode/playbooks/bug-fix.md
+- **Perf issue.** A measured slowness to trace and improve against a baseline. → skill://poteto-mode/playbooks/perf-issue.md
+- **Hillclimb.** Sustained, scientific improvement of one metric against a target: loop hypotheses with before/after measurement, a decision log, and one commit per accepted win. Distinct from Perf issue, which is a one-off fix. → skill://poteto-mode/playbooks/hillclimb.md
+- **Runtime forensics.** Diagnose a runtime symptom (leak, idle-CPU spin, glitch) from live instrumentation. The deliverable is a diagnosis, not a fix. → skill://poteto-mode/playbooks/runtime-forensics.md
+- **Trace forensics.** Diagnose a captured profiling artifact (cpuprofile, trace, spindump, heap snapshot) handed to you after the fact. The deliverable is a diagnosis, not a fix. → skill://poteto-mode/playbooks/trace-forensics.md
+- **Feature.** New or changed behavior, built from a named data shape. → skill://poteto-mode/playbooks/feature.md
+- **Refactoring.** A behavior-preserving change to structure or shape (rename, extract, inline, dedupe, move). → skill://poteto-mode/playbooks/refactoring.md
+- **Prototype.** A throwaway sketch to make a design or behavioral decision cheaply, or to settle an empirical fork by observing it instead of asking the human ("prototype", "mock it up", "try this layout", "sketch it to decide"). → skill://poteto-mode/playbooks/prototype.md
+- **Visual parity.** Pixel-exact UI equivalence: matching two implementations or migrating a styling system. → skill://poteto-mode/playbooks/visual-parity.md
+- **Authoring or modifying a skill.** Writing or editing a SKILL.md. → skill://poteto-mode/playbooks/authoring-a-skill.md
+- **Eval.** Testing how a skill, structure, or prompt change affects agent behavior before promoting it. → skill://poteto-mode/playbooks/eval.md
+- **Babysit.** Driving a PR or a stack to merge-ready: conflicts, review threads, CI. → skill://poteto-mode/playbooks/babysit.md
+- **Shipping.** The half after Babysit. Independently verifying a green stack, then landing the contiguous verified run bottom-up through `gh` by default or Origin when its CLI is available. → skill://poteto-mode/playbooks/shipping.md
+- **Autonomous run.** A long task to drive to completion without stopping ("run until done", "keep going until X"). → skill://poteto-mode/playbooks/autonomous-run.md
+- **Autopilot-full.** A queue of independent PRs run to merged with full autonomy. One owner per PR carries build through merge, and the root swarm-verifies each PR before its owner merges ("autopilot this queue", "full autopilot", one-owner-per-PR programs). → skill://poteto-mode/playbooks/autopilot-full.md
+- **Autopilot-stack.** Autopilot-full without the merge. A queue of PRs built and verified with full autonomy, then handed to the operator to land. A PR stacks only on a PR it builds on ("autopilot-stack", "autopilot, don't merge", "stack them, don't ship", "build the stack, I'll land it"). → skill://poteto-mode/playbooks/autopilot-stack.md
+- **Session pickup.** Resuming or taking over a prior agent's in-flight work from a transcript, hosted-agent URL, or pushed branch. → skill://poteto-mode/playbooks/session-pickup.md
+- **Pause safely.** Suspending in-flight work cleanly so it can be resumed, on an explicit pause, going offline, an omp restart you start yourself, or imminent context compaction. The complement to Session pickup. → skill://poteto-mode/playbooks/pause-safely.md
+- **Multi-phase or multi-PR plan.** Work that spans phases or stacked PRs. → skill://poteto-mode/playbooks/multi-phase-plan.md
+- **Worktree and simulator cleanup.** Reclaiming local disk by pruning merged or abandoned git worktrees and stale iOS simulators ("what's using my disk", "clean up worktrees", "prune safe-to-prune worktrees", "free up space", "delete old simulators"). → skill://poteto-mode/playbooks/worktree-cleanup.md
+- **Opening a PR.** Invoked at the end of every other playbook. → skill://poteto-mode/playbooks/opening-a-pr.md
+
 ## Delegation
 
 Size each item before calling `task`, even when asked to parallelize. Do small items (one or two responses) yourself with parallel tool calls. Delegate items of several minutes each or bulk reading that would crowd your context; never delegate a step quicker to do than to brief. Follow poteto-mode's Subagents rules: `pstack-agent` for code, `scout` or `reviewer` for read-only work. Own and review every result. Never delegate the playbook itself.

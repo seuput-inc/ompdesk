@@ -46,26 +46,31 @@ function required(map: Map<string, string>, name: string, where: string): string
 	return value;
 }
 
-/** The playbook list items of poteto-mode (`- **Title.** text`), each followed by the path the model reads it at. */
-function playbookLines(body: string, playbookDir: string): string[] {
-	const out: string[] = [];
-	for (const line of body.split("\n")) {
-		const item = /^- \*\*(.+?)\.\*\* (.*)$/.exec(line);
-		if (!item) continue;
-		const explicit = /File: `playbooks\/([a-z0-9-]+\.md)`/.exec(item[2]);
-		const file =
-			explicit?.[1] ??
-			`${item[1]
-				.toLowerCase()
-				.replace(/[^a-z0-9]+/g, "-")
-				.replace(/^-|-$/g, "")}.md`;
-		if (!fs.existsSync(path.join(playbookDir, file))) {
-			throw new Error(`poteto-mode lists the playbook "${item[1]}" but playbooks/${file} does not exist`);
+/** Upstream shortened three titles in its compact list. The adapter keeps their shipped descriptions and labels. */
+const compactTitles: Record<string, string> = {
+	"Authoring or modifying a skill": "Authoring a skill",
+	"Multi-phase or multi-PR plan": "Multi-phase plan",
+	"Worktree and simulator cleanup": "Worktree cleanup",
+};
+
+export function playbookSection(body: string, routes: string, playbookFiles: readonly string[]): string {
+	const files = new Set(playbookFiles);
+	const titles = routes.split("\n").map(line => {
+		const row = /^- \*\*(.+?)\.\*\* \S.* → skill:\/\/poteto-mode\/playbooks\/([a-z0-9-]+\.md)$/.exec(line);
+		if (!row) throw new Error(`Invalid playbook route in adapter.md: ${line}`);
+		const title = compactTitles[row[1]] ?? row[1];
+		const file = `${title.toLowerCase().replaceAll(" ", "-")}.md`;
+		if (file !== row[2] || !files.delete(file)) {
+			throw new Error(`Expected one route to playbooks/${file} for "${title}": ${line}`);
 		}
-		const text = item[2].replace(/ File: `playbooks\/[a-z0-9-]+\.md`\.?/, "");
-		out.push(`- **${item[1]}.** ${text} → skill://poteto-mode/playbooks/${file}`);
+		return title;
+	});
+	if (files.size) throw new Error(`Playbooks without adapter routes: ${[...files].join(", ")}`);
+	const listStart = body.lastIndexOf("\n\n");
+	if (listStart < 0 || body.slice(listStart + 2) !== `${titles.join(", ")}.`) {
+		throw new Error("poteto-mode's compact Playbooks list no longer matches the routes in adapter.md");
 	}
-	return out;
+	return body.slice(0, listStart + 2) + routes;
 }
 
 /** Principle leaf names in the index order of poteto-mode's Principles section. */
@@ -93,14 +98,14 @@ export function assemblePstackSections(packDir: string): PstackSections {
 	const nonNegotiables = required(mode, "Non-negotiables", "poteto-mode SKILL.md");
 	const principleIndex = required(mode, "Principles", "poteto-mode SKILL.md");
 	const autonomy = required(mode, "Autonomy", "poteto-mode SKILL.md");
-	const playbooksIntro = required(mode, "Playbooks", "poteto-mode SKILL.md");
-	const playbooks = playbookLines(playbooksIntro, path.join(skillsDir, "poteto-mode/playbooks"));
-	if (playbooks.length < 15) throw new Error(`poteto-mode lists only ${playbooks.length} playbooks`);
-	const playbookRules = playbooksIntro
-		.split("\n")
-		.filter(line => !line.startsWith("- **"))
-		.join("\n")
-		.trim();
+	const playbooks = playbookSection(
+		required(mode, "Playbooks", "poteto-mode SKILL.md"),
+		required(adapter, "Playbooks", "adapter.md"),
+		fs
+			.readdirSync(path.join(skillsDir, "poteto-mode/playbooks"), { withFileTypes: true })
+			.filter(entry => entry.isFile() && entry.name.endsWith(".md"))
+			.map(entry => entry.name),
+	);
 
 	const compose = (delegationBody: string): string =>
 		[
@@ -129,9 +134,7 @@ export function assemblePstackSections(packDir: string): PstackSections {
 			reply,
 			"",
 			"## Playbooks",
-			playbookRules,
-			"",
-			...playbooks,
+			playbooks,
 			"</pstack>",
 		].join("\n");
 
