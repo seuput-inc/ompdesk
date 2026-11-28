@@ -38,7 +38,6 @@ import {
 	reviewFromDevice,
 } from "../shared/agent-control";
 import { BOTS_FOLDER, type BotsCall } from "../shared/bots";
-import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
 import {
@@ -163,7 +162,7 @@ import {
 } from "./checkout-peers";
 import { type ConnectorAccounts, connectorCommand } from "./connector-accounts";
 import { createControlBackend } from "./control-socket/backend";
-import { controlSocketFailure, startControlSocket } from "./control-socket/index";
+import { startControlSocket } from "./control-socket/index";
 import { CorePort, type PortHandlers } from "./core/ports";
 import { core } from "./core/process";
 import { defaultWorkspace } from "./default-workspace";
@@ -1766,7 +1765,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	// factory hands over; index.ts reaches it through `deps.autopilotRef` (TurnResume, the factory).
 	autopilot.attachControl(agentControl.control);
 
-	ipc.handle(IPC_COMMANDS.CONTROL_SOCKET_FAILURE, () => controlSocketFailure());
+	// `control-socket:failure` routes directly from tauri-shell to ompdesk-core (`crates/core/src/control/mod.rs`).
 
 	ipc.handle(IPC_COMMANDS.RPC_COMMAND, async (caller, payload: IpcRpcCommandPayload) => {
 		const win = caller.win;
@@ -2716,20 +2715,23 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			return machineFor(callerFromPort(call), device).setCreditSpend(enabled);
 		},
 	});
-	ipc.handle(IPC_COMMANDS.HOST_DESKTOP_GET, (caller, device?: unknown) => machineFor(caller, device).desktop());
-	ipc.handle(IPC_COMMANDS.HOST_DESKTOP_UPDATE, (caller, action: unknown, device?: unknown) => {
-		if (!HOST_UPDATE_ACTIONS.includes(action as HostUpdateAction)) {
-			throw codedError("invalid_preference_key", "Invalid update action");
-		}
-		return machineFor(caller, device).desktopUpdate(action as HostUpdateAction);
+	// Paired-host desktop/omp updates and bridge-health read route directly from tauri-shell to ompdesk-core
+	// (`crates/core/src/omp/ipc.rs`).
+	bindCorePort("omp.hostIpcPort", {
+		getHostDesktop: (call: CoreIpcPortCall) => machineFor(callerFromPort(call), call.args?.[0]).desktop(),
+		updateHostDesktop: (call: CoreIpcPortCall) => {
+			const [action, device] = call.args ?? [];
+			if (!HOST_UPDATE_ACTIONS.includes(action as HostUpdateAction)) {
+				throw codedError("invalid_preference_key", "Invalid update action");
+			}
+			return machineFor(callerFromPort(call), device).desktopUpdate(action as HostUpdateAction);
+		},
+		// omp's own update on a paired host: that host's OmpUpdater runs it; its state changes come back as pushed events.
+		getHostOmpUpdate: (call: CoreIpcPortCall) => machineFor(callerFromPort(call), call.args?.[0]).ompUpdate(),
+		startHostOmpUpdate: (call: CoreIpcPortCall) => machineFor(callerFromPort(call), call.args?.[0]).startOmpUpdate(),
+		// The bridge self-check's latest result per omp version: this computer's, or the paired host's own (omp.bridge_health).
+		getBridgeHealth: (call: CoreIpcPortCall) => machineFor(callerFromPort(call), call.args?.[0]).bridgeHealth(),
 	});
-	// omp's own update on a paired host: that host's OmpUpdater runs it; its state changes come back as pushed events.
-	ipc.handle(IPC_COMMANDS.HOST_OMP_UPDATE_GET, (caller, device?: unknown) => machineFor(caller, device).ompUpdate());
-	ipc.handle(IPC_COMMANDS.HOST_OMP_UPDATE_NOW, (caller, device?: unknown) =>
-		machineFor(caller, device).startOmpUpdate(),
-	);
-	// The bridge self-check's latest result per omp version: this computer's, or the paired host's own (omp.bridge_health).
-	ipc.handle(BRIDGE_HEALTH_GET, (caller, device?: unknown) => machineFor(caller, device).bridgeHealth());
 	// Schedules, bots, bot connectors, mail accounts, trackers, and sidebar projects route directly from
 	// tauri-shell to ompdesk-core (`crates/core/src/routines/ipc.rs`).
 	bindCorePort("routines.ipcPort", {

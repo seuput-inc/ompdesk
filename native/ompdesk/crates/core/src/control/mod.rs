@@ -36,6 +36,7 @@ use tokio::sync::watch;
 
 use crate::agentctl::service::text::waits;
 use crate::agentctl::service::types::{ControlTab, TabStatus};
+use crate::ipc::{Handled, IpcContext};
 use crate::server::{Call, Events, Fault, Registry, Reply};
 use link::{Ask, Link, Push};
 use listen::Listening;
@@ -182,6 +183,7 @@ struct Server {
 }
 
 static SERVERS: LazyLock<Mutex<HashMap<u64, Server>>> = LazyLock::new(Default::default);
+static START_FAILURE: LazyLock<Mutex<Option<String>>> = LazyLock::new(Default::default);
 
 fn servers() -> MutexGuard<'static, HashMap<u64, Server>> {
     SERVERS
@@ -189,7 +191,35 @@ fn servers() -> MutexGuard<'static, HashMap<u64, Server>> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+#[derive(Deserialize)]
+struct SetFailureParams {
+    failure: Option<String>,
+}
+
+/// Direct core IPC `control-socket:failure`: returns the latest startup failure message or `null`.
+pub(crate) fn ipc_start_failure(_ctx: IpcContext, _args: Vec<serde_json::Value>) -> Handled {
+    Box::pin(async move {
+        let value = START_FAILURE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        Ok(Some(match value {
+            Some(message) => serde_json::Value::String(message),
+            None => serde_json::Value::Null,
+        }))
+    })
+}
+
 pub fn register(registry: &mut Registry) {
+    registry.add("control.setFailure", |call| {
+        Box::pin(async move {
+            let SetFailureParams { failure } = call.params()?;
+            *START_FAILURE
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = failure;
+            Reply::json(&serde_json::Value::Null)
+        })
+    });
     registry.add("control.installCli", |call| {
         Box::pin(cli_install::install(call))
     });
@@ -568,4 +598,38 @@ async fn push(call: Call) -> Result<Reply, Fault> {
         link.push(params.seq, push, views).await?;
     }
     Reply::json(&serde_json::Map::new())
+}
+
+#[cfg(test)]
+mod ipc_tests {
+    use super::*;
+    use crate::ipc::Caller;
+
+    fn ctx() -> IpcContext {
+        IpcContext {
+            caller: Caller {
+                key: "w1".into(),
+                window: Some(1),
+                conn_id: None,
+                device_id: None,
+            },
+            user_data: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn ipc_start_failure_returns_stored_message_or_null() {
+        let _guard = crate::ipc::TEST_LOCK.lock().await;
+        *START_FAILURE.lock().unwrap() = None;
+        assert_eq!(
+            ipc_start_failure(ctx(), vec![]).await.unwrap(),
+            Some(serde_json::Value::Null)
+        );
+        *START_FAILURE.lock().unwrap() = Some("permission denied".into());
+        assert_eq!(
+            ipc_start_failure(ctx(), vec![]).await.unwrap(),
+            Some(serde_json::Value::String("permission denied".into()))
+        );
+        *START_FAILURE.lock().unwrap() = None;
+    }
 }

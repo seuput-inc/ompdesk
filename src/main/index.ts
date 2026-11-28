@@ -117,6 +117,7 @@ import { ConnectorAccounts } from "./connector-accounts";
 import { CONSOLE_POLL_MS, ConsoleWindowWatch, listConsoleWindows } from "./console-window-watch";
 import { installCliLaunchers, removeCliLaunchers } from "./control-socket/cli-install";
 import { takeHubMinute } from "./core/hub";
+import { CorePort } from "./core/ports";
 import { core, shutdownCore } from "./core/process";
 import { routeCoreSaves } from "./core-saves";
 import { defaultWorkspace } from "./default-workspace";
@@ -998,7 +999,16 @@ app.whenReady().then(async () => {
 	const ipc = new IpcRegistry(ipcMain);
 	// Before any window opens: the shell serves a page only the channels it, the core (H(c)), or main owns.
 	await ipc.routeShell(shellIpc, IPC_POLICY);
-	ipc.handle(IPC_COMMANDS.BRIDGE_HEALTH_TAKE, () => bridgeHealth.take());
+	// `bridge-health:take` routes directly from tauri-shell to ompdesk-core (`crates/core/src/omp/ipc.rs`).
+	const bridgeHealthPort = new CorePort({ takeWarnings: () => bridgeHealth.take() });
+	const connectBridgeHealthPort = () => {
+		void core()
+			.call("omp.bridgeHealthPort", { port: bridgeHealthPort.id })
+			.catch(() => {});
+	};
+	connectBridgeHealthPort();
+	core().on("ready", connectBridgeHealthPort);
+	app.once("will-quit", () => bridgeHealthPort.close());
 	// The first local tab boots alone: the stats server and machine setup's optional installs (gh, Node;
 	// winget on Windows) wait until a tab's session is ready, or FIRST_TAB_GRACE_MS when none comes (only
 	// paired-host tabs, an omp that cannot start). Measured by e2e/first-run-no-omp.e2e.ts.

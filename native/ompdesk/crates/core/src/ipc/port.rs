@@ -104,3 +104,53 @@ impl IpcPort {
         Ok(val)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ipc::Caller;
+    use crate::ports::apply_answer;
+    use crate::server::Events;
+
+    static TEST_PORT: IpcPort = IpcPort::new("test_unavailable", "Test port is not connected");
+
+    fn ctx() -> IpcContext {
+        IpcContext {
+            caller: Caller {
+                key: "w4".into(),
+                window: Some(4),
+                conn_id: None,
+                device_id: None,
+            },
+            user_data: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn replacing_port_closes_superseded_instance() {
+        let _guard = crate::ipc::TEST_LOCK.lock().await;
+        TEST_PORT.replace(None);
+
+        let (events, _tx, mut frames) = Events::capture();
+        let first = Port::open(&events, 92_099, Value::Null).unwrap();
+        let second = Port::open(&events, 92_100, Value::Null).unwrap();
+        TEST_PORT.replace(Some(Arc::clone(&first)));
+        TEST_PORT.replace(Some(Arc::clone(&second)));
+
+        let stale_err = first
+            .ask::<Value, _>("ping", &json!({}))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(stale_err.code.as_deref(), Some("port_closed"));
+
+        let live = tokio::spawn(TEST_PORT.ask_value("ping", ctx(), vec![json!(1)]));
+        let frame = frames.recv().await.unwrap();
+        let parsed: Value = serde_json::from_slice(frame.parts().0).unwrap();
+        assert_eq!(parsed["data"]["port"], 92_100);
+        apply_answer(&second, parsed["data"]["ask"].as_u64().unwrap(), Ok("2"));
+        assert_eq!(live.await.unwrap().unwrap(), Some(json!(2)));
+
+        TEST_PORT.replace(None);
+    }
+}

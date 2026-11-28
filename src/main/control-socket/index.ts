@@ -6,6 +6,7 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CONTROL_PROTOCOL_VERSION, START_FAILURE_FILE } from "../../shared/control-protocol";
+import { core } from "../core/process";
 import type { ControlBackend } from "./backend";
 import { controlEndpoint, prepareControlDir, readOrCreateToken } from "./endpoint";
 import { setControlEndpoint } from "./env";
@@ -27,6 +28,21 @@ export interface ControlSocketHandle {
 }
 
 let failure: string | null = null;
+let failureSyncRegistered = false;
+
+function syncFailure(): void {
+	if (!failureSyncRegistered) {
+		failureSyncRegistered = true;
+		core().on("ready", () => {
+			void core()
+				.call("control.setFailure", { failure })
+				.catch(() => {});
+		});
+	}
+	void core()
+		.call("control.setFailure", { failure })
+		.catch(() => {});
+}
 
 /** Why this launch's control socket did not start, or null. */
 export function controlSocketFailure(): string | null {
@@ -60,6 +76,7 @@ export async function startControlSocket({
 		await server?.close();
 		setControlEndpoint(null);
 		failure = error instanceof Error ? error.message : String(error);
+		syncFailure();
 		log(`Control socket not started: ${failure}`);
 		await mkdir(dir, { recursive: true })
 			.then(() => writeFile(join(dir, START_FAILURE_FILE), `${failure}\n`, { mode: 0o600 }))
@@ -67,6 +84,7 @@ export async function startControlSocket({
 		return null;
 	}
 	failure = null;
+	syncFailure();
 	await rm(join(dir, START_FAILURE_FILE), { force: true }).catch(() => undefined);
 	const running = server;
 	return {

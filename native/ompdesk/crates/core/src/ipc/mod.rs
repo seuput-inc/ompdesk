@@ -199,6 +199,14 @@ const OWNED: &[Owned] = &[
         handler: crate::routines::ipc::ipc_bots_command,
     },
     Owned {
+        channel: "bridge-health:get",
+        handler: crate::omp::ipc::ipc_bridge_health_get,
+    },
+    Owned {
+        channel: "bridge-health:take",
+        handler: crate::omp::ipc::ipc_bridge_health_take,
+    },
+    Owned {
         channel: "cli-update:get-state",
         handler: crate::tools::ipc::ipc_cli_update_get_state,
     },
@@ -209,6 +217,10 @@ const OWNED: &[Owned] = &[
     Owned {
         channel: "connectivity:report",
         handler: crate::resume::ipc_connectivity_report,
+    },
+    Owned {
+        channel: "control-socket:failure",
+        handler: crate::control::ipc_start_failure,
     },
     Owned {
         channel: "credit-spend:get",
@@ -277,6 +289,22 @@ const OWNED: &[Owned] = &[
     Owned {
         channel: "github-auth:switch",
         handler: crate::gh::auth::ipc_switch,
+    },
+    Owned {
+        channel: "host-desktop:get",
+        handler: crate::omp::ipc::ipc_host_desktop_get,
+    },
+    Owned {
+        channel: "host-desktop:update",
+        handler: crate::omp::ipc::ipc_host_desktop_update,
+    },
+    Owned {
+        channel: "host-omp-update:get",
+        handler: crate::omp::ipc::ipc_host_omp_update_get,
+    },
+    Owned {
+        channel: "host-omp-update:now",
+        handler: crate::omp::ipc::ipc_host_omp_update_now,
     },
     Owned {
         channel: "local-engines:get",

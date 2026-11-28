@@ -22,6 +22,7 @@
 
 mod cli;
 mod facts;
+pub(crate) mod ipc;
 mod log_tail;
 mod rename;
 mod worktrees;
@@ -85,6 +86,7 @@ struct Entry {
 }
 
 pub fn register(registry: &mut Registry) {
+    ipc::register(registry);
     registry.add("omp.worktrees", |call| Box::pin(worktrees::run(call)));
     registry.add("omp.renameStoredSession", |call| {
         Box::pin(rename::run(call))
