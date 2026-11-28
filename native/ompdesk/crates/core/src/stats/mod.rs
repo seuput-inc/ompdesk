@@ -1,5 +1,6 @@
 //! The core owns the dashboard listener, child and retry budget. The installed stock modules run only in Bun.
 mod front;
+pub(crate) mod ipc;
 mod page;
 
 use std::collections::HashMap;
@@ -350,6 +351,7 @@ struct Id {
 }
 
 pub(super) fn register(registry: &mut Registry) {
+    ipc::register(registry);
     registry.add("stats.start", |c| at_once(start(c)));
     registry.add("stats.fetch", |c| Box::pin(fetch(c)));
     registry.add("stats.stop", |c| {

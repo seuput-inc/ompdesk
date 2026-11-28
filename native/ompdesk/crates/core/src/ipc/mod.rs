@@ -183,6 +183,14 @@ const OWNED: &[Owned] = &[
         handler: crate::aimemory::ipc::ipc_write_page,
     },
     Owned {
+        channel: "bench:abort",
+        handler: crate::stats::ipc::ipc_bench_abort,
+    },
+    Owned {
+        channel: "bench:run",
+        handler: crate::stats::ipc::ipc_bench_run,
+    },
+    Owned {
         channel: "cli-update:get-state",
         handler: crate::tools::ipc::ipc_cli_update_get_state,
     },
@@ -273,6 +281,26 @@ const OWNED: &[Owned] = &[
     Owned {
         channel: "log:snapshot",
         handler: crate::logs::ipc_snapshot,
+    },
+    Owned {
+        channel: "model-setup:abort",
+        handler: crate::stats::ipc::ipc_model_setup_abort,
+    },
+    Owned {
+        channel: "model-setup:pick-get",
+        handler: crate::stats::ipc::ipc_model_setup_pick_get,
+    },
+    Owned {
+        channel: "model-setup:pick-set",
+        handler: crate::stats::ipc::ipc_model_setup_pick_set,
+    },
+    Owned {
+        channel: "model-setup:run",
+        handler: crate::stats::ipc::ipc_model_setup_run,
+    },
+    Owned {
+        channel: "model-setup:status",
+        handler: crate::stats::ipc::ipc_model_setup_status,
     },
     Owned {
         channel: "models:config-open",
@@ -421,6 +449,10 @@ const OWNED: &[Owned] = &[
     Owned {
         channel: "ssh-tools:prompts",
         handler: crate::ssh::ipc_prompts,
+    },
+    Owned {
+        channel: "stats:fetch",
+        handler: crate::stats::ipc::ipc_stats_fetch,
     },
 ];
 

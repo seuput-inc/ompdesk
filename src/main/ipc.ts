@@ -2200,15 +2200,16 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		},
 	);
 
-	// Stats: the stats server of the machine the caller's focused tab runs on.
-	ipc.handle(IPC_COMMANDS.STATS_FETCH, (caller, payload: IpcStatsFetchPayload) =>
-		machineFor(caller, payload?.device).fetchStats(payload.path, payload.params),
-	);
-
-	// `omp bench` on the machine the caller's focused tab runs on, one per window.
-	ipc.handle(
-		IPC_COMMANDS.BENCH_RUN,
-		async (caller, options: IpcBenchmarkRunOptions, device?: unknown): Promise<IpcBenchmarkRunResult> => {
+	// Stats, `omp bench`, and model-setup research route directly from tauri-shell to ompdesk-core
+	// (`crates/core/src/stats/ipc.rs`).
+	bindCorePort("stats.ipcPort", {
+		fetchStats: (call: CoreIpcPortCall) => {
+			const payload = call.args?.[0] as IpcStatsFetchPayload;
+			return machineFor(callerFromPort(call), payload?.device).fetchStats(payload.path, payload.params);
+		},
+		runBenchmark: async (call: CoreIpcPortCall): Promise<IpcBenchmarkRunResult> => {
+			const caller = callerFromPort(call);
+			const [options, device] = (call.args ?? []) as [IpcBenchmarkRunOptions, unknown];
 			const id = deviceOf(device);
 			const senderId = caller.sender.id;
 			if (!id) return deps.machine.runBenchmark(benchCaller(senderId), options, cwdFor(deps, caller));
@@ -2216,15 +2217,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				machineFor(caller, id).runBenchmark(benchCaller(senderId), options, null),
 			);
 		},
-	);
-	ipc.handle(IPC_COMMANDS.BENCH_ABORT, (caller, device?: unknown) =>
-		machineFor(caller, device).abortBenchmark(benchCaller(caller.sender.id)),
-	);
-
-	// The model setup assistant's research on the machine the caller's focused tab runs on, one per window.
-	ipc.handle(
-		IPC_COMMANDS.MODEL_SETUP_RUN,
-		async (caller, request: ModelSetupRequest, device?: unknown): Promise<IpcModelSetupRunResult> => {
+		abortBenchmark: (call: CoreIpcPortCall) => {
+			const caller = callerFromPort(call);
+			return machineFor(caller, call.args?.[0]).abortBenchmark(benchCaller(caller.sender.id));
+		},
+		runModelSetup: async (call: CoreIpcPortCall): Promise<IpcModelSetupRunResult> => {
+			const caller = callerFromPort(call);
+			const [request, device] = (call.args ?? []) as [ModelSetupRequest, unknown];
 			const id = deviceOf(device);
 			const senderId = caller.sender.id;
 			if (!id) return deps.machine.runModelSetup(benchCaller(senderId), request);
@@ -2232,22 +2231,24 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 				machineFor(caller, id).runModelSetup(benchCaller(senderId), request),
 			);
 		},
-	);
-	ipc.handle(IPC_COMMANDS.MODEL_SETUP_STATUS, (caller, device?: unknown) =>
-		machineFor(caller, device).modelSetupStatus(benchCaller(caller.sender.id)),
-	);
-	ipc.handle(IPC_COMMANDS.MODEL_SETUP_ABORT, (caller, device?: unknown) =>
-		machineFor(caller, device).abortModelSetup(benchCaller(caller.sender.id)),
-	);
-	// The research pick lives on the machine the research runs on, so every view of that machine reads the one value.
-	ipc.handle(IPC_COMMANDS.MODEL_SETUP_PICK_GET, (caller, device?: unknown) =>
-		machineFor(caller, device).modelSetupResearchPick(),
-	);
-	ipc.handle(IPC_COMMANDS.MODEL_SETUP_PICK_SET, (caller, pick: unknown, device?: unknown) => {
-		if (pick !== null && parseResearchPick(pick) === null) {
-			throw codedError("invalid_preference_key", "Invalid research model");
-		}
-		return machineFor(caller, device).setModelSetupResearchPick(pick as string | null);
+		getModelSetupStatus: (call: CoreIpcPortCall) => {
+			const caller = callerFromPort(call);
+			return machineFor(caller, call.args?.[0]).modelSetupStatus(benchCaller(caller.sender.id));
+		},
+		abortModelSetup: (call: CoreIpcPortCall) => {
+			const caller = callerFromPort(call);
+			return machineFor(caller, call.args?.[0]).abortModelSetup(benchCaller(caller.sender.id));
+		},
+		// The research pick lives on the machine the research runs on, so every view of that machine reads the one value.
+		getModelSetupPick: (call: CoreIpcPortCall) =>
+			machineFor(callerFromPort(call), call.args?.[0]).modelSetupResearchPick(),
+		setModelSetupPick: (call: CoreIpcPortCall) => {
+			const [pick, device] = call.args ?? [];
+			if (pick !== null && parseResearchPick(pick) === null) {
+				throw codedError("invalid_preference_key", "Invalid research model");
+			}
+			return machineFor(callerFromPort(call), device).setModelSetupResearchPick(pick as string | null);
+		},
 	});
 
 	// Renderer-initiated quit (the `quit` command). Straight to the guard, never

@@ -25,6 +25,8 @@
 		"ai-memory:set-terminal",
 		"ai-memory:sweep",
 		"ai-memory:write-page",
+		"bench:abort",
+		"bench:run",
 		"cli-update:get-state",
 		"cli-update:now",
 		"credit-spend:get",
@@ -47,6 +49,11 @@
 		"local-engines:get",
 		"local-engines:set",
 		"log:snapshot",
+		"model-setup:abort",
+		"model-setup:pick-get",
+		"model-setup:pick-set",
+		"model-setup:run",
+		"model-setup:status",
 		"models:config-open",
 		"models:override-set",
 		"models:provider-delete",
@@ -83,7 +90,8 @@
 		"setup:retry",
 		"ssh-tools:agent",
 		"ssh-tools:command",
-		"ssh-tools:prompts"
+		"ssh-tools:prompts",
+		"stats:fetch"
 	],
 	"send": [
 		"connectivity:report"
