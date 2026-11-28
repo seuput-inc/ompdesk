@@ -51,6 +51,12 @@ export interface SubagentsStore {
 	 * failed fetch leaves frame-driven state untouched.
 	 */
 	refresh: (options?: { expect?: () => boolean }) => Promise<boolean>;
+	/**
+	 * Release heavy per-subagent `ToolsStore` surfaces and cached transcripts while keeping the lightweight
+	 * subagent roster metadata intact (used when a background/hibernated tab is dehydrated). No-op while
+	 * an expanded surface is mounted (`eventConsumers > 0`).
+	 */
+	dehydrateCaches: () => boolean;
 	reset: () => void;
 }
 
@@ -474,6 +480,15 @@ export const createSubagentsStore = (command: TabCommand = activeTabCommand) => 
 				set({ error: cause instanceof Error ? cause.message : String(cause) });
 				return false;
 			}
+		},
+		dehydrateCaches: () => {
+			const state = get();
+			if (state.eventConsumers > 0) return false;
+			if (state.surfaces.size === 0 && hydrations.size === 0 && transcripts.size() === 0) return false;
+			hydrations.clear();
+			transcripts.clear();
+			set({ surfaces: new Map(), surfaceVersion: state.surfaceVersion + 1 });
+			return true;
 		},
 		reset: () => {
 			refreshVersion++;

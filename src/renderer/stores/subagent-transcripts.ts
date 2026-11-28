@@ -40,8 +40,13 @@ export interface SubagentTranscripts {
 	held(id: string): HeldTranscript | undefined;
 	/** Reads what the journal holds past the cursor; one read at a time per agent. Rejects with the read's error. */
 	read(id: string, options?: TranscriptReadOptions): Promise<TranscriptRead>;
+	/** Number of subagent transcripts currently retained in memory for this tab. */
+	size(): number;
 	clear(): void;
 }
+
+/** Maximum subagent transcripts retained simultaneously per tab; older settled entries evict cleanly (cursor-resumable). */
+export const MAX_HELD_SUBAGENT_TRANSCRIPTS = 12;
 
 interface Entry extends HeldTranscript {
 	/** The settled mark the last read was made under. */
@@ -68,9 +73,24 @@ function sameTail(shown: readonly AgentMessage[], reread: readonly AgentMessage[
 	);
 }
 
-export function createSubagentTranscripts(command: Command): SubagentTranscripts {
+export function createSubagentTranscripts(
+	command: Command,
+	maxEntries = MAX_HELD_SUBAGENT_TRANSCRIPTS,
+): SubagentTranscripts {
 	let entries = new Map<string, Entry>();
 	const send = (rpc: RpcCommand) => command(rpc, timeoutForCommand(rpc));
+	const touch = (id: string, entry: Entry): void => {
+		entries.delete(id);
+		entries.set(id, entry);
+	};
+	const evictOverflow = (): void => {
+		if (maxEntries <= 0 || entries.size <= maxEntries) return;
+		for (const [candidateId, candidate] of entries) {
+			if (entries.size <= maxEntries) break;
+			if (candidate.pending) continue;
+			entries.delete(candidateId);
+		}
+	};
 
 	const ask = async (id: string, entry: Entry, fromByte: number, sessionFile?: string): Promise<TranscriptData> => {
 		const stored = { type: "get_subagent_transcript", subagentId: id, fromByte } as const;
@@ -97,13 +117,18 @@ export function createSubagentTranscripts(command: Command): SubagentTranscripts
 	return {
 		held: id => {
 			const entry = entries.get(id);
-			return entry?.loaded ? { messages: entry.messages, nextByte: entry.nextByte } : undefined;
+			if (!entry?.loaded) return undefined;
+			touch(id, entry);
+			return { messages: entry.messages, nextByte: entry.nextByte };
 		},
+		size: () => entries.size,
 		read: (id, options = {}) => {
 			let entry = entries.get(id);
 			if (!entry) {
 				entry = { messages: [], nextByte: 0, stored: false, loaded: false };
 				entries.set(id, entry);
+			} else {
+				touch(id, entry);
 			}
 			const current = entry;
 			const run = async (): Promise<TranscriptRead> => {
@@ -120,6 +145,8 @@ export function createSubagentTranscripts(command: Command): SubagentTranscripts
 				current.nextByte = data.nextByte ?? fromByte;
 				current.settled = options.settled;
 				current.loaded = true;
+				touch(id, current);
+				evictOverflow();
 				return { messages: current.messages, nextByte: current.nextByte, incoming };
 			};
 			// Each read starts where the one before it stopped.
@@ -131,6 +158,7 @@ export function createSubagentTranscripts(command: Command): SubagentTranscripts
 			current.pending = done;
 			void done.then(() => {
 				if (current.pending === done) current.pending = undefined;
+				evictOverflow();
 			});
 			return result;
 		},
