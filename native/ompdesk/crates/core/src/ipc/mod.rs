@@ -81,6 +81,74 @@ struct Owned {
 /// The channels the core serves. Must match `channels.json` 1-to-1 (pinned by `channels_json_matches_owned`).
 const OWNED: &[Owned] = &[
     Owned {
+        channel: "ai-memory:cancel-handoff",
+        handler: crate::aimemory::ipc::ipc_cancel_handoff,
+    },
+    Owned {
+        channel: "ai-memory:delete-page",
+        handler: crate::aimemory::ipc::ipc_delete_page,
+    },
+    Owned {
+        channel: "ai-memory:feedback",
+        handler: crate::aimemory::ipc::ipc_feedback,
+    },
+    Owned {
+        channel: "ai-memory:handoffs",
+        handler: crate::aimemory::ipc::ipc_handoffs,
+    },
+    Owned {
+        channel: "ai-memory:lint",
+        handler: crate::aimemory::ipc::ipc_lint,
+    },
+    Owned {
+        channel: "ai-memory:observations",
+        handler: crate::aimemory::ipc::ipc_observations,
+    },
+    Owned {
+        channel: "ai-memory:overview",
+        handler: crate::aimemory::ipc::ipc_overview,
+    },
+    Owned {
+        channel: "ai-memory:pages",
+        handler: crate::aimemory::ipc::ipc_pages,
+    },
+    Owned {
+        channel: "ai-memory:profile",
+        handler: crate::aimemory::ipc::ipc_profile,
+    },
+    Owned {
+        channel: "ai-memory:projects",
+        handler: crate::aimemory::ipc::ipc_projects,
+    },
+    Owned {
+        channel: "ai-memory:read-page",
+        handler: crate::aimemory::ipc::ipc_read_page,
+    },
+    Owned {
+        channel: "ai-memory:recent",
+        handler: crate::aimemory::ipc::ipc_recent,
+    },
+    Owned {
+        channel: "ai-memory:restore-page",
+        handler: crate::aimemory::ipc::ipc_restore_page,
+    },
+    Owned {
+        channel: "ai-memory:search",
+        handler: crate::aimemory::ipc::ipc_search,
+    },
+    Owned {
+        channel: "ai-memory:sessions",
+        handler: crate::aimemory::ipc::ipc_sessions,
+    },
+    Owned {
+        channel: "ai-memory:sweep",
+        handler: crate::aimemory::ipc::ipc_sweep,
+    },
+    Owned {
+        channel: "ai-memory:write-page",
+        handler: crate::aimemory::ipc::ipc_write_page,
+    },
+    Owned {
         channel: "draft-pictures:put",
         handler: crate::draft_pictures::ipc_put,
     },

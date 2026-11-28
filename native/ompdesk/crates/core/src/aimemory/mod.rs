@@ -18,6 +18,7 @@
 //! Names: `memory.*` is this computer's RAM (`memory/`), so the memory server's methods are `aimemory.*`.
 
 pub(crate) mod client;
+pub(crate) mod ipc;
 pub(crate) mod ops;
 pub(crate) mod service;
 pub(crate) mod value;

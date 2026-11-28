@@ -367,17 +367,17 @@ pub struct Conclusion {
 /// What the Memory page's editor saves.
 #[derive(Debug, Deserialize)]
 pub struct WriteInput {
-    body: String,
+    pub(crate) body: String,
     #[serde(default)]
-    title: Option<String>,
+    pub(crate) title: Option<String>,
     #[serde(default)]
-    kind: Option<String>,
+    pub(crate) kind: Option<String>,
     #[serde(default)]
-    tier: Option<String>,
+    pub(crate) tier: Option<String>,
     #[serde(default)]
-    tags: Option<Vec<String>>,
+    pub(crate) tags: Option<Vec<String>>,
     #[serde(default)]
-    pinned: Option<bool>,
+    pub(crate) pinned: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -405,7 +405,7 @@ pub struct CreateInput {
 #[derive(Debug, Deserialize)]
 pub struct DeleteInput {
     #[serde(default)]
-    title: Option<String>,
+    pub(crate) title: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

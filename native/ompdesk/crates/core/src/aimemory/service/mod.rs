@@ -55,6 +55,7 @@ use serde_json::{Map, Number, Value, json};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
+use super::client::Server;
 use crate::disk::tree::write_atomic_if;
 use crate::server::{Call, Events, Fault, Registry, Reply};
 use binary::{Builds, BuiltAsset};
@@ -239,6 +240,42 @@ pub struct Service {
 }
 
 static SERVICES: LazyLock<Mutex<HashMap<String, Arc<Service>>>> = LazyLock::new(Default::default);
+/// Latest active service's `(url, dataDir)` for direct `ai-memory:*` core IPC calls (`aimemory/ipc.rs`).
+static CURRENT_SERVER: LazyLock<Mutex<Option<(String, Server)>>> = LazyLock::new(Default::default);
+
+fn server_from_state(state: &State) -> Server {
+    Server {
+        url: Some(
+            state
+                .server_url
+                .clone()
+                .unwrap_or_else(|| crate::aimemory::DEFAULT_SERVER_URL.to_owned()),
+        ),
+        data_dir: state.data_dir.clone(),
+    }
+}
+
+fn set_current_server(name: &str, state: &State) {
+    *locked(&CURRENT_SERVER) = Some((name.to_owned(), server_from_state(state)));
+}
+
+fn clear_current_server(name: &str) {
+    let mut slot = locked(&CURRENT_SERVER);
+    if slot.as_ref().is_some_and(|(active, _)| active == name) {
+        *slot = None;
+    }
+}
+
+/// The active ai-memory server endpoint, matching `AiMemoryService`'s `#client` fallback when not yet wired.
+pub(crate) fn current_server() -> Server {
+    locked(&CURRENT_SERVER)
+        .as_ref()
+        .map(|(_, server)| server.clone())
+        .unwrap_or_else(|| Server {
+            url: Some(crate::aimemory::DEFAULT_SERVER_URL.to_owned()),
+            data_dir: None,
+        })
+}
 
 /// The file a spawned omp reads memory's address from (the bridge's recall, env `OMP_GUI_MEMORY`): `{url, dataDir}`
 /// once the data folder is known, owner-only, written by a thread of its own (newest first) and only when it changed.
@@ -475,6 +512,7 @@ impl Service {
             }
             (inner.state.clone(), before)
         };
+        set_current_server(&self.name, &state);
         if (state.phase, state.step, &state.detail) != (before.0, before.1, &before.2) {
             self.log(
                 "phase",
@@ -525,6 +563,7 @@ impl Service {
         // Whatever a check still waits for will not come.
         locked(&self.asks).clear();
         locked(&self.timers).clear();
+        clear_current_server(&self.name);
         self.closed.send_replace(true);
     }
 }
@@ -684,10 +723,12 @@ fn open(call: &Call) -> Result<Reply, Fault> {
             ));
         }
         service.inner().quality = quality.map(|clients| quality::Schedule::new(clients, &service));
-        services.insert(name, Arc::clone(&service));
+        services.insert(name.clone(), Arc::clone(&service));
     }
+    let state = service.state();
+    set_current_server(&name, &state);
     *locked(&service.worker) = Some(tokio::spawn(work(Arc::clone(&service), queued)));
-    Reply::json(&service.state())
+    Reply::json(&state)
 }
 
 #[derive(Deserialize)]

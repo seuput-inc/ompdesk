@@ -26,21 +26,7 @@ import {
 	AI_MEMORY_BINARIES,
 	AI_MEMORY_BUILD_MANIFEST,
 	AI_MEMORY_VERSION,
-	type AiMemoryDeleted,
-	type AiMemoryFeedback,
-	type AiMemoryHandoff,
-	type AiMemoryLintFinding,
-	type AiMemoryObservations,
-	type AiMemoryOverview,
-	type AiMemoryPage,
-	type AiMemoryPageRef,
-	type AiMemoryProfile,
-	type AiMemoryProject,
-	type AiMemoryProjectRef,
-	type AiMemorySession,
 	type AiMemoryState,
-	type AiMemorySweep,
-	type AiMemoryWriteInput,
 } from "../../shared/ai-memory";
 import type { SetupPlatform } from "../../shared/setup";
 import { CoreError, core } from "../core/process";
@@ -297,74 +283,6 @@ export class AiMemoryService {
 			if (refused instanceof CoreError) return [];
 			throw refused;
 		}
-	}
-
-	async projects(): Promise<AiMemoryProject[]> {
-		return this.#client.projects();
-	}
-
-	async search(query: string, project?: AiMemoryProjectRef): Promise<AiMemoryPageRef[]> {
-		return this.#client.search(query, project);
-	}
-
-	async recent(project?: AiMemoryProjectRef): Promise<AiMemoryPageRef[]> {
-		return project ? this.#client.recent(project) : this.#client.recentEverywhere();
-	}
-
-	async handoffs(project?: AiMemoryProjectRef): Promise<AiMemoryHandoff[]> {
-		return this.#client.handoffs(project);
-	}
-
-	async readPage(ref: AiMemoryProjectRef & { path: string }): Promise<AiMemoryPage> {
-		return this.#client.page(ref);
-	}
-
-	pages(project: AiMemoryProjectRef): Promise<AiMemoryPageRef[]> {
-		return this.#client.pages(project);
-	}
-
-	overview(project: AiMemoryProjectRef): Promise<AiMemoryOverview> {
-		return this.#client.overview(project);
-	}
-
-	sessions(project: AiMemoryProjectRef): Promise<AiMemorySession[]> {
-		return this.#client.sessions(project);
-	}
-
-	observations(project: AiMemoryProjectRef, sessionId: string, offset?: number): Promise<AiMemoryObservations> {
-		return this.#client.observations(project, sessionId, offset);
-	}
-
-	profile(): Promise<AiMemoryProfile> {
-		return this.#client.profile();
-	}
-
-	lint(project: AiMemoryProjectRef): Promise<AiMemoryLintFinding[]> {
-		return this.#client.lint(project);
-	}
-
-	sweep(project: AiMemoryProjectRef, dryRun: boolean): Promise<AiMemorySweep> {
-		return this.#client.sweep(project, dryRun);
-	}
-
-	writePage(input: AiMemoryWriteInput): Promise<void> {
-		return this.#client.writePage(input);
-	}
-
-	deletePage(ref: AiMemoryProjectRef & { path: string; title?: string }): Promise<AiMemoryDeleted> {
-		return this.#client.deletePage(ref);
-	}
-
-	restorePage(ref: AiMemoryProjectRef & { path: string }, rev: string): Promise<void> {
-		return this.#client.restorePage(ref, rev);
-	}
-
-	feedback(ref: AiMemoryProjectRef & { path: string }, signal: AiMemoryFeedback): Promise<void> {
-		return this.#client.feedback(ref, signal);
-	}
-
-	cancelHandoff(project: AiMemoryProjectRef, id: string): Promise<void> {
-		return this.#client.cancelHandoff(project, id);
 	}
 
 	/** The /web console's password: the root token (any username works). */
