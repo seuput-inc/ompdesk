@@ -92,6 +92,16 @@ async function provider() {
 		for await (const chunk of req) body += chunk;
 		const prompt = /test-key-turn-[12]/.exec(body)?.[0];
 		if (prompt) turns.push({ prompt, account });
+		console.log("#42 loopback /v1/messages 200", {
+			account,
+			caller: req.headers["x-fixture-caller"] ?? "direct loopback",
+			kind:
+				prompt ??
+				(body.includes("What is 17 times 23?") ? "thinking probe" : body.includes('"ping"') ? "ping" : "other"),
+			model: offered.flat().find(id => body.includes(`"model":"${id}"`)) ?? "other",
+			maxTokens: /"max_tokens"\s*:\s*(\d+)/.exec(body)?.[1],
+			stream: /"stream"\s*:\s*true/.test(body),
+		});
 		res.writeHead(200, { "content-type": "text/event-stream" });
 		const event = (type: string, data: object) =>
 			res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
@@ -146,6 +156,12 @@ globalThis.fetch = Object.assign(async (input, init) => {
 	}
 	if (!allowed.includes(request.headers.get("x-api-key"))) {
 		throw new Error("expected a dummy fixture key in x-api-key");
+	}
+	if (request.method === "POST") {
+		// Only function names, never full stacks or request contents, reach the loopback test log.
+		const frames = (new Error().stack || "").split("\\n").flatMap(line =>
+			line.match(/^\\s*at (?:async )?([\\w.$<>]+) \\(/)?.slice(1) ?? []);
+		request.headers.set("x-fixture-caller", [process.pid, ...frames].join(":"));
 	}
 	return send(origin + url.pathname + url.search, {
 		method: request.method, headers: request.headers,

@@ -36,7 +36,7 @@ export const ModelsConfigSchema = schema();
 export function providerEntries(): Record<string, { id: string }> {
 	return Object.fromEntries(["anthropic", "openai", "google", "openai-codex", "fixture"].map(id => [id, { id }]));
 }
-export function seedModels(provider: string) {
+export function getBundledModels(provider: string) {
 	return provider === "anthropic"
 		? fixtureProviderOptions.anthropicModels.map(model => ({ ...model, api: "anthropic-messages" }))
 		: [];

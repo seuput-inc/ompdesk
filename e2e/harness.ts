@@ -84,7 +84,7 @@ export const SessionManager = { ...Fixture, open: async (...args) => (await impo
 		JSON.stringify({
 			name: "@oh-my-pi/pi-catalog",
 			type: "module",
-			exports: { "./compat/providers": "./config.ts", "./compat/auth": "./config.ts" },
+			exports: { "./compat/providers": "./config.ts", "./compat/auth": "./config.ts", "./models": "./config.ts" },
 		}),
 	);
 	await writeFile(path.join(catalog, "config.ts"), `export * from ${JSON.stringify(config)};\n`);
