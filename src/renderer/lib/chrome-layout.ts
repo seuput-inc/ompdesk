@@ -7,6 +7,7 @@ export type ChromeViewer = "windows" | "mac" | "browser" | "phone";
 export function chromeViewer(platform: ChromePlatform, mode: ShellMode | null): ChromeViewer {
 	if (mode === "phone") return "phone";
 	if (mode !== null || platform === "web") return "browser";
+	// Only Windows and macOS ship a desktop host.
 	return platform === "win32" ? "windows" : platform === "darwin" ? "mac" : "browser";
 }
 

@@ -216,6 +216,96 @@ async function migrateProfile(): Promise<void> {
 	}
 }
 
+// HWND-backed WebView2 handles CSS drag regions, but CSS cannot mark a Windows maximize button.
+// Report only the top row, in client physical pixels (including the page's current zoom).
+function watchCaptionRegions(): void {
+	const layers = ".omp-dialog-overlay,.omp-action-sheet-overlay,[data-sheet-placement],.omp-pop-in,dialog[open],[popover]:popover-open,[role=dialog],[role=menu]";
+	const controls = "button,a,input,textarea,select,[role=button],[role=tab],[contenteditable=true]";
+	const chrome = `.drag-region,.no-drag,[data-caption],${layers}`;
+	const watched = new Set<Element>();
+	let frame = 0;
+	let sent = "";
+	let sending = false;
+	const schedule = () => {
+		if (!frame) frame = requestAnimationFrame(sync);
+	};
+	const resize = new ResizeObserver(schedule);
+	function sync(): void {
+		frame = 0;
+		if (sending) return;
+		const dpr = window.devicePixelRatio;
+		const width = Math.round(window.innerWidth * dpr);
+		const height = Math.round(36 * dpr);
+		const cells: Array<[string, number, number, number, number]> = [];
+		const current = new Set<Element>();
+		const add = (el: Element, kind: string) => {
+			current.add(el);
+			if (!watched.has(el)) resize.observe(el);
+			const rect = el.getBoundingClientRect();
+			const l = Math.max(0, Math.round(rect.left * dpr));
+			const t = Math.max(0, Math.round(rect.top * dpr));
+			const r = Math.min(width, Math.round(rect.right * dpr));
+			const b = Math.min(height, Math.round(rect.bottom * dpr));
+			if (l >= r || t >= b || getComputedStyle(el).visibility !== "visible") return;
+			const cell: [string, number, number, number, number] = [kind, l, t, r, b];
+			cells.push(cell);
+			return cell;
+		};
+		for (const el of document.querySelectorAll(".drag-region")) add(el, "drag");
+		for (const el of document.querySelectorAll(`.no-drag,.drag-region :is(${controls})`)) add(el, "client");
+		const buttons = new Map<Element, (typeof cells)[number]>();
+		for (const el of document.querySelectorAll<HTMLElement>("[data-caption]")) {
+			const action = el.dataset.caption;
+			if (action === "minimize" || action === "maximize" || action === "close") {
+				const cell = add(el, action);
+				if (cell) buttons.set(el, cell);
+			}
+		}
+		const front: typeof cells = [];
+		for (const el of document.querySelectorAll(layers)) {
+			const layer = add(el, "client");
+			if (!layer) continue;
+			for (const [button, cell] of buttons) {
+				const l = Math.max(cell[1], layer[1]), t = Math.max(cell[2], layer[2]);
+				const r = Math.min(cell[3], layer[3]), b = Math.min(cell[4], layer[4]);
+				if (l < r && t < b && button.contains(document.elementFromPoint((l + r) / (2 * dpr), (t + b) / (2 * dpr)))) {
+					front.push([cell[0], l, t, r, b]);
+				}
+			}
+		}
+		cells.push(...front);
+		for (const el of watched) if (!current.has(el)) resize.unobserve(el);
+		watched.clear();
+		for (const el of current) watched.add(el);
+		const payload = { action: "regions", width, height, cells };
+		const key = JSON.stringify(payload);
+		if (key === sent) return;
+		sending = true;
+		void call("windowControl", payload).then(() => {
+			sent = key;
+			schedule(); // A reflow during the call must publish the newest geometry last.
+		}).catch(error => note("window hit regions", error)).finally(() => { sending = false; });
+	}
+	new MutationObserver(records => {
+		for (const record of records) {
+			const target = record.target;
+			if (target instanceof Element && (watched.has(target) || target.closest(chrome))) return schedule();
+			for (const node of [...record.addedNodes, ...record.removedNodes]) {
+				if (node instanceof Element && (node.matches(chrome) || node.querySelector(chrome))) return schedule();
+			}
+		}
+	}).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["class", "style", "hidden", "open", "data-state"] });
+	window.addEventListener("resize", schedule);
+	document.addEventListener("scroll", event => {
+		if (event.target instanceof Element && event.target.closest(".drag-region")) schedule();
+	}, true);
+	transport.on("window-chrome:hover", action => {
+		if (action === "minimize" || action === "maximize" || action === "close") document.documentElement.dataset.captionHover = action;
+		else delete document.documentElement.dataset.captionHover;
+	});
+	schedule();
+}
+
 /**
  * Windows: the host's windows have no OS caption (`decorations` off, as Electron's `titleBarStyle: "hidden"` with a
  * `titleBarOverlay`), so the three caption buttons are drawn here, over the top-right corner, in the colors main last
@@ -229,8 +319,8 @@ function installCaptionButtons(): void {
 	style.textContent = `html[data-platform="win32"]:root{--sc-caption-buttons:${CAPTION_BUTTON_WIDTH * 3}px!important;--sc-caption-band:36px!important}
 [data-caption-buttons]{position:fixed;top:0;right:0;height:36px;z-index:2147483647;display:flex;-webkit-app-region:no-drag;app-region:no-drag;background:var(--omp-caption-bg,var(--sc-bg,#fff));color:var(--omp-caption-fg,var(--sc-text,#1b1b1f));font:10px "Segoe MDL2 Assets","Segoe Fluent Icons",system-ui}
 [data-caption-buttons] button{all:unset;box-sizing:border-box;width:${CAPTION_BUTTON_WIDTH}px;height:100%;display:grid;place-items:center;cursor:default;-webkit-app-region:no-drag;app-region:no-drag}
-[data-caption-buttons] button:hover{background:color-mix(in srgb,currentColor 12%,transparent)}
-[data-caption-buttons] button[data-caption="close"]:hover{background:#c42b1c;color:#fff}`;
+[data-caption-buttons] button:hover,html[data-caption-hover=minimize] [data-caption=minimize],html[data-caption-hover=maximize] [data-caption=maximize]{background:color-mix(in srgb,currentColor 12%,transparent)}
+[data-caption-buttons] button[data-caption="close"]:hover,html[data-caption-hover=close] [data-caption=close]{background:#c42b1c;color:#fff}`;
 	document.documentElement.appendChild(style);
 	const build = () => {
 		const bar = document.createElement("div");
@@ -259,6 +349,7 @@ function installCaptionButtons(): void {
 		window.addEventListener("resize", sync);
 		sync();
 		document.body.appendChild(bar);
+		watchCaptionRegions();
 		Object.defineProperty(window, "__ompTauriCaption", {
 			value: (colors: { color?: string; symbolColor?: string }) => {
 				if (colors.color) bar.style.setProperty("--omp-caption-bg", colors.color);

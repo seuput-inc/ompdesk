@@ -7,6 +7,8 @@ mod assets;
 mod automation;
 #[cfg(windows)]
 mod boot_paint;
+#[cfg(any(windows, test))]
+mod chrome_hit;
 mod core_pages;
 mod diagnostic_bundle_name;
 mod entry;
@@ -54,6 +56,8 @@ mod web_view_keys;
 mod window_activation;
 mod window_bounds;
 mod window_state;
+#[cfg(windows)]
+mod windows_chrome;
 use entry::shortcut;
 use native_services::diagnostic_logs::feedback_profile;
 use native_services::{power, screen, system};
@@ -560,6 +564,13 @@ fn show_migration_failure(wc: u64) {
 }
 
 fn page_load(wc: u64, url: &str, event: PageLoadEvent) {
+    #[cfg(windows)]
+    if event == PageLoadEvent::Started
+        && let Ok(window) = window_for_wc(wc)
+        && let Ok(hwnd) = window.hwnd()
+    {
+        windows_chrome::forget(hwnd.0);
+    }
     if url == "about:blank" {
         if event == PageLoadEvent::Finished {
             show_migration_failure(wc);
@@ -1689,6 +1700,29 @@ async fn omp_ipc(webview: tauri::Webview, kind: String, payload: String) -> Resu
                 .map_err(|e| json!({"code":"failed","message":e.to_string()}))?
         }
         "windowControl" => {
+            #[cfg(windows)]
+            if value["action"] == "regions" {
+                let (send, receive) = tokio::sync::oneshot::channel();
+                runtime()
+                    .app
+                    .run_on_main_thread(move || {
+                        let result = (|| {
+                            ensure_current(identity)?;
+                            let hwnd = window_for_wc(identity.wc)
+                                .map_err(|e| json!({"code":e.code,"message":e.message}))?
+                                .hwnd()
+                                .map_err(|e| json!({"code":"gone","message":e.to_string()}))?;
+                            windows_chrome::layout(hwnd.0, identity, &value)
+                                .map_err(|message| json!({"code":"invalid","message":message}))?;
+                            Ok(json!({}))
+                        })();
+                        let _ = send.send(result);
+                    })
+                    .map_err(|e| json!({"code":"failed","message":e.to_string()}))?;
+                return receive
+                    .await
+                    .map_err(|e| json!({"code":"gone","message":e.to_string()}))?;
+            }
             let action = value["action"].as_str().unwrap_or_default().to_owned();
             let wc = identity.wc;
             runtime()

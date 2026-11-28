@@ -20,8 +20,8 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetActiveWindow, GetFocus};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallWindowProcW, DefWindowProcW, GWL_STYLE, GWLP_WNDPROC, GetClassNameW, GetForegroundWindow,
-    IsWindowVisible, PostMessageW, STYLESTRUCT, SetWindowLongPtrW, WM_ACTIVATE, WM_APP,
-    WM_NCDESTROY, WM_STYLECHANGING, WNDPROC, WS_VISIBLE,
+    IsWindowVisible, PostMessageW, STYLESTRUCT, SetWindowLongPtrW, WM_ACTIVATE, WM_APP, WM_DESTROY,
+    WM_NCDESTROY, WM_NCHITTEST, WM_SIZE, WM_STYLECHANGING, WNDPROC, WS_VISIBLE,
 };
 
 /// Posted by the subclass to its own window on every `WM_ACTIVATE`: the report runs once the activation that raised
@@ -131,6 +131,18 @@ unsafe extern "system" fn window_proc(
         return unsafe { DefWindowProcW(hwnd, message, wparam, lparam) };
     };
     match message {
+        WM_NCHITTEST => {
+            if let Some(result) = crate::windows_chrome::hit(hwnd, lparam) {
+                return result;
+            }
+        }
+        WM_SIZE => {
+            // SAFETY: let tao finish reordering its resize child before placing the title-bar input row.
+            let result = unsafe { CallWindowProcW(hook.previous, hwnd, message, wparam, lparam) };
+            crate::windows_chrome::resized(hwnd);
+            return result;
+        }
+        WM_DESTROY => crate::windows_chrome::forget(hwnd),
         WM_STYLECHANGING
             if wparam as i32 == GWL_STYLE
                 && lparam != 0
