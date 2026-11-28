@@ -5,6 +5,10 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::adapter::AgentAdapter;
+use super::backends::{
+    ClaudeCliAdapter, CodexCliAdapter, DirectApiAdapter, NoopToolExecutor, ToolExecutor,
+};
+use super::omp_contract::OmpAdapterContract;
 use super::types::{
     AgentError, BackendId, BackendKind, CapabilityRequirements, DirectApiProvider, DiscoverySource,
     InstallStatus, InstalledBackend, ProviderCliKind,
@@ -156,6 +160,34 @@ impl AdapterRegistry {
             adapters: BTreeMap::new(),
             preference_order: DEFAULT_PREFERENCE_ORDER.to_vec(),
         }
+    }
+
+    /// Builds a registry pre-populated with every concrete Stage 2A backend adapter
+    /// (`ClaudeCliAdapter`, `CodexCliAdapter`, all four `DirectApiAdapter` providers backed by
+    /// [`NoopToolExecutor`], and the [`OmpAdapterContract`] slot).
+    pub fn with_default_backends() -> Self {
+        Self::with_default_backends_and_tools(Arc::new(NoopToolExecutor))
+    }
+
+    /// Builds a default backend registry wired with a custom [`ToolExecutor`] for Direct LLM API
+    /// sessions (Stage 2B local/MCP tool execution hook).
+    pub fn with_default_backends_and_tools(tool_executor: Arc<dyn ToolExecutor>) -> Self {
+        let mut registry = Self::new();
+        registry.register(Arc::new(ClaudeCliAdapter::new()));
+        registry.register(Arc::new(CodexCliAdapter::new()));
+        registry.register(Arc::new(OmpAdapterContract::new()));
+        for provider in [
+            DirectApiProvider::Anthropic,
+            DirectApiProvider::OpenAi,
+            DirectApiProvider::OpenRouter,
+            DirectApiProvider::OpenAiCompatible,
+        ] {
+            registry.register(Arc::new(DirectApiAdapter::new(
+                provider,
+                Arc::clone(&tool_executor),
+            )));
+        }
+        registry
     }
 
     /// Registers an adapter under its [`AgentAdapter::id`], returning any replaced adapter.
@@ -528,5 +560,41 @@ mod tests {
             picked.executable_path,
             Some(PathBuf::from("/usr/local/bin/codex"))
         );
+    }
+
+    #[test]
+    fn default_backends_register_all_three_families_and_resolve_with_snapshot() {
+        let reg = AdapterRegistry::with_default_backends();
+        let claude = BackendId::ProviderCli(ProviderCliKind::ClaudeCode);
+        let codex = BackendId::ProviderCli(ProviderCliKind::Codex);
+        let anthropic = BackendId::DirectApi(DirectApiProvider::Anthropic);
+        let openai = BackendId::DirectApi(DirectApiProvider::OpenAi);
+        let openrouter = BackendId::DirectApi(DirectApiProvider::OpenRouter);
+        let compat = BackendId::DirectApi(DirectApiProvider::OpenAiCompatible);
+
+        assert_eq!(reg.len(), 7);
+        for id in [
+            claude,
+            codex,
+            BackendId::Omp,
+            anthropic,
+            openai,
+            openrouter,
+            compat,
+        ] {
+            assert!(reg.contains(id), "missing default backend {id}");
+        }
+
+        let snapshot = [
+            InstalledBackend::missing(claude, "not installed"),
+            InstalledBackend::missing(codex, "not installed"),
+            InstalledBackend::missing(BackendId::Omp, "not installed"),
+            InstalledBackend::available(anthropic, DiscoverySource::EnvironmentCredentials),
+        ];
+        let zero_cli_req = ResolutionRequest::default()
+            .requiring(CapabilityRequirements::default().with_no_external_cli());
+        let outcome = reg.resolve_with_snapshot(&zero_cli_req, &snapshot).unwrap();
+        assert_eq!(outcome.backend, anthropic);
+        assert_eq!(outcome.adapter.kind(), BackendKind::DirectApi);
     }
 }

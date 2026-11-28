@@ -1,4 +1,4 @@
-//! Agent-neutral Rust multi-agent runtime (Stage 1 foundation).
+//! Agent-neutral Rust multi-agent runtime (Stage 1 + Stage 2A concrete adapters).
 //!
 //! Defines a uniform contract across three first-class execution backend families:
 //! - **Provider CLI** (`claude`, `codex`, `agy`, generic PTY)
@@ -16,9 +16,11 @@ pub mod registry;
 pub mod types;
 
 pub use adapter::{AgentAdapter, AgentSession, BoxFuture};
-pub use backends::detect::{
-    CliCommandSpec, CliDescriptor, DiscoveryEnv, InstalledBackendInfo, detect_all_clis, detect_cli,
-    detect_direct_api,
+pub use backends::{
+    ClaudeCliAdapter, CliCommandSpec, CliDescriptor, CodexCliAdapter, CodexTransportMode,
+    ConversationMessage, ConversationRole, DirectApiAdapter, DirectApiHttpRequest, DiscoveryEnv,
+    InstalledBackendInfo, NoopToolExecutor, SecretHeader, ToolExecutionResult, ToolExecutor,
+    ToolInvocation, ToolSchema, detect_all_clis, detect_cli, detect_direct_api,
 };
 pub use omp_contract::{
     OMP_FRAME_MAPPINGS, OmpAdapterContract, OmpContractState, OmpFrameMappingSpec,
