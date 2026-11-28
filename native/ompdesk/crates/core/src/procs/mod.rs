@@ -26,6 +26,7 @@
 //! `procs.consoles` (Windows) lists the console windows a person sees and whose each new one is: OMPdesk starts every
 //! program without a window, so one that shows is a start that missed that, a tool's own doing, or not OMPdesk's.
 
+mod accounting;
 mod pressure_record;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -203,6 +204,7 @@ struct Report {
 }
 
 pub fn register(registry: &mut Registry) {
+    accounting::register(registry);
     pressure_record::register(registry);
     registry.add("procs.list", |call| {
         Box::pin(async move {

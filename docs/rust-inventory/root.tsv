@@ -265,7 +265,7 @@ src/main/i18n-text.test.ts	tooling	-	Vitest suite: main's English counts of one.
 src/main/i18n-text.ts	port	1	mainT, notification-batch and web-push-notifier format messages directly from MAIN_TEXT. Move the catalog with its last formatter, not one RPC per label.
 src/main/i18n.ts	port	1	WindowManager.createWindow, the context menu and dialogs consume getMainLanguage, mainT and editLabels synchronously; index.ts and ipc.ts push getMainLanguage to the shell's app menu and tray (app.language). Move with dialog and prefs ownership. Keep shared uiLanguageFromLocale and fillText.
 src/main/idle-release.test.ts	tooling	-	Vitest suite: memoryShort.
-src/main/idle-release.ts	port	3	memory-watch re-reads the current tab facts after the native sample; pick() combines them with prior quiet-since times before releasing the selected tab without yielding. The sampler, not IdleRelease, owns the OS query.
+src/main/idle-release.ts	port	3	Rust hibernation engine and RPCs (memory.hibernateConfigure/Evaluate/Status/Mark in crates/core/src/memory/hibernate.rs) are ready; Phase 2 cuts over memory-watch and removes TS IdleRelease.
 src/main/index.ts	mixed	4	Main entry wires ready/quit, windows, IPC, setup and session services, the language the shell's app menu and tray speak and the tray's update item (serveTray); routes core IPC and calls sidecar.holdStarts during startup and procs.consoles for process diagnostics.
 src/main/initial-cwd.test.ts	tooling	-	Real-core parity for startup cwd selection and default workspace creation.
 src/main/initial-cwd.ts	native-client	1	fs.initialCwd selects the explicit path or an existing directory before falling back to home.
@@ -302,7 +302,7 @@ src/main/memory-record.ts	mixed	1	procs.pressureRecord scans and ranks in core, 
 src/main/memory-sampler.test.ts	tooling	-	Vitest suite: the core's reading of this computer.
 src/main/memory-sampler.ts	mixed	1	Production memory, process rows and idle-tree facts come from core. testMemoryReading reads only the fixture override; the memory watch consumes its answer in the same tick (§1.3c).
 src/main/memory-watch.test.ts	tooling	-	Checks that the watch makes release decisions from the live tabs after sampling and ignores failed process snapshots.
-src/main/memory-watch.ts	mixed	3	memory.reading/watchProcesses and procs.pressureRecord run in core. After sampling, main reads current tab quiet state, calls MachineState.sample, then invokes SidecarPool.releaseIdle in that turn. Move with idle release and the pool (§1.3a,c).
+src/main/memory-watch.ts	mixed	3	memory.reading/watchProcesses, memory.hibernate* and procs.pressureRecord run in core. Phase 2 wires memory-watch directly to memory.hibernateEvaluate and moves with the pool (§1.3a,c).
 src/main/menu-actions.test.ts	tooling	-	Vitest suite: menu actions (tauri-shell/src/app_menu.rs against MenuAction and NATIVE_CHORDS).
 src/main/message-update-slim.test.ts	tooling	-	Vitest suite: slimMessageUpdate.
 src/main/message-update-slim.ts	port	1	§1.3a,b,c: SidecarPool, the link encoder and subagent frame shaping synchronously strip repeated content using state for this turn. No I/O unit; move with the producer and its ordered sinks, not another round trip per event.
@@ -391,7 +391,7 @@ src/main/session-pace-memory.test.ts	tooling	-	Vitest suite: reads a journal far
 src/main/session-pace.test.ts	tooling	-	Vitest suite: session-pace.
 src/main/session-pace.ts	mixed	1	sessions.pacePage reads bounded journal pages and projects only fold inputs. scripts/session-pace and session-checks consume pace() synchronously; the bridge and page share the check and poll classifiers. The single fold and its cache remain with those rules.
 src/main/session-processes.test.ts	tooling	-	Vitest suite: a session's processes, on this computer.
-src/main/session-processes.ts	mixed	3	procs.list/end perform the OS work. SidecarManager.#onLaunch takes the tag and scratch path from open immediately; index reads held/owners during disk care and quit. Each resample checks the current freeze state before surveying; keep the kill decision with the tag ledger.
+src/main/session-processes.ts	mixed	3	procs.list/end/sessionFootprints perform the OS work and per-session process-tree accounting in core. SidecarManager.#onLaunch takes the tag and scratch path from open immediately; index reads held/owners during disk care and quit. Each resample checks the current freeze state before surveying; keep the kill decision with the tag ledger.
 src/main/session-scratch.ts	port	2	SessionProcesses.open synchronously takes the tag and scratch folder for SidecarManager's spawn. SidebarProjects reconciliation consults sessionsOf against the same records before publishing. Disk care consumes that ownership for retention; do not split the folder from the tag or publish before opening it.
 src/main/session-store.ts	mixed	2	Stock list admission runs when stock.request is received, ordered against move/delete; stockHelperRequest checks setup availability before enqueue. Sessions are then validated and passed to sessions.enrich with its own deadline. A nested native list call would move admission after yielding and merge two failure boundaries.
 src/main/session-summaries.test.ts	tooling	-	Vitest suite: SessionSummaries.
