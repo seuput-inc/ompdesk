@@ -13,6 +13,7 @@ pub mod backends;
 pub mod omp_contract;
 pub mod parsers;
 pub mod registry;
+pub mod tools;
 pub mod types;
 
 pub use adapter::{AgentAdapter, AgentSession, BoxFuture};
@@ -34,6 +35,7 @@ pub use registry::{
     AdapterRegistry, DEFAULT_PREFERENCE_ORDER, ResolutionOutcome, ResolutionRequest, SkipReason,
     SkippedCandidate, discovery_status_for, select_preferred_install,
 };
+pub use tools::{LocalToolExecutor, LocalToolPolicy, builtin_tool_schemas, resolve_confined_path};
 pub use types::{
     AgentCapabilities, AgentError, AgentEvent, ApprovalDecision, ApprovalKind, ApprovalMode,
     BackendId, BackendKind, CapabilityRequirements, DirectApiConfig, DirectApiProvider,
