@@ -19,6 +19,8 @@ workspace = true
 
 [dependencies]
 ompdesk-checks = { path = "../checks" }
+# Items commit a batch and its per-chat notices together. Use the same SQLite on both supported OSes.
+rusqlite = { version = "=0.41.1", default-features = false, features = ["bundled"] }
 # The system proxy a check, an update or a tab spawn goes through when no other is set (`proxy.rs`).
 ompdesk-sysproxy = { path = "../sysproxy" }
 # Diagnostic bundles use stock's stored/deflated ZIP entries and publish a completed file without clobbering Downloads.
