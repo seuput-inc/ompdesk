@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const bridgeDir = join(__dirname, "../resources/gui-bridge");
 const launch = join(bridgeDir, "wsl/launch.ts");
 const linux = process.platform === "linux";
+const uid = linux ? process.getuid?.() : undefined;
 const homes: string[] = [];
 const runtime = linux ? `/run/user/${process.getuid!()}` : "";
 const id = () => randomBytes(16).toString("hex");
@@ -103,7 +104,9 @@ function refused(f: Fixture, input: string, reason: RegExp) {
 			.split("\n")
 			.map(line => JSON.parse(line)),
 	).toEqual([
-		{ type: "ompdesk-wsl-attached", invocationId: f.options.env.INVOCATION_ID },
+		...(uid === undefined || uid === 0
+			? []
+			: [{ type: "ompdesk-wsl-attached", invocationId: f.options.env.INVOCATION_ID, uid }]),
 		{ type: "ompdesk-wsl-error", message: expect.stringMatching(reason) },
 	]);
 }
@@ -152,7 +155,12 @@ it("rejects injected fields, noncanonical IDs, host paths and session traversal 
 		refused(f, `${JSON.stringify({ ...req, ...patch })}\n`, reason);
 });
 
-describe.skipIf(!linux)("guest Linux launch", () => {
+it.skipIf(uid !== undefined && uid !== 0)("never witnesses a launch outside a non-root Linux account", () => {
+	const f = fixture();
+	refused(f, `${JSON.stringify({ ...f.request, cwd: "/work", bridgeDir: "/bridge" })}\n`, /non-root/);
+});
+
+describe.skipIf(uid === undefined || uid === 0)("guest Linux launch", () => {
 	it("fails before ready for absent or old guest stock and for an unsupported engine", () => {
 		const f = fixture();
 		const header = `${JSON.stringify(f.request)}\n`;
@@ -230,6 +238,7 @@ describe.skipIf(!linux)("guest Linux launch", () => {
 				expect(JSON.parse((await stderr.next()).value!)).toEqual({
 					type: "ompdesk-wsl-attached",
 					invocationId: f.env.INVOCATION_ID,
+					uid,
 				});
 				expect(stdout).toEqual([]);
 				child.stdin.write(`${JSON.stringify(f.request)}\n`);

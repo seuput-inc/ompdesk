@@ -60,6 +60,8 @@ On Windows with Ubuntu WSL 2, ending the Win32 launcher left its transient user 
 
 The supervisor must identify the exact launch, stop its process group through the guest service manager, and confirm the unit and its descendants no longer run. A failed query, an unavailable manager, or a stop racing a start that the guest has not yet accepted is not that confirmation. After a host restart, reconcile the recorded spawn before reusing its session. If ownership is uncertain, keep the existing assignment and report one reason instead of opening an empty or concurrent tab.
 
+The `ompdesk-wsl-attached` record binds `invocationId` to the numeric Linux `uid` of the service. Persist both with the registration and spawn. Every `state` or `stop` must supply that UID; the supervisor compares it with its actual UID before consulting systemd. A missing witness or changed default user means **unknown**, even if the new user's manager has no such unit. Do not switch users to obtain a different answer.
+
 ## Accounts and fallback
 
 Until a host-side model relay is verified, only a guest with working guest authentication is eligible. A fresh guest, unsupported omp, or failed preflight leaves a new tab on direct Windows execution with a one-line reason. Do not copy Windows credentials to the guest or prompt for a second sign-in. A relay must authorize only the current spawn's model request on its assigned account and attribute usage to that account. Socket permissions alone do not establish which same-user process made the request.

@@ -45,7 +45,8 @@ case $1 in
             /bin/sh -c 'exec /usr/bin/env -i HOME="$1" PATH=/usr/bin:/bin XDG_RUNTIME_DIR="$3" INVOCATION_ID="$INVOCATION_ID" "$1/.bun/bin/bun" --no-env-file "$2" "$4"' sh "$home" "$script" "$XDG_RUNTIME_DIR" "$2"
         ;;
     state|stop)
-        [ "$#" = 3 ] && hex_id "$3" || fail 'A witnessed guest invocation is required.'
+        [ "$#" = 4 ] && hex_id "$3" || fail 'A witnessed guest invocation and UID are required.'
+        [ "$uid" = "$4" ] || fail 'Guest process state is unknown for this user.'
         result=$(state "$3") || fail 'Guest process state is unknown.'
         if [ "$1" = stop ] && [ "$result" = owned ]; then
             # A natural exit can race the stop. Only the following read proves it ended.

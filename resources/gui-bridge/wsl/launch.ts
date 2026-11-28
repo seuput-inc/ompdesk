@@ -119,15 +119,16 @@ async function launch() {
 	requireThat(process.argv.length === 3 && id(spawnId), "Expected the service's WSL spawn ID");
 	const invocationId = process.env.INVOCATION_ID;
 	requireThat(id(invocationId), "Missing or invalid guest systemd INVOCATION_ID");
-	writeSync(2, `${JSON.stringify({ type: "ompdesk-wsl-attached", invocationId })}\n`);
+	const uid = process.platform === "linux" ? process.getuid?.() : undefined;
+	if (uid !== undefined && uid !== 0)
+		writeSync(2, `${JSON.stringify({ type: "ompdesk-wsl-attached", invocationId, uid })}\n`);
 	const { request: r, remainder, input } = await readRequest();
 	requireThat(r.spawnId === spawnId, "WSL spawn ID does not match the assigned service");
 	requireThat(
-		process.platform === "linux" && process.getuid && process.versions.bun,
-		"WSL launch requires guest Linux Bun",
+		uid !== undefined && uid !== 0 && process.versions.bun,
+		"WSL launch requires guest Linux Bun under a non-root user",
 	);
 	process.umask(0o077);
-	const uid = process.getuid();
 	const home = process.env.HOME;
 	requireThat(guestPath(home) && home !== "/", "Missing guest HOME");
 	ownedDir(home, uid, false);

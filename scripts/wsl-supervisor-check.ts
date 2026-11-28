@@ -24,7 +24,16 @@ const supervisor = guest(
 	"-u",
 	resolve(import.meta.dir, "../resources/gui-bridge/wsl/supervisor.sh"),
 );
-const control = (op: string, id: string, invocation: string) => ["/bin/sh", supervisor, op, id, invocation];
+const uid = guest("/usr/bin/id", "-u");
+assert.match(uid, /^[1-9]\d*$/);
+const control = (op: string, id: string, invocation: string, owner = uid) => [
+	"/bin/sh",
+	supervisor,
+	op,
+	id,
+	invocation,
+	owner,
+];
 const id = () => randomBytes(16).toString("hex");
 const first = id();
 const second = id();
@@ -86,6 +95,16 @@ try {
 	assert.equal(guest(...control("state", second, b.invocation)), "owned");
 	guest("/usr/bin/test", "-d", `/proc/${b.grandchild}`);
 	assert.equal(guest(...control("stop", first, a.invocation)), "stopped");
+	for (const op of ["state", "stop"]) {
+		const otherUser = spawnSync(wsl, [...args, ...control(op, first, a.invocation, uid === "1" ? "2" : "1")], {
+			...options,
+			timeout: 5_000,
+		});
+		assert(
+			otherUser.status !== null && otherUser.status !== 0 && otherUser.stdout.length === 0,
+			"Wrong user witnessed a stop",
+		);
+	}
 	assert.equal(guest(...control("stop", second, b.invocation)), "stopped");
 	console.log(
 		"PASS: a Win32 launcher exit retained guest ownership; wrong invocation refused; targeted stop removed the detached child, preserved the second unit and remained stopped on repeat.",
