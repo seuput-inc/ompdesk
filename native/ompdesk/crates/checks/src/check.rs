@@ -2064,7 +2064,8 @@ mod tests {
     fn a_journal_cannot_choose_a_cleanup_path_and_the_ten_run_limit_stays_local() {
         let store = cache_store("journals");
         let old = CACHE_NOW - 4 * DAY;
-        let a = cached_run(&store, 0, "history", "passed", old);
+        // The oldest journal does not have the smallest id.
+        let a = cached_run(&store, 99, "history", "passed", old);
         for i in 1..=10 {
             cached_run(&store, i, "history", "passed", old + u64::from(i));
         }
@@ -2077,6 +2078,9 @@ mod tests {
         prune_idle_inputs(&store.dir, CACHE_NOW, || false);
         assert!(store.file(&forged.id, "inputs.tsv").exists());
         assert!(inputs::stat_cache_path(&store.dir, &other.root).exists());
+        let history = store.of_key(&a.key);
+        assert_eq!(history.len(), 11);
+        assert_eq!(history.last().unwrap().id, a.id);
         store.prune(&a.key, CACHE_NOW);
         assert!(!store.run_dir(&a.id).exists());
         assert_eq!(store.of_key(&a.key).len(), 10);

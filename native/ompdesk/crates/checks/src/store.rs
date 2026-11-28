@@ -361,6 +361,22 @@ impl Run {
     }
 }
 
+struct IdleLock(File);
+
+impl IdleLock {
+    fn try_acquire(file: File) -> Result<Self, fs::TryLockError> {
+        file.try_lock()?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for IdleLock {
+    fn drop(&mut self) {
+        // A child between fork and exec still has the open file description even after our File closes.
+        let _ = self.0.unlock();
+    }
+}
+
 pub struct Store {
     pub dir: PathBuf,
 }
@@ -406,8 +422,9 @@ impl Store {
     /// Whether the run's runner still holds `alive`.
     pub fn runner_alive(&self, id: &str) -> bool {
         let path = self.file(id, "alive");
-        open_plain_file(&path)
-            .is_some_and(|file| matches!(file.try_lock(), Err(fs::TryLockError::WouldBlock)))
+        open_plain_file(&path).is_some_and(|file| {
+            matches!(IdleLock::try_acquire(file), Err(fs::TryLockError::WouldBlock))
+        })
     }
 
     pub fn write(&self, run: &Run) -> io::Result<()> {
@@ -470,14 +487,12 @@ impl Store {
         !self.dir.as_os_str().is_empty() && plain_parents(&self.dir.join("runs"))
     }
 
-    fn idle_lock(&self, run: &Run) -> Option<File> {
+    fn idle_lock(&self, run: &Run) -> Option<IdleLock> {
         let alive = self.file(&run.id, "alive");
         if !plain_parents(&self.run_dir(&run.id)) {
             return None;
         }
-        let lock = open_plain_file(&alive)?;
-        lock.try_lock().ok()?;
-        Some(lock)
+        IdleLock::try_acquire(open_plain_file(&alive)?).ok()
     }
 
     pub(super) fn expire_inputs(&self, now: u64, cancelled: &impl Fn() -> bool) -> u64 {
@@ -643,6 +658,21 @@ pub fn duration(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_of_the_cleanup_descriptor_does_not_hold_the_next_prune() {
+        let path = std::env::temp_dir().join(format!("ompdesk-idle-lock-{}", std::process::id()));
+        let file = File::create_new(&path).unwrap();
+        let next = File::open(&path).unwrap();
+        fs::remove_file(path).unwrap();
+        let guard = IdleLock::try_acquire(file).unwrap();
+        let inherited = guard.0.try_clone().unwrap();
+        assert!(matches!(next.try_lock(), Err(fs::TryLockError::WouldBlock)));
+        drop(guard);
+        next.try_lock().unwrap();
+        drop(inherited);
+    }
 
     #[test]
     fn dates_read_as_utc() {
