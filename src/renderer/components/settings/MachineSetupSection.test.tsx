@@ -166,6 +166,29 @@ describe("MachineSetupSection", () => {
 		expect(row("node")?.querySelector("[role='progressbar']")).toBeNull();
 	});
 
+	it("offers Fix (not Undo) on Windows when Git Mandatory ASLR overrides are incomplete even if sh.exe is overridden", async () => {
+		await mount(
+			setupState("win32", {
+				git: {
+					phase: "present",
+					presence: {
+						kind: "present",
+						version: "2.56.0",
+						path: "C:\\Program Files\\Git",
+						gitShell: { kind: "mandatory-aslr" },
+						gitAslrOverride: true,
+						gitAslrUndoable: true,
+					},
+				},
+			}),
+		);
+		const git = row("git");
+		expect(git?.querySelector('[data-testid="setup-git-aslr-fix"]')).not.toBeNull();
+		expect(git?.querySelector('[data-testid="setup-git-aslr-undo"]')).toBeNull();
+		await act(async () => (git?.querySelector('[data-testid="setup-git-aslr-fix"]') as HTMLElement | null)?.click());
+		expect(fake.api.gitAslr).toHaveBeenCalledWith("fix");
+	});
+
 	it("is hidden where OMPdesk doesn't set the machine up", async () => {
 		await mount(setupState("other"));
 		expect(document.body.querySelector("#setting-machine-setup")).toBeNull();

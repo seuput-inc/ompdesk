@@ -209,6 +209,8 @@ pub struct Seams {
     /// The registry's manifest of omp `version`, asked by `bun` in `env` (`ompRelease`).
     #[allow(clippy::type_complexity)]
     pub omp_release: Option<Rc<dyn Fn(String, String, Env) -> LocalFuture<Result<Value, String>>>>,
+    /// Test stand-in for reading live Windows Mandatory ASLR / IFEO state after a `gitAslr` step.
+    pub git_aslr_os: Option<Rc<dyn Fn(&[String]) -> git_aslr::OsState>>,
 }
 
 #[cfg(test)]
@@ -231,6 +233,7 @@ impl Seams {
                 })
             })),
             omp_release: None,
+            git_aslr_os: None,
         }
     }
 }
@@ -735,9 +738,11 @@ async fn detect(tools: &Rc<Tools>) {
         Some(detect) => detect().await,
         None => detect::machine(tools).await,
     };
+    let git_aslr = detection.git_aslr.clone();
     if let Some(Presence::Present {
         path: Some(root),
-        git_aslr_override: Some(true),
+        git_shell,
+        git_aslr_override,
         git_aslr_undoable,
         ..
     }) = detection.presence.get_mut("git")
@@ -746,7 +751,18 @@ async fn detect(tools: &Rc<Tools>) {
             &tools.opts.user_data,
             git_aslr::RECORD,
         ]));
-        if !git_aslr::recorded_images(&record, root).is_empty() {
+        if let Some(aslr) = &git_aslr {
+            let audit = git_aslr::audit(&aslr.images, &aslr.os);
+            if git_shell.is_none() && audit.incomplete {
+                *git_shell = Some(json!({"kind": "mandatory-aslr"}));
+            }
+            *git_aslr_override = audit.overridden.then_some(true);
+            *git_aslr_undoable = (audit.overridden
+                && git_aslr::any_recorded_override_active(&record, root, &aslr.os.ifeo))
+            .then_some(true);
+        } else if *git_aslr_override == Some(true)
+            && !git_aslr::recorded_images(&record, root).is_empty()
+        {
             *git_aslr_undoable = Some(true);
         }
     }
@@ -1501,21 +1517,101 @@ async fn git_aslr_step(tools: &Rc<Tools>, ctx: &Ctx, action: &'static str) -> Va
     let _ = std::fs::remove_file(&output_file);
     let _ = std::fs::remove_file(&input);
     let record = git_aslr::read_record(&record_file);
-    let (record, images) = if action == "fix" {
+    let seams = tools.setup.borrow().seams.clone();
+    let detected_images = tools
+        .setup
+        .borrow()
+        .detection
+        .as_ref()
+        .and_then(|d| d.git_aslr.as_ref())
+        .map(|a| a.images.clone());
+    let verify_os = async |paths: Vec<String>| -> Option<git_aslr::OsState> {
+        if let Some(reader) = &seams.git_aslr_os {
+            return Some(reader(&paths));
+        }
+        if seams.run.is_none() {
+            return Some(off_hub(move || git_aslr::read_os_state(&paths)).await);
+        }
+        None
+    };
+    let (record, images, missing_after) = if action == "fix" {
         let fixed = git_aslr::parse_fix_output(&written);
-        let images: Vec<String> = fixed.iter().map(|image| image.path.clone()).collect();
-        (git_aslr::with_fixed(&record, &root, &fixed), images)
+        let mut all_images = match detected_images {
+            Some(list) if !list.is_empty() => list,
+            _ => {
+                let root_clone = root.clone();
+                off_hub(move || git_aslr::usr_executables(&root_clone)).await
+            }
+        };
+        let mut check_paths = all_images.clone();
+        for img in &fixed {
+            if !check_paths
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(&img.path))
+            {
+                check_paths.push(img.path.clone());
+            }
+        }
+        if all_images.is_empty() {
+            all_images = check_paths.clone();
+        }
+        let verified_os = verify_os(check_paths).await;
+        let (verified, missing_after) = match &verified_os {
+            Some(os) => {
+                let verified = git_aslr::filter_verified_fix(&fixed, &os.ifeo);
+                let audit = git_aslr::audit(&all_images, os);
+                let missing = if audit.incomplete {
+                    audit.missing
+                } else {
+                    Vec::new()
+                };
+                (verified, missing)
+            }
+            None => (fixed, Vec::new()),
+        };
+        let images: Vec<String> = verified.iter().map(|image| image.path.clone()).collect();
+        (
+            git_aslr::with_fixed(&record, &root, &verified),
+            images,
+            missing_after,
+        )
     } else {
         let restored = git_aslr::parse_undo_output(&written);
-        (git_aslr::with_restored(&record, &root, &restored), restored)
+        let verified = match verify_os(restored.clone()).await {
+            Some(os) => git_aslr::filter_verified_undo(&restored, &os.ifeo),
+            None => restored,
+        };
+        (
+            git_aslr::with_restored(&record, &root, &verified),
+            verified,
+            Vec::new(),
+        )
     };
     let _ = git_aslr::write_record(&record_file, &record);
-    let kind = match &ran.outcome {
-        RunOutcome::Succeeded => "succeeded",
-        RunOutcome::Cancelled => "cancelled",
-        RunOutcome::Failed { .. } => "failed",
+    let incomplete_after = ran.outcome == RunOutcome::Succeeded && !missing_after.is_empty();
+    let kind = if incomplete_after {
+        "failed"
+    } else {
+        match &ran.outcome {
+            RunOutcome::Succeeded => "succeeded",
+            RunOutcome::Cancelled => "cancelled",
+            RunOutcome::Failed { .. } => "failed",
+        }
     };
-    let detail = update_detail(&tail.borrow());
+    let detail = if incomplete_after {
+        let sample: Vec<&str> = missing_after
+            .iter()
+            .take(5)
+            .map(|path| path.rsplit(['\\', '/']).next().unwrap_or(path))
+            .collect();
+        Some(format!(
+            "Mandatory ASLR override is still missing for {} executable(s): {}",
+            missing_after.len(),
+            sample.join(", ")
+        ))
+    } else {
+        update_detail(&tail.borrow())
+    };
     tools.log(
         "setup",
         &format!("Git Mandatory ASLR override {action}: {kind}"),
@@ -1525,10 +1621,14 @@ async fn git_aslr_step(tools: &Rc<Tools>, ctx: &Ctx, action: &'static str) -> Va
             "action": action,
             "outcome": kind,
             "images": images,
+            "missing": missing_after.iter().take(20).collect::<Vec<_>>(),
             "output": detail,
         }),
     );
     detect(tools).await;
+    if incomplete_after {
+        return json!({"ok": false, "detail": detail.unwrap_or_default()});
+    }
     match ran.outcome {
         RunOutcome::Succeeded => json!({"ok": true, "images": images.len()}),
         RunOutcome::Failed { detail: failed, .. } => {

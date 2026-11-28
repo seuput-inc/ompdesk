@@ -5,6 +5,8 @@
  */
 import { vi } from "vitest";
 import {
+	type GitAslrAction,
+	type GitAslrResult,
 	SETUP_ITEMS,
 	type SetupItemId,
 	type SetupItemState,
@@ -62,6 +64,7 @@ export function fakeSetupApi(initial: SetupState) {
 		getState: vi.fn(async () => current.state),
 		retry: vi.fn(async (_item: SetupItemId) => {}),
 		cancel: vi.fn(async () => true),
+		gitAslr: vi.fn(async (_action: GitAslrAction): Promise<GitAslrResult> => ({ ok: true, images: 0 })),
 		onState: vi.fn((callback: (state: SetupState) => void) => {
 			listener = callback;
 			return () => {

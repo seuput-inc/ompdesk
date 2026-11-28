@@ -408,6 +408,7 @@ fn harness_in(dir: &Path, found: Machine, options: Options, mirror: Option<&Mirr
                 brew: found.brew.clone(),
                 winget: found.winget.clone(),
                 path_env: String::new(),
+                git_aslr: None,
             };
             Box::pin(async move { detection })
         })
@@ -417,6 +418,7 @@ fn harness_in(dir: &Path, found: Machine, options: Options, mirror: Option<&Mirr
         detect: Some(detect),
         run: Some(run),
         omp_release: options.omp_release.clone(),
+        git_aslr_os: None,
     };
     crate::tools::cli::offline(&tools);
     H {
@@ -3765,6 +3767,244 @@ fn git_aslr_fix_records_what_it_changed_and_undo_puts_it_back() {
     });
 }
 
+/// Regression: `git-aslr.json` already lists `grep.exe`, `sh.exe`/`bash.exe`/`sed.exe` have IFEO overrides (so
+/// `sh -c /usr/bin/true` succeeds), system Mandatory ASLR is ON, and `grep.exe` is missing from Windows IFEO.
+/// Detection must flag `mandatory-aslr` despite the cached record; Fix must verify actual OS state before recording,
+/// refuse to falsely record unapplied binaries, and clear `mandatory-aslr` once `grep.exe` is actually present in IFEO.
+#[test]
+fn git_aslr_detects_missing_grep_override_despite_stale_record_and_verifies_fix() {
+    local(|dir| async move {
+        let root = "C:\\Program Files\\Git";
+        let sh = format!("{root}\\usr\\bin\\sh.exe");
+        let bash = format!("{root}\\usr\\bin\\bash.exe");
+        let sed = format!("{root}\\usr\\bin\\sed.exe");
+        let grep = format!("{root}\\usr\\bin\\grep.exe");
+        let all_images = vec![bash.clone(), grep.clone(), sed.clone(), sh.clone()];
+
+        // Pre-populate git-aslr.json with ALL 4 executables including grep.exe (stale cache).
+        let record_path = dir.join(git_aslr::RECORD).to_string_lossy().into_owned();
+        let stale = git_aslr::with_fixed(
+            &git_aslr::Record::default(),
+            root,
+            &all_images
+                .iter()
+                .map(|path| git_aslr::Image {
+                    path: path.clone(),
+                    prior: "notset".into(),
+                })
+                .collect::<Vec<_>>(),
+        );
+        git_aslr::write_record(&record_path, &stale).unwrap();
+
+        // Live OS state: system Mandatory ASLR is ON, sh/bash/sed have overrides, grep.exe is MISSING!
+        let os_state = Rc::new(RefCell::new(git_aslr::OsState {
+            system_mandatory_aslr: true,
+            ifeo: git_aslr::IfeoState {
+                filtered_off: [sh.to_lowercase(), bash.to_lowercase(), sed.to_lowercase()]
+                    .into_iter()
+                    .collect(),
+                basename_off: Default::default(),
+            },
+        }));
+
+        let mut found = machine(&[]);
+        found.presence.insert(
+            "git",
+            Presence::Present {
+                version: Some("2.56.0".into()),
+                path: Some(root.into()),
+                // sh -c "/usr/bin/true; exit" passed because sh.exe and true.exe are overridden.
+                git_shell: None,
+                git_aslr_override: Some(true),
+                git_aslr_undoable: None,
+            },
+        );
+        let h = harness(
+            &dir,
+            found,
+            Options {
+                platform: "win32",
+                automatic: false,
+                ..Options::default()
+            },
+        );
+        // Wire detection seam to include the live OS state snapshot (matching detect_git on Windows).
+        {
+            let machine = Rc::clone(&h.machine);
+            let os_state = Rc::clone(&os_state);
+            let images = all_images.clone();
+            h.tools.setup.borrow_mut().seams.detect = Some(Rc::new(move || {
+                let found = machine.borrow();
+                let detection = Detection {
+                    presence: found.presence.clone(),
+                    bun: Some("/home/u/.bun/bin/bun".into()),
+                    omp: Some("/home/u/.bun/bin/omp".into()),
+                    brew: None,
+                    winget: None,
+                    path_env: String::new(),
+                    git_aslr: Some(super::detect::GitAslrDetection {
+                        images: images.clone(),
+                        os: os_state.borrow().clone(),
+                    }),
+                };
+                Box::pin(async move { detection })
+            }));
+        }
+        {
+            let os_state = Rc::clone(&os_state);
+            h.tools.setup.borrow_mut().seams.git_aslr_os =
+                Some(Rc::new(move |_| os_state.borrow().clone()));
+        }
+
+        h.start().await;
+        // Must detect mandatory-aslr even though sh.exe passed and git-aslr.json already listed grep.exe.
+        assert_eq!(
+            h.item("git")["presence"]["gitShell"],
+            json!({"kind": "mandatory-aslr"})
+        );
+        assert_eq!(h.item("git")["presence"]["gitAslrOverride"], true);
+
+        // 1) Suppose elevated script claims it fixed a new binary `regtool.exe` + `grep.exe`,
+        //    but actual OS IFEO STILL does NOT contain either of them.
+        let regtool = format!("{root}\\usr\\bin\\regtool.exe");
+        let out = dir.join("git-aslr-out.json");
+        let fake_written =
+            json!([{"path": grep, "prior": 0}, {"path": regtool, "prior": 0}]).to_string();
+        {
+            let out = out.clone();
+            let fake_written = fake_written.clone();
+            h.tools.setup.borrow_mut().seams.run = Some(Rc::new(move |_, _, _, _| {
+                std::fs::write(&out, &fake_written).unwrap();
+                Box::pin(async { ran(0, String::new()) })
+            }));
+        }
+        let failed = h
+            .later("setup.gitAslr", json!({"action": "fix"}))
+            .await
+            .unwrap();
+        assert_eq!(failed["ok"], false);
+        assert!(
+            failed["detail"].as_str().unwrap().contains("grep.exe"),
+            "detail should name missing executable: {failed}"
+        );
+        // Unapplied `regtool.exe` must NOT have been recorded in git-aslr.json.
+        let after_failed = git_aslr::read_record(&record_path);
+        assert!(
+            !git_aslr::recorded_images(&after_failed, root)
+                .iter()
+                .any(|img| img.path.eq_ignore_ascii_case(&regtool))
+        );
+        assert_eq!(
+            h.item("git")["presence"]["gitShell"],
+            json!({"kind": "mandatory-aslr"})
+        );
+
+        // 2) Now Fix actually writes `grep.exe` into Windows IFEO: must succeed and clear mandatory-aslr.
+        {
+            let out = out.clone();
+            let os_state = Rc::clone(&os_state);
+            let grep_path = grep.clone();
+            h.tools.setup.borrow_mut().seams.run = Some(Rc::new(move |_, _, _, _| {
+                os_state
+                    .borrow_mut()
+                    .ifeo
+                    .filtered_off
+                    .insert(grep_path.to_lowercase());
+                std::fs::write(&out, json!([{"path": grep_path, "prior": 1}]).to_string()).unwrap();
+                Box::pin(async { ran(0, String::new()) })
+            }));
+        }
+        let fixed = h
+            .later("setup.gitAslr", json!({"action": "fix"}))
+            .await
+            .unwrap();
+        assert_eq!(fixed, json!({"ok": true, "images": 1}));
+        assert_eq!(h.item("git")["presence"]["gitShell"], Value::Null);
+        assert_eq!(h.item("git")["presence"]["gitAslrOverride"], true);
+        assert_eq!(h.item("git")["presence"]["gitAslrUndoable"], true);
+        // Original prior ("notset") for grep.exe in git-aslr.json is preserved across re-Fix.
+        let final_record = git_aslr::read_record(&record_path);
+        let grep_entry = git_aslr::recorded_images(&final_record, root)
+            .into_iter()
+            .find(|img| img.path.eq_ignore_ascii_case(&grep))
+            .unwrap();
+        assert_eq!(grep_entry.prior, "notset");
+    });
+}
+
+/// When system Mandatory ASLR is OFF, missing per-app overrides do not trigger `mandatory-aslr`, and a stale
+/// `git-aslr.json` whose overrides were all removed from Windows IFEO is not reported as overridden or undoable.
+#[test]
+fn git_aslr_ignores_stale_record_when_system_aslr_off_and_ifeo_empty() {
+    local(|dir| async move {
+        let root = "C:\\Program Files\\Git";
+        let sh = format!("{root}\\usr\\bin\\sh.exe");
+        let grep = format!("{root}\\usr\\bin\\grep.exe");
+        let record_path = dir.join(git_aslr::RECORD).to_string_lossy().into_owned();
+        let stale = git_aslr::with_fixed(
+            &git_aslr::Record::default(),
+            root,
+            &[
+                git_aslr::Image {
+                    path: sh.clone(),
+                    prior: "notset".into(),
+                },
+                git_aslr::Image {
+                    path: grep.clone(),
+                    prior: "notset".into(),
+                },
+            ],
+        );
+        git_aslr::write_record(&record_path, &stale).unwrap();
+
+        let mut found = machine(&[]);
+        found.presence.insert(
+            "git",
+            Presence::Present {
+                version: Some("2.56.0".into()),
+                path: Some(root.into()),
+                git_shell: None,
+                git_aslr_override: None,
+                git_aslr_undoable: None,
+            },
+        );
+        let h = harness(
+            &dir,
+            found,
+            Options {
+                platform: "win32",
+                automatic: false,
+                ..Options::default()
+            },
+        );
+        let machine = Rc::clone(&h.machine);
+        let images = vec![sh, grep];
+        h.tools.setup.borrow_mut().seams.detect = Some(Rc::new(move || {
+            let found = machine.borrow();
+            let detection = Detection {
+                presence: found.presence.clone(),
+                bun: Some("/home/u/.bun/bin/bun".into()),
+                omp: Some("/home/u/.bun/bin/omp".into()),
+                brew: None,
+                winget: None,
+                path_env: String::new(),
+                git_aslr: Some(super::detect::GitAslrDetection {
+                    images: images.clone(),
+                    os: git_aslr::OsState {
+                        system_mandatory_aslr: false,
+                        ifeo: git_aslr::IfeoState::default(),
+                    },
+                }),
+            };
+            Box::pin(async move { detection })
+        }));
+        h.start().await;
+        assert_eq!(h.item("git")["presence"]["gitShell"], Value::Null);
+        assert_eq!(h.item("git")["presence"]["gitAslrOverride"], Value::Null);
+        assert_eq!(h.item("git")["presence"]["gitAslrUndoable"], Value::Null);
+    });
+}
+
 // ---- compiled-launcher.test.ts ---------------------------------------------------------------------------------------
 
 /// "holds the next install until a stalled rename has restored its launcher": a `bun install -g` step stopped by its
@@ -4629,11 +4869,11 @@ async fn follows_a_windows_npm_shim_to_its_prefix() {
 // ---- git-aslr.test.ts --------------------------------------------------------------------------------------------
 
 /// gitAslrSpawn: "elevates one step that turns only ForceRelocateImages off …", "undoes only the recorded images'
-/// ForceRelocateImages bits", "quotes a path with a quote in it": both scripts compared whole with the TypeScript's.
+/// ForceRelocateImages bits", "quotes a path with a quote in it": uses 64-bit native .NET RegistryKey (no wildcard
+/// `New-Item -Path`), always enforces `UseFilter = 1`, and verifies each persisted write before recording `$done`.
 #[test]
 fn elevates_the_scripts_the_typescript_elevated() {
-    for row in captured_plans()["aslr"].as_array().unwrap() {
-        let action = row["action"].as_str().unwrap();
+    for action in ["fix", "undo"] {
         let spec = git_aslr::spawn(
             "C:\\Windows",
             "C:\\O'Brien\\Git",
@@ -4641,32 +4881,47 @@ fn elevates_the_scripts_the_typescript_elevated() {
             "C:\\u\\in.json",
             "C:\\u\\out.json",
         );
-        let outer = decode_powershell(&spec.args);
-        assert_eq!(outer, row["outer"], "{action}");
         assert_eq!(
+            spec.file,
+            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        );
+        let outer = decode_powershell(&spec.args);
+        assert!(outer.contains("-Verb RunAs -Wait -PassThru -WindowStyle Hidden"));
+        assert!(outer.contains("if ($proc.ExitCode -ne 0)"));
+        let encoded_inner = outer
+            .split("'-EncodedCommand', '")
+            .nth(1)
+            .and_then(|rest| rest.split('\'').next())
+            .unwrap();
+        let inner = decode_powershell(&["-EncodedCommand".into(), encoded_inner.into()]);
+        assert_eq!(
+            inner,
             git_aslr::elevated_script(
                 "C:\\O'Brien\\Git",
                 action,
                 "C:\\u\\in.json",
                 "C:\\u\\out.json"
             ),
-            row["elevated"],
             "{action}"
         );
-        assert_eq!(
-            spec.file,
-            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-        );
+        assert!(inner.contains("RegistryView]::Registry64"), "{action}");
+        assert!(!inner.contains("New-Item -Path"), "{action}");
+        assert!(!inner.contains("Set-ProcessMitigation"), "{action}");
     }
-    let fix = git_aslr::elevated_script("C:\\Program Files\\Git", "fix", "in", "out");
+    let fix = git_aslr::elevated_script("C:\\O'Brien\\Git", "fix", "in", "out");
     assert!(fix.contains(
-        "Get-ChildItem -LiteralPath 'C:\\Program Files\\Git\\usr' -Recurse -File -Filter *.exe"
+        "Get-ChildItem -LiteralPath 'C:\\O''Brien\\Git\\usr' -Recurse -File -Filter *.exe"
     ));
     assert!(
-        fix.contains("if ($prior -eq 2) { continue }") && !fix.contains("Set-ProcessMitigation")
+        fix.contains(
+            "$parent.SetValue('UseFilter', 1, [Microsoft.Win32.RegistryValueKind]::DWord)"
+        )
     );
+    assert!(fix.contains("if ($prior -eq 2)"));
+    assert!(fix.contains("Failed to verify ForceRelocateImages override for "));
     let undo = git_aslr::elevated_script("C:\\Program Files\\Git", "undo", "in", "out");
-    assert!(undo.contains("-eq 2) { Set-Relocate $entry $options ([int]$e.prior) }"));
+    assert!(undo.contains("-eq 2) { Set-Relocate $entry $options ([int]$e.prior)"));
+    assert!(undo.contains("Failed to verify ForceRelocateImages restore for "));
     assert!(!undo.contains("Remove-Item") && !undo.contains("-Remove"));
 }
 
@@ -4776,5 +5031,101 @@ fn finds_the_override_on_that_gits_sh_only() {
         &query.replace("0102", "0101"),
         "C:\\Program Files\\Git"
     ));
+    // Without UseFilter=1 on the parent key, Windows ignores {guid} subkeys.
+    assert!(!git_aslr::overridden(
+        &query.replace("0x1", "0x0"),
+        "C:\\Program Files\\Git"
+    ));
     assert!(!git_aslr::overridden("", "C:\\Program Files\\Git"));
+}
+
+/// Parses system Mandatory ASLR, full IFEO state (filtered, UseFilter=0 ignored, basename-only, `[.exe`), and audits
+/// missing overrides such as `grep.exe`.
+#[test]
+fn parses_system_aslr_and_audits_full_ifeo_overrides() {
+    assert!(git_aslr::system_mandatory_aslr(
+        "\r\nHKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\kernel\r\n    MitigationOptions    REG_BINARY    0001000000020000\r\n"
+    ));
+    assert!(git_aslr::system_mandatory_aslr(
+        "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\kernel\n    MitigationOptions    REG_BINARY    00030000\n"
+    ));
+    assert!(!git_aslr::system_mandatory_aslr(
+        "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\kernel\n    MitigationOptions    REG_BINARY    00000000\n"
+    ));
+    assert!(!git_aslr::system_mandatory_aslr(
+        "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\kernel\n    MitigationOptions    REG_BINARY    00020000\n"
+    ));
+    assert!(!git_aslr::system_mandatory_aslr(""));
+
+    let query = [
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sh.exe",
+        "    UseFilter    REG_DWORD    0x1",
+        "",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sh.exe\\{11111111-1111-1111-1111-111111111111}",
+        "    FilterFullPath    REG_SZ    C:\\Program Files\\Git\\usr\\bin\\sh.exe",
+        "    MitigationOptions    REG_BINARY    000200000000000000000000000000000000000000000000",
+        "",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\[.exe",
+        "    UseFilter    REG_DWORD    0x1",
+        "",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\[.exe\\{22222222-2222-2222-2222-222222222222}",
+        "    FilterFullPath    REG_SZ    C:\\Program Files\\Git\\usr\\bin\\[.exe",
+        "    MitigationOptions    REG_BINARY    000200000000000000000000000000000000000000000000",
+        "",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\sed.exe",
+        "    MitigationOptions    REG_BINARY    000200000000000000000000000000000000000000000000",
+        "",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\awk.exe",
+        "    UseFilter    REG_DWORD    0x0",
+        "",
+        "HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\awk.exe\\{33333333-3333-3333-3333-333333333333}",
+        "    FilterFullPath    REG_SZ    C:\\Program Files\\Git\\usr\\bin\\awk.exe",
+        "    MitigationOptions    REG_BINARY    000200000000000000000000000000000000000000000000",
+    ]
+    .join("\r\n");
+
+    let ifeo = git_aslr::parse_ifeo(&query);
+    let sh = "C:\\Program Files\\Git\\usr\\bin\\sh.exe".to_owned();
+    let bracket = "C:\\Program Files\\Git\\usr\\bin\\[.exe".to_owned();
+    let sed = "C:\\Program Files\\Git\\usr\\bin\\sed.exe".to_owned();
+    let awk = "C:\\Program Files\\Git\\usr\\bin\\awk.exe".to_owned();
+    let grep = "C:\\Program Files\\Git\\usr\\bin\\grep.exe".to_owned();
+
+    assert!(ifeo.has_filtered_override(&sh));
+    assert!(ifeo.has_filtered_override(&bracket));
+    // sed.exe has a basename-level override (no UseFilter): protects sed.exe, not a path-filtered entry.
+    assert!(!ifeo.has_filtered_override(&sed));
+    assert!(ifeo.protects_image(&sed));
+    // awk.exe has UseFilter=0 so its {guid} subkey is ignored by Windows.
+    assert!(!ifeo.protects_image(&awk));
+    // grep.exe has no key at all.
+    assert!(!ifeo.protects_image(&grep));
+
+    let images = vec![sh, bracket, sed, awk.clone(), grep.clone()];
+    let audit = git_aslr::audit(
+        &images,
+        &git_aslr::OsState {
+            system_mandatory_aslr: true,
+            ifeo: ifeo.clone(),
+        },
+    );
+    assert!(audit.overridden);
+    assert!(audit.incomplete);
+    assert_eq!(audit.missing, vec![awk, grep]);
+
+    // Enumerating usr executables picks up nested `.exe` files including `[.exe` and ignores non-exe files.
+    let tmp = tempfile::tempdir().unwrap();
+    let usr_bin = tmp.path().join("usr").join("bin");
+    let usr_lib = tmp.path().join("usr").join("lib").join("ssh");
+    std::fs::create_dir_all(&usr_bin).unwrap();
+    std::fs::create_dir_all(&usr_lib).unwrap();
+    std::fs::write(usr_bin.join("grep.exe"), b"").unwrap();
+    std::fs::write(usr_bin.join("[.exe"), b"").unwrap();
+    std::fs::write(usr_bin.join("msys-2.0.dll"), b"").unwrap();
+    std::fs::write(usr_lib.join("sftp-server.EXE"), b"").unwrap();
+    let listed = git_aslr::usr_executables(&tmp.path().to_string_lossy());
+    assert_eq!(listed.len(), 3);
+    assert!(listed.iter().any(|p| p.ends_with("grep.exe")));
+    assert!(listed.iter().any(|p| p.ends_with("[.exe")));
+    assert!(listed.iter().any(|p| p.ends_with("sftp-server.EXE")));
 }
