@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.154.0] - 2026-11-28
+
+호스트에서 닫은 자식 세션이 사이드바에서 부모와 떨어져 별도 행으로 남지 않습니다.
+
+- 휴대폰에서 봇 패키지를 가져올 때 연결한 컴퓨터가 보여 주는 목록에서 파일을 선택합니다.
+
+<!-- en -->
+
+A child session closed on its host no longer lingers as a separate sidebar row outside its parent.
+
+- When importing a bot package from your phone, choose the file from the list on the connected computer.
+
 ## [0.153.0] - 2026-11-28
 
 선택한 컴퓨터에 봇을 만들고, 질문함에서 여러 에이전트의 질문에 한 번에 답하고, ‘할 일’에서 진행 중인 일을 먼저 볼 수 있습니다.
