@@ -9,7 +9,7 @@ fn registry_default_binds_by_id_and_only_a_registered_v2_can_be_probed() {
     let distro = |id: &str, name: &str, version| {
         Distribution::registered(id.into(), name.into(), version, Some(OLD)).unwrap()
     };
-    let inventory = Inventory {
+    let mut inventory = Inventory {
         app_version: Some("2.7.13.0".into()),
         distributions: vec![
             distro(OLD, "이전", 1),
@@ -25,7 +25,7 @@ fn registry_default_binds_by_id_and_only_a_registered_v2_can_be_probed() {
             ]
         })
     );
-    assert_eq!(inventory.registered_v2(&ID.to_uppercase()).unwrap(), ID);
+    assert_eq!(inventory.registered_v2(&ID.to_uppercase()).unwrap().id, ID);
     assert_eq!(inventory.registered_v2(OLD).unwrap_err().code, "wsl_not_v2");
     for other in ["작업", "{12345678-abcd-0000-0000-000000000002}"] {
         assert_eq!(

@@ -8,6 +8,7 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OmpApi } from "../../../../shared/ipc-types";
 import { I18nProvider } from "../../../lib/i18n";
 import { useSidebarPrefs } from "../../../stores/sidebar-prefs";
 import ProjectDialog, { type ProjectDialogRequest } from "./ProjectDialogs";
@@ -24,8 +25,15 @@ Object.assign(globalThis as Record<string, unknown>, {
 });
 
 const updateSidebar = vi.fn(async () => {});
+const getHost = vi.fn<OmpApi["wslHost"]["get"]>();
+const setHost = vi.fn<OmpApi["wslHost"]["set"]>();
+const openExternal = vi.fn(async () => {});
 Object.assign(window as unknown as Record<string, unknown>, {
-	omp: { prefs: { updateSidebar, get: vi.fn(async () => null), onChanged: vi.fn(() => () => {}) } },
+	omp: {
+		prefs: { updateSidebar, get: vi.fn(async () => null), onChanged: vi.fn(() => () => {}) },
+		wslHost: { get: getHost, set: setHost },
+		system: { openExternal },
+	},
 });
 
 let root: Root | undefined;
@@ -70,7 +78,63 @@ afterEach(async () => {
 	root = undefined;
 	updateSidebar.mockClear();
 	onClose.mockClear();
+	getHost.mockReset();
+	setHost.mockReset();
+	openExternal.mockClear();
 	useSidebarPrefs.getState().reset();
+});
+
+describe("project execution host", () => {
+	const cwd = "C:\\test\\project";
+	const distro = { id: "{aba10101-abcd-1234-4321-123456789abc}", name: "Distro", version: 2, isDefault: true };
+	async function click(name: string) {
+		const button = [...document.querySelectorAll("button")].find(element => element.textContent === name);
+		if (!button) throw new Error(`Missing button ${name}`);
+		await act(async () => (button as unknown as HTMLButtonElement).click());
+	}
+
+	it("starts on Windows, shows only WSL 2 choices, and saves the registration only after confirmation", async () => {
+		getHost.mockResolvedValue({ selected: null, distributions: [distro, { ...distro, id: "legacy", version: 1 }] });
+		await mount({ kind: "host", cwd, name: "Project" });
+		expect(getHost).toHaveBeenCalledWith(cwd);
+		expect(document.querySelector('[data-choice=""]')?.getAttribute("aria-checked")).toBe("true");
+		expect(document.querySelector('[data-choice="legacy"]')).toBeNull();
+		await run(`[data-choice="${distro.id}"]`, "onClick");
+		expect(document.body.textContent).toContain("WSL is not a sandbox");
+		for (const label of ["WSL configuration", "File permissions", "WSL container API"]) await click(label);
+		expect(openExternal.mock.calls).toEqual(
+			["wsl-config", "file-permissions", "wsl-container"].map(page => [
+				`https://learn.microsoft.com/en-us/windows/wsl/${page}`,
+			]),
+		);
+		expect(setHost).not.toHaveBeenCalled();
+		await click("Save");
+		expect(setHost).toHaveBeenCalledWith(cwd, distro.id);
+		expect(onClose).toHaveBeenCalledOnce();
+	});
+
+	it("does not silently replace a missing distro; Windows can be saved explicitly", async () => {
+		getHost.mockResolvedValue({ selected: distro.id, distributions: [] });
+		await mount({ kind: "host", cwd, name: "Project" });
+		expect(document.body.textContent).toContain("no longer available");
+		expect(document.querySelector('[aria-checked="true"]')).toBeNull();
+		expect(setHost).not.toHaveBeenCalled();
+		await run('[data-choice=""]', "onClick");
+		setHost.mockRejectedValueOnce(new Error("raw core refusal"));
+		await click("Save");
+		expect(onClose).not.toHaveBeenCalled();
+		expect(document.querySelector('[role="alert"]')?.textContent).toContain("Couldn’t save this host");
+		await click("Save");
+		expect(setHost).toHaveBeenLastCalledWith(cwd, null);
+		expect(onClose).toHaveBeenCalledOnce();
+	});
+
+	it("shows the localized reason when the window cannot read this project", async () => {
+		getHost.mockRejectedValue(new Error("[wsl_host_local_only] refused"));
+		await mount({ kind: "host", cwd, name: "Project" });
+		expect(document.querySelector('[role="alert"]')?.textContent).toContain("local tab");
+		expect(document.querySelector('[role="radio"]')).toBeNull();
+	});
 });
 
 describe("Move to group", () => {

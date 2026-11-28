@@ -1,10 +1,13 @@
-//! A Windows host may offer exactly one get_state exchange on a reserved, non-running lane. No process starts here.
+//! Validate stock's guest-only identity and project it onto the host registration.
+#[cfg(test)]
 use std::time::Instant;
 
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
+#[cfg(test)]
 use tokio::sync::{mpsc, oneshot};
 
+#[cfg(test)]
 use super::lane::{Msg, StockReply};
 use crate::server::Fault;
 use crate::wsl_copy::Writer;
@@ -63,6 +66,7 @@ fn invalid() -> Fault {
     )
 }
 
+#[cfg(test)]
 pub(super) enum Probe {
     Offered(oneshot::Sender<Result<(u64, bool), Fault>>),
     Asked {
@@ -72,6 +76,7 @@ pub(super) enum Probe {
     },
 }
 
+#[cfg(test)]
 pub struct Answer {
     pub seq: u64,
     pub writer: Writer,
@@ -80,21 +85,21 @@ pub struct Answer {
     pub done: oneshot::Sender<Result<Writer, Fault>>,
 }
 
+#[cfg(test)]
 struct Cancel {
     inbox: mpsc::UnboundedSender<Msg>,
     seq: u64,
 }
 
+#[cfg(test)]
 impl Drop for Cancel {
     fn drop(&mut self) {
         let _ = self.inbox.send(Msg::CancelGuest(self.seq));
     }
 }
 
-/// Serves one actual `sidecar.command(get_state)` on this lease, returning the bound writer on success.
-/// `guest_home` and `exchange` belong to the host-selected distro and spawn, not to RPC. This is not execution
-/// admission: no other command, unsolicited event or bridge is accepted. There is no packaged connector yet.
-/// Drop this future to withdraw the offer. The exchange must return only the response from that spawn's stdout.
+/// Test seam for a single correlated exchange, with no admission or execution surface in a production build.
+#[cfg(test)]
 pub async fn serve_guest_state<F, Fut>(
     tab: &str,
     writer: Writer,
@@ -140,11 +145,12 @@ where
 }
 
 // resources/gui-bridge/wsl/original.ts sessionName. Ownership, links and filesystem type are checked in Linux.
-fn valid_name(name: &str) -> bool {
+pub(super) fn valid_name(name: &str) -> bool {
     let Some(stem) = name.strip_suffix(".jsonl") else {
         return false;
     };
     if stem.is_empty()
+        || name.len() > 255
         || name
             .chars()
             .any(|c| c.is_control() || "\\/:*?\"<>|".contains(c))
@@ -168,51 +174,68 @@ fn valid_name(name: &str) -> bool {
     !reserved && !port
 }
 
+#[cfg(test)]
 impl Answer {
     pub(super) fn project(&mut self) -> Result<Value, Fault> {
         let id = format!("{}-{}", self.writer.spawn_id(), self.seq);
-        let response = &self.response;
-        if response["type"] != "response"
-            || response["command"] != "get_state"
-            || response["id"].as_str() != Some(id.as_str())
-            || response["success"] != true
-        {
-            return Err(invalid());
-        }
-        let stock = &response["data"];
-        let file = stock["sessionFile"].as_str().ok_or_else(invalid)?;
-        let (directory, name) = file.rsplit_once('/').ok_or_else(invalid)?;
-        if directory != self.directory || !valid_name(name) {
-            return Err(invalid());
-        }
-        self.writer
-            .bind_stock_id(stock["sessionId"].as_str().ok_or_else(invalid)?)
-            .map_err(|_| invalid())?;
-        let reference = format_ref(self.writer.session_key());
-        let registration = self.writer.registration();
-        let mut data = json!({
-            "sessionId":reference, "sessionFile":reference, "cwd":registration.cwd,
-            "openedBySession":registration.parent, "parentSession":registration.parent,
-        });
-        // Pre-admission projects identity and scalar run facts only, never tool grants, model configuration or paths.
-        for key in [
-            "isStreaming",
-            "isCompacting",
-            "isSettled",
-            "hasPendingAsyncWork",
-        ] {
-            if let Some(value) = stock[key].as_bool() {
-                data[key] = value.into();
-            }
-        }
-        for key in ["messageCount", "queuedMessageCount"] {
-            if let Some(value) = stock[key].as_u64() {
-                data[key] = value.into();
-            }
-        }
-        Ok(json!({
-            "type":"response", "command":"get_state", "id":format!("gui-{}", self.seq),
-            "success":true, "data":data,
-        }))
+        project(
+            &mut self.writer,
+            &self.directory,
+            &self.response,
+            &id,
+            self.seq,
+        )
     }
+}
+
+pub(super) fn project(
+    writer: &mut Writer,
+    directory: &str,
+    response: &Value,
+    id: &str,
+    seq: u64,
+) -> Result<Value, Fault> {
+    if response["type"] != "response"
+        || response["command"] != "get_state"
+        || response["id"].as_str() != Some(id)
+        || response["success"] != true
+    {
+        return Err(invalid());
+    }
+    let stock = &response["data"];
+    let file = stock["sessionFile"].as_str().ok_or_else(invalid)?;
+    let (parent, name) = file.rsplit_once('/').ok_or_else(invalid)?;
+    if parent != directory || !valid_name(name) {
+        return Err(invalid());
+    }
+    writer
+        .bind_stock_id(stock["sessionId"].as_str().ok_or_else(invalid)?)
+        .map_err(|_| invalid())?;
+    writer.remember_original(name).map_err(|_| invalid())?;
+    let reference = format_ref(writer.session_key());
+    let registration = writer.registration();
+    let mut data = json!({
+        "sessionId":reference, "sessionFile":reference, "cwd":registration.cwd,
+        "openedBySession":registration.parent, "parentSession":registration.parent,
+    });
+    // Pre-admission projects identity and scalar run facts only, never tool grants, model configuration or paths.
+    for key in [
+        "isStreaming",
+        "isCompacting",
+        "isSettled",
+        "hasPendingAsyncWork",
+    ] {
+        if let Some(value) = stock[key].as_bool() {
+            data[key] = value.into();
+        }
+    }
+    for key in ["messageCount", "queuedMessageCount"] {
+        if let Some(value) = stock[key].as_u64() {
+            data[key] = value.into();
+        }
+    }
+    Ok(json!({
+        "type":"response", "command":"get_state", "id":format!("gui-{seq}"),
+        "success":true, "data":data,
+    }))
 }

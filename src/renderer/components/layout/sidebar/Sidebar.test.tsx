@@ -1415,6 +1415,28 @@ describe("Sidebar menus and pinned ordering", () => {
 		expect(labels).toHaveLength(11);
 	});
 
+	it.each([
+		["win32", undefined, true],
+		["win32", "paired", false],
+		["web", undefined, false],
+		["darwin", undefined, false],
+	] as const)("project host menu on %s with tab device %s", async (platform, device, offered) => {
+		const previous = document.documentElement.dataset.platform;
+		document.documentElement.dataset.platform = platform;
+		onTestFinished(() => {
+			if (previous === undefined) delete document.documentElement.dataset.platform;
+			else document.documentElement.dataset.platform = previous;
+		});
+		const cwd = "C:/work/alpha";
+		const omp = installMockOmp([session("C:/sessions/one.jsonl", cwd)]);
+		omp.sidebarProjects.lists.local = { projects: [{ path: cwd, addedAt: 1 }], removed: [], worktrees: {} };
+		seedStores();
+		if (device) useTabsStore.setState(state => ({ tabs: state.tabs.map(tab => ({ ...tab, device })) }));
+		await mount(<Sidebar />);
+		await fire(container.querySelector(`[data-workspace-group="${cwd}"]`), "onContextMenu");
+		expect(menuItemLabels().includes("Execution host…")).toBe(offered);
+	});
+
 	it("lists a project group's projects under its header, and folding the group hides them", async () => {
 		installMockOmp(LIST);
 		seedStores();

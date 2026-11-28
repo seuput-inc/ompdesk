@@ -8,6 +8,8 @@ use tokio::process::Command;
 
 use crate::server::{Call, Fault, Registry, Reply, Scope};
 
+pub(crate) mod project;
+
 const PROBE: &str = include_str!("../../../../../../resources/gui-bridge/wsl/probe-tools.sh");
 const MINIMUM: &str = include_str!("../../../../../../src/shared/omp-minimum.json");
 
@@ -21,7 +23,7 @@ struct Target {
     id: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Distribution {
     pub(crate) id: String,
@@ -121,13 +123,13 @@ async fn inventory(scope: &Scope) -> Result<Inventory, Fault> {
 }
 
 impl Inventory {
-    fn registered_v2(&self, id: &str) -> Result<&str, Fault> {
+    fn registered_v2(&mut self, id: &str) -> Result<Distribution, Fault> {
         match self
             .distributions
             .iter()
-            .find(|d| d.id.eq_ignore_ascii_case(id))
+            .position(|d| d.id.eq_ignore_ascii_case(id))
         {
-            Some(d) if d.version == 2 => Ok(&d.id),
+            Some(i) if self.distributions[i].version == 2 => Ok(self.distributions.swap_remove(i)),
             Some(_) => Err(Fault::new("wsl_not_v2", "The registration is not WSL 2")),
             None => Err(Fault::new("wsl_not_registered", "No such WSL registration")),
         }
@@ -285,7 +287,16 @@ async fn probe(id: &str, scope: &Scope, system: &std::path::Path) -> Result<Pref
     }
 }
 
+pub(crate) async fn admissible(id: &str, scope: &Scope) -> Result<Distribution, Fault> {
+    let distro = inventory(scope).await?.registered_v2(id)?;
+    if !probe(&distro.id, scope, &system_directory()?).await?.ready {
+        return Err(Fault::new("wsl_not_ready", "The guest tools are not ready"));
+    }
+    Ok(distro)
+}
+
 pub(super) fn register(registry: &mut Registry) {
+    project::register(registry);
     registry.add("setup.wslInventory", |call| {
         Box::pin(async move {
             let _: Empty = call.params()?;
@@ -303,10 +314,8 @@ pub(super) fn register(registry: &mut Registry) {
                     "Expected a braced WSL registration GUID",
                 ));
             }
-            let inv = inventory(&call.scope).await?;
-            let id = inv.registered_v2(&id)?;
-            let system = system_directory()?;
-            Reply::json(&probe(id, &call.scope, &system).await?)
+            let distro = inventory(&call.scope).await?.registered_v2(&id)?;
+            Reply::json(&probe(&distro.id, &call.scope, &system_directory()?).await?)
         })
     });
 }

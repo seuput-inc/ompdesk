@@ -176,7 +176,7 @@ fn dispatch(ctx: Ctx, method: &str, p: P) -> Outcome {
                 opener: p.os("opener"),
                 former_ids: p.has("formerIds").then(|| p.strings("formerIds")),
             };
-            let (ok, added) = ctx.acquire(args).await?;
+            let (ok, added) = ctx.acquire(args, None).await?;
             Ok(json!({"ok": ok, "added": added}))
         }),
         "acquireHostedView" => later(async move {

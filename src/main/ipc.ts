@@ -289,6 +289,7 @@ import {
 } from "./workspace-fs";
 import { searchWorkspace } from "./workspace-search";
 import type { WorktreeLifecycle, WorktreePrompts } from "./worktree-lifecycle";
+import { registerWslProjectIpc } from "./wsl-project-ipc";
 
 /** The caller `ompdesk_app` hands a handler: the calling session's window, no native browser window. */
 function agentCaller(win: ClientWindow): IpcCaller {
@@ -383,7 +384,7 @@ export interface IpcDeps {
 	/** Bots' Slack apps (connector-accounts.ts): read per use. */
 	connectorAccounts?: () => Pick<ConnectorAccounts, "command" | "slackTokens"> | null;
 	/** This computer's sidebar project list: it looks for new folders when the session index changes. */
-	sidebarProjects?: Pick<SidebarProjects, "schedule" | "layoutChanged">;
+	sidebarProjects?: Pick<SidebarProjects, "schedule" | "layoutChanged" | "state">;
 	/**
 	 * Who typed a prompt, for the tabs several windows show (bridge prompt-origin.ts): `of` is the paired
 	 * device a window belongs to (null for a desktop window, whose prompts are the host's own), `hostName`
@@ -610,6 +611,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	const { ipc } = deps;
 	registerTerminalIpc(ipc, deps.sidecarPool, deps.remoteDevices);
 	registerSshToolsIpc(ipc);
+	registerWslProjectIpc(deps, process.platform === "win32" ? app.getPath("userData") : null);
 	const visuals = new VisualStore(path.join(app.getPath("userData"), "visuals"));
 	const visualPages = registerPreviewHost(
 		ipc,

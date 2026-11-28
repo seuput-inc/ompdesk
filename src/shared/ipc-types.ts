@@ -354,6 +354,8 @@ export const IPC_COMMANDS = {
 	/** Choose a project directory and restart the sidecar there */
 	SIDECAR_SELECT_PROJECT: "sidecar:select-project",
 	SIDECAR_SET_PROJECT: "sidecar:set-project",
+	WSL_PROJECT_GET: "wsl-host:project-get",
+	WSL_PROJECT_SET: "wsl-host:project-set",
 	/** Resolve and create the GUI-owned Work-mode workspace. */
 	SIDECAR_DEFAULT_WORKSPACE: "sidecar:default-workspace",
 	/** List custom models.yml providers */
@@ -2452,6 +2454,11 @@ export interface SystemInfo {
 	node: string;
 }
 
+export interface WslProjectHost {
+	selected: string | null;
+	distributions: Array<{ id: string; name: string; version: number; isDefault: boolean }>;
+}
+
 export interface OmpApi {
 	terminal: TerminalApi;
 	preview: PreviewApi;
@@ -2467,6 +2474,10 @@ export interface OmpApi {
 	trackers: TrackersApi;
 	/** The sidebar's project list of this computer or a paired host (src/main/sidebar-projects.ts). */
 	sidebarProjects: SidebarProjectsApi;
+	wslHost: {
+		get(cwd: string): Promise<WslProjectHost>;
+		set(cwd: string, id: string | null): Promise<void>;
+	};
 	/** OMPdesk's own ssh on this computer: port forwards, port watch, agent state, prompts (Settings › SSH). */
 	sshTools: SshToolsApi;
 	/** Mobile web over Tailscale: the switch and its state, the paired phones, pairing (Settings › Mobile web). */

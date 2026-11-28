@@ -81,6 +81,24 @@ fn ordinary_linked_profile_is_empty_but_a_store_under_it_is_not_trusted() {
 }
 
 #[test]
+fn an_unpublished_guest_holds_its_folder_until_a_matching_stop() {
+    let profile = tempdir().unwrap();
+    let session = Store::open(profile.path())
+        .unwrap()
+        .register(registration())
+        .unwrap();
+    let writer = session.admit().unwrap();
+    writer.issue().unwrap();
+    let folders = || catalog::issued_folders(profile.path()).unwrap();
+    assert_eq!(folders(), ["/project"]);
+    writer.attached("unit", 1000).unwrap();
+    assert!(writer.stopped(writer.spawn_id(), "wrong", 1000).is_err());
+    assert_eq!(folders(), ["/project"]);
+    writer.stopped(writer.spawn_id(), "unit", 1000).unwrap();
+    assert!(folders().is_empty());
+}
+
+#[test]
 fn catalog_lists_only_published_content_with_host_identity() {
     let profile = tempdir().unwrap();
     let profile = profile.path();
@@ -693,4 +711,38 @@ fn process_death_releases_lease_but_not_baseline_or_unsealed_bytes() {
         assert!(reopened.interrupted().unwrap().is_none());
         assert!(reopened.open_turn().unwrap().is_none());
     }
+}
+
+#[test]
+fn pending_tab_reopens_the_same_issued_service_after_host_loss() {
+    let profile = tempdir().unwrap();
+    let tag = "deadbeef000000000000000000000001";
+    assert_eq!(Store::tab_record(profile.path(), tag).unwrap(), None);
+    let store = Store::open(profile.path()).unwrap();
+    let session = store.register_tab(tag, registration()).unwrap();
+    let w = session.admit().unwrap();
+    w.issue().unwrap();
+    let spawn = w.spawn_id().to_owned();
+    assert!(w.stopped(&spawn, "receipt", 1000).is_err());
+    assert!(w.retire_candidate().is_err());
+    w.attached("receipt", 1000).unwrap();
+    drop(w);
+    assert!(store.register_tab(tag, registration()).is_err());
+    let (path, retired) = Store::tab_record(profile.path(), tag).unwrap().unwrap();
+    assert!(!retired);
+    let recovered = store
+        .session(reference::parse_ref(&path).unwrap().unwrap())
+        .unwrap()
+        .admit()
+        .unwrap();
+    assert!(recovered.issue().is_err());
+    assert!(recovered.stopped(&spawn, "receipt", 1001).is_err());
+    assert!(recovered.stopped(&spawn, "other", 1000).is_err());
+    recovered.stopped(&spawn, "receipt", 1000).unwrap();
+    recovered.retire_candidate().unwrap();
+    assert_eq!(
+        Store::tab_record(profile.path(), tag).unwrap(),
+        Some((path, true))
+    );
+    assert!(recovered.issue().is_err());
 }

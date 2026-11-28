@@ -47,6 +47,7 @@ export interface SidecarLike extends Pick<EventEmitter, "on" | "off" | "once" | 
 	readonly statusPayload: SidecarStatusPayload;
 	readonly cwd: string;
 	readonly kind: "agent" | "chat";
+	readonly wslTabTag?: string;
 	readonly rpcClient: Pick<RpcClient, "command"> | null;
 	readonly processAlive: boolean;
 	/** Local sidecars: the running omp's pid (its process tree is measured for idle release). */

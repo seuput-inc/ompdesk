@@ -284,12 +284,29 @@ describe("spawnTabForWindow refusal contracts", () => {
 describe("spawnTabForWindow reopening a stored session", () => {
 	it("never opens an offline WSL copy as a fresh Windows tab in the caller’s folder", async () => {
 		const { deps, acquire, recordedCwd } = harness();
-		recordedCwd.mockResolvedValue("//wsl.localhost/Ubuntu/work");
+		recordedCwd.mockResolvedValue(null);
 		await expect(
 			spawnTabForWindow(deps, fakeWindow(), { cwd: "/caller", sessionPath: `ompdesk-wsl:${"a".repeat(32)}` }),
 		).rejects.toThrow("[wsl_session_unavailable]");
-		expect(recordedCwd).not.toHaveBeenCalled();
+		expect(recordedCwd).toHaveBeenCalledOnce();
 		expect(acquire).not.toHaveBeenCalled();
+	});
+
+	it("reopens a WSL key in its registered folder even if the caller supplies a different workspace", async () => {
+		const { deps, acquire, recordedCwd } = harness();
+		const folder = await realpath(tmpdir());
+		const key = `ompdesk-wsl:${"a".repeat(32)}`;
+		recordedCwd.mockResolvedValue(folder);
+		await spawnTabForWindow(deps, fakeWindow(), { sessionPath: key, cwd: "/caller", defaultWorkspace: true });
+		expect(acquire.mock.calls[0]?.slice(0, 7)).toEqual([
+			folder,
+			expect.anything(),
+			expect.any(String),
+			key,
+			"agent",
+			undefined,
+			false,
+		]);
 	});
 
 	it("opens it in the folder its file records, whatever folder the caller or the app is in", async () => {

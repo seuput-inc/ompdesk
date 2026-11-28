@@ -248,6 +248,16 @@ export interface SidecarOptions {
 	omp: () => Promise<OmpResolution>;
 	/** The gui-bridge extension directory. Absent: no `-e`, no bridge (tests). */
 	bridgeDir?: string;
+	wslProject?: {
+		profile: string;
+		bridgeDir: string;
+		choiceCwd?: string;
+		tabTag: string;
+		parent?: string;
+		parentUnknown?: true;
+		resumePending?: true;
+	};
+	wslFallbackText?: (reason: "notRegistered" | "notReady" | "noAuth" | "unavailable") => string;
 	/** Optional app-only MCP root, resolved before a spawn; never touches stock config. */
 	builtinMcp?: () => Promise<BuiltinLaunch>;
 	/** Whether the OMPdesk control tools are registered with the GUI's host tools (Settings switch); default off. */
@@ -549,7 +559,8 @@ interface StatusEvent extends LaneEvent {
 	payload: SidecarStatusPayload;
 }
 interface PidEvent extends LaneEvent {
-	pid: number;
+	pid?: number;
+	executionHost?: "wsl";
 	spawnId: number;
 	wrapped: boolean;
 	priorityError?: string;
@@ -595,6 +606,7 @@ const LANE_EVENTS = [
 	"slow",
 	"sessionWait",
 	"status",
+	"wslFallback",
 	"spawned",
 	"exited",
 	"frame",
@@ -767,6 +779,7 @@ export class SidecarManager extends EventEmitter {
 	#opened = false;
 	#botLaunch: { id: string; port: number; path: string | null } | undefined;
 	#botLane = false;
+	#guestExitUnknown = false;
 	#alive = false;
 	#pid: number | undefined;
 	#rpcClient: RpcClient | null = null;
@@ -846,6 +859,10 @@ export class SidecarManager extends EventEmitter {
 		return { status: this.#status, cwd: this.#options.cwd, ...this.#statusDetail };
 	}
 
+	get wslTabTag(): string | undefined {
+		return this.#options.wslProject?.tabTag;
+	}
+
 	get cwd(): string {
 		return this.#options.cwd;
 	}
@@ -909,6 +926,7 @@ export class SidecarManager extends EventEmitter {
 					itemWorkerPeer: options.itemWorkerPeer,
 					itemsFile: options.itemsFile,
 					bridge: Boolean(options.bridgeDir),
+					...(options.wslProject ? { wslProject: options.wslProject } : {}),
 					...(options.ledgerFile ? { ledgerFile: options.ledgerFile } : {}),
 					...(options.heldQueueFile ? { heldQueueFile: options.heldQueueFile } : {}),
 					startSlowMs: options.startSlowMs ?? START_SLOW_MS,
@@ -936,6 +954,7 @@ export class SidecarManager extends EventEmitter {
 	#laneLost(error: unknown, stops: number): void {
 		this.#opened = false;
 		this.#botLane = false;
+		if (this.#options.wslProject) this.#guestExitUnknown = true;
 		this.#markGone();
 		this.#batcher?.dispose();
 		this.#batcher = null;
@@ -1098,6 +1117,15 @@ export class SidecarManager extends EventEmitter {
 				return this.#onSessionWait({ ...(data as SessionWaitAsk), generation });
 			case "status":
 				return this.#onStatus(data as StatusEvent);
+			case "wslFallback": {
+				if (this.#staleAsk(data.cmd) || !this.#options.wslFallbackText) return;
+				const { reason } = data as LaneEvent & { reason?: unknown };
+				const message = this.#options.wslFallbackText(
+					reason === "notRegistered" || reason === "notReady" || reason === "noAuth" ? reason : "unavailable",
+				);
+				this.emit("events", [{ type: "notice", level: "warning", message }]);
+				return;
+			}
 			case "spawned":
 				return this.#onSpawned(data as PidEvent, generation);
 			case "exited":
@@ -1124,6 +1152,7 @@ export class SidecarManager extends EventEmitter {
 				if (!this.#disposed) this.#options.reportSlowStart?.((data as SlowReportEvent).report);
 				return;
 			case "disposed":
+				this.#guestExitUnknown = (data as LaneEvent & { wslStopConfirmed?: boolean }).wslStopConfirmed === false;
 				this.#closeProcesses();
 				lanes.delete(this.#tab);
 				return;
@@ -1178,7 +1207,11 @@ export class SidecarManager extends EventEmitter {
 		this.#pid = pid;
 		this.#session = null;
 		this.#processes?.setPid(pid);
-		const relay = new BridgeRelay(this.#tab, () => ++this.#seq, generation, event.spawnId, event.wrapped);
+		// Guest bridge admission and grants belong to the core; never sync Windows settings into it.
+		const relay =
+			event.executionHost === "wsl"
+				? null
+				: new BridgeRelay(this.#tab, () => ++this.#seq, generation, event.spawnId, event.wrapped);
 		this.#bridge = relay;
 		this.#batcher = new EventBatcher(events => {
 			this.emit("events", events);
@@ -1186,6 +1219,7 @@ export class SidecarManager extends EventEmitter {
 		const client: RpcClient = new RpcClient({
 			send: (command, timeoutMs) => this.#command(command, timeoutMs),
 			local: command => {
+				if (!relay) return undefined;
 				const type = command.type;
 				const read = type === "get_turn_edits" ? new AbortController() : undefined;
 				const handler =
@@ -1939,12 +1973,23 @@ export class SidecarManager extends EventEmitter {
 	}
 
 	/** Resolves once the current omp and every one this tab stopped before it have exited (at once when none runs). */
-	whenExited(): Promise<void> {
-		if (!this.#opened) return Promise.resolve();
-		return this.#send("sidecar.whenExited", {}, {}, NO_DEADLINE_MS).then(
-			() => undefined,
-			() => undefined,
-		);
+	async whenExited(): Promise<void> {
+		if (this.#opened) {
+			try {
+				await this.#send("sidecar.whenExited", {}, {}, NO_DEADLINE_MS);
+				return;
+			} catch (error) {
+				if (error instanceof CoreError && error.code === "wsl_stop_unknown") throw error;
+				if (!this.#options.wslProject) return;
+				this.#guestExitUnknown = true;
+			}
+		}
+		if (this.#guestExitUnknown && this.#options.wslProject) {
+			const { profile } = this.#options.wslProject;
+			const { result } = await core().call<string[]>("sessions.wslIssuedFolders", { profile });
+			if (result.includes(this.#options.cwd))
+				throw new CoreError("wsl_stop_unknown", "WSL session exit is unconfirmed.");
+		}
 	}
 
 	/**

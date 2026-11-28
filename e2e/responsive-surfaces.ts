@@ -3467,6 +3467,24 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "work", after: closeOverlay },
 	},
 	{
+		id: "sidebar-project-host",
+		area: "A",
+		title: "Execution host for new sessions: selectable in the local Windows window, absent from paired views",
+		open: async (page, look, view) => {
+			await openProjectMenu(page, look);
+			await page.getByRole("menuitem").first().waitFor({ state: "visible" });
+			const choice = page.getByRole("menuitem", { name: say(look, "sidebar.menu.executionHost"), exact: true });
+			if (view === "local") {
+				await choice.click();
+				await expect(page.getByRole("radio", { name: say(look, "sidebar.host.windows") })).toBeChecked();
+			} else {
+				await expect(choice).toHaveCount(0);
+			}
+		},
+		when: () => false,
+		parity: { session: "work", available: () => process.platform === "win32", after: closeOverlay },
+	},
+	{
 		id: "sidebar-project-delete",
 		area: "A",
 		title: "A project's Delete confirm: its opt-in box to also delete the saved sessions, off as it opens",

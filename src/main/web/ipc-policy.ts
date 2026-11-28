@@ -377,6 +377,8 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 		web: "In-app host folder browser, then SIDECAR_SET_PROJECT",
 	},
 	[C.SIDECAR_SET_PROJECT]: { dir: "invoke", permission: "workspace", mode: "pass" },
+	[C.WSL_PROJECT_GET]: { dir: "invoke", permission: "pairing-admin", mode: "boundary" },
+	[C.WSL_PROJECT_SET]: { dir: "invoke", permission: "pairing-admin", mode: "boundary" },
 	[C.SIDECAR_DEFAULT_WORKSPACE]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.FS_LIST]: { dir: "invoke", permission: "workspace", mode: "pass" },
 	[C.FS_READ]: { dir: "invoke", permission: "workspace", mode: "pass" },

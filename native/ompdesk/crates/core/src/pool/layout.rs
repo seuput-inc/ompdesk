@@ -302,6 +302,11 @@ async fn sanitize(
         descriptor.insert("kind".into(), Value::from(kind));
         if let Some(path) = &session_path {
             descriptor.insert("sessionPath".into(), Value::from(path.clone()));
+        } else if device.is_none()
+            && let Some(tag) = candidate.get("wslTabTag").and_then(Value::as_str)
+            && crate::wsl_copy::reference::valid_key(tag)
+        {
+            descriptor.insert("wslTabTag".into(), Value::from(tag));
         }
         if let Some(device) = &device {
             descriptor.insert("device".into(), Value::from(device.clone()));

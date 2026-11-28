@@ -327,6 +327,22 @@ export const MAIN_TEXT = {
 		en: "This session is still open in another omp (a terminal, or OMPdesk's last launch closing). Opening it here too would split it into a second file. Close the other one: it opens here by itself then, or press Restart.",
 		ko: "이 세션이 아직 다른 omp(터미널, 또는 닫히는 중인 이전 OMPdesk)에 열려 있어요. 여기서도 열면 세션이 두 파일로 갈라져요. 다른 쪽을 닫으면 여기서 알아서 열려요. 다시 시작을 눌러도 돼요.",
 	},
+	"wsl.fallback.notRegistered": {
+		en: "This project's WSL 2 distribution is no longer registered. This session will run on Windows.",
+		ko: "이 프로젝트의 WSL 2 배포판 등록을 찾지 못해 이 세션은 Windows에서 실행합니다.",
+	},
+	"wsl.fallback.notReady": {
+		en: "Git, Bun or omp is not ready in this project's WSL distribution. This session will run on Windows.",
+		ko: "이 프로젝트의 WSL 배포판에서 Git, Bun 또는 omp를 사용할 수 없어 이 세션은 Windows에서 실행합니다.",
+	},
+	"wsl.fallback.noAuth": {
+		en: "The selected guest model has no usable sign-in. This session will run on Windows.",
+		ko: "WSL에서 선택한 모델의 로그인을 확인할 수 없어 이 세션은 Windows에서 실행합니다.",
+	},
+	"wsl.fallback.unavailable": {
+		en: "OMPdesk could not verify the WSL host for this session. This session will run on Windows.",
+		ko: "이 세션의 WSL 실행 환경을 확인할 수 없어 Windows에서 실행합니다.",
+	},
 	"omp.overrideMissing": {
 		en: "OMP_GUI_OMP points at a missing file ({path}). Fix or unset it, then press Restart.",
 		ko: "OMP_GUI_OMP가 가리키는 파일이 없어요 ({path}). 값을 고치거나 지운 뒤 다시 시작을 눌러 주세요.",

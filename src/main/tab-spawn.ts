@@ -32,8 +32,9 @@
  */
 
 import type { SavedWorktree } from "../shared/disk-care";
+import { codedError } from "../shared/ipc-error-codes";
 import type { IpcSavedFolder, IpcSpawnTabPayload, IpcSpawnTabResult, SessionKind } from "../shared/ipc-types";
-import { requireFileSession } from "../shared/wsl-session-ref";
+import { isWslSessionRef, requireFileSession } from "../shared/wsl-session-ref";
 import { canonicalCwd, directoryExists } from "./canonical-cwd";
 import type { SessionIndex } from "./session-index";
 import type { SidecarPool } from "./sidecar-pool";
@@ -130,6 +131,7 @@ export async function spawnTabForWindow(
 	const device = typeof payload?.device === "string" && payload.device ? payload.device : undefined;
 	const sessionPath =
 		typeof payload?.sessionPath === "string" && payload.sessionPath ? payload.sessionPath : undefined;
+	const registeredGuest = sessionPath !== undefined && isWslSessionRef(sessionPath);
 	let kind: SessionKind = payload?.kind === "chat" ? "chat" : "agent";
 	let home: string | undefined;
 	if (sessionPath) {
@@ -169,7 +171,13 @@ export async function spawnTabForWindow(
 		// A stored agent session runs where its file says, never where the caller happens to be: read on the computer
 		// that holds the file. A host too old to answer a plain lookup still refuses a gone folder in its own
 		// `tab.open`; a restore that fails or outlasts its wait opens nothing (its worktree may be half put back).
-		if (kind !== "chat") {
+		if (registeredGuest) {
+			// Only the host catalog can choose this folder. A missing record cannot fall back to the caller's cwd.
+			const folder = await deps.sessionIndex.recordedCwd(sessionPath);
+			if (!folder) throw codedError("wsl_session_unavailable", "No host record for this WSL session.");
+			if (!(await directoryExists(folder))) return { tabId: null, refusal: "folder-missing", folder };
+			home = folder;
+		} else if (kind !== "chat") {
 			const restore = payload.restoreSaved === true;
 			const asked = device ? deps.remote.sessionFolder?.(device, sessionPath, restore) : undefined;
 			const state = device
@@ -192,7 +200,7 @@ export async function spawnTabForWindow(
 		}
 	}
 	const requested = typeof payload?.cwd === "string" && payload.cwd.length > 0 ? payload.cwd : undefined;
-	const neutral = payload.defaultWorkspace === true || kind === "chat";
+	const neutral = (payload.defaultWorkspace === true && !registeredGuest) || kind === "chat";
 	// A host's paths are canonicalized by the host; with no explicit or
 	// same-device caller cwd, a remote tab opens in the host's Work workspace.
 	const callerCwd = deps.fallbackCwd(device);

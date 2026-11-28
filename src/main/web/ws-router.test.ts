@@ -496,6 +496,9 @@ describe("channel policy and grants", () => {
 	it("never serves pairing-admin, even to a device that somehow holds it", async () => {
 		const r = await rig({ grants: ["pairing-admin", "workspace"] });
 		expect(await call(r, WEB_DEVICES_LIST)).toMatchObject({ ok: false, e: { code: "web_forbidden" } });
+		for (const channel of [IPC_COMMANDS.WSL_PROJECT_GET, IPC_COMMANDS.WSL_PROJECT_SET])
+			expect(await call(r, channel)).toMatchObject({ ok: false, e: { code: "web_forbidden" } });
+		expect(r.invoke).not.toHaveBeenCalled();
 	});
 
 	it("serves a web-only channel with the device's context and its own permission", async () => {

@@ -49,6 +49,7 @@ import type { HostView, SessionInfo } from "../../../../shared/ipc-types";
 import { autopilotRunOf, worktreeKindOf, worktreeLabel } from "../../../../shared/project-origin";
 import { hostedSummaries, type SessionSummary, unsavedSessionKey } from "../../../../shared/session-summary";
 import type { FooterPin } from "../../../../shared/sidebar-prefs";
+import { isLocalWindowsProject } from "../../../../shared/sidebar-projects";
 import {
 	CHATS_ORDER_KEY,
 	familyRows,
@@ -97,6 +98,7 @@ import { askTabAccount, useTabAccounts } from "../../../lib/tab-accounts";
 import { performTabClose } from "../../../lib/tab-close";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { isTabFailed } from "../../../lib/tab-signal";
+import { chromePlatform } from "../../../lib/window-chrome";
 import { pickWorkspaceDirectory } from "../../../lib/workspace-dirs";
 import { ensureAgentReviewSubscription, useAgentReviewStore } from "../../../stores/agent-review";
 import { botOfFolder, botOfSession, ensureBots, listedBotItems, useBotsStore } from "../../../stores/bots";
@@ -3119,6 +3121,14 @@ export function Sidebar() {
 				(() => {
 					const { group } = groupMenu;
 					const index = allGroups.findIndex(item => item.cwd === group.cwd);
+					const canChooseHost =
+						chromePlatform() === "win32" &&
+						activeTab &&
+						!activeTabRemote &&
+						!activeTab.shared &&
+						!hostedByKey.has(activeTab.sessionPath ?? activeTab.sessionId ?? "") &&
+						isLocalWindowsProject(group.cwd) &&
+						projectList.projects.some(project => project.path === group.cwd && !project.missing);
 					const archivable = group.sessions.filter(
 						session => session.liveTabId === undefined && tabForSession(session) === undefined,
 					);
@@ -3166,6 +3176,13 @@ export function Sidebar() {
 										setGroupRenameDraft(group.name);
 										setRenamingGroupCwd(group.cwd);
 									}),
+									...(canChooseHost
+										? {
+												executionHost: then(() =>
+													openProjectDialog({ kind: "host", cwd: group.cwd, name: group.name }),
+												),
+											}
+										: {}),
 									moveUp: then(() => move(index - 1)),
 									moveDown: then(() => move(index + 1)),
 									togglePin: then(() => useSidebarPrefs.getState().toggleGroupPin(group.cwd)),

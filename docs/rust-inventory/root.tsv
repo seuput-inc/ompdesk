@@ -527,4 +527,6 @@ src/main/worktree-orphans.test.ts	tooling	-	Vitest suite: listOrphanWorktrees.
 src/main/worktree-orphans.ts	mixed	3	git.orphanRepositories/orphanProject/orphanProjectWithEntries discover repositories in stock's global and project roots. The bridge supplies stock worktree.base; withRemovalClaim rechecks live open folders before deletion and the caller supplies archive preparation under its repo lock.
 src/main/worktree-removals.test.ts	tooling	-	Vitest suite: withRemovalClaim.
 src/main/worktree-removals.ts	port	3	SidecarPool's blocked check and LocalHostServices.#open read removalHolds before acquiring. withRemovalClaim canonicalizes open folders and reserves the worktree without yielding; even its realpath I/O belongs inside that atomic check.
+src/main/wsl-project-ipc.test.ts	tooling	-	Vitest suite: local Windows project ownership and execution host selection.
+src/main/wsl-project-ipc.ts	native-client	3	Local window and sidebar membership checks before setup.wslProjectGet/Set; the core owns registration and selection.
 src/main/xdev-stock.test.ts	tooling	-	Vitest suite: names the device stock names, and no device where stock finds none.

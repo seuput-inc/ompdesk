@@ -19,11 +19,13 @@ import { useT } from "../../../lib/i18n";
 import { renameProjectGroup, setSidebarEntry, useSidebarEntry } from "../../../stores/sidebar-entries";
 import { Button, ChoiceList, Input, Modal } from "../../common";
 import { ProjectGlyph } from "./ProjectGlyph";
+import { WslProjectDialog } from "./WslProjectDialog";
 
 export type ProjectDialogRequest =
 	| { kind: "move"; device?: string; cwd: string; name: string }
 	| { kind: "rename"; device?: string; group: string }
 	| { kind: "look"; device?: string; cwd: string; name: string }
+	| { kind: "host"; cwd: string; name: string }
 	| { kind: "emoji"; device?: string; path: string; name: string }
 	| {
 			kind: "parent";
@@ -414,6 +416,7 @@ function ParentDialog({
 const AUTOMATIC = "\u0000automatic";
 
 export default function ProjectDialog({ request, onClose }: { request: ProjectDialogRequest; onClose: () => void }) {
+	if (request.kind === "host") return <WslProjectDialog key={request.cwd} onClose={onClose} {...request} />;
 	if (request.kind === "move") return <MoveDialog onClose={onClose} request={request} />;
 	if (request.kind === "rename") return <RenameDialog onClose={onClose} request={request} />;
 	if (request.kind === "emoji") return <EmojiDialog onClose={onClose} request={request} />;

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { removalHolds, withRemovalClaim } from "./worktree-removals";
+import { removalHolds, setWslIssuedFoldersSource, withRemovalClaim } from "./worktree-removals";
 
 let root: string;
 beforeEach(async () => {
@@ -13,6 +13,24 @@ beforeEach(async () => {
 afterEach(() => fs.rm(root, { recursive: true, force: true }));
 
 describe("withRemovalClaim", () => {
+	it("keeps a guest worktree after host restart until the journal confirms exit", async () => {
+		const worktree = path.join(root, "gui-a");
+		const remove = () =>
+			withRemovalClaim(
+				worktree,
+				() => [],
+				async () => "removed",
+			);
+		try {
+			setWslIssuedFoldersSource(async () => [path.join(worktree, "src")]);
+			await expect(remove()).rejects.toMatchObject({ code: "in_use" });
+			setWslIssuedFoldersSource(async () => []);
+			await expect(remove()).resolves.toBe("removed");
+		} finally {
+			setWslIssuedFoldersSource(undefined);
+		}
+	});
+
 	it("holds the worktree (and every folder in it) until the removal ends, refusing a second removal meanwhile", async () => {
 		const worktree = path.join(root, "gui-a");
 		let release: () => void = () => undefined;

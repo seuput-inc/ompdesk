@@ -122,6 +122,9 @@ export type SidecarFactory = (
 	/** The tab is the phone page's (a paired web window owns it), not a desktop window's. */
 	web: boolean,
 	botChat?: BotChatSpawn,
+	/** Host session key of the opener; null when an opener exists but its local session cannot be identified. */
+	parent?: string | null,
+	restoredWslTag?: string | null,
 ) => SidecarLike;
 
 function forwardToWindow(win: ClientWindow, channel: string, data: unknown): void {
@@ -293,6 +296,7 @@ interface PendingAcquire {
 
 /** The facts the core asks of a sidecar (`facts`): what only the live object can say. */
 interface SidecarFacts {
+	wslTabTag?: string;
 	cwd: string;
 	status: string;
 	processAlive: boolean;
@@ -809,6 +813,8 @@ export class SidecarPool {
 					tab,
 					isWebWindow(item.win as number),
 					botChat,
+					item.parentUnknown === true ? null : ((item.parentSession as string | null) ?? undefined),
+					item.restorePending === true ? ((item.wslTabTag as string | null) ?? null) : undefined,
 				);
 				const status = sidecar.status;
 				// Before anything can start it: the gate must be in place for the first `ready`.
@@ -854,6 +860,7 @@ export class SidecarPool {
 					if (!sidecar) continue;
 					facts[id] = {
 						cwd: sidecar.cwd,
+						...(sidecar.wslTabTag ? { wslTabTag: sidecar.wslTabTag } : {}),
 						status: sidecar.status,
 						processAlive: sidecar.processAlive === true,
 						shared: sidecar.shared === true,
@@ -971,9 +978,12 @@ export class SidecarPool {
 
 	#noteExiting(exiting: Map<string, Promise<void>>, key: string, exited: Promise<void>): void {
 		exiting.set(key, exited);
-		void exited.finally(() => {
-			if (exiting.get(key) === exited) exiting.delete(key);
-		});
+		void exited.then(
+			() => {
+				if (exiting.get(key) === exited) exiting.delete(key);
+			},
+			() => undefined,
+		);
 	}
 
 	/** The window's one "closed" listener (registered at the core's word): every tab it owned or viewed goes. */

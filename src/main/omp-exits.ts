@@ -31,12 +31,18 @@ export async function ompsExitedIn(folder: string, timeoutMs: number): Promise<b
 	const root = realFolder(folder);
 	const waits = [...pending.entries()]
 		.filter(([cwd]) => cwd === root || isInside(root, cwd))
-		.flatMap(([, set]) => [...set].map(exit => exit.catch(() => undefined)));
+		.flatMap(([, set]) => [...set]);
 	if (waits.length === 0) return true;
 	const { promise: late, resolve } = Promise.withResolvers<boolean>();
 	const timer = setTimeout(() => resolve(false), timeoutMs);
 	try {
-		return await Promise.race([Promise.all(waits).then(() => true), late]);
+		return await Promise.race([
+			Promise.all(waits).then(
+				() => true,
+				() => false,
+			),
+			late,
+		]);
 	} finally {
 		clearTimeout(timer);
 	}

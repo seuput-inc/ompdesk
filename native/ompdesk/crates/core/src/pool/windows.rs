@@ -190,7 +190,7 @@ impl Ctx {
 
     /// `acquire`: true when the tab was created (main holds its sidecar then); `added` says whether the pool holds an
     /// entry even though a step after it threw, as the TypeScript's `catch` left it.
-    pub(super) async fn acquire(&self, args: Acquire) -> R<(bool, bool)> {
+    pub(super) async fn acquire(&self, args: Acquire, restored: Option<&Value>) -> R<(bool, bool)> {
         let Some(slot) = self
             .acquire_slot(
                 &args.tab,
@@ -209,12 +209,31 @@ impl Ctx {
         let at = match slot {
             AcquireSlot::Seeded(at) => at,
             AcquireSlot::New => {
+                let parent = args
+                    .opener
+                    .as_deref()
+                    .and_then(|id| {
+                        self.with(|pool| {
+                            pool.entry(id)
+                                .filter(|entry| entry.device.is_none() && !entry.hosted_view)
+                                .and_then(|entry| entry.session_file.clone())
+                        })
+                    })
+                    .or_else(|| {
+                        restored
+                            .filter(|r| r["openedByDevice"].is_null())
+                            .and_then(|r| r["openedBy"].as_str())
+                            .map(str::to_owned)
+                    });
                 let Ok(spawned) = self
                     .ask(
                         "spawn",
                         json!({
                             "tab": tab, "win": args.win, "cwd": args.cwd, "kind": args.kind, "fresh": args.fresh,
                             "device": args.device, "sessionPath": args.session_path, "worktree": args.worktree,
+                            "parentUnknown": parent.is_none() && (args.opener.is_some() || restored.is_some_and(|r| !r["openedBy"].is_null())), "parentSession": parent,
+                            "restorePending": restored.is_some() && args.session_path.is_none(),
+                            "wslTabTag": restored.and_then(|r| r.get("wslTabTag")),
                             "placeholder": args.placeholder, "deferStart": args.defer_start,
                         }),
                     )

@@ -32,6 +32,13 @@ export interface SidebarProject {
 	by?: "sessions";
 }
 
+/** A drive folder or this machine's WSL UNC share, not an SMB server or Win32 device namespace. */
+export function isLocalWindowsProject(path: string): boolean {
+	return /^(?:[a-z]:[\\/]|[\\/]{2}(?:wsl\$|wsl\.localhost)[\\/](?!\.{1,2}(?:[\\/]|$))[^\\/:*?"<>|]+(?:[\\/]|$))/i.test(
+		path,
+	);
+}
+
 /**
  * The host's arrangement a paired view draws and edits. The keyed entries (groups, colors, emoji, parents) are absent
  * from a host older than them.

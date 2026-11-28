@@ -353,6 +353,10 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 			command: request => transport.invoke(TRACKERS_COMMAND, request),
 			accounts: request => transport.invoke(TRACKERS_ACCOUNTS, request),
 		} satisfies TrackersApi,
+		wslHost: {
+			get: cwd => transport.invoke(IPC_COMMANDS.WSL_PROJECT_GET, cwd),
+			set: (cwd, id) => transport.invoke(IPC_COMMANDS.WSL_PROJECT_SET, cwd, id),
+		},
 		sidebarProjects: {
 			command: (request, device) => transport.invoke(SIDEBAR_PROJECTS_COMMAND, request, device),
 			onState: callback => subscribe<IpcSidebarProjects>(SIDEBAR_PROJECTS_STATE, callback),

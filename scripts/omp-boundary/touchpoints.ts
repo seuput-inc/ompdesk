@@ -1123,6 +1123,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"Model setup facts: pi-ai env key and provider definition, catalog types, the role resolver, `ModelsConfigFile.relocate` and auth keyless/source.",
 		files: [
 			"resources/gui-bridge/model-setup-facts.ts",
+			"resources/gui-bridge/wsl/admission.ts",
 			"resources/gui-bridge/capabilities.ts",
 			"resources/gui-bridge/health.ts",
 		],
@@ -1137,8 +1138,13 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"getProviderDefinition",
 			"ModelsConfigFile.relocate",
 			"getAgentDir",
+			"AgentSession.getAvailableModels, SessionManager.ensureOnDisk and flush (WSL admission)",
 		],
-		tests: ["src/main/model-setup-metering.test.ts", "src/main/model-setup-review-stock.test.ts"],
+		tests: [
+			"src/main/model-setup-metering.test.ts",
+			"src/main/model-setup-review-stock.test.ts",
+			"scripts/wsl-admission.test.ts",
+		],
 	},
 	{
 		id: "B33",

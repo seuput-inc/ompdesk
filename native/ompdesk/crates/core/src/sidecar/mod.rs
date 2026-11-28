@@ -30,6 +30,7 @@ pub mod bridge;
 mod chips;
 mod frames;
 mod guest_state;
+#[cfg(test)]
 pub use guest_state::serve_guest_state;
 mod held_queue;
 mod lane;
@@ -42,6 +43,10 @@ mod stop;
 mod stream;
 #[cfg(test)]
 mod tests;
+mod wsl_boundary;
+mod wsl_lane;
+mod wsl_page;
+mod wsl_transport;
 
 pub(crate) use frames::strip_vt_control_characters;
 use lane::{Command, Msg, OpenParams, Plan, StockReply};
@@ -87,7 +92,21 @@ pub fn register(registry: &mut Registry) {
     registry.add("sidecar.desktopProcess", desktop_process);
     registry.add("sidecar.barrier", |call| waited(call, Command::Barrier));
     registry.add("sidecar.whenExited", |call| {
-        waited(call, |_, reply| Command::WhenExited(reply))
+        let params: Seq = match call.params() {
+            Ok(p) => p,
+            Err(f) => return failed(f),
+        };
+        let (reply, answer) = oneshot::channel();
+        deliver(&params.tab, params.seq, Command::WhenExited(reply));
+        Box::pin(async move {
+            if !answer.await.unwrap_or(false) {
+                return Err(Fault::new(
+                    "wsl_stop_unknown",
+                    "The guest service did not confirm it stopped.",
+                ));
+            }
+            Reply::json(&Done {})
+        })
     });
     registry.add("sidecar.resolved", resolved);
     registry.add("sidecar.launched", launched);

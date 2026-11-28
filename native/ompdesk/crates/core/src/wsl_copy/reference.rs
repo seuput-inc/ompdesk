@@ -2,7 +2,7 @@ use std::io;
 
 const PREFIX: &str = "ompdesk-wsl:";
 
-pub(super) fn valid_key(key: &str) -> bool {
+pub(crate) fn valid_key(key: &str) -> bool {
     key.len() == 32
         && key
             .bytes()

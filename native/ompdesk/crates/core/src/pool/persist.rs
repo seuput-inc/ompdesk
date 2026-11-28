@@ -79,6 +79,11 @@ impl Ctx {
                 descriptor.insert("kind".into(), Value::from(entry.kind.clone()));
                 if let Some(file) = entry.session_file.as_ref().filter(|file| !file.is_empty()) {
                     descriptor.insert("sessionPath".into(), Value::from(file.clone()));
+                } else if !web
+                    && entry.device.is_none()
+                    && let Some(tag) = facts[tab.as_str()]["wslTabTag"].as_str()
+                {
+                    descriptor.insert("wslTabTag".into(), Value::from(tag));
                 }
                 if let Some(worktree) = &entry.worktree {
                     // Ownership is this launch's only: a restored tab is an ordinary worktree tab.

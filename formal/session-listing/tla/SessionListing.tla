@@ -211,8 +211,8 @@ Announce(f2, r2) ==
 \* ===== the host's tabs change: each handler ends by calling listingChanged() in the same synchronous block =====
 
 \* @code src/main/remote/host-services.ts:2365-2398 #createTab records the session file and calls listingChanged().
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:303-337 Ctx::finish_acquire registers the window tab's session file and notifies its window.
-\* @code native/ompdesk/crates/core/src/pool/routes.rs:50-88 Ctx::register_session_file_of records the file and owner, then calls on_session_files_changed if the file changed.
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:329-363 Ctx::finish_acquire registers the window tab's session file and notifies its window.
+\* @code native/ompdesk/crates/core/src/pool/routes.rs:98-136 Ctx::register_session_file_of records the file and owner, then calls on_session_files_changed if the file changed.
 Open(t, s) ==
     /\ ~Busy
     /\ file[t] = NoS /\ t \notin pendReg /\ nChanges < MaxChanges
@@ -221,9 +221,9 @@ Open(t, s) ==
     /\ UNCHANGED <<pendReg, rec, idx, hs, lkv, hsl, ip, fd, post, nIdx, nTicks, nDrops, nForeign, seen>>
 
 \* @code src/main/remote/host-services.ts:3199-3229 #closeTab removes the tab and calls listingChanged().
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:426-458 Ctx::release_entry removes only the matching entry and awaits release_detached.
-\* @code native/ompdesk/crates/core/src/pool/windows.rs:460-547 Ctx::release_detached calls unregister_session_file_of.
-\* @code native/ompdesk/crates/core/src/pool/api.rs:1370-1381 Ctx::release_tab notifies the window after a successful removal.
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:452-484 Ctx::release_entry removes only the matching entry and awaits release_detached.
+\* @code native/ompdesk/crates/core/src/pool/windows.rs:486-573 Ctx::release_detached calls unregister_session_file_of.
+\* @code native/ompdesk/crates/core/src/pool/api.rs:1418-1429 Ctx::release_tab notifies the window after a successful removal.
 Close(t) ==
     /\ ~Busy
     /\ (file[t] # NoS \/ t \in pendReg) /\ nChanges < MaxChanges
@@ -242,7 +242,7 @@ Switch(t, s) ==
     /\ UNCHANGED <<pendReg, rec, idx, hs, lkv, hsl, ip, fd, post, nIdx, nTicks, nDrops, nForeign, seen>>
 
 \* @code native/ompdesk/crates/core/src/pool/listen.rs:234-269 Ctx::feed_session_info unregisters the tab's file if a known session ID changes.
-\* @code native/ompdesk/crates/core/src/pool/routes.rs:99-118 Ctx::unregister_session_file_of drops the owner and calls on_session_files_changed.
+\* @code native/ompdesk/crates/core/src/pool/routes.rs:147-166 Ctx::unregister_session_file_of drops the owner and calls on_session_files_changed.
 \* @code src/main/index.ts:1499-1502 onSessionFilesChanged calls hostServices.listingChanged().
 IdChange(t) ==
     /\ ~Busy

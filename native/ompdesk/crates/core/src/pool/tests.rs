@@ -475,6 +475,31 @@ async fn a_saved_layout_restores_its_tabs_and_splits_and_what_is_saved_matches_w
 }
 
 #[tokio::test]
+async fn a_pending_wsl_tab_recovers_its_reservation_without_its_old_live_tab_id() {
+    let mut main = Main::start(opts()).await;
+    let tag = "0123456789abcdef0123456789abcdef";
+    main.answer = Box::new(move |q, item| {
+        if q == "snowflake" {
+            return json!("new-tab");
+        }
+        let mut answer = default_answer(q, item);
+        if q == "facts" {
+            answer["new-tab"]["wslTabTag"] = json!(tag);
+        }
+        answer
+    });
+    let layout = json!({"version":1,"activeIndex":0,"tabs":[{"cwd":"/work","kind":"agent","wslTabTag":tag}]});
+    main.call("restoreLayout", json!({"win": 1, "layout":layout}))
+        .await;
+    let (_, spawn) = main.asked.iter().find(|(q, _)| q == "spawn").unwrap();
+    assert_eq!(spawn["tab"], "new-tab");
+    assert_eq!(spawn["restorePending"], true);
+    assert_eq!(spawn["wslTabTag"], tag);
+    let saved = main.call("tabLayoutForWindow", json!({"win": 1})).await;
+    assert_eq!(saved["tabs"][0]["wslTabTag"], tag);
+}
+
+#[tokio::test]
 async fn a_new_core_is_seeded_with_the_tabs_main_holds() {
     let mut main = Main::start(opts()).await;
     main.call(

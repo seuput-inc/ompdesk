@@ -99,6 +99,16 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&Rows { rows })
         }))
     });
+    registry.add("sessions.wslIssuedFolders", |call| {
+        Box::pin(blocking(move || {
+            #[derive(Deserialize)]
+            struct Params {
+                profile: PathBuf,
+            }
+            let p: Params = call.params()?;
+            Reply::json(&crate::wsl_copy::catalog::issued_folders(&p.profile).map_err(wsl_fault)?)
+        }))
+    });
     registry.add("sessions.wslLookup", |call| {
         Box::pin(blocking(move || {
             #[derive(Deserialize)]

@@ -115,15 +115,30 @@ struct Stored<T> {
     info: T,
 }
 
+/// Written under the writer lease before starting wsl.exe. No receipt means stop cannot be proved.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Issued {
+    pub spawn: String,
+    pub receipt: Option<(String, u32)>,
+}
+
 #[derive(Serialize, Deserialize)]
 struct State {
     registration: Registration,
     stock_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    original: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    issued: Option<Issued>,
+    #[serde(default)]
+    direct_fallback: bool,
     verified: Option<Stored<Checkpoint>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     published: Option<catalog::Published>,
     pending: Option<Stored<Span>>,
     turn: Option<Turn>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completion: Option<String>,
 }
 
 impl State {
@@ -181,8 +196,11 @@ impl Store {
     }
 
     pub fn register(&self, registration: Registration) -> io::Result<Session> {
+        self.create(random_id()?, registration)
+    }
+
+    fn create(&self, key: String, registration: Registration) -> io::Result<Session> {
         registration.validate()?;
-        let key = random_id()?;
         let dir = self.root.join(&key);
         // Exclusive creation, including in the (improbable) event of a random key collision.
         let mut builder = fs::DirBuilder::new();
@@ -195,10 +213,14 @@ impl Store {
         let initial = State {
             registration,
             stock_id: None,
+            original: None,
+            issued: None,
+            direct_fallback: false,
             verified: None,
             published: None,
             pending: None,
             turn: None,
+            completion: None,
         };
         files::commit(&dir, &initial)?;
         Ok(Session {
@@ -206,6 +228,51 @@ impl Store {
             key,
             registration: initial.registration,
         })
+    }
+
+    fn tab_key(tag: &str) -> io::Result<String> {
+        use sha2::{Digest, Sha256};
+        if !reference::valid_key(tag) {
+            return Err(invalid("invalid host tab tag"));
+        }
+        let mut digest = Sha256::new();
+        digest.update(b"ompdesk/WSL/new-tab/v1:");
+        digest.update(tag.as_bytes());
+        Ok(crate::hex(&digest.finalize()[..16]))
+    }
+
+    /// The same host tab can find its issued guest even if the core died before main saw its reference.
+    /// No directory is created when checking an ordinary Windows tab.
+    pub(crate) fn tab_record(profile: &Path, tag: &str) -> io::Result<Option<(String, bool)>> {
+        let key = Self::tab_key(tag)?;
+        if profile.is_absolute()
+            && fs::symlink_metadata(profile.join(catalog::DIRECTORY))
+                .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
+        {
+            return Ok(None);
+        }
+        let root = catalog::root(profile)?;
+        match files::directory(&root, false) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            result => result?,
+        }
+        let dir = root.join(&key);
+        match files::directory(&dir, false) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Ok(()) => Ok(Some((
+                reference::format_ref(&key),
+                state(&dir)?.direct_fallback,
+            ))),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub(crate) fn register_tab(
+        &self,
+        tag: &str,
+        registration: Registration,
+    ) -> io::Result<Session> {
+        self.create(Self::tab_key(tag)?, registration)
     }
 
     /// Reopen an existing host key; never create an empty journal when its original/registration is missing.
@@ -277,6 +344,90 @@ impl Session {
 }
 
 impl Writer {
+    pub(crate) fn retire_candidate(&self) -> io::Result<()> {
+        let mut s = state(&self.session.dir)?;
+        if s.issued.is_some() || s.turn.is_some() || s.pending.is_some() {
+            return Err(invalid("WSL candidate is still owned or interrupted"));
+        }
+        s.direct_fallback = true;
+        files::commit(&self.session.dir, &s)
+    }
+
+    pub(crate) fn pending_completion(&self) -> io::Result<(bool, Option<String>)> {
+        let s = state(&self.session.dir)?;
+        Ok((s.turn.is_some(), s.completion))
+    }
+
+    /// Record live completion evidence before starting its checkpoint so reconnect can verify the same turn.
+    pub(crate) fn completing(&self, id: &str) -> io::Result<()> {
+        let mut s = state(&self.session.dir)?;
+        if s.turn.is_none()
+            || s.completion.as_deref().is_some_and(|old| old != id)
+            || id.is_empty()
+            || id.len() > 128
+            || id.chars().any(char::is_control)
+        {
+            return Err(invalid("invalid guest completion"));
+        }
+        s.completion = Some(id.to_owned());
+        files::commit(&self.session.dir, &s)
+    }
+
+    pub(crate) fn prior(&self) -> io::Result<Option<Issued>> {
+        Ok(state(&self.session.dir)?.issued)
+    }
+
+    pub(crate) fn original(&self) -> io::Result<Option<String>> {
+        Ok(state(&self.session.dir)?.original)
+    }
+
+    pub(crate) fn remember_original(&self, name: &str) -> io::Result<()> {
+        let mut s = state(&self.session.dir)?;
+        match s.original.as_deref() {
+            Some(old) if old == name => return Ok(()),
+            Some(_) => return Err(invalid("guest original changed")),
+            None => s.original = Some(name.to_owned()),
+        }
+        files::commit(&self.session.dir, &s)
+    }
+
+    pub(crate) fn issue(&self) -> io::Result<()> {
+        let mut s = state(&self.session.dir)?;
+        if s.issued.is_some() || s.direct_fallback {
+            return Err(invalid("previous guest stop unconfirmed"));
+        }
+        s.issued = Some(Issued {
+            spawn: self.spawn.clone(),
+            receipt: None,
+        });
+        files::commit(&self.session.dir, &s)
+    }
+
+    pub(crate) fn attached(&self, invocation: &str, uid: u32) -> io::Result<()> {
+        let mut s = state(&self.session.dir)?;
+        let owner = s
+            .issued
+            .as_mut()
+            .filter(|i| i.spawn == self.spawn && i.receipt.is_none())
+            .ok_or_else(|| invalid("stale guest attach"))?;
+        owner.receipt = Some((invocation.to_owned(), uid));
+        files::commit(&self.session.dir, &s)
+    }
+
+    pub(crate) fn stopped(&self, spawn: &str, invocation: &str, uid: u32) -> io::Result<()> {
+        let mut s = state(&self.session.dir)?;
+        if !s.issued.as_ref().is_some_and(|i| {
+            i.spawn == spawn
+                && i.receipt
+                    .as_ref()
+                    .is_some_and(|(token, user)| token == invocation && *user == uid)
+        }) {
+            return Err(invalid("no matching guest receipt"));
+        }
+        s.issued = None;
+        files::commit(&self.session.dir, &s)
+    }
+
     pub fn session_key(&self) -> &str {
         self.session.key()
     }
@@ -417,6 +568,7 @@ impl Writer {
         let turn_resolved = witnessed && recovery != Recovery::Divergent;
         if turn_resolved {
             s.turn = None;
+            s.completion = None;
         }
         if recovery != Recovery::Divergent {
             s.pending = None;

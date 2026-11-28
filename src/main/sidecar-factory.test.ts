@@ -180,6 +180,7 @@ describe("localSidecarFactory", () => {
 		created.length = 0;
 		const create = localSidecarFactory({
 			bridgeDir: "/bridge",
+			wslProfile: "/profile",
 			builtinDir: "/builtin",
 			proxyEnv: async () => ({}),
 			bridgeHealth: new BridgeHealth(() => {}),
@@ -203,6 +204,14 @@ describe("localSidecarFactory", () => {
 			expect(own).toEqual({ OMPDESK_SOCKET: "/s/control.sock", OMPDESK_CONTROL_DIR: "/s" });
 			expect(device).toEqual({ OMPDESK_CONTROL_OFF: "1" });
 			expect(phone).toEqual({ OMPDESK_CONTROL_OFF: "1" });
+			const tag = created[0]?.wslProject?.tabTag;
+			expect(tag).toHaveLength(32);
+			expect(created[1]?.wslProject).toBeUndefined();
+			expect(created[2]?.wslProject).toBeUndefined();
+			create("/w/alpha", "agent", true, undefined, false, undefined, undefined, undefined, tag);
+			expect(created[3]?.wslProject).toMatchObject({ tabTag: tag, resumePending: true });
+			create("/w/alpha", "agent", true, undefined, false, undefined, undefined, undefined, null);
+			expect(created[4]?.wslProject).toBeUndefined();
 		} finally {
 			setControlEndpoint(null);
 		}

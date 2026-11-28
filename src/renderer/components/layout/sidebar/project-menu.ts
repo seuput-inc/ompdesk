@@ -44,6 +44,7 @@ export interface ProjectMenuActions {
 	newWorktree?: () => void;
 	rename?: () => void;
 	togglePin?: () => void;
+	executionHost?: () => void;
 	toggleMute?: () => void;
 	moveUp?: () => void;
 	moveDown?: () => void;
@@ -93,6 +94,13 @@ export function projectMenuItems({ facts, actions, t }: ProjectMenuInput): Conte
 		});
 	if (actions.rename)
 		edit.push({ id: "group-rename", label: t("sidebar.menu.rename"), icon: Pencil, onSelect: actions.rename });
+	if (actions.executionHost)
+		edit.push({
+			id: "group-execution-host",
+			label: t("sidebar.menu.executionHost"),
+			icon: SquareTerminal,
+			onSelect: actions.executionHost,
+		});
 	if (actions.appearance)
 		edit.push({
 			id: "group-appearance",

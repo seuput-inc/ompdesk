@@ -119,6 +119,7 @@ export const FEATURES = {
 	modelRoleSet: "Changing a model role",
 	ompdeskRoles: "OMPdesk's own model roles and agent tiers (held at runtime)",
 	modelSetupFacts: "Model setup (billing and model facts)",
+	wslAdmission: "Starting a WSL session with its guest account",
 	sessionSpend: "Session spend per provider (work board)",
 	usage: "Usage (per-account reports and session totals)",
 	usageHistory: "Usage totals across a session's whole journal",
@@ -1679,6 +1680,16 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 			[`${AGENT}/config/model-roles`]: ["roleCandidatePool()"],
 		},
 	}),
+	/** The guest can use its chosen model and stock can flush the original journal before the host sends a prompt. */
+	wslAdmission: {
+		session: [
+			"getAvailableModels()",
+			"modelRegistry.authStorage.keys.source()",
+			"modelRegistry.authStorage.keys.keyless()",
+			"sessionManager.ensureOnDisk()",
+			"sessionManager.flush()",
+		],
+	},
 	/**
 	 * session_spend: the live journal's spend per provider with that provider's billing (work board: a metered charge
 	 * apart from a subscription's estimate).

@@ -283,6 +283,7 @@ import {
 	type WorktreeWindows,
 } from "./worktree-lifecycle";
 import { sessionOpenFolders, setOpenFoldersSource } from "./worktree-orphans";
+import { setWslIssuedFoldersSource } from "./worktree-removals";
 
 // App identity: the dev run shows "Electron" in the dock otherwise; packaged
 // builds get the name from the bundle via electron-builder. The name also picks
@@ -1113,6 +1114,12 @@ app.whenReady().then(async () => {
 	});
 	const createLocalSidecar = localSidecarFactory({
 		bridgeDir,
+		...(process.platform === "win32"
+			? {
+					wslProfile: app.getPath("userData"),
+					wslProjectRoot: (cwd: string) => sidebarProjects.state().worktrees[cwd],
+				}
+			: {}),
 		builtinDir,
 		botSessionFree: async path => ((await sessionIndex.ownedElsewhere(path, true)) ? "owned" : "free"),
 		sessionFree: async sessionPath => {
@@ -1251,8 +1258,8 @@ app.whenReady().then(async () => {
 			isMutedFolder(mutedGroups, sidebarProjects.state().worktrees, target.sidecar.cwd)
 		);
 	};
-	sidecarPool = new SidecarPool((cwd, kind, fresh, device, tabId, web, botChat) => {
-		if (!device) return createLocalSidecar(cwd, kind, fresh, undefined, web, botChat, tabId);
+	sidecarPool = new SidecarPool((cwd, kind, fresh, device, tabId, web, botChat, parent, restoredWslTag) => {
+		if (!device) return createLocalSidecar(cwd, kind, fresh, undefined, web, botChat, tabId, parent, restoredWslTag);
 		// The host runs its own health check, session-kind record and bridge probe; only the probe's verdict comes
 		// back, for this machine's toast (no record and no repair here: the host keeps and repairs its own).
 		const sc = devices.createSidecar(device, tabId, cwd, kind, fresh);
@@ -1513,6 +1520,12 @@ app.whenReady().then(async () => {
 	// Orphaned worktrees (worktree-orphans.ts): a folder is open when a tab of this computer or a tab it hosts for a
 	// paired device runs in it (`hostServices.workspaceDirs()` is the cwd of every hosted tab, a superset of its `summarySources()`).
 	setOpenFoldersSource(() => [...sidecarPool.workspaceDirs(), ...hostServices.workspaceDirs()]);
+	if (process.platform === "win32") {
+		const profile = app.getPath("userData");
+		setWslIssuedFoldersSource(
+			async () => (await core().call<string[]>("sessions.wslIssuedFolders", { profile })).result,
+		);
+	}
 	setRecordedFoldersSource(async () => (await sessionIndex.listKnown())?.map(info => info.cwd) ?? []);
 	// A new task's branch renamed for its work (FS91): every tab bound to that worktree on the old name follows.
 	setBranchRenamedListener((path, from, branch) => {

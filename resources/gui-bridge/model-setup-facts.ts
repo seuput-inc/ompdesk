@@ -28,6 +28,7 @@ import type { ModelSetupFacts, ProviderBilling, SessionSpend, SetupModelFacts } 
 import { dayStart, spendByProvider } from "./session-spend-core";
 import { roleMetadata } from "./settings";
 import type { BridgeMethods } from "./types";
+import { wslAdmission } from "./wsl/admission";
 
 /** `models.yml` providers: name → whether the entry sets a `baseUrl`; undefined when the file cannot be read. */
 async function modelsYmlProviders(): Promise<Map<string, boolean> | undefined> {
@@ -208,6 +209,9 @@ export async function sessionSpend(session: AgentSession, now: number): Promise<
 }
 
 export const methods: BridgeMethods = {
+	...guard("wslAdmission", {
+		wsl_admission: async (_params, env) => wslAdmission(env.session()),
+	}),
 	...guard("modelSetupFacts", {
 		model_setup_facts: async (_params, env) => modelSetupFacts(env.session()),
 	}),

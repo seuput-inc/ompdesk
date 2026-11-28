@@ -21,7 +21,9 @@ use super::bot::BotChat;
 use super::bridge::{Bridge, CONNECT_TIMEOUT, Out, Sink, new_address, remove_address};
 use super::chips::{Chips, Lane as ChipLane};
 use super::frames::{Decoder, Frame, head_of, js_trim, strip_vt_control_characters, supports_v2};
-use super::guest_state::{self, Probe};
+use super::guest_state;
+#[cfg(test)]
+use super::guest_state::Probe;
 use super::held_queue;
 use super::launch::{
     MAX_RESTART_ATTEMPTS, Open, WINDOWS_SESSION_END_EXIT_CODE, file_exists, restart_delay,
@@ -33,6 +35,7 @@ use super::queue::{Slot, queue};
 use super::queue_commands::{self, Continuation, Step};
 use super::stop::{Proc, StdinMsg, Timing};
 use super::stream::Stream;
+use super::wsl_lane::{self, Notice, Reason};
 use crate::server::{Events, Fault};
 
 /// stderr lines kept per spawn for the crash report.
@@ -131,7 +134,7 @@ pub enum Command {
         reply: BridgeReply,
     },
     Barrier(u64, oneshot::Sender<()>),
-    WhenExited(oneshot::Sender<()>),
+    WhenExited(oneshot::Sender<bool>),
 }
 
 #[derive(Deserialize)]
@@ -158,7 +161,10 @@ impl Command {
             Command::Bridge { reply, .. } => {
                 let _ = reply.send(Err(no_bridge()));
             }
-            Command::Barrier(_, reply) | Command::WhenExited(reply) => {
+            Command::WhenExited(reply) => {
+                let _ = reply.send(true);
+            }
+            Command::Barrier(_, reply) => {
                 let _ = reply.send(());
             }
             _ => {}
@@ -188,11 +194,28 @@ pub struct Stopped {
 
 pub enum Msg {
     Seq(u64, Command),
+    WslPrepared {
+        seq: u64,
+        generation: u64,
+        cwd: String,
+        result: Result<Option<Box<wsl_lane::Prepared>>, Reason>,
+    },
+    WslNotice(u64, Notice, oneshot::Sender<()>),
+    WslPage {
+        generation: u64,
+        reference: String,
+        seq: u64,
+        result: Result<Value, Fault>,
+        reply: StockReply,
+    },
+    #[cfg(test)]
     OfferGuest {
         reference: String,
         offer: oneshot::Sender<Result<(u64, bool), Fault>>,
     },
+    #[cfg(test)]
     GuestAnswer(Box<guest_state::Answer>),
+    #[cfg(test)]
     CancelGuest(u64),
     Resolved {
         ask: u64,
@@ -320,6 +343,7 @@ pub struct OpenParams {
     /// A re-open after a lost core: the session the tab was on.
     pub session_path: Option<String>,
     pub is_new: Option<bool>,
+    wsl_project: Option<wsl_lane::Project>,
 }
 
 #[derive(Clone, Default, PartialEq, Debug)]
@@ -540,7 +564,13 @@ pub struct Lane {
     run_messages: Vec<Value>,
     barriers: Vec<(u64, oneshot::Sender<()>)>,
     running: Option<Running>,
+    #[cfg(test)]
     guest_probe: Option<Probe>,
+    wsl_project: Option<wsl_lane::Project>,
+    wsl_active: Option<wsl_lane::Active>,
+    wsl_fresh: bool,
+    wsl_reading: bool,
+    wsl_exit: Option<watch::Receiver<bool>>,
     ask_counter: u64,
     asks: Vec<(u64, Ask)>,
     ready: Option<ReadyProgress>,
@@ -666,7 +696,13 @@ impl Lane {
             run_messages: Vec::new(),
             barriers: Vec::new(),
             running: None,
+            #[cfg(test)]
             guest_probe: None,
+            wsl_project: params.wsl_project,
+            wsl_active: None,
+            wsl_fresh: params.is_new.unwrap_or(params.fresh),
+            wsl_reading: false,
+            wsl_exit: None,
             ask_counter: 0,
             asks: Vec::new(),
             ready: None,
@@ -881,10 +917,52 @@ impl Lane {
                 self.applied = seq;
                 self.command(command);
             }
+            Msg::WslPrepared {
+                seq,
+                generation,
+                cwd,
+                result,
+            } => {
+                if seq == self.start_seq && self.is_live(generation) && !self.quit {
+                    if self.cwd != cwd {
+                        self.start();
+                    } else {
+                        self.wsl_prepared(result);
+                    }
+                }
+            }
+            Msg::WslNotice(generation, notice, ack) => {
+                if self.is_live(generation) && self.wsl_active.is_some() {
+                    self.wsl_notice(notice);
+                    let _ = ack.send(());
+                }
+            }
+            Msg::WslPage {
+                generation,
+                reference,
+                seq,
+                result,
+                reply,
+            } => {
+                self.wsl_reading = false;
+                if self.is_live(generation)
+                    && self.session_path.as_ref() == Some(&reference)
+                    && !reply.is_closed()
+                {
+                    let _ = reply.send(result.map(|data| {
+                        let out = json!({"id":format!("gui-{seq}"),"type":"response","command":"get_transcript_page","success":true,"data":data});
+                        self.answer_event(seq, Some(out.to_string().into_bytes()));
+                    }));
+                } else {
+                    let _ = reply.send(Err(disconnected()));
+                }
+            }
+            #[cfg(test)]
             Msg::OfferGuest { reference, offer } => {
                 if !self.disposed
                     && !self.quit
                     && self.running.is_none()
+                    && self.wsl_active.is_none()
                     && self.session_path.as_deref() == Some(reference.as_str())
                     && (self.guest_probe.is_none()
                         || matches!(&self.guest_probe, Some(Probe::Offered(tx)) if tx.is_closed()))
@@ -894,7 +972,9 @@ impl Lane {
                     let _ = offer.send(Err(disconnected()));
                 }
             }
+            #[cfg(test)]
             Msg::GuestAnswer(answer) => self.guest_answer(*answer),
+            #[cfg(test)]
             Msg::CancelGuest(seq) => {
                 if matches!(&self.guest_probe, Some(Probe::Asked { seq: at, .. }) if *at == seq) {
                     self.guest_probe = None;
@@ -1257,9 +1337,17 @@ impl Lane {
                 if let Some(running) = &self.running {
                     exits.push(running.proc.exited.clone());
                 }
+                if let Some(guest) = &self.wsl_active {
+                    exits.push(guest.done.clone());
+                }
+                let proof = self.wsl_exit.clone();
                 tokio::spawn(async move {
                     wait_all(exits).await;
-                    let _ = reply.send(());
+                    let confirmed = match proof {
+                        Some(mut guest) => guest.wait_for(|stopped| *stopped).await.is_ok(),
+                        None => true,
+                    };
+                    let _ = reply.send(confirmed);
                 });
             }
         }
@@ -1298,8 +1386,145 @@ impl Lane {
         // this pending spawn — it already killed whatever child existed (nothing yet) — so spawning on its answer
         // would orphan the newer child and tear it down with the session it just opened.
         self.start_seq += 1;
+        if self.wsl_active.is_some() {
+            return;
+        }
+        if cfg!(windows)
+            && (self.on_reserved_session()
+                || (self.session_path.is_none()
+                    && (self.wsl_fresh
+                        || self.wsl_project.as_ref().is_some_and(|p| p.resume_pending))))
+            && let Some(project) = self.wsl_project.clone()
+        {
+            if self.session_path.is_none() {
+                match project.tab_record() {
+                    Ok(Some((_, true))) => {
+                        self.wsl_fresh = false;
+                        self.start_direct();
+                        return;
+                    }
+                    Ok(Some((reference, false))) => self.set_tab_session(Some(reference), false),
+                    Ok(None) => (),
+                    Err(_) => {
+                        self.set_status(
+                            "error",
+                            Detail::message("The previous WSL host could not be verified."),
+                        );
+                        return;
+                    }
+                }
+            }
+            self.set_status("starting", Detail::default());
+            let (seq, generation) = (self.start_seq, self.generation);
+            let (inbox, path, cwd) = (
+                self.inbox.clone(),
+                self.session_path.clone(),
+                self.cwd.clone(),
+            );
+            let exits = self.exiting.iter().map(|s| s.done.clone()).collect();
+            tokio::spawn(async move {
+                wait_all(exits).await;
+                let result = project
+                    .prepare(&cwd, path.as_deref())
+                    .await
+                    .map(|p| p.map(Box::new));
+                let _ = inbox.send(Msg::WslPrepared {
+                    seq,
+                    generation,
+                    cwd,
+                    result,
+                });
+            });
+            return;
+        }
+        self.start_direct();
+    }
+
+    fn wsl_prepared(&mut self, result: Result<Option<Box<wsl_lane::Prepared>>, Reason>) {
+        let bound = self.on_reserved_session();
+        self.wsl_fresh = false;
+        match result {
+            Ok(Some(p)) => {
+                let Ok((active, reference, cwd)) = p.start(self.generation, self.inbox.clone())
+                else {
+                    self.set_status(
+                        "error",
+                        Detail::message("The WSL session could not be reserved.".to_owned()),
+                    );
+                    return;
+                };
+                self.wsl_exit = Some(active.confirmed.clone());
+                self.wsl_active = Some(active);
+                self.cwd = cwd;
+                self.set_tab_session(Some(reference), false);
+            }
+            Ok(None) if !bound => self.start_direct(),
+            Err(reason) if !bound => self.wsl_fallback(reason),
+            _ => self.set_status(
+                "error",
+                Detail::message("The assigned WSL session is unavailable.".to_owned()),
+            ),
+        }
+    }
+
+    fn wsl_fallback(&mut self, reason: Reason) {
+        self.emit("sidecar.wslFallback", json!({"reason":reason.wire()}));
+        self.start_direct();
+    }
+
+    fn wsl_notice(&mut self, notice: Notice) {
+        match notice {
+            Notice::Ready(state) => {
+                self.spawn_counter += 1;
+                self.emit(
+                    "sidecar.spawned",
+                    json!({"spawnId":self.spawn_counter,"wrapped":false,"executionHost":"wsl"}),
+                );
+                self.observe_guest_state(&state);
+                self.emit("sidecar.bridgeState", json!({"connected":true}));
+                self.finish_ready(None);
+            }
+            Notice::Frame(frame) => self.emit_frame(value_frame(&frame)),
+            Notice::Answer(seq, value, reply) => {
+                if value["command"] == "get_state" {
+                    self.observe_guest_state(&value);
+                }
+                self.answer_event(seq, Some(value.to_string().into_bytes()));
+                let _ = reply.send(Ok(()));
+            }
+            Notice::Closed { reason, fallback } => {
+                self.wsl_active = None;
+                if fallback {
+                    self.set_tab_session(None, true);
+                    self.wsl_fallback(reason);
+                } else {
+                    self.emit("sidecar.bridgeState", json!({"connected":false}));
+                    self.set_status(
+                        "error",
+                        Detail::message(
+                            "The assigned WSL session stopped or could not be verified.".to_owned(),
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
+    fn observe_guest_state(&mut self, state: &Value) {
+        let command = CommandInfo {
+            ty: "get_state".into(),
+            name: None,
+            session_path: None,
+        };
+        let _ = self.observe(&command, &state.to_string(), true);
+    }
+
+    fn start_direct(&mut self) {
         if self.refuse_reserved_start() {
-            self.guest_probe = None;
+            #[cfg(test)]
+            {
+                self.guest_probe = None;
+            }
             return;
         }
         self.set_status("starting", Detail::default());
@@ -1816,7 +2041,46 @@ impl Lane {
         timeout: Option<Duration>,
         reply: StockReply,
     ) {
-        if self.running.is_none() && self.guest_probe.is_none() {
+        if self.on_reserved_session()
+            && let (Some(project), Some(reference)) = (&self.wsl_project, &self.session_path)
+            && let Ok(request) = serde_json::from_str::<Value>(command.get())
+            && request["type"] == "get_transcript_page"
+        {
+            if self.wsl_reading {
+                let _ = reply.send(Err(Fault::new(
+                    "wsl_transcript_busy",
+                    "A verified transcript read is in progress.",
+                )));
+                return;
+            }
+            self.wsl_reading = true;
+            let (project, reference, cwd, generation, inbox) = (
+                project.clone(),
+                reference.clone(),
+                self.cwd.clone(),
+                self.generation,
+                self.inbox.clone(),
+            );
+            tokio::task::spawn_blocking(move || {
+                let result = project.page(&reference, &cwd, &request);
+                let _ = inbox.send(Msg::WslPage {
+                    generation,
+                    reference,
+                    seq,
+                    result,
+                    reply,
+                });
+            });
+            return;
+        }
+        if let Some(guest) = &self.wsl_active {
+            guest.request(seq, command, reply);
+            return;
+        }
+        let offline = self.running.is_none();
+        #[cfg(test)]
+        let offline = offline && self.guest_probe.is_none();
+        if offline {
             let _ = reply.send(Err(disconnected()));
             return;
         }
@@ -1842,6 +2106,7 @@ impl Lane {
             name: text("name"),
             session_path: text("sessionPath"),
         };
+        #[cfg(test)]
         if self.running.is_none() {
             if info.ty == "get_state"
                 && matches!(self.guest_probe, Some(Probe::Offered(_)))
@@ -1867,6 +2132,7 @@ impl Lane {
         }
     }
 
+    #[cfg(test)]
     fn guest_answer(&mut self, mut answer: guest_state::Answer) {
         if !matches!(&self.guest_probe, Some(Probe::Asked { seq, .. }) if *seq == answer.seq) {
             let _ = answer.done.send(Err(disconnected()));
@@ -2249,7 +2515,12 @@ impl Lane {
 
     /// Track the session identity through the responses every hydrate already requests.
     // formal/tab-session `Observe`, `Switch(f)`, `NewSession` (findings F1, F2; CORRESPONDENCE A5).
-    fn observe(&mut self, command: &CommandInfo, response: &str, guest: bool) -> Result<bool, Fault> {
+    fn observe(
+        &mut self,
+        command: &CommandInfo,
+        response: &str,
+        guest: bool,
+    ) -> Result<bool, Fault> {
         #[derive(Deserialize)]
         struct Response<'a> {
             success: Option<bool>,
@@ -2837,7 +3108,17 @@ impl Lane {
     fn cleanup(&mut self) -> Option<Running> {
         // Main drops what the lane sent before the command that tears this down: nothing after leans on it.
         self.revoke_bot();
-        self.guest_probe = None;
+        #[cfg(test)]
+        {
+            self.guest_probe = None;
+        }
+        if let Some(guest) = self.wsl_active.take() {
+            let done = guest.stop();
+            self.exiting.push(Stopping {
+                exited: done.clone(),
+                done,
+            });
+        }
         self.stream.reset();
         self.generation += 1;
         self.slow_epoch += 1;
@@ -2890,6 +3171,18 @@ impl Lane {
     // formal/tab-session `Restart`, `Open(f)`, `Move`: synchronous in the lane: kill, state, start.
     fn restart(&mut self, cwd: Option<String>, resume_session_path: Option<String>) {
         self.stop_child(None);
+        if self.wsl_project.is_some()
+            && self.on_reserved_session()
+            && resume_session_path
+                .as_ref()
+                .is_some_and(|p| Some(p) != self.session_path.as_ref())
+        {
+            self.set_status(
+                "error",
+                Detail::message("A WSL session must reopen its assigned conversation.".to_owned()),
+            );
+            return;
+        }
         let pinned = self.on_reserved_session()
             && resume_session_path
                 .as_ref()
@@ -2916,7 +3209,11 @@ impl Lane {
     /// Stop the omp of an idle tab and read `asleep`, as a restored tab reads before its first start: the pool restarts
     /// it on its session file when it is shown or messaged (`idle-release.ts`). The omp stops as a restart stops it.
     fn sleep(&mut self) {
-        if self.disposed || self.running.is_none() {
+        if self.disposed
+            || (self.running.is_none()
+                && self.wsl_active.is_none()
+                && !(self.wsl_project.is_some() && self.status == "starting"))
+        {
             return;
         }
         self.stop_child(None);
@@ -2954,7 +3251,11 @@ impl Lane {
         if !self.disposed {
             return false;
         }
-        self.emit_always("sidecar.disposed", json!({}));
+        let result = self.wsl_exit.as_ref().map_or_else(
+            || json!({}),
+            |proof| json!({"wslStopConfirmed":*proof.borrow()}),
+        );
+        self.emit_always("sidecar.disposed", result);
         true
     }
 
@@ -2971,6 +3272,9 @@ impl Lane {
                 .count(),
         )
         .unwrap_or(u32::MAX);
+        if self.wsl_active.is_some() {
+            told += 1;
+        }
         if let Some(running) = self.cleanup() {
             if running.proc.running() {
                 told += 1;

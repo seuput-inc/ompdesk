@@ -1859,25 +1859,28 @@ impl Ctx {
                     .unwrap_or_default()
                     .to_string();
                 let (created, _) = self
-                    .acquire(super::windows::Acquire {
-                        cwd: tab["cwd"].as_str().unwrap_or("").to_string(),
-                        win,
-                        tab: fresh.clone(),
-                        session_path: path.map(str::to_string),
-                        kind: tab["kind"].as_str().unwrap_or("agent").to_string(),
-                        worktree: tab
-                            .get("worktree")
-                            .filter(|value| !value.is_null())
-                            .cloned(),
-                        fresh: path.is_none(),
-                        placeholder: tab["placeholder"].as_bool() == Some(true),
-                        defer_start: true,
-                        title: tab["title"].as_str().map(str::to_string),
-                        device: device.map(str::to_string),
-                        task: None,
-                        opener: None,
-                        former_ids: None,
-                    })
+                    .acquire(
+                        super::windows::Acquire {
+                            cwd: tab["cwd"].as_str().unwrap_or("").to_string(),
+                            win,
+                            tab: fresh.clone(),
+                            session_path: path.map(str::to_string),
+                            kind: tab["kind"].as_str().unwrap_or("agent").to_string(),
+                            worktree: tab
+                                .get("worktree")
+                                .filter(|value| !value.is_null())
+                                .cloned(),
+                            fresh: path.is_none(),
+                            placeholder: tab["placeholder"].as_bool() == Some(true),
+                            defer_start: true,
+                            title: tab["title"].as_str().map(str::to_string),
+                            device: device.map(str::to_string),
+                            task: None,
+                            opener: None,
+                            former_ids: None,
+                        },
+                        Some(tab),
+                    )
                     .await?;
                 if created {
                     tab_id = Some(fresh.clone());

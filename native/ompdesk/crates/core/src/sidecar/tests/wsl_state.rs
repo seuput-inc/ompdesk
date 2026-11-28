@@ -274,3 +274,171 @@ async fn a_reply_from_before_restart_neither_binds_the_writer_nor_reaches_the_rp
         .unwrap();
     finish(rig).await;
 }
+
+#[tokio::test]
+async fn a_verified_transcript_is_read_on_the_registered_project_without_launching_stock() {
+    use sha2::{Digest, Sha256};
+    let mut rig = Rig::new("wsl-offline-page", "ok").await;
+    let session = registration(&rig);
+    let mut writer = session.admit().unwrap();
+    writer.bind_stock_id("test-stock").unwrap();
+    let journal = [
+        json!({"type":"session","id":"test-stock","cwd":"not-host-cwd"}),
+        json!({"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":"question"}}),
+        json!({"type":"message","id":"other","parentId":"u1","message":{"role":"assistant","content":"wrong branch"}}),
+        json!({"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant","content":[{"type":"text","text":"answer"},{"type":"image","path":"C:private"}]}}),
+    ].map(|row| format!("{row}\n")).concat();
+    let prefix = json!({"v":1,"sessionKey":session.key(),"spawnId":writer.spawn_id(),"stockId":"test-stock","bytes":journal.len(),"source":"1:2"});
+    let seal = json!({"sha256":crate::hex(&Sha256::digest(journal.as_bytes()))});
+    let wire = format!("{prefix}\n{journal}{seal}\n");
+    writer
+        .receive(
+            wire.as_bytes(),
+            || Ok(true),
+            crate::wsl_copy::TurnDisposition::SnapshotOnly,
+        )
+        .unwrap();
+    drop(writer);
+    let seq = rig.seq();
+    let mut open = rig.open_params(seq, no_queue());
+    open["cwd"] = PROJECT.into();
+    open["sessionPath"] = format!("ompdesk-wsl:{}", session.key()).into();
+    open["wslProject"] = json!({"profile":rig.dir,"bridgeDir":"not-used","tabTag":"00000000000000000000000000000001"});
+    let _opened = rig.post("sidecar.open", open);
+    let page = rig
+        .tab_call(
+            "sidecar.command",
+            json!({"command":{"type":"get_transcript_page","fromEnd":true,"limit":1}}),
+        )
+        .await
+        .unwrap();
+    let data = &page["response"]["data"];
+    assert_eq!(data["totalMessages"], 2);
+    assert_eq!(
+        data["messages"][0],
+        json!({"role":"assistant","entryId":"a1","content":[{"type":"text","text":"answer"}]})
+    );
+    let before = rig
+        .tab_call(
+            "sidecar.command",
+            json!({"command":{"type":"get_transcript_page","cursor":data["prevCursor"],"limit":1}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(before["response"]["data"]["messages"][0]["entryId"], "u1");
+    assert!(rig.event("sidecar.resolve").is_none() && rig.event("sidecar.spawned").is_none());
+    finish(rig).await;
+}
+
+#[cfg(unix)]
+async fn admitted_candidate(mode: &str) -> Rig {
+    use crate::sidecar::{lane::Msg, wsl_lane::Prepared};
+    use std::os::unix::fs::PermissionsExt;
+    let mut rig = Rig::new(&format!("wsl-candidate-{mode}"), "ok").await;
+    let exe = rig.dir.join("synthetic-wsl");
+    std::fs::write(&exe, include_bytes!("wsl_fixture.py")).unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(rig.dir.join("guest-mode"), mode).unwrap();
+    let registration = Registration {
+        distro: "{06744d8e-f876-4161-955d-5beadbb75d41}".into(),
+        parent: Some("host-parent".into()),
+        cwd: r"C:\assigned project".into(),
+    };
+    let project = json!({"profile":rig.dir,"bridgeDir":"fixture","tabTag":"0123456789abcdef0123456789abcdef"});
+    let seq = rig.seq();
+    let mut open = rig.open_params(seq, no_queue());
+    open["cwd"] = json!(registration.cwd);
+    open["wslProject"] = project.clone();
+    let _open = rig.post("sidecar.open", open);
+    rig.tab_call("sidecar.barrier", json!({})).await.unwrap();
+    let cwd = registration.cwd.clone();
+    let prepared = Prepared::fixture(exe, registration, serde_json::from_value(project).unwrap());
+    crate::sidecar::tell(
+        &rig.tab,
+        Msg::WslPrepared {
+            seq: 0,
+            generation: 0,
+            cwd,
+            result: Ok(Some(Box::new(prepared))),
+        },
+    );
+    rig
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn admitted_lane_prompts_its_guest_and_serves_only_the_verified_answer() {
+    let mut rig = admitted_candidate("ok").await;
+    rig.status("ready").await;
+    assert_eq!(
+        rig.event("sidecar.spawned").unwrap().data["executionHost"],
+        "wsl"
+    );
+    let response = rig
+        .tab_call("sidecar.command", json!({"command":{"type":"get_state"}}))
+        .await
+        .unwrap();
+    let reference = response["response"]["data"]["sessionFile"]
+        .as_str()
+        .unwrap();
+    assert!(reference.starts_with("ompdesk-wsl:"));
+    assert!(!response.to_string().contains("stock-test"));
+    rig.tab_call("sidecar.command",json!({"command":{"type":"prompt","message":"fixture question","images":[],"deliveryId":"d1","env":{"SECRET":"no"}}})).await.unwrap();
+    rig.tab_call("sidecar.command", json!({"command":{"type":"get_state"}}))
+        .await
+        .unwrap();
+    assert!(rig.dir.join("host-refused").exists());
+    let page = rig
+        .tab_call(
+            "sidecar.command",
+            json!({"command":{"type":"get_transcript_page","fromEnd":true}}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        page["response"]["data"]["messages"][0]["content"][0]["text"],
+        "fixture answer"
+    );
+    rig.drain();
+    let delivered = frames(&rig);
+    assert!(
+        delivered.iter().any(|f| f["type"] == "message_end"
+            && f["message"]["content"][0]["text"] == "fixture answer")
+    );
+    assert!(
+        delivered
+            .iter()
+            .all(|f| f["type"] != "host_tool_call" && !f.to_string().contains("DO-NOT-FORWARD"))
+    );
+    assert!(rig.event("sidecar.resolve").is_none() && rig.event("sidecar.launch").is_none());
+    finish(rig).await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn fresh_no_auth_falls_back_only_after_an_exact_guest_stop() {
+    let mut rig = admitted_candidate("noauth").await;
+    let fallback = rig
+        .until("safe fallback", |e| e.name == "sidecar.wslFallback")
+        .await;
+    assert_eq!(fallback.data["reason"], "noAuth");
+    rig.status("ready").await;
+    assert!(rig.event("sidecar.resolve").is_some());
+    finish(rig).await;
+    let mut rig = admitted_candidate("unknown").await;
+    rig.status("error").await;
+    assert!(rig.event("sidecar.wslFallback").is_none() && rig.event("sidecar.resolve").is_none());
+    assert!(
+        rig.event("sidecar.tabSession").unwrap().data["sessionPath"]
+            .as_str()
+            .unwrap()
+            .starts_with("ompdesk-wsl:")
+    );
+    assert_eq!(
+        rig.tab_call("sidecar.whenExited", json!({}))
+            .await
+            .unwrap_err()["code"],
+        "wsl_stop_unknown"
+    );
+    finish(rig).await;
+}

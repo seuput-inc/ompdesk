@@ -35,6 +35,18 @@ function recording() {
 describe("createOmpApi", () => {
 	const preview = { chats: 1, workers: 0, kept: 2, digest: "a".repeat(64) };
 
+	it("reads and changes a project's host without sending a profile or a remote device", async () => {
+		const { api, invoked, answers } = recording();
+		const state = { selected: null, distributions: [] };
+		answers.set(IPC_COMMANDS.WSL_PROJECT_GET, state);
+		expect(await api.wslHost.get("C:\\project")).toEqual(state);
+		await api.wslHost.set("C:\\project", null);
+		expect(invoked).toEqual([
+			{ channel: IPC_COMMANDS.WSL_PROJECT_GET, args: ["C:\\project"] },
+			{ channel: IPC_COMMANDS.WSL_PROJECT_SET, args: ["C:\\project", null] },
+		]);
+	});
+
 	it("sends only the confirmed counts and membership digest on delete", async () => {
 		const { api, invoked, answers } = recording();
 		answers.set(BOTS_COMMAND, { ...preview, paths: ["/private/session"] });

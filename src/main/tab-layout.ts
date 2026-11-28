@@ -16,6 +16,8 @@ export const MAX_PERSISTED_TITLE = 120;
 export interface PersistedTabDescriptor {
 	cwd: string;
 	sessionPath?: string;
+	/** Local pending WSL reservation until its durable host session reference reaches the layout. */
+	wslTabTag?: string;
 	kind: SessionKind;
 	worktree?: IpcTabWorktree;
 	/** Untargeted startup tab, disposable once another real tab exists. */

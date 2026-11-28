@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use super::{Registration, Store, files, invalid, reference, state, wire};
 use crate::schedules::rules::iso;
 
-const DIRECTORY: &str = "wsl-session-copies";
+pub(super) const DIRECTORY: &str = "wsl-session-copies";
 
 #[derive(Clone, Copy, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -124,28 +124,54 @@ fn row(dir: &Path, key: &str) -> io::Result<Option<Row>> {
     }))
 }
 
-pub(crate) fn rows(profile: &Path) -> io::Result<Vec<Row>> {
+fn visit_keys(
+    profile: &Path,
+    mut visit: impl FnMut(&Path, &str) -> io::Result<()>,
+) -> io::Result<()> {
     // An ordinary Windows profile may itself be a junction. No copy directory means no WSL rows;
     // a directory that exists but is not safe to read must not be reported as an authoritative empty list.
     if profile.is_absolute()
         && fs::symlink_metadata(profile.join(DIRECTORY))
             .is_err_and(|e| e.kind() == io::ErrorKind::NotFound)
     {
-        return Ok(Vec::new());
+        return Ok(());
     }
     let root = root(profile)?;
     files::directory(&root, false)?;
     let entries = fs::read_dir(&root)?;
-    let mut rows = Vec::new();
     for entry in entries {
         let entry = entry?;
         if let Some(key) = entry.file_name().to_str()
             && reference::valid_key(key)
-            && let Some(row) = row(&entry.path(), key)?
         {
-            rows.push(row);
+            visit(&entry.path(), key)?;
         }
     }
+    Ok(())
+}
+
+pub(crate) fn issued_folders(profile: &Path) -> io::Result<Vec<String>> {
+    let mut folders = Vec::new();
+    visit_keys(profile, |dir, _| {
+        files::directory(dir, false)?;
+        let _gate = files::lock(&dir.join("gate"), false)?;
+        let s = state(dir)?;
+        if s.issued.is_some() {
+            folders.push(s.registration.cwd);
+        }
+        Ok(())
+    })?;
+    Ok(folders)
+}
+
+pub(crate) fn rows(profile: &Path) -> io::Result<Vec<Row>> {
+    let mut rows = Vec::new();
+    visit_keys(profile, |dir, key| {
+        if let Some(row) = row(dir, key)? {
+            rows.push(row);
+        }
+        Ok(())
+    })?;
     rows.sort_unstable_by(|a, b| {
         b.summary
             .modified

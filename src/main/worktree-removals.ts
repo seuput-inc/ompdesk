@@ -12,6 +12,11 @@ import { isInside } from "./local/git/parse";
 import { LocalCommandError } from "./local/types";
 
 const removing = new Set<string>();
+let issuedFolders: (() => Promise<readonly string[]>) | undefined;
+
+export function setWslIssuedFoldersSource(read: typeof issuedFolders): void {
+	issuedFolders = read;
+}
 
 /**
  * The one form both sides compare: the OS's real path (Windows: the long name of an 8.3 path, the drive and every
@@ -49,6 +54,8 @@ export async function withRemovalClaim<T>(
 		throw new LocalCommandError(`${worktree} is in use by an open session; nothing was removed.`, "in_use");
 	removing.add(held);
 	try {
+		if (issuedFolders && (await issuedFolders()).some(folder => covers(held, realFolder(folder))))
+			throw new LocalCommandError(`${worktree} has no confirmed WSL session exit; nothing was removed.`, "in_use");
 		return await remove();
 	} finally {
 		removing.delete(held);

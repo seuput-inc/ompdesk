@@ -3,6 +3,7 @@
  * remote host's tabs for paired devices (src/main/remote/host-services.ts)
  * both come from here, so a session runs the same way whoever opened it.
  */
+import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { app } from "electron";
 import type { AutoTitleSettings } from "../../resources/gui-bridge/modes/auto-title-contracts";
@@ -45,6 +46,8 @@ export interface LocalSidecarDeps {
 	botSessionFree?: (sessionPath: string) => Promise<"free" | "owned">;
 	/** The gui-bridge extension directory. */
 	bridgeDir: string;
+	wslProfile?: string;
+	wslProjectRoot?: (cwd: string) => string | undefined;
 	/** OMPdesk's own extension root (`resources/omp-builtin`). */
 	builtinDir: string;
 	/** Address and credentials for the memory extension's MCP hub. */
@@ -153,6 +156,8 @@ export type LocalSidecarFactory = (
 	web?: boolean,
 	botChat?: BotChatSpawn,
 	itemWorkerTab?: string,
+	parent?: string | null,
+	restoredWslTag?: string | null,
 ) => SidecarManager;
 
 /** What the factory hands the coordinator: the status to overlay, and the bridge's autopilot frames. */
@@ -169,7 +174,7 @@ export interface DesktopSlotFrameSink {
 export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory {
 	const { bridgeDir, bridgeHealth, sessionKinds } = deps;
 	let reportedPriorityFailure = false;
-	return (cwd, kind, fresh, origin, web, botChat, itemWorkerTab) => {
+	return (cwd, kind, fresh, origin, web, botChat, itemWorkerTab, parent, restoredWslTag) => {
 		if (botChat && (origin || web || kind !== "agent")) throw new Error("Bot chats require a local agent tab");
 		const trustedPath = botChat?.botChatSessionPath;
 		const sessionFree = trustedPath
@@ -198,6 +203,19 @@ export function localSidecarFactory(deps: LocalSidecarDeps): LocalSidecarFactory
 					: { ...resolution, error: ompFailureText(resolution.reason) };
 			},
 			bridgeDir,
+			...(kind === "agent" && deps.wslProfile && !origin && !web && restoredWslTag !== null
+				? {
+						wslProject: {
+							profile: deps.wslProfile,
+							bridgeDir,
+							choiceCwd: deps.wslProjectRoot?.(cwd),
+							tabTag: restoredWslTag ?? randomBytes(16).toString("hex"),
+							...(restoredWslTag ? { resumePending: true as const } : {}),
+							...(parent === null ? { parentUnknown: true as const } : parent ? { parent } : {}),
+						},
+						wslFallbackText: reason => mainT(`wsl.fallback.${reason}`),
+					}
+				: {}),
 			builtinMcp: async () => {
 				// The control tools' skill loads with them; the tools themselves follow the switch live (hostTools).
 				const own =

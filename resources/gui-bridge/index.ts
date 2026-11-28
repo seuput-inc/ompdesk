@@ -101,7 +101,7 @@ const AREAS: readonly Area[] = [
 	},
 	{
 		name: "model-setup-facts",
-		features: ["modelSetupFacts", "sessionSpend"],
+		features: ["modelSetupFacts", "sessionSpend", "wslAdmission"],
 		load: () => import("./model-setup-facts"),
 	},
 	{ name: "ompdesk-roles", features: ["ompdeskRoles"], load: () => import("./ompdesk-roles") },
