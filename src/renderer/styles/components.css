@@ -1931,11 +1931,11 @@ button.omp-children-at-work-row:hover {
 
 .omp-work-cards {
 	display: grid;
-	gap: 1px;
+	gap: var(--sc-space-1);
 	margin: 0;
 	padding: 0;
 	list-style: none;
-	max-height: 8rem;
+	max-height: 9rem;
 	overflow-y: auto;
 	overscroll-behavior: contain;
 }
@@ -1952,27 +1952,53 @@ button.omp-children-at-work-row:hover {
 	width: 100%;
 	min-height: var(--sc-control-sm);
 	padding: var(--sc-space-1) var(--sc-space-2);
+	border: var(--sc-hairline) solid transparent;
 	border-radius: var(--sc-radius-md);
+	background: var(--sc-surface-1);
 	font-size: var(--sc-font-sm);
 	text-align: start;
-	transition: background-color var(--sc-duration-instant) var(--sc-ease-standard);
+	transition:
+		background-color var(--sc-duration-instant) var(--sc-ease-standard),
+		border-color var(--sc-duration-instant) var(--sc-ease-standard);
 }
 
 .omp-work-card-button:hover {
+	border-color: var(--sc-border-subtle);
 	background: var(--sc-hover);
 }
 
 .omp-work-card[data-open="true"] > .omp-work-card-button {
+	border-color: var(--sc-accent-border);
 	background: var(--sc-selected);
+}
+
+.omp-work-card-identity {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--sc-space-1-5);
+	min-width: 0;
 }
 
 .omp-work-card-name {
 	max-width: 16ch;
 	overflow: hidden;
 	color: var(--sc-text);
+	font-family: var(--sc-font-mono);
 	font-weight: var(--sc-weight-medium);
 	text-overflow: ellipsis;
 	white-space: nowrap;
+}
+
+.omp-work-card-role {
+	flex-shrink: 0;
+	padding: 0 5px;
+	border: var(--sc-hairline) solid var(--sc-border-subtle);
+	border-radius: var(--sc-radius-sm);
+	background: var(--sc-elevated);
+	color: var(--sc-text-muted);
+	font-family: var(--sc-font-mono);
+	font-size: var(--sc-font-xs);
+	line-height: 1.45;
 }
 
 .omp-work-card-activity {

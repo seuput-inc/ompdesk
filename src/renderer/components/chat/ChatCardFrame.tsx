@@ -50,7 +50,7 @@ export function ChatCardStatus({
 		>
 			<span
 				aria-hidden
-				className={cx("size-1.5 shrink-0 rounded-full", STATUS_DOT[tone], pulse && "animate-pulse")}
+				className={cx("size-1.5 shrink-0 rounded-full", STATUS_DOT[tone], pulse && "omp-pulse-dot")}
 			/>
 			<span className="truncate">{label}</span>
 			{meta ? <span className="font-mono opacity-80 tabular-nums">{meta}</span> : null}

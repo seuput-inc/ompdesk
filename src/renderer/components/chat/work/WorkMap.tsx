@@ -235,7 +235,12 @@ export function WorkMap({
 								onClick={() => onExpandedChange(open ? null : node.id)}
 							>
 								<WorkStatus state={agentWorkState(node.status)} label={label} motion={laneMotion} />
-								<span className="omp-work-card-name">{node.id}</span>
+								<span className="omp-work-card-identity">
+									<span className="omp-work-card-name">{node.id}</span>
+									{node.agent && node.agent !== "task" ? (
+										<span className="omp-work-card-role">{node.agent}</span>
+									) : null}
+								</span>
 								<span
 									className="omp-work-card-activity"
 									title={
