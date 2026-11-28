@@ -226,11 +226,11 @@ function SplitDiff({ diff }: { diff: string }) {
 	const rows = useMemo(() => toSplitRows(parseDiff(diff)), [diff]);
 	return (
 		<Card
-			className="grid grid-cols-2 gap-px overflow-x-auto bg-(--sc-border-subtle) font-mono text-sc-sm leading-(--sc-leading-normal)"
+			className="grid grid-cols-2 gap-px overflow-x-auto bg-(--sc-divider) font-mono text-sc-sm leading-(--sc-leading-normal)"
 			padding="none"
 		>
 			{(["left", "right"] as const).map(side => (
-				<div className="min-w-0 bg-(--sc-surface-2)" key={side}>
+				<div className="min-w-0 bg-(--sc-code-bg)" key={side}>
 					{rows.map((row, index) => {
 						const line = row[side];
 						return (
@@ -409,7 +409,7 @@ function EditTimelineRow({
 				</span>
 			</DisclosureButton>
 			{expanded && (
-				<Card className="mt-0.5 overflow-hidden py-1" padding="none" surface="2">
+				<Card className="mt-0.5 overflow-hidden py-1" padding="none" surface="code">
 					<EditPreview entry={entry} />
 				</Card>
 			)}
@@ -466,7 +466,7 @@ function DiffTimeline({ candidates }: { candidates: DiffCandidate[] }) {
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			<div className="space-y-1.5 px-3 pb-2">
+			<div className="space-y-1.5 border-b border-(--sc-divider) px-2.5 py-2">
 				<div className="flex flex-wrap items-center gap-2 text-sc-xs text-(--sc-text-muted)">
 					<span>
 						{t("diffPanel.summary", {
@@ -484,7 +484,7 @@ function DiffTimeline({ candidates }: { candidates: DiffCandidate[] }) {
 				<EditActivityStrip edits={candidates} />
 			</div>
 
-			<div ref={parentRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-3">
+			<div ref={parentRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1.5">
 				<div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
 					{virtualizer.getVirtualItems().map(item => {
 						const row = rows[item.index];
@@ -603,7 +603,7 @@ export function DiffPanel() {
 			) : (
 				<>
 					{candidates.length > 1 && (
-						<div className="px-3 pb-1.5">
+						<div className="border-b border-(--sc-divider) px-2.5 py-1.5">
 							<Select
 								aria-label={t("diffPanel.selectFile")}
 								controlSize="sm"
@@ -618,10 +618,10 @@ export function DiffPanel() {
 						</div>
 					)}
 
-					<div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+					<div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2">
 						{selected && (
 							<div className="space-y-1.5">
-								<div className="flex min-w-0 items-center gap-1.5 text-sc-sm text-(--sc-text-muted)">
+								<div className="flex min-h-(--sc-control-sm) min-w-0 items-center gap-1.5 text-sc-xs text-(--sc-text-muted)">
 									<FileCode2 className="size-(--sc-icon-sm) shrink-0 text-(--sc-text-muted)" />
 									<span className="min-w-0">
 										<FilePath cwd={cwd} file={selected.file} />

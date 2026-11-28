@@ -74,7 +74,7 @@ export function CombinedDiff({
 				const diff = diffs[file.path];
 				return (
 					<section className="border-b border-(--sc-divider)" data-combined-file={file.path} key={file.path}>
-						<div className="sticky top-0 z-(--sc-z-sticky) flex items-center gap-2 bg-(--sc-surface-1) px-2 py-1 [[data-sheet-panel]_&]:bg-(--sc-elevated)">
+						<div className="sticky top-0 z-(--sc-z-sticky) flex min-h-(--sc-control-md) items-center gap-1.5 border-b border-(--sc-divider) bg-(--sc-surface-1) px-2 py-1 [[data-sheet-panel]_&]:bg-(--sc-elevated)">
 							<DisclosureButton
 								className="min-w-0 flex-1"
 								onToggle={() =>

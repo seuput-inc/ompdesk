@@ -326,7 +326,7 @@ export function DiffLines({
 					}
 					if (row.kind === "note") {
 						return (
-							<div className="border-y border-(--sc-divider) bg-(--sc-surface-2) px-2 font-sans">
+							<div className="border-y border-(--sc-divider) bg-(--sc-code-bg) px-2 font-sans">
 								<NoteCard note={row.note} />
 							</div>
 						);
@@ -335,7 +335,7 @@ export function DiffLines({
 						const anchor = { kind: "diff", path, lines: row.lines } as const;
 						const place = noteLabel(t, anchor);
 						return (
-							<div className="border-y border-(--sc-divider) bg-(--sc-surface-2) font-sans">
+							<div className="border-y border-(--sc-divider) bg-(--sc-code-bg) font-sans">
 								<NoteEditor
 									initial={draftBody}
 									label={t("reviewNotes.newLabel", { place })}

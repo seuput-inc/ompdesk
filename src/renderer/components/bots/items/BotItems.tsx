@@ -249,8 +249,8 @@ export function BotItems({ bots, group, onOpen, onOrder }: BotItemsProps) {
 		groups.working.length === 0;
 
 	return (
-		<div className="flex flex-col gap-2 p-4" data-bot-items>
-			<div className="flex items-center gap-2">
+		<div className="flex flex-col gap-2 px-4 py-3" data-bot-items>
+			<div className="flex min-h-(--sc-control-sm) items-center gap-2 border-b border-(--sc-divider) pb-1.5">
 				<span className="flex-1 text-sc-xs text-(--sc-text-muted)">
 					{allClear ? t("bots.items.allClear") : t("bots.items.count", { count: shown.length })}
 				</span>
@@ -318,7 +318,7 @@ export function BotItems({ bots, group, onOpen, onOrder }: BotItemsProps) {
 			)}
 			{picked.length > 0 && (
 				<div
-					className="sticky bottom-2 z-(--sc-z-raised) mx-auto flex items-center gap-1 rounded-(--sc-radius-full) border border-(--sc-border-subtle) bg-(--sc-elevated) px-3 py-1 shadow-(--sc-shadow-md)"
+					className="sticky bottom-2 z-(--sc-z-raised) mx-auto flex items-center gap-1 rounded-(--sc-radius-full) border border-(--sc-dialog-border) bg-(--sc-elevated) px-3 py-1 shadow-(--sc-shadow-md)"
 					data-bot-items-selection
 				>
 					<span className="text-sc-sm">{t("bots.items.selected", { count: picked.length })}</span>
@@ -405,14 +405,14 @@ function ItemGroup({
 	const title = t(`bots.items.group.${id}`);
 	return (
 		<section aria-label={title} className="flex flex-col gap-0.5" data-bot-items-group={id}>
-			<div className="flex items-center gap-1">
+			<div className="flex min-h-(--sc-control-sm) items-center gap-1">
 				<DisclosureButton
-					className="flex-1 text-sc-xs font-medium text-(--sc-text-muted)"
+					className="flex-1 text-sc-xs font-semibold text-(--sc-text-muted)"
 					onToggle={() => setOpen(!open)}
 					open={open}
 				>
 					{title}
-					<span className="ml-1.5 font-normal">
+					<span className="ml-1.5 font-normal tabular-nums text-(--sc-text-subtle)">
 						{items.length}
 						{!open && fresh > 0 && (
 							<span className="text-(--sc-text)"> · {t("bots.items.group.new", { count: fresh })}</span>
