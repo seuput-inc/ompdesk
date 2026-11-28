@@ -21,7 +21,6 @@ import {
 	isLoopbackUrl,
 	PREVIEW_COMMAND,
 	PREVIEW_DEVICE,
-	PREVIEW_HISTORY,
 	PREVIEW_LOAD_STALL_MS,
 	PREVIEW_PAGE,
 	PREVIEW_PROBLEM_LIMIT,
@@ -39,7 +38,6 @@ import {
 	type PreviewDevice,
 	type PreviewDeviceRequest,
 	type PreviewHistoryEntry,
-	type PreviewHistoryRequest,
 	type PreviewPageRequest,
 	type PreviewPageState,
 	type PreviewRequest,
@@ -184,15 +182,6 @@ const pageRequestSchema: z.ZodType<PreviewPageRequest> = z.discriminatedUnion("a
 		query: z.string().max(500),
 		step: z.union([z.literal(-1), z.literal(0), z.literal(1)]),
 	}),
-]);
-const historyRequestSchema: z.ZodType<PreviewHistoryRequest> = z.discriminatedUnion("action", [
-	z.object({
-		action: z.literal("list"),
-		query: z.string().max(2048),
-		limit: z.number().int().min(1).max(50).optional(),
-	}),
-	z.object({ action: z.literal("remove"), url: z.string().max(4096) }),
-	z.object({ action: z.literal("clear") }),
 ]);
 
 const DeviceId = z.string().min(1).max(200);
@@ -1262,13 +1251,6 @@ export function registerPreviewHost(
 		return choice.filePath;
 	});
 	ipc.handle(PREVIEW_VISUALS, () => visuals.list());
-	ipc.handle(PREVIEW_HISTORY, async (_caller, raw: unknown) => {
-		const request = historyRequestSchema.parse(raw);
-		if (!history) return request.action === "list" ? [] : null;
-		if (request.action === "list") return history.list(request.query, request.limit);
-		await (request.action === "remove" ? history.remove(request.url) : history.clear());
-		return null;
-	});
 	// This computer's running mobile devices (Orca's emulator pane): the core runs `simctl`/`adb` on the login shell's
 	// PATH; nothing is booted here (the `ompdesk-mobile-emulator` skill does that).
 	ipc.handle(PREVIEW_DEVICE, async (_caller, raw: unknown) => {

@@ -92,6 +92,10 @@ const OWNED: &[Owned] = &[
         channel: "draft-pictures:remove",
         handler: crate::draft_pictures::ipc_remove,
     },
+    Owned {
+        channel: "preview:history",
+        handler: crate::browsing::ipc_history,
+    },
 ];
 
 /// Plumbing channels for main's tests (as `core.echo` is the wire's), served only when `ipc.start` asks for them.
@@ -427,13 +431,19 @@ mod tests {
         let server = tokio::spawn(crate::serve(server_read, server_write, crate::registry()));
         let (client_read, mut client_write) = tokio::io::split(client);
         let mut lines = tokio::io::BufReader::new(client_read);
-        let policy = serde_json::json!({
-            "draft-pictures:put": {"dir": "invoke"},
-            "draft-pictures:read": {"dir": "invoke"},
-            "draft-pictures:remove": {"dir": "invoke"},
-            "test:ipc.record": {"dir": "send"},
-            "test:ipc.recorded": {"dir": "invoke"},
-        });
+        let mut policy_map = serde_json::Map::new();
+        for owned in OWNED {
+            policy_map.insert(
+                owned.channel.to_owned(),
+                serde_json::json!({"dir": "invoke"}),
+            );
+        }
+        policy_map.insert("test:ipc.record".into(), serde_json::json!({"dir": "send"}));
+        policy_map.insert(
+            "test:ipc.recorded".into(),
+            serde_json::json!({"dir": "invoke"}),
+        );
+        let policy = Value::Object(policy_map);
         let caller = r#"{"key":"order-test","window":1,"connId":null}"#;
         let input = format!(
             "{{\"id\":1,\"method\":\"ipc.start\",\"params\":{{\"policy\":{policy},\"testChannels\":true}}}}\n\

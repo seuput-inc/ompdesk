@@ -12,8 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::disk::saves::{waiting_content, write_kept};
+use crate::ipc::{Handled, IpcContext};
 use crate::server::{Call, Fault, Registry, Reply};
 
 const FILE: &str = "preview-history.json";
@@ -265,6 +267,115 @@ async fn clear(call: Call) -> Result<Reply, Fault> {
     .await
 }
 
+const IPC_QUERY_MAX: usize = 2048;
+const IPC_URL_MAX: usize = 4096;
+const IPC_LIMIT_MAX: usize = 50;
+
+enum HistoryRequest {
+    List { query: String, limit: usize },
+    Remove { url: String },
+    Clear,
+}
+
+fn parse_history_request(raw: &Value) -> Result<HistoryRequest, Fault> {
+    let invalid = || Fault::new("invalid_params", "Invalid preview history request");
+    let obj = raw.as_object().ok_or_else(invalid)?;
+    match obj.get("action").and_then(Value::as_str) {
+        Some("list") => {
+            let query = obj
+                .get("query")
+                .and_then(Value::as_str)
+                .ok_or_else(invalid)?;
+            if query.encode_utf16().count() > IPC_QUERY_MAX {
+                return Err(invalid());
+            }
+            let limit = match obj.get("limit") {
+                None => DEFAULT_LIMIT,
+                Some(value) => {
+                    let n = value
+                        .as_u64()
+                        .or_else(|| {
+                            let f = value.as_f64()?;
+                            (f.is_finite() && f.fract() == 0.0 && f >= 0.0).then_some(f as u64)
+                        })
+                        .ok_or_else(invalid)?;
+                    let n = usize::try_from(n).map_err(|_| invalid())?;
+                    if !(1..=IPC_LIMIT_MAX).contains(&n) {
+                        return Err(invalid());
+                    }
+                    n
+                }
+            };
+            Ok(HistoryRequest::List {
+                query: query.to_owned(),
+                limit,
+            })
+        }
+        Some("remove") => {
+            let url = obj.get("url").and_then(Value::as_str).ok_or_else(invalid)?;
+            if url.encode_utf16().count() > IPC_URL_MAX {
+                return Err(invalid());
+            }
+            Ok(HistoryRequest::Remove {
+                url: url.to_owned(),
+            })
+        }
+        Some("clear") => Ok(HistoryRequest::Clear),
+        _ => Err(invalid()),
+    }
+}
+
+/// Core IPC handler for `preview:history` (routed directly from `tauri-shell` via H(c)).
+pub(crate) fn ipc_history(ctx: IpcContext, args: Vec<Value>) -> Handled {
+    Box::pin(async move {
+        let user_data = ctx
+            .user_data
+            .ok_or_else(|| Fault::new("internal", "ompdesk-core IPC started without userData"))?;
+        let raw = args.first().unwrap_or(&Value::Null);
+        match parse_history_request(raw)? {
+            HistoryRequest::List { query, limit } => {
+                let entries = blocking(move || {
+                    let _held = LOCK
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    Ok(suggestions(&load(&user_data.join(FILE)), &query, limit))
+                })
+                .await?;
+                let value = serde_json::to_value(&entries)
+                    .map_err(|error| Fault::new("internal", error.to_string()))?;
+                Ok(Some(value))
+            }
+            HistoryRequest::Remove { url } => {
+                blocking(move || {
+                    let _held = LOCK
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let file = user_data.join(FILE);
+                    let mut store = load(&file);
+                    let before = store.entries.len();
+                    store.entries.retain(|entry| entry.url != url);
+                    if store.entries.len() != before {
+                        save(&file, &store)?;
+                    }
+                    Ok(())
+                })
+                .await?;
+                Ok(Some(Value::Null))
+            }
+            HistoryRequest::Clear => {
+                blocking(move || {
+                    let _held = LOCK
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    save(&user_data.join(FILE), &Store::default())
+                })
+                .await?;
+                Ok(Some(Value::Null))
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,5 +491,84 @@ mod tests {
         std::fs::write(&file, b"{not json").unwrap();
         assert!(load(&file).entries.is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ipc_history_validates_lists_removes_and_clears() {
+        use serde_json::json;
+
+        let dir = std::env::temp_dir().join(format!("ompdesk-browsing-ipc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        save(
+            &dir.join(FILE),
+            &store(&[
+                ("https://alpha.test/", "Alpha", 2.0, 2),
+                ("https://beta.test/", "Beta", 1.0, 1),
+            ]),
+        )
+        .unwrap();
+
+        let ctx = IpcContext {
+            caller: crate::ipc::Caller {
+                key: "w1".into(),
+                window: Some(1),
+                conn_id: None,
+                device_id: None,
+            },
+            user_data: Some(dir.clone()),
+        };
+
+        let listed = ipc_history(
+            ctx.clone(),
+            vec![json!({"action": "list", "query": "", "limit": 1})],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1);
+        assert_eq!(listed[0]["url"], "https://alpha.test/");
+
+        let removed = ipc_history(
+            ctx.clone(),
+            vec![json!({"action": "remove", "url": "https://alpha.test/"})],
+        )
+        .await
+        .unwrap();
+        assert_eq!(removed, Some(Value::Null));
+
+        let remaining = ipc_history(ctx.clone(), vec![json!({"action": "list", "query": ""})])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(remaining.as_array().unwrap().len(), 1);
+        assert_eq!(remaining[0]["url"], "https://beta.test/");
+
+        let cleared = ipc_history(ctx.clone(), vec![json!({"action": "clear"})])
+            .await
+            .unwrap();
+        assert_eq!(cleared, Some(Value::Null));
+        let empty = ipc_history(ctx.clone(), vec![json!({"action": "list", "query": ""})])
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(empty, json!([]));
+
+        for bad in [
+            json!(null),
+            json!({"action": "unknown"}),
+            json!({"action": "list", "query": 5}),
+            json!({"action": "list", "query": "", "limit": 0}),
+            json!({"action": "list", "query": "", "limit": 51}),
+            json!({"action": "list", "query": "", "limit": 1.5}),
+            json!({"action": "list", "query": "", "limit": null}),
+            json!({"action": "list", "query": "a".repeat(2049)}),
+            json!({"action": "remove", "url": "a".repeat(4097)}),
+        ] {
+            let err = ipc_history(ctx.clone(), vec![bad]).await.unwrap_err();
+            assert_eq!(err.code, "invalid_params");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

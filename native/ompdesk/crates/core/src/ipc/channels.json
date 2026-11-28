@@ -1,4 +1,9 @@
 {
-	"invoke": ["draft-pictures:put", "draft-pictures:read", "draft-pictures:remove"],
+	"invoke": [
+		"draft-pictures:put",
+		"draft-pictures:read",
+		"draft-pictures:remove",
+		"preview:history"
+	],
 	"send": []
 }
