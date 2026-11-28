@@ -1,0 +1,82 @@
+name: Capture one shipped Windows app
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+
+jobs:
+  capture:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+      - uses: ./.github/actions/install
+        with:
+          electron: "false"
+          native: "true"
+      - uses: ./.github/actions/tauri-shell
+        with:
+          test-automation: "true"
+      - uses: ./.github/actions/install-omp
+      - run: bun run build
+      # Reuse the exact older host for the new form's unsupported-computer case.
+      - if: inputs.tag == 'v0.152.0'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: legacy-runtime
+          path: |
+            out/
+            resources/node/win32-x64/
+            resources/ompdesk-bin/win32-x64/
+            resources/ompdesk-tauri/win32-x64/
+          retention-days: 1
+          if-no-files-found: error
+      - if: inputs.tag == 'v0.153.0'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: v0.152.0
+          path: legacy
+      - if: inputs.tag == 'v0.153.0'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: legacy-runtime
+          path: legacy
+      - if: inputs.tag == 'v0.153.0'
+        working-directory: legacy
+        run: bun install --frozen-lockfile --ignore-scripts
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: capture-driver
+      - name: Capture through real Windows profiles
+        working-directory: capture-driver
+        shell: pwsh
+        env:
+          OMP_GUI_E2E_OUT: ${{ github.workspace }}/out
+          OMP_GUI_E2E_SHELL: ${{ github.workspace }}/resources/ompdesk-tauri/win32-x64/ompdesk-shell.exe
+          OMPDESK_NODE: ${{ github.workspace }}/resources/node/win32-x64/node.exe
+          OMP_GUI_SHIPPED_CAPTURES: ${{ runner.temp }}/shipped
+          OMP_GUI_SHIPPED_TAG: ${{ inputs.tag }}
+          OMP_GUI_SHIPPED_LEGACY: ${{ github.workspace }}/legacy
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          bunx playwright install chromium
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force $env:OMP_GUI_SHIPPED_CAPTURES | Out-Null
+          @{ tag=$env:OMP_GUI_SHIPPED_TAG; app=(git -C .. rev-parse HEAD); driver=(git rev-parse HEAD) } | ConvertTo-Json | Set-Content "$env:OMP_GUI_SHIPPED_CAPTURES/build.json"
+          bunx playwright test 'shipped-.*\.e2e\.ts' --grep 'shipped captures' --trace off --reporter 'list,./e2e/shipped-reporter.ts'
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shipped-${{ inputs.tag }}
+          path: ${{ runner.temp }}/shipped/
+          retention-days: 30
+          if-no-files-found: error

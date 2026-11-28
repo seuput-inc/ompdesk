@@ -67,7 +67,7 @@ import {
 } from "../../resources/gui-bridge/transcript-page";
 import { GuiBridgeClient } from "../../src/main/bridge-client";
 import { STRESS_PROMPT, stressReplyText } from "../../src/renderer/dev-harness/fixture";
-import { blockedAccountUsage } from "../../src/renderer/dev-harness/fixture-usage";
+import { blockedAccountUsage, creditAccountUsage } from "../../src/renderer/dev-harness/fixture-usage";
 import { REPLY_SHOWCASE } from "../../src/renderer/dev-harness/reply-showcase";
 import type {
 	AgentMessage,
@@ -605,6 +605,10 @@ export function runRpcUi(): void {
 	 * replaces it.
 	 */
 	const ownerUsage = (): Array<Record<string, unknown>> | undefined => {
+		if (process.env.OMP_GUI_TEST_USAGE_ACCOUNTS === "credits")
+			return creditAccountUsage()
+				.filter(report => report.provider === "anthropic")
+				.map(report => ({ ...report }));
 		if (process.env.OMP_GUI_TEST_USAGE_ACCOUNTS === "blocked")
 			return blockedAccountUsage().map(report => ({ ...report }));
 		if (process.env.OMP_GUI_TEST_USAGE_ACCOUNTS !== "many") return undefined;
@@ -7356,9 +7360,9 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 					ok();
 					break;
 				}
-				if (line === "fixture:board") {
+				if (line === "fixture:board" || line === "fixture:board-work") {
 					const now = Date.now();
-					boardUsage = true;
+					if (line === "fixture:board") boardUsage = true;
 					type Progress = NonNullable<SubagentSnapshot["progress"]>;
 					const progress = (
 						id: string,
@@ -7412,7 +7416,9 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 								resolvedModel: "openai/gpt-5",
 							}),
 						},
-						{
+					];
+					if (line === "fixture:board") {
+						subagentRoster.push({
 							id: "sa-docs",
 							index: 2,
 							agent: "task",
@@ -7420,8 +7426,8 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 							status: "parked",
 							live: true,
 							lastUpdate: now,
-						},
-					];
+						});
+					}
 					for (const agent of subagentRoster) writeLifecycle(agent, "started");
 					for (const agent of subagentRoster) {
 						if (!agent.progress) continue;
@@ -7435,6 +7441,58 @@ T_{\\text{请求}} = T_{\\text{排队等待}} + T_{\\text{网络传输}} + T_{\\
 								progress: agent.progress,
 							},
 						});
+					}
+					if (line === "fixture:board-work") {
+						// The active task is deliberately late in the stored order, behind finished and empty phases.
+						todoPhases = [
+							{
+								name: "요구사항 조사",
+								tasks: [
+									{ content: "기존 동작 확인", status: "completed" },
+									{ content: "색상 검토", status: "completed" },
+									{ content: "레이블 정리", status: "completed" },
+								],
+							},
+							{ name: "보류한 실험", tasks: [] },
+							{
+								name: "배포 준비",
+								tasks: [
+									{ content: "릴리스 노트 작성", status: "pending" },
+									{ content: "변경 내역 정리", status: "pending" },
+									{ content: "스크린샷 검토", status: "pending" },
+								],
+							},
+							{
+								name: "설정 점검",
+								tasks: [
+									{ content: "메뉴 구조 확인", status: "completed" },
+									{ content: "도움말 문구 확인", status: "pending" },
+									{ content: "설정 변경 확인", status: "in_progress" },
+									{ content: "좁은 화면 확인", status: "blocked" },
+									{ content: "도구 모음 재배치", status: "abandoned" },
+									{ content: "아이콘 교체", status: "abandoned" },
+								],
+							},
+						];
+						const tool = { toolCallId: `work-plan-${now}`, toolName: "todo" };
+						write({ type: "tool_execution_start", ...tool, args: { op: "init" } });
+						write({
+							type: "tool_execution_end",
+							...tool,
+							result: {
+								content: [{ type: "text", text: "todo updated" }],
+								details: { phases: todoPhases },
+							},
+							isError: false,
+						});
+						write({
+							type: "tool_execution_start",
+							toolCallId: `work-read-${now}`,
+							toolName: "read",
+							args: { path: "src/settings.ts", intent: "설정 파일 비교" },
+						});
+						ok();
+						break;
 					}
 					boardGoal = {
 						objective: "Ship the 1.4 release notes",

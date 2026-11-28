@@ -31,7 +31,7 @@ on:
         type: string
         default: ""
       parity:
-        description: "Parity surfaces to capture instead of the suite (ids, space or comma separated, or --both-orders for the order check; sheets uploaded as `parity`)"
+        description: "Parity surface ids, --both-orders, or --shipped for the v0.152.0/v0.153.0 Windows capture pair"
         type: string
         default: ""
       fake-env:
@@ -47,7 +47,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: e2e-nightly-${{ github.ref }}-${{ inputs.parity && 'parity' || inputs.specs && 'specs' || 'full' }}
+  group: e2e-nightly-${{ github.ref }}-${{ inputs.parity == '--shipped' && 'shipped' || inputs.parity && 'parity' || inputs.specs && 'specs' || 'full' }}
   cancel-in-progress: true
 
 jobs:
@@ -64,7 +64,7 @@ jobs:
 
   build-out:
     needs: gate
-    if: ${{ !cancelled() && (github.event_name == 'schedule' || needs.gate.result == 'success') }}
+    if: ${{ !cancelled() && inputs.parity != '--shipped' && (github.event_name == 'schedule' || needs.gate.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -115,6 +115,40 @@ jobs:
     with:
       specs: ${{ inputs.specs || '' }}
 
+  shipped-before:
+    if: inputs.parity == '--shipped'
+    needs: gate
+    uses: ./.github/workflows/shipped-capture.yml
+    with:
+      tag: v0.152.0
+
+  shipped-after:
+    if: ${{ !cancelled() && inputs.parity == '--shipped' && needs.gate.result == 'success' }}
+    needs: [gate, shipped-before]
+    uses: ./.github/workflows/shipped-capture.yml
+    with:
+      tag: v0.153.0
+
+  shipped-report:
+    if: ${{ !cancelled() && inputs.parity == '--shipped' && needs.gate.result == 'success' }}
+    needs: [gate, shipped-before, shipped-after]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: shipped-v*
+          path: evidence
+      - name: Compare tagged captures
+        run: node scripts/shipped-capture-report.mjs evidence
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shipped-comparison
+          path: evidence/
+          retention-days: 30
+          if-no-files-found: error
+
   # The parity sheet (e2e/parity.e2e.ts, what `bun run parity` runs after its own build) of the named surfaces on a
   # Windows runner, against the bundle build-out made. Uploaded whether it passed or not: the e2e shards keep their
   # captures of a failed run only. The order check runs each order on a runner of its own: a runner has one Playwright
@@ -122,7 +156,7 @@ jobs:
   # 45798443670 hit the 45 min timeout mid-capture.
   parity:
     name: ${{ matrix.order == 'named' && 'parity' || format('parity ({0})', matrix.order) }}
-    if: ${{ inputs.parity != '' }}
+    if: ${{ inputs.parity != '' && inputs.parity != '--shipped' }}
     needs: build-out
     runs-on: windows-latest
     timeout-minutes: 45
