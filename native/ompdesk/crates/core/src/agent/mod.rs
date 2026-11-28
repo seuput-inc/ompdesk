@@ -10,6 +10,7 @@
 
 pub mod adapter;
 pub mod backends;
+pub mod journal;
 pub mod omp_contract;
 pub mod parsers;
 pub mod registry;
@@ -25,6 +26,11 @@ pub use backends::{
     RoundOutcome, SecretHeader, SseTransport, ToolExecutionResult, ToolExecutor, ToolInvocation,
     ToolSchema, antigravity_approval_args, build_antigravity_command, detect_all_clis, detect_cli,
     detect_direct_api, pump_antigravity_stream,
+};
+pub use journal::{
+    DIRECT_RESUME_PREFIX, JOURNAL_FORMAT_VERSION, JournalEntry, JournalHeader, JournalSnapshot,
+    JournalStore, accumulate_usage, format_direct_resume_id, parse_direct_journal_id,
+    sanitize_journal_id, validate_journal_id,
 };
 pub use omp_contract::{
     OMP_FRAME_MAPPINGS, OmpAdapterContract, OmpContractState, OmpFrameMappingSpec,

@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use http_body_util::{BodyExt, Full};
@@ -27,10 +28,14 @@ use url::{Host, Position, Url};
 
 use super::detect::detect_direct_api_in;
 use crate::agent::adapter::{AgentAdapter, AgentSession, BoxFuture};
+use crate::agent::journal::{
+    JournalEntry, JournalHeader, JournalStore, accumulate_usage, format_direct_resume_id,
+    now_unix_ms, parse_direct_journal_id, sanitize_journal_id,
+};
 use crate::agent::parsers::direct_sse::DirectSseParser;
 use crate::agent::types::{
     AgentCapabilities, AgentError, AgentEvent, BackendId, DirectApiProvider, InstalledBackend,
-    ResumeHandle, SessionLifecycleState, SessionSpec, TurnFinishReason, TurnInput,
+    ResumeHandle, SessionLifecycleState, SessionSpec, TokenUsage, TurnFinishReason, TurnInput,
 };
 use crate::http::machine_tls;
 
@@ -677,6 +682,7 @@ fn build_chat_completions_body(
 pub struct RoundOutcome {
     pub assistant_text: String,
     pub tool_calls: Vec<RecordedToolCall>,
+    pub usage: Vec<TokenUsage>,
     pub finish_reason: TurnFinishReason,
     pub terminal_event: Option<AgentEvent>,
 }
@@ -695,6 +701,7 @@ pub struct RoundCollector {
     assistant_text: String,
     tool_order: Vec<String>,
     pending_tools: HashMap<String, PendingToolCall>,
+    usage: Vec<TokenUsage>,
     finish_reason: TurnFinishReason,
     terminal_event: Option<AgentEvent>,
 }
@@ -706,6 +713,7 @@ impl RoundCollector {
             assistant_text: String::new(),
             tool_order: Vec::new(),
             pending_tools: HashMap::new(),
+            usage: Vec::new(),
             finish_reason: TurnFinishReason::Completed,
             terminal_event: None,
         }
@@ -763,6 +771,11 @@ impl RoundCollector {
                     }
                 }
             }
+            AgentEvent::Usage { usage } => {
+                if !usage.is_empty() {
+                    self.usage.push(usage.clone());
+                }
+            }
             AgentEvent::TurnFinished { reason, .. } => {
                 self.finish_reason = *reason;
                 self.terminal_event = Some(event);
@@ -797,6 +810,7 @@ impl RoundCollector {
         RoundOutcome {
             assistant_text: self.assistant_text,
             tool_calls,
+            usage: self.usage,
             finish_reason: self.finish_reason,
             terminal_event: self.terminal_event,
         }
@@ -1065,11 +1079,19 @@ struct DirectSessionRuntime {
     spec: SessionSpec,
     event_tx: mpsc::Sender<AgentEvent>,
     history: StdMutex<Vec<ConversationMessage>>,
+    total_usage: StdMutex<TokenUsage>,
     resume_handle: StdMutex<ResumeHandle>,
     active_cancel: StdMutex<Option<oneshot::Sender<()>>>,
+    journal_store: Option<Arc<JournalStore>>,
+    journal_id: String,
+    next_seq: AtomicU64,
 }
 
 impl DirectSessionRuntime {
+    fn next_journal_seq(&self) -> u64 {
+        self.next_seq.fetch_add(1, Ordering::Relaxed)
+    }
+
     fn cancel_active_turn(&self) -> bool {
         let cancel = self
             .active_cancel
@@ -1084,6 +1106,74 @@ impl DirectSessionRuntime {
         }
     }
 
+    fn record_message(&self, message: ConversationMessage) -> Vec<ConversationMessage> {
+        let snapshot = {
+            let mut history = self
+                .history
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            history.push(message.clone());
+            history.clone()
+        };
+        if let Some(store) = &self.journal_store {
+            let entry = JournalEntry::Message {
+                seq: self.next_journal_seq(),
+                timestamp_ms: now_unix_ms(),
+                message,
+            };
+            let _ = store.append_entry(&self.journal_id, &entry);
+        }
+        snapshot
+    }
+
+    fn record_usage(&self, usage_records: &[TokenUsage]) {
+        if usage_records.is_empty() {
+            return;
+        }
+        {
+            let mut total = self
+                .total_usage
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            for usage in usage_records {
+                accumulate_usage(&mut total, usage);
+            }
+        }
+        if let Some(store) = &self.journal_store {
+            for usage in usage_records {
+                let entry = JournalEntry::Usage {
+                    seq: self.next_journal_seq(),
+                    timestamp_ms: now_unix_ms(),
+                    usage: usage.clone(),
+                };
+                let _ = store.append_entry(&self.journal_id, &entry);
+            }
+        }
+    }
+
+    fn flush_checkpoint(&self) {
+        let Some(store) = &self.journal_store else {
+            return;
+        };
+        let message_count = self
+            .history
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len();
+        let total_usage = self
+            .total_usage
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let entry = JournalEntry::Checkpoint {
+            seq: self.next_journal_seq(),
+            timestamp_ms: now_unix_ms(),
+            message_count,
+            total_usage,
+        };
+        let _ = store.append_entry(&self.journal_id, &entry);
+    }
+
     fn snapshot_resume_handle(&self) -> ResumeHandle {
         let count = self
             .history
@@ -1096,6 +1186,9 @@ impl DirectSessionRuntime {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
         handle.checkpoint_cursor = Some(count.to_string());
+        if handle.cwd.is_none() {
+            handle.cwd = Some(self.spec.cwd.clone());
+        }
         handle
     }
 }
@@ -1108,6 +1201,7 @@ pub struct DirectApiAdapter {
     api_key_override: Option<String>,
     tool_executor: Arc<dyn ToolExecutor>,
     transport: Arc<dyn SseTransport>,
+    journal_store: Option<Arc<JournalStore>>,
     sessions: Arc<StdMutex<HashMap<String, Arc<DirectSessionRuntime>>>>,
 }
 
@@ -1116,6 +1210,7 @@ impl fmt::Debug for DirectApiAdapter {
         f.debug_struct("DirectApiAdapter")
             .field("provider", &self.provider)
             .field("has_api_key_override", &self.api_key_override.is_some())
+            .field("has_journal_store", &self.journal_store.is_some())
             .finish()
     }
 }
@@ -1127,6 +1222,7 @@ impl DirectApiAdapter {
             api_key_override: None,
             tool_executor,
             transport: Arc::new(HyperSseTransport),
+            journal_store: None,
             sessions: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
@@ -1143,12 +1239,44 @@ impl DirectApiAdapter {
         self
     }
 
+    /// Enables atomic JSONL session persistence under `dir` for cross-restart and hibernation resume.
+    pub fn with_journal_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.journal_store = Some(Arc::new(JournalStore::new(dir)));
+        self
+    }
+
+    /// Attaches a shared [`JournalStore`] for Direct API session persistence and resume.
+    pub fn with_journal_store(mut self, store: Arc<JournalStore>) -> Self {
+        self.journal_store = Some(store);
+        self
+    }
+
     pub fn provider(&self) -> DirectApiProvider {
         self.provider
     }
 
     pub fn tool_executor(&self) -> &Arc<dyn ToolExecutor> {
         &self.tool_executor
+    }
+
+    pub fn journal_store(&self) -> Option<&Arc<JournalStore>> {
+        self.journal_store.as_ref()
+    }
+
+    /// Returns a snapshot of the active in-memory conversation history for `session_id`.
+    pub fn session_history(&self, session_id: &str) -> Option<Vec<ConversationMessage>> {
+        let rt = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(session_id)
+            .cloned()?;
+        Some(
+            rt.history
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
+        )
     }
 
     fn resolve_api_key(&self, spec: &SessionSpec) -> Option<String> {
@@ -1215,6 +1343,7 @@ impl AgentAdapter for DirectApiAdapter {
         let backend = self.id();
         let caps = self.capabilities();
         let sessions = Arc::clone(&self.sessions);
+        let journal_store = self.journal_store.clone();
         Box::pin(async move {
             if let Some(resume) = &spec.resume
                 && resume.backend != backend
@@ -1226,17 +1355,62 @@ impl AgentAdapter for DirectApiAdapter {
             }
             let (tx, rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
             let session_id = spec.session_id.clone();
-            let handle = spec
-                .resume
-                .clone()
-                .unwrap_or_else(|| ResumeHandle::new(backend, session_id.clone()));
+
+            let (mut handle, journal_id) = match spec.resume.clone() {
+                Some(resume) => {
+                    let jid = parse_direct_journal_id(&resume.native_id).to_owned();
+                    (resume, jid)
+                }
+                None => {
+                    let jid = sanitize_journal_id(&session_id);
+                    let mut fresh = ResumeHandle::new(backend, format_direct_resume_id(&jid));
+                    fresh.cwd = Some(spec.cwd.clone());
+                    (fresh, jid)
+                }
+            };
+
+            let mut initial_history = Vec::new();
+            let mut initial_usage = TokenUsage::default();
+            let mut next_seq: u64 = 1;
+
+            if let Some(store) = &journal_store {
+                if store.exists(&journal_id)? {
+                    let snapshot = store.load_and_repair(&journal_id)?;
+                    if let Some(recorded_backend) = snapshot.backend
+                        && recorded_backend != backend
+                    {
+                        return Err(AgentError::InvalidResumeHandle {
+                            expected: backend,
+                            found: recorded_backend,
+                        });
+                    }
+                    initial_history = snapshot.messages;
+                    initial_usage = snapshot.total_usage;
+                    next_seq = snapshot.last_seq.saturating_add(1);
+                    handle.checkpoint_cursor = Some(initial_history.len().to_string());
+                    for (k, v) in snapshot.metadata {
+                        handle.metadata.entry(k).or_insert(v);
+                    }
+                } else {
+                    let mut header = JournalHeader::new(&journal_id, backend);
+                    header.cwd = Some(spec.cwd.clone());
+                    header.model = spec.model.clone();
+                    header.system_prompt = spec.system_prompt.clone();
+                    header.metadata = handle.metadata.clone();
+                    store.create_if_absent(&header)?;
+                }
+            }
 
             let runtime = Arc::new(DirectSessionRuntime {
                 spec,
                 event_tx: tx.clone(),
-                history: StdMutex::new(Vec::new()),
+                history: StdMutex::new(initial_history),
+                total_usage: StdMutex::new(initial_usage),
                 resume_handle: StdMutex::new(handle.clone()),
                 active_cancel: StdMutex::new(None),
+                journal_store,
+                journal_id,
+                next_seq: AtomicU64::new(next_seq),
             });
             sessions
                 .lock()
@@ -1270,14 +1444,7 @@ impl AgentAdapter for DirectApiAdapter {
             .and_then(|rt| self.resolve_api_key(&rt.spec));
         Box::pin(async move {
             let runtime = runtime?;
-            let messages = {
-                let mut history = runtime
-                    .history
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                history.push(ConversationMessage::user(input.prompt.clone()));
-                history.clone()
-            };
+            let messages = runtime.record_message(ConversationMessage::user(input.prompt.clone()));
 
             let initial_req = build_http_request(
                 provider,
@@ -1367,21 +1534,17 @@ impl AgentAdapter for DirectApiAdapter {
                         }
                     };
 
+                    runtime_bg.record_usage(&outcome.usage);
+
                     if !outcome.tool_calls.is_empty() {
-                        runtime_bg
-                            .history
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .push(ConversationMessage::assistant_with_tools(
+                        let _ =
+                            runtime_bg.record_message(ConversationMessage::assistant_with_tools(
                                 outcome.assistant_text,
                                 outcome.tool_calls.clone(),
                             ));
                     } else if !outcome.assistant_text.is_empty() {
-                        runtime_bg
-                            .history
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .push(ConversationMessage::assistant(outcome.assistant_text));
+                        let _ = runtime_bg
+                            .record_message(ConversationMessage::assistant(outcome.assistant_text));
                     }
 
                     if outcome.tool_calls.is_empty() || tools.is_empty() {
@@ -1454,16 +1617,12 @@ impl AgentAdapter for DirectApiAdapter {
                                 is_error,
                             })
                             .await;
-                        runtime_bg
-                            .history
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .push(ConversationMessage::tool_result(
-                                call.call_id,
-                                call.name,
-                                output,
-                                is_error,
-                            ));
+                        let _ = runtime_bg.record_message(ConversationMessage::tool_result(
+                            call.call_id,
+                            call.name,
+                            output,
+                            is_error,
+                        ));
                     }
                     if cancelled {
                         break;
@@ -1489,11 +1648,7 @@ impl AgentAdapter for DirectApiAdapter {
         let runtime = self.lookup_session(session.id());
         Box::pin(async move {
             let runtime = runtime?;
-            runtime
-                .history
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(ConversationMessage::user(input.prompt));
+            let _ = runtime.record_message(ConversationMessage::user(input.prompt));
             Ok(())
         })
     }
@@ -1521,16 +1676,19 @@ impl AgentAdapter for DirectApiAdapter {
         Box::pin(async move {
             let handle = if let Some(rt) = runtime {
                 let _ = rt.cancel_active_turn();
+                rt.flush_checkpoint();
                 let _ = rt.event_tx.try_send(AgentEvent::SessionStateChanged {
                     state: SessionLifecycleState::Hibernated,
                     detail: None,
                 });
                 rt.snapshot_resume_handle()
             } else {
-                session
-                    .resume_handle()
-                    .cloned()
-                    .unwrap_or_else(|| ResumeHandle::new(backend, session_id))
+                session.resume_handle().cloned().unwrap_or_else(|| {
+                    ResumeHandle::new(
+                        backend,
+                        format_direct_resume_id(&sanitize_journal_id(&session_id)),
+                    )
+                })
             };
             session.set_pid(None);
             session.set_state(SessionLifecycleState::Hibernated);
@@ -1948,5 +2106,144 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resumed.resume_handle(), Some(&handle));
+    }
+
+    #[tokio::test]
+    async fn persists_direct_api_session_to_journal_and_resumes_across_restart_with_corrupt_tail() {
+        let ws = tempfile::tempdir().unwrap();
+        let journal_dir = tempfile::tempdir().unwrap();
+        fs::write(ws.path().join("note.txt"), "persisted workspace note\n").unwrap();
+
+        let round1 = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m_j1\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":25}}}\n\n",
+            "event: content_block_start\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_j1\",\"name\":\"read_file\"}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"note.txt\\\"}\"}}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":8}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        )
+        .to_owned();
+
+        let round2 = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m_j2\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":60}}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Note read successfully.\"}}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":12}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        )
+        .to_owned();
+
+        let transport1 = Arc::new(ScriptedSseTransport::new(vec![round1, round2]));
+        let executor1 = Arc::new(LocalToolExecutor::with_root(ws.path()));
+        let adapter1 = DirectApiAdapter::new(DirectApiProvider::Anthropic, executor1)
+            .with_api_key("sk-ant-journal-test")
+            .with_journal_dir(journal_dir.path())
+            .with_transport(Arc::clone(&transport1) as Arc<dyn SseTransport>);
+
+        let mut session1 = adapter1
+            .start(SessionSpec::new("tab-journal-resume", ws.path()))
+            .await
+            .unwrap();
+        let mut rx1 = session1.take_events().unwrap();
+        adapter1
+            .send_turn(&session1, TurnInput::text("Read note.txt"))
+            .await
+            .unwrap();
+        while let Some(ev) = rx1.recv().await {
+            if matches!(ev, AgentEvent::TurnFinished { .. }) {
+                break;
+            }
+        }
+
+        let handle = adapter1.hibernate(&mut session1).await.unwrap();
+        assert_eq!(handle.native_id, "direct:tab-journal-resume");
+        assert_eq!(handle.checkpoint_cursor.as_deref(), Some("4"));
+
+        // Verify persisted journal snapshot contains messages, tool call, tool result, and usage.
+        let store = JournalStore::new(journal_dir.path());
+        let saved = store.load(&handle.native_id).unwrap();
+        assert_eq!(saved.messages.len(), 4);
+        assert_eq!(saved.total_usage.input_tokens, 85);
+        assert_eq!(saved.total_usage.output_tokens, 20);
+
+        // Append a simulated crash-truncated trailing line before resuming in a fresh adapter.
+        {
+            use std::io::Write as _;
+            let path = store.path_for(&handle.native_id).unwrap();
+            let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(b"{\"type\":\"message\",\"seq\":99,\"truncated")
+                .unwrap();
+        }
+
+        // Simulate app restart with a brand-new DirectApiAdapter pointing at the same journal dir.
+        let round3 = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"m_j3\",\"model\":\"claude-sonnet-4-6\",\"usage\":{\"input_tokens\":90}}}\n\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Continuing after restart.\"}}\n\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":9}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        )
+        .to_owned();
+
+        let transport2 = Arc::new(ScriptedSseTransport::new(vec![round3]));
+        let executor2 = Arc::new(LocalToolExecutor::with_root(ws.path()));
+        let adapter2 = DirectApiAdapter::new(DirectApiProvider::Anthropic, executor2)
+            .with_api_key("sk-ant-journal-test")
+            .with_journal_dir(journal_dir.path())
+            .with_transport(Arc::clone(&transport2) as Arc<dyn SseTransport>);
+
+        let mut session2 = adapter2
+            .resume(
+                handle.clone(),
+                SessionSpec::new("tab-journal-resume", ws.path()),
+            )
+            .await
+            .unwrap();
+        let mut rx2 = session2.take_events().unwrap();
+        assert_eq!(
+            adapter2
+                .session_history("tab-journal-resume")
+                .unwrap()
+                .len(),
+            4
+        );
+
+        adapter2
+            .send_turn(&session2, TurnInput::text("Summarize what you read"))
+            .await
+            .unwrap();
+        while let Some(ev) = rx2.recv().await {
+            if matches!(ev, AgentEvent::TurnFinished { .. }) {
+                break;
+            }
+        }
+
+        // Resumed HTTP request must carry all 4 prior messages plus the new 5th user prompt.
+        let reqs = transport2.captured();
+        assert_eq!(reqs.len(), 1);
+        let wire_msgs = reqs[0].body["messages"].as_array().unwrap();
+        assert_eq!(wire_msgs.len(), 5);
+        assert_eq!(wire_msgs[0]["content"], "Read note.txt");
+        assert_eq!(wire_msgs[1]["content"][0]["type"], "tool_use");
+        assert_eq!(wire_msgs[2]["content"][0]["type"], "tool_result");
+        assert_eq!(wire_msgs[3]["content"], "Note read successfully.");
+        assert_eq!(wire_msgs[4]["content"], "Summarize what you read");
+
+        // Reloading the journal after the follow-up turn shows clean, repaired JSONL with 6 messages.
+        let final_snap = store.load(&handle.native_id).unwrap();
+        assert!(!final_snap.recovered_corrupt_tail);
+        assert_eq!(final_snap.messages.len(), 6);
+        assert_eq!(final_snap.total_usage.input_tokens, 175);
+        assert_eq!(final_snap.total_usage.output_tokens, 29);
     }
 }
