@@ -1696,7 +1696,7 @@ export const en: Record<string, string> = {
 	"modelRoles.use.slow": "Hard problems: the model you switch to for deep reasoning. The advisor borrows it.",
 	"modelRoles.use.smol":
 		"Quick, cheap work: lookups, small edits, scout agents and the first stop of the model-switch cycle.",
-	"modelRoles.use.plan": "Plan mode: reads the code and writes the plan before any edit.",
+	"modelRoles.use.plan": "omp uses this model to plan code changes.",
 	"modelRoles.use.task": "Subagents started by the task tool.",
 	"modelRoles.use.advisor": "A second opinion: reviews every turn and leaves notes while the advisor is on.",
 	"modelRoles.use.commit": "Commit messages and changelog entries (omp commit).",

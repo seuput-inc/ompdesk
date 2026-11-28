@@ -199,6 +199,8 @@ describe("Model roles grouped by purpose", () => {
 		await mount();
 
 		expect(rowText("plan")).toContain(translate("modelRoles.use.plan"));
+		expect(rowText("plan")).not.toMatch(/plan mode/i);
+		expect(ko["modelRoles.use.plan"]).not.toContain("계획 모드");
 		expect(rowText("smol")).toContain("Quick, cheap work");
 		// Configured: the model alone.
 		expect(rowText("smol")).toContain("GPT");

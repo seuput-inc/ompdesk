@@ -1684,7 +1684,7 @@ export const ko: Record<string, string> = {
 	"modelRoles.use.slow": "어려운 문제에 바꿔 쓰는 깊은 추론용 모델이에요. 어드바이저가 빌려 쓰기도 해요.",
 	"modelRoles.use.smol":
 		"빠르고 저렴하게 끝낼 일에 써요: 조회, 작은 수정, 탐색 에이전트, 모델 빠른 전환의 첫 칸이에요.",
-	"modelRoles.use.plan": "계획 모드에서 편집 전에 코드를 살피고 계획을 써요.",
+	"modelRoles.use.plan": "omp가 코드 변경 계획을 세울 때 쓰는 모델이에요.",
 	"modelRoles.use.task": "task 도구로 띄운 서브에이전트가 써요.",
 	"modelRoles.use.advisor": "어드바이저가 켜져 있는 동안 매 턴을 검토하고 의견을 남겨요.",
 	"modelRoles.use.commit": "커밋 메시지와 변경 기록을 써요(omp commit).",
