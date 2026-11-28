@@ -10,15 +10,16 @@ import { ATTENTION_LABEL_KEY } from "../../lib/attention";
 import { useT } from "../../lib/i18n";
 import { sessionRun } from "../../lib/session-run";
 import { sessionDisplayTitle } from "../../lib/session-title";
-import { useBotsStore } from "../../stores/bots";
+import { listedBotItems, useBotsStore } from "../../stores/bots";
 import { tabSummary, useHostedSessionsStore } from "../../stores/hosted-sessions";
 import { useTabsStore } from "../../stores/tabs";
+import { botPageKey } from "./bot-page";
 import { type BotChatFacts, type BotFacts, botChatHome, botFacts } from "./bot-view";
 
 export function useBotFacts(bots: readonly Bot[]): ReadonlyMap<string, BotFacts> {
 	const t = useT();
 	const { sessions } = useSessionList("global");
-	const items = useBotsStore(s => s.state.items);
+	const state = useBotsStore(s => s.state);
 	const tabs = useTabsStore(s => s.tabs);
 	const summaries = useHostedSessionsStore(s => s.summaries);
 	return useMemo(() => {
@@ -45,13 +46,9 @@ export function useBotFacts(bots: readonly Bot[]): ReadonlyMap<string, BotFacts>
 							unread: run.done,
 						};
 					});
-				const needing = itemsNeedingYou(
-					items.filter(item => item.bot === bot.id),
-					null,
-					now,
-				).length;
-				return [bot.id, botFacts(bot, chats, needing)] as const;
+				const needing = itemsNeedingYou(listedBotItems(state, bot.device, bot.id), null, now).length;
+				return [botPageKey(bot.id, bot.device), botFacts(bot, chats, needing)] as const;
 			}),
 		);
-	}, [bots, sessions, items, tabs, summaries, t]);
+	}, [bots, sessions, state, tabs, summaries, t]);
 }

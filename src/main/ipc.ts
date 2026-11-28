@@ -38,7 +38,14 @@ import {
 	reviewFromDevice,
 } from "../shared/agent-control";
 import { BOT_CONNECTORS_COMMAND } from "../shared/bot-connector-channels";
-import { BOTS_COMMAND, BOTS_FOLDER, type BotsCall, ITEMS_V2_CHANGED, ITEMS_V2_QUERY } from "../shared/bots";
+import {
+	BOTS_COMMAND,
+	BOTS_FOLDER,
+	type BotsCall,
+	ITEMS_V2_CHANGE,
+	ITEMS_V2_CHANGED,
+	ITEMS_V2_QUERY,
+} from "../shared/bots";
 import { BRIDGE_HEALTH_GET } from "../shared/bridge-health";
 import { COMPUTER_USE_PREF, isComputerUseEngine } from "../shared/computer-use";
 import { CREDIT_SPEND_PREF } from "../shared/credit-spend";
@@ -124,7 +131,13 @@ import {
 	type IpcSessionLinksChanged,
 	type IpcSessionsChanged,
 } from "../shared/ipc-types";
-import { ItemsV2DeviceSchema, ItemsV2RequestSchema, parseItemsV2Reply } from "../shared/items-v2";
+import {
+	ItemChangeRequestSchema,
+	ItemChangeResultSchema,
+	ItemsV2DeviceSchema,
+	ItemsV2RequestSchema,
+	parseItemsV2Reply,
+} from "../shared/items-v2";
 import { LOCAL_ENGINE_DETECT_PREF } from "../shared/local-engines";
 import { isMacPermission } from "../shared/mac-permissions";
 import { MAIL_ACCOUNTS_COMMAND, type MailAccountDraft } from "../shared/mail-accounts";
@@ -161,7 +174,7 @@ import { quitApproved, requestQuit } from "./app-quit";
 import { Autopilot, type AutopilotCommand, type AutopilotNotice } from "./autopilot";
 import { routeHostAutopilotNotice } from "./autopilot-notice-route";
 import { localBotChatOpener } from "./bot-chat-tab";
-import { type HostBots, type ItemFeedViewers, setBotsAsk, setBotsState } from "./bots";
+import { type HostBots, type ItemFeedViewers, setBotQuietFolders, setBotsState } from "./bots";
 import {
 	CHECKOUT_PEERS_SWEEP_MS,
 	type CheckoutMember,
@@ -301,7 +314,10 @@ export interface IpcDeps {
 	windowManager: WindowManager;
 	/** Both remote roles: the paired hosts tabs may run on, and this computer as a host. */
 	remoteDevices: RemoteDevices;
-	itemsWebRouter: () => Pick<WsRouter, "readItemsFeed" | "itemsV2Changed"> | undefined;
+	itemsWebRouter: () =>
+		| Pick<WsRouter, "readItemsFeed" | "itemsV2Changed" | "hasLegacyItemReaders" | "readLegacyItems">
+		| undefined;
+	setBotLaunchFor(lookup: (cwd: string) => Promise<string[]>): void;
 	desktopItemFeeds: ItemFeedViewers<number>;
 	/**
 	 * The tabs this computer runs for paired devices (LocalHostServices): this computer's windows open one of their
@@ -650,7 +666,12 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		if (itemWindows.has(caller.sender)) return;
 		itemWindows.add(caller.sender);
 		const id = caller.sender.id;
-		caller.sender.once("destroyed", () => desktopItemFeeds.forget(id));
+		const forget = () => {
+			desktopItemFeeds.forget(id);
+			audienceChanged();
+		};
+		caller.sender.once("destroyed", forget);
+		caller.browserWindow?.webContents.on("did-start-loading", forget);
 	};
 	const itemsChanged = (device: string | null, reseed: boolean) => {
 		desktopItemFeeds.changed(device, reseed);
@@ -1612,11 +1633,13 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		itemsFile: path.join(app.getPath("userData"), "items.json"),
 		botsRoot: path.join(os.homedir(), BOTS_FOLDER),
 		botsChanged: setBotsState,
-		itemsV2Changed: () => {
+		botQuietFolders: setBotQuietFolders,
+		itemsV2Changed: ({ botHomes, localOnly }) => {
 			itemsChanged(null, false);
-			remoteDevices.itemsV2Changed();
+			if (!localOnly) remoteDevices.itemsV2Changed(botHomes === true);
 		},
 		remoteItemsQuery: (device, request) => remoteDevices.itemsV2(device, request),
+		remoteItemsChange: (device, request) => remoteDevices.itemsChange(device, request),
 		// What paired devices list of this computer's bots changed: each connected one hears the change.
 		botsShared: change => remoteDevices.hostBotsChanged(change),
 		// One of this computer's bots answered a paired device's group: handed to that device's link.
@@ -1736,6 +1759,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		ownerGrantsPeerItem: (device, tab, check) => agentControl.control.ownerGrantsPeerItem(device, tab, check),
 		share: () => agentControl.botsShare(),
 		itemsV2: request => agentControl.control.itemsQueryFrom(request),
+		itemsChange: request => agentControl.control.itemsChangeFrom(request),
+		cached: (device, legacy) => agentControl.control.botsCached(device, legacy),
 		from: (request, deviceId, deviceName, createKey) =>
 			agentControl.botsFrom(request, deviceId, deviceName, createKey),
 		created: (device, createKey) => agentControl.control.botPeerCreated(device, createKey),
@@ -1746,8 +1771,34 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 		remote: update => agentControl.botsRemote(update),
 		roomPost: post => agentControl.botsRoomPost(post),
 	};
+	let peerLegacy = false;
+	const localLegacy = () => desktopItemFeeds.hasLegacyReaders || !!deps.itemsWebRouter()?.hasLegacyItemReaders;
+	let localDemand: boolean | undefined = false;
+	let synced = Promise.resolve();
+	const syncAudience = () => {
+		const local = localLegacy();
+		if (local !== localDemand) {
+			localDemand = local;
+			synced = Promise.all([
+				agentControl.control.itemsLegacyAudience(local, peerLegacy),
+				remoteDevices.setLegacyBotsDemand(local),
+			]).then(() => {});
+			const pending = synced;
+			void pending.catch(() => {
+				if (synced === pending) localDemand = undefined;
+			});
+		}
+		return synced;
+	};
+	const audienceChanged = () => {
+		void syncAudience().catch(error => console.warn("[items] legacy audience:", error));
+	};
+	remoteDevices.onLegacyBotsAudience(active => {
+		peerLegacy = active;
+		return agentControl.control.itemsLegacyAudience(localLegacy(), active);
+	});
 	remoteDevices.botsReady();
-	setBotsAsk(() => agentControl.bots({ action: "get" }));
+	deps.setBotLaunchFor(cwd => agentControl.control.botLaunchFor(cwd));
 	// The control socket (src/main/control-socket): anything on this computer drives the same service as the tools.
 	void startControlSocket({
 		userData: app.getPath("userData"),
@@ -2777,6 +2828,11 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			caller.scheduleReservationId,
 		);
 	});
+	ipc.handle(ITEMS_V2_CHANGE, async (_caller, source: unknown, raw: unknown) =>
+		ItemChangeResultSchema.parse(
+			await agentControl.control.itemsChange(ItemsV2DeviceSchema.parse(source), ItemChangeRequestSchema.parse(raw)),
+		),
+	);
 	ipc.handle(ITEMS_V2_QUERY, (caller, source: unknown, raw: unknown) => {
 		const device = ItemsV2DeviceSchema.parse(source);
 		const request = ItemsV2RequestSchema.parse(raw);
@@ -2826,13 +2882,16 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			if (device !== undefined && typeof device !== "string") throw new Error("Invalid computer");
 			return agentControl.bots({ action: "createModels", callerTabId, device });
 		}
-		if (
-			caller.browserWindow &&
-			"action" in request &&
-			!["file", "deletePreview", "importSources", "export", "createFolder"].includes(String(request.action))
-		) {
-			trackItemWindow(caller);
-			desktopItemFeeds.legacyRead(caller.sender.id);
+		if ("action" in request && request.action === "get") {
+			if (caller.browserWindow) {
+				trackItemWindow(caller);
+				desktopItemFeeds.legacyRead(caller.sender.id);
+			} else if (caller.connId !== undefined) {
+				const router = deps.itemsWebRouter();
+				if (!router) throw new Error("The requesting page disconnected");
+				router.readLegacyItems(caller.connId, audienceChanged);
+			}
+			await syncAudience();
 		}
 		if (!caller.browserWindow && "action" in request && request.action === "update" && "reach" in request)
 			return agentControl.bots({ ...(request as BotsCall), pairedWeb: true });

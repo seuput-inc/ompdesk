@@ -212,8 +212,7 @@ impl AgentControl {
         };
         let state = self.host.state();
         let now = self.now();
-        let items = self.items().v1(now);
-        let context = bot_context(&bot, &items, &state.tabs, &tab.tab_id, now);
+        let context = bot_context(&bot, &self.items(), &state.tabs, &tab.tab_id, now);
         let text = context.to_string();
         let answer = self
             .host

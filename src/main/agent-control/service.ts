@@ -41,7 +41,16 @@ import type {
 	PrivacyPane,
 	SidebarView,
 } from "../../shared/agent-control";
-import type { BotsAnswer, BotsCall, BotsState, SharedBots, SharedBotsDelta } from "../../shared/bots";
+import type {
+	Bot,
+	BotsAnswer,
+	BotsCall,
+	BotsState,
+	ItemChangeRequest,
+	ItemChangeResult,
+	SharedBots,
+	SharedBotsDelta,
+} from "../../shared/bots";
 import type { SessionStatus } from "../../shared/control-protocol";
 import { ipcErrorCode } from "../../shared/ipc-error-codes";
 import type {
@@ -486,8 +495,10 @@ export interface AgentControlHost {
 	closedChildren?(): readonly ClosedChild[];
 	/** The bots state changed in the core (`botsChanged`): main keeps it and tells every window. */
 	botsChanged?(state: BotsState): void;
-	itemsV2Changed?(): void;
+	itemsV2Changed?(notice: { botHomes?: boolean; localOnly?: boolean }): void;
+	botQuietFolders?(folders: Pick<Bot, "folder" | "quiet">[]): void;
 	remoteItemsQuery?(device: string, request: ItemsV2Request): Promise<ItemsV2Reply>;
+	remoteItemsChange?(device: string, request: ItemChangeRequest): Promise<ItemChangeResult>;
 	/** A session handed to a bot: `openerTabId` (the bot's home chat) becomes `tabId`'s opener, as the pool keeps one. */
 	setOpener?(tabId: string, openerTabId: string): void;
 	/** A paired host's bot by name (`host.bots.home`): its home chat file; the host refuses unless this computer is in its reach. */
@@ -838,6 +849,7 @@ export class AgentControl {
 	readonly #unobserve: () => void;
 	readonly runtime = new RuntimeClient(this);
 	#opened: Promise<void> | null = null;
+	#itemsAudience = { local: false, peer: false };
 	#closed = false;
 	#last: HostSnapshot | null = null;
 
@@ -1002,6 +1014,27 @@ export class AgentControl {
 		return this.#call("itemsQueryFrom", { request });
 	}
 
+	itemsChange(device: string | null, request: ItemChangeRequest): Promise<ItemChangeResult> {
+		return this.#call("itemsChange", { device, request });
+	}
+
+	itemsChangeFrom(request: ItemChangeRequest): Promise<ItemChangeResult> {
+		return this.#call("itemsChangeFrom", { request });
+	}
+
+	itemsLegacyAudience(local: boolean, peer: boolean): Promise<void> {
+		this.#itemsAudience = { local, peer };
+		return this.#call("itemsLegacyAudience", this.#itemsAudience);
+	}
+
+	botLaunchFor(cwd: string): Promise<string[]> {
+		return this.#call("botLaunchFor", { cwd });
+	}
+
+	botsCached(device: string, legacy = false): Promise<{ feed?: unknown; legacy?: unknown } | null> {
+		return this.#call("botsCached", { device, legacy });
+	}
+
 	/** A quiet note (no turn) into a session file on this computer: now when a tab holds it, else when one opens it. */
 	noteSession(sessionPath: string, text: string): Promise<void> {
 		return this.#call("noteSession", { sessionPath, text });
@@ -1137,6 +1170,12 @@ export class AgentControl {
 			this.#opened = null;
 			if (this.#host.runtime) this.#retryOpen();
 		});
+		if (this.#itemsAudience.local || this.#itemsAudience.peer)
+			await core().call("agentControl.call", {
+				port: this.#port.id,
+				method: "itemsLegacyAudience",
+				args: this.#itemsAudience,
+			});
 	}
 
 	/** Main's synchronous reads, at this moment (`HostState`). A read that throws leaves the last good snapshot. */
@@ -1432,6 +1471,11 @@ export class AgentControl {
 					if (!host.remoteItemsQuery) throw new Error("Paired computers' items are not reachable here.");
 					return host.remoteItemsQuery(device, request);
 				}),
+			remoteItemsChange: ({ device, request }: { device: string; request: ItemChangeRequest }) =>
+				coded(() => {
+					if (!host.remoteItemsChange) throw new Error("Paired computers' items are not reachable here.");
+					return host.remoteItemsChange(device, request);
+				}),
 			botsRoomPostTo: ({ device: where, post }: { device: string; post: unknown }) =>
 				coded(() => ({ sent: host.botsRoomPostTo?.(where, post) ?? false })),
 			connectorCredential: ({ service, account }: { service: string; account: string }) =>
@@ -1471,7 +1515,10 @@ export class AgentControl {
 			closedChildren: ({ rows }: { rows: ClosedChild[] }) => tell(() => host.runtime?.closedChildren(rows)),
 			sessionFatesChanged: () => told(() => host.runtime?.sessionFatesChanged?.()),
 			botsChanged: ({ state }: { state: BotsState }) => told(() => host.botsChanged?.(state)),
-			itemsV2Changed: () => told(() => host.itemsV2Changed?.()),
+			itemsV2Changed: (notice: { botHomes?: boolean; localOnly?: boolean }) =>
+				told(() => host.itemsV2Changed?.(notice)),
+			botQuietFolders: ({ folders }: { folders: Pick<Bot, "folder" | "quiet">[] }) =>
+				told(() => host.botQuietFolders?.(folders)),
 			botsShared: ({ change }: { change: SharedBotsDelta }) => told(() => host.botsShared?.(change)),
 			wakeDone: ({ runId, code, error }: { runId: string; code: number | null; error?: string }) =>
 				told(() => host.runtime?.wakeDone(runId, { code, ...(error === undefined ? {} : { error }) })),

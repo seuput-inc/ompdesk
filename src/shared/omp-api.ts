@@ -38,6 +38,7 @@ import {
 	BOTS_STATE,
 	type BotDeletePreview,
 	type BotsState,
+	ITEMS_V2_CHANGE,
 	ITEMS_V2_CHANGED,
 	ITEMS_V2_QUERY,
 } from "./bots";
@@ -298,6 +299,7 @@ export function createOmpApi(transport: OmpTransport): TransportOmpApi {
 		},
 		bots: {
 			itemsV2: (device, request) => transport.invoke(ITEMS_V2_QUERY, device, request),
+			itemChange: (device, request) => transport.invoke(ITEMS_V2_CHANGE, device, request),
 			onItemsV2Changed: callback => subscribe(ITEMS_V2_CHANGED, callback),
 			command: async request => {
 				if (request.action !== "delete") return transport.invoke<BotsState>(BOTS_COMMAND, request);

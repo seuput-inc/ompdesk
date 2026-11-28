@@ -11,7 +11,7 @@
  */
 import { AGENT_CONTROL_APP, AGENT_CONTROL_REVIEW, AGENT_CONTROL_VIEW } from "../../shared/agent-control";
 import { BOT_CONNECTORS_COMMAND } from "../../shared/bot-connector-channels";
-import { BOTS_COMMAND, BOTS_STATE, ITEMS_V2_CHANGED, ITEMS_V2_QUERY } from "../../shared/bots";
+import { BOTS_COMMAND, BOTS_STATE, ITEMS_V2_CHANGE, ITEMS_V2_CHANGED, ITEMS_V2_QUERY } from "../../shared/bots";
 import { BRIDGE_HEALTH_GET } from "../../shared/bridge-health";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { MAIL_ACCOUNTS_COMMAND } from "../../shared/mail-accounts";
@@ -89,6 +89,7 @@ export type IpcChannel =
 	| typeof BOT_CONNECTORS_COMMAND
 	| typeof BOTS_STATE
 	| typeof ITEMS_V2_QUERY
+	| typeof ITEMS_V2_CHANGE
 	| typeof ITEMS_V2_CHANGED
 	| typeof SIDEBAR_PROJECTS_COMMAND
 	| typeof SIDEBAR_PROJECTS_STATE
@@ -533,6 +534,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	// The owner's Bots page: this computer's bots and their items.
 	[BOTS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
 	[ITEMS_V2_QUERY]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
+	[ITEMS_V2_CHANGE]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
 	// Paired callers can list account metadata. The connector handler requires a native window for mutations.
 	[BOT_CONNECTORS_COMMAND]: { dir: "invoke", permission: "extensions-admin", mode: "pass" },
 	// Mail accounts for email routines: a password is sent to main only, never read back.
@@ -658,7 +660,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 	[PREVIEW_VISUAL]: { dir: "push", mode: "pass" },
 	// A webhook routine's key rides in the state: only a device that may run schedules gets it.
 	[SCHEDULES_STATE]: { dir: "push", mode: "pass", permission: "extensions-admin" },
-	[BOTS_STATE]: { dir: "push", mode: "pass" },
+	[BOTS_STATE]: { dir: "push", permission: "extensions-admin", mode: "pass" },
 	[ITEMS_V2_CHANGED]: { dir: "push", permission: "extensions-admin", mode: "pass" },
 	[SSH_TOOLS_STATE]: { dir: "push", mode: "pass" },
 	[SSH_TOOLS_PROMPT]: { dir: "push", mode: "pass" },

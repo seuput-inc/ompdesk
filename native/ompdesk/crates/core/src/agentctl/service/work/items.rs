@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::path::Path;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::super::AgentControl;
 use super::super::fail::{Fail, R, fail};
@@ -236,6 +236,18 @@ pub(super) fn read_facts(
     (stale, limit)
 }
 
+/// Only fields projected by `bot_context` warrant another pass over the chats.
+fn context_changed(old: &ItemRecord, new: &ItemRecord, now: f64) -> bool {
+    if old.status == new.status
+        && old.title == new.title
+        && old.question == new.question
+        && old.snoozed_until == new.snoozed_until
+    {
+        return false;
+    }
+    (old.is_open() && !old.snoozed(now)) || (new.is_open() && !new.snoozed(now))
+}
+
 /// Records an edit of `field`, its words before and after.
 fn edited(
     item: &mut ItemRecord,
@@ -364,22 +376,26 @@ impl AgentControl {
     /// before its first message was written). Whether anything changed.
     pub(crate) fn settle_item_links(&self, state: &HostState) -> bool {
         let mut items = self.items();
-        let pending: Vec<(String, usize, String)> = {
-            let now = self.now();
-            items
-                .visible(now)
-                .flat_map(|item| {
-                    item.links.iter().enumerate().filter_map(|(at, link)| {
-                        let tab = state.tabs.iter().find(|tab| tab.tab_id == link.target)?;
-                        let path = tab.session_path.clone().filter(|path| !path.is_empty())?;
-                        (link.kind == "session").then(|| (item.id.clone(), at, path))
-                    })
-                })
-                .collect()
-        };
+        let resolved = state.tabs.iter().filter_map(|tab| {
+            let path = tab.session_path.as_deref()?;
+            (!path.is_empty() && path != tab.tab_id).then_some((tab.tab_id.as_str(), path))
+        });
+        let ids = items.linking(resolved.clone().map(|(id, _)| id), self.now());
+        if ids.is_empty() {
+            return false;
+        }
+        let paths: HashMap<_, _> = resolved.collect();
         let mut changed = false;
-        for (id, at, path) in pending {
-            match items.change(&id, |item| item.links[at].target = path) {
+        for id in ids {
+            match items.change(&id, |item| {
+                for link in &mut item.links {
+                    if link.kind == "session"
+                        && let Some(&path) = paths.get(link.target.as_str())
+                    {
+                        path.clone_into(&mut link.target);
+                    }
+                }
+            }) {
                 Ok(item) => changed |= item.is_some(),
                 Err(error) => eprintln!("[items] could not settle link for {id}: {error}"),
             }
@@ -443,7 +459,7 @@ impl AgentControl {
             item.event(&at, "bot", "made", Some(&status));
             let item = store.add(item).map_err(item_store_error)?;
             drop(store);
-            self.items_changed();
+            self.items_changed(true);
             return Ok(format!(
                 "Added item #{} “{}” ({}).",
                 item.number, item.title, item.status
@@ -478,12 +494,15 @@ impl AgentControl {
         let found = {
             let store = self.items();
             let found = if args.action == "show" {
-                store.find(&bot.id, key).ok_or_else(|| {
-                    Fail::Tool(format!(
-                        "No item \"{key}\" of the bot {}. ompdesk_item {{\"action\":\"list\"}} lists them.",
-                        bot.name
-                    ))
-                })?
+                store
+                    .find(&bot.id, key)
+                    .map_err(item_store_error)?
+                    .ok_or_else(|| {
+                        Fail::Tool(format!(
+                            "No item \"{key}\" of the bot {}. ompdesk_item {{\"action\":\"list\"}} lists them.",
+                            bot.name
+                        ))
+                    })?
             } else {
                 store.write_address(&bot.id, key).map_err(Fail::Tool)?
             };
@@ -827,29 +846,39 @@ impl AgentControl {
         if !changed.is_open() && is_open(&found.status) {
             journal_line(Path::new(&bot.folder), &closing_line(&changed, &at), &at);
         }
-        self.items_changed();
+        self.items_changed(context_changed(&found, &changed, now));
         Ok(format!(
             "Item {}",
             item_line(&changed).trim_start_matches("- ")
         ))
     }
 
-    /// An item changed: main hears the new state and bot chats their new context.
-    pub(crate) fn items_changed(&self) {
-        self.items_v2_changed(false);
+    fn items_changed(&self, context: bool) {
+        self.items_v2_changed(false, context);
         self.legacy_bots_changed();
-        let control = self.clone();
-        tokio::spawn(async move { control.bots_tick().await });
+        if context {
+            let control = self.clone();
+            tokio::spawn(async move { control.bots_tick().await });
+        }
     }
 
     /// The owner opened a bot's Items tab (`BotsRequest` `itemsOpened`): what its items hold now is seen.
-    pub(crate) fn items_opened(&self, bot: &str) -> R<()> {
-        let bot = self.bot_named(bot)?;
-        let newest = self.items().newest_event(&bot.id, self.now());
+    pub(super) fn items_opened(&self, key: &str, exact: bool) -> R<()> {
+        let mut bots = self.bots();
+        let Some(bot) = bots.find(key).filter(|b| !exact || b.id == key) else {
+            return fail("No such bot on this computer.");
+        };
+        let newest = if exact {
+            self.items().latest_event(&bot.id)
+        } else {
+            self.items().newest_event(&bot.id, self.now())
+        };
         if newest > bot.items_seen {
-            self.bots()
-                .change(&bot.id, |record| record.items_seen = newest);
-            self.bots_changed();
+            let id = bot.id.clone();
+            bots.change(&id, |record| record.items_seen = newest);
+            drop(bots);
+            self.items_v2_changed(true, false);
+            self.legacy_bots_changed();
         }
         Ok(())
     }
@@ -896,7 +925,7 @@ impl AgentControl {
         });
         drop(store);
         if changed {
-            self.items_changed();
+            self.items_changed(false);
         }
         result.map_err(|error: std::io::Error| {
             Fail::other(format!(
@@ -907,16 +936,30 @@ impl AgentControl {
 
     /// The owner's change to one item (`id`) or several (`ids`), `BotsRequest` `item`: mailed once to each item's
     /// chat, an answer as a turn. Answers `question_changed` when an answer names a question the bot replaced.
-    pub(crate) async fn owner_item(&self, request: &Value) -> R<Option<&'static str>> {
-        let (refused, changed) = self.commit_owner_item(request)?;
-        self.drain_item_mail().await;
-        if changed {
-            self.items_changed();
+    pub(super) async fn owner_item(&self, request: &Value, archived: bool) -> R<Value> {
+        let (refused, sessions) = self.commit_owner_item(request, archived)?;
+        for session in &sessions {
+            self.deliver_item_mail(session).await;
         }
-        Ok(refused)
+        let mut outcome = json!({});
+        if let Some(code) = refused {
+            outcome["refused"] = json!(code);
+        }
+        if request["action"] == "itemBatch" {
+            let key = request["requestId"].as_str().expect("validated item batch");
+            let Some(result) = self.items().batch_result(key).map_err(item_store_error)? else {
+                return fail("Could not read the committed item batch receipt.");
+            };
+            outcome["itemBatchResult"] = result;
+        }
+        Ok(outcome)
     }
 
-    fn commit_owner_item(&self, request: &Value) -> R<(Option<&'static str>, bool)> {
+    fn commit_owner_item(
+        &self,
+        request: &Value,
+        archived: bool,
+    ) -> R<(Option<&'static str>, Vec<String>)> {
         let ids: Vec<&str> = match request.get("ids").and_then(Value::as_array) {
             Some(ids) => ids.iter().filter_map(Value::as_str).collect(),
             None => request
@@ -955,19 +998,65 @@ impl AgentControl {
             .and_then(|answer| answer.get("question"))
             .and_then(Value::as_u64);
         let mut store = self.items();
+        if archived && ids.iter().any(|id| store.get(id).is_none()) {
+            return fail("No such item on this computer.");
+        }
         if let Some(key) = request_id.as_deref()
-            && let Some(result) = store.receipt(key).map_err(item_store_error)?
+            && let Some(receipt) = store.batch_result(key).map_err(item_store_error)?
         {
-            return match result.as_deref() {
-                None => Ok((None, false)),
-                Some(QUESTION_CHANGED) => Ok((Some(QUESTION_CHANGED), false)),
-                Some(code) => fail(format!("Unknown stored item refusal: {code}")),
+            if archived {
+                let same_ids = receipt["ids"].as_array().is_some_and(|saved| {
+                    saved
+                        .iter()
+                        .map(Value::as_str)
+                        .eq(ids.iter().copied().map(Some))
+                });
+                if !same_ids {
+                    return fail("That request id belongs to another item change.");
+                }
+                if let Some(q) = named {
+                    for id in &ids {
+                        let item = store.get(id).expect("checked item id");
+                        let id = json!(id);
+                        let outcome = |question| {
+                            store
+                                .item_receipt(&item.bot, &id, key, question)
+                                .map_err(item_store_error)
+                        };
+                        if outcome(Some(q))?["outcome"] == "unknown"
+                            && matches!(
+                                outcome(None)?["outcome"].as_str(),
+                                Some("answered" | QUESTION_CHANGED)
+                            )
+                        {
+                            return fail("That request did not answer this question.");
+                        }
+                    }
+                }
+            }
+            let refused = match receipt["refused"].as_str() {
+                None => None,
+                Some(QUESTION_CHANGED) => Some(QUESTION_CHANGED),
+                Some(code) => return fail(format!("Unknown stored item refusal: {code}")),
             };
+            // Only the original commit's changed rows, never the retry's supplied targets.
+            let mut seen = HashSet::new();
+            let sessions = receipt["changed"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|row| store.get(row["id"].as_str()?))
+                .map(|item| item.session.as_str())
+                .filter(|session| seen.insert(*session))
+                .map(str::to_owned)
+                .collect();
+            return Ok((refused, sessions));
         }
         let mut mails: Vec<(String, Mail)> = Vec::new();
         let mut groups: HashMap<&str, (usize, usize)> = HashMap::new();
         let mut seen = HashSet::new();
         let mut changed = Vec::new();
+        let mut context = false;
         let mut closed = Vec::new();
         let mut refused = None;
         let mut refused_items = Vec::new();
@@ -975,7 +1064,10 @@ impl AgentControl {
             if !seen.insert(id) {
                 continue;
             }
-            let Some(found) = store.get(id).filter(|item| item.visible_at(now)) else {
+            let Some(found) = store
+                .get(id)
+                .filter(|item| archived || item.visible_at(now))
+            else {
                 continue;
             };
             if let Some(key) = request_id.as_deref()
@@ -1115,6 +1207,7 @@ impl AgentControl {
                 }
                 item
             };
+            context |= context_changed(found, &item, now);
             if !item.is_open() && found.is_open() {
                 closed.push((item.bot.clone(), closing_line(&item, &at)));
             }
@@ -1202,7 +1295,13 @@ impl AgentControl {
                 journal_line(Path::new(&folder), &line, &at);
             }
         }
-        Ok((refused, changed_any))
+        if changed_any {
+            self.items_changed(context);
+        }
+        Ok((
+            refused,
+            mails.into_iter().map(|(session, _)| session).collect(),
+        ))
     }
 
     /// `ompdesk_session_open {item}` from a bot's chat: each child it opened is linked to the item, and a planned
@@ -1215,6 +1314,7 @@ impl AgentControl {
         let mut store = self.items();
         let Some(id) = store
             .find(&bot.id, key)
+            .map_err(item_store_error)?
             .filter(|item| item.visible_at(now))
             .map(|found| found.id.clone())
         else {
@@ -1245,7 +1345,7 @@ impl AgentControl {
         });
         changed.map_err(item_store_error)?;
         drop(store);
-        self.items_changed();
+        self.items_changed(true);
         Ok(())
     }
 }

@@ -40,9 +40,8 @@ export async function openInboxRow(row: QuestionRow): Promise<void> {
 		if (row.source === "access") openBotPage(row.bot.id, "activity");
 		else {
 			// Keep the item page and its draft/answer code out of the first-screen badge.
-			const { openItem } = await import("../components/bots/items/item-store");
-			openItem(row.item.bot, row.item.id);
-			openBotPage(row.item.bot, "items");
+			const { showBotItem } = await import("../components/bots/items/item-place");
+			showBotItem({ id: row.item.bot, device: row.device }, row.item.id);
 		}
 		return;
 	}

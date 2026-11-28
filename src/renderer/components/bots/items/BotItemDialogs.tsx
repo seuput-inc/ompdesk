@@ -30,7 +30,7 @@ export function WaitDialog({
 	onDone,
 	onClose,
 }: {
-	items: readonly Item[];
+	items: readonly Pick<Item, "status" | "title" | "wait">[];
 	onDone: (wait: string) => void;
 	onClose: () => void;
 }) {

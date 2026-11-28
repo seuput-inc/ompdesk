@@ -17,6 +17,7 @@ enum LegacyRow {
 }
 
 const SCHEMA: &str = include_str!("../items_v1.sql");
+const MAIL_INDEXES: &str = include_str!("../items_v2.sql");
 
 fn regular(path: &Path) -> io::Result<bool> {
     match fs::symlink_metadata(path) {
@@ -49,6 +50,7 @@ fn disk(path: &Path) -> io::Result<Connection> {
 fn initialize(db: &mut Connection, original: Option<&str>) -> io::Result<()> {
     let tx = db.transaction().map_err(sql)?;
     tx.execute_batch(SCHEMA).map_err(sql)?;
+    tx.execute_batch(MAIL_INDEXES).map_err(sql)?;
     if let Some(text) = original {
         // Vec rejects a non-array root; the struct deserializers reject unknown/duplicate fields.
         let rows: Vec<LegacyRow> = serde_json::from_str(text)?;
@@ -145,9 +147,10 @@ fn initialize(db: &mut Connection, original: Option<&str>) -> io::Result<()> {
     tx.commit().map_err(sql)
 }
 
-fn verify(db: &Connection, path: &Path) -> io::Result<()> {
+fn verify(db: &Connection, path: &Path) -> io::Result<i64> {
     let integer = |p| db.query_row(p, [], |r| r.get::<_, i64>(0)).map_err(sql);
-    if integer("PRAGMA application_id")? != 0x4f49544d || integer("PRAGMA user_version")? != 1 {
+    let version = integer("PRAGMA user_version")?;
+    if integer("PRAGMA application_id")? != 0x4f49544d || !matches!(version, 1 | 2) {
         return Err(invalid("unrecognized or incomplete items database"));
     }
     if integer("PRAGMA page_count")?
@@ -160,8 +163,10 @@ fn verify(db: &Connection, path: &Path) -> io::Result<()> {
         ));
     }
     // A version number alone can't distinguish a damaged or dropped table/index from an empty one.
-    let expected: Vec<_> = SCHEMA
-        .split(';')
+    let schemas = [SCHEMA, if version == 2 { MAIL_INDEXES } else { "" }];
+    let expected: Vec<_> = schemas
+        .into_iter()
+        .flat_map(|s| s.split(';'))
         .filter_map(|s| s.find("CREATE ").map(|i| &s[i..]))
         .collect();
     let mut stmt = db
@@ -191,7 +196,7 @@ fn verify(db: &Connection, path: &Path) -> io::Result<()> {
     if integer("SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)")? != 0 {
         return Err(invalid("orphaned item event"));
     }
-    Ok(())
+    Ok(version)
 }
 
 fn load(db: Connection, writer: Option<File>) -> io::Result<Items> {
@@ -241,7 +246,8 @@ fn load(db: Connection, writer: Option<File>) -> io::Result<Items> {
         while let Some(row) = rows.next().map_err(sql)? {
             let bot: String = row.get(0).map_err(sql)?;
             let last: i64 = row.get(1).map_err(sql)?;
-            let last = u32::try_from(last).map_err(|_| invalid("board item number out of range"))?;
+            let last =
+                u32::try_from(last).map_err(|_| invalid("board item number out of range"))?;
             numbers.last_issued.insert(bot, last);
         }
     }
@@ -254,6 +260,9 @@ fn load(db: Connection, writer: Option<File>) -> io::Result<Items> {
         items,
         by_id,
         last_event,
+        mail_cursor: String::new(),
+        #[cfg(test)]
+        full_reads: Default::default(),
     })
 }
 
@@ -294,8 +303,8 @@ pub(super) fn open(legacy: Option<&Path>) -> io::Result<Items> {
     if fs::metadata(&path)?.len() < 512 {
         return Err(invalid("empty or truncated items database"));
     }
-    let db = disk(&path)?;
-    verify(&db, &path)?;
+    let mut db = disk(&path)?;
+    let version = verify(&db, &path)?;
     if !marked && regular(legacy)? {
         let mut mode = fs::metadata(legacy)?.permissions();
         mode.set_readonly(true);
@@ -317,6 +326,11 @@ pub(super) fn open(legacy: Option<&Path>) -> io::Result<Items> {
     writer.sync_all()?;
     #[cfg(unix)]
     File::open(dir)?.sync_all()?;
+    if version == 1 {
+        let tx = db.transaction().map_err(sql)?;
+        tx.execute_batch(MAIL_INDEXES).map_err(sql)?;
+        tx.commit().map_err(sql)?;
+    }
     let mut loaded = load(db, Some(writer))?;
     loaded.file = Some(legacy.to_path_buf());
     Ok(loaded)

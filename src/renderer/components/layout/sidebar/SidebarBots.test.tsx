@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Bot, BotDeletePreview, BotsState } from "../../../../shared/bots";
 import type { RemoteState } from "../../../../shared/ipc-types";
 import { I18nProvider, loadLocale, setLanguageOverride } from "../../../lib/i18n";
-import { lastRead } from "../../../lib/last-read";
+import { resetSnapshotsForTest, snapshots } from "../../../lib/snapshot-cache";
 import { listedBots, useBotsStore } from "../../../stores/bots";
 import { useBotsView } from "../../../stores/bots-view";
 import { useRemoteStore } from "../../../stores/remote";
@@ -53,7 +53,14 @@ const bot = (id: string, name: string, over: Partial<Bot> = {}): Bot => ({
 
 const command = vi.fn(async (_request: unknown): Promise<BotsState> => ({ bots: [], items: [] }));
 const deletePreview = vi.fn<(request: { id: string }) => Promise<BotDeletePreview>>();
-Reflect.set(window, "omp", { bots: { command, deletePreview, onState: () => () => {} } });
+Reflect.set(window, "omp", {
+	bots: {
+		command,
+		deletePreview,
+		itemsV2: async () => ({ protocol: 2, kind: "seed", version: "desk.1", open: [], counts: {}, bots: [] }),
+		onItemsV2Changed: () => () => {},
+	},
+});
 
 let container: HTMLElement;
 let root: Root;
@@ -85,6 +92,17 @@ const entry = (value: Bot, facts: BotFacts, chats = 0): SidebarBotEntry => ({
 });
 
 beforeEach(() => {
+	const saved = new Map<string, string>();
+	vi.stubGlobal("localStorage", {
+		get length() {
+			return saved.size;
+		},
+		key: (i: number) => [...saved.keys()][i] ?? null,
+		getItem: (key: string) => saved.get(key) ?? null,
+		setItem: (key: string, value: string) => saved.set(key, value),
+		removeItem: (key: string) => saved.delete(key),
+	});
+	resetSnapshotsForTest();
 	container = document.createElement("div");
 	document.body.appendChild(container);
 	root = createRoot(container as unknown as Element);
@@ -102,6 +120,8 @@ afterEach(async () => {
 	useBotDialogs.getState().close();
 	useToastStore.setState({ toasts: [] });
 	setLanguageOverride(null);
+	vi.unstubAllGlobals();
+	resetSnapshotsForTest();
 });
 
 describe("SidebarBots", () => {
@@ -180,7 +200,7 @@ describe("SidebarBots", () => {
 		expect(container.querySelector('[data-bot-entry="r"] .opacity-60')).not.toBeNull();
 		// Nothing is written here: a change to the host's item is refused before it leaves, naming the host.
 		await expect(
-			useBotsStore.getState().command({ action: "item", id: "item-r1", answer: { choice: 0 } }),
+			useBotsStore.getState().command({ action: "item", device: "dev-a", id: "item-r1", answer: { choice: 0 } }),
 		).rejects.toThrow("Mini is offline");
 		expect(command).not.toHaveBeenCalled();
 	});
@@ -320,7 +340,9 @@ describe("bot deletion confirmation", () => {
 			else expect(line).toBeNull();
 		}
 		expect(useBotsStore.getState().state).not.toHaveProperty("deleteChanged");
-		expect(lastRead<BotsState>(undefined, "bots")).not.toHaveProperty("deleteChanged");
+		const cached = snapshots().read("panel", "local", "items.v2")?.value;
+		expect(cached).toMatchObject({ kind: "seed" });
+		expect(cached).not.toHaveProperty("deleteChanged");
 		await act(async () => {
 			confirm.dispatchEvent(Object.assign(new Event("click", { bubbles: true }), { detail: 2 }));
 		});

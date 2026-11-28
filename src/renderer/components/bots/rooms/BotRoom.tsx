@@ -19,7 +19,7 @@ import { useT } from "../../../lib/i18n";
 import { isImeKeyEvent } from "../../../lib/ime";
 import { MarkdownRenderer } from "../../../lib/markdown";
 import { type SessionRun, sessionRun } from "../../../lib/session-run";
-import { useBotsStore } from "../../../stores/bots";
+import { listedBotItems, useBotsStore } from "../../../stores/bots";
 import { tabSummary, useHostedSessionsStore } from "../../../stores/hosted-sessions";
 import { useTabsStore } from "../../../stores/tabs";
 import { toastError } from "../../../stores/toast";
@@ -96,10 +96,12 @@ export function BotRoom({ room }: { room: Room }) {
 		},
 		{ id: "delete", label: t("bots.groups.delete"), icon: Trash2, danger: true, onSelect: () => setDeleting(true) },
 	];
-	const needsYou = useBotsStore(
-		s =>
-			s.state.items.filter(item => room.members.includes(item.bot) && item.status === "needs_you" && !item.stale)
-				.length,
+	const state = useBotsStore(s => s.state);
+	const needsYou = members.reduce(
+		(count, bot) =>
+			count +
+			listedBotItems(state, bot.device, bot.id).filter(item => item.status === "needs_you" && !item.stale).length,
+		0,
 	);
 	return (
 		<div className="flex h-full min-h-0 min-w-0 flex-col" data-bot-room={room.id}>

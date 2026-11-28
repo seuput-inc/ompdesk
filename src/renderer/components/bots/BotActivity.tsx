@@ -39,14 +39,7 @@ import {
 	X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import {
-	type Bot,
-	type BotFile,
-	type BotSuggestion,
-	type BotWorker,
-	type Item,
-	itemsNeedingYou,
-} from "../../../shared/bots";
+import { type Bot, type BotFile, type BotSuggestion, type BotWorker, itemsNeedingYou } from "../../../shared/bots";
 import { useQuestionInbox } from "../../hooks/use-question-inbox";
 import { handToTab } from "../../lib/composer-handoff";
 import { formatClock } from "../../lib/format";
@@ -54,7 +47,7 @@ import { useT } from "../../lib/i18n";
 import { openExternal } from "../../lib/open-external";
 import type { QuestionRow } from "../../lib/question-inbox";
 import { openInboxRow } from "../../lib/question-inbox-view";
-import { useBotsStore } from "../../stores/bots";
+import { listedBotItems, useBotsStore } from "../../stores/bots";
 import { useRemoteStore } from "../../stores/remote";
 import { useRuntimeTabId } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
@@ -80,17 +73,11 @@ import { BotLineText } from "./BotLineText";
 import { useBotHostName } from "./BotOwner";
 import { type BotAutomation, botAutomations, turnedOffAfterFailures, useSchedulesOf } from "./bot-automations";
 import { type LaunchStep, openBotChat, retryKickoff, useBotLaunch } from "./bot-launch";
-import { openBotPage } from "./bot-page";
+import { botPageKey, openBotPage } from "./bot-page";
 import { botChatHome } from "./bot-view";
-import { openItem } from "./items/item-store";
+import { showBotItem } from "./items/item-place";
 import { type MemoryLineChange, memoryLineChanges, undoMemoryLine } from "./memory-lines";
 import { useBotFacts } from "./use-bot-facts";
-
-/** The item's own page, under the bot's Items tab. */
-function showItem(bot: Bot, item: Item): void {
-	openBotPage(bot.id, "items");
-	openItem(bot.id, item.id);
-}
 
 const ROWS = 5;
 
@@ -109,10 +96,10 @@ export function BotActivity({ bot }: { bot: Bot }) {
 
 export function BotInspectorHome({ bot }: { bot: Bot }) {
 	const t = useT();
-	const items = useBotsStore(s => s.state.items);
-	const open = items.filter(item => item.bot === bot.id && item.device === bot.device && !item.closedAt);
+	const state = useBotsStore(s => s.state);
+	const open = listedBotItems(state, bot.device, bot.id).filter(item => !item.closedAt);
 	const selected = useMemo(() => [bot], [bot]);
-	const facts = useBotFacts(selected).get(bot.id);
+	const facts = useBotFacts(selected).get(botPageKey(bot.id, bot.device));
 	const mark = bot.paused ? "paused" : facts?.needsYou ? "needsYou" : facts?.failed ? "failed" : null;
 	return (
 		<div className="flex min-w-0 flex-col gap-3.5 overflow-auto py-3 pr-2 pl-3.5" data-inspector-bot={bot.id}>
@@ -129,7 +116,7 @@ export function BotInspectorHome({ bot }: { bot: Bot }) {
 				<IconButton
 					icon={<Settings />}
 					label={t("bots.menu.settings")}
-					onClick={() => openBotPage(bot.id, "settings")}
+					onClick={() => openBotPage(bot.id, "settings", bot.device)}
 					size="md"
 				/>
 				<BotActionsMenu bot={bot} />
@@ -138,7 +125,7 @@ export function BotInspectorHome({ bot }: { bot: Bot }) {
 				<ul aria-label={t("bots.pane.items")}>
 					{open.map(item => (
 						<li key={item.id}>
-							<Button onClick={() => showItem(bot, item)} size="sm" variant="ghost">
+							<Button onClick={() => showBotItem(bot, item.id)} size="sm" variant="ghost">
 								{item.title}
 							</Button>
 						</li>
@@ -233,7 +220,7 @@ interface NeedRow {
 
 function NeedsYou({ bot }: { bot: Bot }) {
 	const t = useT();
-	const items = useBotsStore(s => s.state.items);
+	const state = useBotsStore(s => s.state);
 	const inbox = useQuestionInbox().filter(row => row.bot?.id === bot.id && row.device === bot.device);
 	const [all, setAll] = useState(false);
 	const askers = inbox.filter(row => row.source === "access");
@@ -247,14 +234,14 @@ function NeedsYou({ bot }: { bot: Bot }) {
 			open: () => void openInboxRow(row),
 		}));
 	// An item can be marked Needs you without a question. Keep it here, not in the question inbox.
-	for (const item of itemsNeedingYou(items, null, Date.now())) {
-		if (!item.question && !item.closedAt && item.bot === bot.id && item.device === bot.device)
+	for (const item of itemsNeedingYou(listedBotItems(state, bot.device, bot.id), null, Date.now())) {
+		if (!item.question && !item.closedAt)
 			rows.push({
 				key: item.id,
 				kind: "item",
 				title: item.title,
 				detail: t("bots.needs.item"),
-				open: () => showItem(bot, item),
+				open: () => showBotItem(bot, item.id),
 			});
 	}
 	rows.sort(
@@ -575,7 +562,7 @@ function Automations({ bot, inspector = false }: { bot: Bot; inspector?: boolean
 								key={kind}
 								className="w-full justify-start gap-2 border-0 px-2 text-sc-sm leading-5 font-normal"
 								icon={kind === "tidy" ? <Moon /> : <Eye />}
-								onClick={() => openBotPage(bot.id, "settings")}
+								onClick={() => openBotPage(bot.id, "settings", bot.device)}
 								size="sm"
 								variant="ghost"
 							>
@@ -808,7 +795,7 @@ function TidyUp({ bot }: { bot: Bot }) {
 		<section aria-label={t("bots.tidy.title")} className="flex flex-col gap-1" data-bot-tidy>
 			<SectionLabel
 				action={
-					<Button onClick={() => openBotPage(bot.id, "settings")} size="sm" variant="ghost">
+					<Button onClick={() => openBotPage(bot.id, "settings", bot.device)} size="sm" variant="ghost">
 						{t("bots.tidy.memory")}
 					</Button>
 				}

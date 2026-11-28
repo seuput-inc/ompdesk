@@ -1,5 +1,6 @@
 import { isBotSchedule, waitingAskers } from "../../shared/bot-connectors";
-import { type Bot, type BotsState, type Item, type ItemQuestion, itemsNeedingYou } from "../../shared/bots";
+import { type Bot, type ItemQuestion, itemsNeedingYou } from "../../shared/bots";
+import type { ListedBotsState, ListedItem } from "../../shared/items-v2";
 import { worktreeFolderSlug } from "../../shared/project-origin";
 import type { ExtensionUIRequest } from "../../shared/rpc-types";
 import type { ConnectorAsker, SchedulesState } from "../../shared/schedules";
@@ -28,7 +29,7 @@ interface Row {
 
 export type QuestionRow = Row &
 	(
-		| { source: "item"; item: Item & { question: ItemQuestion } }
+		| { source: "item"; item: ListedItem & { question: ItemQuestion } }
 		| { source: "ask" | "approval"; session: QuestionSession; requestId?: string; localTabId?: string }
 		| { source: "access"; bot: Bot; scheduleId: string; service: string; person: ConnectorAsker }
 	);
@@ -44,7 +45,7 @@ function time(value?: string): number | null {
 	return Number.isFinite(at) ? at : null;
 }
 
-function openItemQuestion(item: Item): item is Item & { question: ItemQuestion } {
+function openItemQuestion(item: ListedItem): item is ListedItem & { question: ItemQuestion } {
 	return !item.closedAt && !!item.question;
 }
 
@@ -84,7 +85,7 @@ export function requestLabel(request: ExtensionUIRequest, t: Translate): string 
 
 /** Existing item, request and schedule identities become display keys only. Answers always use the source's own id. */
 export function questionRows(
-	state: BotsState,
+	state: ListedBotsState,
 	computers: readonly QuestionComputer[],
 	schedules: Pick<SchedulesState, "schedules" | "asking">,
 	now: number,
@@ -186,9 +187,14 @@ export function questionRows(
 	for (const item of itemsNeedingYou(state.items, null, now)) {
 		if (!openItemQuestion(item)) continue;
 		const bot = state.bots.find(b => b.id === item.bot && b.device === item.device);
-		const asked = item.events.findLast(
-			e => e.kind === "asked" && (item.question?.id === undefined || e.id === item.question.id),
-		);
+		const askedAt =
+			"events" in item
+				? time(
+						item.events.findLast(
+							e => e.kind === "asked" && (item.question.id === undefined || e.id === item.question.id),
+						)?.at,
+					)
+				: item.askedAt;
 		rows.push({
 			key: JSON.stringify([item.device, "item", item.id]),
 			source: "item",
@@ -197,7 +203,7 @@ export function questionRows(
 			asker: bot?.name ?? item.bot,
 			title: item.title,
 			detail: item.question.text,
-			askedAt: time(asked?.at),
+			askedAt,
 			device: item.device,
 			deviceName:
 				state.remote?.find(host => host.device === item.device)?.name ??

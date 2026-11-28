@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { createServer, type ViteDevServer } from "vite";
-import { BOTS_STATE, type Bot, type BotsRequest, type BotsState, type Item } from "../src/shared/bots";
+import { type Bot, type BotsRequest, type BotsState, ITEMS_V2_CHANGED, type Item } from "../src/shared/bots";
 import { captureTo } from "./harness";
 import { type Look, openLook } from "./responsive-audit";
 import { SURFACES } from "./responsive-surfaces";
@@ -123,9 +123,9 @@ for (const lang of ["en", "ko"] as const) {
 					([channel, state]) => {
 						if (!window.__harness) throw new Error("No harness");
 						window.__harness.bots = async () => state;
-						window.__harness.emit(channel, state);
+						window.__harness.emit(channel, { device: null, reseed: true });
 					},
-					[BOTS_STATE, state] as const,
+					[ITEMS_V2_CHANGED, state] as const,
 				);
 				const module = board ? /\/question-inbox-view\.ts(?:\?|$)/ : /\/QuestionInbox\.tsx(?:\?|$)/;
 				let offline = true;
@@ -180,7 +180,7 @@ for (const lang of ["en", "ko"] as const) {
 							call =>
 								call.channel === "extension-ui:respond" ||
 								call.channel === "extension-ui:submit-work-question" ||
-								(call.channel === "bots:command" && (call.args[0] as BotsRequest).action === "item"),
+								(call.channel === "bots:itemsChange" && (call.args[1] as BotsRequest).action === "item"),
 						),
 					),
 				).toEqual([]);
@@ -206,10 +206,12 @@ for (const lang of ["en", "ko"] as const) {
 			const push = () =>
 				Promise.all(
 					pages.map(page =>
-						page.evaluate(([channel, next]) => window.__harness?.emit(channel, next), [
-							BOTS_STATE,
-							state,
-						] as const),
+						page.evaluate(
+							([channel, sources]) => {
+								for (const device of sources) window.__harness?.emit(channel, { device, reseed: true });
+							},
+							[ITEMS_V2_CHANGED, [null, ...(state.remote ?? []).map(h => h.device)]] as const,
+						),
 					),
 				);
 			const items = () => [...state.items, ...(state.remote?.[0]?.items ?? [])];

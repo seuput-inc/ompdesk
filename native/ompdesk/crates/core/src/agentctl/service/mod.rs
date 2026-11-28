@@ -174,6 +174,8 @@ pub struct Mem {
     pub watched: HashMap<String, crate::agentctl::rules::child_watch::ChildWatch>,
     /// Tabs a control tool is closing right now (`close_tab`): their release is no close by the person.
     pub tool_closing: HashSet<String>,
+    /// Main tracks v1 subscribers separately from v2 readers.
+    legacy_bot_audience: (bool, bool),
     /// The bot context last handed to each bot chat's omp (JSON), so it goes again only when it changed.
     pub bot_sent: HashMap<String, String>,
     /// Bot chats whose bridge has no `agent_control.bot` (an older omp or bridge): logged once each.
@@ -1329,6 +1331,7 @@ async fn open(call: Call) -> Result<Reply, Fault> {
             format!("Could not open the items store: {error}"),
         )
     })?;
+    control.tell_quiet_folders();
     if let Some(config) = params.runtime {
         let invalidate = || -> Box<dyn Fn() + Send + Sync> {
             let port = port.clone();
@@ -1596,6 +1599,48 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
         }
         // The owner's own change to the bots or their items (`BotsRequest`, Settings and the Bots page): the state after.
         "bots" => reply(control.bots_command(args).await),
+        "botLaunchFor" => Reply::json(&control.bot_launch_for(&text_arg(&args, "cwd", method)?)),
+        "botsCached" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Cached {
+                device: String,
+                #[serde(default)]
+                legacy: bool,
+            }
+            let Cached { device, legacy } = args_of(args, method)?;
+            Reply::json(&control.across().copies.cached(&device, legacy))
+        }
+        "itemsLegacyAudience" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Audience {
+                local: bool,
+                peer: bool,
+            }
+            let Audience { local, peer } = args_of(args, method)?;
+            control.items_legacy_audience(local, peer);
+            Reply::json(&serde_json::json!({}))
+        }
+        "itemsChange" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Change {
+                device: Value,
+                request: Value,
+            }
+            let Change { device, request } = args_of(args, method)?;
+            reply(control.items_change(device, request).await)
+        }
+        "itemsChangeFrom" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Change {
+                request: Value,
+            }
+            let Change { request } = args_of(args, method)?;
+            reply(control.items_change_from(&request).await)
+        }
         "itemsQuery" | "itemsQueryFrom" => {
             #[derive(Deserialize)]
             #[serde(deny_unknown_fields)]

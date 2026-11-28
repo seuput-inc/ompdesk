@@ -16,12 +16,14 @@
  * - Filter: Needs you only (with its chip), and in a group's list which bots, each with its count; Clear filters.
  */
 import { Check, Clock, ListChecks, ListFilter, MoreHorizontal, X } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
-import type { Bot, Item, ItemStatus } from "../../../../shared/bots";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
+import type { Bot, ItemStatus } from "../../../../shared/bots";
 import { activityAt } from "../../../../shared/item-activity";
+import type { ListedItem } from "../../../../shared/items-v2";
 import { cx, formatTimeAgo } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
-import { useBotsStore } from "../../../stores/bots";
+import { itemCounts, itemEpoch, listedBotItems, useBotsStore } from "../../../stores/bots";
 import {
 	Button,
 	Checkbox,
@@ -35,8 +37,10 @@ import {
 	MenuButton,
 } from "../../common";
 import { BotAvatar } from "../BotAvatar";
+import { botPageKey } from "../bot-page";
 import { formatSnooze, presetName, SnoozeDialog, WaitDialog } from "./BotItemDialogs";
 import { ItemStatusIcon, itemLive, statusName } from "./ItemStatusIcon";
+import { ArchiveReader, type ArchiveSlice } from "./item-archive";
 import {
 	filterItems,
 	filterOn,
@@ -55,50 +59,53 @@ import {
 	questionLine,
 	snoozePresets,
 } from "./item-model";
+import { rowPlace } from "./item-place";
 import { moveItems, offerItemBatchRetries, snoozeItems } from "./item-store";
 
 /** Each bot's seen mark as this list opened; `own` (a bot's own tab) then marks its items seen. */
 function useSeenAtOpen(bots: readonly Bot[], own: boolean): ReadonlyMap<string, number> | null {
-	const live = useBotsStore(s => s.live);
+	const live = useBotsStore(s => s.live && bots.every(bot => s.hostLive(bot.device)));
 	const command = useBotsStore(s => s.command);
 	const [atOpen, setAtOpen] = useState<ReadonlyMap<string, number> | null>(null);
 	// The kept list of the last run paints first; the mark waits for this run's read so no row flashes as new.
-	if (atOpen === null && live) setAtOpen(new Map(bots.map(bot => [bot.id, bot.itemsSeen ?? 0])));
+	if (atOpen === null && live)
+		setAtOpen(new Map(bots.map(bot => [botPageKey(bot.id, bot.device), bot.itemsSeen ?? 0])));
 	const [only] = bots;
 	const botId = own ? only?.id : undefined;
+	const device = only?.device ?? null;
 	useEffect(() => {
 		if (!live || !botId) return;
-		void command({ action: "itemsOpened", id: botId }).catch(() => {});
-	}, [live, botId, command]);
+		void command({ action: "itemsOpened", id: botId, device }).catch(() => {});
+	}, [live, botId, device, command]);
 	return atOpen;
 }
 
 /** The moves that ask something first (Waiting, a snooze picked by date), as dialogs beside the menus. */
-type Asking = { kind: "wait"; items: readonly Item[] } | { kind: "snooze"; items: readonly Item[] } | null;
+type Asking = { kind: "wait" | "snooze"; items: readonly ListedItem[] } | null;
 
 /** The owner's moves of items; `dialog` is mounted beside the menus that open it. */
 export interface ItemMoves {
-	move: (items: readonly Item[], status: ItemStatus) => void;
-	snooze: (items: readonly Item[], until: number | null) => void;
-	pickSnooze: (items: readonly Item[]) => void;
+	move: (items: readonly ListedItem[], status: ItemStatus) => void;
+	snooze: (items: readonly ListedItem[], until: number | null) => void;
+	pickSnooze: (items: readonly ListedItem[]) => void;
 	dialog: ReactNode;
 }
 
-function eachItemHost(items: readonly Item[], send: (rows: Item[], requestId: string) => void): void {
+function eachItemHost(items: readonly ListedItem[], send: (rows: ListedItem[], requestId: string) => void): void {
 	for (const rows of Map.groupBy(items, item => item.device).values()) send(rows, crypto.randomUUID());
 }
 
 export function useItemMoves(onDone?: () => void): ItemMoves {
 	const [asking, setAsking] = useState<Asking>(null);
 	useEffect(offerItemBatchRetries, []);
-	const move = (items: readonly Item[], status: ItemStatus) => {
+	const move = (items: readonly ListedItem[], status: ItemStatus) => {
 		if (status === "waiting") setAsking({ kind: "wait", items });
 		else {
 			eachItemHost(items, (rows, id) => void moveItems(rows, status, id));
 			onDone?.();
 		}
 	};
-	const snooze = (items: readonly Item[], until: number | null) => {
+	const snooze = (items: readonly ListedItem[], until: number | null) => {
 		eachItemHost(items, (rows, id) => void snoozeItems(rows, until, id));
 		onDone?.();
 	};
@@ -122,12 +129,12 @@ export function useItemMoves(onDone?: () => void): ItemMoves {
 				}}
 			/>
 		) : null;
-	return { move, snooze, pickSnooze: (items: readonly Item[]) => setAsking({ kind: "snooze", items }), dialog };
+	return { move, snooze, pickSnooze: items => setAsking({ kind: "snooze", items }), dialog };
 }
 
 /** The snooze choices for `items`: the presets, Pick a time…, and Unsnooze while any is snoozed. */
 export function snoozeMenu(
-	items: readonly Item[],
+	items: readonly ListedItem[],
 	moves: ItemMoves,
 	t: (key: string, params?: Record<string, string | number>) => string,
 	separatorBefore = false,
@@ -156,50 +163,107 @@ export interface BotItemsProps {
 	bots: readonly Bot[];
 	/** A group's list: rows carry their bot's face, the filter names the bots, no seen mark moves. */
 	group: boolean;
-	onOpen: (item: Item) => void;
+	active?: boolean;
+	onOpen: (item: ListedItem) => void;
 	/** The list's order as shown, for the item page's previous and next. */
-	onOrder?: (order: readonly string[]) => void;
+	onOrder?: (order: readonly string[], rows: readonly ListedItem[]) => void;
 }
 
-export function BotItems({ bots, group, onOpen, onOrder }: BotItemsProps) {
+export function BotItems({ bots, group, active = true, onOpen, onOrder }: BotItemsProps) {
 	const t = useT();
-	const all = useBotsStore(s => s.state.items);
+	const state = useBotsStore(s => s.state);
 	const live = useBotsStore(s => s.live);
 	const seen = useSeenAtOpen(bots, !group);
 	const [filter, setFilter] = useState<ItemFilter>(NO_FILTER);
 	const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 	const [anchor, setAnchor] = useState<string | null>(null);
-	const [cancelling, setCancelling] = useState<readonly Item[] | null>(null);
+	const [cancelling, setCancelling] = useState<readonly ListedItem[] | null>(null);
+	const counts = useBotsStore(useShallow(() => bots.map(bot => itemCounts(bot.device, bot.id))));
+	useBotsStore(useShallow(s => (active ? bots.map(bot => s.itemRevision(bot.device, bot.id)) : [])));
+	const hosts = useBotsStore(s => s.state.remote);
+	const [take, setTake] = useState(0);
+	const [retry, setRetry] = useState(0);
+	const [pages, setPages] = useState<Record<string, { source: string; page: ArchiveSlice }>>({});
+	const publish = useCallback((bot: string, device: string | undefined, source: string, page: ArchiveSlice) => {
+		setPages(previous => ({ ...previous, [botPageKey(bot, device)]: { source, page } }));
+	}, []);
 	const moves = useItemMoves(() => setSelected(new Set()));
 	const now = Date.now();
-	const ids = new Set(bots.map(bot => bot.id));
-	const items = all.filter(item => ids.has(item.bot));
+	const items = bots.flatMap(bot => listedBotItems(state, bot.device, bot.id));
 	const shown = filterItems(items, filter);
-	const botOf = (item: Item) => bots.find(bot => bot.id === item.bot);
-	const seenOf = (item: Item) => seen?.get(item.bot) ?? Number.POSITIVE_INFINITY;
+	const botOf = (item: ListedItem) => bots.find(bot => bot.id === item.bot && bot.device === item.device);
+	const seenOf = (item: ListedItem) =>
+		seen?.get(botPageKey(item.bot, item.device)) ??
+		(item.device && hosts?.some(host => host.device === item.device && !host.online)
+			? (botOf(item)?.itemsSeen ?? 0)
+			: Number.POSITIVE_INFINITY);
+	let closedTotal = shown.filter(item => isClosed(item.status)).length;
+	let closedFresh = shown.filter(item => isClosed(item.status) && isUnseen(item, seenOf(item))).length;
+	let allCount = items.length;
+	let unreadKnown = true;
+	let totalKnown = true;
+	let error: string | undefined;
+	const readers = bots.map((bot, i) => {
+		const count = counts[i];
+		const botKey = botPageKey(bot.id, bot.device);
+		const online = !bot.device || !!hosts?.find(host => host.device === bot.device)?.online;
+		if (!online && !count && !items.some(row => row.bot === bot.id && row.device === bot.device && "events" in row))
+			totalKnown = false;
+		if (!count?.closedTotal) return null;
+		allCount += count.closedTotal;
+		if (filter.needsYou || (filter.bots && !filter.bots.includes(botKey))) return null;
+		closedTotal += count.closedTotal;
+		const mark = seen?.get(botKey) ?? bot.itemsSeen ?? 0;
+		const source = JSON.stringify([itemEpoch(bot.device ?? null), bot.device, bot.id, count.archiveRevision, mark]);
+		const loaded = pages[botKey];
+		if (loaded?.source !== source || loaded.page.unreadTotal === undefined) unreadKnown = false;
+		if (loaded?.source === source) {
+			shown.push(...loaded.page.rows);
+			closedFresh += loaded.page.unreadTotal ?? 0;
+			error ??= loaded.page.error;
+		}
+		return (
+			<ArchiveReader
+				key={`${source}:${online}:${retry}`}
+				source={source}
+				bot={bot.id}
+				device={bot.device}
+				visible={active}
+				online={online}
+				seen={mark}
+				take={take}
+				publish={publish}
+			/>
+		);
+	});
 	const groups = groupItems(shown, seenOf, now);
 	const order = ITEM_GROUPS.flatMap(id => groups[id]);
-	const orderKey = order.map(item => item.id).join("\n");
-	const onOrderRef = useRef(onOrder);
-	onOrderRef.current = onOrder;
-	useEffect(() => onOrderRef.current?.(orderKey ? orderKey.split("\n") : []), [orderKey]);
-	const picked = order.filter(item => selected.has(item.id));
-	const select = (item: Item, on: boolean, range: boolean) => {
+	const orderKeys = order.map(rowPlace);
+	const lastOrder = useRef<readonly string[] | undefined>(undefined);
+	useEffect(() => {
+		if (
+			!onOrder ||
+			(lastOrder.current?.length === orderKeys.length && lastOrder.current.every((key, i) => key === orderKeys[i]))
+		)
+			return;
+		lastOrder.current = orderKeys;
+		onOrder(orderKeys, order);
+	}, [orderKeys, order, onOrder]);
+	const picked = order.filter(item => selected.has(rowPlace(item)));
+	const select = (item: ListedItem, on: boolean, range: boolean) => {
 		setSelected(current => {
 			const next = new Set(current);
-			const from = anchor ? order.findIndex(entry => entry.id === anchor) : -1;
-			const to = order.findIndex(entry => entry.id === item.id);
+			const from = anchor ? orderKeys.indexOf(anchor) : -1;
+			const to = orderKeys.indexOf(rowPlace(item));
 			const span =
-				range && from >= 0
-					? order.slice(Math.min(from, to), Math.max(from, to) + 1).map(entry => entry.id)
-					: [item.id];
+				range && from >= 0 ? orderKeys.slice(Math.min(from, to), Math.max(from, to) + 1) : [rowPlace(item)];
 			for (const id of span) {
 				if (on) next.add(id);
 				else next.delete(id);
 			}
 			return next;
 		});
-		setAnchor(item.id);
+		setAnchor(rowPlace(item));
 	};
 	const needsYou = items.filter(item => item.status === "needs_you").length;
 	const staleDays = bots.length === 1 ? bots[0]?.staleDays : null;
@@ -211,14 +275,20 @@ export function BotItems({ bots, group, onOpen, onOrder }: BotItemsProps) {
 		...(group
 			? bots.map(
 					(bot, index): ContextMenuItem => ({
-						id: `bot-${bot.id}`,
+						id: `bot-${botPageKey(bot.id, bot.device)}`,
 						label: bot.name,
-						hint: String(items.filter(item => item.bot === bot.id && !isClosed(item.status)).length),
-						checked: filter.bots?.includes(bot.id) ?? false,
+						hint: String(
+							counts[index]?.openCount ??
+								items.filter(
+									item => item.bot === bot.id && item.device === bot.device && !isClosed(item.status),
+								).length,
+						),
+						checked: filter.bots?.includes(botPageKey(bot.id, bot.device)) ?? false,
 						separatorBefore: index === 0,
 						onSelect: () => {
-							const rest = (filter.bots ?? []).filter(id => id !== bot.id);
-							const next = filter.bots?.includes(bot.id) ? rest : [...rest, bot.id];
+							const key = botPageKey(bot.id, bot.device);
+							const rest = (filter.bots ?? []).filter(id => id !== key);
+							const next = filter.bots?.includes(key) ? rest : [...rest, key];
 							setFilter({ ...filter, bots: next.length > 0 ? next : null });
 						},
 					}),
@@ -247,7 +317,7 @@ export function BotItems({ bots, group, onOpen, onOrder }: BotItemsProps) {
 
 	const allClear =
 		live &&
-		items.length > 0 &&
+		allCount > 0 &&
 		!filterOn(filter) &&
 		bots.every(bot => !bot.paused) &&
 		groups.needs_you.length === 0 &&
@@ -255,9 +325,13 @@ export function BotItems({ bots, group, onOpen, onOrder }: BotItemsProps) {
 
 	return (
 		<div className="flex flex-col gap-2 p-4" data-bot-items>
+			{readers}
 			<div className="flex items-center gap-2">
 				<span className="flex-1 text-sc-xs text-(--sc-text-muted)">
-					{allClear ? t("bots.items.allClear") : t("bots.items.count", { count: shown.length })}
+					{totalKnown &&
+						(allClear
+							? t("bots.items.allClear")
+							: t("bots.items.count", { count: shown.length - groups.closed.length + closedTotal }))}
 				</span>
 				<MenuButton
 					icon={<ListFilter />}
@@ -277,14 +351,14 @@ export function BotItems({ bots, group, onOpen, onOrder }: BotItemsProps) {
 					</Chip>
 				</div>
 			)}
-			{items.length === 0 ? (
+			{!totalKnown && !allCount ? null : allCount === 0 ? (
 				<EmptyState
 					description={t("bots.items.empty.body", { bot: bots.length === 1 ? (bots[0]?.name ?? "") : "" })}
 					icon={<ListChecks />}
 					size="sm"
 					title={t("bots.items.empty.title")}
 				/>
-			) : shown.length === 0 ? (
+			) : shown.length === 0 && closedTotal === 0 ? (
 				<EmptyState
 					actions={
 						<Button onClick={() => setFilter(NO_FILTER)} size="sm" variant="secondary">
@@ -307,6 +381,17 @@ export function BotItems({ bots, group, onOpen, onOrder }: BotItemsProps) {
 					{ITEM_GROUPS.map(id => (
 						<ItemGroup
 							botOf={group ? botOf : undefined}
+							archive={
+								id === "closed"
+									? {
+											total: closedTotal,
+											fresh: unreadKnown ? closedFresh : 0,
+											take: setTake,
+											error,
+											retry: () => setRetry(retry + 1),
+										}
+									: undefined
+							}
 							groups={groups}
 							id={id}
 							key={id}
@@ -379,6 +464,7 @@ export function BotItems({ bots, group, onOpen, onOrder }: BotItemsProps) {
 
 function ItemGroup({
 	id,
+	archive,
 	groups,
 	selected,
 	seenOf,
@@ -390,22 +476,24 @@ function ItemGroup({
 	onCancelAll,
 }: {
 	id: ItemGroupId;
+	archive?: { total: number; fresh: number; take: (n: number) => void; error?: string; retry: () => void };
 	groups: ItemGroups;
 	selected: ReadonlySet<string>;
-	seenOf: (item: Item) => number;
+	seenOf: (item: ListedItem) => number;
 	now: number;
 	moves: ItemMoves;
-	botOf?: (item: Item) => Bot | undefined;
-	onOpen: (item: Item) => void;
-	onSelect: (item: Item, on: boolean, range: boolean) => void;
+	botOf?: (item: ListedItem) => Bot | undefined;
+	onOpen: (item: ListedItem) => void;
+	onSelect: (item: ListedItem, on: boolean, range: boolean) => void;
 	onCancelAll?: () => void;
 }) {
 	const t = useT();
 	const items = groups[id];
 	const [open, setOpen] = useState(!GROUP_FOLDED[id]);
 	const [rows, setRows] = useState(GROUP_ROWS);
-	if (items.length === 0) return null;
-	const fresh = items.filter(item => isUnseen(item, seenOf(item))).length;
+	const total = archive?.total ?? items.length;
+	if (!total) return null;
+	const fresh = archive?.fresh ?? items.filter(item => isUnseen(item, seenOf(item))).length;
 	const all = id === "needs_you";
 	const drawn = all ? items : items.slice(0, rows);
 	const title = t(`bots.items.group.${id}`);
@@ -414,12 +502,15 @@ function ItemGroup({
 			<div className="flex items-center gap-1">
 				<DisclosureButton
 					className="flex-1 text-sc-xs font-medium text-(--sc-text-muted)"
-					onToggle={() => setOpen(!open)}
+					onToggle={() => {
+						if (!open) archive?.take(rows);
+						setOpen(!open);
+					}}
 					open={open}
 				>
 					{title}
 					<span className="ml-1.5 font-normal">
-						{items.length}
+						{total}
 						{!open && fresh > 0 && (
 							<span className="text-(--sc-text)"> · {t("bots.items.group.new", { count: fresh })}</span>
 						)}
@@ -437,25 +528,37 @@ function ItemGroup({
 						<ItemRow
 							face={botOf?.(item)}
 							item={item}
-							key={item.id}
+							key={rowPlace(item)}
 							moves={moves}
 							muted={id === "stale" || id === "snoozed"}
 							now={now}
 							onOpen={onOpen}
 							onSelect={onSelect}
-							selected={selected.has(item.id)}
+							selected={selected.has(rowPlace(item))}
 							selecting={selected.size > 0}
 							unseen={isUnseen(item, seenOf(item))}
 						/>
 					))}
-					{!all && items.length > drawn.length && (
+					{archive?.error && (
+						<div role="alert">
+							{archive.error}{" "}
+							<Button size="sm" variant="ghost" onClick={archive.retry}>
+								{t("common.retry")}
+							</Button>
+						</div>
+					)}
+					{!all && total > drawn.length && (!archive || drawn.length >= rows) && (
 						<Button
 							className="self-start"
-							onClick={() => setRows(rows + Math.max(GROUP_ROWS, items.length))}
+							onClick={() => {
+								const next = archive ? Math.min(total, rows + 50) : total;
+								setRows(next);
+								archive?.take(next);
+							}}
 							size="sm"
 							variant="ghost"
 						>
-							{t("bots.showMore", { count: items.length - drawn.length })}
+							{t("bots.showMore", { count: Math.min(total - drawn.length, archive ? 50 : total) })}
 						</Button>
 					)}
 				</div>
@@ -476,7 +579,7 @@ function ItemRow({
 	onOpen,
 	onSelect,
 }: {
-	item: Item;
+	item: ListedItem;
 	face?: Bot;
 	muted: boolean;
 	unseen: boolean;
@@ -484,8 +587,8 @@ function ItemRow({
 	selecting: boolean;
 	now: number;
 	moves: ItemMoves;
-	onOpen: (item: Item) => void;
-	onSelect: (item: Item, on: boolean, range: boolean) => void;
+	onOpen: (item: ListedItem) => void;
+	onSelect: (item: ListedItem, on: boolean, range: boolean) => void;
 }) {
 	const t = useT();
 	const closed = isClosed(item.status);

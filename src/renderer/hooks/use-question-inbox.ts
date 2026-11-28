@@ -41,7 +41,14 @@ export function useQuestionInbox(): QuestionRow[] {
 		[hosts, summaries],
 	);
 	const minute = useMinuteTick(
-		state.items.some(item => item.snoozedUntil !== undefined && Date.parse(item.snoozedUntil) > Date.now()),
+		state.items.some(
+			item =>
+				item.status === "needs_you" &&
+				!!item.question &&
+				!item.closedAt &&
+				item.snoozedUntil !== undefined &&
+				Date.parse(item.snoozedUntil) > Date.now(),
+		),
 	);
 	return useMemo(
 		() =>

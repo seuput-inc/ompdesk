@@ -53,6 +53,17 @@ const session: SessionSummary = {
 const empty = { schedules: [] };
 
 describe("question inbox", () => {
+	it("orders a summary-only question by its asking time, not the latest item update", () => {
+		const { events: _events, links: _links, ...fields } = item;
+		const summary = { ...fields, touched: 30, sessionLinks: [], lastEvent: 30, othersLast: 11, askedAt: 2500 };
+		const rows = questionRows({ bots: [bot], items: [summary] }, [{ summaries: [session] }], empty, 5000, t);
+		expect(rows.map(row => [row.source, row.askedAt])).toEqual([
+			["approval", 2000],
+			["item", 2500],
+			["ask", 3000],
+		]);
+	});
+
 	it("keeps all requests of an unviewed session, isolates identical hosts' ids and orders a bot's rows by when asked", () => {
 		const rows = questionRows(
 			{ bots: [bot, { ...bot, device: "peer" }], items: [item, { ...item, device: "peer" }] },

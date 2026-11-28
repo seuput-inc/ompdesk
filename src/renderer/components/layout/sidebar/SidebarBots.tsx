@@ -52,7 +52,7 @@ import { BotHoverCard } from "../../bots/BotHoverCard";
 import { BotLineText } from "../../bots/BotLineText";
 import { BotOwner, useOfflineBotHosts } from "../../bots/BotOwner";
 import { openBotDialog, openBotHome } from "../../bots/bot-launch";
-import { openBotPage, openRoomPage } from "../../bots/bot-page";
+import { botPageKey, openBotPage, openRoomPage } from "../../bots/bot-page";
 import { type BotFacts, foldedFaces, sortBots } from "../../bots/bot-view";
 import { GroupFaces, roomBots, roomPreview } from "../../bots/rooms/room-faces";
 import {
@@ -104,7 +104,7 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 	const [renaming, setRenaming] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
 	const [menu, setMenu] = useState<{ x: number; y: number; bot: Bot } | null>(null);
-	const facts = new Map(entries.map(entry => [entry.bot.id, entry.facts]));
+	const facts = new Map(entries.map(entry => [botPageKey(entry.bot.id, entry.bot.device), entry.facts]));
 	const byBot = new Map(entries.map(entry => [entry.bot, entry]));
 	const sorted = sortBots(
 		entries.map(entry => entry.bot),
@@ -151,7 +151,12 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 					setRenaming(bot.id);
 				},
 			},
-			{ id: "page", label: t("bots.menu.page"), icon: PanelRight, onSelect: () => openBotPage(bot.id) },
+			{
+				id: "page",
+				label: t("bots.menu.page"),
+				icon: PanelRight,
+				onSelect: () => openBotPage(bot.id, "activity", bot.device),
+			},
 			{
 				id: "new",
 				label: t("bots.add.new"),
@@ -162,7 +167,7 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 				id: "settings",
 				label: t("bots.menu.settings"),
 				icon: Settings2,
-				onSelect: () => openBotPage(bot.id, "settings"),
+				onSelect: () => openBotPage(bot.id, "settings", bot.device),
 			},
 			bot.paused
 				? { id: "resume", label: t("bots.menu.resume"), icon: Play, onSelect: () => setPaused(bot, false) }
@@ -247,10 +252,10 @@ export function SidebarBots({ entries, filtering }: { entries: readonly SidebarB
 							.map(bot => (
 								<BotAvatar
 									bot={bot}
-									key={bot.id}
-									mark={botMark(bot, facts.get(bot.id))}
+									key={botPageKey(bot.id, bot.device)}
+									mark={botMark(bot, facts.get(botPageKey(bot.id, bot.device)))}
 									size={16}
-									working={facts.get(bot.id)?.working}
+									working={facts.get(botPageKey(bot.id, bot.device))?.working}
 								/>
 							))}
 					</span>

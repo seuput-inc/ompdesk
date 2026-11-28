@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { ITEMS_LINKED_MAX, type ItemsV2Request } from "../../../../shared/items-v2";
 import { useJobs } from "../../../hooks/use-background-jobs";
 import { useLiveReview } from "../../../hooks/use-live-review";
 import { useOpenedChildren } from "../../../hooks/use-opened-children";
@@ -7,6 +8,7 @@ import { requestLabel } from "../../../lib/question-inbox";
 import { parseStreamingArgs } from "../../../lib/streaming-json";
 import { botOfFolder, botOfSession, useBotsStore } from "../../../stores/bots";
 import { isUserBlockingRequest, useExtensionUiStore } from "../../../stores/extension-ui";
+import { cachedItemQuery, queryItems } from "../../../stores/item-query";
 import { useSessionStore } from "../../../stores/session";
 import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useSubagentsStore } from "../../../stores/subagents";
@@ -23,6 +25,75 @@ import type { DockFacts, DockRunner } from "./dock-summary";
 const NO_FACTS: DockFacts = {};
 const RECENT_MS = 15_000;
 type Completion = { at: number; text: string };
+type Links = NonNullable<DockFacts["links"]>;
+type LinkRequest = Extract<ItemsV2Request, { action: "itemsLinked" }>;
+const NO_LINKS: Links = [];
+
+function linkRequests(bot: string, aliases: Map<string, string>): LinkRequest[] {
+	if (aliases.size <= ITEMS_LINKED_MAX)
+		return [{ protocol: 2, action: "itemsLinked", bot, sessions: [...aliases.keys()] }];
+	const batches: LinkRequest[] = [];
+	const groups = new Map<string, string[]>();
+	for (const [key, session] of aliases) {
+		const group = groups.get(session);
+		if (group) group.push(key);
+		else groups.set(session, [key]);
+	}
+	// The dock matches one runner at a time. Keep its tab and path in insertion order in one reply.
+	let batch: string[] = [];
+	for (const group of groups.values()) {
+		if (batch.length + group.length > ITEMS_LINKED_MAX) batch = [];
+		for (const key of group) {
+			if (batch.length === ITEMS_LINKED_MAX) batch = [];
+			if (!batch.length) batches.push({ protocol: 2, action: "itemsLinked", bot, sessions: batch });
+			batch.push(key);
+		}
+	}
+	return batches;
+}
+
+function useDockLinks(bot: string | undefined, device: string | undefined, sessionKey: string): Links {
+	const plan = useMemo(() => {
+		if (!bot || !sessionKey) return null;
+		const aliases = new Map<string, string>(JSON.parse(sessionKey));
+		const requests = linkRequests(bot, aliases);
+		const cached = requests.map(r => cachedItemQuery(device ?? null, r)?.links);
+		return { bot, device, aliases, requests, cached };
+	}, [bot, device, sessionKey]);
+	const revision = useBotsStore(s => plan && s.linkRevision(plan.device, plan.bot));
+	const online = useBotsStore(s => !device || s.state.remote?.some(host => host.device === device && host.online));
+	const [loaded, setLoaded] = useState<{ plan: NonNullable<typeof plan>; links: Links }>();
+	useEffect(() => {
+		if (!plan || !online || revision === null) return;
+		let current = true;
+		void Promise.all(plan.requests.map(r => queryItems(plan.device ?? null, r))).then(
+			replies => {
+				if (current) setLoaded({ plan, links: replies.flatMap(reply => reply.links) });
+			},
+			// A failed refresh is not evidence that the host has no links.
+			() => undefined,
+		);
+		return () => {
+			current = false;
+		};
+	}, [online, plan, revision]);
+	return useMemo(() => {
+		if (!plan) return NO_LINKS;
+		const previous = loaded?.plan.bot === plan.bot && loaded.plan.device === plan.device ? loaded.links : NO_LINKS;
+		const raw =
+			loaded?.plan === plan
+				? loaded.links
+				: plan.requests.flatMap(
+						(r, i) => plan.cached[i] ?? previous.filter(link => r.sessions.includes(link.session)),
+					);
+		const links: Links = [];
+		for (const link of raw) {
+			const session = plan.aliases.get(link.session);
+			if (session) links.push({ ...link, session });
+		}
+		return links;
+	}, [loaded, plan]);
+}
 
 /** Only calls that still run can describe what the parent is doing now. */
 function newestLiveStep(entries: ReadonlyMap<string, ToolEntry>): ToolEntry | undefined {
@@ -42,12 +113,6 @@ export function useDockFacts(enabled = true): DockFacts {
 	const tab = tabs.find(row => row.id === tabId);
 	const session = useSessionStore(state => state.sessionFile) ?? tab?.sessionPath;
 	const cwd = useSessionStore(state => state.cwd) || tab?.cwd;
-	const bot = useBotsStore(state =>
-		enabled
-			? (botOfSession(state.state.bots, session, tab?.device) ?? botOfFolder(state.state.bots, cwd, tab?.device))
-			: undefined,
-	);
-	const items = useBotsStore(state => (bot ? state.state.items : undefined));
 	const subagents = useSubagentsStore(state => (enabled ? state.subagents : undefined));
 	const jobs = useJobs(feed => (enabled ? feed.rows : null), false);
 	const opened = useOpenedChildren(tabId);
@@ -61,10 +126,9 @@ export function useDockFacts(enabled = true): DockFacts {
 	);
 	const { check } = useTurnCheck(enabled ? "cached" : "off");
 
-	const { facts, recent } = useMemo<{ facts: DockFacts; recent?: Completion }>(() => {
-		if (!subagents) return { facts: NO_FACTS, recent: undefined };
+	const { facts, recent, sessionKey } = useMemo<{ facts: DockFacts; recent?: Completion; sessionKey: string }>(() => {
+		if (!subagents) return { facts: NO_FACTS, recent: undefined, sessionKey: "" };
 		const runners: DockRunner[] = [];
-		const links: NonNullable<DockFacts["links"]> = [];
 		// The core first records a child tab id, then replaces it with its session path. Neither id crosses hosts.
 		const sessions = new Map<string, string>();
 		for (const agent of workingSubagents(liveSubagents(subagents))) {
@@ -136,13 +200,6 @@ export function useDockFacts(enabled = true): DockFacts {
 			if (agent.status === "completed") completed(agent.lastUpdate, subagentPrimaryLabel(agent));
 		}
 		if (tab?.lastRun?.stopReason === "stop") completed(ended);
-		for (const item of items ?? []) {
-			if (item.bot !== bot?.id || item.device !== bot?.device) continue;
-			for (const link of item.links) {
-				const session = link.kind === "session" && sessions.get(link.ref);
-				if (session) links.push({ session, number: item.number, title: item.title });
-			}
-		}
 		const waiting = opened.rows.find(row => row.status === "waiting");
 		const attention = ask
 			? requestLabel(ask, t)
@@ -151,15 +208,22 @@ export function useDockFacts(enabled = true): DockFacts {
 				: undefined;
 		const facts: DockFacts = {
 			runners,
-			links,
 			attention,
 			failure: check?.state === "failed" ? checkWords(t, check) : undefined,
 			step: call ? workNarrative(call.toolName, call.args, t, undefined, call.intent) : undefined,
 			startedAt: active ? (start ?? tab?.runningSince) : undefined,
 			nextLabel: task => t("dock.todo.next", { task }),
 		};
-		return { facts, recent };
-	}, [active, ask, bot, call, check, ended, items, jobs, opened.rows, start, subagents, t, tab, tabs]);
+		return { facts, recent, sessionKey: sessions.size ? JSON.stringify([...sessions]) : "" };
+	}, [active, ask, call, check, ended, jobs, opened.rows, start, subagents, t, tab, tabs]);
+	const device = tab?.device;
+	const botId = useBotsStore(state =>
+		sessionKey
+			? (botOfSession(state.state.bots, session, device) ?? botOfFolder(state.state.bots, cwd, device))?.id
+			: undefined,
+	);
+	const links = useDockLinks(botId, botId ? device : undefined, sessionKey);
+	const linkedFacts = useMemo(() => (enabled ? { ...facts, links } : NO_FACTS), [enabled, facts, links]);
 
 	const until = recent ? recent.at + RECENT_MS : 0;
 	const [expired, setExpired] = useState(0);
@@ -169,5 +233,5 @@ export function useDockFacts(enabled = true): DockFacts {
 		const timer = window.setTimeout(() => setExpired(until), left);
 		return () => window.clearTimeout(timer);
 	}, [until]);
-	return recent && expired !== until && until > Date.now() ? { ...facts, finished: recent.text } : facts;
+	return recent && expired !== until && until > Date.now() ? { ...linkedFacts, finished: recent.text } : linkedFacts;
 }

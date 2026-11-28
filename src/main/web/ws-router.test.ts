@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { BOT_CONNECTORS_COMMAND } from "../../shared/bot-connector-channels";
-import { BOTS_COMMAND, BOTS_STATE, ITEMS_V2_CHANGED } from "../../shared/bots";
+import { BOTS_COMMAND, BOTS_STATE, ITEMS_V2_CHANGED, ITEMS_V2_QUERY } from "../../shared/bots";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICES_CHANGED, WEB_DEVICES_LIST, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
 import { type AgentSessionEvent, modelNotStarted } from "../../shared/rpc-types";
@@ -990,6 +990,18 @@ describe("events", () => {
 		expect(r.socket.frames("evt")).toEqual([{ t: "evt", seq: 1, ch: IPC_EVENTS.REMOTE_STATE, d: state }]);
 	});
 
+	it("sends histories only to the page that requested v1, not other pages on the same device", async () => {
+		const r = await rig();
+		const modern = await r.host.attach("dev1");
+		if (!modern) throw new Error("Second page did not connect");
+		r.router.readLegacyItems(r.connection.connId, () => {});
+		await r.router.readItemsFeed(modern.connId, null, async () => "seed");
+		const state = { bots: [], items: [{ id: "one", events: [{ text: "old comment" }] }] };
+		r.router.legacyItemsChanged(state);
+		await r.host.flush();
+		expect(r.socket.frames("evt")).toEqual([{ t: "evt", seq: 1, ch: BOTS_STATE, d: state }]);
+		expect(modern.socket.frames("evt")).toEqual([]);
+	});
 	it("keeps the first requesting computer off paired pages in both bot state replies and pushes", async () => {
 		const r = await rig();
 		const state = { bots: [{ id: "a", legacyPeerRequest: "Work laptop" }, { id: "b" }], items: [] };
@@ -1002,6 +1014,11 @@ describe("events", () => {
 		expect(r.socket.frames("res")).toEqual([{ t: "res", id: 1, ok: true, v: visible }]);
 		expect(r.socket.frames("evt")).toEqual([{ t: "evt", seq: 1, ch: BOTS_STATE, d: visible }]);
 		expect(state.bots[0]?.legacyPeerRequest).toBe("Work laptop");
+		const seed = { protocol: 2, kind: "seed", bots: state.bots };
+		r.invoke.mockResolvedValueOnce(seed);
+		await r.frame({ t: "inv", id: 2, ch: ITEMS_V2_QUERY, a: [null, { protocol: 2, action: "itemsFeed" }] });
+		await r.settle();
+		expect(r.socket.frames("res").at(-1)).toEqual({ t: "res", id: 2, ok: true, v: { ...seed, bots: visible.bots } });
 	});
 
 	it("does not push the remote sidebar or its device IDs without the workspace grant needed to read it", async () => {

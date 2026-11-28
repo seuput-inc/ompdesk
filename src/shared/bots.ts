@@ -23,6 +23,7 @@ export const BOTS_AVAILABLE = true;
 export const BOTS_COMMAND = "bots:command";
 export const BOTS_STATE = "bots:state";
 export const ITEMS_V2_QUERY = "bots:itemsV2";
+export const ITEMS_V2_CHANGE = "bots:itemsChange";
 export const ITEMS_V2_CHANGED = "bots:itemsV2Changed";
 export interface ItemsV2Change {
 	device: string | null;
@@ -455,7 +456,7 @@ export type BotsRequest =
 	  }
 	| ({ action: "itemBatch"; ids: string[]; device: string | null; requestId: string } & ItemBatchChange)
 	/** The owner opened the bot's Items tab: its items as they are now are seen. */
-	| { action: "itemsOpened"; id: string }
+	| { action: "itemsOpened"; id: string; device?: string | null }
 	/** Its page opened (the kickoff's one retry, `asked` false) or the owner's Try again (`asked`): sent again only
 	 *  when its turn ended without a word and the owner wrote nothing there. */
 	| { action: "kickoff"; id: string; asked?: boolean }
@@ -480,6 +481,10 @@ export type BotsRequest =
 	 */
 	| { action: "connect"; id: string; on: ScheduleEvent; schedule?: string }
 	| { action: "disconnect"; id: string; schedule: string };
+
+type Unrouted<T> = T extends unknown ? Omit<T, "device"> : never;
+export type ItemChangeRequest = Unrouted<Extract<BotsRequest, { action: "item" | "itemBatch" | "itemsOpened" }>>;
+export type ItemChangeResult = Pick<BotsState, "refused" | "itemBatchResult">;
 
 /**
  * One of a bot's own files (`SOUL.md`, `MEMORY.md`, `memory/<name>.md`, `memory/history/<name>.md`): read, or written
@@ -547,6 +552,7 @@ export type BotsAnswer<C extends BotsCall> = C extends BotFileRequest
 
 export interface BotsApi {
 	itemsV2<R extends ItemsV2Request>(device: string | null, request: R): Promise<ItemsV2Reply<R>>;
+	itemChange(device: string | null, request: ItemChangeRequest): Promise<ItemChangeResult>;
 	onItemsV2Changed(callback: (change: ItemsV2Change) => void): () => void;
 	command(request: BotsRequest): Promise<BotsState>;
 	createFolder(name: string, device?: string): Promise<BotFolderPreview>;
@@ -576,7 +582,11 @@ export function isQuietResult(answer: string): boolean {
 }
 
 /** The open items a bot chat's owner has to answer (Needs you), unsnoozed at `now`. */
-export function itemsNeedingYou(items: readonly Item[], session: string | null, now: number): Item[] {
+export function itemsNeedingYou<T extends Pick<Item, "status" | "session" | "snoozedUntil">>(
+	items: readonly T[],
+	session: string | null,
+	now: number,
+): T[] {
 	return items.filter(
 		item =>
 			item.status === "needs_you" &&

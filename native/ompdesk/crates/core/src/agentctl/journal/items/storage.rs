@@ -302,6 +302,7 @@ impl Items {
         Ok(Some(result))
     }
 
+    #[cfg(test)]
     pub fn receipt(&self, request_id: &str) -> io::Result<Option<Option<String>>> {
         self.db
             .query_row(
@@ -416,6 +417,55 @@ impl Items {
         Ok(())
     }
 
+    /// Seek past a whole chat, not through every intent of a chat that is still offline.
+    pub fn next_mail_session(&mut self) -> io::Result<Option<String>> {
+        let session: Option<String> = self
+            .db
+            .prepare_cached(
+                "SELECT session FROM item_mail WHERE session>?1 ORDER BY session LIMIT 1",
+            )
+            .map_err(sql)?
+            .query_row([&self.mail_cursor], |r| r.get(0))
+            .optional()
+            .map_err(sql)?;
+        self.mail_cursor.clear();
+        if let Some(path) = &session {
+            self.mail_cursor.push_str(path);
+        }
+        Ok(session)
+    }
+
+    pub fn mail_wakes_session(&self, session: &str) -> io::Result<bool> {
+        self.db
+            .prepare_cached(
+                "SELECT EXISTS(SELECT 1 FROM item_mail INDEXED BY item_mail_wake
+             WHERE session=?1 AND json_extract(mail_json,'$.kind')='question')",
+            )
+            .map_err(sql)?
+            .query_row([session], |r| r.get(0))
+            .map_err(sql)
+    }
+
+    pub fn first_mail(&self, session: &str) -> io::Result<Option<Mail>> {
+        let mut stmt = self
+            .db
+            .prepare_cached(
+                "SELECT mail_json FROM item_mail WHERE session=?1 ORDER BY rowid LIMIT 1",
+            )
+            .map_err(sql)?;
+        let mut rows = stmt.query([session]).map_err(sql)?;
+        let Some(row) = rows.next().map_err(sql)? else {
+            return Ok(None);
+        };
+        let text = row
+            .get_ref(0)
+            .map_err(sql)?
+            .as_str()
+            .map_err(|_| invalid("invalid item mail"))?;
+        Ok(Some(serde_json::from_str(text)?))
+    }
+
+    #[cfg(test)]
     pub fn pending_mail(&self) -> io::Result<Vec<(String, Mail)>> {
         let mut stmt = self
             .db

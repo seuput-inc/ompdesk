@@ -1,8 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { JUDGE_ASSIST_NEEDS_USER } from "../../resources/gui-bridge/modes/judge-assist-contracts";
-import type { Bot } from "../shared/bots";
 import type { IpcNotifyPayload } from "../shared/ipc-types";
-import { setBotsState } from "./bots";
+import { setBotQuietFolders } from "./bots";
 import { type AdmitNotification, type BridgeAsk, createNotifyHandler, type NotifyCaller } from "./notify-triage";
 import { prepareShellPolicyFixture, type ShellPolicyFixture, shellPolicyFixture } from "./shell-policy-test-rig";
 import type { ClientWindow } from "./web/client-window";
@@ -260,24 +259,8 @@ describe("a payload without a title", () => {
 
 describe("a bot chat's quiet turn", () => {
 	const folder = "/Users/me/.omp/bots/scout";
-	const bot: Bot = {
-		id: "b1",
-		name: "Scout",
-		folder,
-		home: null,
-		sessions: [],
-		paused: false,
-		model: null,
-		autoApprove: false,
-		reach: [],
-		staleDays: 7,
-		lookAround: null,
-		tidy: null,
-		quiet: [],
-		createdAt: "2026-11-25T00:00:00.000Z",
-	};
-	beforeEach(() => setBotsState({ bots: [bot], items: [] }));
-	afterEach(() => setBotsState({ bots: [], items: [] }));
+	beforeEach(() => setBotQuietFolders([{ folder, quiet: [] }]));
+	afterEach(() => setBotQuietFolders([]));
 
 	it("notifies nothing, not even a dedupe slot", async () => {
 		const world = build();
@@ -300,7 +283,7 @@ describe("a bot chat's quiet turn", () => {
 	});
 
 	it("notifies nothing of a kind the owner turned off for that bot", async () => {
-		setBotsState({ bots: [{ ...bot, quiet: ["done"] }], items: [] });
+		setBotQuietFolders([{ folder, quiet: ["done"] }]);
 		const world = build(async () => ({ needsUser: false }));
 		world.turns.set("t1", { cwd: folder, reply: "Merged the fix." });
 		world.turns.set("t2", { cwd: "/Users/me/code/app", reply: "Merged the fix." });

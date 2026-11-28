@@ -11,7 +11,7 @@ import type { RemoteState, RemoteTailnetPhase, TailnetComputer } from "../../sha
 import type { TailnetNode, TailscaleStatus } from "../tailscale/status";
 import type { TailnetPeer } from "../tailscale/whois";
 import { WebBlocks } from "../web/blocks-store";
-import { RemoteDevices } from "./devices";
+import { RemoteDevices, type RemoteDevicesDeps } from "./devices";
 import type { LocalHostServices } from "./host-services";
 import { loadIdentity } from "./identity";
 import { freePortRun } from "./test-ports";
@@ -60,6 +60,7 @@ function statusOf(tailnet: FakeTailnet): TailscaleStatus | null {
 /** What the host computer of a rig runs: its own services (default: fakes) and where its `remote-link` lines go. */
 export interface HostOptions {
 	services?: LocalHostServices;
+	bots?: RemoteDevicesDeps["bots"];
 	logLink?: (event: string, details: Record<string, unknown>) => void;
 	orderStore?: { get(key: string): unknown; set(key: string, value: unknown): void };
 }
@@ -137,6 +138,7 @@ export class DevicesRig {
 				else broadcasts.push({ channel, data });
 			},
 			services: options.services ?? (services as unknown as LocalHostServices),
+			bots: options.bots,
 			logLink: options.logLink,
 			machineInfo: () => ({ platform: "darwin", ompVersion: "18.8.0", home: "/home/u", sep: "/" }),
 			offlineMessage: () => "offline",
@@ -179,7 +181,7 @@ export class DevicesRig {
 	}
 
 	/** A host B sharing itself and a device A that sees it as node `nSTUDIO`; B sees A as node `nLAPTOP`. */
-	async pair(host: HostOptions = {}): Promise<{ a: Computer; b: Computer }> {
+	async pair(host: HostOptions = {}, viewer: HostOptions = {}): Promise<{ a: Computer; b: Computer }> {
 		await this.pickPort();
 		const b = await this.computer(
 			"Studio",
@@ -189,7 +191,7 @@ export class DevicesRig {
 		b.devices.start();
 		await b.devices.setHostEnabled(true);
 		await until(b, state => state.host.port !== null);
-		const a = await this.computer("Laptop", fakeTailnet({ peers: [studioNode()] }));
+		const a = await this.computer("Laptop", fakeTailnet({ peers: [studioNode()] }), viewer);
 		a.devices.start();
 		return { a, b };
 	}

@@ -170,7 +170,7 @@ export async function createBot(draft: NewBotDraft): Promise<Bot> {
 				? importKickoff(draft.importFrom)
 				: null;
 	const where = draft.device ? { device: draft.device } : {};
-	await store.command({
+	const reply = await store.command({
 		action: "create",
 		name,
 		...where,
@@ -186,7 +186,12 @@ export async function createBot(draft: NewBotDraft): Promise<Bot> {
 				: {}),
 		...(kickoff ? { kickoff } : {}),
 	});
-	const bot = useBotsStore.getState().state.bots.find(known => known.name === name && known.device === draft.device);
+	const made = draft.device
+		? reply.remote?.find(host => host.device === draft.device)?.bots.find(bot => bot.name === name)
+		: reply.bots?.find(bot => bot.name === name);
+	const bot =
+		useBotsStore.getState().state.bots.find(known => known.name === name && known.device === draft.device) ??
+		(made && draft.device ? { ...made, device: draft.device } : made);
 	if (!bot) throw new Error(translate("bots.new.failed"));
 	noteLaunch(bot.id, { tabId: null, start: "running" });
 	let tabId: string | null;

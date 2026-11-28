@@ -6,7 +6,7 @@
 import { Inbox, Laptop } from "lucide-react";
 import { type Bot, itemsNeedingYou } from "../../../shared/bots";
 import { useT } from "../../lib/i18n";
-import { useBotsStore } from "../../stores/bots";
+import { listedBotItems, useBotsStore } from "../../stores/bots";
 import { BotAvatar } from "./BotAvatar";
 import { botLineText } from "./BotLineText";
 import type { BotFacts } from "./bot-view";
@@ -15,12 +15,8 @@ const SHOWN_ASKS = 3;
 
 export function BotHoverCard({ bot, facts }: { bot: Bot; facts: BotFacts }) {
 	const t = useT();
-	const items = useBotsStore(s => s.state.items);
-	const asks = itemsNeedingYou(
-		items.filter(item => item.bot === bot.id),
-		null,
-		Date.now(),
-	);
+	const listed = useBotsStore(s => s.state);
+	const asks = itemsNeedingYou(listedBotItems(listed, bot.device, bot.id), null, Date.now());
 	const state = bot.paused ? t("bots.row.paused") : facts.working ? t("bots.hover.working") : t("bots.row.idle");
 	return (
 		<div className="flex w-72 flex-col gap-2 text-sc-sm" data-bot-hover={bot.id}>

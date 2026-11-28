@@ -50,6 +50,13 @@ describe("groupItems", () => {
 });
 
 describe("isUnseen", () => {
+	it("uses the summary's non-owner watermark independently of its most recent event", () => {
+		const { events: _events, links: _links, ...fields } = item(2);
+		const row = { ...fields, askedAt: null, sessionLinks: [], touched: NOW, othersLast: 4, lastEvent: 30 };
+		expect(isUnseen(row, 4)).toBe(false);
+		expect(isUnseen(row, 3)).toBe(true);
+	});
+
 	it("counts only what someone but the owner did after the mark", () => {
 		expect(isUnseen(item(1, { events: [event(9, "owner")] }), 5)).toBe(false);
 		expect(isUnseen(item(1, { events: [event(4, "bot"), event(9, "owner")] }), 5)).toBe(false);

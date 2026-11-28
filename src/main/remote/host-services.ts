@@ -57,7 +57,12 @@ import {
 	type RemoteOpenedTab,
 	type SessionInfo,
 } from "../../shared/ipc-types";
-import { ItemsV2RequestSchema, parseItemsV2Reply } from "../../shared/items-v2";
+import {
+	ItemChangeRequestSchema,
+	ItemChangeResultSchema,
+	ItemsV2RequestSchema,
+	parseItemsV2Reply,
+} from "../../shared/items-v2";
 import { ModelSetupRequestSchema, ModelSetupResearchPickSchema } from "../../shared/model-setup";
 import type { OmpUpdateState } from "../../shared/omp-update";
 import { MAX_RPC_COMMAND_TIMEOUT_MS } from "../../shared/rpc-client";
@@ -194,6 +199,7 @@ import {
 	HostFsReadRangeParams,
 	HostUploadParams,
 	HostUploadPartParams,
+	ITEMS_CHANGE_METHOD,
 	ITEMS_V2_CHANGED,
 	ITEMS_V2_METHOD,
 	KEPT_TABS_METHOD,
@@ -793,7 +799,10 @@ export class LocalHostServices implements HostServices {
 	/** Live connections that have talked to us; `sessions.changed` goes to each. */
 	readonly #conns = new Set<HostConnection>();
 	readonly #itemsReaders = new Set<HostConnection>();
-	readonly #legacyBotReaders = new WeakSet<HostConnection>();
+	readonly #legacyBotReaders = new Set<HostConnection>();
+	readonly #legacyListeners = new Set<(active: boolean) => void | Promise<void>>();
+	#legacyAudience?: boolean;
+	#legacySync = Promise.resolve();
 	#itemsRevision = 0;
 	/** Each connected device's latest connection, for events meant for one device. */
 	readonly #connOf = new Map<string, HostConnection>();
@@ -1424,11 +1433,12 @@ export class LocalHostServices implements HostServices {
 		requestId?: string,
 	): Promise<unknown> {
 		if (!this.#conns.has(conn)) {
+			this.#conns.add(conn);
 			const counts = this.#deps.localTabs.modelWait?.snapshot.local;
 			if (counts && Object.keys(counts).length > 0) emitSafely(conn, MODEL_WAIT_EVENT, { counts });
 			this.#connOf.set(peer.deviceId, conn);
 		}
-		this.#conns.add(conn);
+		this.#connOf.set(peer.deviceId, conn);
 		switch (method) {
 			case "host.item.fence":
 				await this.#itemReceipt(peer, conn, "capability", { op: "ready" });
@@ -1978,7 +1988,12 @@ export class LocalHostServices implements HostServices {
 			// A device lists this computer's bots (orca-bots-remote): the copy it keeps, at its version.
 			case "host.bots.list":
 				this.#legacyBotReaders.add(conn);
+				await this.#syncLegacyAudience();
 				return this.#bots().share();
+			case "host.bots.unlist":
+				this.#legacyBotReaders.delete(conn);
+				await this.#syncLegacyAudience();
+				return null;
 			case ITEMS_V2_METHOD: {
 				const request = parse(ItemsV2RequestSchema, method, params);
 				const bots = this.#bots();
@@ -1994,8 +2009,11 @@ export class LocalHostServices implements HostServices {
 			// A device's change to one of this computer's bots: made here, once (a resent answer carries its request id).
 			// An answer to an item question, and a device group's question to a bot here, start a turn of the bot here:
 			// one of the device's model requests.
+			case ITEMS_CHANGE_METHOD:
 			case "host.bots.command": {
-				const { request } = parse(BotsCommandParams, method, params);
+				const compact = method === ITEMS_CHANGE_METHOD ? parse(ItemChangeRequestSchema, method, params) : undefined;
+				const request: z.infer<typeof BotsCommandParams>["request"] =
+					compact ?? parse(BotsCommandParams, method, params).request;
 				const bots = this.#bots();
 				const createKey = request.action === "create" ? randomUUID() : undefined;
 				let receipt: Promise<boolean> | undefined;
@@ -2003,6 +2021,10 @@ export class LocalHostServices implements HostServices {
 					? () => (receipt ??= bots.created(peer.deviceId, createKey).catch(() => true))
 					: undefined;
 				const change = async () => {
+					if (compact) {
+						if (!bots.itemsChange) throw new Error("Item changes are unavailable");
+						return ItemChangeResultSchema.parse(await bots.itemsChange(compact));
+					}
 					try {
 						return await bots.from(request, peer.deviceId, peer.name, createKey);
 					} catch (error) {
@@ -2099,6 +2121,7 @@ export class LocalHostServices implements HostServices {
 		for (const check of this.#itemChecks.values()) if (check.conn === conn) check.answer(false);
 		this.#itemsReaders.delete(conn);
 		this.#legacyBotReaders.delete(conn);
+		void this.#syncLegacyAudience();
 		if (this.#connOf.get(peer.deviceId) === conn) this.#connOf.delete(peer.deviceId);
 		if (this.#connOf.get(peer.deviceId) === undefined) this.#deps.presence?.forget(peer.deviceId);
 		// Nobody is left to read the result.
@@ -2217,16 +2240,37 @@ export class LocalHostServices implements HostServices {
 		for (const conn of this.#conns) emitSafely(conn, PROJECTS_EVENT, state);
 	}
 
-	/** A v2-only connection never needs a v1 body. Unnegotiated and mixed readers retain the old stream. */
-	botsChanged(change: SharedBotsDelta): void {
-		for (const conn of this.#conns)
-			if (!this.#itemsReaders.has(conn) || this.#legacyBotReaders.has(conn)) emitSafely(conn, BOTS_EVENT, change);
-		if (change.set.bots.length || change.set.items.length || change.remove.items.length) this.observeBotHomes();
+	onLegacyBotsAudience(listener: (active: boolean) => void | Promise<void>): () => void {
+		this.#legacyListeners.add(listener);
+		void this.#syncLegacyAudience(true);
+		return () => this.#legacyListeners.delete(listener);
 	}
 
-	itemsV2Changed(): void {
+	#syncLegacyAudience(force = false): Promise<void> {
+		const active = this.#legacyBotReaders.size > 0;
+		if (!force && this.#legacyAudience === active) return this.#legacySync;
+		this.#legacyAudience = active;
+		const next = this.#legacySync
+			.catch(() => {})
+			.then(async () => {
+				await Promise.all(Array.from(this.#legacyListeners, listener => listener(active)));
+			});
+		this.#legacySync = next;
+		void next.catch(() => {
+			if (this.#legacySync === next) this.#legacyAudience = undefined;
+		});
+		return next;
+	}
+
+	/** Send histories only to devices that explicitly requested the v1 list. */
+	botsChanged(change: SharedBotsDelta): void {
+		for (const conn of this.#legacyBotReaders) emitSafely(conn, BOTS_EVENT, change);
+	}
+
+	itemsV2Changed(botHomes = false): void {
 		this.#itemsRevision++;
 		for (const conn of this.#itemsReaders) emitSafely(conn, ITEMS_V2_CHANGED, { protocol: 2 });
+		if (botHomes) this.observeBotHomes();
 	}
 
 	observeBotHomes(device?: string): void {
@@ -2480,6 +2524,8 @@ export class LocalHostServices implements HostServices {
 		this.#ports.dispose();
 		this.#conns.clear();
 		this.#itemsReaders.clear();
+		this.#legacyBotReaders.clear();
+		void this.#syncLegacyAudience();
 	}
 
 	/** The tab's browser relay ends here (its device is gone): forget it and tell the tab's omp to give its browser back. */
@@ -2709,7 +2755,9 @@ export class LocalHostServices implements HostServices {
 		const key = this.#key(peer.deviceId, params.rtab);
 		const managed = ItemTab.safeParse(params.rtab).success;
 		if (managed) {
-			this.#opening.set(key, (this.#opening.get(key) ?? 0) + 1);
+			const opens = this.#opening.get(key) ?? new Set<{ sessionPath?: string }>();
+			opens.add(params);
+			this.#opening.set(key, opens);
 			try {
 				const row = await this.#itemReceipt(peer, conn, params.rtab, { op: "read" });
 				const bound = z.object({ session: z.string().nullable() }).parse(row).session;
@@ -2717,9 +2765,8 @@ export class LocalHostServices implements HostServices {
 					throw codedError("remote_blocked", "This is not the accepted worker session.");
 				if (this.#closedWhileOpening.has(key)) throw codedError("unknown_tab", "The device closed this tab.");
 			} finally {
-				const remaining = (this.#opening.get(key) ?? 1) - 1;
-				if (remaining > 0) this.#opening.set(key, remaining);
-				else {
+				opens.delete(params);
+				if (opens.size === 0) {
 					this.#opening.delete(key);
 					this.#closedWhileOpening.delete(key);
 				}

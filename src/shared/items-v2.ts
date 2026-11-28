@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { LOOK_EVERY } from "./bot-limits";
-import { BOT_QUIET_KINDS, ITEM_STATUSES } from "./bots";
+import { BOT_QUIET_KINDS, type BotsState, ITEM_STATUSES, type Item, type RemoteBots } from "./bots";
 import { activityAt, othersLast } from "./item-activity";
 import { APPROVAL_MODES } from "./tool-approval";
 
@@ -15,10 +15,54 @@ const key = text
 	.max(256)
 	.refine(s => s === s.trim() && !/\p{Cc}/u.test(s));
 export const ItemsV2DeviceSchema = key.nullable();
+const requestId = key.refine(s => s.length <= 200);
+const batch = { action: z.literal("itemBatch"), ids: z.array(key).min(1), requestId };
+export const ItemChangeRequestSchema = z.union([
+	z.strictObject({ action: z.literal("itemsOpened"), id: key }),
+	z.strictObject({ ...batch, status: z.enum(ITEM_STATUSES), wait: optionalText, note: optionalText }),
+	z.strictObject({ ...batch, snoozeUntil: text.nullable() }),
+	z
+		.strictObject({
+			action: z.literal("item"),
+			id: key.optional(),
+			ids: z.array(key).min(1).optional(),
+			requestId: requestId.optional(),
+			status: z.enum(ITEM_STATUSES).optional(),
+			wait: optionalText,
+			note: optionalText,
+			comment: optionalText,
+			snoozeUntil: text.nullable().optional(),
+			answer: z
+				.strictObject({ text: optionalText, choice: nat.optional(), question: positive.optional() })
+				.optional(),
+		})
+		.refine(r => (r.id === undefined) !== (r.ids === undefined)),
+]);
+export const ItemChangeResultSchema = z.strictObject({
+	refused: z.literal("question_changed").optional(),
+	itemBatchResult: z
+		.strictObject({
+			ids: texts,
+			changed: z.array(z.strictObject({ id: key, version: nat })),
+			refused: text.nullable(),
+		})
+		.optional(),
+});
+export const ITEMS_LINKED_MAX = 128;
+const sessionKey = text
+	.min(1)
+	.max(32768)
+	.refine(s => s === s.trim() && !/\p{Cc}/u.test(s));
 const protocol = z.literal(2);
 const cursor = z.strictObject({ at: z.int(), number });
 export const ItemsV2RequestSchema = z.discriminatedUnion("action", [
 	z.strictObject({ protocol, action: z.literal("itemsFeed"), since: key.optional() }),
+	z.strictObject({
+		protocol,
+		action: z.literal("itemsLinked"),
+		bot: key,
+		sessions: z.array(sessionKey).min(1).max(ITEMS_LINKED_MAX),
+	}),
 	z.strictObject({
 		protocol,
 		action: z.literal("itemsPage"),
@@ -41,7 +85,7 @@ export const ItemsV2RequestSchema = z.discriminatedUnion("action", [
 		action: z.literal("itemReceipt"),
 		bot: key,
 		id: key,
-		requestId: key.refine(s => s.length <= 200),
+		requestId,
 		question: positive.optional(),
 	}),
 ]);
@@ -123,10 +167,16 @@ const summary = z.strictObject({
 	touched: z.number(),
 	askedAt: z.int().nullable(),
 	sessionLinks: texts,
+	live: z.literal(true).optional(),
 	lastEvent: nat,
 	othersLast: nat,
 });
 export type ItemSummary = z.infer<typeof summary>;
+export type ListedItem = (ItemSummary | Item) & { device?: string };
+export type ListedBotsState = Omit<BotsState, "items" | "remote"> & {
+	items: ListedItem[];
+	remote?: (Omit<RemoteBots, "items"> & { items: ListedItem[] })[];
+};
 const isClosed = (row: { status: string }) => row.status === "done" || row.status === "canceled";
 const open = summary.refine(r => !isClosed(r));
 const counts = z.record(key, z.strictObject({ openCount: nat, closedTotal: nat, archiveRevision: nat }));
@@ -147,6 +197,8 @@ const bot = z.object({
 	name: text,
 	folder: text,
 	home: text.nullable(),
+	chatHome: optionalText,
+	legacyPeerRequest: optionalText,
 	sessions: texts,
 	paused: z.boolean(),
 	model: text.nullable(),
@@ -216,6 +268,7 @@ const seed = z.strictObject({
 	open: z.array(open),
 	counts,
 	bots: z.array(bot),
+	remote: z.array(z.object({ device: key, name: text, online: z.boolean() })).optional(),
 	rooms: z.array(room).optional(),
 	looks: z.array(looks).optional(),
 });
@@ -230,6 +283,10 @@ const delta = z.strictObject({
 });
 const reply = {
 	itemsFeed: z.discriminatedUnion("kind", [seed, delta]),
+	itemsLinked: z.strictObject({
+		...meta,
+		links: z.array(z.strictObject({ session: sessionKey, number, title: text })),
+	}),
 	itemsPage: z.strictObject({
 		...meta,
 		closed: z.array(summary.refine(isClosed)).max(50),
@@ -255,6 +312,11 @@ export type ItemsV2Reply<R extends ItemsV2Request = ItemsV2Request> = Replies[R[
 
 export function parseItemsV2Reply<R extends ItemsV2Request>(request: R, raw: unknown): ItemsV2Reply<R> {
 	const result = reply[request.action].parse(raw);
+	if (
+		"links" in result &&
+		(request.action !== "itemsLinked" || result.links.some(l => !request.sessions.includes(l.session)))
+	)
+		throw new Error("Linked item scope mismatch");
 	if ("kind" in result && result.kind === "delta" && (request.action !== "itemsFeed" || result.base !== request.since))
 		throw new Error("Item feed base mismatch");
 	if ("closed" in result && (request.action !== "itemsPage" || result.closed.some(r => r.bot !== request.id)))
@@ -273,7 +335,9 @@ const legacyItem = details.extend({ events: z.array(event) });
 const legacyShare = z.object({
 	version: key,
 	state: z.object({
-		bots: z.array(bot.omit({ workers: true, launch: true, skillProjects: true })),
+		bots: z.array(
+			bot.omit({ workers: true, launch: true, skillProjects: true, legacyPeerRequest: true, chatHome: true }),
+		),
 		items: z.array(legacyItem),
 	}),
 });
@@ -297,6 +361,9 @@ function summarize({
 		touched: row.touched ?? (Date.parse(row.updatedAt) || 0),
 		askedAt: Number.isFinite(at) ? at : null,
 		sessionLinks: links.filter(l => l.kind === "session").map(l => l.ref),
+		...(links.some(l => l.kind === "session" && (l.state === "working" || l.state === "waiting"))
+			? { live: true as const }
+			: {}),
 		lastEvent,
 		othersLast: othersLast(events),
 	};
@@ -335,6 +402,19 @@ export function projectLegacyItemsV2<R extends ItemsV2Request>(r: R, raw: unknow
 			}
 			value = { ...flags, kind: "seed", version, open, counts, bots };
 		}
+	} else if (r.action === "itemsLinked") {
+		if (!bots.some(b => b.id === r.bot)) throw new Error("Bot not found");
+		const sessions = new Set(r.sessions);
+		value = {
+			...flags,
+			links: items
+				.filter(i => i.bot === r.bot)
+				.flatMap(i =>
+					i.links
+						.filter(l => l.kind === "session" && sessions.has(l.ref))
+						.map(l => ({ session: l.ref, number: i.number, title: i.title })),
+				),
+		};
 	} else if (r.action === "itemsPage") {
 		if (!bots.some(b => b.id === r.id)) throw new Error("Bot not found");
 		const filtered = items.filter(i => i.bot === r.id && isClosed(i)).map(summarize);

@@ -609,6 +609,8 @@ describe("paired item reads", () => {
 		const modern = new FakeConnection(peer("modern"));
 		const mixed = new FakeConnection(peer("mixed"));
 		const old = new FakeConnection(peer("old"));
+		const unnegotiated = new FakeConnection(peer("unnegotiated"));
+		await services.call(unnegotiated.peer, "host.bots.home", { name: "Ada" }, unnegotiated);
 		await services.call(mixed.peer, "host.bots.list", {}, mixed);
 		await services.call(old.peer, "host.bots.list", {}, old);
 		for (const conn of [modern, mixed]) await services.call(conn.peer, method, feed, conn);
@@ -623,8 +625,52 @@ describe("paired item reads", () => {
 			[old, ["host.bots.changed"]],
 			[modern, [event]],
 			[mixed, ["host.bots.changed", event]],
+			[unnegotiated, []],
 		] as const)
 			expect(conn.events.map(e => e.event).filter(name => name.startsWith("host.bots."))).toEqual(expected);
+	});
+
+	it("installs legacy demand before the first list, keeps mixed demand, and releases the last reader", async () => {
+		const bots = { ...fakeBots(), itemsV2: async () => seed };
+		const { services } = setup(60_000, { bots: () => bots });
+		const installed = Promise.withResolvers<void>();
+		const changes: boolean[] = [];
+		services.onLegacyBotsAudience(active => {
+			changes.push(active);
+			if (active) return installed.promise;
+		});
+		const a = new FakeConnection(peer("a"));
+		const b = new FakeConnection(peer("b"));
+		const list = services.call(a.peer, "host.bots.list", {}, a);
+		await vi.waitFor(() => expect(changes).toEqual([false, true]));
+		expect(bots.share).not.toHaveBeenCalled();
+		installed.resolve();
+		await list;
+		await services.call(a.peer, method, feed, a);
+		await services.call(b.peer, "host.bots.list", {}, b);
+		services.disconnected(b.peer, b);
+		expect(changes).toEqual([false, true]);
+		await services.call(a.peer, "host.bots.unlist", {}, a);
+		expect(changes).toEqual([false, true, false]);
+	});
+
+	it("rejects nested routing; a compact answer and a v1 answer use the same peer quota", async () => {
+		const itemsChange = vi.fn().mockResolvedValue({});
+		const bots = { ...fakeBots(), itemsChange };
+		const { services } = setup(60_000, { bots: () => bots });
+		const x = new FakeConnection(peer("device-x"));
+		const { quota } = quotaOver({ ...x.peer, limits: { requestsPerDay: 1 } });
+		services.attachQuota(quota);
+		const change = (request: object) => services.call(x.peer, "host.bots.itemsChange", request, x);
+		const answer = { action: "item", id: "i", requestId: "r", answer: { text: "go", question: 1 } };
+		await expect(change({ ...answer, device: "elsewhere" })).rejects.toThrow();
+		await expect(change({ action: "update", id: "b", reach: ["all"] })).rejects.toThrow();
+		expect(itemsChange).not.toHaveBeenCalled();
+		expect(await change(answer)).toEqual({});
+		const old = services.call(x.peer, "host.bots.command", { request: { ...answer, requestId: "r2" } }, x);
+		expect(ipcErrorCode(await old.catch(error => error))).toBe("remote_limit_reached");
+		expect(bots.from).not.toHaveBeenCalled();
+		expect(await change({ action: "item", id: "i", comment: "note" })).toEqual({});
 	});
 
 	it("coalesces changes during the first feed without emitting before success", async () => {

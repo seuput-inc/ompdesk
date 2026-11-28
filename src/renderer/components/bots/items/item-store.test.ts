@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { Bot, BotsRequest, BotsState, Item } from "../../../../shared/bots";
+import type { Bot, BotsRequest, BotsState, Item, ItemChangeRequest, ItemChangeResult } from "../../../../shared/bots";
 
 const date = "2026-11-28T00:00:00.000Z";
 const bot: Bot = {
@@ -33,7 +33,7 @@ const item: Item = {
 	version: 1,
 };
 const state: BotsState = { bots: [bot], items: [item] };
-const command = vi.fn<(request: BotsRequest) => Promise<BotsState>>();
+const command = vi.fn<(request: BotsRequest) => Promise<ItemChangeResult>>();
 const stored = new Map<string, string>();
 const storage = {
 	get length() {
@@ -50,7 +50,15 @@ async function openPage(current: BotsState) {
 	vi.resetModules();
 	const { useBotsStore } = await import("../../../stores/bots");
 	const { useToastStore } = await import("../../../stores/toast");
-	useBotsStore.setState({ state: current, command });
+	useBotsStore.setState({ state: current });
+	vi.stubGlobal("window", {
+		omp: {
+			bots: {
+				itemChange: (device: string | null, request: ItemChangeRequest) => command({ ...request, device }),
+				itemsV2: async () => ({ protocol: 2, outcome: "unknown" }),
+			},
+		},
+	});
 	return { ...(await import("./item-store")), notices: () => useToastStore.getState().toasts };
 }
 
@@ -59,9 +67,7 @@ beforeEach(() => {
 	command
 		.mockReset()
 		.mockImplementation(async request =>
-			request.action === "itemBatch"
-				? { ...state, itemBatchResult: { ids: request.ids, changed: [], refused: null } }
-				: state,
+			request.action === "itemBatch" ? { itemBatchResult: { ids: request.ids, changed: [], refused: null } } : {},
 		);
 	vi.stubGlobal("localStorage", storage);
 });
@@ -71,14 +77,15 @@ afterEach(() => {
 
 it("retries the original wake time on the original host after losing a reply and restarting", async () => {
 	const remote = { ...item, device: "desk" };
-	const first = await openPage({ bots: [{ ...bot, device: "desk" }], items: [remote] });
+	const host = { device: "desk", name: "Desk", online: true, bots: [bot], items: [item] };
+	const first = await openPage({ bots: [{ ...bot, device: "desk" }], items: [remote], remote: [host] });
 	command.mockRejectedValueOnce(new Error("Reply lost"));
 	await first.snoozeItems([remote], Date.parse(date), "snooze-1");
 	const request = { action: "itemBatch", ids: ["i"], device: "desk", requestId: "snooze-1", snoozeUntil: date };
 	expect(command).toHaveBeenCalledWith(request);
 
 	// The same item id now also exists here; the receipt must not be re-routed by that id.
-	const restarted = await openPage(state);
+	const restarted = await openPage({ ...state, remote: [host] });
 	restarted.offerItemBatchRetries();
 	expect(command).toHaveBeenCalledTimes(1);
 	const retry = restarted.notices().at(-1)?.action;
@@ -99,7 +106,6 @@ it("keeps a move's id on explicit retry even after a downgrade, and finishes on 
 	const oldState = { ...state, bots: [{ ...bot, itemReceipts: undefined }] };
 	const restarted = await openPage(oldState);
 	command.mockResolvedValueOnce({
-		...state,
 		itemBatchResult: { ids: ["i"], changed: [], refused: "question_changed" },
 	});
 	restarted.offerItemBatchRetries();
@@ -195,8 +201,7 @@ it("treats a new identical gesture after intervening edits as new without replac
 it("keeps a move pending until the host confirms the original ids, even when its latest snapshot already looks done", async () => {
 	const page = await openPage(state);
 	const latest = { ...state, items: [{ ...item, status: "done" as const }] };
-	command.mockResolvedValueOnce(latest).mockResolvedValueOnce({
-		...latest,
+	command.mockResolvedValueOnce({}).mockResolvedValueOnce({
 		itemBatchResult: { ids: ["another"], changed: [], refused: null },
 	});
 	await page.moveItems([item], "done", "confirm-this");
@@ -209,4 +214,25 @@ it("keeps a move pending until the host confirms the original ids, even when its
 	const again = await openPage(latest);
 	again.offerItemBatchRetries();
 	expect(again.notices()).toHaveLength(0);
+});
+
+it("shows and retries a lost comment on the originating item only when host ids collide", async () => {
+	const remote = { ...item, device: "desk" };
+	const page = await openPage({
+		...state,
+		items: [item, remote],
+		remote: [{ device: "desk", name: "Desk", online: true, bots: [bot], items: [item] }],
+	});
+	command.mockRejectedValueOnce(new Error("Disconnected"));
+	page.sendComment(remote, "Only on Desk");
+	const key = page.itemUiKey(remote);
+	await vi.waitFor(() => expect(page.useItemsUi.getState().pending[key]?.[0]?.failed).toBe(true));
+	expect(page.useItemsUi.getState().pending[page.itemUiKey(item)]).toBeUndefined();
+	const requestId = page.useItemsUi.getState().pending[key][0].requestId;
+	page.retryComment(item, requestId);
+	expect(command).toHaveBeenCalledTimes(1);
+	page.retryComment(remote, requestId);
+	await vi.waitFor(() => expect(page.useItemsUi.getState().pending[key]).toEqual([]));
+	const request = { action: "item", device: "desk", id: "i", comment: "Only on Desk", requestId };
+	expect(command.mock.calls).toEqual([[request], [request]]);
 });

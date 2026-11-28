@@ -13,10 +13,12 @@
  */
 import type { Item, ItemDecision, ItemEvent, ItemQuestion, ItemStatus } from "../../../../shared/bots";
 import { activityAt, othersLast } from "../../../../shared/item-activity";
+import type { ListedItem } from "../../../../shared/items-v2";
+import { botPageKey } from "../bot-page";
 
 export const ITEM_GROUPS = ["needs_you", "working", "waiting", "planned", "snoozed", "stale", "closed"] as const;
 export type ItemGroupId = (typeof ITEM_GROUPS)[number];
-export type ItemGroups = Record<ItemGroupId, Item[]>;
+export type ItemGroups = Record<ItemGroupId, ListedItem[]>;
 /** Groups that start folded; the rest start open. */
 export const GROUP_FOLDED: Record<ItemGroupId, boolean> = {
 	needs_you: false,
@@ -49,19 +51,23 @@ export function isSnoozed(item: Pick<Item, "status" | "snoozedUntil">, now: numb
 	return !isClosed(item.status) && item.snoozedUntil !== undefined && Date.parse(item.snoozedUntil) > now;
 }
 
-export function itemGroupOf(item: Item, now: number): ItemGroupId {
+export function itemGroupOf(item: ListedItem, now: number): ItemGroupId {
 	if (item.status === "done" || item.status === "canceled") return "closed";
 	if (isSnoozed(item, now)) return "snoozed";
 	return item.stale ? "stale" : item.status;
 }
 
 /** Changed by anyone but the owner since the owner last opened its bot's Items tab. */
-export function isUnseen(item: Pick<Item, "events">, seen: number): boolean {
-	return othersLast(item.events) > seen;
+export function isUnseen(item: ListedItem, seen: number): boolean {
+	return ("events" in item ? othersLast(item.events) : item.othersLast) > seen;
 }
 
 /** Several bots' items in one set of groups, each marked by its own bot's seen mark (`seenOf`). */
-export function groupItems(items: readonly Item[], seenOf: (item: Item) => number, now: number): ItemGroups {
+export function groupItems(
+	items: readonly ListedItem[],
+	seenOf: (item: ListedItem) => number,
+	now: number,
+): ItemGroups {
 	const groups: ItemGroups = {
 		needs_you: [],
 		working: [],
@@ -72,7 +78,7 @@ export function groupItems(items: readonly Item[], seenOf: (item: Item) => numbe
 		closed: [],
 	};
 	for (const item of items) groups[itemGroupOf(item, now)].push(item);
-	const unseen = (item: Item) => Number(isUnseen(item, seenOf(item)));
+	const unseen = (item: ListedItem) => Number(isUnseen(item, seenOf(item)));
 	for (const id of ITEM_GROUPS)
 		groups[id].sort(
 			id === "snoozed"
@@ -93,10 +99,11 @@ export function filterOn(filter: ItemFilter): boolean {
 	return filter.needsYou || filter.bots !== null;
 }
 
-export function filterItems(items: readonly Item[], filter: ItemFilter): Item[] {
+export function filterItems(items: readonly ListedItem[], filter: ItemFilter): ListedItem[] {
 	return items.filter(
 		item =>
-			(filter.bots === null || filter.bots.includes(item.bot)) && (!filter.needsYou || item.status === "needs_you"),
+			(filter.bots === null || filter.bots.includes(botPageKey(item.bot, item.device))) &&
+			(!filter.needsYou || item.status === "needs_you"),
 	);
 }
 

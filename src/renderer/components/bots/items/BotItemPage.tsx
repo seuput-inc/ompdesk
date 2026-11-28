@@ -41,8 +41,9 @@ import {
 	Send,
 	X,
 } from "lucide-react";
-import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Bot, Item, ItemEvent, ItemLink, ItemQuestion } from "../../../../shared/bots";
+import type { ListedItem } from "../../../../shared/items-v2";
 import { cx, formatClock, formatTimeAgo } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { isImeKeyEvent } from "../../../lib/ime";
@@ -78,10 +79,12 @@ import {
 	PICKER_STATUSES,
 	questionLine,
 } from "./item-model";
+import { itemPlace } from "./item-place";
 import {
 	discardComment,
 	heldAnswers,
 	holdAnswers,
+	itemUiKey,
 	type PendingComment,
 	retryComment,
 	sendComment,
@@ -107,23 +110,31 @@ function itemKey(event: KeyboardEvent): "back" | "previous" | "next" | null {
 }
 
 /** Opens a session an item links: the tab holding it, else a tab of its own. */
-function openLinkedSession(path: string): void {
+function openLinkedSession(path: string, device?: string): void {
 	const tabs = useTabsStore.getState();
-	const held = tabs.tabs.find(tab => (tab.sessionPath === path || tab.id === path) && !tab.device);
+	const held = tabs.tabs.find(tab => (tab.sessionPath === path || tab.id === path) && tab.device === device);
 	useUiStore.getState().closeDestination();
 	if (held) void tabs.switchTab(held.id);
-	else void tabs.openTab({ sessionPath: path }).catch(() => {});
+	else void tabs.openTab({ sessionPath: path, device }).catch(() => {});
 }
 
 export function BotItemPage({
 	bot,
 	item,
+	asks,
+	earlier,
+	paging,
+	failure,
 	order,
 	onBack,
 	onStep,
 }: {
 	bot: Bot;
-	item: Item;
+	item: ListedItem;
+	asks?: ReadonlyMap<number, ItemEvent>;
+	earlier?: () => void;
+	paging?: boolean;
+	failure?: ReactNode;
 	/** The list's order, for previous and next. */
 	order: readonly string[];
 	onBack: () => void;
@@ -135,8 +146,19 @@ export function BotItemPage({
 	const root = useRef<HTMLDivElement>(null);
 	const questionRef = useRef<HTMLDivElement>(null);
 	const boxRef = useRef<HTMLTextAreaElement>(null);
+	const viewport = useRef<HTMLDivElement>(null);
+	const anchor = useRef<{ node: Element; offset: number } | null>(null);
+	useLayoutEffect(() => {
+		const held = anchor.current;
+		const scroller = viewport.current;
+		if (paging || !held || !scroller) return;
+		if (held.node.isConnected)
+			scroller.scrollTop += held.node.getBoundingClientRect().top + scroller.scrollTop - held.offset;
+		scroller.style.overflowAnchor = "";
+		anchor.current = null;
+	});
 	const [questionPlace, setQuestionPlace] = useState<"visible" | "above" | "below">("visible");
-	const at = order.indexOf(item.id);
+	const at = order.indexOf(itemPlace(item.bot, item.device, item.id));
 	const previous = at > 0 ? order[at - 1] : undefined;
 	const next = at >= 0 ? order[at + 1] : undefined;
 	const now = Date.now();
@@ -232,7 +254,7 @@ export function BotItemPage({
 					size="sm"
 				/>
 			</div>
-			<div className="min-h-0 flex-1 overflow-y-auto">
+			<div className="min-h-0 flex-1 overflow-y-auto" ref={viewport}>
 				<div className="flex flex-col gap-3 px-4 pt-3">
 					<h2 className="text-sc-md font-semibold" title={item.title}>
 						<span className="tabular-nums text-(--sc-text-subtle)">#{item.number}</span> {item.title}
@@ -244,9 +266,10 @@ export function BotItemPage({
 								{statusName(item.status, t)}
 							</span>
 						</MenuButton>
-						{item.links.map(link => (
-							<LinkChip key={`${link.kind}:${link.ref}`} link={link} />
-						))}
+						{"events" in item &&
+							item.links.map(link => (
+								<LinkChip key={`${link.kind}:${link.ref}`} link={link} device={item.device} />
+							))}
 						{question && questionPlace !== "visible" && (
 							<Button
 								className="ml-auto"
@@ -271,12 +294,12 @@ export function BotItemPage({
 							</Button>
 						</div>
 					)}
-					{item.description && (
+					{"description" in item && item.description && (
 						<div className="text-sc-sm" data-bot-item-description>
 							<MarkdownRenderer content={item.description} />
 						</div>
 					)}
-					{!open && item.closeNote && (
+					{!open && "closeNote" in item && item.closeNote && (
 						<p className="text-sc-sm text-(--sc-text-muted)">
 							{item.status === "canceled" ? t("bots.items.view.canceledNote") : t("bots.items.view.doneNote")}{" "}
 							<span className="text-(--sc-text)">{item.closeNote}</span>
@@ -296,7 +319,7 @@ export function BotItemPage({
 								</span>
 							</LinkButton>
 						</dd>
-						{item.doneMeans && (
+						{"doneMeans" in item && item.doneMeans && (
 							<>
 								<dt className="text-(--sc-text-muted)">{t("bots.items.field.doneMeans")}</dt>
 								<dd>{item.doneMeans}</dd>
@@ -306,7 +329,26 @@ export function BotItemPage({
 				</div>
 				<section aria-label={t("bots.items.view.activity")} className="mt-4 px-4 pb-4" data-bot-item-activity>
 					<h3 className="mb-2 text-sc-xs font-medium text-(--sc-text-muted)">{t("bots.items.view.activity")}</h3>
-					<Activity bot={bot} item={item} questionRef={questionRef} t={t} />
+					{failure}
+					{earlier && (
+						<Button
+							onClick={() => {
+								const scroller = viewport.current;
+								const node = scroller?.querySelector("[data-item-events]")?.firstElementChild;
+								if (node && scroller) {
+									anchor.current = { node, offset: node.getBoundingClientRect().top + scroller.scrollTop };
+									scroller.style.overflowAnchor = "none";
+								}
+								earlier();
+							}}
+							disabled={paging}
+							size="sm"
+							variant="ghost"
+						>
+							{t("fileViewer.loadMore")}
+						</Button>
+					)}
+					<Activity bot={bot} item={item} asks={asks} hasEarlier={!!earlier} questionRef={questionRef} t={t} />
 				</section>
 			</div>
 			<CommentBox bot={bot} boxRef={boxRef} item={item} question={question} t={t} />
@@ -316,9 +358,9 @@ export function BotItemPage({
 }
 
 /** One link of the item: a session with its state, a PR with its live state, an address, a file. */
-function LinkChip({ link }: { link: ItemLink }) {
+function LinkChip({ link, device }: { link: ItemLink; device?: string }) {
 	if (link.kind === "pr") return <PrChip link={link} />;
-	if (link.kind === "session") return <SessionChip link={link} />;
+	if (link.kind === "session") return <SessionChip link={link} device={device} />;
 	if (link.kind === "url")
 		return (
 			<Button icon={<Link />} onClick={() => openExternal(link.ref)} size="sm" variant="ghost">
@@ -339,9 +381,11 @@ function LinkChip({ link }: { link: ItemLink }) {
 	return null;
 }
 
-function SessionChip({ link }: { link: ItemLink }) {
+function SessionChip({ link, device }: { link: ItemLink; device?: string }) {
 	const t = useT();
-	const tab = useTabsStore(s => s.tabs.find(entry => entry.sessionPath === link.ref || entry.id === link.ref));
+	const tab = useTabsStore(s =>
+		s.tabs.find(entry => entry.device === device && (entry.sessionPath === link.ref || entry.id === link.ref)),
+	);
 	const state = link.state ?? "done";
 	const glyph =
 		state === "working" || state === "waiting" ? (
@@ -356,7 +400,7 @@ function SessionChip({ link }: { link: ItemLink }) {
 		<Button
 			data-bot-item-link="session"
 			icon={glyph}
-			onClick={() => openLinkedSession(link.ref)}
+			onClick={() => openLinkedSession(link.ref, device)}
 			size="sm"
 			title={`${name} · ${t(`bots.items.link.state.${state}`)}`}
 			variant="ghost"
@@ -419,20 +463,25 @@ function PrChip({ link }: { link: ItemLink }) {
 function Activity({
 	bot,
 	item,
+	asks,
+	hasEarlier,
 	questionRef,
 	t,
 }: {
 	bot: Bot;
-	item: Item;
+	item: ListedItem;
+	asks?: ReadonlyMap<number, ItemEvent>;
+	hasEarlier: boolean;
 	questionRef: React.RefObject<HTMLDivElement | null>;
 	t: T;
 }) {
-	const pending = useItemsUi(s => s.pending[item.id]);
+	const pending = useItemsUi(s => s.pending[itemUiKey(item)]);
 	const question = item.status === "needs_you" ? item.question : undefined;
-	const comments = item.events.some(isCommentEvent) || (pending?.length ?? 0) > 0;
+	const events = "events" in item ? item.events : undefined;
+	const comments = events?.some(isCommentEvent) || (pending?.length ?? 0) > 0;
 	return (
-		<div className="flex flex-col gap-1.5">
-			{item.events.map(event =>
+		<div className="flex flex-col gap-1.5" data-item-events>
+			{events?.map(event =>
 				event.kind === "asked" && question && event.id === question.id ? (
 					<QuestionCard
 						bot={bot}
@@ -443,10 +492,30 @@ function Activity({
 						questionRef={questionRef}
 					/>
 				) : isCommentEvent(event) ? (
-					<CommentCard bot={bot} event={event} item={item} key={event.id} t={t} />
+					<CommentCard
+						bot={bot}
+						event={event}
+						asked={
+							event.question === undefined
+								? undefined
+								: (asks?.get(event.question) ?? events.find(e => e.kind === "asked" && e.id === event.question))
+						}
+						key={event.id}
+						t={t}
+					/>
 				) : (
-					<EventLine event={event} key={event.id} t={t} />
+					<EventLine device={item.device} event={event} key={event.id} t={t} />
 				),
+			)}
+			{question && !events?.some(e => e.kind === "asked" && e.id === question.id) && (
+				<QuestionCard
+					bot={bot}
+					item={item}
+					event={question.id === undefined ? undefined : asks?.get(question.id)}
+					key={question.id ?? "legacy-question"}
+					question={question}
+					questionRef={questionRef}
+				/>
 			)}
 			{item.status === "waiting" && item.wait && (
 				<Card data-bot-item-wait-card padding="row" surface="elevated">
@@ -463,15 +532,15 @@ function Activity({
 			{pending?.map(entry => (
 				<PendingCard entry={entry} item={item} key={entry.requestId} t={t} />
 			))}
-			{!comments && <p className="text-sc-xs text-(--sc-text-muted)">{t("bots.items.activity.noComments")}</p>}
+			{events && !hasEarlier && !comments && !question && (
+				<p className="text-sc-xs text-(--sc-text-muted)">{t("bots.items.activity.noComments")}</p>
+			)}
 		</div>
 	);
 }
 
-function CommentCard({ bot, item, event, t }: { bot: Bot; item: Item; event: ItemEvent; t: T }) {
+function CommentCard({ bot, asked, event, t }: { bot: Bot; asked?: ItemEvent; event: ItemEvent; t: T }) {
 	const who = event.actor === "owner" ? t("bots.items.activity.you") : bot.name;
-	const asked =
-		event.question === undefined ? undefined : item.events.find(e => e.id === event.question && e.kind === "asked");
 	return (
 		<Card data-bot-item-comment={event.id} padding="row">
 			<p className="flex items-center gap-1.5 text-sc-xs">
@@ -495,7 +564,7 @@ function CommentCard({ bot, item, event, t }: { bot: Bot; item: Item; event: Ite
 	);
 }
 
-function PendingCard({ item, entry, t }: { item: Item; entry: PendingComment; t: T }) {
+function PendingCard({ item, entry, t }: { item: ListedItem; entry: PendingComment; t: T }) {
 	return (
 		<Card data-bot-item-pending={entry.failed ? "failed" : "sending"} padding="row">
 			<p className="flex items-center gap-1.5 text-sc-xs">
@@ -509,10 +578,10 @@ function PendingCard({ item, entry, t }: { item: Item; entry: PendingComment; t:
 			</div>
 			{entry.failed && (
 				<div className="mt-1 flex gap-1">
-					<Button onClick={() => retryComment(item.id, entry.requestId)} size="sm" variant="secondary">
+					<Button onClick={() => retryComment(item, entry.requestId)} size="sm" variant="secondary">
 						{t("common.retry")}
 					</Button>
-					<Button onClick={() => discardComment(item.id, entry.requestId)} size="sm" variant="ghost">
+					<Button onClick={() => discardComment(item, entry.requestId)} size="sm" variant="ghost">
 						{t("bots.items.comment.discard")}
 					</Button>
 				</div>
@@ -522,9 +591,11 @@ function PendingCard({ item, entry, t }: { item: Item; entry: PendingComment; t:
 }
 
 /** One muted line: who did what, and when. */
-function EventLine({ event, t }: { event: ItemEvent; t: T }) {
+function EventLine({ event, device, t }: { event: ItemEvent; device?: string; t: T }) {
 	const workerTitle = useTabsStore(s =>
-		event.kind === "worker" ? s.tabs.find(tab => tab.sessionPath === event.link)?.title : undefined,
+		event.kind === "worker"
+			? s.tabs.find(tab => tab.device === device && tab.sessionPath === event.link)?.title
+			: undefined,
 	);
 	const [open, setOpen] = useState(false);
 	const by = event.actor === "owner" ? t("bots.items.activity.you") : t("bots.items.activity.bot");
@@ -632,24 +703,25 @@ function QuestionCard({
 	questionRef,
 }: {
 	bot: Bot;
-	item: Item;
-	event: ItemEvent;
+	item: ListedItem;
+	event?: ItemEvent;
 	question: ItemQuestion;
 	questionRef: React.RefObject<HTMLDivElement | null>;
 }) {
 	const t = useT();
 	const decisions = decisionsOf(question);
 	const qid = question.id ?? 0;
-	const [answers, setAnswers] = useState<DecisionAnswer[]>(() => heldAnswers(item.id, qid, decisions));
-	const pending = useItemsUi(s => (s.pending[item.id] ?? []).some(entry => !entry.failed && entry.question === qid));
+	const key = itemUiKey(item);
+	const [answers, setAnswers] = useState<DecisionAnswer[]>(() => heldAnswers(key, qid, decisions));
+	const pending = useItemsUi(s => (s.pending[key] ?? []).some(entry => !entry.failed && entry.question === qid));
 	const hold = (next: DecisionAnswer[]) => {
 		setAnswers(next);
-		holdAnswers(item.id, qid, next);
+		holdAnswers(key, qid, next);
 	};
 	const send = (picked = answers) => {
 		const text = answersText(question, picked);
 		if (!text || question.id === undefined || pending) return;
-		sendComment(item.id, text, question.id);
+		sendComment(item, text, question.id);
 		hold(decisions.map(() => null));
 	};
 	const count = answers.filter(Boolean).length;
@@ -664,9 +736,11 @@ function QuestionCard({
 				<p className="flex items-center gap-1.5 text-sc-xs">
 					<span className="font-medium">{bot.name}</span>
 					<span className="text-(--sc-attention)">{t("bots.items.ask.needsYou")}</span>
-					<span className="ml-auto text-(--sc-text-subtle)" title={formatClock(event.at)}>
-						{formatTimeAgo(event.at)}
-					</span>
+					{event && (
+						<span className="ml-auto text-(--sc-text-subtle)" title={formatClock(event.at)}>
+							{formatTimeAgo(event.at)}
+						</span>
+					)}
 				</p>
 				<ItemAnswerEditor
 					answers={answers}
@@ -708,20 +782,21 @@ function CommentBox({
 	t,
 }: {
 	bot: Bot;
-	item: Item;
+	item: ListedItem;
 	question: ItemQuestion | undefined;
 	boxRef: React.RefObject<HTMLTextAreaElement | null>;
 	t: T;
 }) {
-	const draft = useItemsUi(s => s.drafts[item.id] ?? "");
+	const key = itemUiKey(item);
+	const draft = useItemsUi(s => s.drafts[key] ?? "");
 	const [hidden, setHidden] = useState<number | null>(null);
 	const replying = question && hidden !== question.id ? question : undefined;
 	const send = () => {
 		const text = draft.trim();
 		if (!text) return;
 		// Words typed while a question waits answer it; with the mark hidden they are a comment of their own.
-		sendComment(item.id, text, replying ? replying.id : undefined);
-		setDraft(item.id, "");
+		sendComment(item, text, replying ? replying.id : undefined);
+		setDraft(key, "");
 	};
 	const line = replying ? questionLine(replying.decisions?.[0]?.question ?? replying.text) : "";
 	return (
@@ -750,7 +825,7 @@ function CommentBox({
 						autoGrow
 						className="w-full"
 						maxLength={8000}
-						onChange={event => setDraft(item.id, event.target.value)}
+						onChange={event => setDraft(key, event.target.value)}
 						onKeyDown={event => {
 							if (isImeKeyEvent(event)) return;
 							if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {

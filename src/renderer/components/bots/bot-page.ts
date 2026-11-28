@@ -15,9 +15,13 @@ export const useBotPage = create<{ botId: string | null; tab: BotPageTab; roomId
 	roomId: null,
 }));
 
+export function botPageKey(id: string, device?: string): string {
+	return device ? `${device}\0${id}` : id;
+}
+
 /** Shows the bot on the Bots page (its Activity, or `tab`). */
-export function openBotPage(botId: string, tab: BotPageTab = "activity"): void {
-	useBotPage.setState({ botId, tab, roomId: null });
+export function openBotPage(botId: string, tab: BotPageTab = "activity", device?: string): void {
+	useBotPage.setState({ botId: botPageKey(botId, device), tab, roomId: null });
 	useUiStore.getState().openBots();
 }
 

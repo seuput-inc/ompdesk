@@ -1090,9 +1090,10 @@ fn items_keep_closed_rows_and_history_outside_the_v1_window_across_reload() {
     assert_eq!(items.next_number("b1"), 3);
     assert!(items.write_address("b2", "#1").is_err(), "legacy board");
     assert_eq!(items.write_address("b2", "i3").unwrap().number, 1);
-    assert_eq!(items.find("b1", "#2").unwrap().id, "i2");
-    assert_eq!(items.find("b2", "1").unwrap().id, "i3");
-    assert_eq!(items.find("b1", "i1").unwrap().number, 1);
+    assert_eq!(items.find("b1", "#2").unwrap().unwrap().id, "i2");
+    assert_eq!(items.find("b2", "1").unwrap().unwrap().id, "i3");
+    assert_eq!(items.find("b1", "i1").unwrap().unwrap().number, 1);
+    assert!(items.find("b2", "#2").unwrap().is_none());
     items
         .change("i1", |item| {
             item.status = "done".into();

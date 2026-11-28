@@ -10,7 +10,7 @@ import { useEffect, useState } from "react";
 import { type Bot, itemsNeedingYou } from "../../../shared/bots";
 import { useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
-import { refreshBots, useBotsStore } from "../../stores/bots";
+import { listedBotItems, refreshBots, useBotsStore } from "../../stores/bots";
 import { toastError } from "../../stores/toast";
 import { Banner, Button, IconButton, Input, LinkButton, Tabs } from "../common";
 import { BotActionsMenu, setBotPaused } from "./BotActionsMenu";
@@ -21,7 +21,7 @@ import { BotLineText } from "./BotLineText";
 import { BotOwner, useBotHostName, useOfflineBotHosts } from "./BotOwner";
 import { BotSettings } from "./BotSettings";
 import { openBotHome } from "./bot-launch";
-import { type BotPageTab, useBotPage } from "./bot-page";
+import { type BotPageTab, botPageKey, useBotPage } from "./bot-page";
 import type { BotFacts } from "./bot-view";
 import { ItemsPane } from "./items/ItemsPane";
 
@@ -50,14 +50,12 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 		});
 	};
 	const mark = bot.paused ? "paused" : facts.needsYou > 0 ? "needsYou" : facts.failed ? "failed" : null;
-	const openItems = useBotsStore(
-		s =>
-			itemsNeedingYou(
-				s.state.items.filter(item => item.bot === bot.id && !item.stale),
-				null,
-				Date.now(),
-			).length,
-	);
+	const state = useBotsStore(s => s.state);
+	const openItems = itemsNeedingYou(
+		listedBotItems(state, bot.device, bot.id).filter(item => !item.stale),
+		null,
+		Date.now(),
+	).length;
 	// A paired host's bot lives there: while the host's link stays lost its page shows the last copy and says so.
 	const hostName = useBotHostName(bot.device);
 	const offline = useOfflineBotHosts().has(bot.device ?? "");
@@ -157,7 +155,7 @@ export function BotPane({ bot, facts, onDeleted }: { bot: Bot; facts: BotFacts; 
 			/>
 			<div className="flex min-h-0 flex-1 flex-col" role="tabpanel">
 				{tab === "activity" && <BotActivity bot={bot} />}
-				{tab === "items" && <ItemsPane bots={[bot]} group={false} owner={bot.id} />}
+				{tab === "items" && <ItemsPane bots={[bot]} group={false} owner={botPageKey(bot.id, bot.device)} />}
 				{tab === "chats" && <BotChats bot={bot} />}
 				{tab === "settings" && <BotSettings bot={bot} onDeleted={onDeleted} />}
 			</div>

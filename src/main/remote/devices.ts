@@ -20,7 +20,7 @@
 import { hostname } from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import type { SharedBotsDelta } from "../../shared/bots";
+import type { ItemChangeRequest, ItemChangeResult, SharedBotsDelta } from "../../shared/bots";
 import { KEEP_AWAKE_WORKING_PREF } from "../../shared/desktop-prefs";
 import { codedError, type IpcErrorCode, ipcErrorCode, isIpcErrorCode } from "../../shared/ipc-error-codes";
 import {
@@ -37,6 +37,8 @@ import {
 	type TailnetComputer,
 } from "../../shared/ipc-types";
 import {
+	ItemChangeRequestSchema,
+	ItemChangeResultSchema,
 	type ItemsV2Reply,
 	type ItemsV2Request,
 	ItemsV2RequestSchema,
@@ -74,6 +76,7 @@ import {
 	DEVICE_RENAME_EVENT,
 	DeviceNameSchema,
 	HOST_NAME_EVENT,
+	ITEMS_CHANGE_METHOD,
 	ITEMS_V2_CHANGED,
 	ITEMS_V2_METHOD,
 	ItemsV2Changed,
@@ -210,7 +213,9 @@ export interface RemoteDevicesDeps {
 	/** A host link's transitions and the host role's connections (`remote-link`; no addresses or keys). */
 	logLink?: (event: string, details: Record<string, unknown>) => void;
 	/** The core's bots across paired computers: a host's copy is told to it. Null until the control tools exist. */
-	bots?: () => HostBots | null;
+	bots?: () =>
+		| (Pick<HostBots, "remote" | "roomPost" | "cached"> & Partial<Pick<HostBots, "ownerGrantsPeerItem">>)
+		| null;
 }
 
 /** A host whose link is down: no summaries of it, so its rows show no live state rather than stale state. */
@@ -221,6 +226,11 @@ interface HostLink {
 	itemsEpoch: number;
 	itemsMode?: "legacy" | "v2";
 	itemsFeedRequested?: boolean;
+	mirrorVersion?: string;
+	mirrorReading?: boolean;
+	mirrorDirty?: boolean;
+	legacyReady?: boolean;
+	legacyPull?: Promise<z.infer<typeof SharedBotsSchema>>;
 	/** rtab → tab on this host. */
 	tabs: Map<string, RemoteSidecar>;
 	/** Tabs closed here while the host was unreachable; it is told when the link is back. */
@@ -237,6 +247,14 @@ interface HostLink {
 	relays: Map<string, LinkRelaySocket>;
 }
 
+function unknownMethod(error: unknown, method: string): boolean {
+	return (
+		error instanceof RemoteError &&
+		error.code === "unsupported" &&
+		error.message === `[unsupported] Unknown method ${method}`
+	);
+}
+
 export class RemoteDevices {
 	readonly #deps: RemoteDevicesDeps;
 	readonly #identity: Identity;
@@ -249,7 +267,9 @@ export class RemoteDevices {
 	/** Every host's transcripts this device read (subagent journals, tail pages): one folder for all tabs and hosts. */
 	readonly #transcripts: TranscriptCache;
 	readonly #links = new Map<string, HostLink>();
+	readonly #mirrorWrites = new Map<string, Promise<{ applied: boolean }>>();
 	readonly #itemsListeners = new Set<(device: string, reseed: boolean) => void>();
+	#legacyBotsDemand = false;
 	/** Stand-ins here for the dev servers of host tabs (`hostPort`). */
 	readonly #ports = new DevicePortTunnels(deviceId =>
 		this.#links.has(deviceId) ? (method, params) => this.request(deviceId, method, params) : null,
@@ -651,10 +671,7 @@ export class RemoteDevices {
 	async removeHost(deviceId: unknown): Promise<RemoteState> {
 		if (typeof deviceId !== "string") throw codedError("remote_unknown_device", "Unknown device");
 		this.#unlink(deviceId);
-		void this.#deps
-			.bots?.()
-			?.remote({ device: deviceId, forget: true })
-			.catch(() => {});
+		await this.#tellBots(deviceId, { forget: true });
 		await (await this.#sharing).removeHost(deviceId);
 		this.#deps.broadcast(IPC_EVENTS.SESSIONS_CHANGED, { device: deviceId } satisfies IpcSessionsChanged);
 		return this.#broadcastState();
@@ -859,8 +876,8 @@ export class RemoteDevices {
 		this.#deps.services.botsChanged(change);
 	}
 
-	itemsV2Changed(): void {
-		this.#deps.services.itemsV2Changed();
+	itemsV2Changed(botHomes = false): void {
+		this.#deps.services.itemsV2Changed(botHomes);
 	}
 
 	onItemsV2Changed(listener: (device: string, reseed: boolean) => void): () => void {
@@ -868,37 +885,82 @@ export class RemoteDevices {
 		return () => this.#itemsListeners.delete(listener);
 	}
 
-	async itemsV2<R extends ItemsV2Request>(device: string, request: R): Promise<ItemsV2Reply<R>> {
-		ItemsV2RequestSchema.parse(request);
+	onLegacyBotsAudience(listener: (active: boolean) => void | Promise<void>): () => void {
+		return this.#deps.services.onLegacyBotsAudience(listener);
+	}
+
+	/** An aggregate v1 reader needs genuine histories before its first list, and deltas until its last reader leaves. */
+	async setLegacyBotsDemand(active: boolean): Promise<void> {
+		this.#legacyBotsDemand = active;
+		await Promise.all(
+			Array.from(this.#links, async ([device, link]) => {
+				if (link.client.state !== "online") return;
+				if (active) {
+					if (!link.legacyReady) await this.#readLegacy(device, link);
+				} else if ((link.legacyReady || link.legacyPull) && link.itemsMode !== "legacy") {
+					link.legacyReady = false;
+					link.legacyPull = undefined;
+					await link.client.request("host.bots.unlist", {}).catch(() => {});
+				}
+			}),
+		);
+	}
+
+	#connected(device: string, link: HostLink, epoch: number): void {
+		if (link.itemsEpoch !== epoch || link.client.state !== "online" || this.#links.get(device) !== link)
+			throw codedError("remote_offline", "The device connection changed");
+	}
+
+	async itemsChange(device: string, request: ItemChangeRequest): Promise<ItemChangeResult> {
+		const change = ItemChangeRequestSchema.parse(request);
 		const link = this.#links.get(device);
 		if (!link) throw codedError("remote_unknown_device", "The device is not paired");
 		const epoch = link.itemsEpoch;
-		const stillConnected = () => {
-			if (link.itemsEpoch !== epoch || link.client.state !== "online" || this.#links.get(device) !== link)
-				throw codedError("remote_offline", "The device connection changed");
-		};
-		stillConnected();
-		if (request.action === "itemsFeed") link.itemsFeedRequested = true;
+		this.#connected(device, link, epoch);
+		let raw: unknown;
+		try {
+			raw = await link.client.request(ITEMS_CHANGE_METHOD, change);
+		} catch (error) {
+			if (!unknownMethod(error, ITEMS_CHANGE_METHOD)) throw error;
+			this.#connected(device, link, epoch);
+			const old = SharedBotsSchema.parse(await link.client.request("host.bots.command", { request: change }));
+			if (change.action === "itemBatch" && !old.itemBatchResult)
+				throw new Error("The host did not return the item batch outcome");
+			return ItemChangeResultSchema.parse({
+				...(old.refused !== undefined ? { refused: old.refused } : {}),
+				...(old.itemBatchResult !== undefined ? { itemBatchResult: old.itemBatchResult } : {}),
+			});
+		}
+		return ItemChangeResultSchema.parse(raw);
+	}
+
+	async itemsV2<R extends ItemsV2Request>(device: string, request: R): Promise<ItemsV2Reply<R>> {
+		ItemsV2RequestSchema.parse(request);
+		const link = this.#links.get(device);
+		if (link && request.action === "itemsFeed") link.itemsFeedRequested = true;
+		if (link?.client.state !== "online") {
+			const cached = await this.#deps.bots?.()?.cached?.(device, request.action !== "itemsFeed");
+			if (request.action === "itemsFeed" && cached?.feed) return parseItemsV2Reply(request, cached.feed);
+			if (cached?.legacy) return projectLegacyItemsV2(request, cached.legacy);
+			if (!link && !cached) throw codedError("remote_unknown_device", "The device is not paired");
+			throw codedError("remote_offline", "This item data is not available offline");
+		}
+		const epoch = link.itemsEpoch;
 		if (link.itemsMode !== "legacy") {
 			try {
 				const raw = await link.client.request<unknown>(ITEMS_V2_METHOD, request);
-				stillConnected();
+				this.#connected(device, link, epoch);
 				const reply = parseItemsV2Reply(request, raw);
 				link.itemsMode = "v2";
 				return reply;
 			} catch (error) {
-				if (
-					!(error instanceof RemoteError) ||
-					error.code !== "unsupported" ||
-					error.message !== `[unsupported] Unknown method ${ITEMS_V2_METHOD}`
-				)
-					throw error;
-				stillConnected();
+				if (!unknownMethod(error, ITEMS_V2_METHOD)) throw error;
+				this.#connected(device, link, epoch);
 				link.itemsMode = "legacy";
 			}
 		}
-		const raw = await link.client.request<unknown>("host.bots.list", {});
-		stillConnected();
+		const raw = await this.#readLegacy(device, link);
+		this.#connected(device, link, epoch);
 		return projectLegacyItemsV2(request, raw);
 	}
 
@@ -1067,6 +1129,7 @@ export class RemoteDevices {
 			relays: new Map(),
 		};
 		client.on("state", state => {
+			if (this.#links.get(deviceId) !== link) return;
 			for (const tab of link.tabs.values()) tab.linkStateChanged(state);
 			// The agent's tunnel to a host tab's relay ends with the link (the host closes its end as the connection ends).
 			if (state !== "online") for (const relay of [...link.relays.values()]) relay.linkLost();
@@ -1076,6 +1139,11 @@ export class RemoteDevices {
 			if (state !== "online") {
 				link.itemsEpoch++;
 				link.itemsMode = undefined;
+				link.mirrorVersion = undefined;
+				link.mirrorReading = false;
+				link.mirrorDirty = false;
+				link.legacyReady = false;
+				link.legacyPull = undefined;
 				this.#deps.modelWait?.setHostCounts(deviceId, undefined);
 				if (link.summaries) {
 					link.summaries = undefined;
@@ -1092,6 +1160,7 @@ export class RemoteDevices {
 			}
 			if (link.itemsFeedRequested) for (const listener of this.#itemsListeners) listener(deviceId, true);
 			void this.#readBots(deviceId, link);
+			if (this.#legacyBotsDemand) void this.#readLegacy(deviceId, link).catch(() => {});
 			void this.#exchangeDeviceOrder(deviceId, link);
 			link.closes.flush(rtab => client.request("tab.close", { rtab }));
 			void this.#readSummaries(deviceId, link);
@@ -1112,7 +1181,7 @@ export class RemoteDevices {
 					const { request, tab, check } = challenge.data;
 					void this.#deps
 						.bots?.()
-						?.ownerGrantsPeerItem(deviceId, tab, check)
+						?.ownerGrantsPeerItem?.(deviceId, tab, check)
 						.then(verdict =>
 							current() ? client.request("host.item.verdict", { request, ...verdict }) : undefined,
 						)
@@ -1135,19 +1204,27 @@ export class RemoteDevices {
 				return;
 			}
 			if (event === ITEMS_V2_CHANGED) {
-				if (link.itemsFeedRequested && client.state === "online" && ItemsV2Changed.safeParse(data).success)
+				if (link.itemsFeedRequested && client.state === "online" && ItemsV2Changed.safeParse(data).success) {
+					void this.#readBots(deviceId, link);
 					for (const listener of this.#itemsListeners) listener(deviceId, false);
+				}
 				return;
 			}
 			if (event === BOTS_EVENT) {
+				if (link.itemsMode !== "legacy" && !this.#legacyBotsDemand) return;
 				const change = SharedBotsDeltaSchema.safeParse(data);
 				if (!change.success || link.client.state !== "online") return;
 				if (link.itemsMode === "legacy" && link.itemsFeedRequested)
 					for (const listener of this.#itemsListeners) listener(deviceId, true);
-				void this.#tellBots(deviceId, { online: true, change: change.data }).then(applied => {
-					// A change on a version this computer does not hold: it missed one, so it reads the whole copy.
-					if (applied === false) void this.#readBots(deviceId, link);
-				});
+				const epoch = link.itemsEpoch;
+				void this.#tellBots(deviceId, { online: true, change: change.data })
+					.then(async applied => {
+						if (applied !== false) return;
+						await link.legacyPull;
+						this.#connected(deviceId, link, epoch);
+						if (link.itemsMode === "legacy" || this.#legacyBotsDemand) await this.#readLegacy(deviceId, link);
+					})
+					.catch(() => {});
 				return;
 			}
 			if (event === SESSIONS_CHANGED_EVENT) {
@@ -1265,26 +1342,84 @@ export class RemoteDevices {
 		this.#links.delete(deviceId);
 	}
 
-	/** The host's bots, whole: as the link comes up and whenever a change did not apply on the copy here. */
-	async #readBots(deviceId: string, link: HostLink): Promise<void> {
+	async #readLegacy(device: string, link: HostLink): Promise<z.infer<typeof SharedBotsSchema>> {
+		if (link.legacyPull) return link.legacyPull;
+		const epoch = link.itemsEpoch;
+		this.#connected(device, link, epoch);
+		const pull: Promise<z.infer<typeof SharedBotsSchema>> = link.client
+			.request<unknown>("host.bots.list", {})
+			.then(async raw => {
+				this.#connected(device, link, epoch);
+				const read = SharedBotsSchema.parse(raw);
+				if (this.#deps.bots?.()) {
+					const applied = await this.#tellBots(device, {
+						online: true,
+						change: {
+							version: read.version,
+							state: read.state,
+							...(link.itemsMode === "legacy" ? { legacyOnly: true } : {}),
+						},
+					});
+					if (!applied) throw new Error("The host's full bot copy was not applied");
+				}
+				if (link.legacyPull === pull) link.legacyReady = true;
+				return read;
+			});
+		link.legacyPull = pull;
 		try {
-			const read = SharedBotsSchema.safeParse(await link.client.request<unknown>("host.bots.list", {}));
-			if (read.success && link.client.state === "online")
-				await this.#tellBots(deviceId, { online: true, change: read.data });
-		} catch {
-			// unsupported (an older host lists no bots), or the link dropped again: the next push or link-up says it.
+			return await pull;
+		} finally {
+			if (link.legacyPull === pull) link.legacyPull = undefined;
 		}
 	}
 
-	/** Tells the core what this computer heard of host `deviceId`'s bots; null while the control tools are not up. */
+	/** A second invalidation while the mirror reads requests the next delta, never a concurrent older seed. */
+	async #readBots(device: string, link: HostLink): Promise<void> {
+		if (!this.#deps.bots?.()) return;
+		if (link.mirrorReading) {
+			link.mirrorDirty = true;
+			return;
+		}
+		link.mirrorReading = true;
+		const epoch = link.itemsEpoch;
+		try {
+			do {
+				link.mirrorDirty = false;
+				const request = { protocol: 2, action: "itemsFeed", since: link.mirrorVersion } as const;
+				const feed = await this.itemsV2(device, request);
+				this.#connected(device, link, epoch);
+				if (link.itemsMode === "legacy") return; // The v1 read already installed the genuine histories.
+				if (feed.kind === "delta" && feed.version === link.mirrorVersion) continue;
+				const applied = await this.#tellBots(device, { online: true, feed });
+				this.#connected(device, link, epoch);
+				if (applied) link.mirrorVersion = feed.version;
+				else if (applied === false && feed.kind === "delta") {
+					link.mirrorVersion = undefined;
+					link.mirrorDirty = true;
+				}
+			} while (link.mirrorDirty);
+		} catch {
+			// A broken v2 reply is not an old host. Keep the last copy until another notification or reconnect.
+		} finally {
+			if (epoch === link.itemsEpoch) link.mirrorReading = false;
+		}
+	}
+
+	/** Mirror updates for one host reach the core in link order, including offline and forget after the last read. */
 	async #tellBots(deviceId: string, update: Omit<HostBotsUpdate, "device" | "name">): Promise<boolean | null> {
 		const bots = this.#deps.bots?.();
 		if (!bots) return null;
 		const name = this.#links.get(deviceId)?.client.host.name ?? deviceId;
+		const apply = () => bots.remote({ device: deviceId, name, ...update });
+		const previous = this.#mirrorWrites.get(deviceId);
+		const next = previous ? previous.then(apply, apply) : apply();
+		this.#mirrorWrites.set(deviceId, next);
 		try {
-			return (await bots.remote({ device: deviceId, name, ...update })).applied;
+			return (await next).applied;
 		} catch {
 			return null;
+		} finally {
+			if (this.#mirrorWrites.get(deviceId) === next) this.#mirrorWrites.delete(deviceId);
 		}
 	}
 

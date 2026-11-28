@@ -336,7 +336,10 @@ pub struct Items {
     items: Vec<ItemRecord>,
     by_id: HashMap<String, usize>,
     last_event: u64,
+    mail_cursor: String,
     feed: queries::Feed,
+    #[cfg(test)]
+    full_reads: std::cell::Cell<usize>,
 }
 
 impl Items {
@@ -360,7 +363,14 @@ impl Items {
         })
     }
 
+    #[cfg(test)]
+    pub fn full_reads(&self) -> usize {
+        self.full_reads.get()
+    }
+
     pub fn visible(&self, now: f64) -> impl Iterator<Item = &ItemRecord> {
+        #[cfg(test)]
+        self.full_reads.set(self.full_reads.get() + 1);
         self.items.iter().filter(move |item| item.visible_at(now))
     }
 
@@ -384,6 +394,7 @@ impl Items {
             return Err("Use the immutable item id from the list: this board has no complete number history.".into());
         }
         self.find(bot, key)
+            .map_err(|e| format!("Could not look up the item: {e}"))?
             .ok_or_else(|| format!("No item \"{key}\" on this bot's board."))
     }
 
@@ -403,33 +414,8 @@ impl Items {
         self.last_number(bot).saturating_add(1)
     }
 
-    /// The item of `bot` that `key` names: its number (`3`, `#3`), else its id.
-    pub fn find(&self, bot: &str, key: &str) -> Option<&ItemRecord> {
-        let key = key.trim();
-        let number = key.trim_start_matches('#').parse::<u32>().ok();
-        number
-            .and_then(|number| {
-                self.items
-                    .iter()
-                    .find(|item| item.bot == bot && item.number == number)
-            })
-            .or_else(|| self.get(key).filter(|item| item.bot == bot))
-    }
-
     pub fn get(&self, id: &str) -> Option<&ItemRecord> {
         self.by_id.get(id).map(|&at| &self.items[at])
-    }
-
-    /// Ids of the items that link `target` (a session's tab id or file).
-    pub fn linking(&self, targets: &[&str], now: f64) -> Vec<String> {
-        self.visible(now)
-            .filter(|item| {
-                item.links
-                    .iter()
-                    .any(|link| link.kind == "session" && targets.contains(&link.target.as_str()))
-            })
-            .map(|item| item.id.clone())
-            .collect()
     }
 }
 

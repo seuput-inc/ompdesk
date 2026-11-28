@@ -264,6 +264,7 @@ export const PROJECTS_EVENT = "host.projects.changed";
  */
 export const BOTS_EVENT = "host.bots.changed";
 export const ITEMS_V2_METHOD = "host.bots.itemsV2";
+export const ITEMS_CHANGE_METHOD = "host.bots.itemsChange";
 export const ITEMS_V2_CHANGED = "host.bots.itemsV2Changed";
 export const ItemsV2Changed = z.strictObject({ protocol: z.literal(2) });
 /**

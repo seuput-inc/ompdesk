@@ -99,7 +99,7 @@ import { useTabRpc } from "../../../lib/tab-rpc";
 import { isTabFailed } from "../../../lib/tab-signal";
 import { pickWorkspaceDirectory } from "../../../lib/workspace-dirs";
 import { ensureAgentReviewSubscription, useAgentReviewStore } from "../../../stores/agent-review";
-import { botOfFolder, botOfSession, ensureBots, useBotsStore } from "../../../stores/bots";
+import { botOfFolder, botOfSession, ensureBots, listedBotItems, useBotsStore } from "../../../stores/bots";
 import { useBotsView } from "../../../stores/bots-view";
 import { type BranchRow, branchPrOf, branchPrTone, useBranchPrs, watchBranchPrs } from "../../../stores/branch-prs";
 import { ensureClosedChildren, useClosedChildrenStore } from "../../../stores/closed-children";
@@ -447,11 +447,11 @@ export function Sidebar() {
 	const botsAvailable = useBotsAvailable();
 	const botsNavHidden = useSidebarFolds(state => state.navHidden.bots === true);
 	const botsShown = botsAvailable && !botsNavHidden;
-	const bots = useBotsStore(state => state.state.bots);
+	const botsState = useBotsStore(state => state.state);
+	const bots = botsState.bots;
 	const hidePausedBots = useBotsView(state => state.hidePaused);
 	const openBots = useBotsView(state => state.open);
 	const botsFolded = useBotsView(state => state.folded);
-	const botItems = useBotsStore(state => state.state.items);
 	useEffect(() => {
 		if (botsShown) ensureBots();
 	}, [botsShown]);
@@ -2757,11 +2757,7 @@ export function Sidebar() {
 						unread: state.done,
 					};
 				});
-				const needing = itemsNeedingYou(
-					botItems.filter(item => item.bot === bot.id),
-					null,
-					Date.now(),
-				).length;
+				const needing = itemsNeedingYou(listedBotItems(botsState, bot.device, bot.id), null, Date.now()).length;
 				return [
 					{
 						bot,

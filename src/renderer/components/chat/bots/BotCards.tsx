@@ -21,14 +21,14 @@
  */
 import { CalendarClock, EyeOff, ListTodo, Moon, Send, Wrench } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
-import { type Bot, ITEM_STATUSES, type Item, type ItemStatus } from "../../../../shared/bots";
+import { type Bot, ITEM_STATUSES, type ItemStatus } from "../../../../shared/bots";
 import type { AgentMessage } from "../../../../shared/rpc-types";
 import { parseScheduleResultNote } from "../../../../shared/schedule-result-note";
 import { cx, resultBodyText, resultDetails } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { MarkdownRenderer } from "../../../lib/markdown";
 import { useTabRpc } from "../../../lib/tab-rpc";
-import { botNamed, botOfFolder, ensureBots, useBotsStore } from "../../../stores/bots";
+import { botNamed, botOfFolder, ensureBots, listedItemByNumber, useBotsStore } from "../../../stores/bots";
 import { useRuntimeTabId } from "../../../stores/session-runtime-context";
 import { useTabsStore } from "../../../stores/tabs";
 import { toastError } from "../../../stores/toast";
@@ -36,7 +36,7 @@ import { BotAvatar } from "../../bots/BotAvatar";
 import { openBotDialog } from "../../bots/bot-launch";
 import { openBotPage } from "../../bots/bot-page";
 import { ItemStatusIcon, statusName } from "../../bots/items/ItemStatusIcon";
-import { openItem } from "../../bots/items/item-store";
+import { showBotItem } from "../../bots/items/item-place";
 import { Badge, Button, Card, Chip, DisclosureButton, IconButton, LinkButton } from "../../common";
 import { MailNote } from "../CustomMessageCard";
 import type { BotCardKind } from "./bot-card-kind";
@@ -63,11 +63,6 @@ function useChatBot(): Bot | undefined {
 	const device = useTabDevice();
 	useEffect(() => ensureBots(), []);
 	return useBotsStore(s => botOfFolder(s.state.bots, cwd, device));
-}
-
-function showItem(bot: Bot, item: Item): void {
-	openBotPage(bot.id, "items");
-	openItem(bot.id, item.id);
 }
 
 function HideButton({ kind }: { kind: BotCardKind }) {
@@ -115,11 +110,7 @@ function Row({
 /** An item named in a line: the live one when this chat's bot still has it. */
 function ItemChip({ bot, number, title, status }: { bot?: Bot; number: number; title: string; status?: ItemStatus }) {
 	const t = useT();
-	const item = useBotsStore(s =>
-		bot
-			? s.state.items.find(entry => entry.device === bot.device && entry.bot === bot.id && entry.number === number)
-			: undefined,
-	);
+	const item = useBotsStore(s => (bot ? listedItemByNumber(s.state, bot.device, bot.id, number) : undefined));
 	const shown = item?.status ?? status;
 	const name = item?.title ?? title;
 	const label = `#${number} ${name}`;
@@ -128,7 +119,7 @@ function ItemChip({ bot, number, title, status }: { bot?: Bot; number: number; t
 			className="max-w-64 shrink"
 			data-bot-card-item={number}
 			icon={shown ? <ItemStatusIcon status={shown} /> : <ListTodo aria-hidden className="size-3.5" />}
-			onClick={item && bot ? () => showItem(bot, item) : undefined}
+			onClick={bot && number > 0 ? () => showBotItem(bot, item?.id ?? number) : undefined}
 			tooltip={shown ? `${label}, ${statusName(shown, t)}` : label}
 		>
 			{label}
@@ -308,7 +299,11 @@ function OfferCard({ args }: { args: Record<string, unknown> }) {
 						{purpose && <p className="text-sc-sm text-(--sc-text-secondary)">{purpose}</p>}
 						<div className="mt-1.5 flex gap-1.5">
 							{made ? (
-								<Button onClick={() => openBotPage(made.id)} size="sm" variant="secondary">
+								<Button
+									onClick={() => openBotPage(made.id, "activity", made.device)}
+									size="sm"
+									variant="secondary"
+								>
 									{t("chat.botCards.offer.open", { name: made.name })}
 								</Button>
 							) : (
@@ -382,7 +377,11 @@ function RequestCard({
 				size={16}
 			/>
 			{bot ? (
-				<LinkButton className="shrink-0 font-medium" onClick={() => openBotPage(bot.id)} tone="inherit">
+				<LinkButton
+					className="shrink-0 font-medium"
+					onClick={() => openBotPage(bot.id, "activity", bot.device)}
+					tone="inherit"
+				>
 					{bot.name}
 				</LinkButton>
 			) : (

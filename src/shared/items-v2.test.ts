@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ItemsV2RequestSchema, parseItemsV2Reply, projectLegacyItemsV2 } from "./items-v2";
+import { ItemChangeRequestSchema, ItemsV2RequestSchema, parseItemsV2Reply, projectLegacyItemsV2 } from "./items-v2";
 
 const at = "2026-01-02T00:00:00Z";
 const bot = {
@@ -111,6 +111,29 @@ describe("previous host item projection", () => {
 		expect(projectLegacyItemsV2({ ...receipt, requestId: "not-owner" }, raw).outcome).toBe("unknown");
 		expect(() => projectLegacyItemsV2({ ...detail, beforeEvent: 900 }, raw)).toThrow();
 		expect(() => projectLegacyItemsV2({ ...detail, bot: "elsewhere" }, raw)).toThrow();
+	});
+	it("keeps archived session links in order without sending unrelated links or history", () => {
+		const linked = { protocol: 2, action: "itemsLinked", bot: bot.id, sessions: ["session"] } as const;
+		const request = { ...linked, sessions: [...linked.sessions] };
+		const raw = old([
+			{
+				...item(2),
+				links: [
+					{ kind: "url", ref: "session" },
+					{ kind: "session", ref: "session" },
+				],
+			},
+			item(3),
+		]);
+		const result = projectLegacyItemsV2(request, raw);
+		expect(result.links).toEqual([{ session: "session", number: 2, title: "Item 2" }]);
+		expect(() => parseItemsV2Reply({ ...request, sessions: ["different"] }, result)).toThrow();
+	});
+	it("refuses a nested host or mixed batch operation on the compact write channel", () => {
+		const change = { action: "itemBatch", requestId: "retry", ids: ["i1"], status: "working" };
+		expect(ItemChangeRequestSchema.parse(change)).toEqual(change);
+		expect(ItemChangeRequestSchema.safeParse({ ...change, device: "elsewhere" }).success).toBe(false);
+		expect(ItemChangeRequestSchema.safeParse({ ...change, snoozeUntil: null }).success).toBe(false);
 	});
 	it("rejects writes, route injection, mixed cursors and replies for another base or item", () => {
 		for (const raw of [

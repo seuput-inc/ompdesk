@@ -110,7 +110,7 @@ import {
 import { sweepStaleTemps } from "./atomic-file";
 import type { Autopilot } from "./autopilot";
 import { askBackgroundWork } from "./background-work";
-import { botsStateNow, ItemFeedViewers, onBotsState } from "./bots";
+import { ItemFeedViewers, onBotsState } from "./bots";
 import { type BridgeConnectResult, BridgeHealth } from "./bridge-health";
 import { answersWithin, ConnectivityMonitor, PROBE_TIMEOUT_MS, probeTarget, reaches } from "./connectivity";
 import { ConnectorAccounts } from "./connector-accounts";
@@ -1022,6 +1022,7 @@ app.whenReady().then(async () => {
 	const sessionWake: IpcDeps["sessionWake"] = { current: null };
 	const sessionNote: IpcDeps["sessionNote"] = { current: null };
 	const hostBots: IpcDeps["hostBots"] = { current: null };
+	const botLaunchFor = Promise.withResolvers<(cwd: string) => Promise<string[]>>();
 	const tabReport: IpcDeps["tabReport"] = { current: null };
 	const agentOpening: IpcDeps["agentOpening"] = { current: null };
 	/** Tabs a lost core took that are still not ready, gathered for one notification (`recovery.stuck*`). */
@@ -1169,10 +1170,7 @@ app.whenReady().then(async () => {
 		creditSpendPref: () => prefsStore().get(CREDIT_SPEND_PREF),
 		ompdeskRolesFile: join(app.getPath("userData"), OMPDESK_ROLES_FILE),
 		launchFlags: cwd => prefsStore().launchFlags(cwd),
-		// A bot's chat also starts with its owner's picks (its approval mode, its skill projects): the core's `launch`,
-		// asked of the core first when no state has arrived yet (a restored bot chat right after a relaunch).
-		botLaunchArgs: async cwd =>
-			(await botsStateNow()).bots.find(bot => !bot.device && bot.folder === cwd)?.launch ?? [],
+		botLaunchArgs: async cwd => (await botLaunchFor.promise)(cwd),
 		itemsFile: join(app.getPath("userData"), "items.json"),
 		// ai-memory's `session-end` (the handoff) needs omp's own shutdown, which only a closed stdin triggers.
 		gracefulStopMs: () => (aiMemoryService?.state().phase === "ready" ? 4_000 : 0),
@@ -2211,6 +2209,7 @@ app.whenReady().then(async () => {
 			if (!win.isDestroyed() && desktopItemFeeds.wantsLegacy(win.webContents.id))
 				win.webContents.send(BOTS_STATE, state);
 		}
+		webHost?.router.legacyItemsChanged(state);
 	});
 	scheduleService = new ScheduleService({
 		file: join(app.getPath("userData"), "schedules.json"),
@@ -2707,6 +2706,7 @@ app.whenReady().then(async () => {
 		remoteDevices: devices,
 		itemsWebRouter: () => webHost?.router,
 		desktopItemFeeds,
+		setBotLaunchFor: botLaunchFor.resolve,
 		hostedTabs: hostServices,
 		summaries: sessionSummaries,
 		webTabNotice,

@@ -15,7 +15,7 @@ import { BotLineText } from "./BotLineText";
 import { BotOwner, useOfflineBotHosts } from "./BotOwner";
 import { BotPane } from "./BotPane";
 import { openBotDialog } from "./bot-launch";
-import { useBotPage } from "./bot-page";
+import { botPageKey, useBotPage } from "./bot-page";
 import { sortBots } from "./bot-view";
 import { BotRoom } from "./rooms/BotRoom";
 import { GroupFaces, roomBots, roomPreview } from "./rooms/room-faces";
@@ -32,11 +32,12 @@ export function BotsPage() {
 	useEffect(() => ensureBots(), []);
 	const lost = useOfflineBotHosts();
 	const sorted = sortBots(bots, view.sort, view.order, facts, false);
-	const bot = bots.find(known => known.id === botId) ?? null;
+	const bot =
+		bots.find(known => botPageKey(known.id, known.device) === botId) ?? bots.find(known => known.id === botId);
 	const room = rooms?.find(known => known.id === roomId) ?? null;
 	// Beside the list (a window, a tablet) the first bot shows until one is chosen; a phone shows the list first.
 	const shown = bot ?? sorted[0] ?? null;
-	const fact = shown ? facts.get(shown.id) : undefined;
+	const fact = shown ? facts.get(botPageKey(shown.id, shown.device)) : undefined;
 	const addMenu = (
 		<MenuButton
 			icon={<Plus />}
@@ -112,7 +113,7 @@ export function BotsPage() {
 								<BotPane
 									bot={shown}
 									facts={fact}
-									key={shown.id}
+									key={botPageKey(shown.id, shown.device)}
 									onDeleted={() => useBotPage.setState({ botId: null })}
 								/>
 							) : (
@@ -126,14 +127,14 @@ export function BotsPage() {
 						label={t("destination.bots")}
 						list={[
 							...sorted.map(item => {
-								const itemFacts = facts.get(item.id);
+								const itemFacts = facts.get(botPageKey(item.id, item.device));
 								return (
 									<ListRow
 										buttonProps={{ "data-bots-page-row": item.id }}
 										className={
 											item.paused || (item.device && lost.has(item.device)) ? "opacity-60" : undefined
 										}
-										key={item.id}
+										key={botPageKey(item.id, item.device)}
 										leading={
 											<BotAvatar
 												bot={item}
@@ -142,9 +143,11 @@ export function BotsPage() {
 												working={itemFacts?.working}
 											/>
 										}
-										onClick={() => useBotPage.setState({ botId: item.id, roomId: null })}
+										onClick={() =>
+											useBotPage.setState({ botId: botPageKey(item.id, item.device), roomId: null })
+										}
 										secondary={itemFacts ? <BotLineText bot={item} line={itemFacts.line} /> : undefined}
-										selected={room === null && item.id === shown?.id}
+										selected={room === null && item === shown}
 										title={
 											item.device ? (
 												<span className="flex min-w-0 items-baseline gap-1.5">

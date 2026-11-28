@@ -15,7 +15,14 @@ import {
 	todoDrift,
 	todoDriftState,
 } from "../../../resources/gui-bridge/todo-drift-core";
-import { BOTS_COMMAND, type BotsRequest, type BotsState } from "../../shared/bots";
+import {
+	BOTS_COMMAND,
+	type BotsRequest,
+	type BotsState,
+	ITEMS_V2_CHANGE,
+	ITEMS_V2_CHANGED,
+	ITEMS_V2_QUERY,
+} from "../../shared/bots";
 import { EMPTY_GITHUB_AUTH_STATE } from "../../shared/github-auth";
 import {
 	IPC_COMMANDS,
@@ -27,6 +34,12 @@ import {
 	type IpcStatsFetchPayload,
 	type SessionInfo,
 } from "../../shared/ipc-types";
+import {
+	ItemChangeRequestSchema,
+	ItemsV2DeviceSchema,
+	ItemsV2RequestSchema,
+	projectLegacyItemsV2,
+} from "../../shared/items-v2";
 import type { LaunchProfile } from "../../shared/launch-profile";
 import { MAIL_ACCOUNTS_COMMAND } from "../../shared/mail-accounts";
 import { MOBILE_WEB_COMMAND, MOBILE_WEB_GET_STATE, WEB_BLOCKS_LIST, WEB_DEVICES_LIST } from "../../shared/mobile-web";
@@ -465,7 +478,9 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 	const note = (key: string) => {
 		if (!unhandled.includes(key)) unhandled.push(key);
 	};
+	let itemVersion = 0;
 	const emit = (channel: string, data: unknown) => {
+		if (channel === ITEMS_V2_CHANGED) itemVersion++;
 		for (const listener of listeners.get(channel) ?? []) listener(data);
 	};
 	const summaries = createHarnessSummaries({
@@ -888,6 +903,8 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				remoteState = { ...remoteState, deviceSectionOrder: [...payload] };
 				emit(IPC_EVENTS.REMOTE_STATE, remoteState);
 				return undefined;
+			case ITEMS_V2_QUERY:
+			case ITEMS_V2_CHANGE:
 			case BOTS_COMMAND: {
 				// The synthetic roster never reads bot files or contacts another app.
 				const action =
@@ -895,11 +912,11 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				if (action === "file") return { exists: false, content: "", mtimeMs: 0, topics: [], history: [] };
 				if (action === "importSources") return { sources: [] };
 				if (action === "export") return { file: "" };
-				if (harness.bots) return harness.bots(payload as BotsRequest);
+				if (channel === BOTS_COMMAND && harness.bots) return harness.bots(payload as BotsRequest);
 				const session = stateFixture("tab-1").sessionFile ?? "";
 				const bots = quietBots(session, DOCK_WORKERS);
 				const at = "2026-11-27T00:00:00Z";
-				const items = DOCK_WORKERS
+				const items: BotsState["items"] = DOCK_WORKERS
 					? [
 							{
 								bot: bots[0].id,
@@ -916,7 +933,32 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 							},
 						]
 					: [];
-				return { bots, items };
+				const fixture: BotsState = { bots, items };
+				if (channel === BOTS_COMMAND) return fixture;
+				const device = ItemsV2DeviceSchema.parse(payload);
+				if (channel === ITEMS_V2_CHANGE) {
+					const change = ItemChangeRequestSchema.parse(args[1]);
+					const result = harness.bots ? await harness.bots({ ...change, device }) : fixture;
+					return { refused: result.refused, itemBatchResult: result.itemBatchResult };
+				}
+				const state = harness.bots ? await harness.bots({ action: "get" }) : fixture;
+				const source = device === null ? state : state.remote?.find(h => h.device === device);
+				if (!source) throw new Error("Unknown fixture device");
+				const request = ItemsV2RequestSchema.parse(args[1]);
+				const { legacy: _legacy, ...reply } = projectLegacyItemsV2(request, {
+					version: `fixture.${itemVersion}`,
+					state: source,
+				});
+				if (!("kind" in reply) || reply.kind !== "seed") return reply;
+				return {
+					...reply,
+					bots: source.bots,
+					...(device === null && {
+						rooms: state.rooms,
+						looks: state.looks,
+						remote: state.remote?.map(({ device, name, online }) => ({ device, name, online })),
+					}),
+				};
 			}
 			case SCHEDULES_COMMAND:
 				return SCHEDULES_STATE;

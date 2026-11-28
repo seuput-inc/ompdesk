@@ -289,6 +289,7 @@ impl AgentControl {
                 error.message()
             ));
         }
+        self.tell_quiet_folders();
         self.bots_changed();
         // The folder moved and the registry names it: what is left converges at the next bot pass if it fails now.
         if let Err(error) = self.finish_move(&bot.id).await {

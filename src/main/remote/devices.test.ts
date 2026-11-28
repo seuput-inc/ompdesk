@@ -693,6 +693,80 @@ describe("the tabs a host keeps for this device", () => {
 		expect(lists).toBe(before + 1);
 	});
 
+	it("falls back once for a missing write method, never for a lost or malformed write answer", async () => {
+		const { a, b, hostId } = await rig.connected();
+		const request = { action: "item", id: "i", comment: "one", requestId: "r" } as const;
+		const compact = "host.bots.itemsChange";
+		let answer = "lost";
+		let oldWrites = 0;
+		b.services.call.mockImplementation(async (_peer, method, params) => {
+			if (method === compact) {
+				expect(params).toEqual(request);
+				if (answer === "lost") throw new Error("lost the answer after applying");
+				if (answer === "broken") return { state: {} };
+				throw codedError("unsupported", `Unknown method ${compact}`);
+			}
+			if (method === "host.bots.command") {
+				oldWrites++;
+				expect(params).toEqual({ request });
+				return { version: "e.2", state: { bots: [], items: [] } };
+			}
+			return null;
+		});
+		await expect(a.devices.itemsChange(hostId, request)).rejects.toThrow("lost the answer");
+		answer = "broken";
+		await expect(a.devices.itemsChange(hostId, request)).rejects.toThrow();
+		expect(oldWrites).toBe(0);
+		answer = "missing";
+		await expect(a.devices.itemsChange(hostId, request)).resolves.toEqual({});
+		expect(oldWrites).toBe(1);
+	});
+
+	it("mirrors v2 on link-up and change; only an aggregate reader orders histories", async () => {
+		const remote = vi.fn().mockResolvedValue({ applied: true });
+		const { a, b } = await rig.pair({}, { bots: () => ({ remote, roomPost: vi.fn() }) });
+		const seed = { protocol: 2, kind: "seed", version: "v.1", bots: [], open: [], counts: {} };
+		const delta = { protocol: 2, kind: "delta", base: "v.1", version: "v.2", set: [], remove: [], counts: {} };
+		const history = { version: "old.1", state: { bots: [], items: [{ id: "i", events: [{ id: 1 }] }] } };
+		b.services.call.mockImplementation(async (_peer, method, params) => {
+			if (method === "host.bots.itemsV2") return params.since ? delta : seed;
+			if (method === "host.bots.list") return history;
+			return null;
+		});
+		const { deviceId } = await a.devices.connect("nSTUDIO");
+		const applied = (body: object) => expect.objectContaining({ device: deviceId, online: true, ...body });
+		await vi.waitFor(() => expect(remote).toHaveBeenCalledWith(applied({ feed: seed })));
+		const conn = b.services.call.mock.calls.find(call => call[1] === "host.bots.itemsV2")?.[3] as HostConnection;
+		conn.emit("host.bots.itemsV2Changed", { protocol: 2 });
+		await vi.waitFor(() => expect(remote).toHaveBeenCalledWith(applied({ feed: delta })));
+		expect(b.services.call.mock.calls.filter(call => call[1] === "host.bots.list")).toHaveLength(0);
+		await a.devices.setLegacyBotsDemand(true);
+		expect(remote).toHaveBeenCalledWith(applied({ change: history }));
+		const comment = {
+			base: "old.1",
+			version: "old.2",
+			set: { bots: [], items: [{ id: "i", events: [{ id: 1 }, { id: 2, text: "next" }] }] },
+			remove: { bots: [], items: [] },
+		};
+		conn.emit("host.bots.changed", comment);
+		await vi.waitFor(() => expect(remote).toHaveBeenCalledWith(applied({ change: comment })));
+		await a.devices.setLegacyBotsDemand(true);
+		expect(b.services.call.mock.calls.filter(call => call[1] === "host.bots.list")).toHaveLength(1);
+		await a.devices.setLegacyBotsDemand(false);
+		expect(b.services.call.mock.calls.filter(call => call[1] === "host.bots.unlist")).toHaveLength(1);
+	});
+
+	it("reads a saved feed without a live link and refuses an uncached history or mutation", async () => {
+		const seed = { protocol: 2, kind: "seed", version: "v.1", bots: [], open: [], counts: {} };
+		const cached = vi.fn(async (_id: string, legacy?: boolean) => (legacy ? null : { feed: seed }));
+		const { a } = await rig.pair({}, { bots: () => ({ remote: vi.fn(), roomPost: vi.fn(), cached }) });
+		await expect(a.devices.itemsV2("saved", { protocol: 2, action: "itemsFeed" })).resolves.toEqual(seed);
+		await expect(
+			a.devices.itemsV2("saved", { protocol: 2, action: "itemDetail", bot: "b", id: "i" }),
+		).rejects.toThrow();
+		await expect(a.devices.itemsChange("saved", { action: "itemsOpened", id: "b" })).rejects.toThrow();
+	});
+
 	it("delivers validated v2 invalidations to readers without another bots.list", async () => {
 		const { a, b, hostId } = await rig.connected();
 		const seed = { protocol: 2, kind: "seed", version: "epoch.1", counts: {}, bots: [], open: [] };

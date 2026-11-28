@@ -9,11 +9,12 @@ use serde_json::{Value, json};
 use super::super::fail::{Fail, R, fail};
 use super::super::host::HostState;
 use super::super::js::trim;
+use super::super::types::DeviceState;
 use super::super::{AgentControl, lock};
-use super::bots::{BotView, new_id};
+use super::bots::{BotView, new_id, validate_item_batch};
 use super::items::{item_store_error, read_facts, session_state};
 use crate::agentctl::journal::bots::BotRecord;
-use crate::agentctl::journal::items::{ItemRecord, Items};
+use crate::agentctl::journal::items::{ItemRecord, Items, STATUSES, parse_iso};
 use crate::agentctl::journal::looks::OPEN_FOR_MS;
 
 const MAX_SAFE: u64 = (1 << 53) - 1;
@@ -51,6 +52,10 @@ fn keys(v: &Value, allowed: &[&str]) -> R<()> {
 
 enum Query<'a> {
     Feed(Option<&'a str>),
+    Linked {
+        bot: &'a str,
+        sessions: Vec<&'a str>,
+    },
     Page {
         bot: &'a str,
         before: Option<(f64, u32)>,
@@ -82,6 +87,17 @@ impl<'a> Query<'a> {
                 Ok(Self::Feed(
                     v.get("since").map(|s| text(s, 256)).transpose()?,
                 ))
+            }
+            Some("itemsLinked") => {
+                keys(v, &["protocol", "action", "bot", "sessions"])?;
+                let sessions = v["sessions"]
+                    .as_array()
+                    .filter(|s| (1..=128).contains(&s.len()))
+                    .ok_or_else(invalid)?;
+                Ok(Self::Linked {
+                    bot: text(&v["bot"], 256)?,
+                    sessions: sessions.iter().map(|s| text(s, 32_768)).collect::<R<_>>()?,
+                })
             }
             Some("itemsPage") => {
                 keys(v, &["protocol", "action", "id", "before", "unreadSince"])?;
@@ -151,6 +167,81 @@ impl<'a> Query<'a> {
             _ => Err(invalid()),
         }
     }
+}
+
+fn validate_change(r: &Value) -> R<()> {
+    match r["action"].as_str() {
+        Some("itemsOpened") => {
+            keys(r, &["action", "id"])?;
+            text(&r["id"], 256)?;
+        }
+        Some("itemBatch") => {
+            validate_item_batch(r)?;
+            text(&r["requestId"], 200)?;
+            for id in r["ids"].as_array().into_iter().flatten() {
+                text(id, 256)?;
+            }
+        }
+        Some("item") => {
+            keys(
+                r,
+                &[
+                    "action",
+                    "id",
+                    "ids",
+                    "status",
+                    "note",
+                    "wait",
+                    "answer",
+                    "comment",
+                    "requestId",
+                    "snoozeUntil",
+                ],
+            )?;
+            match (r.get("id"), r.get("ids")) {
+                (Some(id), None) => {
+                    text(id, 256)?;
+                }
+                (None, Some(ids)) => {
+                    for id in ids
+                        .as_array()
+                        .filter(|a| !a.is_empty())
+                        .ok_or_else(invalid)?
+                    {
+                        text(id, 256)?;
+                    }
+                }
+                _ => return Err(invalid()),
+            }
+            if let Some(id) = r.get("requestId") {
+                text(id, 200)?;
+            }
+            if r.get("status")
+                .is_some_and(|s| !s.as_str().is_some_and(|s| STATUSES.contains(&s)))
+                || ["note", "wait", "comment"]
+                    .iter()
+                    .any(|k| r.get(*k).is_some_and(|v| !v.is_string()))
+                || r.get("snoozeUntil")
+                    .is_some_and(|s| !s.is_null() && s.as_str().and_then(parse_iso).is_none())
+            {
+                return Err(invalid());
+            }
+            if let Some(answer) = r.get("answer") {
+                keys(answer, &["question", "text", "choice"])?;
+                if answer.get("text").is_some_and(|v| !v.is_string()) {
+                    return Err(invalid());
+                }
+                if let Some(q) = answer.get("question") {
+                    integer(q, 1, MAX_SAFE)?;
+                }
+                if let Some(c) = answer.get("choice") {
+                    integer(c, 0, MAX_SAFE)?;
+                }
+            }
+        }
+        _ => return fail("Not an item change."),
+    }
+    Ok(())
 }
 
 struct View {
@@ -245,6 +336,8 @@ fn decorate(
     let (stale, limit) = read_facts(state, item, bot, |index, status| {
         if detail {
             row["links"][index]["state"] = json!(status);
+        } else if matches!(status, "working" | "waiting") {
+            row["live"] = Value::Bool(true);
         }
     });
     if detail && let Some(fields) = row.as_object_mut() {
@@ -292,7 +385,8 @@ impl AgentControl {
             return self.read_items_v2(query, false);
         }
         let device = text(&device, 256)?;
-        if self.host.state().device(device).is_none() {
+        if self.host.state().device(device).is_none() && self.across().copies.host(device).is_none()
+        {
             return fail("Select a paired computer by its id.");
         }
         let answer: Value = self
@@ -312,6 +406,69 @@ impl AgentControl {
         self.read_items_v2(Query::parse(request)?, true)
     }
 
+    /// An explicit source is required even when only one host currently has an item with this id.
+    pub(crate) async fn items_change(&self, device: Value, request: Value) -> R<Value> {
+        if device.is_null() {
+            return self.items_change_from(&request).await;
+        }
+        let device = text(&device, 256)?;
+        validate_change(&request)?;
+        {
+            let state = self.host.state();
+            let Some(peer) = state.device(device) else {
+                return fail("Select a paired computer by its id.");
+            };
+            if peer.state != DeviceState::Online {
+                return fail(format!(
+                    "{} is offline: its items change only while it is connected.",
+                    peer.name
+                ));
+            }
+        }
+        let result: Value = self
+            .host
+            .ask(
+                "remoteItemsChange",
+                json!({"device": device, "request": request}),
+            )
+            .await?;
+        keys(&result, &["refused", "itemBatchResult"])?;
+        if result
+            .get("refused")
+            .is_some_and(|v| v != "question_changed")
+            || (request["action"] == "itemBatch") != result.get("itemBatchResult").is_some()
+        {
+            return fail("The paired computer did not confirm the item change.");
+        }
+        if let Some(batch) = result.get("itemBatchResult") {
+            keys(batch, &["ids", "changed", "refused"])?;
+            if batch["ids"] != request["ids"]
+                || !batch["changed"].as_array().is_some_and(|rows| {
+                    rows.iter().all(|r| {
+                        keys(r, &["id", "version"]).is_ok()
+                            && r["id"].is_string()
+                            && r["version"].as_u64().is_some()
+                    })
+                })
+                || !batch
+                    .get("refused")
+                    .is_some_and(|v| v.is_null() || v == "question_changed")
+            {
+                return fail("The paired computer did not confirm this item batch.");
+            }
+        }
+        Ok(result)
+    }
+
+    pub(crate) async fn items_change_from(&self, request: &Value) -> R<Value> {
+        validate_change(request)?;
+        if request["action"] == "itemsOpened" {
+            self.items_opened(request["id"].as_str().expect("validated bot id"), true)?;
+            return Ok(json!({}));
+        }
+        self.owner_item(request, true).await
+    }
+
     fn read_items_v2(&self, query: Query<'_>, peer: bool) -> R<Value> {
         if let Query::Feed(since) = query {
             return self.items_feed(since, peer);
@@ -327,6 +484,7 @@ impl AgentControl {
                 .ok_or_else(|| Fail::Tool("No such bot on this computer.".into()))
         };
         let mut answer = match query {
+            Query::Linked { bot, sessions } => items.items_linked(&own(bot)?.id, &sessions),
             Query::Page {
                 bot,
                 before,
@@ -393,7 +551,9 @@ impl AgentControl {
         let clock_changed = items.refresh_archive_clock(now);
         let revision = items.feed_revision();
         if clock_changed || (view.stamp.is_some() && !view.current(stamp, now)) {
-            self.host.port().tell("itemsV2Changed", &json!({}));
+            self.host
+                .port()
+                .tell("itemsV2Changed", &json!({"botHomes":true}));
         }
         view.sync(revision, stamp, now);
         let base = since.and_then(|version| view.since(version, revision));
@@ -419,6 +579,9 @@ impl AgentControl {
                 now,
                 if peer { BotView::Peer } else { BotView::Local },
             );
+            if !peer {
+                answer["remote"] = Value::Array(self.across().copies.sources());
+            }
             if let Value::Object(fields) = metadata {
                 for (key, value) in fields {
                     if key == "looks" {
@@ -446,13 +609,25 @@ impl AgentControl {
         Ok(answer)
     }
 
-    pub(super) fn items_v2_changed(&self, metadata: bool) {
+    pub(super) fn items_sources_changed(&self) {
+        lock(&self.items_feed).local.stamp = None;
+        self.host
+            .port()
+            .tell("itemsV2Changed", &json!({"localOnly":true}));
+    }
+
+    pub(super) fn items_v2_changed(&self, metadata: bool, bot_homes: bool) {
         if metadata {
             let mut views = lock(&self.items_feed);
             views.local.stamp = None;
             views.peer.stamp = None;
         }
-        self.host.port().tell("itemsV2Changed", &json!({}));
+        let change = if bot_homes {
+            json!({"botHomes":true})
+        } else {
+            json!({})
+        };
+        self.host.port().tell("itemsV2Changed", &change);
     }
 
     pub(super) fn observe_items_v2(&self, state: &HostState) {
@@ -471,7 +646,9 @@ impl AgentControl {
             }
         }
         if changed {
-            self.host.port().tell("itemsV2Changed", &json!({}));
+            self.host
+                .port()
+                .tell("itemsV2Changed", &json!({"botHomes":true}));
         }
     }
 }

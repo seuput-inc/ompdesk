@@ -5,7 +5,7 @@
  * - The open item per bot (or group), so the page comes back to it across a remount.
  * - Each item's comment draft, which a refused send fills again only while it is empty.
  * - Comments on their way: shown at once under the Activity, sent with a request id so a resend posts once; the
- *   core's answer carries the comment, which drops it. A failure keeps it with Retry and Discard. An answer whose
+ *   host confirms it. A failure keeps it with Retry and Discard. An answer whose
  *   question the bot replaced meanwhile is refused (`question_changed`): a toast says so and the words go back.
  * - The picks of a several-question ask, per question, kept in `localStorage` until they are sent.
  *
@@ -24,6 +24,7 @@ import { errorDetail } from "../../../lib/error-detail";
 import { uiLocale } from "../../../lib/format";
 import { translate } from "../../../lib/i18n";
 import { useBotsStore } from "../../../stores/bots";
+import { queryItems } from "../../../stores/item-query";
 import { toast, toastError, useToastStore } from "../../../stores/toast";
 import type { AnswerReview } from "../inbox-answers";
 import type { DecisionAnswer } from "./item-model";
@@ -75,37 +76,65 @@ function setPending(item: string, change: (list: PendingComment[]) => PendingCom
 	useItemsUi.setState(state => ({ pending: { ...state.pending, [item]: change(state.pending[item] ?? []) } }));
 }
 
-export function postItemAnswer(item: string, question: number, text: string, requestId: string) {
-	return useBotsStore.getState().command({ action: "item", id: item, answer: { text, question }, requestId });
+type ItemTarget = Pick<Item, "device" | "bot" | "id">;
+
+export function itemUiKey(item: Pick<Item, "device" | "id">): string {
+	return item.device ? `${item.device}\0${item.id}` : item.id;
 }
 
-async function post(item: string, entry: PendingComment): Promise<void> {
+export function postItemAnswer(item: ItemTarget, question: number, text: string, requestId: string) {
+	return useBotsStore.getState().command({
+		action: "item",
+		device: item.device ?? null,
+		id: item.id,
+		answer: { text, question },
+		requestId,
+	});
+}
+
+async function post(item: ItemTarget, entry: PendingComment): Promise<void> {
+	const key = itemUiKey(item);
+	const device = item.device ?? null;
+	let replaced = false;
 	try {
 		const state =
 			entry.question === undefined
 				? await useBotsStore.getState().command({
 						action: "item",
-						id: item,
+						device,
+						id: item.id,
 						comment: entry.text,
 						requestId: entry.requestId,
 					})
 				: await postItemAnswer(item, entry.question, entry.text, entry.requestId);
-		setPending(item, list => list.filter(known => known.requestId !== entry.requestId));
-		if (state.refused === "question_changed") {
-			toast({ variant: "warning", message: translate("bots.items.ask.replaced") });
-			// The words go back only into an empty box: what the owner typed since stays.
-			if (!useItemsUi.getState().drafts[item]?.trim()) setDraft(item, entry.text);
-		}
+		replaced = state.refused === "question_changed";
 	} catch (error) {
-		setPending(item, list =>
-			list.map(known => (known.requestId === entry.requestId ? { ...known, failed: true } : known)),
-		);
-		toastError({ title: translate("bots.items.comment.failed"), error });
+		const receipt = await queryItems(device, {
+			protocol: 2,
+			action: "itemReceipt",
+			bot: item.bot,
+			id: item.id,
+			requestId: entry.requestId,
+			question: entry.question,
+		}).catch(() => undefined);
+		replaced = receipt?.outcome === "question_changed";
+		if (!replaced && receipt?.outcome !== "answered" && receipt?.outcome !== "commented") {
+			setPending(key, list =>
+				list.map(known => (known.requestId === entry.requestId ? { ...known, failed: true } : known)),
+			);
+			toastError({ title: translate("bots.items.comment.failed"), error });
+			return;
+		}
+	}
+	setPending(key, list => list.filter(known => known.requestId !== entry.requestId));
+	if (replaced) {
+		toast({ variant: "warning", message: translate("bots.items.ask.replaced") });
+		if (!useItemsUi.getState().drafts[key]?.trim()) setDraft(key, entry.text);
 	}
 }
 
 /** Sends a comment (or an answer to `question`): shown at once, posted once whatever is retried. */
-export function sendComment(item: string, text: string, question?: number): void {
+export function sendComment(item: ItemTarget, text: string, question?: number): void {
 	const entry: PendingComment = {
 		requestId: crypto.randomUUID(),
 		text,
@@ -113,19 +142,20 @@ export function sendComment(item: string, text: string, question?: number): void
 		failed: false,
 		...(question === undefined ? {} : { question }),
 	};
-	setPending(item, list => [...list, entry]);
+	setPending(itemUiKey(item), list => [...list, entry]);
 	void post(item, entry);
 }
 
-export function retryComment(item: string, requestId: string): void {
-	const entry = useItemsUi.getState().pending[item]?.find(known => known.requestId === requestId);
-	if (!entry) return;
-	setPending(item, list => list.map(known => (known.requestId === requestId ? { ...known, failed: false } : known)));
+export function retryComment(item: ItemTarget, requestId: string): void {
+	const key = itemUiKey(item);
+	const entry = useItemsUi.getState().pending[key]?.find(known => known.requestId === requestId);
+	if (!entry?.failed) return;
+	setPending(key, list => list.map(known => (known.requestId === requestId ? { ...known, failed: false } : known)));
 	void post(item, { ...entry, failed: false });
 }
 
-export function discardComment(item: string, requestId: string): void {
-	setPending(item, list => list.filter(known => known.requestId !== requestId));
+export function discardComment(item: ItemTarget, requestId: string): void {
+	setPending(itemUiKey(item), list => list.filter(known => known.requestId !== requestId));
 }
 
 const BATCH_KEY = "omp.itemBatch.v1:";
@@ -223,13 +253,13 @@ async function dispatchBatch(id: string, batch: Batch, raw?: string): Promise<vo
 	try {
 		if (raw !== undefined && localStorage.getItem(key) !== raw) return;
 		const { device, ids, change } = batch;
-		const reply = await useBotsStore.getState().command({
-			action: raw === undefined ? "item" : "itemBatch",
-			device,
-			ids,
-			requestId: id,
-			...change,
-		});
+		const reply = await useBotsStore
+			.getState()
+			.command(
+				raw === undefined
+					? { action: "item", device, ids, requestId: id, ...change }
+					: { action: "itemBatch", device, ids, requestId: id, ...change },
+			);
 		let refused: string | null | undefined = reply.refused;
 		if (raw !== undefined) {
 			const receipt = batchResult.safeParse(reply.itemBatchResult);
@@ -260,7 +290,7 @@ async function dispatchBatch(id: string, batch: Batch, raw?: string): Promise<vo
 	}
 }
 
-async function submitBatch(items: readonly Item[], change: ItemBatchChange, requestId: string): Promise<void> {
+async function submitBatch(items: readonly ItemTarget[], change: ItemBatchChange, requestId: string): Promise<void> {
 	if (!items.length) return;
 	const device = items[0].device ?? null;
 	const batch = { device, ids: items.map(item => item.id), change };
@@ -295,7 +325,7 @@ async function submitBatch(items: readonly Item[], change: ItemBatchChange, requ
 
 /** The caller starts one request per host. The saved command keeps the original wait reason or absolute wake time. */
 export function moveItems(
-	items: readonly Item[],
+	items: readonly ItemTarget[],
 	status: ItemStatus,
 	requestId: string,
 	note?: { wait?: string; note?: string },
@@ -303,7 +333,7 @@ export function moveItems(
 	return submitBatch(items, { status, ...note }, requestId);
 }
 
-export function snoozeItems(items: readonly Item[], until: number | null, requestId: string): Promise<void> {
+export function snoozeItems(items: readonly ItemTarget[], until: number | null, requestId: string): Promise<void> {
 	return submitBatch(items, { snoozeUntil: until === null ? null : new Date(until).toISOString() }, requestId);
 }
 

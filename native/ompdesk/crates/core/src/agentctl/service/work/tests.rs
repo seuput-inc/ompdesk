@@ -4,6 +4,8 @@
 //! captured from the TypeScript (`captured.json`).
 
 mod bot_provenance;
+#[cfg(target_os = "linux")]
+mod item_cost;
 mod item_mail;
 mod items_feed;
 mod owner_replay;
@@ -1366,6 +1368,7 @@ const NOTE: crate::agentctl::rules::mail::MailDelivery =
 async fn a_bot_is_made_in_its_own_folder_and_its_first_chat_becomes_its_home_once() {
     let root = Scratch::new();
     let (control, asked, _) = ada(&root, Mails::default(), |_, _| None).await;
+    control.items_legacy_audience(true, false);
     assert!(root.0.join("ada").is_dir());
     let bot = control.bot_named("ada").unwrap();
     assert_eq!(bot.home.as_deref(), Some("/s/bot.jsonl"));
@@ -1951,6 +1954,7 @@ async fn an_owner_change_is_mailed_once_per_version_and_an_empty_one_or_a_gone_i
     let item = control
         .items()
         .find(&control.bot_named("Ada").unwrap().id, "1")
+        .unwrap()
         .cloned()
         .unwrap();
     assert_eq!(item.version, 2);
@@ -2108,7 +2112,13 @@ async fn managed_item_open_recovers_only_a_tab_accepted_by_the_assigner() {
         )
         .await;
     assert!(!add.is_error, "{}", add.text);
-    let id = control.items().find(&bot, "#1").unwrap().id.clone();
+    let id = control
+        .items()
+        .find(&bot, "#1")
+        .unwrap()
+        .unwrap()
+        .id
+        .clone();
     let reservation = ItemWork {
         generation: 1,
         device: None,
@@ -2284,7 +2294,7 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
             None,
         )
         .await;
-    let id = control.items().find(&bot, "1").unwrap().id.clone();
+    let id = control.items().find(&bot, "1").unwrap().unwrap().id.clone();
     control.items().set_fail_writes(true).unwrap();
     assert!(
         control
@@ -2300,7 +2310,7 @@ async fn managed_item_open_commits_before_spawn_and_first_prompt() {
             None,
         )
         .await;
-    assert!(rejected.is_error && control.items().find(&bot, "#2").is_none());
+    assert!(rejected.is_error && control.items().find(&bot, "#2").unwrap().is_none());
     let open = json!({"item": id, "worktree": true, "message":"go"});
     let tool = "ompdesk_session_open";
     let failed = control.run("bot1", tool, open.clone(), None).await;
@@ -2491,9 +2501,31 @@ async fn a_session_an_item_opened_is_linked_and_names_its_file_once_it_has_one()
         .unwrap();
     control.link_opened(&caller, "1", "child1").unwrap();
     let bot = control.bot_named("Ada").unwrap();
-    let item = control.items().find(&bot.id, "1").cloned().unwrap();
+    let item = control
+        .items()
+        .find(&bot.id, "1")
+        .unwrap()
+        .cloned()
+        .unwrap();
     assert_eq!(item.status, "working");
     assert_eq!(item.links[0].target, "child1");
+    control
+        .items()
+        .change(&item.id, |row| {
+            let original = row.links[0].clone();
+            for (kind, target) in [
+                ("url", "child1"),
+                ("session", "pending"),
+                ("session", "child1"),
+            ] {
+                row.links.push(crate::agentctl::journal::items::ItemLink {
+                    kind: kind.into(),
+                    target: target.into(),
+                    ..original.clone()
+                });
+            }
+        })
+        .unwrap();
     let mut world = bot_world(&bot.folder);
     world["tabs"]
         .as_array_mut()
@@ -2501,10 +2533,22 @@ async fn a_session_an_item_opened_is_linked_and_names_its_file_once_it_has_one()
         .push(tab("child1", json!({ "sessionPath": "/s/child.jsonl" })));
     crate::ports::apply_state(control.host.port(), 1, &world.to_string()).unwrap();
     control.observe_bots();
+    let store = control.items();
+    let row = store.get(&item.id).unwrap();
     assert_eq!(
-        control.items().get(&item.id).unwrap().links[0].target,
-        "/s/child.jsonl"
+        row.links
+            .iter()
+            .map(|l| l.target.as_str())
+            .collect::<Vec<_>>(),
+        ["/s/child.jsonl", "child1", "pending", "/s/child.jsonl"]
     );
+    let base = store.feed_revision();
+    let reads = store.full_reads();
+    drop(store);
+    assert!(!control.settle_item_links(&control.host.state()));
+    let store = control.items();
+    assert_eq!(store.feed_revision(), base);
+    assert_eq!(store.full_reads(), reads);
 }
 
 #[tokio::test]
@@ -2585,6 +2629,7 @@ async fn legacy_peer_request_is_private_and_recorded_once_across_concurrent_send
     let root = Scratch::new();
     let row = json!({"id":"ada","name":"Ada","folder":root.0,"home":"/s/ada.jsonl"});
     let (host, asked) = started_with(&root, json!([row]));
+    host.items_legacy_audience(true, false);
     let shared = host.bots_share();
     assert_eq!(
         host.bot_home("Ada", "peer", Some("Mini"), false)
@@ -2932,6 +2977,17 @@ async fn only_the_owner_picks_the_approval_mode_and_skill_projects_a_bots_chats_
     assert_eq!(flags[0], "--approval-mode");
     assert_eq!(flags[1], "always-ask");
     assert_eq!(flags[2], "--config");
+    // A v2 seed does not prepare the skill overlay. A real local spawn does.
+    let overlay_path = flags[3].as_str().unwrap();
+    std::fs::remove_file(overlay_path).unwrap();
+    control
+        .items_query(json!({"device":null,"action":"itemsFeed","protocol":2}))
+        .await
+        .unwrap();
+    assert!(!Path::new(overlay_path).exists());
+    assert!(control.bot_launch_for("/somewhere/else").is_empty());
+    let folder = control.bot_named(&id).unwrap().folder;
+    assert_eq!(json!(control.bot_launch_for(&folder)), flags);
     let overlay = std::fs::read_to_string(flags[3].as_str().unwrap()).unwrap();
     assert!(overlay.contains("skills"), "{overlay}");
     assert!(
@@ -3335,7 +3391,12 @@ async fn an_answer_names_its_question_and_a_resent_comment_posts_once() {
     }))
     .await;
     assert!(!out.is_error, "{}", out.text);
-    let item = control.items().find(&bot_id, "1").cloned().unwrap();
+    let item = control
+        .items()
+        .find(&bot_id, "1")
+        .unwrap()
+        .cloned()
+        .unwrap();
     let question = item.question.clone().unwrap();
     assert_eq!(item.status, "needs_you");
     assert_eq!(question.decisions.len(), 2);
@@ -3425,7 +3486,12 @@ async fn bot_self_decision_closes_inbox_but_does_not_authorize_dependents() {
     ] {
         let out =
             tool(json!({"action":"set","item":"1","ask":"Proceed?","options":["proceed"]})).await;
-        let item = control.items().find(&bot_id, "1").cloned().unwrap();
+        let item = control
+            .items()
+            .find(&bot_id, "1")
+            .unwrap()
+            .cloned()
+            .unwrap();
         let question = item.question.as_ref().unwrap().id;
         assert!(out.text.contains(&format!("[question {question}]")));
         if let Some(old) = previous {
@@ -3471,7 +3537,12 @@ async fn bot_self_decision_closes_inbox_but_does_not_authorize_dependents() {
         previous = Some(question);
     }
     tool(json!({"action":"set","item":"1","ask":"Proceed?","options":["proceed"]})).await;
-    let item = control.items().find(&bot_id, "1").cloned().unwrap();
+    let item = control
+        .items()
+        .find(&bot_id, "1")
+        .unwrap()
+        .cloned()
+        .unwrap();
     let question = item.question.unwrap().id;
     let reply = control
         .bots_command(json!({
@@ -3508,7 +3579,15 @@ async fn a_move_of_several_items_is_one_mail_and_waiting_says_what_it_waits_on()
             )
             .await;
     }
-    let id = |number: &str| control.items().find(&bot_id, number).unwrap().id.clone();
+    let id = |number: &str| {
+        control
+            .items()
+            .find(&bot_id, number)
+            .unwrap()
+            .unwrap()
+            .id
+            .clone()
+    };
     let (one, two) = (id("1"), id("2"));
     control
         .bots_command(json!({ "action": "item", "ids": [one, two], "status": "waiting", "wait": "the vendor" }))
@@ -3838,6 +3917,7 @@ async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_onc
     let root = Scratch::new();
     let mails = Mails::default();
     let (host, host_asked, ada_id) = ada(&root, mails.clone(), |_, _| None).await;
+    host.items_legacy_audience(false, true);
     let tool = |args: Value| host.run("bot1", "ompdesk_item", args, None);
     assert!(
         !tool(json!({ "action": "add", "title": "Pick a day" }))
@@ -3849,7 +3929,7 @@ async fn a_paired_device_lists_this_computers_bots_and_its_answer_lands_here_onc
     )
     .await;
     assert!(!out.is_error, "{}", out.text);
-    let item = host.items().find(&ada_id, "1").cloned().unwrap();
+    let item = host.items().find(&ada_id, "1").unwrap().cloned().unwrap();
     let question = item.question.as_ref().unwrap().id;
     let whole = host.bots_share();
     assert_eq!(whole["state"]["bots"][0]["name"], "Ada");

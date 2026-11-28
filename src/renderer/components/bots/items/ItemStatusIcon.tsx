@@ -4,7 +4,8 @@
  * muted. A picker's Waiting ends in an ellipsis: it asks what the item waits on first.
  */
 import { Circle, CircleAlert, CircleCheck, CircleDot, CircleSlash, Hourglass } from "lucide-react";
-import type { Item, ItemStatus } from "../../../../shared/bots";
+import type { ItemStatus } from "../../../../shared/bots";
+import type { ListedItem } from "../../../../shared/items-v2";
 import { cx } from "../../../lib/format";
 import { WorkingArc } from "../../common";
 
@@ -27,7 +28,8 @@ const TONES: Record<ItemStatus, string> = {
 };
 
 /** Whether a session the item links may still be at work: its In progress glyph turns. */
-export function itemLive(item: Pick<Item, "links">): boolean {
+export function itemLive(item: ListedItem): boolean {
+	if (!("events" in item)) return item.live === true;
 	return item.links.some(link => link.kind === "session" && (link.state === "working" || link.state === "waiting"));
 }
 

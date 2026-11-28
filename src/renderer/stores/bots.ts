@@ -1,28 +1,92 @@
-/**
- * This computer's bots and their items as the core holds them (`BotsState`, `src/shared/bots.ts`): read once, then
- * kept by main's `BOTS_STATE` pushes and by every change's answer. The last read paints the first frame
- * (`lib/last-read.ts`, kind `panel`), so the sidebar's Bots section and the Bots page never open empty.
- *
- * Each paired host's bots come in the same state (`remote`, the copy the core keeps of each host): `state.bots` and
- * `state.items` list them after this computer's own, each tagged with its host's `device` (orca-bots-remote). A change
- * to one goes to its host through the core, which routes it by the bot's or item's id; nothing of it is written here.
- */
+/** The v2 feed owns each device's open rows. Commands never install an unversioned item snapshot over it. */
 import { create } from "zustand";
-import type { Bot, BotsRequest, BotsState } from "../../shared/bots";
+import type { Bot, BotsRequest, BotsState, ItemChangeRequest } from "../../shared/bots";
+import type { ListedBotsState, ListedItem } from "../../shared/items-v2";
 import { translate } from "../lib/i18n";
-import { lastRead, rememberRead } from "../lib/last-read";
+import { webRuntime } from "../web/runtime";
+import { cachedHosts, cacheHosts, type HostInfo, ItemFeed } from "./item-feed";
+import { useRemoteStore } from "./remote";
 
-const READ_KEY = "bots";
-const EMPTY: BotsState = { bots: [], items: [] };
+const EMPTY: ListedBotsState = { bots: [], items: [] };
+const sources = new Map<string | null, ItemFeed>();
+let hosts = new Map(cachedHosts().map(h => [h.device, { ...h, online: false }]));
+let mirrored: HostInfo[] = [];
+let revision = 0;
+function source(device: string | null) {
+	let feed = sources.get(device);
+	if (!feed) {
+		feed = new ItemFeed(device);
+		sources.set(device, feed);
+	}
+	return feed;
+}
+for (const device of [null, ...hosts.keys()]) source(device).restore(++revision);
+
+function listedSources(): ListedBotsState {
+	const local = source(null);
+	const state: ListedBotsState = { items: [], bots: [], rooms: local.rooms, looks: local.looks };
+	for (const device of [null, ...hosts.keys()]) {
+		const feed = source(device);
+		feed.globalSlots.clear();
+		for (const row of feed.rows) {
+			feed.globalSlots.set(row.id, state.items.length);
+			state.items.push(row);
+		}
+		for (const bot of feed.bots) state.bots.push(bot);
+		if (device) {
+			state.remote ??= [];
+			state.remote.push({ ...hosts.get(device)!, bots: feed.bots, items: feed.rows });
+		}
+	}
+	return state;
+}
+
+export function itemCounts(device: string | undefined, bot: string) {
+	return sources.get(device ?? null)?.counts[bot];
+}
+
+export function listedItem(state: ListedBotsState, device: string | undefined, id: string): ListedItem | undefined {
+	const slot = sources.get(device ?? null)?.globalSlots.get(id);
+	if (slot !== undefined) {
+		const row = state.items[slot];
+		if (row?.id === id && row.device === device) return row;
+	}
+	// Directly supplied (v1) lists have no feed index.
+	return state === indexed ? undefined : state.items.find(row => row.id === id && row.device === device);
+}
+
+const NO_ROWS: readonly ListedItem[] = [];
+export function listedBotItems(state: ListedBotsState, device: string | undefined, bot: string): readonly ListedItem[] {
+	if (state !== indexed) return state.items.filter(row => row.device === device && row.bot === bot);
+	return sources.get(device ?? null)?.byBot.get(bot)?.rows ?? NO_ROWS;
+}
+
+export function listedItemByNumber(state: ListedBotsState, device: string | undefined, bot: string, number: number) {
+	if (state !== indexed)
+		return state.items.find(row => row.device === device && row.bot === bot && row.number === number);
+	const group = sources.get(device ?? null)?.byBot.get(bot);
+	const slot = group?.slots.get(number);
+	return slot === undefined ? undefined : group?.rows[slot];
+}
+
+let indexed = listedSources();
+export const itemEpoch = (device: string | null) => sources.get(device)?.epoch;
+type CommandResult = Pick<BotsState, "rooms" | "deleteChanged" | "refused" | "itemBatchResult"> &
+	Partial<Pick<ListedBotsState, "bots" | "remote">>;
+type StoreRequest =
+	| Exclude<BotsRequest, { action: ItemChangeRequest["action"] }>
+	| (ItemChangeRequest & { device: string | null });
 
 interface BotsStore {
 	/** This computer's bots and items, then each paired host's (tagged `device`). */
-	state: BotsState;
+	state: ListedBotsState;
 	/** A live read or push arrived this run (until then `state` is the last run's). */
 	live: boolean;
+	hostLive: (device?: string) => boolean;
 	/** Applies the owner's change; the state after it is kept. Rejects with the core's reason. */
-	command: (request: BotsRequest) => Promise<BotsState>;
-	receive: (state: BotsState) => void;
+	command: (request: StoreRequest) => Promise<CommandResult>;
+	itemRevision: (device: string | undefined, bot: string) => number;
+	linkRevision: (device: string | undefined, bot: string) => number;
 	reset: () => void;
 }
 
@@ -38,63 +102,201 @@ export function listedBots(state: BotsState): BotsState {
 }
 
 /** The offline host a change to a paired host's bot or item would go to (its name), else null. */
-function offlineOwner(state: BotsState, request: BotsRequest): string | null {
-	if ((request.action === "item" || request.action === "itemBatch") && request.device !== undefined) {
-		if (request.device === null) return null;
+function offlineOwner(state: ListedBotsState, request: BotsRequest): string | null {
+	if (
+		(request.action === "item" || request.action === "itemBatch" || request.action === "itemsOpened") &&
+		request.device !== undefined
+	) {
+		if (!request.device) return null;
 		const host = state.remote?.find(known => known.device === request.device);
 		return host?.online ? null : (host?.name ?? request.device);
 	}
-	const id = "id" in request ? request.id : "ids" in request ? request.ids?.[0] : undefined;
-	if (!id) return null;
-	const device =
-		request.action === "item"
-			? state.items.find(item => item.id === id)?.device
-			: state.bots.find(bot => bot.id === id)?.device;
+	const id = "id" in request ? request.id : undefined;
+	const device = id && state.bots.find(bot => bot.id === id)?.device;
 	const host = device ? state.remote?.find(known => known.device === device) : undefined;
 	return host && !host.online ? host.name : null;
 }
 
-export const useBotsStore = create<BotsStore>()(set => ({
-	state: listedBots(lastRead<BotsState>(undefined, READ_KEY) ?? EMPTY),
+export const useBotsStore = create<BotsStore>()((set, get) => ({
+	state: indexed,
 	live: false,
+	hostLive: device => (device ? Boolean(hosts.get(device)?.online && sources.get(device)?.ready) : get().live),
+	itemRevision: (device, bot) => sources.get(device ?? null)?.revisions.get(bot) ?? 0,
+	linkRevision: (device, bot) => sources.get(device ?? null)?.linkRevisions.get(bot) ?? 0,
 	command: async request => {
-		const offline = offlineOwner(useBotsStore.getState().state, request);
+		const offline = offlineOwner(get().state, request);
 		if (offline) throw new Error(translate("bots.remote.offlineChange", { device: offline }));
-		const state = await window.omp.bots.command(request);
-		useBotsStore.getState().receive(state);
-		return state;
-	},
-	receive: ({ deleteChanged: _deleteChanged, refused: _refused, itemBatchResult: _batch, ...state }) => {
-		rememberRead(undefined, READ_KEY, state);
-		set({ state: listedBots(state), live: true });
+		if (request.action === "item" || request.action === "itemBatch" || request.action === "itemsOpened") {
+			const { device, ...change } = request;
+			return window.omp.bots.itemChange(device, change);
+		}
+		if (request.action === "get") {
+			await readFeed(null, true);
+			return get().state;
+		}
+		// The command may remove its own routing row. Resolve its host before dispatch.
+		const device =
+			"device" in request
+				? request.device
+				: "id" in request
+					? get().state.bots.find(bot => bot.id === request.id)?.device
+					: undefined;
+		const reply = await window.omp.bots.command(request);
+		// A lost follow-up read does not undo the owner's confirmed write.
+		await readFeed(device ?? null, true).catch(() => {});
+		return reply;
 	},
 	reset: () => set({ state: EMPTY, live: false }),
 }));
 
-let subscribed = false;
+const reads = new Map<string | null, { again: boolean; seed: boolean; promise: Promise<void> }>();
+let stop: (() => void) | undefined;
 
-/** Reads the bots once and follows main's pushes; a page without the bridge (tests) is skipped. */
+function publish() {
+	indexed = listedSources();
+	useBotsStore.setState({ state: indexed });
+}
+
+function readFeed(device: string | null, force: boolean): Promise<void> {
+	const prior = reads.get(device);
+	if (prior) {
+		prior.again = true;
+		prior.seed ||= force;
+		return prior.promise;
+	}
+	const read = { again: false, seed: force, promise: Promise.resolve() };
+	reads.set(device, read);
+	read.promise = (async () => {
+		const feed = source(device);
+		try {
+			do {
+				read.again = false;
+				const since = read.seed ? undefined : feed.version;
+				read.seed = false;
+				try {
+					const next = await window.omp.bots.itemsV2(device, {
+						protocol: 2,
+						action: "itemsFeed",
+						...(since && { since }),
+					});
+					if (reads.get(device) !== read) return;
+					if (read.again) continue;
+					const previous = feed.version?.match(/^(.+)\.(\d+)$/);
+					const incoming = next.version.match(/^(.+)\.(\d+)$/);
+					// An offline mirror may still be behind the live feed that this window holds.
+					if (previous && incoming && previous[1] === incoming[1] && Number(previous[2]) > Number(incoming[2]))
+						return;
+					if (next.kind === "seed") {
+						feed.seed(next, ++revision, true);
+						if (device === null) {
+							mirrored = next.remote ?? [];
+							discover(false);
+						}
+						publish();
+					} else if (
+						!since ||
+						next.base !== since ||
+						next.base !== feed.version ||
+						previous?.[1] !== incoming?.[1]
+					) {
+						if (!since) throw new Error("An item seed is required");
+						read.again = read.seed = true;
+						continue;
+					} else if (
+						next.version !== since ||
+						next.set.length ||
+						next.remove.length ||
+						Object.keys(next.counts).length
+					) {
+						const { structure, facts, inbox } = feed.delta(next, indexed, ++revision);
+						if (structure) publish();
+						else {
+							if (facts || inbox) indexed = { ...indexed };
+							useBotsStore.setState({ state: indexed });
+						}
+					}
+					if (!feed.ready) {
+						feed.ready = true;
+						useBotsStore.setState(device === null ? { live: true } : {});
+					}
+				} catch (error) {
+					if (since && error instanceof Error && error.message.includes("Item feed base mismatch"))
+						read.again = read.seed = true;
+					if (!read.again) throw error;
+				}
+			} while (read.again && reads.get(device) === read);
+		} finally {
+			if (reads.get(device) === read) reads.delete(device);
+		}
+	})();
+	return read.promise;
+}
+
+function discover(notify = true) {
+	const peers = useRemoteStore.getState().state?.hosts;
+	const next = new Map(mirrored.map(h => [h.device, h]));
+	if (!peers || !source(null).version) for (const [device, h] of hosts) if (!next.has(device)) next.set(device, h);
+	for (const peer of peers ?? [])
+		next.set(peer.deviceId, { device: peer.deviceId, name: peer.name, online: peer.state === "online" });
+	let changed = next.size !== hosts.size;
+	const fetch: string[] = [];
+	for (const [device, h] of next) {
+		const old = hosts.get(device);
+		if (!old || h.online !== old.online || h.name !== old.name) changed = true;
+		const feed = source(device);
+		if (old && h.online !== old.online) {
+			feed.ready = false;
+			reads.delete(device);
+		}
+		if (!old || (h.online && !old.online) || (!feed.version && !reads.has(device))) fetch.push(device);
+	}
+	for (const device of hosts.keys())
+		if (!next.has(device)) {
+			sources.delete(device);
+			reads.delete(device);
+		}
+	hosts = next;
+	if (changed) {
+		cacheHosts([...hosts.values()]);
+		if (notify) publish();
+	}
+	for (const device of fetch) void readFeed(device, false).catch(() => {});
+}
+
 export function ensureBots(): void {
-	if (subscribed || typeof window === "undefined" || typeof window.omp?.bots?.command !== "function") return;
-	subscribed = true;
-	window.omp.bots.onState(state => useBotsStore.getState().receive(state));
-	window.omp.bots
-		.command({ action: "get" })
-		.then(state => useBotsStore.getState().receive(state))
-		.catch(() => {});
+	if (stop || typeof window === "undefined" || !window.omp?.bots?.itemsV2) return;
+	const off = window.omp.bots.onItemsV2Changed(({ device, reseed }) => {
+		if (!device || hosts.has(device)) void readFeed(device, reseed).catch(() => {});
+	});
+	const offPeers = useRemoteStore.subscribe((next, prev) => {
+		if (next.state?.hosts !== prev.state?.hosts) discover();
+	});
+	const offLink = webRuntime()?.onConnectionState(state => {
+		if (state === "open") for (const device of [null, ...hosts.keys()]) void readFeed(device, false).catch(() => {});
+	});
+	stop = () => {
+		off();
+		offPeers();
+		offLink?.();
+	};
+	discover();
+	void readFeed(null, true).catch(() => {});
 }
 
-/** The bot may have edited its soul since the last read. */
+/** A bot may have edited its soul without an item change. */
 export function refreshBots(): void {
-	void useBotsStore
-		.getState()
-		.command({ action: "get" })
-		.catch(() => {});
+	if (!stop) return ensureBots();
+	for (const device of [null, ...hosts.keys()]) void readFeed(device, true).catch(() => {});
 }
 
-/** Tests: forget the subscription too. */
 export function resetBotsForTest(): void {
-	subscribed = false;
+	stop?.();
+	stop = undefined;
+	reads.clear();
+	sources.clear();
+	hosts.clear();
+	mirrored = [];
+	indexed = EMPTY;
 	useBotsStore.getState().reset();
 }
 

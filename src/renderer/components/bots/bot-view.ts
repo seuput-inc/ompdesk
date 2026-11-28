@@ -11,6 +11,7 @@ import type { SidebarProjectsState } from "../../../shared/sidebar-projects";
 import type { RowGroup } from "../../../shared/sidebar-rows";
 import { sessionHasContent } from "../../lib/session-title";
 import { webRuntime } from "../../web/runtime";
+import { botPageKey } from "./bot-page";
 
 /** The local owner's chat destination; delivery, schedules and paired views still use `home`. */
 export function botChatHome(bot: Bot): string | null {
@@ -112,7 +113,8 @@ export function sortBots(
 		// A bot the order does not name yet is newer than every one it does: on top, newest first.
 		return at === -1 ? -1 - Date.parse(bot.createdAt) / 1e13 : at;
 	};
-	const recency = (bot: Bot) => Date.parse(facts.get(bot.id)?.latest ?? bot.createdAt);
+	const factOf = (bot: Bot) => facts.get(botPageKey(bot.id, bot.device));
+	const recency = (bot: Bot) => Date.parse(factOf(bot)?.latest ?? bot.createdAt);
 	const collator = new Intl.Collator(undefined, { sensitivity: "base" });
 	const shown = bots.filter(bot => !(hidePaused && bot.paused));
 	const byPlace = (a: Bot, b: Bot) => placed(a) - placed(b);
@@ -124,7 +126,7 @@ export function sortBots(
 		case "smart":
 			return shown.toSorted(
 				(a, b) =>
-					Number((facts.get(b.id)?.needsYou ?? 0) > 0) - Number((facts.get(a.id)?.needsYou ?? 0) > 0) ||
+					Number((factOf(b)?.needsYou ?? 0) > 0) - Number((factOf(a)?.needsYou ?? 0) > 0) ||
 					recency(b) - recency(a) ||
 					byPlace(a, b),
 			);
@@ -136,7 +138,7 @@ export function sortBots(
 /** The faces a folded Bots header shows: who needs the person, then unread, then working, then the rest. */
 export function foldedFaces(bots: readonly Bot[], facts: ReadonlyMap<string, BotFacts>): Bot[] {
 	const rank = (bot: Bot) => {
-		const fact = facts.get(bot.id);
+		const fact = facts.get(botPageKey(bot.id, bot.device));
 		if (!fact) return 3;
 		if (fact.needsYou > 0 || fact.failed) return 0;
 		if (fact.unread) return 1;

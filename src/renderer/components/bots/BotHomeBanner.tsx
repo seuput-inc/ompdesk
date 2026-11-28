@@ -32,7 +32,7 @@ export function BotHomeBanner({
 			aria-label={t("bots.banner.open", { name: bot.name })}
 			className="ml-2 hidden shrink-0 gap-1.5 rounded-full px-2 min-[720px]:inline-flex"
 			data-bot-banner={home ? "home" : "chat"}
-			onClick={() => openBotPage(bot.id)}
+			onClick={() => openBotPage(bot.id, "activity", bot.device)}
 			size="sm"
 			variant="ghost"
 		>

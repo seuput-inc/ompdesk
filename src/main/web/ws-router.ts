@@ -14,7 +14,7 @@
  * event that ends its connection, and a call's answer (`web.reply`) leaves after every push main made before it.
  */
 import { hash } from "node:crypto";
-import { BOTS_COMMAND, BOTS_STATE, ITEMS_V2_CHANGED } from "../../shared/bots";
+import { BOTS_COMMAND, BOTS_STATE, ITEMS_V2_CHANGED, ITEMS_V2_QUERY } from "../../shared/bots";
 import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICE_CONNECTED, WEB_DEVICES_CHANGED, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
@@ -319,7 +319,8 @@ export class WsRouter {
 	readonly #deps: WsRouterDeps;
 	/** Each connected device's connections, as the core last told them. */
 	readonly #connections = new Map<string, PageConnection[]>();
-	readonly #itemsFeeds = new ItemFeedViewers<string>();
+	#legacyAudienceChanged?: () => void;
+	readonly #itemsFeeds = new ItemFeedViewers<string>(() => this.#legacyAudienceChanged?.());
 	/** The device that last sent each tab a model command: it is charged that tab's tokens. */
 	readonly #drivers = new Map<string, string>();
 	/** A streamed push's data JSON, made once for every device that gets the pool's very push object. */
@@ -410,6 +411,26 @@ export class WsRouter {
 			if (this.#deps.devices.get(deviceId)) this.#deliver(deviceId, channel, payload, page);
 			return;
 		}
+	}
+
+	get hasLegacyItemReaders(): boolean {
+		return this.#itemsFeeds.hasLegacyReaders;
+	}
+
+	readLegacyItems(connId: string, changed: () => void): void {
+		for (const connections of this.#connections.values()) {
+			if (!connections.some(page => page.connId === connId)) continue;
+			this.#legacyAudienceChanged = changed;
+			this.#itemsFeeds.legacyRead(connId);
+			return;
+		}
+		throw new Error("The requesting page disconnected");
+	}
+
+	legacyItemsChanged(state: unknown): void {
+		for (const [device, pages] of this.#connections)
+			for (const page of pages)
+				if (this.#itemsFeeds.wantsLegacy(page.connId)) this.#deliver(device, BOTS_STATE, state, page);
 	}
 
 	readItemsFeed<T>(connId: string, device: string | null, query: () => Promise<T>): Promise<T> {
@@ -704,7 +725,7 @@ export class WsRouter {
 
 	/** What a page may see: no secret-looking preferences, no raw bytes or `omp-media://` address. */
 	#shape(deviceId: string, channel: string, args: readonly unknown[], result: unknown, win: WebClientWindow): unknown {
-		if (channel === BOTS_COMMAND) return withoutLegacyPeerRequest(result);
+		if (channel === BOTS_COMMAND || channel === ITEMS_V2_QUERY) return withoutLegacyPeerRequest(result);
 		if (channel === IPC_COMMANDS.PREFS_GET) {
 			const payload = args[0];
 			const keyed = typeof payload === "object" && payload !== null && "key" in payload && payload.key;

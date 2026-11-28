@@ -1,5 +1,6 @@
 use super::*;
 use crate::agentctl::journal::items::{ItemQuestion, ItemRecord};
+use crate::agentctl::rules::mail::{Mail, MailKind};
 use std::fs::File;
 use std::io::Write as _;
 use std::process::Command;
@@ -291,6 +292,83 @@ async fn an_answer_wakes_a_chat_for_its_older_note_without_overtaking_it() {
 }
 
 #[tokio::test]
+async fn a_comment_and_its_retry_leave_an_unrelated_mail_backlog_for_recovery() {
+    let ready = Arc::new(AtomicBool::new(false));
+    let receiver = ready.clone();
+    let (host, asked) = rig(bot_world("demo"), Caps::default(), move |method, args| {
+        Ok(if method == "mail" {
+            json!({"journaled":receiver.load(Ordering::SeqCst),"itemSession":args["details"]["itemSession"]})
+        } else {
+            Value::Null
+        })
+    });
+    seed(&host, "a", 1);
+    let offline = 20;
+    let backlog: Vec<_> = (0..60)
+        .map(|i| {
+            let session = if i < offline {
+                format!("/offline/{i}")
+            } else {
+                "/s/work.jsonl".into()
+            };
+            (
+                session,
+                Mail::new(
+                    &format!("pending-{i}"),
+                    "owner",
+                    "Owner",
+                    "",
+                    MailKind::Note,
+                    "earlier",
+                    1.0,
+                ),
+            )
+        })
+        .collect();
+    host.items()
+        .commit_owner_scoped(vec![], None, None, &backlog, &[], &[])
+        .unwrap();
+    let request = json!({"action":"item","id":"a","comment":"next","requestId":"note"});
+    assert_eq!(host.items_change_from(&request).await.unwrap(), json!({}));
+    assert_eq!(
+        host.items().pending_mail().unwrap().len(),
+        backlog.len() + 1
+    );
+    ready.store(true, Ordering::SeqCst);
+    host.items_change_from(&request).await.unwrap();
+    host.items_change_from(&request).await.unwrap();
+    assert_eq!(host.items().pending_mail().unwrap(), backlog);
+    assert_eq!(host.items().get("a").unwrap().version, 2);
+    assert_eq!(
+        host.items()
+            .item_receipt("bot", &json!("a"), "note", None)
+            .unwrap()["outcome"],
+        "commented"
+    );
+    {
+        let log = asked.lock().unwrap();
+        let attempts: Vec<_> = log.iter().filter(|(m, _)| m == "mail").collect();
+        assert_eq!(attempts.len(), 2);
+        assert!(
+            attempts
+                .iter()
+                .all(|(_, a)| a["details"]["id"] == "item-a-v2"
+                    && a["details"]["itemSession"] == CHAT)
+        );
+    }
+    // A later pass can reach the live chat behind persistently offline ones without draining it all at once.
+    for _ in 0..=offline {
+        host.bots_tick().await;
+        let left = host.items().pending_mail().unwrap().len();
+        if left < backlog.len() {
+            assert!(left > offline);
+            return;
+        }
+    }
+    panic!("offline chats starved the next live chat");
+}
+
+#[tokio::test]
 async fn failed_owner_commit_writes_no_activity_receipt_journal_or_mail() {
     let root = Scratch::new();
     let mails = Mails::default();
@@ -304,7 +382,7 @@ async fn failed_owner_commit_writes_no_activity_receipt_journal_or_mail() {
         )
         .await;
     assert!(!out.is_error, "{}", out.text);
-    let before = host.items().find(&bot_id, "1").unwrap().v1();
+    let before = host.items().find(&bot_id, "1").unwrap().unwrap().v1();
     let month = crate::aimemory::value::iso(host.now().max(0.0) as u64);
     let journal = root
         .0
@@ -315,7 +393,7 @@ async fn failed_owner_commit_writes_no_activity_receipt_journal_or_mail() {
     let request = json!({"action":"itemBatch", "device":null, "requestId":"close",
                          "ids":[before.id], "status":"done"});
     assert!(host.bots_command(request).await.is_err());
-    assert_eq!(host.items().find(&bot_id, "1").unwrap(), &before);
+    assert_eq!(host.items().find(&bot_id, "1").unwrap().unwrap(), &before);
     assert_eq!(host.items().receipt("close").unwrap(), None);
     assert_eq!(std::fs::read(&journal).ok(), old);
     assert_eq!(delivered(&mails, &format!("item-{}-v2", before.id)), 0);

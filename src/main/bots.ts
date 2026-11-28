@@ -1,14 +1,11 @@
 /**
- * Main's copy of the bots state the core's agent control holds (`agentctl/journal/bots.rs`, told as `botsChanged`):
- * every window gets it as `BOTS_STATE`, and main reads it where it must know whether a tab is a bot's chat (a quiet
- * result notifies nothing, a bot chat's spawn carries its owner's launch flags). The core owns every change; this only
- * keeps the latest.
+ * The core owns the registry. Legacy readers receive `botsChanged`; item feeds negotiate their own pushes.
  */
 
 import type { z } from "zod";
 import type { BotContext } from "../../resources/gui-bridge/modes/bots-contracts";
-import type { Bot, BotsState, ItemsV2Change, SharedBots } from "../shared/bots";
-import type { ItemsV2Request } from "../shared/items-v2";
+import type { Bot, BotsState, ItemChangeRequest, ItemChangeResult, ItemsV2Change, SharedBots } from "../shared/bots";
+import type { ItemsV2Reply, ItemsV2Request } from "../shared/items-v2";
 import type { BotsRoomPostSchema, SharedBotsDeltaSchema, SharedBotsSchema } from "./remote/app-protocol";
 import type { PeerItemCheck, PeerItemStep, PeerItemVerdict } from "./remote/item-work";
 
@@ -19,6 +16,7 @@ export interface HostBotsUpdate {
 	online?: boolean;
 	/** As the link carried it (`app-protocol.ts`); the core checks every row. */
 	change?: z.infer<typeof SharedBotsSchema> | z.infer<typeof SharedBotsDeltaSchema>;
+	feed?: ItemsV2Reply<{ protocol: 2; action: "itemsFeed" }>;
 	forget?: true;
 }
 
@@ -40,6 +38,8 @@ export interface HostBots {
 	/** This computer's bots and items as its paired devices get them (`host.bots.list`). */
 	share(): Promise<SharedBots>;
 	itemsV2?(request: ItemsV2Request): Promise<unknown>;
+	itemsChange?(request: ItemChangeRequest): Promise<ItemChangeResult>;
+	cached?(device: string, legacy?: boolean): Promise<{ feed?: unknown; legacy?: unknown } | null>;
 	/** A device's change to one of this computer's bots (`host.bots.command`): the copy after it, or a file. */
 	from(request: unknown, deviceId: string, deviceName: string, createKey?: string): Promise<unknown>;
 	/** Whether the host durably recorded this exact create. An unknown outcome is not a refund. */
@@ -66,6 +66,15 @@ interface FeedReader {
 export class ItemFeedViewers<K> {
 	readonly #pages = new Map<K, Map<string | null, FeedReader>>();
 	readonly #legacy = new Set<K>();
+	readonly #onLegacyChange?: (active: boolean) => void;
+
+	constructor(onLegacyChange?: (active: boolean) => void) {
+		this.#onLegacyChange = onLegacyChange;
+	}
+
+	get hasLegacyReaders(): boolean {
+		return this.#legacy.size !== 0;
+	}
 
 	async read<T>(key: K, device: string | null, send: FeedReader["send"], query: () => Promise<T>): Promise<T> {
 		let sources = this.#pages.get(key);
@@ -107,57 +116,27 @@ export class ItemFeedViewers<K> {
 	}
 
 	legacyRead(key: K): void {
+		const first = !this.hasLegacyReaders;
 		this.#legacy.add(key);
+		if (first) this.#onLegacyChange?.(true);
 	}
 
 	wantsLegacy(key: K): boolean {
-		if (!this.#legacy.has(key)) {
-			const sources = this.#pages.get(key);
-			if (sources) for (const reader of sources.values()) if (reader.active) return false;
-		}
-		return true;
+		return this.#legacy.has(key);
 	}
 
 	forget(key: K): void {
 		this.#pages.delete(key);
-		this.#legacy.delete(key);
+		if (this.#legacy.delete(key) && !this.hasLegacyReaders) this.#onLegacyChange?.(false);
 	}
 }
 
-let current: BotsState = { bots: [], items: [] };
-let told = false;
-let ask: (() => Promise<BotsState>) | null = null;
+const quietFolders = new Map<string, Pick<Bot, "folder" | "quiet">>();
 const listeners = new Set<(state: BotsState) => void>();
 
-export function botsState(): BotsState {
-	return current;
-}
-
-/** The core told a new state: keep it and tell every listener. */
+/** Forward a legacy body without retaining its item histories in main. */
 export function setBotsState(state: BotsState): void {
-	current = state;
-	told = true;
 	for (const listener of listeners) listener(state);
-}
-
-/** How the state is asked of the core (`AgentControl.bots({action: "get"})`), once agent control is up. */
-export function setBotsAsk(getState: () => Promise<BotsState>): void {
-	ask = getState;
-}
-
-/**
- * The state, asked of the core first while none has arrived yet: a bot chat restored right after a relaunch spawns
- * before any change made the core tell it, and its spawn must still carry its owner's flags.
- */
-export async function botsStateNow(): Promise<BotsState> {
-	if (!told && ask) {
-		try {
-			setBotsState(await ask());
-		} catch {
-			// No agent control yet: the spawn goes as any chat's; the core's first tell fixes the next one.
-		}
-	}
-	return current;
 }
 
 export function onBotsState(listener: (state: BotsState) => void): () => void {
@@ -165,8 +144,12 @@ export function onBotsState(listener: (state: BotsState) => void): () => void {
 	return () => listeners.delete(listener);
 }
 
+export function setBotQuietFolders(folders: readonly Pick<Bot, "folder" | "quiet">[]): void {
+	quietFolders.clear();
+	for (const entry of folders) quietFolders.set(entry.folder, entry);
+}
+
 /** The bot whose chats run in `cwd` (a tab in a bot's folder is one of its chats). */
-export function botOfFolder(cwd: string | undefined): Bot | undefined {
-	if (!cwd) return undefined;
-	return current.bots.find(bot => !bot.device && bot.folder === cwd);
+export function botOfFolder(cwd: string | undefined): Pick<Bot, "folder" | "quiet"> | undefined {
+	return cwd ? quietFolders.get(cwd) : undefined;
 }

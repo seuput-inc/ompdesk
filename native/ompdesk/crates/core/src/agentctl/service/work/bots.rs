@@ -2,8 +2,8 @@
 //! control-tools.md › Bots, items and rooms): the registry, pause and resume, delete, a bot's Look around routine,
 //! handing a session to a bot, a bot by name (`bot:<name>`) and the context each bot chat's omp is handed.
 //!
-//! Tells to main: `botsChanged {state}` after every change. A paused bot's chats are in `Host::held`: a report to one
-//! is kept in the mail outbox and handed over by the pass its resume runs.
+//! V1 subscribers get `botsChanged {state}` or `botsShared {change}`. A paused bot's chats are in `Host::held`:
+//! a report to one is kept in the mail outbox and handed over by the pass its resume runs.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ use crate::agentctl::journal::attachments::sha256_hex;
 use crate::agentctl::journal::bots::{
     BotRecord, BotWorker, Bots, STALE_DAYS, WORKERS_KEPT, WorkerOrigin, slug, specialty,
 };
-use crate::agentctl::journal::items::{ItemRecord, STATUSES, parse_iso};
+use crate::agentctl::journal::items::{ItemRecord, Items, STATUSES, parse_iso};
 use crate::agentctl::journal::looks::{EVERY_CHOICES, FOCUS_MAX, LookSetting, PER_LOOK, TITLE_MAX};
 use crate::agentctl::journal::mail_outbox::{
     MailAnswer, OutboxMail, RedeliverDeps, redeliver_mail,
@@ -172,7 +172,7 @@ fn with_command_outcome(mut state: Value, mut answer: Value) -> Value {
 }
 
 // Paired hosts meter waking answers under `item`; a retryable bulk move or snooze can never carry one.
-fn validate_item_batch(request: &Value) -> R<()> {
+pub(super) fn validate_item_batch(request: &Value) -> R<()> {
     let Some(fields) = request.as_object() else {
         return fail("An item batch must be an object.");
     };
@@ -237,23 +237,32 @@ impl AgentControl {
     /// Something of the bots or their items changed: held mail follows the pauses, paired devices hear what changed of
     /// this computer's bots (`botsShared`, nothing when nothing they get changed), and main hears the new state.
     pub(crate) fn bots_changed(&self) {
-        self.items_v2_changed(true);
+        self.hold_paused();
+        self.items_v2_changed(true, true);
         self.legacy_bots_changed();
     }
 
+    pub(crate) fn items_legacy_audience(&self, local: bool, peer: bool) {
+        self.mem().legacy_bot_audience = (local, peer);
+    }
+
     pub(super) fn legacy_bots_changed(&self) {
-        self.hold_paused();
+        let (local, peer) = self.mem().legacy_bot_audience;
+        if !local && !peer {
+            return;
+        }
         let own = self.own_bots_state();
-        let change = self.across().share.take(&own);
-        if let Some(change) = change {
+        if peer && let Some(change) = self.across().share.take(&own) {
             self.host
                 .port()
                 .tell("botsShared", &json!({ "change": change }));
         }
-        let state = self.with_copies(own);
-        self.host
-            .port()
-            .tell("botsChanged", &json!({ "state": state }));
+        if local {
+            let state = self.with_copies(own);
+            self.host
+                .port()
+                .tell("botsChanged", &json!({ "state": state }));
+        }
     }
 
     /// `BotsState`: this computer's bots and items, and (`remote`) the paired hosts' as last heard.
@@ -416,6 +425,13 @@ impl AgentControl {
         flags
     }
 
+    pub(crate) fn bot_launch_for(&self, cwd: &str) -> Vec<String> {
+        self.bots()
+            .of_folder(cwd)
+            .map(|bot| self.bot_launch(bot, true))
+            .unwrap_or_default()
+    }
+
     /// The bot `key` names (its name or id).
     pub(crate) fn bot_named(&self, key: &str) -> R<BotRecord> {
         match self.bots().find(key) {
@@ -478,6 +494,30 @@ impl AgentControl {
         }
     }
 
+    pub(crate) fn tell_quiet_folders(&self) {
+        let bots = self.bots();
+        #[derive(serde::Serialize)]
+        struct Folder<'a> {
+            folder: &'a str,
+            quiet: &'a [String],
+        }
+        #[derive(serde::Serialize)]
+        struct Folders<'a> {
+            folders: Vec<Folder<'a>>,
+        }
+        let folders = bots
+            .all()
+            .iter()
+            .map(|b| Folder {
+                folder: &b.folder,
+                quiet: &b.quiet,
+            })
+            .collect();
+        self.host
+            .port()
+            .tell("botQuietFolders", &Folders { folders });
+    }
+
     /// Makes a bot: its folder (`~/.omp/bots/<slug>`, made unique, unless one is named) exists afterwards. Its first run
     /// starts: once its home chat exists, OMPdesk speaks first there (`bot_first_run.rs`).
     pub(crate) fn create_bot(&self, name: &str, folder: Option<&str>) -> R<BotRecord> {
@@ -486,6 +526,7 @@ impl AgentControl {
         bots.add(bot.clone());
         drop(bots);
         self.items().new_board(&bot.id);
+        self.tell_quiet_folders();
         self.bots_changed();
         Ok(bot)
     }
@@ -548,7 +589,14 @@ impl AgentControl {
             self.return_bot_asks(id).await?;
         } else {
             self.redeliver_mail_now().await;
-            self.drain_item_mail().await;
+            for session in bot
+                .home
+                .iter()
+                .filter(|home| !bot.sessions.contains(home))
+                .chain(&bot.sessions)
+            {
+                self.deliver_item_mail(session).await;
+            }
         }
         Ok(bot)
     }
@@ -657,6 +705,7 @@ impl AgentControl {
             let _ = std::fs::remove_file(dir.join(format!("{id}.yml")));
         }
         self.bots().remove(id);
+        self.tell_quiet_folders();
         self.bots_changed();
         Ok(None)
     }
@@ -739,65 +788,66 @@ impl AgentControl {
         }
     }
 
-    /// Serialize selection, handoff and acknowledgement, but never take the item store across an await.
-    pub(super) async fn drain_item_mail(&self) {
-        let _delivery = self.item_delivery.lock().await;
-        let pending = match self.items().pending_mail() {
-            Ok(pending) => pending,
-            Err(error) => {
-                eprintln!("[items] cannot read pending mail: {error}");
-                return;
-            }
-        };
-        // An answer can open its chat for older quiet notes. Never let it overtake them.
-        let mut wake: HashSet<&str> = pending
-            .iter()
-            .filter(|(_, mail)| mail.kind == MailKind::Question)
-            .map(|(session, _)| session.as_str())
-            .collect();
-        let mut blocked = HashSet::new();
-        for (session, mail) in &pending {
-            if blocked.contains(session.as_str()) || self.host.holds(session, None) {
-                continue;
-            }
-            match self
-                .hand_item_mail(session, mail, wake.remove(session.as_str()))
-                .await
-            {
-                Ok(true) => match self.items().ack_mail(&mail.id) {
-                    Ok(()) => continue,
-                    Err(error) => eprintln!("[items] cannot acknowledge {}: {error}", mail.id),
-                },
-                Ok(false) => {}
+    /// Startup/timer recovery visits a bounded number of chats, even when older ones stay offline.
+    async fn drain_item_mail(&self) {
+        for _ in 0..8 {
+            let next = self.items().next_mail_session();
+            match next {
+                Ok(Some(session)) => self.deliver_item_mail(&session).await,
+                Ok(None) => break,
                 Err(error) => {
-                    eprintln!(
-                        "[items] mail {} still pending: {}",
-                        mail.id,
-                        error.message()
-                    )
+                    eprintln!("[items] cannot recover pending mail: {error}");
+                    break;
                 }
             }
-            blocked.insert(session.as_str());
         }
     }
 
-    async fn hand_item_mail(&self, session: &str, mail: &Mail, wake: bool) -> R<bool> {
-        let tab = if wake {
-            self.host.reach(session).await?
-        } else {
-            OutboxTabs { host: &self.host }.tab_of(session, None)
-        };
-        let Some(tab) = tab else { return Ok(false) };
-        if self.host.holds(session, None) {
-            return Ok(false);
+    /// Serialize handoff and acknowledgement with retries and chat deletion, not the item store.
+    pub(super) async fn deliver_item_mail(&self, session: &str) {
+        let _delivery = self.item_delivery.lock().await;
+        if let Err(error) = self.hand_item_mail(session).await {
+            eprintln!(
+                "[items] mail for {session} still pending: {}",
+                error.message()
+            );
         }
-        let mut details = mail_details(mail);
-        details["itemSession"] = json!(session);
-        let answer = self
-            .host
-            .send_mail(&tab, &mail_text(mail), &details, delivery_for(mail.kind))
-            .await?;
-        Ok(answer.is_some_and(|answer| answer.journaled))
+    }
+
+    async fn hand_item_mail(&self, session: &str) -> R<()> {
+        if self.host.holds(session, None) {
+            return Ok(());
+        }
+        // An answer can wake the chat for its older notes, but must not overtake them.
+        let mut wake = self
+            .items()
+            .mail_wakes_session(session)
+            .map_err(item_store_error)?;
+        for _ in 0..8 {
+            let tab = if std::mem::take(&mut wake) {
+                self.host.reach(session).await?
+            } else {
+                OutboxTabs { host: &self.host }.tab_of(session, None)
+            };
+            let Some(tab) = tab else { break };
+            if self.host.holds(session, None) {
+                break;
+            }
+            let Some(mail) = self.items().first_mail(session).map_err(item_store_error)? else {
+                break;
+            };
+            let mut details = mail_details(&mail);
+            details["itemSession"] = json!(session);
+            let answer = self
+                .host
+                .send_mail(&tab, &mail_text(&mail), &details, delivery_for(mail.kind))
+                .await?;
+            if !answer.is_some_and(|answer| answer.journaled) {
+                break;
+            }
+            self.items().ack_mail(&mail.id).map_err(item_store_error)?;
+        }
+        Ok(())
     }
 
     // ---- what a bot chat's omp is told ------------------------------------------------------------------------------------
@@ -880,7 +930,6 @@ impl AgentControl {
         let state = self.host.state();
         let now = self.now();
         let bots: Vec<BotRecord> = self.bots().all().to_vec();
-        let items = self.items().v1(now);
         let live: HashSet<String> = state.tabs.iter().map(|tab| tab.tab_id.clone()).collect();
         {
             let mut mem = self.mem();
@@ -902,7 +951,7 @@ impl AgentControl {
             if first_run && self.first_run_due(tab) {
                 self.mem().bot_sent.remove(&tab.tab_id);
             }
-            let context = bot_context(bot, &items, &state.tabs, &tab.tab_id, now);
+            let context = bot_context(bot, &self.items(), &state.tabs, &tab.tab_id, now);
             let text = context.to_string();
             if self.mem().bot_sent.get(&tab.tab_id) == Some(&text) {
                 continue;
@@ -1256,19 +1305,15 @@ impl AgentControl {
             return "No bots yet. ompdesk_bot {\"action\":\"create\",\"name\":…} makes one."
                 .to_owned();
         }
-        let items = self.items().v1(now);
+        let items = self.items();
         let mut lines = vec!["Bots:".to_owned()];
         for bot in &bots {
-            let open = items
-                .iter()
-                .filter(|item| item.bot == bot.id && item.is_open())
-                .count();
-            let needs = items
-                .iter()
-                .filter(|item| {
-                    item.bot == bot.id && item.status == "needs_you" && !item.snoozed(now)
-                })
-                .count();
+            let (open, needs) = items.bot_open(&bot.id).fold((0, 0), |(n, waiting), item| {
+                (
+                    n + 1,
+                    waiting + usize::from(item.status == "needs_you" && !item.snoozed(now)),
+                )
+            });
             lines.push(format!(
                 "- {} (id {}) in {}; home chat {}{}; {open} open item(s), {needs} waiting on the owner{}",
                 bot.name,
@@ -1803,8 +1848,10 @@ impl AgentControl {
             .across()
             .copies
             .apply(device, &name, true, Some(&answer));
-        if applied {
-            self.legacy_bots_changed();
+        if applied && self.mem().legacy_bot_audience.0 {
+            self.host
+                .port()
+                .tell("botsChanged", &json!({"state":self.bots_state()}));
         }
         Ok(with_command_outcome(self.bots_state(), answer))
     }
@@ -1818,7 +1865,9 @@ impl AgentControl {
             let change = across.share.take(&own);
             (change, across.share.whole())
         };
-        if let Some(change) = change {
+        if let Some(change) = change
+            && self.mem().legacy_bot_audience.1
+        {
             self.host
                 .port()
                 .tell("botsShared", &json!({ "change": change }));
@@ -1895,19 +1944,33 @@ impl AgentControl {
         }
         let name = update.get("name").and_then(Value::as_str).unwrap_or(device);
         let online = update.get("online").and_then(Value::as_bool) == Some(true);
-        let applied = {
+        let (applied, roster_changed) = {
             let mut across = self.across();
+            let old = across.copies.host(device);
+            let was_missing = old.is_none();
+            let renamed = old.is_some_and(|h| h.name != name || h.online != online);
             if update.get("forget").and_then(Value::as_bool) == Some(true) {
-                across.copies.forget(device);
-                true
+                (true, across.copies.forget(device))
             } else {
-                across
-                    .copies
-                    .apply(device, name, online, update.get("change"))
+                let applied = match update.get("feed") {
+                    Some(feed) => across.copies.feed(device, name, online, feed),
+                    None => across
+                        .copies
+                        .apply(device, name, online, update.get("change")),
+                };
+                (
+                    applied,
+                    applied && (renamed || (was_missing && across.copies.host(device).is_some())),
+                )
             }
         };
-        if applied {
-            self.legacy_bots_changed();
+        if roster_changed {
+            self.items_sources_changed();
+        }
+        if applied && self.mem().legacy_bot_audience.0 {
+            self.host
+                .port()
+                .tell("botsChanged", &json!({"state":self.bots_state()}));
         }
         json!({ "applied": applied })
     }
@@ -1920,7 +1983,6 @@ impl AgentControl {
     ) -> R<Value> {
         let text = |key: &str| request.get(key).and_then(Value::as_str).map(str::to_owned);
         let id = text("id").unwrap_or_default();
-        let mut refused: Option<&'static str> = None;
         match request.get("action").and_then(Value::as_str).unwrap_or("") {
             "get" => {}
             "allowLegacyPeers" => {
@@ -2038,6 +2100,7 @@ impl AgentControl {
                 }
                 drop(bots);
                 self.items().new_board(&board);
+                self.tell_quiet_folders();
                 self.bots_changed();
             }
             // One of the bot's own files, read or written (`BotFileRequest`): its answer, not the state.
@@ -2081,6 +2144,7 @@ impl AgentControl {
                 let bot = self.create_bot(&name, None)?;
                 if let Err(error) = bot_package::seed(Path::new(&bot.folder), &bot.name, &package) {
                     self.bots().remove(&bot.id);
+                    self.tell_quiet_folders();
                     let _ = std::fs::remove_dir_all(&bot.folder);
                     self.bots_changed();
                     return Err(error);
@@ -2096,6 +2160,9 @@ impl AgentControl {
                         .collect();
                     record.stale_days = package.stale_days.filter(|days| *days > 0.0);
                 })?;
+                if !package.quiet.is_empty() {
+                    self.tell_quiet_folders();
+                }
             }
             "update" => {
                 let bot = self.bot_named(&id)?;
@@ -2189,6 +2256,9 @@ impl AgentControl {
                             .collect();
                     }
                 })?;
+                if request["quiet"].is_array() {
+                    self.tell_quiet_folders();
+                }
                 if let Some(look) = request.get("lookAround").filter(|look| look.is_object()) {
                     self.look_around(&bot.id, &LookPatch::of(look)).await?;
                 }
@@ -2209,8 +2279,11 @@ impl AgentControl {
                     return Ok(state);
                 }
             }
-            "item" | "itemBatch" => refused = self.owner_item(&request).await?,
-            "itemsOpened" => self.items_opened(&id)?,
+            "item" | "itemBatch" => {
+                let outcome = self.owner_item(&request, false).await?;
+                return Ok(with_command_outcome(self.bots_state(), outcome));
+            }
+            "itemsOpened" => self.items_opened(&id, false)?,
             // The bot's page opened (its one retry, in the background) or the owner's Try again (`asked`).
             "kickoff" => {
                 if request.get("asked").and_then(Value::as_bool) == Some(true) {
@@ -2295,25 +2368,14 @@ impl AgentControl {
             }
             other => return fail(format!("bots: no action {other}")),
         }
-        let mut state = self.bots_state();
-        if request["action"] == "itemBatch" {
-            let key = request["requestId"].as_str().expect("validated item batch");
-            let Some(result) = self.items().batch_result(key).map_err(item_store_error)? else {
-                return fail("Could not read the committed item batch receipt.");
-            };
-            state["itemBatchResult"] = result;
-        }
-        if let Some(code) = refused {
-            state["refused"] = json!(code);
-        }
-        Ok(state)
+        Ok(self.bots_state())
     }
 }
 
 /// `BotContext` (`resources/gui-bridge/modes/bots-contracts.ts`) for the chat `tab_id` of `bot`.
 pub(super) fn bot_context(
     bot: &BotRecord,
-    items: &[ItemRecord],
+    items: &Items,
     tabs: &[ControlTab],
     tab_id: &str,
     now: f64,
@@ -2327,8 +2389,8 @@ pub(super) fn bot_context(
         value
     };
     let open: Vec<&ItemRecord> = items
-        .iter()
-        .filter(|item| item.bot == bot.id && item.is_open() && !item.snoozed(now))
+        .bot_open(&bot.id)
+        .filter(|item| !item.snoozed(now))
         .collect();
     let live: Vec<String> = tabs
         .iter()

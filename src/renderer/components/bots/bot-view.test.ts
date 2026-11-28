@@ -137,7 +137,8 @@ it("restores the last confirmed worker owner on the first frame without live tab
 		setItem: (key: string, value: string) => void saved.set(key, value),
 		removeItem: (key: string) => void saved.delete(key),
 	});
-	vi.useFakeTimers();
+	const feed = vi.fn();
+	vi.stubGlobal("window", { omp: { bots: { itemsV2: feed } } });
 	try {
 		// Each import boots a new store; a static import would reuse its in-memory copy.
 		vi.resetModules();
@@ -166,10 +167,17 @@ it("restores the last confirmed worker owner on the first frame without live tab
 		};
 		const state = (owner: Bot) =>
 			[a, b].map(bot => (bot !== owner ? bot : { ...bot, workers: [{ ...worker, openedBySession: bot.home! }] }));
-		useBotsStore.getState().receive({ bots: state(b), items: [] });
-		vi.runOnlyPendingTimers();
-		useBotsStore.getState().receive({ bots: state(a), items: [] });
-		vi.runOnlyPendingTimers();
+		for (const [i, owner] of [b, a].entries()) {
+			feed.mockResolvedValueOnce({
+				protocol: 2,
+				kind: "seed",
+				version: `host.${i}`,
+				bots: state(owner),
+				open: [],
+				counts: {},
+			});
+			await useBotsStore.getState().command({ action: "get" });
+		}
 
 		vi.resetModules();
 		const { useBotsStore: restored } = await import("../../stores/bots");
@@ -184,7 +192,6 @@ it("restores the last confirmed worker owner on the first frame without live tab
 		});
 		expect(owners).toEqual([["a", row.path]]);
 	} finally {
-		vi.useRealTimers();
 		vi.unstubAllGlobals();
 		vi.resetModules();
 	}

@@ -83,7 +83,9 @@ struct Archived {
 
 #[derive(Default)]
 struct BotIndex {
-    open: usize,
+    open: HashSet<String>,
+    latest_event: u64,
+    by_session: HashMap<String, HashSet<String>>,
     archive_revision: u64,
     closed: HashMap<u32, Archived>,
     by_time: BTreeSet<Order>,
@@ -92,9 +94,33 @@ struct BotIndex {
 }
 
 impl BotIndex {
+    fn update_links(&mut self, old: Option<&ItemRecord>, new: Option<&ItemRecord>) {
+        if old.map(|i| &i.links) == new.map(|i| &i.links) {
+            return;
+        }
+        if let Some(item) = old {
+            for link in item.links.iter().filter(|l| l.kind == "session") {
+                if let Some(rows) = self.by_session.get_mut(&link.target) {
+                    rows.remove(&item.id);
+                    if rows.is_empty() {
+                        self.by_session.remove(&link.target);
+                    }
+                }
+            }
+        }
+        if let Some(item) = new {
+            for link in item.links.iter().filter(|l| l.kind == "session") {
+                let rows = self.by_session.entry(link.target.clone()).or_default();
+                if !rows.contains(&item.id) {
+                    rows.insert(item.id.clone());
+                }
+            }
+        }
+    }
+
     fn insert(&mut self, item: &ItemRecord) -> Option<i64> {
         if item.is_open() {
-            self.open += 1;
+            self.open.insert(item.id.clone());
             return None;
         }
         let n = item.number;
@@ -124,7 +150,7 @@ impl BotIndex {
 
     fn remove(&mut self, item: &ItemRecord) -> Option<i64> {
         if item.is_open() {
-            self.open -= 1;
+            self.open.remove(&item.id);
             None
         } else {
             let n = item.number;
@@ -139,7 +165,7 @@ impl BotIndex {
     }
 
     fn counts(&self) -> Value {
-        json!({"openCount":self.open, "closedTotal":self.closed.len(), "archiveRevision":self.archive_revision})
+        json!({"openCount":self.open.len(), "closedTotal":self.closed.len(), "archiveRevision":self.archive_revision})
     }
 }
 
@@ -162,7 +188,12 @@ impl Feed {
     pub(super) fn load(items: &[ItemRecord]) -> Self {
         let mut feed = Self::default();
         for item in items {
-            if let Some(wake) = feed.bots.entry(item.bot.clone()).or_default().insert(item) {
+            let index = feed.bots.entry(item.bot.clone()).or_default();
+            index.update_links(None, Some(item));
+            if let Some(last) = item.events.iter().map(|e| e.id).max() {
+                index.latest_event = index.latest_event.max(last);
+            }
+            if let Some(wake) = index.insert(item) {
                 feed.wakes
                     .entry(wake)
                     .or_default()
@@ -177,8 +208,16 @@ impl Feed {
         self.revision += 1;
         let was = old.map(ItemRecord::is_open);
         let is = new.map(ItemRecord::is_open);
+        let index = if old.is_some() {
+            self.bots.get_mut(&row.bot).expect("indexed item bot")
+        } else {
+            self.bots.entry(row.bot.clone()).or_default()
+        };
+        index.update_links(old, new);
+        if let Some(last) = new.and_then(|i| i.events.last()) {
+            index.latest_event = index.latest_event.max(last.id);
+        }
         let counts_for = if was != is || is == Some(false) {
-            let index = self.bots.entry(row.bot.clone()).or_default();
             if let Some(wake) = old.and_then(|item| index.remove(item)) {
                 let entries = self.wakes.get_mut(&wake).expect("indexed archive wake");
                 entries.remove(&row.id);
@@ -195,7 +234,7 @@ impl Feed {
             if was == Some(false) || is == Some(false) {
                 index.archive_revision = self.revision;
             }
-            if index.open == 0 && index.closed.is_empty() {
+            if index.open.is_empty() && index.closed.is_empty() {
                 self.bots.remove(&row.bot);
             }
             Some(row.bot.clone())
@@ -214,6 +253,75 @@ impl Feed {
 }
 
 impl Items {
+    /// Bot prompts list only this bot's open rows, in their original insertion order.
+    pub fn bot_open(&self, bot: &str) -> impl Iterator<Item = &ItemRecord> {
+        let mut positions: Vec<_> = self
+            .feed
+            .bots
+            .get(bot)
+            .into_iter()
+            .flat_map(|idx| idx.open.iter().map(|id| self.by_id[id]))
+            .collect();
+        positions.sort_unstable();
+        positions.into_iter().map(|at| &self.items[at])
+    }
+
+    pub fn latest_event(&self, bot: &str) -> u64 {
+        self.feed.bots.get(bot).map_or(0, |idx| idx.latest_event)
+    }
+
+    fn linked_rows<'a>(
+        &self,
+        indexes: impl Iterator<Item = &'a BotIndex> + Clone,
+        targets: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> BTreeSet<usize> {
+        let mut rows = BTreeSet::new();
+        for target in targets {
+            for index in indexes.clone() {
+                if let Some(ids) = index.by_session.get(target.as_ref()) {
+                    rows.extend(ids.iter().map(|id| self.by_id[id]));
+                }
+            }
+        }
+        rows
+    }
+
+    /// The v1 runtime settles links and records worker reports only on retained rows.
+    pub fn linking(
+        &self,
+        targets: impl IntoIterator<Item = impl AsRef<str>>,
+        now: f64,
+    ) -> Vec<String> {
+        self.linked_rows(self.feed.bots.values(), targets)
+            .into_iter()
+            .map(|at| &self.items[at])
+            .filter(|item| item.visible_at(now))
+            .map(|item| item.id.clone())
+            .collect()
+    }
+
+    pub fn items_linked(&self, bot: &str, sessions: &[&str]) -> Value {
+        let Some(index) = self.feed.bots.get(bot) else {
+            return json!({"links":[]});
+        };
+        let wanted: HashSet<_> = sessions.iter().copied().collect();
+        let rows = self.linked_rows(std::iter::once(index), &wanted);
+        let mut links = Vec::new();
+        for at in rows {
+            let item = &self.items[at];
+            for link in &item.links {
+                if link.kind == "session" && wanted.contains(link.target.as_str()) {
+                    links.push(
+                        json!({"session":link.target,"number":item.number,"title":item.title}),
+                    );
+                }
+            }
+        }
+        let mut reply = json!({});
+        reply["links"] = Value::Array(links);
+        reply
+    }
+
     pub fn feed_revision(&self) -> u64 {
         self.feed.revision
     }
@@ -377,20 +485,41 @@ impl Items {
         page
     }
 
+    fn numbered(&self, bot: &str, number: u32) -> io::Result<Option<&ItemRecord>> {
+        let mut stmt = self
+            .db
+            .prepare_cached("SELECT id FROM item WHERE bot=?1 AND number=?2")
+            .map_err(sql)?;
+        let mut rows = stmt.query((bot, number)).map_err(sql)?;
+        let Some(row) = rows.next().map_err(sql)? else {
+            return Ok(None);
+        };
+        let id = row
+            .get_ref(0)
+            .map_err(sql)?
+            .as_str()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        self.get(id)
+            .map(Some)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing current item"))
+    }
+
+    /// Bot tools resolve a number (`3`, `#3`) first and then a literal item id.
+    pub fn find(&self, bot: &str, key: &str) -> io::Result<Option<&ItemRecord>> {
+        let key = key.trim();
+        if let Ok(number) = key.trim_start_matches('#').parse::<u32>()
+            && let Some(item) = self.numbered(bot, number)?
+        {
+            return Ok(Some(item));
+        }
+        Ok(self.get(key).filter(|item| item.bot == bot))
+    }
+
     fn scoped_item(&self, bot: &str, key: &Value) -> io::Result<&ItemRecord> {
         let row = if let Some(id) = key.as_str() {
             self.get(id).filter(|i| i.bot == bot)
         } else if let Some(number) = key.as_u64().and_then(|n| u32::try_from(n).ok()) {
-            let id: Option<String> = self
-                .db
-                .query_row(
-                    "SELECT id FROM item WHERE bot=?1 AND number=?2",
-                    (bot, number),
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(sql)?;
-            id.as_deref().and_then(|id| self.get(id))
+            self.numbered(bot, number)?
         } else {
             None
         };

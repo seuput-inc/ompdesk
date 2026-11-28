@@ -10,11 +10,17 @@
 //! and a device that missed one (its copy is not at `base`) reads the whole copy again.
 
 use std::collections::BTreeMap;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::agentctl::journal::{read_array, stringify, write_text};
+
+// Between whole seeds, a crash can recover this much of the compact feed. Past it the host
+// must reconnect unless a clean disconnect saved the latest seed; a warm delta never checkpoints.
+const PATCH_BYTES: usize = 4 * 1024 * 1024;
 
 /// One kind of row that crosses: a bot, or an item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -202,21 +208,31 @@ impl Share {
     }
 }
 
+/// Kept apart from v1 item histories. A feed delta changes only its named rows and counts.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+struct Feed {
+    version: String,
+    open: Map<String, Value>,
+    counts: Map<String, Value>,
+}
+
 /// A paired host's bots as this computer last heard them.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct HostCopy {
     pub(crate) name: String,
     pub(crate) online: bool,
     version: String,
     rows: Rows,
+    feed: Option<Feed>,
+    feed_dirty: bool,
 }
 
-/// Every paired host's copy, by its device id, kept in `bots-remote.json` beside the bots (0600, written whole on each
-/// change, its link read as down when loaded), so a host that is away after a relaunch still lists its bots.
+/// Paired hosts' last genuine v1 rows and compact feeds, read offline after a relaunch.
 #[derive(Default)]
 pub(crate) struct Copies {
     file: Option<PathBuf>,
     hosts: BTreeMap<String, HostCopy>,
+    patch_bytes: usize,
 }
 
 impl Copies {
@@ -228,10 +244,13 @@ impl Copies {
             .map(read_array)
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|entry| {
+            .filter_map(|mut entry| {
                 legacy |= entry["state"]["bots"]
                     .as_array()
                     .is_some_and(|bots| bots.iter().any(|bot| bot.get("picture").is_some()));
+                let feed = entry
+                    .get_mut("feed")
+                    .and_then(|v| serde_json::from_value(v.take()).ok());
                 let text = |key: &str| entry.get(key)?.as_str().map(str::to_owned);
                 Some((
                     text("device")?,
@@ -240,28 +259,136 @@ impl Copies {
                         online: false,
                         version: text("version")?,
                         rows: Rows::of(entry.get("state")?),
+                        feed,
+                        feed_dirty: false,
                     },
                 ))
             })
             .collect();
-        let copies = Copies { file, hosts };
+        let mut copies = Copies {
+            hosts,
+            ..Copies::default()
+        };
+        if let Some(path) = &file {
+            match File::open(path.with_extension("feed-deltas")) {
+                Ok(log) => {
+                    if !copies.restore_patches(log) {
+                        for copy in copies.hosts.values_mut() {
+                            copy.feed = None;
+                        }
+                    }
+                    legacy = true;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    eprintln!("[bots] paired feed patches unreadable: {error}");
+                    for copy in copies.hosts.values_mut() {
+                        copy.feed = None;
+                    }
+                }
+            }
+        }
+        copies.file = file;
         if legacy {
             copies.save();
         }
         copies
     }
 
-    fn save(&self) {
+    fn restore_patches(&mut self, log: File) -> bool {
+        let mut bytes = Vec::new();
+        if log
+            .take((PATCH_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .is_err()
+            || bytes.len() > PATCH_BYTES
+            || !bytes.is_empty() && !bytes.ends_with(b"\n")
+        {
+            return false;
+        }
+        for line in bytes.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
+            let Ok((device, delta)) = serde_json::from_slice::<(String, Value)>(line) else {
+                return false;
+            };
+            if delta["kind"] != "delta" {
+                return false;
+            }
+            let Some(feed) = self.host(&device).and_then(|copy| copy.feed.as_ref()) else {
+                continue;
+            };
+            if delta["base"].as_str() != Some(&feed.version) {
+                // Replacing the snapshot and removing the previous journal is not atomic.
+                let Some(version) = delta["version"].as_str() else {
+                    return false;
+                };
+                if version == feed.version
+                    || older(version, &feed.version)
+                    || version.rsplit_once('.').map(|v| v.0)
+                        != feed.version.rsplit_once('.').map(|v| v.0)
+                {
+                    continue;
+                }
+                return false;
+            }
+            if !self.feed(&device, "", false, &delta) {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn append_patch(&mut self, device: &str, delta: &Value) {
+        let Some(file) = &self.file else { return };
+        if self.patch_bytes > PATCH_BYTES {
+            return;
+        }
+        let mut line = serde_json::to_vec(&(device, delta)).expect("JSON values serialize");
+        line.push(b'\n');
+        self.patch_bytes = self.patch_bytes.saturating_add(line.len());
+        let mut options = OpenOptions::new();
+        options.append(true).create(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let bytes: &[u8] = if self.patch_bytes > PATCH_BYTES {
+            b"!\n"
+        } else {
+            &line
+        };
+        if let Err(error) = options
+            .open(file.with_extension("feed-deltas"))
+            .and_then(|mut f| f.write_all(bytes))
+        {
+            eprintln!("[bots] paired feed patch not saved: {error}");
+        }
+    }
+
+    fn save(&mut self) {
         let Some(file) = &self.file else { return };
         let entries: Vec<Value> = self
             .hosts
             .iter()
             .map(|(device, copy)| {
-                json!({ "device": device, "name": copy.name, "version": copy.version, "state": copy.rows.state() })
+                let mut entry = json!({ "device": device, "name": copy.name, "version": copy.version, "state": copy.rows.state() });
+                if let Some(feed) = &copy.feed {
+                    entry["feed"] = json!(feed);
+                }
+                entry
             })
             .collect();
         if let Err(error) = write_text(file, &stringify(entries), Some(0o600)) {
             eprintln!("[bots] paired hosts' bots not saved: {error}");
+        } else {
+            match std::fs::remove_file(file.with_extension("feed-deltas")) {
+                Ok(()) => self.patch_bytes = 0,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => self.patch_bytes = 0,
+                Err(error) => eprintln!("[bots] old paired feed patches not removed: {error}"),
+            }
+            for copy in self.hosts.values_mut() {
+                copy.feed_dirty = false;
+            }
         }
     }
 
@@ -278,6 +405,10 @@ impl Copies {
             if let Some(copy) = self.hosts.get_mut(device) {
                 copy.name = name.to_owned();
                 copy.online = online;
+                if !online && copy.feed_dirty {
+                    copy.feed_dirty = false;
+                    self.save();
+                }
             }
             return true;
         };
@@ -295,15 +426,14 @@ impl Copies {
                 }
                 return true;
             }
-            self.hosts.insert(
-                device.to_owned(),
-                HostCopy {
-                    name: name.to_owned(),
-                    online,
-                    version: version.to_owned(),
-                    rows: Rows::of(state),
-                },
-            );
+            let copy = self.hosts.entry(device.to_owned()).or_default();
+            copy.name = name.to_owned();
+            copy.online = online;
+            copy.version = version.to_owned();
+            copy.rows = Rows::of(state);
+            if change["legacyOnly"] == true {
+                copy.feed = None;
+            }
             self.save();
             return true;
         }
@@ -335,6 +465,94 @@ impl Copies {
         true
     }
 
+    pub(crate) fn feed(&mut self, device: &str, name: &str, online: bool, reply: &Value) -> bool {
+        let (Some(version), Some(counts)) =
+            (reply["version"].as_str(), reply["counts"].as_object())
+        else {
+            return false;
+        };
+        match reply["kind"].as_str() {
+            Some("seed") => {
+                let (Some(open), Some(_)) = (reply["open"].as_array(), reply["bots"].as_array())
+                else {
+                    return false;
+                };
+                let open = open
+                    .iter()
+                    .filter_map(|row| Some((row["id"].as_str()?.to_owned(), row.clone())))
+                    .collect();
+                let copy = self.hosts.entry(device.to_owned()).or_default();
+                copy.name = name.to_owned();
+                copy.online = online;
+                copy.rows.bots = rows_of(reply.get("bots"), Kind::Bots);
+                copy.feed = Some(Feed {
+                    version: version.to_owned(),
+                    open,
+                    counts: counts.clone(),
+                });
+                copy.feed_dirty = false;
+                self.save();
+            }
+            Some("delta") => {
+                let Some(copy) = self.hosts.get_mut(device) else {
+                    return false;
+                };
+                let Some(feed) = &mut copy.feed else {
+                    return false;
+                };
+                if reply["base"].as_str() != Some(&feed.version) {
+                    return false;
+                }
+                copy.online = online;
+                if version != feed.version {
+                    let (Some(remove), Some(set)) =
+                        (reply["remove"].as_array(), reply["set"].as_array())
+                    else {
+                        return false;
+                    };
+                    if remove.iter().any(|id| !id.is_string())
+                        || set.iter().any(|row| !row["id"].is_string())
+                    {
+                        return false;
+                    }
+                    for id in remove.iter().filter_map(Value::as_str) {
+                        feed.open.remove(id);
+                    }
+                    for row in set {
+                        if let Some(id) = row["id"].as_str() {
+                            feed.open.insert(id.to_owned(), row.clone());
+                        }
+                    }
+                    feed.counts.extend(counts.clone());
+                    version.clone_into(&mut feed.version);
+                    copy.feed_dirty = true;
+                    self.append_patch(device, reply);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    pub(crate) fn cached(&self, device: &str, legacy: bool) -> Option<Value> {
+        let copy = self.host(device)?;
+        if !legacy && let Some(feed) = &copy.feed {
+            return Some(json!({"feed": {
+                "protocol": 2, "kind": "seed", "version": feed.version, "counts": feed.counts,
+                "open": feed.open.values().collect::<Vec<_>>(), "bots": values(&copy.rows.bots)
+            }}));
+        }
+        (!copy.version.is_empty())
+            .then(|| json!({"legacy":{"version":copy.version,"state":copy.rows.state()}}))
+    }
+
+    pub(crate) fn sources(&self) -> Vec<Value> {
+        self.hosts
+            .iter()
+            .map(|(device, copy)| json!({"device":device,"name":copy.name,"online":copy.online}))
+            .collect()
+    }
+
     /// A host no longer paired: its copy goes.
     pub(crate) fn forget(&mut self, device: &str) -> bool {
         let gone = self.hosts.remove(device).is_some();
@@ -348,7 +566,14 @@ impl Copies {
     pub(crate) fn owner(&self, kind: Kind, id: &str) -> Option<String> {
         self.hosts
             .iter()
-            .find(|(_, copy)| copy.rows.has(kind, id))
+            .find(|(_, copy)| {
+                (kind == Kind::Items
+                    && copy
+                        .feed
+                        .as_ref()
+                        .is_some_and(|feed| feed.open.contains_key(id)))
+                    || copy.rows.has(kind, id)
+            })
             .map(|(device, _)| device.clone())
     }
 
@@ -546,6 +771,45 @@ mod tests {
         assert!(!Copies::default().apply("dev-b", "Air", true, Some(&change)));
         assert!(copies.forget("dev-a"));
         assert!(copies.json().is_empty());
+    }
+
+    #[test]
+    fn compact_changes_keep_histories_and_recover_the_last_summary_after_a_crash() {
+        let dir = crate::fs::disk::make_temp_dir("ompdesk-bots-mirror-").unwrap();
+        let file = dir.join("bots-remote.json");
+        let mut copies = Copies::load(Some(file.clone()));
+        let legacy = json!({"version":"old.1","state":{"bots":[], "items":[{"id":"it","events":[{"id":1}]}]}});
+        copies.apply("d", "Desk", true, Some(&legacy));
+        let seed = json!({"kind":"seed","version":"new.1","bots":[{"id":"b","picture":"secret"}],
+            "open":[{"id":"it","title":"old"}],"counts":{}});
+        assert!(copies.feed("d", "Desk", true, &seed));
+        let saved = std::fs::read(&file).unwrap();
+        let delta = json!({"kind":"delta","base":"new.1","version":"new.2",
+            "set":[{"id":"new","title":"now"}],"remove":["it"],"counts":{}});
+        assert!(copies.feed("d", "Desk", true, &delta));
+        assert!(!copies.feed("d", "Desk", true, &delta));
+        assert_eq!(std::fs::read(&file).unwrap(), saved);
+        assert_eq!(copies.owner(Kind::Items, "new").as_deref(), Some("d"));
+        assert_eq!(copies.json()[0]["items"], legacy["state"]["items"]);
+        assert!(copies.json()[0]["bots"][0].get("picture").is_none());
+        let loaded = Copies::load(Some(file.clone()));
+        assert_eq!(
+            loaded.cached("d", false).unwrap()["feed"]["open"],
+            delta["set"]
+        );
+        assert_eq!(
+            loaded.cached("d", true).unwrap()["legacy"]["state"]["items"],
+            legacy["state"]["items"]
+        );
+        assert_eq!(
+            loaded.sources(),
+            vec![json!({"device":"d","name":"Desk","online":false})]
+        );
+        std::fs::write(file.with_extension("feed-deltas"), b"cut line").unwrap();
+        let corrupt = Copies::load(Some(file));
+        assert!(corrupt.cached("d", false).unwrap().get("feed").is_none());
+        assert_eq!(corrupt.json()[0]["items"], legacy["state"]["items"]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

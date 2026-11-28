@@ -6,7 +6,7 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use super::{initialize, load};
-use crate::agentctl::journal::items::{ItemQuestion, ItemRecord, Items};
+use crate::agentctl::journal::items::{ItemLink, ItemQuestion, ItemRecord, Items};
 use crate::agentctl::rules::mail::{Mail, MailKind};
 
 fn item(id: &str, bot: &str, number: u32) -> ItemRecord {
@@ -241,7 +241,9 @@ fn damaged_or_missing_sqlite_is_never_replaced_with_the_original() {
     }
     for damage in [
         "DROP TABLE item_mail",
-        "PRAGMA user_version=2",
+        "DROP INDEX item_mail_session",
+        "DROP INDEX item_mail_wake",
+        "PRAGMA user_version=3",
         "PRAGMA application_id=0",
     ] {
         fs::write(&database, &clean).unwrap();
@@ -286,6 +288,13 @@ fn batch_receipts_and_chat_intents_survive_reload_and_removal_keeps_the_high_wat
     s.commit_owner_scoped(vec![], Some("skip"), None, &[], &["gone"], &[])
         .unwrap();
     drop(s);
+    // Upgrade a valid v1 database with live receipts and unacknowledged mail.
+    Connection::open(path.with_extension("sqlite3"))
+        .unwrap()
+        .execute_batch(
+            "DROP INDEX item_mail_wake; DROP INDEX item_mail_session; PRAGMA user_version=1;",
+        )
+        .unwrap();
     let mut s = Items::new(Some(path.clone())).unwrap();
     assert_eq!(
         s.receipt("key").unwrap(),
@@ -300,6 +309,9 @@ fn batch_receipts_and_chat_intents_survive_reload_and_removal_keeps_the_high_wat
         })
     );
     assert_eq!(s.pending_mail().unwrap(), mails);
+    assert_eq!(s.next_mail_session().unwrap().as_deref(), Some("/b"));
+    assert!(!s.mail_wakes_session("/b").unwrap());
+    assert_eq!(s.first_mail("/b").unwrap().as_ref(), Some(&mails[0].1));
     assert_eq!(s.get("i").unwrap().events[0].id, 2);
     s.ack_mail("batch").unwrap();
     let update = changed(&s, "i");
@@ -338,14 +350,31 @@ fn vfs_disk_full_at_commit_does_not_publish_the_batch_or_consume_ids() {
     assert!(limit > 0);
     let mut large = mail("large");
     large.1.text = "x".repeat(512 * 1024);
-    let changes = vec![changed(&items, "a"), changed(&items, "b")];
+    let changes = |items: &Items| {
+        let mut a = changed(items, "a");
+        a.links.push(ItemLink {
+            kind: "session".into(),
+            target: "worker".into(),
+            ..Default::default()
+        });
+        vec![a, changed(items, "b")]
+    };
     let base = items.feed_revision();
     let error = items
-        .commit_owner_scoped(changes, Some("retry"), None, &[large], &["a", "b"], &[])
+        .commit_owner_scoped(
+            changes(&items),
+            Some("retry"),
+            None,
+            &[large],
+            &["a", "b"],
+            &[],
+        )
         .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::StorageFull);
     assert!(error.to_string().starts_with("commit item batch:"));
     assert_eq!(items.feed_revision(), base);
+    assert_eq!(items.items_linked("b", &["worker"])["links"], json!([]));
+    assert_eq!(items.latest_event("b"), 0);
     assert_eq!(
         items.feed_rows(Some(base)),
         json!({"set":[],"remove":[],"counts":{}})
@@ -369,10 +398,9 @@ fn vfs_disk_full_at_commit_does_not_publish_the_batch_or_consume_ids() {
         .db
         .file_control(DEFAULT_NAME, FileControl::SizeLimit(&mut limit))
         .unwrap();
-    let changes = vec![changed(&items, "a"), changed(&items, "b")];
     items
         .commit_owner_scoped(
-            changes,
+            changes(&items),
             Some("retry"),
             None,
             &[mail("ok")],
@@ -381,7 +409,87 @@ fn vfs_disk_full_at_commit_does_not_publish_the_batch_or_consume_ids() {
         )
         .unwrap();
     assert_eq!(items.get("b").unwrap().events[0].id, 2);
+    assert_eq!(items.latest_event("b"), 2);
+    assert_eq!(
+        items.items_linked("b", &["worker"])["links"],
+        json!([{"session":"worker","number":1,"title":"changed"}])
+    );
     assert_eq!(items.pending_mail().unwrap(), [mail("ok")]);
+}
+
+#[test]
+fn session_links_keep_archived_rows_and_duplicate_links_in_insertion_order() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("items.json");
+    let mut store = Items::new(Some(path.clone())).unwrap();
+    let link = |kind: &str, target: &str| ItemLink {
+        kind: kind.into(),
+        target: target.into(),
+        ..Default::default()
+    };
+    let mut first = item("z", "b", 9);
+    first.links = vec![
+        link("session", "file"),
+        link("url", "tab"),
+        link("session", "file"),
+    ];
+    store.add(first).unwrap();
+    let mut second = item("a", "b", 3);
+    second.links = vec![link("session", "tab"), link("session", "file")];
+    second.status = "done".into();
+    second.closed = Some(0.0);
+    second.event("day", "bot", "done", None);
+    store.add(second).unwrap();
+    let mut other = item("other", "c", 1);
+    other.links = vec![link("session", "file")];
+    other.event("day", "bot", "made", None);
+    store.add(other).unwrap();
+
+    let keys = ["tab", "file", "tab", "missing"];
+    let expected = json!([
+        {"session":"file","number":9,"title":"z"}, {"session":"file","number":9,"title":"z"},
+        {"session":"tab","number":3,"title":"a"}, {"session":"file","number":3,"title":"a"}
+    ]);
+    assert_eq!(store.items_linked("b", &keys)["links"], expected);
+    assert_eq!(store.latest_event("b"), 1);
+    drop(store);
+    let mut store = Items::new(Some(path)).unwrap();
+    assert_eq!(store.items_linked("b", &keys)["links"], expected);
+    let day_seven = 7.0 * 86_400_000.0;
+    assert_eq!(store.linking(keys, day_seven - 1.0), ["z", "a", "other"]);
+    assert_eq!(store.linking(keys, day_seven), ["z", "other"]);
+    assert_eq!(store.full_reads(), 0);
+    assert_eq!(store.latest_event("b"), 1);
+    store
+        .change("z", |r| {
+            r.links = vec![link("session", "tab")];
+            r.title = "renamed".into();
+            r.event("day", "bot", "edited", None);
+        })
+        .unwrap();
+    assert_eq!(store.latest_event("b"), 3);
+    assert_eq!(
+        store.items_linked("b", &["tab"])["links"],
+        json!([
+            {"session":"tab","number":9,"title":"renamed"}, {"session":"tab","number":3,"title":"a"}
+        ])
+    );
+    assert_eq!(
+        store.items_linked("b", &["file"])["links"],
+        json!([
+            {"session":"file","number":3,"title":"a"}
+        ])
+    );
+    assert_eq!(store.items_linked("b", &[])["links"], json!([]));
+    store.remove_bot("b").unwrap();
+    assert_eq!(store.items_linked("b", &keys)["links"], json!([]));
+    assert_eq!(store.latest_event("b"), 0);
+    assert_eq!(
+        store.items_linked("c", &keys)["links"],
+        json!([
+            {"session":"file","number":1,"title":"other"}
+        ])
+    );
 }
 
 #[test]

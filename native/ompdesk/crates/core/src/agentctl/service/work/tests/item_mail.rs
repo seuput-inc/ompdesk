@@ -23,7 +23,7 @@ async fn item(ctl: &AgentControl, bot: &str) -> String {
         )
         .await;
     assert!(!result.is_error, "{}", result.text);
-    ctl.items().find(bot, "#1").unwrap().id.clone()
+    ctl.items().find(bot, "#1").unwrap().unwrap().id.clone()
 }
 
 fn assign(ctl: &AgentControl, item: &str, generation: u64, path: &str, device: Option<&str>) {
