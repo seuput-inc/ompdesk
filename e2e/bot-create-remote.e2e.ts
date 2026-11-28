@@ -143,7 +143,7 @@ test("creating a template bot writes only to the selected loopback profile (desk
 		await hostRow.getByText(label, { exact: true }).click();
 		await expect(peerRow.getByText("On", { exact: true })).toBeVisible(wait);
 		await expect(peerRow.getByText("Turn on at Studio", { exact: true })).toHaveCount(0);
-		await client.getByRole("button", { name: "New bot", exact: true }).click();
+		await client.locator(".omp-page-header").getByRole("button", { name: "New bot", exact: true }).click();
 		await client.getByRole("menuitem", { name: "New bot", exact: true }).click();
 		await expect(computer).toHaveValue(device);
 		await input.fill(name);
@@ -152,7 +152,7 @@ test("creating a template bot writes only to the selected loopback profile (desk
 			form.getByText(`A bot named “${name}” already exists on Studio. Choose another name.`),
 		).toBeVisible();
 		await expect(input).toBeFocused();
-		await client.getByRole("button", { name: "Cancel", exact: true }).click();
+		await client.getByRole("dialog").getByRole("button", { name: "Cancel", exact: true }).click();
 		await exitApp(a.app);
 		a = undefined;
 		await exitApp(b.app);
