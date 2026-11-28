@@ -2431,26 +2431,6 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			liveNotifications.delete(notification);
 		});
 	});
-	ipc.handle(IPC_COMMANDS.SYSTEM_NOTIFY_SETTINGS, async () => {
-		const panes =
-			process.platform === "darwin"
-				? [
-						"x-apple.systempreferences:com.apple.Notifications-Settings.extension",
-						// macOS 12 and older name the pane this way.
-						"x-apple.systempreferences:com.apple.preference.notifications",
-					]
-				: process.platform === "win32"
-					? ["ms-settings:notifications"]
-					: [];
-		for (const pane of panes) {
-			try {
-				await shell.openExternal(pane);
-				return;
-			} catch {
-				// The next name, if any.
-			}
-		}
-	});
 	ipc.handle(
 		IPC_COMMANDS.WEB_PUSH_TEST,
 		async (caller): Promise<IpcPushTestResult> =>

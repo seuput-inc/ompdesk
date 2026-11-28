@@ -3,6 +3,7 @@
     "runtime:log-path",
     "runtime:log-tail",
     "session:consume-pending",
+    "system:notify-settings",
     "system:open-dialog",
     "system:save-dialog",
     "system:save-image",

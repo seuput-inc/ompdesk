@@ -146,6 +146,7 @@ fn handler(channel: &str) -> Option<Handler> {
         "updater:version" => |ctx, _, _| Ok(Value::String(app_version(ctx.app_package))),
         // A desktop window starts its tab on its session, so nothing is pending; a paired page reads its own link.
         "session:consume-pending" => |_, _, _| Ok(Value::Null),
+        "system:notify-settings" => |_, _, _| open_notify_settings(),
         "system:save-dialog" => |_, caller, args| page_dialogs::save_dialog(caller, args),
         "system:open-dialog" => |_, caller, args| page_dialogs::open_dialog(caller, args),
         "system:save-image" => |_, caller, args| page_dialogs::save_image(caller, args),
@@ -154,6 +155,58 @@ fn handler(channel: &str) -> Option<Handler> {
         "progress:set" => |_, caller, args| Ok(tray::progress_push(caller, &args[0])),
         _ => return None,
     })
+}
+
+/// `system:notify-settings`: opens the OS notification settings pane on the UI thread, trying
+/// macOS's newer pane before the legacy one and ignoring errors as main's handler did.
+fn open_notify_settings() -> Result<Value, Value> {
+    let panes = notify_settings_panes();
+    if panes.is_empty() {
+        return Ok(Value::Null);
+    }
+    let (done, waited) = std::sync::mpsc::channel();
+    crate::ui::run(move || {
+        open_first_external(panes);
+        let _ = done.send(());
+    });
+    let _ = waited.recv();
+    Ok(Value::Null)
+}
+
+fn notify_settings_panes() -> &'static [&'static str] {
+    #[cfg(target_os = "macos")]
+    {
+        &[
+            "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
+            // macOS 12 and older name the pane this way.
+            "x-apple.systempreferences:com.apple.preference.notifications",
+        ]
+    }
+    #[cfg(windows)]
+    {
+        &["ms-settings:notifications"]
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        &[]
+    }
+}
+
+fn open_first_external(panes: &[&str]) {
+    #[cfg(target_os = "macos")]
+    for pane in panes {
+        if shell_core::sys_mac::shellops::open_external(pane).is_ok() {
+            return;
+        }
+    }
+    #[cfg(windows)]
+    for pane in panes {
+        if shell_core::sys::shellops::open_external(pane).is_ok() {
+            return;
+        }
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let _ = panes;
 }
 
 /// Main's `appVersion()`: `package.json`'s `version` when it is a string, else `0.0.0` (its `readPackage`).
@@ -359,6 +412,16 @@ mod tests {
         ] {
             std::fs::write(&package, text).unwrap();
             assert_eq!(app_version(&package), version, "{text}");
+        }
+    }
+
+    #[test]
+    fn notify_settings_panes_are_valid_external_urls() {
+        for pane in notify_settings_panes() {
+            assert_eq!(
+                shell_core::shell_args::validate_external_url(pane),
+                Ok(*pane)
+            );
         }
     }
 }
