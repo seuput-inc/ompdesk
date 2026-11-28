@@ -1424,8 +1424,9 @@ async fn call_method(call: Call) -> Result<Reply, Fault> {
         // A paired device asks for a bot's home chat by name (`host.bots.home`): refused unless that device may reach it.
         "botHome" => reply(control.bot_home(
             &text_arg(&args, "name", method)?,
-            args.get("device").and_then(Value::as_str),
+            &text_arg(&args, "device", method)?,
             args.get("deviceName").and_then(Value::as_str),
+            args.get("fromBot").and_then(Value::as_bool) == Some(true),
         )),
         // A paired device's change to one of this computer's bots (`host.bots.command`): this computer's copy after it.
         "botsFrom" => reply(

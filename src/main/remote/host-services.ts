@@ -1814,8 +1814,10 @@ export class LocalHostServices implements HostServices {
 			case "host.schedules.create":
 				return this.#deps.machine.createSchedule(parse(SchedulesCreateParams, method, params).draft, peer.deviceId);
 			// A device's agent asks one of this computer's bots by name (`bot:<name>@<this computer>`).
-			case "host.bots.home":
-				return this.#bots().home(parse(BotsHomeParams, method, params).name, peer.deviceId, peer.name);
+			case "host.bots.home": {
+				const { name, fromBot } = parse(BotsHomeParams, method, params);
+				return this.#bots().home(name, peer.deviceId, peer.name, fromBot);
+			}
 			// A device lists this computer's bots (orca-bots-remote): the copy it keeps, at its version.
 			case "host.bots.list":
 				return this.#bots().share();

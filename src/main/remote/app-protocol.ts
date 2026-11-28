@@ -966,7 +966,7 @@ export const SchedulesCommandParams: z.ZodType<{ request: SchedulesRequest }> = 
 export const SchedulesLogParams = z.object({ runId: ScheduleId });
 export const SchedulesCreateParams = z.object({ draft: ScheduleDraftSchema });
 /** `host.bots.home {name}` → `{path, name}`: one of the host's bots by name, refused unless the asking device is in its reach. */
-export const BotsHomeParams = z.object({ name: z.string().trim().min(1).max(200) });
+export const BotsHomeParams = z.object({ name: z.string().trim().min(1).max(200), fromBot: z.boolean().optional() });
 /**
  * `host.bots.command {request}` returns SharedBots, a requested file, deletion counts or a proposed creation folder.
  * The host chooses every creation path. Imports, handovers and owner-only settings stay local.

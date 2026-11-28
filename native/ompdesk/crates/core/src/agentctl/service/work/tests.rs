@@ -2150,7 +2150,7 @@ async fn a_bot_by_name_is_its_home_chat_and_another_computer_reaches_it_unless_r
     );
     assert_eq!(
         control
-            .bot_home("Ada", Some("dev1"), Some("MacBook"))
+            .bot_home("Ada", "dev1", Some("MacBook"), false)
             .unwrap()["path"],
         "/s/bot.jsonl"
     );
@@ -2161,7 +2161,7 @@ async fn a_bot_by_name_is_its_home_chat_and_another_computer_reaches_it_unless_r
         .await
         .unwrap();
     let refused = control
-        .bot_home("Ada", Some("dev1"), Some("MacBook"))
+        .bot_home("Ada", "dev1", Some("MacBook"), true)
         .unwrap_err();
     assert_eq!(
         refused.message(),
@@ -2173,11 +2173,191 @@ async fn a_bot_by_name_is_its_home_chat_and_another_computer_reaches_it_unless_r
         .unwrap();
     assert_eq!(
         control
-            .bot_home("Ada", Some("dev1"), Some("MacBook"))
+            .bot_home("Ada", "dev1", Some("MacBook"), true)
             .unwrap()["path"],
         "/s/bot.jsonl"
     );
     assert!(control.bot_target(&caller, &tabs, "Nobody").await.is_err());
+}
+
+#[tokio::test]
+async fn a_failed_legacy_peer_write_neither_consumes_the_notice_nor_grants_access() {
+    let root = Scratch::new();
+    let (host, _) = started_with(&root, json!([{"id":"ada","name":"Ada","folder":root.0}]));
+    let file = root.0.join("bots.json");
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    let send = || {
+        host.bot_home("Ada", "peer", Some("Mini"), true)
+            .unwrap_err()
+    };
+    assert!(!send().message().contains("owner can allow"));
+    assert!(host.bot_named("Ada").unwrap().legacy_peer_request.is_none());
+    std::fs::remove_dir(&file).unwrap();
+    assert!(send().message().contains("owner can allow"));
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    assert!(
+        host.bots_command(json!({"action":"allowLegacyPeers","ids":["ada"]}))
+            .await
+            .is_err()
+    );
+    let bot = host.bot_named("Ada").unwrap();
+    assert!(bot.undecided_reach());
+    assert_eq!(bot.legacy_peer_request.as_deref(), Some("Mini"));
+}
+
+#[tokio::test]
+async fn legacy_peer_request_is_private_and_recorded_once_across_concurrent_sends_and_restart() {
+    let root = Scratch::new();
+    let row = json!({"id":"ada","name":"Ada","folder":root.0,"home":"/s/ada.jsonl"});
+    let (host, asked) = started_with(&root, json!([row]));
+    let shared = host.bots_share();
+    assert_eq!(
+        host.bot_home("Ada", "peer", Some("Mini"), false)
+            .unwrap_err()
+            .message(),
+        "This bot does not take messages from Mini"
+    );
+    let (_, denied) = run(
+        &host,
+        "ompdesk_bot",
+        json!({"action":"set","bot":"Ada","reach":[]}),
+    )
+    .await;
+    assert!(denied);
+    let start = std::sync::Barrier::new(2);
+    let runtime = tokio::runtime::Handle::current();
+    let send = |label: &str| {
+        let _entered = runtime.enter();
+        start.wait();
+        host.bot_home("aDa", label, Some(label), true)
+            .unwrap_err()
+            .message()
+            .contains("owner can allow")
+    };
+    let (mini, laptop) = std::thread::scope(|scope| {
+        let mini = scope.spawn(|| send("Mini"));
+        let laptop = send("Laptop");
+        (mini.join().unwrap(), laptop)
+    });
+    assert_ne!(mini, laptop);
+    let first = if mini { "Mini" } else { "Laptop" };
+    assert_eq!(host.bots_state()["bots"][0]["legacyPeerRequest"], first);
+    assert_eq!(host.bots_share(), shared);
+    run(&host, "ompdesk_bot", json!({"action":"list"})).await;
+    let notices = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(kind, args)| {
+            kind == "botsChanged" && args["state"]["bots"][0]["legacyPeerRequest"] == first
+        })
+        .count();
+    assert_eq!(notices, 1);
+    drop(host);
+
+    let (host, _) = started_with(&root, Value::Null);
+    assert_eq!(host.bots_state()["bots"][0]["legacyPeerRequest"], first);
+    assert_eq!(
+        host.bot_home("Ada", "peer", Some("Mini"), true)
+            .unwrap_err()
+            .message(),
+        "This bot does not take messages from Mini"
+    );
+    let (_, denied) = run(
+        &host,
+        "ompdesk_bot",
+        json!({"action":"set","bot":"Ada","reach":[]}),
+    )
+    .await;
+    assert!(denied);
+    for request in [
+        json!({"action":"update","id":"ada","reach":[],"pairedWeb":true}),
+        json!({"action":"allowLegacyPeers","ids":["ada"],"allow":"false"}),
+        json!({"action":"allowLegacyPeers","ids":["ada"],"allow":null}),
+    ] {
+        assert!(host.bots_command(request).await.is_err());
+    }
+    assert_eq!(host.bots_state()["bots"][0]["legacyPeerRequest"], first);
+    host.bots_command(json!({"action":"allowLegacyPeers","ids":["ada"],"allow":false}))
+        .await
+        .unwrap();
+    drop(host);
+    let (host, _) = started_with(&root, Value::Null);
+    assert!(
+        host.bots_command(json!({"action":"allowLegacyPeers","ids":["ada"]}))
+            .await
+            .is_err()
+    );
+    assert!(host.bot_home("Ada", "peer", Some("Mini"), true).is_err());
+    let bot = host.bot_named("Ada").unwrap();
+    assert_eq!(bot.all_paired, Some(false));
+    assert!(bot.legacy_peer_request.is_none());
+}
+
+#[tokio::test]
+async fn legacy_peer_request_skips_paused_and_listed_bots_and_obeys_the_owners_current_choice() {
+    let root = Scratch::new();
+    let (host, _) = started_with(
+        &root,
+        json!([
+            {"id":"a","name":"Allowed","folder":root.0,"home":"/s/a.jsonl"},
+            {"id":"b","name":"Paused","folder":root.0,"paused":true},
+            {"id":"c","name":"Listed","folder":root.0,"reach":["other"]},
+            {"id":"d","name":"Restricted","folder":root.0},
+        ]),
+    );
+    for name in ["Paused", "Listed"] {
+        let e = host.bot_home(name, "peer", Some("Mini"), true).unwrap_err();
+        assert!(!e.message().contains("owner can allow"));
+        assert!(host.bot_named(name).unwrap().legacy_peer_request.is_none());
+    }
+    assert!(
+        host.bots_command(json!({"action":"allowLegacyPeers","ids":["a","b"]}))
+            .await
+            .is_err()
+    );
+    assert!(
+        host.bot_home("Allowed", "peer", Some("Mini"), true)
+            .unwrap_err()
+            .message()
+            .contains("owner can allow")
+    );
+    host.bots_command(json!({"action":"allowLegacyPeers","ids":["a"]}))
+        .await
+        .unwrap();
+    assert_eq!(
+        host.bot_home("allowed", "peer", Some("Mini"), true)
+            .unwrap(),
+        json!({"path":"/s/a.jsonl","name":"Allowed"})
+    );
+    assert!(host.bot_named("a").unwrap().legacy_peer_request.is_none());
+    assert!(
+        host.bots_command(json!({"action":"allowLegacyPeers","ids":["a"],"allow":false}))
+            .await
+            .is_err()
+    );
+
+    assert!(
+        host.bot_home("Restricted", "peer", Some("Mini"), true)
+            .is_err()
+    );
+    host.bots_command(json!({"action":"update","id":"d","reach":["other"]}))
+        .await
+        .unwrap();
+    assert!(
+        host.bots_command(json!({"action":"allowLegacyPeers","ids":["d"]}))
+            .await
+            .is_err()
+    );
+    assert!(host.bot_named("d").unwrap().legacy_peer_request.is_none());
+    assert_eq!(
+        host.bot_home("Restricted", "peer", Some("Mini"), true)
+            .unwrap_err()
+            .message(),
+        "This bot does not take messages from Mini"
+    );
 }
 
 /// The `schedules.create` drafts main was asked for, oldest first.

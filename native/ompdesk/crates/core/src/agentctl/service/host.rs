@@ -613,10 +613,12 @@ impl Host {
 
     /// `botHome {device, name}`: the home chat file of the bot `name` on paired host `device`, which refuses unless this
     /// computer is in that bot's reach.
-    pub async fn bot_home(&self, device: &str, name: &str) -> R<String> {
-        let answer: Value = self
-            .ask("botHome", json!({ "device": device, "name": name }))
-            .await?;
+    pub async fn bot_home(&self, device: &str, name: &str, from_bot: bool) -> R<String> {
+        let mut params = json!({ "device": device, "name": name });
+        if from_bot {
+            params["fromBot"] = Value::Bool(true);
+        }
+        let answer: Value = self.ask("botHome", params).await?;
         match answer.get("path").and_then(Value::as_str) {
             Some(path) => Ok(path.to_owned()),
             None => Err(Fail::other(

@@ -47,6 +47,8 @@ pub struct BotRecord {
     /// Older journals have no marker: preserve their list, including an explicit empty list.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub all_paired: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_peer_request: Option<String>,
     /// None = never stale.
     pub stale_days: Option<f64>,
     /// Its Look around schedule's id.
@@ -123,6 +125,10 @@ pub struct BotWorker {
 }
 
 impl BotRecord {
+    pub fn undecided_reach(&self) -> bool {
+        self.all_paired.is_none() && self.reach.is_empty()
+    }
+
     /// Whether `session` is one of its chats.
     pub fn has_session(&self, session: &str) -> bool {
         self.home.as_deref() == Some(session) || self.sessions.iter().any(|known| known == session)
@@ -163,12 +169,43 @@ impl Bots {
 
     /// The bot `key` names: its id, else its name in any case.
     pub fn find(&self, key: &str) -> Option<&BotRecord> {
+        self.find_index(key).map(|i| &self.bots[i])
+    }
+
+    fn find_index(&self, key: &str) -> Option<usize> {
         let key = key.trim();
-        self.bots.iter().find(|bot| bot.id == key).or_else(|| {
+        self.bots.iter().position(|bot| bot.id == key).or_else(|| {
+            let name = key.to_lowercase();
             self.bots
                 .iter()
-                .find(|bot| bot.name.to_lowercase() == key.to_lowercase())
+                .position(|bot| bot.name.to_lowercase() == name)
         })
+    }
+
+    /// Resolve the name and, for the first eligible paired bot, persist its notice in the same lock.
+    pub fn message_target(
+        &mut self,
+        key: &str,
+        requester: Option<&str>,
+    ) -> Result<Option<(&BotRecord, bool)>, String> {
+        let Some(i) = self.find_index(key) else {
+            return Ok(None);
+        };
+        let bot = &mut self.bots[i];
+        if let Some(requester) = requester
+            && bot.undecided_reach()
+            && !bot.paused
+            && bot.legacy_peer_request.is_none()
+        {
+            bot.legacy_peer_request = Some(requester.to_owned());
+            if let Err(error) = self.save_checked() {
+                self.bots[i].legacy_peer_request = None;
+                self.save();
+                return Err(error);
+            }
+            return Ok(Some((&self.bots[i], true)));
+        }
+        Ok(Some((&self.bots[i], false)))
     }
 
     /// The bot whose chats run in `cwd`.
@@ -193,6 +230,33 @@ impl Bots {
         let changed = bot.clone();
         self.save();
         Some(changed)
+    }
+
+    pub fn change_reach(
+        &mut self,
+        id: &str,
+        reach: Vec<String>,
+        owner: bool,
+        change: impl FnOnce(&mut BotRecord),
+    ) -> Result<Option<BotRecord>, String> {
+        let Some(i) = self.bots.iter().position(|bot| bot.id == id) else {
+            return Ok(None);
+        };
+        let bot = &mut self.bots[i];
+        if !owner && bot.undecided_reach() {
+            return Err("Only the owner on this computer can set this bot's legacy access.".into());
+        }
+        let before = bot.clone();
+        change(bot);
+        bot.all_paired = Some(false);
+        bot.reach = reach;
+        bot.legacy_peer_request = None;
+        if let Err(error) = self.save_checked() {
+            self.bots[i] = before;
+            self.save();
+            return Err(error);
+        }
+        Ok(Some(self.bots[i].clone()))
     }
 
     pub fn remove(&mut self, id: &str) -> Option<BotRecord> {
@@ -324,28 +388,37 @@ impl Bots {
     }
 
     /// A stale selection must not replace an explicit reach decision made after the dialog opened.
-    pub fn allow_legacy_peers(&mut self, ids: &HashSet<&str>) -> bool {
+    pub fn decide_legacy_peers(
+        &mut self,
+        ids: &HashSet<&str>,
+        allow: bool,
+    ) -> Result<bool, String> {
         if ids.is_empty()
             || self
                 .bots
                 .iter()
-                .filter(|bot| {
-                    ids.contains(bot.id.as_str())
-                        && bot.all_paired.is_none()
-                        && bot.reach.is_empty()
-                })
+                .filter(|bot| ids.contains(bot.id.as_str()) && !bot.paused && bot.undecided_reach())
                 .count()
                 != ids.len()
         {
-            return false;
+            return Ok(false);
         }
-        for bot in &mut self.bots {
+        let mut previous = Vec::with_capacity(ids.len());
+        for (index, bot) in self.bots.iter_mut().enumerate() {
             if ids.contains(bot.id.as_str()) {
-                bot.all_paired = Some(true);
+                previous.push((index, bot.legacy_peer_request.take()));
+                bot.all_paired = Some(allow);
             }
         }
-        self.save();
-        true
+        if let Err(error) = self.save_checked() {
+            for (index, request) in previous {
+                self.bots[index].all_paired = None;
+                self.bots[index].legacy_peer_request = request;
+            }
+            self.save();
+            return Err(error);
+        }
+        Ok(true)
     }
 
     fn save(&self) {

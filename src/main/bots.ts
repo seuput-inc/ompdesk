@@ -32,7 +32,7 @@ export type PeerBotIntent = { context: BotContext; mail: { id: string; text: str
  */
 export interface HostBots {
 	/** A device's agent asks one of this computer's bots by name (`host.bots.home`): refused unless it may reach it. */
-	home(name: string, deviceId: string, deviceName: string): Promise<{ path: string; name: string }>;
+	home(name: string, deviceId: string, deviceName: string, fromBot?: boolean): Promise<{ path: string; name: string }>;
 	/** This computer's bots and items as its paired devices get them (`host.bots.list`). */
 	share(): Promise<SharedBots>;
 	/** A device's change to one of this computer's bots (`host.bots.command`): the copy after it, or a file. */

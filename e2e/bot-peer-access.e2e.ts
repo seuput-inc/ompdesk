@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { controlToolCaller, exitApp, pressShortcutUntilVisible } from "./harness";
+import { controlToolCaller, exitApp, pressShortcutUntilVisible, readRecords } from "./harness";
 import { connectHost, launchRemote, makeRemoteProfile, type RemoteInstance } from "./remote-harness";
 
 async function review(page: Page) {
@@ -14,7 +14,7 @@ async function review(page: Page) {
 	return page.getByRole("dialog", { name: "Set up paired access for existing bots" });
 }
 
-test("only the owner-selected legacy bots accept messages from an authenticated peer", async () => {
+test("the first refused paired bot message asks the owner once; only an allowed bot receives a retry", async () => {
 	test.setTimeout(300_000);
 	const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "omp-bot-peer-access-")));
 	let owner: RemoteInstance | undefined;
@@ -35,6 +35,10 @@ test("only the owner-selected legacy bots accept messages from an authenticated 
 		].map(bot => ({ ...bot, folder: path.join(root, bot.id) }));
 		for (const bot of fixture) await fs.mkdir(bot.folder);
 		await fs.writeFile(path.join(a.desktop, "bots.json"), JSON.stringify(fixture));
+		await fs.writeFile(
+			path.join(b.desktop, "bots.json"),
+			JSON.stringify([{ id: "sender", name: "Courier", folder: b.project, allPaired: true }]),
+		);
 		owner = await launchRemote(a);
 		const before = await review(owner.page);
 		await expect(before.getByRole("checkbox")).toHaveCount(2);
@@ -49,6 +53,7 @@ test("only the owner-selected legacy bots accept messages from an authenticated 
 		await expect(afterRestart.getByRole("checkbox", { name: "Ada · bot-ada" })).not.toBeChecked();
 		await expect(afterRestart.getByRole("checkbox", { name: "Bess · bot-bess" })).not.toBeChecked();
 		await afterRestart.getByRole("button", { name: "Cancel" }).click();
+		await local.getByRole("button", { name: "Back to session" }).click();
 		const freshFolder = path.join(root, "new");
 		await local.evaluate(folder => window.omp.bots.command({ action: "create", name: "New", folder }), freshFolder);
 		const homes = new Map<string, string>();
@@ -87,43 +92,81 @@ test("only the owner-selected legacy bots accept messages from an authenticated 
 		}
 		peer = await launchRemote(b);
 		const client = peer.page;
+		const sender = (await client.evaluate(() => window.omp.tabs.list())).find(tab => tab.active);
+		if (!sender) throw new Error("The sending bot has no chat");
+		await client.evaluate(
+			id => window.omp.rpc.commandForTab(id, { type: "prompt", message: "Start Courier" }),
+			sender.tabId,
+		);
+		await expect
+			.poll(async () => {
+				const state = await client.evaluate(() => window.omp.bots.command({ action: "get" }));
+				return state.bots.find(bot => bot.id === "sender")?.home;
+			})
+			.toBeTruthy();
+		await client.evaluate(() => window.omp.remote.setDeviceName("Notebook"));
 		await connectHost(local, client, "Studio");
 		await expect
 			.poll(async () => (await client.evaluate(() => window.omp.remote.getState())).hosts[0]?.state)
 			.toBe("online");
-		const call = await controlToolCaller(client, b.record);
-		const send = (bot: string, message: string) =>
-			call("ompdesk_session_send", { session: `bot:${bot}@Studio`, message });
-		const delivered = async (bot: string, message: string) => {
-			const result = await send(bot, message);
-			expect(result.isError, result.text).toBe(false);
-			await expect.poll(() => fs.readFile(homes.get(bot) ?? "", "utf8")).toContain(message);
+		const call = await controlToolCaller(client, b.record, sender.tabId);
+		const send = (bot: string, message: string, requestId = randomUUID()) =>
+			call("ompdesk_session_send", { session: `bot:${bot}@Studio`, message, request_id: requestId });
+		const delivered = async (bot: string) => {
+			const id = randomUUID();
+			const message = `Courier delivery ${id}`;
+			for (let attempt = 0; attempt < 2; attempt++) {
+				const result = await send(bot, message, id);
+				expect(result.isError, result.text).toBe(false);
+			}
+			const file = homes.get(bot);
+			if (!file) throw new Error(`No receiving journal for ${bot}`);
+			await expect
+				.poll(
+					async () =>
+						(await readRecords(file)).filter(
+							entry => entry.type === "message" && JSON.stringify(entry.message).includes(message),
+						).length,
+				)
+				.toBe(1);
 		};
 		const denied = async (bot: string) => {
 			const result = await send(bot, `must not deliver to ${bot}`);
 			expect(result.isError, result.text).toBe(true);
-			expect(result.text).toContain("does not take messages");
+			return result.text;
 		};
-		await delivered("New", "new peer delivery");
-		await denied("Ada");
-		await denied("Closed");
-		await denied("Renamed");
-		const dialog = await review(local);
-		await expect(dialog.getByRole("button", { name: "Apply" })).toBeDisabled();
-		await dialog.getByRole("checkbox", { name: "Ada · bot-ada" }).check();
-		await dialog.getByRole("button", { name: "Apply" }).click();
-		await expect(dialog).toHaveCount(0);
-		await delivered("Ada", "chosen peer delivery");
-		await denied("Bess");
-		await denied("Closed");
+		const notices = local.locator("[data-legacy-peer-request]");
+		await delivered("New");
+		for (const bot of ["Closed", "Renamed"]) expect(await denied(bot)).toContain("does not take messages");
+		await expect(notices).toHaveCount(0);
+
+		expect(await denied("Ada")).toMatch(/owner can allow/i);
+		const ada = local.locator('[data-legacy-peer-request="bot-ada"]');
+		await expect(ada).toContainText("Ada");
+		await expect(ada).toContainText("Notebook");
+		expect(await denied("Ada")).not.toMatch(/owner can allow/i);
+		await expect(notices).toHaveCount(1);
+		await expect(client.locator("[data-legacy-peer-request]")).toHaveCount(0);
+		await ada.getByRole("button", { name: "Allow paired computers", exact: true }).click();
+		await expect(ada).toHaveCount(0);
+		await delivered("Ada");
+		expect(await fs.readFile(homes.get("Ada") ?? "", "utf8")).not.toContain("must not deliver to Ada");
+
+		expect(await denied("Bess")).toMatch(/owner can allow/i);
+		const bess = local.locator('[data-legacy-peer-request="bot-bess"]');
+		await bess.getByRole("button", { name: "Only me", exact: true }).click();
+		await expect(bess).toHaveCount(0);
+		expect(await denied("Bess")).toContain("does not take messages");
+		await expect(notices).toHaveCount(0);
+
 		const id = (await local.evaluate(() => window.omp.remote.getState())).host.peers[0].deviceId;
 		await local.evaluate(id => window.omp.remote.blockPeer(id), id);
 		await expect
 			.poll(async () => (await client.evaluate(() => window.omp.remote.getState())).hosts[0]?.state)
 			.not.toBe("online");
-		const revoked = await send("New", "revoked peer delivery");
+		const revoked = await send("Ada", "revoked peer delivery");
 		expect(revoked.isError, revoked.text).toBe(true);
-		expect(await fs.readFile(homes.get("New") ?? "", "utf8")).not.toContain("revoked peer delivery");
+		expect(await fs.readFile(homes.get("Ada") ?? "", "utf8")).not.toContain("revoked peer delivery");
 	} finally {
 		if (peer) await exitApp(peer.app);
 		if (owner) await exitApp(owner.app);

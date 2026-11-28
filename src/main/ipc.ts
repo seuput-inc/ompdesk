@@ -1701,7 +1701,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 	deps.agentOpening.current = () => agentControl.opening();
 	deps.sessionNote.current = (session, text) => agentControl.noteSession(session, text);
 	deps.hostBots.current = {
-		home: (name, deviceId, deviceName) => agentControl.botHome(name, deviceId, deviceName),
+		home: (name, deviceId, deviceName, fromBot) => agentControl.botHome(name, deviceId, deviceName, fromBot),
 		share: () => agentControl.botsShare(),
 		from: (request, deviceId, deviceName, createKey) =>
 			agentControl.botsFrom(request, deviceId, deviceName, createKey),
@@ -2737,6 +2737,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 			if (device !== undefined && typeof device !== "string") throw new Error("Invalid computer");
 			return agentControl.bots({ action: "createModels", callerTabId, device });
 		}
+		if (!caller.browserWindow && "action" in request && request.action === "update" && "reach" in request)
+			return agentControl.bots({ ...(request as BotsCall), pairedWeb: true });
 		return agentControl.bots(request as BotsCall);
 	});
 	// One owner action: the host picks, reads and stores. No browser supplies a path or receives the file.

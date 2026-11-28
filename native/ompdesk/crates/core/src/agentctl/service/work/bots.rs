@@ -869,7 +869,7 @@ impl AgentControl {
                     None => None,
                     Some(names) => Some(self.device_ids(names)?),
                 };
-                let changed = self.change_bot(&bot.id, |record| {
+                let changed = self.edit_bot(&bot.id, reach, false, |record| {
                     if let Some(model) = &args.model {
                         record.model =
                             Some(model.trim().to_owned()).filter(|model| !model.is_empty());
@@ -879,10 +879,6 @@ impl AgentControl {
                     }
                     if let Some(days) = args.stale_days {
                         record.stale_days = (days > 0.0).then_some(days);
-                    }
-                    if let Some(reach) = reach {
-                        record.all_paired = Some(false);
-                        record.reach = reach;
                     }
                 })?;
                 Ok(format!(
@@ -1047,7 +1043,24 @@ impl AgentControl {
 
     /// Changes a bot and tells main.
     pub(crate) fn change_bot(&self, id: &str, change: impl FnOnce(&mut BotRecord)) -> R<BotRecord> {
-        let Some(bot) = self.bots().change(id, change) else {
+        self.edit_bot(id, None, false, change)
+    }
+
+    fn edit_bot(
+        &self,
+        id: &str,
+        reach: Option<Vec<String>>,
+        owner: bool,
+        change: impl FnOnce(&mut BotRecord),
+    ) -> R<BotRecord> {
+        let bot = match reach {
+            Some(reach) => self
+                .bots()
+                .change_reach(id, reach, owner, change)
+                .map_err(super::super::fail::Fail::other)?,
+            None => self.bots().change(id, change),
+        };
+        let Some(bot) = bot else {
             return fail("That bot is gone.");
         };
         self.bots_changed();
@@ -1376,11 +1389,35 @@ impl AgentControl {
     pub fn bot_home(
         &self,
         name: &str,
-        device: Option<&str>,
+        device: &str,
         device_name: Option<&str>,
+        from_bot: bool,
     ) -> R<Value> {
-        let bot = self.bot_named(name)?;
-        let home = Self::message_home(&bot, device, device_name)?;
+        if device.is_empty() {
+            return fail("A paired computer must identify itself.");
+        }
+        let label = device_name
+            .filter(|name| !name.is_empty())
+            .unwrap_or(device);
+        let mut bots = self.bots();
+        let Some((bot, first)) = bots
+            .message_target(name, from_bot.then_some(label))
+            .map_err(super::super::fail::Fail::other)?
+        else {
+            return fail(format!(
+                "No bot \"{name}\". ompdesk_bot {{\"action\":\"list\"}} lists them."
+            ));
+        };
+        if first {
+            let reason = format!(
+                "The bot {} has no saved choice for messages from paired computers. Its owner can allow them on the bot's computer.",
+                bot.name
+            );
+            drop(bots);
+            self.bots_changed();
+            return fail(reason);
+        }
+        let home = Self::message_home(bot, Some(device), Some(label))?;
         Ok(json!({ "path": home, "name": bot.name }))
     }
 
@@ -1468,7 +1505,10 @@ impl AgentControl {
             return self.bot_tab(name).await;
         };
         let device = self.reach(device).await?;
-        let path = self.host.bot_home(&device.id, name).await?;
+        let from_bot = super::super::messages::sender(&self.bots(), caller)
+            .1
+            .is_some();
+        let path = self.host.bot_home(&device.id, name, from_bot).await?;
         let Some(saved) = saved_id_of_path(Some(&path)) else {
             return fail(format!(
                 "The bot {name} on {} names no saved chat.",
@@ -1694,6 +1734,11 @@ impl AgentControl {
         match request.get("action").and_then(Value::as_str).unwrap_or("") {
             "get" => {}
             "allowLegacyPeers" => {
+                let allow = match request.get("allow") {
+                    None => true,
+                    Some(Value::Bool(allow)) => *allow,
+                    Some(_) => return fail("Select Allow paired computers or Only me."),
+                };
                 let ids = request
                     .get("ids")
                     .and_then(Value::as_array)
@@ -1702,7 +1747,14 @@ impl AgentControl {
                             .map(Value::as_str)
                             .collect::<Option<HashSet<_>>>()
                     });
-                if !ids.is_some_and(|ids| self.bots().allow_legacy_peers(&ids)) {
+                let Some(ids) = ids else {
+                    return fail("Select existing bots whose paired access has not been set.");
+                };
+                let changed = self
+                    .bots()
+                    .decide_legacy_peers(&ids, allow)
+                    .map_err(super::super::fail::Fail::other)?;
+                if !changed {
                     return fail("Select existing bots whose paired access has not been set.");
                 }
                 self.bots_changed();
@@ -1855,6 +1907,10 @@ impl AgentControl {
             }
             "update" => {
                 let bot = self.bot_named(&id)?;
+                let owner = request.get("pairedWeb") != Some(&Value::Bool(true));
+                if !owner && request.get("reach").is_some() && bot.undecided_reach() {
+                    return fail("Set up legacy bot access on the owning computer.");
+                }
                 if let Some(paused) = request.get("paused").and_then(Value::as_bool)
                     && paused != bot.paused
                 {
@@ -1909,7 +1965,7 @@ impl AgentControl {
                         Some(folders)
                     }
                 };
-                self.change_bot(&bot.id, |record| {
+                self.edit_bot(&bot.id, reach, owner, |record| {
                     if let Some(approval) = approval {
                         record.chat_approval = approval;
                     }
@@ -1932,10 +1988,6 @@ impl AgentControl {
                             record.stale_days = days.as_f64().filter(|days| *days > 0.0);
                         }
                         _ => {}
-                    }
-                    if let Some(reach) = reach {
-                        record.all_paired = Some(false);
-                        record.reach = reach;
                     }
                     if let Some(quiet) = request.get("quiet").and_then(Value::as_array) {
                         record.quiet = QUIET_KINDS

@@ -55,6 +55,7 @@ import { WhatsNewCard } from "./WhatsNewCard";
 const AgentsPage = lazyChunk(() => import("../agents/AgentsPage").then(m => ({ default: m.AgentsPage })));
 const BoardPage = lazyChunk(() => import("../board/BoardPage").then(m => ({ default: m.BoardPage })));
 const BotsPage = lazyChunk(() => import("../bots/BotsPage").then(m => ({ default: m.BotsPage })));
+const LegacyPeerRequests = lazyChunk(() => import("../bots/LegacyPeerRequests"));
 // A tip row decides once per launch; its own chunk keeps it off a phone's first screen.
 const FeatureTipCard = lazyChunk(() => import("./FeatureTipCard").then(m => ({ default: m.FeatureTipCard })));
 const InsightsPage = lazyChunk(() => import("../insights/InsightsPage").then(m => ({ default: m.InsightsPage })));
@@ -521,6 +522,11 @@ export function AppShell() {
 				<ViewSheetHost />
 				<MissingFolderSheetHost />
 			</div>
+			{!webRuntime() && (
+				<Suspense fallback={null}>
+					<LegacyPeerRequests />
+				</Suspense>
+			)}
 			<StatusBar />
 		</div>
 	);

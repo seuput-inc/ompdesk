@@ -2801,6 +2801,20 @@ export const SURFACES: readonly Surface[] = [
 		parity: { session: "connector", inView: "[data-connector-offer='slack']" },
 	},
 	{
+		id: "bot-peer-request",
+		area: "B",
+		title: "Only the owning desktop offers the pending bot access choice",
+		open: async (page, _look, view) => {
+			const notice = page.locator("[data-legacy-peer-request]");
+			if (!view || view === "local")
+				await expect(notice.getByRole("button", { name: say(_look, "bots.access.allowPeers") })).toBeVisible();
+			else await expect(notice).toHaveCount(0);
+		},
+		query: "&quiet=peer-request",
+		when: look => look.device === "electron",
+		parity: { session: "work", available: () => process.env.OMP_GUI_TEST_LEGACY_PEER_REQUEST === "1" },
+	},
+	{
 		id: "bot-pane-offline",
 		area: "B",
 		title: "A paired computer's bot while that computer is away: greyed in the list with its owner offline, its page's notice",

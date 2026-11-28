@@ -8580,6 +8580,11 @@ export const en: Record<string, string> = {
 	"bots.access.legacyTitle": "Set up paired access for existing bots",
 	"bots.access.legacyHint":
 		"Only selected bots will accept messages from all paired computers. Other bots keep their current access.",
+	"bots.access.legacyRequest":
+		"A bot on “{device}” tried to message “{bot}”. The message was blocked. Who can send future messages?",
+	"bots.access.allowPeers": "Allow paired computers",
+	"bots.access.keepPrivate": "Only me",
+	"bots.access.choiceFailed": "Couldn’t save your choice. Try again.",
 	"bots.access.summaryYou": "Only you can ask {bot}.",
 	"bots.access.summary": "You and {devices} can ask {bot}.",
 	"bots.access.what": "Their agents can message it and hand it work; it answers in its home chat.",

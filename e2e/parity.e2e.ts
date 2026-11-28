@@ -461,6 +461,14 @@ if (dir) {
 			// core's `bots_share.rs`), and that computer is away, so every view lists its bot offline.
 			if (surfaces.some(surface => surface.id === "bot-pane-offline"))
 				for (const profile of [hostProfile, clientProfile]) await seedAwayHostBots(profile.desktop);
+			if (surfaces.some(surface => surface.id === "bot-peer-request")) {
+				const folder = path.join(hostProfile.root, "courier");
+				await fs.mkdir(folder);
+				await fs.writeFile(
+					path.join(hostProfile.desktop, "bots.json"),
+					JSON.stringify([{ id: "old-courier", name: "Courier", folder, reach: [], legacyPeerRequest: "PC-A" }]),
+				);
+			}
 			if (previewStart)
 				for (const profile of [hostProfile, clientProfile]) await seedPreviewHistory(profile.desktop);
 			host = await launchRemote(hostProfile);

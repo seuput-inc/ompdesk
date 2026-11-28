@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { BOT_CONNECTORS_COMMAND } from "../../shared/bot-connector-channels";
+import { BOTS_COMMAND, BOTS_STATE } from "../../shared/bots";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICES_CHANGED, WEB_DEVICES_LIST, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
 import type { AgentSessionEvent } from "../../shared/rpc-types";
@@ -820,6 +821,20 @@ describe("events", () => {
 		win.webContents.send(IPC_EVENTS.REMOTE_STATE, state);
 		await r.host.flush();
 		expect(r.socket.frames("evt")).toEqual([{ t: "evt", seq: 1, ch: IPC_EVENTS.REMOTE_STATE, d: state }]);
+	});
+
+	it("keeps the first requesting computer off paired pages in both bot state replies and pushes", async () => {
+		const r = await rig();
+		const state = { bots: [{ id: "a", legacyPeerRequest: "Work laptop" }, { id: "b" }], items: [] };
+		const visible = { bots: [{ id: "a" }, { id: "b" }], items: [] };
+		r.invoke.mockResolvedValueOnce(state);
+		await r.frame({ t: "inv", id: 1, ch: BOTS_COMMAND, a: [{ action: "get" }] });
+		await r.settle();
+		r.windows.windowFor("dev1").webContents.send(BOTS_STATE, state);
+		await r.host.flush();
+		expect(r.socket.frames("res")).toEqual([{ t: "res", id: 1, ok: true, v: visible }]);
+		expect(r.socket.frames("evt")).toEqual([{ t: "evt", seq: 1, ch: BOTS_STATE, d: visible }]);
+		expect(state.bots[0]?.legacyPeerRequest).toBe("Work laptop");
 	});
 
 	it("does not push the remote sidebar or its device IDs without the workspace grant needed to read it", async () => {

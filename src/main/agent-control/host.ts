@@ -455,8 +455,13 @@ export class AgentControlRuntime {
 	}
 
 	/** A paired device's `bot:<name>@<this computer>` (`host.bots.home`): refused unless that device may reach it. */
-	botHome(name: string, device: string, deviceName: string): Promise<{ path: string; name: string }> {
-		return this.control.botHome(name, device, deviceName);
+	botHome(
+		name: string,
+		device: string,
+		deviceName: string,
+		fromBot?: boolean,
+	): Promise<{ path: string; name: string }> {
+		return this.control.botHome(name, device, deviceName, fromBot);
 	}
 
 	/** This computer's bots and items as its paired devices get them (`host.bots.list`). */
@@ -1636,10 +1641,14 @@ export class AgentControlRuntime {
 				this.#parents.set(tabId, { callerTabId: openerTabId });
 				deps.pool.setTabOpener(tabId, openerTabId);
 			},
-			botHome: async (device, name) => {
+			botHome: async (device, name, fromBot) => {
 				const remote = deps.remote;
 				if (!remote) throw new Error("No paired computers here.");
-				const answer = await remote.request<{ path?: unknown }>(device, "host.bots.home", { name });
+				const answer = await remote.request<{ path?: unknown }>(
+					device,
+					"host.bots.home",
+					fromBot === true ? { name, fromBot } : { name },
+				);
 				if (typeof answer?.path !== "string")
 					throw new Error("The paired computer did not name the bot's home chat.");
 				return { path: answer.path };

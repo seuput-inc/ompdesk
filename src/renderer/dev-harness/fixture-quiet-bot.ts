@@ -3,7 +3,7 @@ import type { Bot } from "../../shared/bots";
 export const quietScenario = typeof location !== "undefined" ? new URLSearchParams(location.search).get("quiet") : null;
 
 export function quietBots(home: string, dockWorkers = false): Bot[] {
-	return quietScenario === "bot" || dockWorkers
+	return quietScenario === "bot" || quietScenario === "peer-request" || dockWorkers
 		? [
 				{
 					id: "fixture-quiet",
@@ -15,6 +15,7 @@ export function quietBots(home: string, dockWorkers = false): Bot[] {
 					model: null,
 					autoApprove: false,
 					reach: [],
+					...(quietScenario === "peer-request" && { legacyPeerRequest: "PC-A" }),
 					staleDays: null,
 					lookAround: null,
 					tidy: null,

@@ -1225,6 +1225,21 @@ describe("LocalHostServices", () => {
 		]);
 	});
 
+	it("takes the named bot's sender flag from the request but the computer identity from its connection", async () => {
+		const bots = fakeBots();
+		const { services } = setup(60_000, { bots: () => bots });
+		const x = new FakeConnection({ ...peer("device-x"), name: "Work laptop" });
+		for (const params of [{}, { fromBot: false }, { fromBot: true }]) {
+			await services.call(
+				x.peer,
+				"host.bots.home",
+				{ name: "Ada", device: "other", deviceName: "other", ...params },
+				x,
+			);
+			expect(bots.home).toHaveBeenLastCalledWith("Ada", "device-x", "Work laptop", params.fromBot);
+		}
+	});
+
 	describe("daily limits beyond the first ten commands", () => {
 		const MODEL_SETUP_REQUEST: ModelSetupRequest = {
 			researchModel: "anthropic/claude-opus-4-1",

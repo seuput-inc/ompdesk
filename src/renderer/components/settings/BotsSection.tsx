@@ -6,7 +6,7 @@
  */
 import { ChevronLeft, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { Bot } from "../../../shared/bots";
+import { type Bot, canChooseLegacyPeers } from "../../../shared/bots";
 import { useT } from "../../lib/i18n";
 import { ensureBots, useBotsStore } from "../../stores/bots";
 import { useSidebarFolds } from "../../stores/sidebar-folds";
@@ -98,7 +98,7 @@ function LegacyPeerAccess({ bots }: { bots: readonly Bot[] }) {
 	const t = useT();
 	const [picked, setPicked] = useState<string[] | null>(null);
 	const [saving, setSaving] = useState(false);
-	const eligible = bots.filter(bot => bot.allPaired === undefined && bot.reach.length === 0);
+	const eligible = bots.filter(canChooseLegacyPeers);
 	if (eligible.length === 0 && !picked) return null;
 	const title = t("bots.access.legacyTitle");
 	if (!picked)

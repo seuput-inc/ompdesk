@@ -13,6 +13,7 @@
  * Every message between the core and main is handled in the order it came: a page's call reaches main before the
  * event that ends its connection, and a call's answer (`web.reply`) leaves after every push main made before it.
  */
+import { BOTS_COMMAND, BOTS_STATE } from "../../shared/bots";
 import { codedError, ipcErrorCode } from "../../shared/ipc-error-codes";
 import { IPC_COMMANDS, IPC_EVENTS } from "../../shared/ipc-types";
 import { WEB_DEVICE_CONNECTED, WEB_DEVICES_CHANGED, WEB_PAIRING_REQUEST } from "../../shared/mobile-web";
@@ -38,6 +39,19 @@ import type { IpcCaller } from "./ipc-registry";
 import { PageImages } from "./page-images";
 import type { UploadStore } from "./uploads";
 import type { WebClientWindow, WebWindows } from "./web-client-window";
+
+/** The first requesting computer is named only on the bot's own desktop. Non-state command replies pass through. */
+function withoutLegacyPeerRequest(value: unknown): unknown {
+	if (!value || typeof value !== "object" || !("bots" in value) || !Array.isArray(value.bots)) return value;
+	return {
+		...value,
+		bots: value.bots.map((bot: unknown) => {
+			if (!bot || typeof bot !== "object" || !("legacyPeerRequest" in bot)) return bot;
+			const { legacyPeerRequest: _ownerOnly, ...rest } = bot;
+			return rest;
+		}),
+	};
+}
 
 /** Files up to this size ride in the reply as base64; bigger ones are fetched over `/blob`. */
 const INLINE_BINARY_MAX_BYTES = 512 * 1024;
@@ -409,6 +423,7 @@ export class WsRouter {
 		}
 		let data: Uint8Array | undefined;
 		try {
+			if (channel === BOTS_STATE) payload = withoutLegacyPeerRequest(payload);
 			const pictured =
 				Object.hasOwn(PICTURE_CHANNELS, channel) && (page ? page.visible : this.isDeviceVisible(deviceId))
 					? this.#pictures.lift(deviceId, isTabBatch(payload) ? payload.tabId : undefined, payload)
@@ -617,6 +632,7 @@ export class WsRouter {
 
 	/** What a page may see: no secret-looking preferences, no raw bytes or `omp-media://` address. */
 	#shape(deviceId: string, channel: string, args: readonly unknown[], result: unknown, win: WebClientWindow): unknown {
+		if (channel === BOTS_COMMAND) return withoutLegacyPeerRequest(result);
 		if (channel === IPC_COMMANDS.PREFS_GET) {
 			const payload = args[0];
 			const keyed = typeof payload === "object" && payload !== null && "key" in payload && payload.key;

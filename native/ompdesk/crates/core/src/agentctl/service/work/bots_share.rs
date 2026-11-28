@@ -50,7 +50,7 @@ fn copy_row(row: &Value, kind: Kind) -> Value {
                 .collect();
             fields.insert("workerLinks".into(), Value::Array(links));
         }
-        for key in ["picture", "launch", "skillProjects"] {
+        for key in ["picture", "launch", "skillProjects", "legacyPeerRequest"] {
             fields.remove(key);
         }
     }

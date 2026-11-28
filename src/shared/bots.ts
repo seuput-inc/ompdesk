@@ -52,6 +52,8 @@ export interface Bot {
 	reach: string[];
 	/** Absent with empty reach: legacy, denied until the owner chooses. False: explicit reach list. */
 	allPaired?: boolean;
+	/** First paired computer whose bot was refused while access was undecided. Local owner only. */
+	legacyPeerRequest?: string;
 	/** Days an open item goes untouched before it reads as stale; null = never. */
 	staleDays: number | null;
 	/** Its Look around routine (a schedule id in Settings › Schedules); null while none is saved. */
@@ -85,6 +87,10 @@ export interface Bot {
 	kickoffs?: string[];
 	/** The newest kickoff's turn ended without a word: its page offers Try again. */
 	kickoffSilent?: boolean;
+}
+
+export function canChooseLegacyPeers(bot: Bot): boolean {
+	return !bot.device && !bot.paused && bot.allPaired === undefined && bot.reach.length === 0;
 }
 
 /** Look around's presets (`LOOK_EVERY` of `bot-limits.ts`). */
@@ -379,7 +385,7 @@ export interface BotDeletePreview {
 
 export type BotsRequest =
 	| { action: "get" }
-	| { action: "allowLegacyPeers"; ids: string[] }
+	| { action: "allowLegacyPeers"; ids: string[]; allow?: boolean }
 	| ({
 			action: "create";
 			name: string;

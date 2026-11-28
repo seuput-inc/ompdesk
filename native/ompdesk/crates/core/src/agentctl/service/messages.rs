@@ -46,7 +46,7 @@ use crate::agentctl::rules::mail::{
     Mail, MailCheck, MailKind, Posted, delivery_for, mail_details, mail_text,
 };
 
-fn sender<'a>(bots: &'a Bots, caller: &'a ControlTab) -> (&'a str, Option<&'a str>) {
+pub(super) fn sender<'a>(bots: &'a Bots, caller: &'a ControlTab) -> (&'a str, Option<&'a str>) {
     if caller.device.is_none()
         && caller.session_path.is_some()
         && let Some(bot) = bots.of_folder(&caller.cwd)

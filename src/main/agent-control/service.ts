@@ -481,7 +481,7 @@ export interface AgentControlHost {
 	/** A session handed to a bot: `openerTabId` (the bot's home chat) becomes `tabId`'s opener, as the pool keeps one. */
 	setOpener?(tabId: string, openerTabId: string): void;
 	/** A paired host's bot by name (`host.bots.home`): its home chat file; the host refuses unless this computer is in its reach. */
-	botHome?(device: string, name: string): Promise<{ path: string }>;
+	botHome?(device: string, name: string, fromBot?: boolean): Promise<{ path: string }>;
 	/** The owner's change to a paired host's bot or item (`host.bots.command`): the host's copy after it, or a file. */
 	botsCommand?(device: string, request: BotsCall): Promise<unknown>;
 	/** This computer's bots changed as its paired devices see them (`botsShared`): each connected device is told. */
@@ -970,8 +970,13 @@ export class AgentControl {
 	}
 
 	/** A paired device asks for one of this computer's bots by name: its home chat file, unless that device may not reach it. */
-	botHome(name: string, device: string, deviceName: string): Promise<{ path: string; name: string }> {
-		return this.#call("botHome", { name, device, deviceName });
+	botHome(
+		name: string,
+		device: string,
+		deviceName: string,
+		fromBot?: boolean,
+	): Promise<{ path: string; name: string }> {
+		return this.#call("botHome", { name, device, deviceName, ...(fromBot === true && { fromBot }) });
 	}
 
 	/** This computer's bots and items as its paired devices get them (`host.bots.list`). */
@@ -1360,10 +1365,10 @@ export class AgentControl {
 				coded(async () => (await apps().note(tabId, text)) ?? null),
 			"appPorts.openPrivacyPane": ({ pane }: { pane: Parameters<AppPortsLike["openPrivacyPane"]>[0] }) =>
 				coded(async () => (await apps().openPrivacyPane(pane)) ?? null),
-			botHome: ({ device: where, name }: { device: string; name: string }) =>
+			botHome: ({ device: where, name, fromBot }: { device: string; name: string; fromBot?: boolean }) =>
 				coded(() => {
 					if (!host.botHome) throw new Error("Paired computers' bots are not reachable here.");
-					return host.botHome(where, name);
+					return host.botHome(where, name, fromBot);
 				}),
 			botsCommand: ({ device: where, request }: { device: string; request: BotsCall }) =>
 				coded(() => {
