@@ -72,6 +72,7 @@ mod web_peek;
 #[cfg(windows)]
 mod windows_executable;
 pub mod wire;
+pub mod wsl_copy;
 mod yaml;
 
 pub use server::{registry, serve, serve_as};

@@ -2279,6 +2279,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"Session JSONL files: title slot, session header and message, model_change, custom and title_change entries; OMPdesk's own legacy `kind:chat` is not stock.",
 		files: [
 			"native/ompdesk/crates/core/src/sessions/rules.rs",
+			"native/ompdesk/crates/core/src/wsl_copy/wire.rs",
 			"src/main/session-index.ts",
 			"resources/gui-bridge/stock-helper/sessions.ts",
 			"resources/gui-bridge/wsl/checkpoint.ts",
@@ -2289,6 +2290,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"src/main/session-index-activity.test.ts",
 			"src/main/session-index-first-prompt.test.ts",
 			"scripts/wsl-checkpoint.test.ts",
+			"native/ompdesk/crates/core/src/wsl_copy/tests.rs",
 		],
 	},
 	{

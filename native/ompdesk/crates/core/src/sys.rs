@@ -123,6 +123,36 @@ fn wide_path(path: &str) -> std::io::Result<Vec<u16>> {
         .collect())
 }
 
+/// Publish a flushed sibling file without unlinking the last good destination on a failed move.
+#[cfg(windows)]
+pub(crate) fn replace_durable(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    // Both paths are children of the canonical (verbatim) host-profile directory.
+    fn wide(path: &std::path::Path) -> std::io::Result<Vec<u16>> {
+        let mut units: Vec<_> = path.as_os_str().encode_wide().collect();
+        if units.contains(&0) {
+            return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+        }
+        units.push(0);
+        Ok(units)
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(from: *const u16, to: *const u16, flags: u32) -> i32;
+    }
+    let source = wide(source)?;
+    let target = wide(target)?;
+    // SAFETY: both terminated buffers outlive this call. REPLACE_EXISTING | WRITE_THROUGH, no cross-volume copy.
+    if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), 0x1 | 0x8) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// `fs.copyFile` on Windows uses CopyFileW, including its alternate data streams and exclusive-create behavior.
 #[cfg(windows)]
 pub(crate) fn copy_file(source: &str, target: &str, exclusive: bool) -> std::io::Result<()> {
