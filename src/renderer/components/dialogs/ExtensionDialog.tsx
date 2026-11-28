@@ -221,6 +221,7 @@ function SelectDialog({
 	const { label, body } = splitTitle(request.title);
 	return (
 		<PromptCard
+			digitCount={request.options.length}
 			footer={
 				<>
 					<TimeoutFooter remaining={remaining} />
@@ -264,6 +265,7 @@ function ConfirmDialog({
 	const t = useT();
 	return (
 		<PromptCard
+			digitCount={2}
 			footer={
 				<>
 					<TimeoutFooter remaining={remaining} />
@@ -503,6 +505,7 @@ function AskDialog({
 
 	return (
 		<PromptCard
+			digitCount={question.options.length}
 			footer={
 				<>
 					<div className="flex min-w-0 items-center gap-2">
@@ -527,6 +530,16 @@ function AskDialog({
 						</Button>
 					</div>
 				</>
+			}
+			headerAside={
+				total > 1 ? (
+					<span
+						className="rounded-full border border-(--sc-border-subtle) bg-(--sc-elevated) px-2 py-0.5 font-mono text-sc-xs text-(--sc-text-muted) tabular-nums"
+						data-ask-step-counter
+					>
+						{step + 1} / {total}
+					</span>
+				) : undefined
 			}
 			icon={MessageCircleQuestion}
 			label={title}

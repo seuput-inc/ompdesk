@@ -9,7 +9,7 @@
  * card, never on an approval; Deny (or Escape) answers "Deny".
  */
 
-import { ShieldAlert } from "lucide-react";
+import { ShieldAlert, Terminal } from "lucide-react";
 import { useMemo } from "react";
 import {
 	APPROVAL_TITLE_PREFIX,
@@ -22,7 +22,7 @@ import { formatElapsed } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { useNowTick } from "../../lib/now-tick";
 import type { ApprovalSelect } from "../../stores/extension-ui";
-import { Badge, type BadgeVariant, Card, ChoiceList } from "../common";
+import { Badge, type BadgeVariant, ChoiceList } from "../common";
 import { PromptCard, TimeoutFooter } from "./PromptCard";
 
 export type ApprovalResponse = { value: string } | { confirmed: boolean } | { cancelled: true };
@@ -126,19 +126,17 @@ export function ApprovalDialog({
 
 	return (
 		<PromptCard
+			digitCount={choices.length}
 			footer={
 				(waited || remaining !== null) && (
-					<>
-						<span />
-						<span className="flex items-center gap-3">
-							{waited && (
-								<span className="text-sc-xs tabular-nums text-(--sc-text-muted)" data-approval-waited>
-									{t("approval.waitedFor", { time: waited })}
-								</span>
-							)}
-							<TimeoutFooter remaining={remaining} />
-						</span>
-					</>
+					<span className="ml-auto flex items-center gap-3">
+						{waited && (
+							<span className="text-sc-xs tabular-nums text-(--sc-text-muted)" data-approval-waited>
+								{t("approval.waitedFor", { time: waited })}
+							</span>
+						)}
+						<TimeoutFooter remaining={remaining} />
+					</span>
 				)
 			}
 			headerAside={
@@ -155,16 +153,21 @@ export function ApprovalDialog({
 				if (choice) choose(choice.key);
 			}}
 		>
-			<div className="mb-1 truncate font-mono text-sc-sm font-semibold">{toolName}</div>
-			<Card className="mb-2 max-h-[30vh] overflow-y-auto" padding="sm" surface="2">
-				{body ? (
-					<pre className="font-mono text-sc-sm leading-(--sc-leading-normal) break-words whitespace-pre-wrap text-(--sc-text-secondary)">
-						{body}
-					</pre>
-				) : (
-					<span className="text-sc-sm text-(--sc-text-muted) italic">{t("approval.noArgs")}</span>
-				)}
-			</Card>
+			<div className="mb-3 overflow-hidden rounded-(--sc-radius-lg) border border-(--sc-code-border) bg-(--sc-code-bg)">
+				<div className="flex items-center gap-2 border-b border-(--sc-divider) bg-(--sc-surface-1) px-3 py-1.5">
+					<Terminal aria-hidden className="size-3.5 shrink-0 text-(--sc-text-muted)" />
+					<span className="truncate font-mono text-sc-sm font-semibold text-(--sc-text)">{toolName}</span>
+				</div>
+				<div className="max-h-[30vh] overflow-y-auto px-3 py-2.5">
+					{body ? (
+						<pre className="font-mono text-sc-sm leading-(--sc-leading-normal) break-words whitespace-pre-wrap text-(--sc-text)">
+							{body}
+						</pre>
+					) : (
+						<span className="text-sc-sm text-(--sc-text-muted) italic">{t("approval.noArgs")}</span>
+					)}
+				</div>
+			</div>
 			<ChoiceList choices={choices} onChoose={choose} />
 		</PromptCard>
 	);

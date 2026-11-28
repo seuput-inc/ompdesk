@@ -37,7 +37,8 @@ import { openBotDialog } from "../../bots/bot-launch";
 import { openBotPage } from "../../bots/bot-page";
 import { ItemStatusIcon, statusName } from "../../bots/items/ItemStatusIcon";
 import { openItem } from "../../bots/items/item-store";
-import { Badge, Button, Card, Chip, DisclosureButton, IconButton, LinkButton } from "../../common";
+import { Button, Chip, DisclosureButton, IconButton, LinkButton } from "../../common";
+import { ChatCardActions, ChatCardFrame, ChatCardStatus } from "../ChatCardFrame";
 import { MailNote } from "../CustomMessageCard";
 import type { BotCardKind } from "./bot-card-kind";
 import { botTarget, useCardHidden } from "./bot-card-kind";
@@ -284,47 +285,39 @@ function OfferCard({ args }: { args: Record<string, unknown> }) {
 	const made = useBotsStore(s => botNamed(s.state.bots, name, device));
 	useEffect(() => ensureBots(), []);
 	return (
-		<div className="group/bot-card py-1" data-bot-card="botOffers" data-bot-offer={made ? "created" : "open"}>
-			<Card padding="row" surface="elevated">
-				<div className="flex min-w-0 items-start gap-2.5">
+		<div className="group/bot-card py-1.5" data-bot-card="botOffers" data-bot-offer={made ? "created" : "open"}>
+			<ChatCardFrame
+				data-card-kind="bot-offer"
+				eyebrow={t("chat.botCards.offer.heading")}
+				footer={
+					<ChatCardActions>
+						{made ? (
+							<Button onClick={() => openBotPage(made.id)} size="sm" variant="secondary">
+								{t("chat.botCards.offer.open", { name: made.name })}
+							</Button>
+						) : (
+							<Button
+								onClick={() => openBotDialog({ kind: "new", draft: { name, purpose: purpose || undefined } })}
+								size="sm"
+								variant="primary"
+							>
+								{t("chat.botCards.offer.create")}
+							</Button>
+						)}
+					</ChatCardActions>
+				}
+				headerAside={<HideButton kind="botOffers" />}
+				leading={
 					<BotAvatar
 						bot={made ?? { id: text(args.botId) || (device && `${device}:${name}`), name: name || "?" }}
-						className="mt-0.5"
 						size={32}
 					/>
-					<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-						<div className="flex min-w-0 items-center gap-1.5">
-							<span className="text-sc-xs text-(--sc-text-muted)">{t("chat.botCards.offer.heading")}</span>
-							{made && (
-								<Badge size="xs" variant="success">
-									{t("chat.botCards.offer.created")}
-								</Badge>
-							)}
-							<span className="ms-auto">
-								<HideButton kind="botOffers" />
-							</span>
-						</div>
-						<span className="truncate font-medium">{name}</span>
-						{purpose && <p className="text-sc-sm text-(--sc-text-secondary)">{purpose}</p>}
-						<div className="mt-1.5 flex gap-1.5">
-							{made ? (
-								<Button onClick={() => openBotPage(made.id)} size="sm" variant="secondary">
-									{t("chat.botCards.offer.open", { name: made.name })}
-								</Button>
-							) : (
-								<Button
-									onClick={() =>
-										openBotDialog({ kind: "new", draft: { name, purpose: purpose || undefined } })
-									}
-									size="sm"
-								>
-									{t("chat.botCards.offer.create")}
-								</Button>
-							)}
-						</div>
-					</div>
-				</div>
-			</Card>
+				}
+				status={made ? <ChatCardStatus label={t("chat.botCards.offer.created")} tone="success" /> : undefined}
+				title={name}
+			>
+				{purpose ? <p className="leading-relaxed text-(--sc-text-secondary)">{purpose}</p> : null}
+			</ChatCardFrame>
 		</div>
 	);
 }
@@ -439,26 +432,54 @@ function ToolAddedCard({ args, result }: { args: Record<string, unknown>; result
 			});
 	};
 	const removed = state === "removed";
+	const showSignIn = !removed && needsSignIn && state !== "signedIn";
 	return (
-		<Row icon={<Wrench />} kind="toolsAdded">
-			<span className="shrink-0">{removed ? t("chat.botCards.tool.removed") : t("chat.botCards.tool.added")}</span>
-			<span className={cx("min-w-0 truncate font-medium", removed && "line-through")}>{name}</span>
-			{!removed && needsSignIn && state !== "signedIn" && (
-				<LinkButton className="shrink-0" disabled={state !== "added"} onClick={signIn}>
-					{t("chat.botCards.tool.signIn")}
-				</LinkButton>
-			)}
-			{!removed && (
-				<LinkButton
-					className="shrink-0"
-					disabled={state !== "added" && state !== "signedIn"}
-					onClick={remove}
-					tone="muted"
-				>
-					{t("chat.botCards.tool.remove")}
-				</LinkButton>
-			)}
-		</Row>
+		<div className="group/bot-card py-1" data-bot-card="toolsAdded">
+			<ChatCardFrame
+				data-card-kind="tool-added"
+				eyebrow={removed ? t("chat.botCards.tool.removed") : t("chat.botCards.tool.added")}
+				footer={
+					!removed ? (
+						<ChatCardActions>
+							{showSignIn && (
+								<Button
+									disabled={state !== "added"}
+									loading={state === "signingIn"}
+									onClick={signIn}
+									size="sm"
+									variant="primary"
+								>
+									{t("chat.botCards.tool.signIn")}
+								</Button>
+							)}
+							<Button
+								disabled={state !== "added" && state !== "signedIn"}
+								loading={state === "removing"}
+								onClick={remove}
+								size="sm"
+								variant="ghost"
+							>
+								{t("chat.botCards.tool.remove")}
+							</Button>
+						</ChatCardActions>
+					) : undefined
+				}
+				headerAside={<HideButton kind="toolsAdded" />}
+				leading={
+					<span className="flex size-7 items-center justify-center rounded-(--sc-radius-md) border border-(--sc-border-subtle) bg-(--sc-elevated) text-(--sc-text-muted)">
+						<Wrench aria-hidden className="size-3.5" />
+					</span>
+				}
+				status={
+					removed ? (
+						<ChatCardStatus label={t("chat.botCards.tool.removed")} tone="muted" />
+					) : showSignIn ? (
+						<ChatCardStatus label={t("chat.botCards.tool.signIn")} tone="warning" />
+					) : undefined
+				}
+				title={<span className={cx("font-mono text-sc-sm", removed && "line-through opacity-60")}>{name}</span>}
+			/>
+		</div>
 	);
 }
 

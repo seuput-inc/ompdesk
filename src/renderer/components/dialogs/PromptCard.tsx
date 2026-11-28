@@ -26,7 +26,7 @@ import { isImeKeyEvent } from "../../lib/ime";
 import { motionPlay } from "../../lib/motion";
 import { useSessionRuntime } from "../../stores/session-runtime-context";
 import { useTabsStore } from "../../stores/tabs";
-import { Badge } from "../common";
+import { Badge, Kbd } from "../common";
 import { ForeignPrompt, useAskDock } from "./ask-dock";
 
 /**
@@ -79,6 +79,8 @@ export interface PromptCardProps {
 	iconClassName?: string;
 	/** Right side of the header: step counter, badge. */
 	headerAside?: ReactNode;
+	/** Optional desktop-only key hints (`1–3` / `Esc`) shown in the footer when the card accepts quick digits. */
+	digitCount?: number;
 	onCancel: () => void;
 	/** Digit `n` (1-based) pressed with focus in the card, outside a text field. */
 	onDigit?: (n: number) => void;
@@ -93,6 +95,7 @@ export function PromptCard({
 	icon: Icon,
 	iconClassName,
 	headerAside,
+	digitCount,
 	onCancel,
 	onDigit,
 	children,
@@ -125,6 +128,9 @@ export function PromptCard({
 			onDigit(Number(event.key));
 		}
 	};
+	const maxDigit = digitCount ? Math.min(9, digitCount) : 0;
+	const showShortcutStrip = Boolean(onDigit && maxDigit > 0);
+	const showFooter = Boolean(footer) || showShortcutStrip;
 	return (
 		<PromptDock>
 			<section
@@ -138,8 +144,10 @@ export function PromptCard({
 				role="region"
 				tabIndex={-1}
 			>
-				<div className="flex shrink-0 items-center gap-2 px-4 pt-2 pb-1.5 [html[data-input=touch]_&]:pt-3 [html[data-input=touch]_&]:pb-2">
-					<Icon aria-hidden className={cx("size-(--sc-icon-md) shrink-0 text-(--sc-accent)", iconClassName)} />
+				<div className="flex shrink-0 items-center gap-2.5 border-b border-(--sc-divider) bg-(--sc-surface-1) px-4 py-2.5 [html[data-input=touch]_&]:py-3">
+					<span className="flex size-6 shrink-0 items-center justify-center rounded-(--sc-radius-md) border border-(--sc-border-subtle) bg-(--sc-elevated)">
+						<Icon aria-hidden className={cx("size-(--sc-icon-sm) shrink-0 text-(--sc-accent)", iconClassName)} />
+					</span>
 					<span className="min-w-0 flex-1 text-sc-md font-semibold break-keep break-words" id={labelId}>
 						{label}
 					</span>
@@ -157,9 +165,24 @@ export function PromptCard({
 					)}
 					{headerAside}
 				</div>
-				<div className="min-h-0 flex-1 overflow-y-auto px-4 pb-2 [html[data-input=touch]_&]:pb-3">{children}</div>
-				{footer && (
-					<div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-(--sc-divider) px-4 py-2.5">
+				<div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 [html[data-input=touch]_&]:py-3.5">{children}</div>
+				{showFooter && (
+					<div className="flex shrink-0 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-(--sc-divider) bg-(--sc-surface-1) px-4 py-2">
+						{showShortcutStrip && (
+							<span
+								className="flex shrink-0 items-center gap-2.5 text-sc-xs text-(--sc-text-muted) [html[data-input=touch]_&]:hidden"
+								data-prompt-shortcuts
+							>
+								<span className="inline-flex items-center gap-1">
+									<Kbd shortcut={maxDigit === 1 ? "1" : `1–${maxDigit}`} />
+									{t("input.menu.hintPick")}
+								</span>
+								<span className="inline-flex items-center gap-1">
+									<Kbd shortcut="Esc" />
+									{t("input.menu.hintClose")}
+								</span>
+							</span>
+						)}
 						{footer}
 					</div>
 				)}

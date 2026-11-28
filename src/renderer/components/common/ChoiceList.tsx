@@ -57,17 +57,19 @@ export function ChoiceList({ choices, onChoose, selected, mode = "action", label
 	const role = mode === "single" ? "radiogroup" : mode === "multi" ? "group" : undefined;
 	const touch = useShellInput() === "touch";
 	return (
-		<div aria-labelledby={labelledBy} className="space-y-1" data-choice-list role={role}>
+		<div aria-labelledby={labelledBy} className="space-y-1.5" data-choice-list role={role}>
 			{choices.map((choice, index) => {
 				const checked = selected?.has(choice.key) ?? false;
 				return (
 					<button
 						aria-checked={mode === "action" ? undefined : checked}
 						className={cx(
-							"group flex w-full items-start gap-3 rounded-(--sc-radius-md) border px-3 py-2 text-left transition-colors duration-(--sc-duration-fast) focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-(--sc-focus-ring) disabled:cursor-not-allowed disabled:opacity-50",
+							"group flex w-full items-start gap-2.5 rounded-(--sc-radius-lg) border px-3 py-2 text-left transition-colors duration-(--sc-duration-fast) focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-(--sc-focus-ring) disabled:cursor-not-allowed disabled:opacity-50",
 							checked
 								? "border-(--sc-accent-border) bg-(--sc-accent-soft)"
-								: "border-transparent enabled:hover:bg-(--sc-hover) focus-visible:bg-(--sc-hover)",
+								: choice.tone === "danger"
+									? "border-(--sc-border-subtle) bg-(--sc-surface-1) enabled:hover:border-(--sc-danger)/40 enabled:hover:bg-(--sc-danger-soft) focus-visible:bg-(--sc-danger-soft)"
+									: "border-(--sc-border-subtle) bg-(--sc-surface-1) enabled:hover:border-(--sc-border) enabled:hover:bg-(--sc-hover) focus-visible:bg-(--sc-hover)",
 						)}
 						data-choice={choice.key}
 						disabled={choice.disabled}
@@ -81,10 +83,10 @@ export function ChoiceList({ choices, onChoose, selected, mode = "action", label
 							<span
 								aria-hidden
 								className={cx(
-									"flex size-5 shrink-0 items-center justify-center rounded-(--sc-radius-sm) border text-sc-xs font-medium tabular-nums",
+									"mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-(--sc-radius-sm) border font-mono text-sc-xs font-medium tabular-nums transition-colors duration-(--sc-duration-fast)",
 									checked
 										? "border-(--sc-accent) bg-(--sc-accent) text-(--sc-accent-fg)"
-										: "border-(--sc-border) text-(--sc-text-muted)",
+										: "border-(--sc-border) bg-(--sc-elevated) text-(--sc-text-muted)",
 								)}
 							>
 								{touch ? checked && <Check className="size-3.5" /> : index < 9 ? index + 1 : "·"}
@@ -93,15 +95,15 @@ export function ChoiceList({ choices, onChoose, selected, mode = "action", label
 						<span className="min-w-0 flex-1">
 							<span
 								className={cx(
-									"flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sc-md leading-5 break-keep break-words",
-									choice.tone === "danger" && "text-(--sc-danger)",
+									"flex flex-wrap items-center gap-x-2 gap-y-1 text-sc-md leading-5 font-medium break-keep break-words",
+									choice.tone === "danger" ? "text-(--sc-danger)" : "text-(--sc-text)",
 								)}
 							>
 								{choice.label}
 								{choice.aside}
 							</span>
 							{choice.description && (
-								<span className="mt-0.5 block text-sc-sm break-keep break-words whitespace-pre-wrap text-(--sc-text-muted)">
+								<span className="mt-0.5 block text-sc-sm leading-snug break-keep break-words whitespace-pre-wrap text-(--sc-text-muted)">
 									{choice.description}
 								</span>
 							)}
