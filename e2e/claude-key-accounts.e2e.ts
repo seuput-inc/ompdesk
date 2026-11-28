@@ -62,6 +62,7 @@ async function provider() {
 	const posts: number[] = [];
 	const guards = new Set<string>();
 	const turns: { prompt: string; account: number }[] = [];
+	const inputs = new Map<string, number>();
 	const server = createServer(async (req, res) => {
 		if (req.method === "GET" && /^\/guard\/\d+$/.test(req.url ?? "")) {
 			guards.add(String(req.url));
@@ -92,11 +93,24 @@ async function provider() {
 		for await (const chunk of req) body += chunk;
 		const prompt = /test-key-turn-[12]/.exec(body)?.[0];
 		if (prompt) turns.push({ prompt, account });
+		const { messages }: { messages: { role: string; content: string | { text?: string }[] }[] } = JSON.parse(body);
+		const content = messages.length === 1 && messages[0]?.role === "user" ? messages[0].content : "";
+		const text = typeof content === "string" ? content : (content[0]?.text ?? "");
+		const hint =
+			text.startsWith("Compress into one routing hint of at most 12 words:") && text.includes("\nSkill: ")
+				? "skill-description"
+				: text.startsWith("Write one routing hint of at most 15 words:") && text.includes("\nNamespace: ")
+					? "mcp-namespace-hint"
+					: undefined;
+		const input = JSON.stringify(messages);
+		if (!inputs.has(input)) inputs.set(input, inputs.size + 1);
 		console.log("#42 loopback /v1/messages 200", {
 			account,
 			caller: req.headers["x-fixture-caller"] ?? "direct loopback",
+			inputOrdinal: inputs.get(input),
 			kind:
 				prompt ??
+				hint ??
 				(body.includes("What is 17 times 23?") ? "thinking probe" : body.includes('"ping"') ? "ping" : "other"),
 			model: offered.flat().find(id => body.includes(`"model":"${id}"`)) ?? "other",
 			maxTokens: /"max_tokens"\s*:\s*(\d+)/.exec(body)?.[1],
