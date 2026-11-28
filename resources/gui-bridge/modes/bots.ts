@@ -5,8 +5,8 @@
  * - keeps the newest payload as a journal entry (`ompdesk.bot`), so a restarted omp still knows it is a bot,
  * - adds the `ompdesk-bot` section (who it is, its rules, its `SOUL.md`, and in a first-run home chat the first-run
  *   rules) to the main agent's prompts: the same text turn after turn while the name, folder, first run and soul stay,
- * - starts a turn with one `ompdesk.bot-note` message when the digest differs from the newest one the model holds,
- *   and on every fifth turn the owner typed, with the reminder to put open questions on items,
+ * - appends the session host's clock to each new prompt (ordinary chats too), sharing the hidden message with the
+ *   bot digest when it changes and with the owner reminder every fifth typed turn,
  * - answers what the branch says for the core's first run (`BotChatFacts`: the owner's turns, whether a turn runs,
  *   what became of the kickoff the call names).
  */
@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { guard } from "../health";
 import { type JournalEntry, type PromptSectionHost, registerPromptSection } from "../prompt-sections";
+import { turnClock } from "../turn-clock";
 import {
 	BOT_ENTRY,
 	BOT_HOME_PERSIST,
@@ -59,13 +60,13 @@ export function install(pi: BotHost): void {
 		const branch = ctx.sessionManager.getBranch();
 		const context = latestBot(branch);
 		const note = context ? botNote(context, branch, typeof event.prompt === "string" ? event.prompt : "") : null;
-		if (!note) return undefined;
+		const clock = turnClock();
 		return {
 			message: {
-				customType: BOT_NOTE_TYPE,
-				content: note.content,
+				customType: note ? BOT_NOTE_TYPE : "ompdesk.turn-clock",
+				content: note ? `${clock}\n${note.content}` : clock,
 				display: false,
-				details: { digest: note.digest },
+				details: note ? { digest: note.digest } : undefined,
 				attribution: "agent",
 			},
 		};

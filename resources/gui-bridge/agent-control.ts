@@ -30,6 +30,7 @@ import { BOT_HOME_OBSERVATION, type BotHomeManager, botHomeOf, requireBotHome } 
 import { latestBot } from "./modes/bots-core";
 import { completeOnSmol, type ModelLike, type NextPromptSession } from "./modes/next-prompt-engine";
 import { type PromptSectionContext, type PromptSectionHost, registerPromptSection } from "./prompt-sections";
+import { turnClock } from "./turn-clock";
 
 /**
  * The slice of `BridgeEnv` (types.ts) these methods touch. types.ts imports omp's own types, which the GUI's `tsc`
@@ -359,7 +360,7 @@ export const methods: BridgeMethods = {
 	 */
 	"agent_control.mail": async (params, env) => {
 		const record = (params ?? {}) as Record<string, unknown>;
-		const content = mailContent(record.content);
+		let content = mailContent(record.content);
 		if (!content) throw new Error("agent_control.mail needs content");
 		if (!mailHost) throw new Error("This omp cannot receive reports (no extension sendMessage).");
 		const { peerBotHome, ...details } = (record.details ?? {}) as Record<string, unknown>;
@@ -378,10 +379,16 @@ export const methods: BridgeMethods = {
 		const journaled =
 			id !== undefined && hasMailEntry(peerBotHome === undefined ? manager.getBranch() : manager.getEntries(), id);
 		if (id && (journaled || queuedMail.has(id))) return { duplicate: true, journaled };
-		const message = { customType: MAIL_CUSTOM_TYPE, content, display: true, details };
 		// Idle, an aside starts a turn (stock), so a no-turn report keeps stock's plain idle delivery: shown at once.
 		const deliverAs = record.deliverAs === "aside" || session.isStreaming ? "aside" : undefined;
 		const triggerTurn = record.triggerTurn === true;
+		// Stock's idle mail wake skips before_agent_start; carry the receiver's clock with that message instead.
+		if (!session.isStreaming && (triggerTurn || deliverAs === "aside")) {
+			const clock = turnClock();
+			if (typeof content === "string") content += `\n${clock}`;
+			else content.push({ type: "text", text: clock });
+		}
+		const message = { customType: MAIL_CUSTOM_TYPE, content, display: true, details };
 		// A report that asks for a turn (question, blocked, done, review) is read at once; progress and notes wait.
 		if (id && triggerTurn && session.isStreaming) interruptFor(session.agent, `mail:${id}`);
 		mailHost.sendMessage(message, { triggerTurn, ...(deliverAs ? { deliverAs } : {}) });

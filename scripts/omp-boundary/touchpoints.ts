@@ -1382,16 +1382,17 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"Prompt origin, typed prompts and answer-first: public hooks plus journal append/read, with `AgentRegistry` and `agent.state` used to judge whether a live turn is running.",
+			"Prompt origin, host clock, typed prompts and answer-first: public hooks plus journal append/read, with `AgentRegistry` and `agent.state` used to judge whether a live turn is running.",
 		files: [
 			"resources/gui-bridge/prompt-origin.ts",
+			"resources/gui-bridge/turn-clock.ts",
 			"resources/gui-bridge/typed-prompts.ts",
 			"resources/gui-bridge/answer-first.ts",
 			"resources/gui-bridge/turn-origin.ts",
 			"resources/gui-bridge/capabilities.ts",
 		],
 		stock: ["AgentRegistry", "agent.state"],
-		tests: ["src/main/bridge-turn-origin-stock.test.ts"],
+		tests: ["src/main/bridge-turn-origin-stock.test.ts", "src/main/bridge-turn-clock-stock.test.ts"],
 	},
 	{
 		id: "B46",

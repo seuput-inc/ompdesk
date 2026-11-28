@@ -80,7 +80,7 @@ describe("agent_control.mail", () => {
 		expect(sendMessage).toHaveBeenLastCalledWith(
 			{
 				customType: MAIL_CUSTOM_TYPE,
-				content: "<ompdesk-mail …>",
+				content: expect.stringContaining("<ompdesk-mail …>"),
 				display: true,
 				details: { id: "m1", kind: "done" },
 			},
@@ -128,7 +128,12 @@ describe("agent_control.mail", () => {
 		expect(sendMessage).not.toHaveBeenCalled();
 		await send(home, branch);
 		expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
-			{ customType: MAIL_CUSTOM_TYPE, content: "First message", display: true, details: { id: "peer-kickoff-1" } },
+			{
+				customType: MAIL_CUSTOM_TYPE,
+				content: expect.stringContaining("First message"),
+				display: true,
+				details: { id: "peer-kickoff-1" },
+			},
 			{ triggerTurn: true },
 		);
 		const inspect = methods[BOT_HOME_OBSERVATION]!;

@@ -130,7 +130,12 @@ describe("agent_control.mail with pictures", () => {
 		];
 		await mail?.({ content, details: { id: "p1", kind: "done" }, triggerTurn: true, deliverAs: "aside" }, env());
 		expect(sendMessage).toHaveBeenLastCalledWith(
-			{ customType: MAIL_CUSTOM_TYPE, content, display: true, details: { id: "p1", kind: "done" } },
+			{
+				customType: MAIL_CUSTOM_TYPE,
+				content: [...content, { type: "text", text: expect.stringContaining("Session host clock") }],
+				display: true,
+				details: { id: "p1", kind: "done" },
+			},
 			{ triggerTurn: true, deliverAs: "aside" },
 		);
 	});
