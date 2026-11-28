@@ -161,6 +161,7 @@ runs:
         src/main/web/web-push-notifier.test.ts
         src/main/web/web-push.integration.test.ts
         src/main/web/uploads.test.ts
+        src/main/draft-pictures.test.ts
         src/main/web/blobs.test.ts
         src/main/web/asset-archive.test.ts
         src/main/web/devices-store.test.ts

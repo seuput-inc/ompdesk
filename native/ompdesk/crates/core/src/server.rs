@@ -287,6 +287,7 @@ pub fn registry() -> Registry {
     crate::emulator::register(&mut registry);
     crate::web_peek::register(&mut registry);
     crate::web::bytes::register(&mut registry);
+    crate::web::draft_pictures::register(&mut registry);
     crate::web::host::register(&mut registry);
     crate::web::push::register(&mut registry);
     crate::web::router::register(&mut registry);
