@@ -5,9 +5,7 @@ description: Use when the user asks to split work across parallel OMPdesk sessio
 
 # OMPdesk sessions
 
-In an OMPdesk session, use `ompdesk_session_open` to open a child and `ompdesk_session_send` to send a message. These host tools record the calling session as the opener or sender. The `ompdesk` CLI is for people and scripts: even in a session shell, it acts as an outside caller with no opener or sender session. Subagents (`task`) have no host tools; for outside calls see skill://ompdesk/references/cli.md.
-
-Each OMPdesk session is a tab in one of the user's windows, on this computer or on a paired device; saved sessions stay listed after their tab closes. Reply to the user in their language.
+Use `ompdesk_session_open` and `ompdesk_session_send` so the host records your session as opener or sender. The CLI acts as an outside caller, even in a session shell; for scripts and `task` subagents see skill://ompdesk/references/cli.md. Reply to the user in their language.
 
 ## Tools
 
