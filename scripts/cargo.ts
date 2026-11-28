@@ -84,6 +84,7 @@ export function pinnedClippy(workspace: string) {
 		...pin,
 		CARGO: cargo,
 		RUSTC: rustc,
+		RUSTFMT: sibling("rustfmt"),
 		RUSTC_WRAPPER: "",
 		RUSTC_WORKSPACE_WRAPPER: "",
 		CLIPPY_DRIVER_PATH: driver,
@@ -109,5 +110,5 @@ export function pinnedClippy(workspace: string) {
 	const revision = /^clippy \S+ \(([0-9a-f]{7,40}) /.exec(frontend)?.[1];
 	if (!revision || !commit?.startsWith(revision) || version(driver) !== frontend)
 		throw new Error(`cargo-clippy and clippy-driver do not match rustc ${channel} (${commit ?? "unknown commit"})`);
-	return { channel, cargo, clippy, env };
+	return { channel, cargo, clippy, fmt: sibling("cargo-fmt"), env };
 }

@@ -14,6 +14,7 @@
  *   tables     scripts/check-captured-tables.ts on the pushed commit, when it touched `ompdesk_app`'s Rust tables or
  *              their captured TypeScript copy (a second; otherwise only CI's `cargo test` finds a mismatch)
  *
+ *   rustfmt    check formatting across the pushed Rust workspace without writing to the checkout.
  *   clippy     changed Rust workspace crates, including tests, on the commit copy with its locally installed pinned
  *              toolchain. A SHA change rebuilds workspace crates, not immutable registry dependencies.
  *              Windows-only cfg paths still need Windows CI.
@@ -402,6 +403,13 @@ async function checkRust(root: string, gateDir: string, sha: string, changed: st
 	syncTree(root, dir, sha);
 	const workspace = path.join(dir, WORKSPACE);
 	const tool = pinnedClippy(workspace);
+	const fmt = await runStep(
+		`rustfmt (Rust ${tool.channel})`,
+		[tool.fmt, "fmt", "--all", "--check"],
+		workspace,
+		tool.env,
+	);
+	if (fmt.code !== 0) return [fmt];
 	// git archive restores commit times. Even a changed file can be older than the previous build's fingerprint.
 	const target = path.join(gateDir, "clippy-target");
 	const stamp = path.join(target, ".gate-sha");
@@ -447,6 +455,7 @@ async function checkRust(root: string, gateDir: string, sha: string, changed: st
 		"warnings",
 	];
 	return [
+		fmt,
 		await runStep(
 			`clippy (${names.join(", ")}; Rust ${tool.channel})`,
 			[process.execPath, path.join(import.meta.dirname, "build-lock.ts"), "--kind", "other", "--", ...command],

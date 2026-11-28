@@ -223,6 +223,8 @@ describe("the gate's copy of a pushed commit", () => {
 		const exe = (dir: string, name: string, body: string) =>
 			fs.writeFileSync(path.join(dir, name), `#!/bin/sh\nset -eu\n${body}\n`, { mode: 0o755 });
 		exe(bin, "rustup", '[ "$*" = "which --toolchain 1.2.3 cargo" ] && printf "%s/cargo\\n" "$INSTALLED"');
+		exe(installed, "cargo-fmt", '[ "$*" = "fmt --all --check" ] && exec "$RUSTFMT"');
+		exe(installed, "rustfmt", "! grep -qx unformatted crates/demo/src/lib.rs");
 		for (const name of ["cargo", "rustc", "cargo-clippy", "clippy-driver"])
 			exe(bin, name, 'echo "unexpected PATH tool" >&2; exit 42');
 		exe(
@@ -265,6 +267,8 @@ grep -qx clean "$cache" || { echo "lint in $(cat "$cache")" >&2; exit 1; }`,
 		const base = commit("prepare workspace");
 		write(src, "older candidate\n");
 		const older = commit("first candidate");
+		write(src, "unformatted\n");
+		const unformatted = commit("candidate with a formatting difference");
 		write(src, "clean\n");
 		const clean = commit("second candidate");
 		write(src, "checkout\n");
@@ -295,6 +299,9 @@ process.exit(await gatePush(process.cwd(), process.cwd() + "/.git", process.env.
 		const good = push(clean);
 		expect(good.status, good.stderr).toBe(0);
 		expect(good.stdout).toContain("ok     clippy (demo; Rust 1.2.3)");
+		const formatting = push(unformatted);
+		expect(formatting.status).toBe(1);
+		expect(formatting.stdout).toContain("FAILED rustfmt (Rust 1.2.3)");
 		const bad = push(older);
 		expect(bad.status, bad.stdout).toBe(1);
 		expect(bad.stderr).toContain("lint in older candidate");
