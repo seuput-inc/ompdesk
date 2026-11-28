@@ -1,5 +1,5 @@
 import type { ClaudeApiRoute } from "../../src/shared/rpc-types";
-import { isClaudeKeyProvider } from "./claude-key-models";
+import { isClaudeKeyProvider } from "./claude-key-id";
 import { asRecord } from "./params";
 
 export const ROUTE_ENTRY = "ompdesk.claude-api-route";

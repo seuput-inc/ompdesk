@@ -4,7 +4,7 @@
  * names the model before the tab's omp has answered `get_state`. The live reads replace them in place; the
  * catalog generation is never restored, so a live read always wins the generation check.
  */
-import { isClaudeKeyProvider } from "../../../resources/gui-bridge/claude-key-models";
+import { isClaudeKeyProvider } from "../../../resources/gui-bridge/claude-key-id";
 import { codexAccountAccess } from "../../../resources/gui-bridge/codex-picker-contracts";
 import type { ModelInfo, ProviderInfo } from "../../shared/rpc-types";
 import { chosenModelOf, type ModelSelection, type ModelStore } from "../stores/model";

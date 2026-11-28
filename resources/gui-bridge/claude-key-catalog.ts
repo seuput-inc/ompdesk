@@ -4,13 +4,8 @@ import { join } from "node:path";
 import type { Model } from "@oh-my-pi/pi-catalog/types";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { ProviderDiscoveryState } from "../../src/shared/rpc-types";
-import {
-	CLAUDE_API_URL,
-	type ClaudeKeyAdditions,
-	isClaudeKeyAccount,
-	isClaudeKeyProvider,
-	offeredClaudeModels,
-} from "./claude-key-models";
+import { isClaudeKeyProvider } from "./claude-key-id";
+import { CLAUDE_API_URL, type ClaudeKeyAdditions, isClaudeKeyAccount, offeredClaudeModels } from "./claude-key-models";
 
 type Provider = {
 	api: string;

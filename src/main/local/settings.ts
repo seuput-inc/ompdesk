@@ -7,7 +7,8 @@
  */
 
 import { z } from "zod";
-import { type ClaudeKeyAdditions, isClaudeKeyProvider } from "../../../resources/gui-bridge/claude-key-models";
+import { isClaudeKeyProvider } from "../../../resources/gui-bridge/claude-key-id";
+import type { ClaudeKeyAdditions } from "../../../resources/gui-bridge/claude-key-models";
 import type {
 	AccountCredits,
 	AccountUsageState,

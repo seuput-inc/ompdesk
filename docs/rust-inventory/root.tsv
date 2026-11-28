@@ -98,6 +98,9 @@ src/main/bridge-checkout-peers-rules.test.ts	tooling	-	Vitest suite: 1: a file b
 src/main/bridge-checkout-peers.test.ts	tooling	-	Vitest suite: checkout guard: the repository's stash and branches.
 src/main/bridge-ci-watch-stock.test.ts	tooling	-	Vitest suite: the CI watch on the installed omp with a fake gh: one result between turns, none again after a relaunch, a background push not watched.
 src/main/bridge-ci-watch.test.ts	tooling	-	Vitest suite: the CI watch's push parsers, cadence, end and dedupe rules.
+src/main/bridge-claude-api-route-stock.test.ts	tooling	-	Vitest suite: per-key Claude routing through stock omp.
+src/main/bridge-claude-api-route.test.ts	tooling	-	Vitest suite: the selected Claude key and refusal handling.
+src/main/bridge-claude-auto-thinking-stock.test.ts	tooling	-	Vitest suite: stock thinking probes and the main request use the selected key.
 src/main/bridge-client.test.ts	tooling	-	Vitest suite: GuiBridgeClient.
 src/main/bridge-client.ts	tooling	-	GuiBridgeClient speaks newline-delimited JSON to stock-omp test sockets; production lanes instead use crates/core/src/sidecar/bridge.rs.
 src/main/bridge-compaction-points-stock.test.ts	tooling	-	Vitest suite: answers one model's point, as the whole table has it, when asked for that model.
@@ -213,6 +216,7 @@ src/main/checkout-expand.test.ts	tooling	-	Vitest suite: the files a formatter o
 src/main/checkout-peers.test.ts	tooling	-	Vitest suite: checkout peers.
 src/main/checkout-peers.ts	mixed	3	git.checkoutPlace, checkoutAliasDirs and checkoutStatus resolve paths and Git facts. The bridge publisher assigns seq before awaiting sends; agent-control reads peersOf synchronously to authorize reports. Move the pass with these callers, not the pure claim judgment alone (§1.3a,c).
 src/main/ci-queue.test.ts	tooling	-	Vitest suite: every macOS job of a dispatchable workflow.
+src/main/claude-key-models.test.ts	tooling	-	Vitest suite: model lists for individual Claude keys.
 src/main/connectivity.test.ts	tooling	-	Vitest suite: ConnectivityMonitor.
 src/main/connectivity.ts	mixed	2	resume.probe connects to up to two shell-resolved addresses concurrently. Tauri enforces network policy and uncached resolution; main supplies proxy settings, OS events, timer callbacks and promises to the native connectivity hub.
 src/main/connector-accounts.test.ts	tooling	-	Vitest suite: a bot's Google sign-in kept sealed and read for Gmail.

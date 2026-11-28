@@ -13,7 +13,8 @@ import {
 	ROUTE_ENTRY,
 	receipt,
 } from "./claude-api-route-core";
-import { CLAUDE_API_URL, isClaudeKeyProvider, offeredClaudeModels } from "./claude-key-models";
+import { isClaudeKeyProvider } from "./claude-key-id";
+import { CLAUDE_API_URL, offeredClaudeModels } from "./claude-key-models";
 import { guard } from "./health";
 import { createAssistantMessageEventStream } from "./omp/pi-ai";
 import { lookup } from "./omp/pi-coding-agent/config/registry";

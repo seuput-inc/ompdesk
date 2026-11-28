@@ -1,8 +1,6 @@
-export const CLAUDE_API_URL = "https://api.anthropic.com";
+import { isClaudeKeyProvider } from "./claude-key-id";
 
-export function isClaudeKeyProvider(id: string): boolean {
-	return /^anthropic-api-key(?:-\d+)?$/.test(id);
-}
+export const CLAUDE_API_URL = "https://api.anthropic.com";
 
 export type ClaudeKeyAdditions = { stamp: string; models: Record<string, { id: string; name: string }[]> };
 

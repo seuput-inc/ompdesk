@@ -1,4 +1,4 @@
-import { isClaudeKeyProvider } from "../../../resources/gui-bridge/claude-key-models";
+import { isClaudeKeyProvider } from "../../../resources/gui-bridge/claude-key-id";
 
 /** Only for presentation: stock selection still needs the numbered provider ID. */
 export function modelProviderGroup(provider: string): string {
