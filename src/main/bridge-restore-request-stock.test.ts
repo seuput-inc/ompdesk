@@ -145,7 +145,8 @@ export default function (pi: { on(event: string, handler: (event: { messages: Ar
 	pi.on("context", async (event, _ctx, signal) => {
 		if (!existsSync(${JSON.stringify(hold)})) return undefined;
 		const text = JSON.stringify(event.messages);
-		if (!text.includes(${JSON.stringify(SECOND)}) || event.messages.at(-1)?.role !== ${JSON.stringify(holdAfter)}) return undefined;
+		const last = event.messages.findLast(message => message.role === "user" || message.role === "toolResult" || message.role === "assistant");
+		if (!text.includes(${JSON.stringify(SECOND)}) || last?.role !== ${JSON.stringify(holdAfter)}) return undefined;
 		writeFileSync(${JSON.stringify(held)}, "");
 		await new Promise<void>(done => {
 			if (signal?.aborted) done();

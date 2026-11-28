@@ -110,7 +110,9 @@ async function startProvider(calls: Record<string, ToolStep>) {
 				tools?: Array<{ function?: { name?: string } }>;
 			};
 			const tools = (parsed.tools ?? []).map(tool => tool.function?.name ?? "");
-			const last = parsed.messages.at(-1);
+			const last = parsed.messages.findLast(
+				m => m.role === "tool" || (m.role === "user" && textOf(m.content).includes("a2ui-case ")),
+			);
 			requests.push({
 				tools,
 				toolResults: parsed.messages.filter(m => m.role === "tool").map(m => textOf(m.content)),
