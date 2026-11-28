@@ -122,7 +122,9 @@ test.describe("worktree.onStart = create, worktree.onExit = remove", () => {
 	});
 
 	test("GUI worktree removal recognises legacy directory names and keeps branches", async () => {
-		const created = await page.evaluate(() => window.omp.rpc.worktreeCreate("gui-feature"));
+		const created = await page.evaluate(() =>
+			window.omp.rpc.command({ type: "worktree_create", name: "gui-feature" }),
+		);
 		expect(created).toMatchObject({ success: true, data: { branch: "omp/gui/gui-feature" } });
 		const data = created.data;
 		if (

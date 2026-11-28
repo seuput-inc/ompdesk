@@ -65,6 +65,7 @@ import type {
 	SidecarStatus,
 	SidecarStatusPayload,
 	SubagentFrame,
+	WorktreeWaitFrame,
 } from "./rpc-types";
 import type { SchedulesApi, SchedulesState } from "./schedules";
 import type { SessionLinksCommand } from "./session-links";
@@ -109,6 +110,7 @@ export interface IpcHostSchedules {
 export const IPC_EVENTS = {
 	/** Batched agent session events (16ms cadence) */
 	EVENTS_BATCH: "rpc:events",
+	WORKTREE_WAIT: "worktree:wait",
 	/** Sidecar connection status change */
 	SIDECAR_STATUS: "sidecar:status",
 	/** Per-tab sidecar status push (every tab of the window, foreground or background) */
@@ -2518,6 +2520,7 @@ export interface OmpApi {
 		onLiveFrame(callback: (frame: RpcLiveFrame) => void): () => void;
 		onBtwFrame(callback: (frame: RpcBtwFrame) => void): () => void;
 		onConfigUpdate(callback: (payload: ConfigUpdateFrame) => void): () => void;
+		onWorktreeWait(callback: (frame: WorktreeWaitFrame) => void): () => void;
 		/** Full-stream variants keep the originating visible tab id. */
 		onTabBatch(callback: (events: AgentSessionEvent[], tabId: string) => void): () => void;
 		onTabSidecarStatus(callback: (status: IpcSidecarStatusPayload, tabId: string) => void): () => void;

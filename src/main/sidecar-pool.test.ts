@@ -2729,6 +2729,19 @@ describe("SidecarPool quit inventory", () => {
 });
 
 describe("SidecarPool background tabs", () => {
+	it("delivers worktree admission to the background tab's window but not to an unrelated window", () => {
+		const { pool, sidecars } = fakePool();
+		const owner = fakeWindow(1);
+		const other = fakeWindow(2);
+		pool.acquire("/a", owner.win, "tab-a");
+		pool.acquire("/b", owner.win, "tab-b");
+		pool.acquire("/c", other.win, "tab-c");
+		const frame = { requestId: "new-task", step: "create", wait: { reason: "slots" } };
+		sidecars[1]?.emit("worktreeWait", frame);
+		expect(owner.sentTo(IPC_EVENTS.WORKTREE_WAIT).map(entry => entry.data)).toEqual([frame]);
+		expect(other.sentTo(IPC_EVENTS.WORKTREE_WAIT)).toEqual([]);
+	});
+
 	it("forwards a background tab's extension UI to its tab and routes the answer back", async () => {
 		const { pool, sidecars } = fakePool();
 		const fw = fakeWindow(1);

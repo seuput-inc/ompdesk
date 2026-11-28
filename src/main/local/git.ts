@@ -1,8 +1,10 @@
 /** Git / worktree / PR / source-control commands (rpc-map §5), answered in main over the git and gh CLIs. */
 
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import type { RpcPrListFilter } from "../../shared/rpc-types";
+import type { RpcPrListFilter, WorktreeWaitFrame } from "../../shared/rpc-types";
+import { core } from "../core/process";
 import {
 	archiveBeforeRemove,
 	listSavedWorktrees,
@@ -50,7 +52,7 @@ import {
 	worktreeBranchSource,
 } from "./git/worktree";
 import { hasSetupScript, saveSetupScript, setupScriptText, WORKTREE_HOOK_SCRIPTS } from "./git/worktree-seed";
-import { LocalCommandError, type LocalHandler } from "./types";
+import { type LocalCommandContext, LocalCommandError, type LocalHandler } from "./types";
 
 const str = (value: unknown) => (typeof value === "string" ? value : undefined);
 const pathsOrAll = (value: unknown) => (value === "all" ? "all" : Array.isArray(value) ? (value as string[]) : []);
@@ -71,6 +73,26 @@ function prListFilter(raw: unknown): RpcPrListFilter {
 	};
 }
 
+async function withWorktreeWait<T>(
+	requestId: string | undefined,
+	step: WorktreeWaitFrame["step"],
+	ctx: LocalCommandContext,
+	run: (waitId?: string) => Promise<T>,
+): Promise<T> {
+	if (!requestId || requestId.length > 100 || !ctx.worktreeWait) return run();
+	// A renderer owns its row id. Each host operation gets a private id so another caller cannot publish to that row.
+	const waitId = randomUUID();
+	const off = core().on("git.worktreeWait", data => {
+		const { id, wait } = data as { id: string; wait: WorktreeWaitFrame["wait"] };
+		if (id === waitId) ctx.worktreeWait?.({ requestId, step, wait });
+	});
+	try {
+		return await run(waitId);
+	} finally {
+		off();
+	}
+}
+
 export const handlers: Record<string, LocalHandler> = {
 	get_git_status: (_command, ctx) => getGitStatus(ctx.cwd),
 	get_git_changes: (_command, ctx) => getGitChanges(ctx.cwd),
@@ -84,23 +106,29 @@ export const handlers: Record<string, LocalHandler> = {
 	git_set_base: (command, ctx) => scm.setBase(ctx.cwd, str(command.base) ?? null),
 	worktree_create: (command, ctx) => {
 		const requestId = str(command.requestId);
-		return createWorktree(
-			ctx.cwd,
-			{
-				name: str(command.name) ?? "",
-				baseCwd: str(command.baseCwd),
-				baseRef: command.baseRef === null ? null : str(command.baseRef) || "HEAD",
-				branchPrefix: str(command.branchPrefix),
-				branch: worktreeBranchSource(command.branch),
-				sparse: str(command.sparse) || undefined,
-				...(command.prepare === false ? { prepare: false } : {}),
-				...(requestId && requestId.length <= 100 ? { request: { caller: "local", id: requestId } } : {}),
-			},
-			ctx.bridge,
+		return withWorktreeWait(requestId, "create", ctx, waitId =>
+			createWorktree(
+				ctx.cwd,
+				{
+					name: str(command.name) ?? "",
+					baseCwd: str(command.baseCwd),
+					baseRef: command.baseRef === null ? null : str(command.baseRef) || "HEAD",
+					branchPrefix: str(command.branchPrefix),
+					branch: worktreeBranchSource(command.branch),
+					sparse: str(command.sparse) || undefined,
+					...(command.prepare === false ? { prepare: false } : {}),
+					...(requestId && requestId.length <= 100 ? { request: { caller: "local", id: requestId } } : {}),
+					waitId,
+				},
+				ctx.bridge,
+			),
 		);
 	},
 	// The new task sheet's own step after `worktree_create {prepare: false}`: the seed and the setup hook.
-	worktree_prepare: (command, ctx) => prepareCreatedWorktree(str(command.baseCwd) ?? ctx.cwd, str(command.path) ?? ""),
+	worktree_prepare: (command, ctx) =>
+		withWorktreeWait(str(command.requestId), "prepare", ctx, waitId =>
+			prepareCreatedWorktree(str(command.baseCwd) ?? ctx.cwd, str(command.path) ?? "", waitId),
+		),
 	// The worktree dialog's fetch of the remote default branch when it opens (git/worktree.ts).
 	worktree_prefetch: (command, ctx) => prefetchWorktreeBase(str(command.baseCwd) ?? ctx.cwd),
 	// The repository's `.ompdesk/sparse` presets (core git/sparse.rs), offered by the new task sheet.

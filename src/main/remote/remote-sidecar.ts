@@ -54,6 +54,7 @@ import {
 	TabSessionArg,
 	TabSignInArg,
 	TabStatusArg,
+	TabWorktreeWaitArg,
 } from "./app-protocol";
 import type { ImageBlobCache } from "./image-blob-cache";
 import { createLinkEventDecoder, createReadDecoder, encodedReadKey, type WireSubagentFrame } from "./link-events";
@@ -523,6 +524,11 @@ export class RemoteSidecar extends EventEmitter implements SidecarLike {
 				this.#hostSignIns = parsed.data.active;
 				if (parsed.data.active.length === 0) this.#endSignInRelay();
 				this.emit("signIn", parsed.data);
+				return;
+			}
+			case "worktreeWait": {
+				const parsed = TabWorktreeWaitArg.safeParse(message.arg);
+				if (parsed.success) this.emit(message.name, parsed.data);
 				return;
 			}
 			case "extensionUi":

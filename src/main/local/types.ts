@@ -4,6 +4,7 @@
  * the main process instead of forwarding them to omp.
  */
 import type { LeftProcesses } from "../../../resources/gui-bridge/restart-core";
+import type { WorktreeWaitFrame } from "../../shared/rpc-types";
 import type { SessionProcessHandle } from "../session-processes";
 
 /** The user's installed omp CLI, resolved and version-checked once. */
@@ -41,6 +42,7 @@ export interface LocalCommandContext {
 	/** Forward to the stock sidecar; resolves with response.data, rejects with Error(response.error). */
 	send<T = unknown>(command: { type: string; [k: string]: unknown }): Promise<T>;
 	bridge: BridgeClient;
+	worktreeWait?(frame: WorktreeWaitFrame): void;
 	/**
 	 * What the session's commands left running across the last relaunch, once this launch ended what of it had no
 	 * reader of its output; absent for a tab that took over nothing (`SessionProcesses`' handle `leftover`).

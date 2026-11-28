@@ -591,6 +591,7 @@ export const IPC_POLICY: Record<IpcChannel, ChannelPolicy> = {
 
 	// Main → renderer.
 	[E.EVENTS_BATCH]: { dir: "push", mode: "pass" },
+	[E.WORKTREE_WAIT]: { dir: "push", mode: "pass" },
 	[E.SIDECAR_STATUS]: { dir: "push", mode: "pass" },
 	[E.TAB_STATUS]: { dir: "push", mode: "pass" },
 	[E.TAB_LIST_CHANGED]: { dir: "push", mode: "pass" },

@@ -7,7 +7,7 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it } from "vitest";
-import { I18nProvider } from "../../../lib/i18n";
+import { I18nProvider, loadLocale, setLanguageOverride } from "../../../lib/i18n";
 import { type NewTask, useNewTasksStore } from "../../../stores/new-tasks";
 import { NewTaskRows } from "./NewTaskRows";
 
@@ -90,4 +90,31 @@ it("says what refused a failed task, its headline in the tooltip", async () => {
 	const row = document.querySelector("[data-new-task]");
 	expect(row?.textContent).toContain("fatal: invalid reference: no-such-base");
 	expect(row?.getAttribute("title")).toBe("Couldn't start the task\nfatal: invalid reference: no-such-base");
+});
+
+it("shows the disk requirement on the waiting row and the current step on the other", async () => {
+	const running = (id: string): NewTask => ({
+		...task(id, undefined),
+		status: "running",
+		steps: [{ id: "prepare", state: "running" }],
+	});
+	const second = running("second");
+	useNewTasksStore.setState({
+		tasks: { first: running("first"), second: { ...second, wait: { reason: "disk", free: 1024, need: 2048 } } },
+	});
+	await mount(<NewTaskRows cwd="/work/project" />);
+	const text = (id: string) => document.querySelector(`[data-new-task="${id}"]`)?.textContent;
+	expect(text("first")).toContain("Preparing");
+	expect(text("second")).toContain("Waiting for disk space (1.0 KB free, 2.0 KB needed)");
+	await loadLocale("ko");
+	try {
+		await act(async () => setLanguageOverride("ko"));
+		expect(text("first")).toContain("준비하는 중");
+		expect(text("second")).toContain("디스크 공간 대기 중");
+	} finally {
+		await act(async () => setLanguageOverride(null));
+	}
+	await act(async () => useNewTasksStore.setState(state => ({ tasks: { ...state.tasks, second } })));
+	expect(text("second")).toContain("Preparing");
+	expect(text("second")).not.toContain("Waiting");
 });

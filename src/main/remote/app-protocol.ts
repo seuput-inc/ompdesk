@@ -163,7 +163,7 @@ import {
 import type { LocalEngineDetectState } from "../../shared/local-engines";
 import type { ModelSetupStatus } from "../../shared/model-setup";
 import { OMP_UPDATE_FAILURE_REASONS, type OmpUpdateState } from "../../shared/omp-update";
-import { BLOCKING_UI_METHODS, type ExtensionUIRequest } from "../../shared/rpc-types";
+import { BLOCKING_UI_METHODS, type ExtensionUIRequest, type WorktreeWaitFrame } from "../../shared/rpc-types";
 import {
 	type ScheduleCreated,
 	type SchedulesRequest,
@@ -205,6 +205,7 @@ export const TAB_EVENT_NAMES = [
 	"sessionSettled",
 	"commandOutput",
 	"sessionInfoUpdate",
+	"worktreeWait",
 	"extensionError",
 	"session",
 	"bridge",
@@ -598,6 +599,27 @@ export const TabEventMessage = z
 	})
 	.refine(event => event.name === "viewEnded" || event.arg !== undefined);
 export type TabEventMessage = z.infer<typeof TabEventMessage>;
+
+export const TabWorktreeWaitArg: z.ZodType<WorktreeWaitFrame> = z.object({
+	requestId: z.string().min(1).max(100),
+	step: z.enum(["create", "prepare"]),
+	wait: z
+		.union([
+			z.object({
+				reason: z.enum([
+					"criticalMemory",
+					"growingSwap",
+					"hostLoad",
+					"unknownReservation",
+					"reservedVolume",
+					"slots",
+				]),
+			}),
+			z.object({ reason: z.literal("disk"), free: z.number().nonnegative(), need: z.number().nonnegative() }),
+			z.object({ reason: z.literal("queue"), ahead: z.number().int().nonnegative() }),
+		])
+		.nullable(),
+});
 
 export const HostCloseTurnSchema = z
 	.object({ omp: z.string().min(1), turn: z.number().int().nonnegative().safe() })

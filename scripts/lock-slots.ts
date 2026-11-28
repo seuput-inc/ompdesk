@@ -143,6 +143,7 @@ export function defaultLocks(env: NodeJS.ProcessEnv = process.env): Locks {
 export interface Who {
 	owner: string;
 	command: string;
+	argv?: readonly string[];
 }
 
 export interface Lease {
@@ -446,6 +447,7 @@ export async function acquireHeavy(locks: Locks, who: Who): Promise<HeavyLease |
 	const env: NodeJS.ProcessEnv = {
 		...locks.env,
 		OMPDESK_HEAVY_LABEL: `${who.owner} pid ${locks.pid}: ${who.command.replace(/\s+/g, " ")}`,
+		OMPDESK_HEAVY_ARGV: JSON.stringify(who.argv ?? []),
 	};
 	delete env[HEAVY_HELD_ENV];
 	const child = spawn(bin, ["heavy", "hold"], {

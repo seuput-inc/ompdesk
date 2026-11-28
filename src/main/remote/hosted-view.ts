@@ -60,6 +60,7 @@ const VIEW_EVENTS = [
 	"sessionSettled",
 	"commandOutput",
 	"sessionInfoUpdate",
+	"worktreeWait",
 	"extensionError",
 	"session",
 	"beforeResponse",

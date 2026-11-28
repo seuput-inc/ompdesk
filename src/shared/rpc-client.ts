@@ -93,21 +93,6 @@ export interface SessionRpcClient {
 	getGitFingerprint(root?: string): Promise<RpcResponse>;
 	/** `against`: the base range's merge-base (`get_git_compare`); without it the diff is against HEAD. */
 	getGitDiff(path: string, against?: string): Promise<RpcResponse>;
-	worktreeCreate(
-		name: string,
-		options?: {
-			baseCwd?: string;
-			baseRef?: string;
-			branchPrefix?: string;
-			/** The exact branch instead of `<branchPrefix><name>` (`worktree_create.branch`). */
-			branch?: { name: string; mode: "new" | "local" | "remote" | "reuse"; remote?: string; from?: string };
-			requestId?: string;
-			sparse?: string;
-			prepare?: boolean;
-		},
-	): Promise<RpcResponse>;
-	/** The seed and setup hook of a worktree `worktreeCreate(…, {prepare: false})` made (`RpcWorktreePrepared`). */
-	worktreePrepare(baseCwd: string, path: string): Promise<RpcResponse>;
 	/** Fetches the remote default branch ahead of a `default`-based create; its answer is only informative. */
 	worktreePrefetch(baseCwd?: string): Promise<RpcResponse>;
 	/** The repository's `.ompdesk/sparse` presets (`RpcSparsePreset[]`). */
@@ -522,19 +507,6 @@ export function createSessionRpcClient(transport: RpcTransport): SessionRpcClien
 		getGitFingerprint: root => rpcCommand({ type: "get_git_fingerprint", ...(root ? { root } : {}) }),
 		getGitDiff: (path, against) => rpcCommand({ type: "get_git_diff", path, ...(against ? { against } : {}) }),
 		// Worktree and PR commands run in main; RPC_COMMAND_TIMEOUTS holds their budgets.
-		worktreeCreate: (name, options) =>
-			rpcCommand({
-				type: "worktree_create",
-				name,
-				baseCwd: options?.baseCwd,
-				baseRef: options?.baseRef,
-				...(options?.branchPrefix ? { branchPrefix: options.branchPrefix } : {}),
-				...(options?.branch ? { branch: options.branch } : {}),
-				...(options?.requestId ? { requestId: options.requestId } : {}),
-				...(options?.sparse ? { sparse: options.sparse } : {}),
-				...(options?.prepare === false ? { prepare: false } : {}),
-			}),
-		worktreePrepare: (baseCwd, path) => rpcCommand({ type: "worktree_prepare", baseCwd, path }),
 		worktreePrefetch: baseCwd => rpcCommand({ type: "worktree_prefetch", ...(baseCwd ? { baseCwd } : {}) }),
 		worktreeSparsePresets: baseCwd =>
 			rpcCommand({ type: "worktree_sparse_presets", ...(baseCwd ? { baseCwd } : {}) }),

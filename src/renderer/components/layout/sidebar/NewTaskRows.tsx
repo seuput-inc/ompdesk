@@ -7,7 +7,7 @@
 import { AlertTriangle, RotateCcw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { errorDetail } from "../../../lib/error-detail";
-import { formatElapsed } from "../../../lib/format";
+import { formatBytes, formatElapsed } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { dismissNewTask, type NewTask, retryNewTask, useNewTasksStore } from "../../../stores/new-tasks";
 import { IconButton, ListRow, Spinner } from "../../common";
@@ -29,8 +29,13 @@ function NewTaskRow({ task }: { task: NewTask }) {
 	const now = useNow(!failed);
 	const step = task.steps.find(entry => entry.state === "running" || entry.state === "failed");
 	const done = task.steps.filter(entry => entry.state === "done").length;
-	const where = step ? t(`newTask.step.${step.id}`) : "";
-	const title = task.name ?? (task.request.prompt.trim().split("\n")[0] || t("newTask.untitled"));
+	const wait = task.wait;
+	let where = step ? t(`newTask.step.${step.id}`) : "";
+	if (wait?.reason === "disk")
+		where = t("newTask.wait.disk", { free: formatBytes(wait.free), need: formatBytes(wait.need) });
+	else if (wait?.reason === "queue") where = t("newTask.wait.queue", { ahead: wait.ahead });
+	else if (wait) where = t(`newTask.wait.${wait.reason}`);
+	const title = task.name ?? (task.request.prompt.trim().split("\n")[0] || t("worktree.title"));
 	const elapsed = formatElapsed(now - task.startedAt);
 	// The headline only says the task did not start; the line names what refused it, the tooltip both.
 	const headline = task.error?.message ?? t("newTask.failed");
@@ -45,7 +50,7 @@ function NewTaskRow({ task }: { task: NewTask }) {
 						<IconButton
 							data-new-task-retry
 							icon={<RotateCcw />}
-							label={t("newTask.retry")}
+							label={t("common.retry")}
 							onClick={() => retryNewTask(task.id)}
 							size="sm"
 						/>
@@ -55,7 +60,7 @@ function NewTaskRow({ task }: { task: NewTask }) {
 						disabled={!failed}
 						disabledReason={t("newTask.closeWhileRunning")}
 						icon={<X />}
-						label={t("newTask.close")}
+						label={t("common.close")}
 						onClick={() => dismissNewTask(task.id)}
 						size="sm"
 					/>

@@ -10,6 +10,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "postinstall": "bun scripts/ensure-electron.ts",
+    "worktree:install": "bun install --frozen-lockfile && bun scripts/ensure-electron.ts",
     "dev": "bun scripts/dev.ts",
     "build": "bun scripts/build-cache.ts",
     "package:mac": "bun run build && bun scripts/package-mac.ts",

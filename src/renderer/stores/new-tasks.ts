@@ -11,7 +11,13 @@
  * (a step runs, is done with its time, or failed; steps not reached are pending) and `worktree-creation-clock.ts:4-24`.
  */
 import { create } from "zustand";
-import type { ImageContent, RpcResponse, RpcWorktreeCreateResult, RpcWorktreePrepared } from "../../shared/rpc-types";
+import type {
+	ImageContent,
+	RpcResponse,
+	RpcWorktreeCreateResult,
+	RpcWorktreePrepared,
+	WorktreeWait,
+} from "../../shared/rpc-types";
 import { GUI_WORKTREE_BRANCH_PREFIX } from "../../shared/worktree-branch";
 import { fileTextAttachment, intakeComposerFiles } from "../components/layout/composer/composer-files";
 import { fileToImage } from "../components/layout/composer/input-area-utils";
@@ -57,6 +63,7 @@ export interface NewTask {
 	steps: NewTaskStep[];
 	status: "running" | "failed";
 	error?: InlineFailure;
+	wait?: WorktreeWait;
 	/** The worktree's name once known (typed, suggested, or the fallback). */
 	name?: string;
 	/** The name is only the fallback (`task-<id>`): the branch takes the session's first title (FS91). */
@@ -113,6 +120,7 @@ function patch(id: string, change: (task: NewTask) => Partial<NewTask>): void {
 function setStep(id: string, step: NewTaskStepId, next: NewTaskStepState): void {
 	const now = Date.now();
 	patch(id, task => ({
+		wait: undefined,
 		steps: task.steps.map(entry =>
 			entry.id !== step
 				? entry
@@ -186,7 +194,9 @@ async function runStep(id: string, step: NewTaskStepId): Promise<void> {
 		case "create": {
 			const name = task.name ?? request.name;
 			const made = answered<RpcWorktreeCreateResult>(
-				await rpc.worktreeCreate(name, {
+				await rpc.command({
+					type: "worktree_create",
+					name,
 					baseCwd: request.baseCwd,
 					baseRef: request.baseRef,
 					...(request.branchPrefix ? { branchPrefix: request.branchPrefix } : {}),
@@ -203,7 +213,9 @@ async function runStep(id: string, step: NewTaskStepId): Promise<void> {
 		case "prepare": {
 			const made = task.made;
 			if (!made) return;
-			const prepared = answered<RpcWorktreePrepared>(await rpc.worktreePrepare(made.baseCwd, made.path));
+			const prepared = answered<RpcWorktreePrepared>(
+				await rpc.command({ type: "worktree_prepare", baseCwd: made.baseCwd, path: made.path, requestId: id }),
+			);
 			const whole = { ...made, ...prepared };
 			patch(id, () => ({ made: whole }));
 			announced?.(whole);
@@ -318,13 +330,21 @@ async function run(id: string): Promise<void> {
 			return;
 		}
 		setStep(id, next.id, "running");
+		let stopWait: (() => void) | undefined;
 		try {
+			if (next.id === "create" || next.id === "prepare") {
+				stopWait = window.omp.events.onWorktreeWait(({ requestId, step, wait }) => {
+					if (requestId === id && step === next.id) patch(id, () => ({ wait: wait ?? undefined }));
+				});
+			}
 			await runStep(id, next.id);
 			setStep(id, next.id, "done");
 		} catch (error) {
 			setStep(id, next.id, "failed");
 			patch(id, () => ({ status: "failed", error: inlineFailure(error, translate("newTask.failed")) }));
 			return;
+		} finally {
+			stopWait?.();
 		}
 	}
 }

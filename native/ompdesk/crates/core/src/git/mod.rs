@@ -13,6 +13,7 @@
 //! stderr, node's error text, `spawn <bin> ENOENT`, `-c timed out after 60000ms`); a refusal the TypeScript coded
 //! carries that code.
 
+pub(crate) mod admission;
 mod blame;
 pub mod branches;
 mod checkout;
@@ -461,6 +462,9 @@ struct SeedParams {
     primary: String,
     target: String,
     budget_ms: u64,
+    #[serde(default)]
+    admit: bool,
+    wait_id: Option<String>,
     pretend_clones: Option<u32>,
 }
 
@@ -915,11 +919,12 @@ pub fn register(registry: &mut Registry) {
             Reply::json(&worktree::prefetch(&git, &cwd).await?)
         })
     });
+    registry.add("git.worktreeAdmit", |call| Box::pin(admission::admit(call)));
+    registry.add("git.worktreeRelease", |call| {
+        crate::server::at_once(admission::release(call))
+    });
     registry.add("git.worktreeAdd", |call| {
-        Box::pin(async move {
-            let params = call.params()?;
-            Reply::json(&worktree::add(params, call.scope).await?)
-        })
+        Box::pin(admission::checkout(call))
     });
     registry.add("git.worktreeRemoval", |call| {
         Box::pin(async move {
@@ -1157,11 +1162,20 @@ pub fn register(registry: &mut Registry) {
                 target,
                 budget_ms,
                 pretend_clones,
+                admit,
+                wait_id,
             } = call.params()?;
             let limits = seed::Limits {
                 budget: std::time::Duration::from_millis(budget_ms),
                 pretend_clones,
             };
+            if admit {
+                let notices = wait_id.map(|id| (call.events, id));
+                let report =
+                    admission::standalone_seed(git, call.scope, primary, target, limits, notices)
+                        .await?;
+                return Reply::json(&report);
+            }
             let git = Git::new(git, call.scope.clone());
             Reply::json(&seed::seed(git, call.scope, primary, target, limits).await?)
         })

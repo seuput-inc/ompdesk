@@ -10,7 +10,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSessionRpcClient } from "../../../shared/rpc-client";
-import type { RpcCommand, RpcResponse } from "../../../shared/rpc-types";
+import type { RpcCommand, RpcResponse, WorktreeWaitFrame } from "../../../shared/rpc-types";
 import { WORKTREE_BRANCH_PREFIX_PREF } from "../../../shared/worktree-branch";
 import { I18nProvider, translate } from "../../lib/i18n";
 import { retryNewTask, startNewTask, stepsFor, useNewTasksStore } from "../../stores/new-tasks";
@@ -36,6 +36,11 @@ if (typeof elementPrototype.focus !== "function") elementPrototype.focus = () =>
 
 let container: HTMLElement | undefined;
 let root: Root | undefined;
+const waitListeners = new Set<(frame: WorktreeWaitFrame) => void>();
+function onWorktreeWait(listener: (frame: WorktreeWaitFrame) => void) {
+	waitListeners.add(listener);
+	return () => waitListeners.delete(listener);
+}
 
 async function flush(): Promise<void> {
 	await act(async () => {
@@ -51,6 +56,7 @@ afterEach(async () => {
 	useUiStore.getState().closeWorktreeDialog();
 	useTabsStore.getState().reset();
 	useNewTasksStore.getState().reset();
+	expect(waitListeners.size).toBe(0);
 });
 
 /** The props React gave an element (linkedom has no input events of its own). */
@@ -62,7 +68,7 @@ function reactProps(element: Element): Record<string, (event: object) => void> {
 const MADE = { path: "/wt/gui-login-abc1234", branch: "omp/gui/login", baseCwd: "/home/u/app" };
 
 /** A tab client that answers the worktree commands as main does, failing `worktree_create` `failCreates` times. */
-function fakeRpc(failCreates = 0) {
+function fakeRpc(failCreates = 0, createCapacity?: Promise<void>) {
 	const commands: RpcCommand[] = [];
 	let failures = failCreates;
 	const rpc = createSessionRpcClient(async (command: RpcCommand): Promise<RpcResponse> => {
@@ -71,6 +77,7 @@ function fakeRpc(failCreates = 0) {
 		if (command.type === "worktree_create") {
 			if (failures-- > 0)
 				return { type: "response", command: command.type, success: false, error: "index.lock exists" };
+			if (createCapacity) await createCapacity;
 			return ok(MADE);
 		}
 		if (command.type === "worktree_prepare") return ok({});
@@ -87,7 +94,7 @@ async function mount(prefix: unknown, context?: NewTaskSheetContext) {
 		omp: {
 			rpc,
 			prefs: { get: vi.fn(async (key: string) => (key === WORKTREE_BRANCH_PREFIX_PREF ? prefix : undefined)) },
-			events: { onSessionsChanged: () => () => {} },
+			events: { onSessionsChanged: () => () => {}, onWorktreeWait },
 			sessions: { listShared: async () => ({ version: 1, sessions: [] }) },
 		},
 	});
@@ -148,7 +155,12 @@ describe("the new task sheet", () => {
 			},
 		]);
 		expect(commands.filter(command => command.type === "worktree_prepare")).toEqual([
-			{ type: "worktree_prepare", baseCwd: MADE.baseCwd, path: MADE.path },
+			{
+				type: "worktree_prepare",
+				baseCwd: MADE.baseCwd,
+				path: MADE.path,
+				requestId: commands.find(command => command.type === "worktree_create")?.requestId,
+			},
 		]);
 		expect(openTab).toHaveBeenCalledWith({
 			cwd: MADE.path,
@@ -211,13 +223,47 @@ describe("a new task's steps", () => {
 		expect(stepsFor({ ...request, worktree: false })).toEqual(["start"]);
 	});
 
+	it("keeps a capacity wait on the blocked create while another task opens normally", async () => {
+		Object.assign(window, { omp: { events: { onWorktreeWait } } });
+		const capacity = Promise.withResolvers<void>();
+		const blocked = fakeRpc(0, capacity.promise);
+		const openTab = vi.fn(async () => "t2");
+		useTabsStore.setState({ openTab });
+		const id = startNewTask(request, blocked.rpc);
+		try {
+			await flush();
+			const create = blocked.commands.find(command => command.type === "worktree_create");
+			if (!create?.requestId) throw new Error("missing create request id");
+			expect(waitListeners.size).toBe(1);
+			for (const send of waitListeners) {
+				send({ requestId: create.requestId, step: "create", wait: { reason: "slots" } });
+				send({ requestId: "other", step: "create", wait: null });
+				send({ requestId: create.requestId, step: "prepare", wait: null });
+			}
+			const other = startNewTask({ ...request, name: "other" }, fakeRpc().rpc);
+			await flush();
+			expect(useNewTasksStore.getState().tasks[id]?.wait).toEqual({ reason: "slots" });
+			expect(useNewTasksStore.getState().tasks[other]).toBeUndefined();
+			expect(openTab).toHaveBeenCalledTimes(1);
+			for (const send of waitListeners) send({ requestId: id, step: "create", wait: null });
+			expect(useNewTasksStore.getState().tasks[id]?.wait).toBeUndefined();
+		} finally {
+			capacity.resolve();
+			await flush();
+		}
+		expect(openTab).toHaveBeenCalledTimes(2);
+		expect(useNewTasksStore.getState().tasks[id]).toBeUndefined();
+	});
+
 	it("keeps a failed create on its row, and a Retry sends the same request id and goes on", async () => {
+		Object.assign(window, { omp: { events: { onWorktreeWait } } });
 		const { rpc, commands } = fakeRpc(1);
 		useTabsStore.setState({ openTab: vi.fn(async () => "t2") });
 		const id = startNewTask(request, rpc);
 		await flush();
 		const failed = useNewTasksStore.getState().tasks[id];
 		expect(failed?.status).toBe("failed");
+		expect(waitListeners.size).toBe(0);
 		expect(failed?.steps.map(step => step.state)).toEqual(["failed", "pending", "pending"]);
 		retryNewTask(id);
 		await flush();
@@ -233,6 +279,7 @@ describe("a new task's steps", () => {
 		let refusals = 1;
 		Object.assign(window, {
 			omp: {
+				events: { onWorktreeWait },
 				rpc: {
 					commandForTab: async (_tab: string, command: RpcCommand): Promise<RpcResponse> => {
 						sent.push(command);
