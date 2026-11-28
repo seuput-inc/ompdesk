@@ -676,9 +676,10 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 		area: "bridge",
 		contract: "internal",
 		summary:
-			"Account rotation: stock's auth blocks, rank, usage report and usage registry, credential pins, auth namespaces and agent account pools.",
+			"Account rotation: stock's OAuth ranking and credential pins. For a Claude API auto pick only, wrap the session stream and journal model changes to pin one verified key and prevent replay after an uncertain dispatch.",
 		files: [
 			"resources/gui-bridge/account-rotation.ts",
+			"resources/gui-bridge/claude-api-route.ts",
 			"resources/gui-bridge/capabilities.ts",
 			"resources/gui-bridge/health.ts",
 		],
@@ -689,8 +690,15 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"@oh-my-pi/pi-ai",
 			"@oh-my-pi/pi-ai/usage/registry",
 			"@oh-my-pi/pi-coding-agent/session/credential-pin",
+			"@oh-my-pi/pi-coding-agent/config/registry",
+			"AgentSession.agent.streamFn, ModelRegistry.getApiKey, SessionManager.appendModelChange and appendCustomEntry",
 		],
-		tests: ["src/main/bridge-account-rotation-stock.test.ts", "src/main/bridge-usage-live-stock.test.ts"],
+		tests: [
+			"src/main/bridge-account-rotation-stock.test.ts",
+			"src/main/bridge-usage-live-stock.test.ts",
+			"src/main/bridge-claude-api-route-stock.test.ts",
+			"src/main/bridge-claude-auto-thinking-stock.test.ts",
+		],
 	},
 	{
 		id: "B16",
@@ -1060,6 +1068,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"Providers, logout and usage: pi-ai oauth and usage reports, the logout and active-oauth-account helpers, credentials, health, baseURL and the MCP credential id filter.",
 		files: [
 			"resources/gui-bridge/settings.ts",
+			"resources/gui-bridge/claude-key-catalog.ts",
 			"resources/gui-bridge/capabilities.ts",
 			"resources/gui-bridge/health.ts",
 		],
@@ -1072,6 +1081,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"@oh-my-pi/pi-coding-agent/mcp/oauth-flow",
 			"@oh-my-pi/pi-ai/auth/usage-report",
 			"@oh-my-pi/pi-coding-agent/slash-commands/helpers/active-oauth-account",
+			"AgentSession.settings.getAgentDir, ModelRegistry.getApiKey and refresh",
 		],
 		tests: [
 			"src/main/bridge-accounts-stock.test.ts",
@@ -1969,6 +1979,7 @@ export const TOUCHPOINTS: readonly Touchpoint[] = [
 			"@oh-my-pi/pi-coding-agent/config/models-config-schema",
 			"@oh-my-pi/pi-catalog/compat/providers",
 			"@oh-my-pi/pi-catalog/compat/auth",
+			"@oh-my-pi/pi-catalog/models",
 			"ModelsConfigSchema.assert",
 			"ModelsConfigSchema.get",
 			"ModelsConfigSchema.ir",

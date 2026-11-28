@@ -26,7 +26,7 @@ import { useT } from "../../lib/i18n";
 import { isImeKeyEvent } from "../../lib/ime";
 import { listboxTarget } from "../../lib/listbox-nav";
 import { runManualMaintenance } from "../../lib/messages";
-import { modelProviderGroup } from "../../lib/model-provider-group";
+import { claudeApiKeyLabel, modelProviderGroup } from "../../lib/model-provider-group";
 import { useTabRpc } from "../../lib/tab-rpc";
 import { chosenModelOf, useModelStore } from "../../stores/model";
 import { useSessionStore } from "../../stores/session";
@@ -52,6 +52,7 @@ import {
 	Spinner,
 	Tabs,
 } from "../common";
+import { KeyQueryFailure } from "../common/KeyQueryFailure";
 import { ThinkingLevelField } from "../layout/composer/ThinkingControl";
 import { ProviderMark } from "../settings/providers/ProviderMark";
 import { MIN_SERVING_CONTEXT, modelDisplayName } from "../settings/providers/provider-catalog";
@@ -61,6 +62,7 @@ import { compactModelLabels, groupModelsByProvider } from "../settings/providers
 const RECENT_LIMIT = 5;
 const RECENT_GROUP = "recent";
 const CURRENT_GROUP = "current";
+const AUTO_GROUP = "claude-api-auto";
 
 interface PickerGroup {
 	id: string;
@@ -81,17 +83,35 @@ export function ModelPicker() {
 	const [readSince, setReadSince] = useState<number | null>(() => generation);
 	const accountRead = readSince === null || generation > readSince;
 	const catalog = useModelStore(state => state.availableModels);
+	const discovery = useModelStore(state => state.discoveryStates);
+	const failedKeys = useMemo(
+		() =>
+			new Map(
+				discovery
+					.filter(s => s.status === "unavailable" && modelProviderGroup(s.provider) === "anthropic-api-key")
+					.map(s => [s.provider, s]),
+			),
+		[discovery],
+	);
 	const availableModels = useMemo(
 		() =>
 			catalog.filter(
-				row => !row.pickerAvailability || (accountRead && row.pickerAvailability !== "account-unverified"),
+				row =>
+					!failedKeys.has(row.provider) &&
+					(!row.pickerAvailability || (accountRead && row.pickerAvailability !== "account-unverified")),
 			),
-		[catalog, accountRead],
+		[catalog, accountRead, failedKeys],
 	);
-	const unconfirmed = availableModels.length !== catalog.length;
+	const unconfirmed = catalog.some(
+		row =>
+			!failedKeys.has(row.provider) &&
+			row.pickerAvailability &&
+			(!accountRead || row.pickerAvailability === "account-unverified"),
+	);
 	const catalogProviders = useModelStore(state => state.providers);
 	// The person's model is checked, also while a fallback answers in its place.
 	const current = useModelStore(chosenModelOf);
+	const autoRoute = useModelStore(state => state.claudeApiRoute);
 	const supportsThinking = useModelStore(state => state.availableThinkingLevels.length > 0);
 	const refreshProviders = useModelStore(state => state.refreshProviders);
 	// Live session usage: models whose window is smaller render with an
@@ -219,8 +239,7 @@ export function ModelPicker() {
 		() =>
 			new Map(
 				catalogProviders.map(({ id, name }) => {
-					if (modelProviderGroup(id) !== "anthropic-api-key" || (name.trim() && name !== id)) return [id, name];
-					return [id, t("modelPicker.apiKeyNumber", { number: id.split("-")[3] ?? "1" })];
+					return [id, modelProviderGroup(id) === "anthropic-api-key" ? claudeApiKeyLabel(id, name, t) : name];
 				}),
 			),
 		[catalogProviders, t],
@@ -258,6 +277,8 @@ export function ModelPicker() {
 	);
 	const preferredGroup = pickedGroup ?? (current && modelProviderGroup(current.provider));
 	const activeGroup = providerTabs.find(tab => tab.id === preferredGroup)?.id ?? providerTabs[0]?.id;
+	const visibleFailures =
+		activeGroup === "anthropic-api-key" ? [...failedKeys.values()].filter(s => connected.has(s.provider)) : [];
 	const labels = useMemo(() => compactModelLabels(availableModels), [availableModels]);
 
 	const groups = useMemo((): PickerGroup[] => {
@@ -290,12 +311,27 @@ export function ModelPicker() {
 				collapsed: provider === "openrouter" && !q && !openRouterExpanded,
 			}),
 		);
-		if (q.length > 0) return byProvider;
+		let auto: PickerGroup | undefined;
+		if (activeGroup === "anthropic-api-key" && byProvider.length > 1) {
+			const first = new Map<string, ModelInfo>();
+			const shared = new Map<string, ModelInfo>();
+			for (const group of byProvider) {
+				for (const model of group.models) {
+					if (model.pickerAvailability !== "account-verified") continue;
+					const previous = first.get(model.id);
+					if (!previous) first.set(model.id, model);
+					else if (previous.provider !== model.provider) shared.set(model.id, previous);
+				}
+			}
+			if (shared.size) auto = { id: AUTO_GROUP, provider: null, models: [...shared.values()], collapsed: false };
+		}
+		if (q.length > 0) return auto ? [auto, ...byProvider] : byProvider;
 		const bySelector = new Map(filtered.map(model => [`${model.provider}/${model.id}`, model]));
 		const recent = recentSelectors.flatMap(selector => bySelector.get(selector) ?? []).slice(0, RECENT_LIMIT);
 		const currentModel =
 			current?.provider === "openrouter" ? bySelector.get(`${current.provider}/${current.id}`) : undefined;
 		return [
+			...(auto ? [auto] : []),
 			...(currentModel ? [{ id: CURRENT_GROUP, provider: null, models: [currentModel], collapsed: false }] : []),
 			...(recent.length > 0 ? [{ id: RECENT_GROUP, provider: null, models: recent, collapsed: false }] : []),
 			...byProvider,
@@ -326,6 +362,7 @@ export function ModelPicker() {
 							provider: model.provider,
 							modelId: model.id,
 							model,
+							auto: group.id === AUTO_GROUP,
 							key: `${group.id}:${model.provider}/${model.id}`,
 						})),
 					)
@@ -384,7 +421,7 @@ export function ModelPicker() {
 			.join(" · ");
 	};
 
-	const select = async (provider: string, modelId: string) => {
+	const select = async (provider: string, modelId: string, auto: boolean) => {
 		if (!sidecarReady) return;
 		const key = `${provider}/${modelId}`;
 		setSwitching(key);
@@ -411,7 +448,9 @@ export function ModelPicker() {
 				}
 				if (!skipped) toast({ variant: "info", message: t("modelPicker.compactedSwitching") });
 			}
-			const response = await tabRpc.setModel(provider, modelId);
+			const response = auto
+				? await tabRpc.command({ type: "set_claude_api_auto_model", modelId })
+				: await tabRpc.setModel(provider, modelId);
 			if (!response.success) {
 				toastError({ title: t("modelPicker.failed"), error: response });
 				return;
@@ -443,7 +482,7 @@ export function ModelPicker() {
 		if (event.key === "Enter") {
 			event.preventDefault();
 			const option = flatOptions[activeIndex];
-			if (option) void select(option.provider, option.modelId);
+			if (option) void select(option.provider, option.modelId, option.auto);
 		}
 	};
 
@@ -516,6 +555,18 @@ export function ModelPicker() {
 						variant="ghost"
 					/>
 				</div>
+				{!error &&
+					visibleFailures.map(({ provider, fetchedAt }) => (
+						<div key={provider} className="px-2 py-1 text-sc-sm">
+							<strong>{nameByProvider.get(provider) ?? provider}</strong>
+							<KeyQueryFailure
+								account={nameByProvider.get(provider) ?? provider}
+								disabled={!sidecarReady}
+								fetchedAt={fetchedAt}
+								provider={provider}
+							/>
+						</div>
+					))}
 				{unconfirmed && !error && (
 					<InlineNotice
 						action={
@@ -563,7 +614,8 @@ export function ModelPicker() {
 							}
 							tone="danger"
 						/>
-					) : unconfirmed && availableModels.length === 0 ? null : waitingForModels ? (
+					) : (visibleFailures.length > 0 && groups.length === 0) ||
+						(unconfirmed && availableModels.length === 0) ? null : waitingForModels ? (
 						<SkeletonRows className="py-2" label={t("modelPicker.loading")} widths={[60, 44, 70, 52]} />
 					) : !activeGroup || availableModels.length === 0 ? (
 						<EmptyState
@@ -588,7 +640,13 @@ export function ModelPicker() {
 							{groups.map(({ id: groupId, provider, models, collapsed }) => {
 								const groupName =
 									provider === null
-										? t(groupId === CURRENT_GROUP ? "modelPicker.current" : "modelPicker.recent")
+										? t(
+												groupId === AUTO_GROUP
+													? "modelPicker.claudeApiAuto"
+													: groupId === CURRENT_GROUP
+														? "modelPicker.current"
+														: "modelPicker.recent",
+											)
 										: (nameByProvider.get(provider) ?? provider);
 								return (
 									<OptionGroup
@@ -617,7 +675,12 @@ export function ModelPicker() {
 										<Collapse open={!collapsed}>
 											{models.map(model => {
 												const key = `${model.provider}/${model.id}`;
-												const isCurrent = current?.provider === model.provider && current.id === model.id;
+												const auto = groupId === AUTO_GROUP;
+												const isCurrent =
+													current?.id === model.id &&
+													(auto
+														? autoRoute?.provider === current.provider
+														: current.provider === model.provider && !autoRoute);
 												const optionIndex = indexByKey.get(`${groupId}:${key}`);
 												const isActive = optionIndex !== undefined && optionIndex === activeIndex;
 												const over = !isCurrent && isOverContext(model);
@@ -625,11 +688,13 @@ export function ModelPicker() {
 													model.contextWindow != null && model.contextWindow < MIN_SERVING_CONTEXT;
 												const label = labels.get(key) ?? { name: modelDisplayName(model) };
 												const apiKey = modelProviderGroup(model.provider) === "anthropic-api-key";
-												const suffix = apiKey
-													? provider === null
-														? nameByProvider.get(model.provider)
-														: label.suffix?.replace(model.provider, "").trim()
-													: label.suffix;
+												const suffix = auto
+													? undefined
+													: apiKey
+														? provider === null
+															? nameByProvider.get(model.provider)
+															: label.suffix?.replace(model.provider, "").trim()
+														: label.suffix;
 												return (
 													<OptionRow
 														active={isActive}
@@ -642,7 +707,7 @@ export function ModelPicker() {
 																? undefined
 																: `${listboxId}-option-${optionIndex}`
 														}
-														onClick={() => void select(model.provider, model.id)}
+														onClick={() => void select(model.provider, model.id, auto)}
 														onMouseEnter={() => {
 															if (optionIndex !== undefined) setActiveIndex(optionIndex);
 														}}

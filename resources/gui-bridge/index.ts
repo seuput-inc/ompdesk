@@ -235,6 +235,7 @@ const AREAS: readonly Area[] = [
 	{ name: "answer-first", features: ["answerFirst"], load: () => import("./answer-first") },
 	{ name: "recent-models", features: ["recentModels"], load: () => import("./recent-models") },
 	{ name: "model-choice", features: ["modelChoice"], load: () => import("./model-choice") },
+	{ name: "claude-api-route", features: ["claudeApiRoute"], load: () => import("./claude-api-route") },
 	{ name: "input-history", features: ["inputHistory"], load: () => import("./input-history") },
 	{
 		name: "worktree-lifecycle",

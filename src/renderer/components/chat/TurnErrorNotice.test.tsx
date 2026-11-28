@@ -2,7 +2,7 @@ import { parseHTML } from "linkedom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { UsageReport } from "../../../shared/rpc-types";
+import type { ClaudeApiRoute, UsageReport } from "../../../shared/rpc-types";
 import { formatClock } from "../../lib/format";
 import { I18nProvider } from "../../lib/i18n";
 import { useMessagesStore } from "../../stores/messages";
@@ -35,7 +35,7 @@ function report(provider: string, resetAt?: number): UsageReport {
 	return { provider, fetchedAt: 0, limits: [], ...(resetAt === undefined ? {} : { resetAt }) };
 }
 
-async function mount(timestamp: number, errorMessage = LIMIT): Promise<void> {
+async function mount(timestamp: number, errorMessage = LIMIT, claudeRoute?: ClaudeApiRoute): Promise<void> {
 	container = document.createElement("div");
 	document.body.appendChild(container);
 	const mounted = createRoot(container);
@@ -43,7 +43,12 @@ async function mount(timestamp: number, errorMessage = LIMIT): Promise<void> {
 	await act(async () => {
 		mounted.render(
 			<I18nProvider>
-				<TurnErrorNotice errorMessage={errorMessage} stopReason="error" timestamp={timestamp} />
+				<TurnErrorNotice
+					claudeRoute={claudeRoute}
+					errorMessage={errorMessage}
+					stopReason="error"
+					timestamp={timestamp}
+				/>
 			</I18nProvider>,
 		);
 	});
@@ -95,6 +100,39 @@ describe("TurnErrorNotice usage limit", () => {
 		await mount(7);
 		expect(container.querySelector("[data-quota-reset]")).toBeNull();
 		expect(container.querySelector("[data-quota-resume]")).toBeNull();
+	});
+
+	it("shows the provider's wait for this key instead of a subscription reset", async () => {
+		await mount(7, LIMIT, {
+			provider: "anthropic-api-key",
+			skipped: [],
+			refusal: { kind: "transient", retryAfterSeconds: 12 },
+		});
+		expect(container.textContent).toContain("Try again in 12s");
+		expect(container.textContent).toContain("another key may use the same organization’s limit");
+		expect(container.querySelector(".omp-banner-actions button")?.textContent).toBe("Choose another model");
+		expect(container.querySelector("[data-quota-reset]")).toBeNull();
+	});
+
+	it("shows the reported monthly reset and opens Console only for a user-set spending limit", async () => {
+		const route = { provider: "anthropic-api-key", skipped: [] };
+		const resumesAt = Date.UTC(2027, 0, 1);
+		await mount(7, LIMIT, { ...route, refusal: { kind: "monthly", resumesAt } });
+		expect(container.textContent).toContain("monthly spend cap");
+		expect(container.textContent).toContain(formatClock(resumesAt));
+		expect(container.textContent).not.toContain("View spend limits");
+		expect(container.querySelector(".omp-banner-actions button")?.textContent).toBe("Choose another key or model");
+		await unmount();
+		const openExternal = vi.fn();
+		Reflect.set(window.omp, "system", { openExternal });
+		await mount(7, "HTTP 400", { ...route, refusal: { kind: "console" } });
+		expect(container.querySelector(".omp-banner-actions button")?.textContent).toBe("Choose another key or model");
+		const link = Array.from(container.querySelectorAll("button")).find(el =>
+			el.textContent?.includes("View spend limits"),
+		);
+		expect(link).toBeDefined();
+		await act(async () => link?.click());
+		expect(openExternal).toHaveBeenCalledWith("https://platform.claude.com/settings/spend-limits");
 	});
 });
 

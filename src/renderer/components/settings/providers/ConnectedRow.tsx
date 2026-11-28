@@ -185,6 +185,7 @@ export function ProviderGroupItem({
  */
 export function ConnectedRow({
 	account,
+	detail,
 	accountSuffix,
 	accountTitle,
 	actionName,
@@ -202,6 +203,7 @@ export function ConnectedRow({
 	account: string;
 	/** What tells this account from another of the provider with the same address ("team", "pro"), muted after it. */
 	accountSuffix?: string;
+	detail?: ReactNode;
 	accountTitle?: string;
 	/** Names the ⋯ ("{provider} {account}"); the account's own name when absent. */
 	actionName?: string;
@@ -281,6 +283,7 @@ export function ConnectedRow({
 						menu={menu}
 					/>
 				)}
+				{detail && <div className="order-last basis-full">{detail}</div>}
 			</div>
 		</li>
 	);

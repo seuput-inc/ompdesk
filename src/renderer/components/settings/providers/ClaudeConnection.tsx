@@ -1,10 +1,10 @@
 import { useRef, useState } from "react";
+import { CLAUDE_API_URL } from "../../../../../resources/gui-bridge/claude-key-models";
+import { ipcErrorCode } from "../../../../shared/ipc-error-codes";
 import { useT } from "../../../lib/i18n";
 import { useFocusedTabDevice } from "../../../stores/remote";
 import { Banner, Button, Input, Modal } from "../../common";
 import { useProviderLogin } from "./ProviderLogin";
-
-export const CLAUDE_API_URL = "https://api.anthropic.com";
 
 export function useProviderConnection(
 	onConnected: (id: string) => Promise<void>,
@@ -39,12 +39,7 @@ export function useProviderConnection(
 		setError("");
 		let id = "anthropic-api-key";
 		try {
-			const catalog = await window.omp.models.listProviders(device).catch(() => null);
-			const models = catalog?.options.anthropicModels;
-			if (!catalog || !models?.length) {
-				setError(t("providers.claude.noCatalog"));
-				return;
-			}
+			const catalog = await window.omp.models.listProviders(device);
 			for (let n = 2; catalog.providers.some(provider => provider.id === id); n++) id = `anthropic-api-key-${n}`;
 			await window.omp.models.upsertProvider(
 				{
@@ -54,12 +49,18 @@ export function useProviderConnection(
 					api: "anthropic-messages",
 					auth: "apiKey",
 					apiKey,
-					models,
+					models: [],
 				},
 				device,
 			);
-		} catch {
-			setError(t("providerCfg.toast.saveFailed"));
+		} catch (reason) {
+			setError(
+				t(
+					ipcErrorCode(reason) === "source_unavailable"
+						? "providers.claude.noCatalog"
+						: "providerCfg.toast.saveFailed",
+				),
+			);
 			return;
 		} finally {
 			setSaving(false);

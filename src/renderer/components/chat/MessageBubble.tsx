@@ -2,6 +2,7 @@ import { Archive, FileText, GitBranch, MoreHorizontal, Terminal } from "lucide-r
 import type { ReactNode } from "react";
 import { memo, useId, useLayoutEffect, useRef, useState } from "react";
 import { MAIL_CUSTOM_TYPE } from "../../../../resources/gui-bridge/agent-control-contracts";
+import { readClaudeApiRoute } from "../../../../resources/gui-bridge/claude-api-route-core";
 import { A2UI_TOOL } from "../../../../resources/gui-bridge/modes/a2ui-contracts";
 import { CI_MESSAGE_TYPE } from "../../../../resources/gui-bridge/modes/ci-watch-contracts";
 import { COMPUTER_USE_NOTICE_TYPE } from "../../../../resources/gui-bridge/modes/computer-use-contracts";
@@ -17,6 +18,7 @@ import { useT } from "../../lib/i18n";
 import { MarkdownRenderer } from "../../lib/markdown";
 import { forkSessionFromMessageInNewTab, isRenderableMessageText } from "../../lib/messages";
 import { extractModelMentions, type ModelMentionChip } from "../../lib/model-mentions";
+import { claudeApiKeyLabel, modelProviderGroup } from "../../lib/model-provider-group";
 import { PREVIEW_SCROLL_LG } from "../../lib/preview";
 import { promptDisplayText } from "../../lib/prompt-text";
 import { useTabRpc } from "../../lib/tab-rpc";
@@ -752,6 +754,7 @@ export const MessageBubble = memo(function MessageBubble({
 	// carry no message actions: tool-only copy would be empty, and the Process
 	// disclosure owns the grouped chrome and branch point.
 	const compactChrome = compact || !drawsMessageActions(message);
+	const route = readClaudeApiRoute(message.claudeApiRoute);
 
 	return (
 		<div
@@ -773,11 +776,31 @@ export const MessageBubble = memo(function MessageBubble({
 				<ReplyFiles references={references} />
 				{failure && (
 					<TurnErrorNotice
+						claudeRoute={route?.provider === message.provider ? route : undefined}
 						errorMessage={message.errorMessage}
 						stopReason={message.stopReason}
 						timestamp={message.timestamp}
 					/>
 				)}
+				{isAssistant &&
+					!route?.refusal &&
+					typeof message.provider === "string" &&
+					(route?.provider === message.provider ||
+						(!failure && message.stopReason !== "error" && message.stopReason !== "aborted")) &&
+					modelProviderGroup(message.provider) === "anthropic-api-key" && (
+						<div data-claude-key-used={message.provider} className="mt-1 text-sc-xs text-(--sc-text-muted)">
+							{t("chat.claudeApi.used", { key: claudeApiKeyLabel(message.provider, undefined, t) })}
+							{route?.provider === message.provider &&
+								route.skipped.map(({ provider, reason }) => (
+									<span key={provider} className="ml-2">
+										{t("chat.claudeApi.skipped", {
+											key: claudeApiKeyLabel(provider, undefined, t),
+											reason: t(`chat.claudeApi.${reason}`),
+										})}
+									</span>
+								))}
+						</div>
+					)}
 				<UsageRow message={message} />
 			</div>
 			{!compactChrome && (

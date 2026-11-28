@@ -102,6 +102,17 @@ describe("model snapshot", () => {
 		]);
 	});
 
+	it("withholds old numbered Claude catalogs until a fresh key lookup without changing the saved selection", () => {
+		const saved = { provider: "anthropic-api-key-2", id: "old-seed" };
+		const live = createModelStore();
+		live.setState({ availableModels: [saved], model: saved });
+		writeModelSnapshot(undefined, "path:/explicit", live.getState());
+		const next = createModelStore();
+		seedModelStore(next, undefined, "path:/explicit");
+		expect(next.getState().availableModels[0].pickerAvailability).toBe("account-unverified");
+		expect(next.getState().model).toEqual(saved);
+	});
+
 	it("keeps selections per session and catalogs per host", () => {
 		const live = createModelStore();
 		live.setState({ availableModels: [model("a")], model: model("a") });

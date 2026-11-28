@@ -25,6 +25,8 @@ import { appLaunchOptions, exitApp, pressShortcutUntilVisible, readRecords, vari
 test.describe.configure({ mode: "parallel" });
 
 type Language = "en" | "ko";
+const dummyClaudeKey = "offline-fixture-not-a-credential";
+const offeredModel = "offline-claude-model";
 
 function tr(language: Language, key: string, params: Record<string, string> = {}): string {
 	const template = (language === "ko" ? ko : en)[key];
@@ -67,8 +69,27 @@ async function launch(language: Language, theme: "light" | "dark", firstRun = fa
 	for (const key of Object.keys(options.env)) {
 		if (/_API_KEY$|_TOKEN$|^ANTHROPIC_/.test(key)) delete options.env[key];
 	}
+	if (firstRun) {
+		const preload = path.join(project, "claude-list.cjs");
+		await fs.writeFile(
+			preload,
+			`
+const send = globalThis.fetch;
+globalThis.fetch = async (input, init) => {
+	const request = new Request(input, init), url = new URL(request.url);
+	if (["127.0.0.1", "[::1]", "localhost"].includes(url.hostname)) return send(input, { ...init, redirect: "error" });
+	if (url.origin !== "https://api.anthropic.com" || url.pathname !== "/v1/models" || request.method !== "GET" ||
+		request.headers.get("x-api-key") !== ${JSON.stringify(dummyClaudeKey)}) throw new Error("external request blocked by login fixture");
+	return Response.json({data: [{id: ${JSON.stringify(offeredModel)}}], has_more: false});
+};
+globalThis.__loginFixtureGuard = true;
+`,
+		);
+		options.env.NODE_OPTIONS = `--require "${preload.replaceAll("\\", "/")}"`;
+	}
 	const reopen = async () => {
 		const app = await electron.launch(options);
+		if (firstRun) expect(await app.evaluate(() => Reflect.get(globalThis, "__loginFixtureGuard"))).toBe(true);
 		await app.evaluate(({ BrowserWindow, shell }) => {
 			BrowserWindow.getAllWindows()[0]?.setContentSize(1180, 860);
 			const opened: string[] = [];
@@ -133,21 +154,27 @@ for (const first of ["subscription", "key"] as const) {
 		const firstRun = page.locator('[data-first-run-step="connect"]');
 		const chooser = page.locator("[data-claude-connect]");
 		const keyId = "anthropic-api-key";
-		const dummy = "offline-fixture-not-a-credential";
 		const loginIds = async () =>
 			(await readRecords(record)).filter(row => row.type === "login").map(row => row.providerId);
 		const opened = () => app.evaluate(() => (Reflect.get(globalThis, "openedUrls") as string[]).length);
 		const saved = (view: Page) =>
 			view.evaluate(async () =>
-				(await window.omp.models.listProviders()).providers.map(({ id, api, baseUrl, hasApiKey }) => ({
+				(await window.omp.models.listProviders()).providers.map(({ id, api, baseUrl, hasApiKey, models }) => ({
 					id,
 					api,
 					baseUrl,
 					hasApiKey,
+					models: models.map(model => model.id),
 				})),
 			);
 		const expected = [
-			{ id: keyId, api: "anthropic-messages", baseUrl: "https://api.anthropic.com", hasApiKey: true },
+			{
+				id: keyId,
+				api: "anthropic-messages",
+				baseUrl: "https://api.anthropic.com",
+				hasApiKey: true,
+				models: [offeredModel],
+			},
 		];
 		try {
 			let subscriptions = 0;
@@ -160,7 +187,7 @@ for (const first of ["subscription", "key"] as const) {
 				const enter =
 					index === 0
 						? firstRun.locator('[data-provider-connect="anthropic"]')
-						: settings.locator(`[data-provider-add="${first === "key" ? keyId : "anthropic"}"]`);
+						: settings.locator('[data-provider-add="anthropic"]');
 				await enter.click();
 				const subscription = chooser.getByRole("button", { name: tr("ko", "providers.featured.subscription") });
 				const key = chooser.getByRole("button", { name: tr("ko", "providers.featured.apiKey") });
@@ -185,14 +212,14 @@ for (const first of ["subscription", "key"] as const) {
 					await expect(form.locator("input")).toHaveCount(1);
 					await expect(input).toHaveAttribute("type", "password");
 					await expect(input).toBeFocused();
-					await input.fill(dummy);
+					await input.fill(dummyClaudeKey);
 					await page.keyboard.press("Escape");
 					await expect(enter).toBeFocused();
 					expect(await saved(page)).toEqual([]);
 					await enter.click();
 					await key.click();
 					await expect(input).toHaveValue("");
-					await input.fill(dummy);
+					await input.fill(dummyClaudeKey);
 					await test.info().attach(`ko-${index === 0 ? "onboarding" : "settings"}-claude-key.png`, {
 						body: await page.screenshot(),
 						contentType: "image/png",
@@ -211,7 +238,9 @@ for (const first of ["subscription", "key"] as const) {
 				}
 			}
 			await expect(settings.locator('[data-provider-row="anthropic"]')).toBeVisible();
-			await expect(settings.locator(`[data-provider-row="${keyId}"]`)).toBeVisible();
+			await expect(
+				settings.locator(`[data-provider-row="anthropic"] [data-provider-account="${keyId}"]`),
+			).toBeVisible();
 			await exitApp(app);
 			running = null;
 			running = await reopen();
@@ -220,11 +249,15 @@ for (const first of ["subscription", "key"] as const) {
 			await pressShortcutUntilVisible(again, "ControlOrMeta+Comma", reopenedSettings);
 			await reopenedSettings.locator('[data-settings-section="models"]').click();
 			await expect(reopenedSettings.locator('[data-provider-row="anthropic"]')).toBeVisible();
-			await expect(reopenedSettings.locator(`[data-provider-row="${keyId}"]`)).toBeVisible();
+			await expect(
+				reopenedSettings.locator(`[data-provider-row="anthropic"] [data-provider-account="${keyId}"]`),
+			).toBeVisible();
 			expect(await saved(again)).toEqual(expected);
 			expect(await loginIds()).toEqual(["anthropic"]);
-			expect((await fs.readFile(path.join(root, "agent", "models.yml"), "utf8")).includes(dummy)).toBe(true);
-			expect((await fs.readFile(record, "utf8")).includes(dummy)).toBe(false);
+			expect((await fs.readFile(path.join(root, "agent", "models.yml"), "utf8")).includes(dummyClaudeKey)).toBe(
+				true,
+			);
+			expect((await fs.readFile(record, "utf8")).includes(dummyClaudeKey)).toBe(false);
 		} finally {
 			if (running) await exitApp(running);
 			await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

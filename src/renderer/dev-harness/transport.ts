@@ -419,10 +419,13 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 	const calls: Harness["calls"] = [];
 	const pickerFixture = new URLSearchParams(location.search).get("picker") === "providers";
 	const keyIds = ["anthropic-api-key", "anthropic-api-key-2"];
+	const failureMode = pickerFixture && new URLSearchParams(location.search).get("keyQueryFailed");
+	const initialFailures = failureMode === "2" ? keyIds : failureMode === "1" ? keyIds.slice(1) : [];
+	const failedKeys = new Set(initialFailures);
 	const models = pickerFixture
 		? [
 				...MODELS.filter(m => m.provider === "anthropic"),
-				...keyIds.map(provider => ({ ...MODELS[0], provider })),
+				...keyIds.map(provider => ({ ...MODELS[0], provider, pickerAvailability: "account-verified" as const })),
 				{ ...MODELS[2], provider: "openai-codex" },
 			]
 		: MODELS;
@@ -515,6 +518,7 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 			case "get_state":
 				return respond(command, {
 					...stateFixture(tabId),
+					...(initialFailures.length > 0 && { model: models.find(model => model.provider === keyIds[0]) }),
 					...(pickedModels.has(tabId) && { model: pickedModels.get(tabId) }),
 				});
 			case "set_model": {
@@ -539,12 +543,23 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 				});
 			case "get_available_models":
 			case "get_providers":
+				if (command.type === "get_providers" && command.retryKey) failedKeys.delete(command.retryKey);
+				else if (command.forceRefresh) failedKeys.clear();
 				return respond(command, {
-					models: FIRST_RUN ? [] : models,
-					providers: FIRST_RUN ? FIRST_RUN_PROVIDERS : providers,
-					discoveryStates: [],
+					models: FIRST_RUN ? [] : models.filter(model => !failedKeys.has(model.provider)),
+					providers: FIRST_RUN
+						? FIRST_RUN_PROVIDERS
+						: providers.map(p => (failedKeys.has(p.id) ? { ...p, modelCount: 0 } : p)),
+					discoveryStates: initialFailures.map(provider => ({
+						provider,
+						status: failedKeys.has(provider) ? "unavailable" : "ok",
+						optional: false,
+						stale: false,
+						models: failedKeys.has(provider) ? [] : [MODELS[0].id],
+						fetchedAt: Date.UTC(2026, 10, 28, 9, failedKeys.has(provider) ? 42 : 43),
+					})),
 					refreshPending: false,
-					generation: 1,
+					generation: 1 + initialFailures.length - failedKeys.size,
 				});
 			case "history_recent":
 				return respond(command, []);
@@ -833,7 +848,20 @@ export function createHarnessTransport(prefs: Record<string, unknown>): { transp
 			case IPC_COMMANDS.GITHUB_AUTH_REFRESH:
 				return EMPTY_GITHUB_AUTH_STATE;
 			case IPC_COMMANDS.MODELS_PROVIDERS_LIST:
-				return { providers: [], options: fixtureProviderOptions };
+				return {
+					providers: pickerFixture
+						? keyIds.map(id => ({
+								id,
+								baseUrl: "https://api.anthropic.com",
+								api: "anthropic-messages",
+								auth: "apiKey",
+								hasApiKey: true,
+								builtin: false,
+								models: models.filter(model => model.provider === id && !failedKeys.has(id)),
+							}))
+						: [],
+					options: fixtureProviderOptions,
+				};
 			case IPC_COMMANDS.MODELS_PROVIDER_UPSERT:
 				throw new Error("The layout harness does not store provider credentials");
 			case IPC_COMMANDS.LOCAL_ENGINES_GET:

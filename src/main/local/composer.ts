@@ -39,6 +39,7 @@ const BUSY_MESSAGE = "Session is busy (streaming or foreground execution in flig
 interface StateExtras {
 	cwd: string;
 	autoRetryEnabled: boolean;
+	claudeApiRoute?: RpcSessionState["claudeApiRoute"];
 	thinkingConfigured: ThinkingLevel | "auto" | undefined;
 	prewalkArmed: boolean;
 	agentsPaused: boolean;
@@ -132,6 +133,7 @@ export const handlers: Record<string, LocalHandler> = {
 		const result: RpcSessionState = {
 			...state,
 			cwd: extras?.cwd ?? ctx.cwd,
+			...(extras?.claudeApiRoute && { claudeApiRoute: extras.claudeApiRoute }),
 			autoRetryEnabled: extras?.autoRetryEnabled ?? true,
 			thinkingConfigured: extras?.thinkingConfigured ?? state.thinkingLevel,
 			availableThinkingLevels: reasoningLevels(levels?.levels),

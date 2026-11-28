@@ -1,4 +1,5 @@
 import type { StoreApi } from "zustand";
+import { readClaudeApiRoute } from "../../../resources/gui-bridge/claude-api-route-core";
 import type { AutopilotStatus } from "../../../resources/gui-bridge/modes/autopilot-contracts";
 import type { CheckoutPeers } from "../../../resources/gui-bridge/modes/checkout-peers-contracts";
 import type { NextPromptState } from "../../../resources/gui-bridge/modes/next-prompt-contracts";
@@ -243,7 +244,15 @@ export function applyModelInfo(model: unknown, tabId: string | null, options?: {
 	const info = asModelInfo(model);
 	if (!info || !tabId) return;
 	withSessionRuntime(tabId, () =>
-		useModelStore.setState(options?.picked ? { model: info, chosenModel: null } : { model: info }),
+		useModelStore.setState(
+			options?.picked
+				? {
+						model: info,
+						chosenModel: null,
+						claudeApiRoute: readClaudeApiRoute(Reflect.get(info, "claudeApiRoute")) ?? null,
+					}
+				: { model: info },
+		),
 	);
 }
 

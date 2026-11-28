@@ -233,22 +233,18 @@ pub(super) fn provider(id: &str, raw: &Value, roster: &Roster) -> Value {
         "baseUrl".into(),
         text(rec.get("baseUrl")).unwrap_or_default().into(),
     );
-    match text(rec.get("apiKey")) {
-        Some(key) => {
-            let tail: String = key
-                .chars()
-                .rev()
-                .take(MASK_PREVIEW_LEN)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
-            view.insert("hasApiKey".into(), true.into());
-            view.insert("apiKeyPreview".into(), format!("•••{tail}").into());
-        }
-        None => {
-            view.insert("hasApiKey".into(), false.into());
-        }
+    let key = text(rec.get("apiKey"));
+    view.insert("hasApiKey".into(), key.is_some().into());
+    if let Some(key) = key.filter(|_| !super::claude_key_id(id)) {
+        let start = key
+            .char_indices()
+            .rev()
+            .nth(MASK_PREVIEW_LEN - 1)
+            .map_or(0, |(start, _)| start);
+        view.insert(
+            "apiKeyPreview".into(),
+            format!("•••{}", &key[start..]).into(),
+        );
     }
     put(
         &mut view,

@@ -6,10 +6,22 @@ interface CatalogModel {
 	id: string;
 	name?: string;
 	reasoning?: boolean;
+	thinking?: {
+		mode: string;
+		efforts: string[];
+		defaultLevel?: string;
+		effortMap?: Record<string, string>;
+		supportsDisplay?: boolean;
+		requiresEffort?: boolean;
+		unverified?: boolean;
+	};
 	input?: string[];
+	supportsTools?: boolean;
 	cost?: Record<string, number>;
 	contextWindow?: number;
 	maxTokens?: number;
+	premiumMultiplier?: number;
+	omitMaxOutputTokens?: boolean;
 }
 
 interface Schema {
@@ -40,9 +52,10 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 	"catalog.roster": async () => {
 		const schema = await stockSchema();
 		// Runtime-selected: catalog modules belong to the resolved omp installation.
-		const [providers, auth] = await Promise.all([
+		const [providers, auth, models] = await Promise.all([
 			import(ompModuleFile("pi-catalog/compat/providers")),
 			import(ompModuleFile("pi-catalog/compat/auth")),
+			import(ompModuleFile("pi-catalog/models")),
 		]);
 		if (typeof providers.providerEntries !== "function" || typeof auth.authProviders !== "function") {
 			throw new Error("Installed omp cannot determine built-in providers");
@@ -56,12 +69,39 @@ export const methods: Record<string, (params: unknown) => Promise<unknown>> = {
 					...auth.authProviders().map((entry: { id: string }) => entry.id),
 				]),
 			],
-			anthropicModels: (providers.seedModels?.("anthropic") ?? []).flatMap(
-				({ api, id, name, reasoning, input, cost, contextWindow, maxTokens }: CatalogModel) =>
-					api === "anthropic-messages" && id
-						? [{ id, name, reasoning, input, cost, contextWindow, maxTokens }]
-						: [],
-			),
+			anthropicModels: models.getBundledModels("anthropic").flatMap((model: CatalogModel) => {
+				if (model.api !== "anthropic-messages" || !model.id) return [];
+				// Persist only stock's configurable vocabulary, not computed flags or a provisional ladder.
+				const thinking = model.thinking?.unverified ? undefined : model.thinking;
+				const cost = model.cost;
+				return [
+					{
+						id: model.id,
+						name: model.name,
+						reasoning: model.thinking?.unverified ? undefined : model.reasoning,
+						thinking: thinking && {
+							mode: thinking.mode,
+							efforts: thinking.efforts,
+							defaultLevel: thinking.defaultLevel,
+							effortMap: thinking.effortMap,
+							supportsDisplay: thinking.supportsDisplay,
+							requiresEffort: thinking.requiresEffort,
+						},
+						input: model.input,
+						supportsTools: model.supportsTools,
+						cost: cost && {
+							input: cost.input,
+							output: cost.output,
+							cacheRead: cost.cacheRead,
+							cacheWrite: cost.cacheWrite,
+						},
+						contextWindow: model.contextWindow,
+						maxTokens: model.maxTokens,
+						premiumMultiplier: model.premiumMultiplier,
+						omitMaxOutputTokens: model.omitMaxOutputTokens,
+					},
+				];
+			}),
 			apis: options("api"),
 			auth: options("auth"),
 			discovery: options("discovery", "type"),

@@ -36,7 +36,7 @@ function methodCall(command: RpcCommand): [method: string, args: unknown[]] | nu
 		case "get_available_models":
 			return ["getAvailableModels", [command.forceRefresh]];
 		case "get_providers":
-			return ["getProviders", [command.forceRefresh]];
+			return ["getProviders", command.retryKey ? [command.forceRefresh, command.retryKey] : [command.forceRefresh]];
 		case "set_fast_mode":
 			return ["setFastMode", [command.enabled]];
 		case "set_subagent_subscription":

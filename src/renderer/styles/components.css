@@ -788,6 +788,11 @@
 	.omp-whats-new-summary {
 		display: none;
 	}
+
+	[data-claude-refusal] > .omp-banner-actions,
+	[data-claude-refusal] > .omp-banner-actions > button {
+		width: 100%;
+	}
 }
 
 /* What the board shows, its dock twin does not repeat: docked beside the pane, or as the status strip a pane without

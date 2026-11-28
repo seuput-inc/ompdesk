@@ -1,14 +1,17 @@
 // models.yml through the core and the installed stock omp. The core's own cases (a stand-in stock: the file racing a
 // save, symlinks and modes, a missing roster, a misread edit) are in `native/ompdesk/crates/core/src/models/file`.
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { parse } from "yaml";
+import { CLAUDE_API_URL } from "../../resources/gui-bridge/claude-key-models";
 import type { CustomProviderInput } from "../shared/ipc-types";
 import { core } from "./core/process";
 import {
 	deleteModelsProvider,
+	extendClaudeKeyModels,
 	listModelsProviders,
 	modelsCatalog,
 	modelsPath,
@@ -20,6 +23,7 @@ import {
 import { ompPackageRoot, systemOmp } from "./omp-runtime";
 import { CustomProviderInputSchema } from "./remote/app-protocol";
 import { stockHelperHost, stopStockHelper } from "./stock-helper";
+import { stockFixtureEnv } from "./test-bridge-probe";
 
 const stock = await systemOmp();
 const available = stock.ok && ompPackageRoot(stock.runtime.bin) !== null;
@@ -41,6 +45,7 @@ describe.skipIf(!available)("models.yml through installed stock", () => {
 		process.env.PI_CODING_AGENT_DIR = dir;
 	});
 	afterEach(() => {
+		vi.unstubAllGlobals();
 		stopStockHelper();
 		if (original === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = original;
@@ -82,6 +87,242 @@ describe.skipIf(!available)("models.yml through installed stock", () => {
 		await upsertModelsProvider(input);
 		await expect(upsertModelsProvider({ ...input, apiKey: "dummy-second" })).rejects.toThrow(/changed_on_disk/);
 		expect(saved().providers[input.id].apiKey === input.apiKey).toBe(true);
+	});
+
+	test("saves only offered models, preserves stock metadata, and never previews a Claude key", async () => {
+		const known = ["claude-sonnet-5", "claude-haiku-5-5"];
+		const unknown = { id: "new-probe-model", name: "New model" };
+		const input: CustomProviderInput = {
+			id: "anthropic-api-key",
+			baseUrl: CLAUDE_API_URL,
+			api: "anthropic-messages",
+			auth: "apiKey",
+			apiKey: "offline-probe-key",
+			onlyIfAbsent: true,
+			models: [],
+		};
+		vi.stubGlobal("fetch", () =>
+			Response.json({
+				data: [...known.map(id => ({ id })), { id: unknown.id, display_name: unknown.name }],
+				has_more: false,
+			}),
+		);
+		await upsertModelsProvider(input);
+		const [provider] = await listModelsProviders();
+		expect(provider.models.map(model => model.id)).toEqual([...known, unknown.id]);
+		const rows = saved().providers[input.id].models;
+		expect(rows.at(-1)).toEqual(unknown);
+		const root = stock.ok && ompPackageRoot(stock.runtime.bin);
+		const probe = `
+			globalThis.fetch = Object.assign(() => { throw Error("network disabled"); }, { preconnect() {} });
+			const load = name => import(Bun.resolveSync("@oh-my-pi/" + name, ${JSON.stringify(root)}));
+			const { AuthStorage } = await load("pi-ai/auth-storage");
+			const { getBundledModels } = await load("pi-catalog/models");
+			const { ModelRegistry } = await load("pi-coding-agent/config/model-registry");
+			const auth = await AuthStorage.create(":memory:");
+			try {
+				const registry = new ModelRegistry(auth, ${JSON.stringify(file)});
+				const shape = ({ reasoning, thinking, supportsTools, input, contextWindow, maxTokens }) =>
+					({ reasoning, thinking, supportsTools, input, contextWindow, maxTokens });
+				const known = ${JSON.stringify(known)}.map(id => ({
+					bundled: shape(getBundledModels("anthropic").find(m => m.id === id)),
+					subscriptionThinking: registry.find("anthropic", id).thinking,
+					key: shape(registry.find(${JSON.stringify(input.id)}, id)),
+				}));
+				const fresh = registry.find(${JSON.stringify(input.id)}, ${JSON.stringify(unknown.id)});
+				console.log(JSON.stringify({ known, provisional: fresh.thinking?.unverified === true }));
+			} finally { auth.close(); }
+		`;
+		const runtime = JSON.parse(
+			execFileSync("bun", ["-e", probe], { cwd: dir, encoding: "utf8", env: stockFixtureEnv(dir) }),
+		);
+		for (const [i, { bundled, subscriptionThinking, key }] of runtime.known.entries()) {
+			expect(key).toEqual(bundled);
+			expect(key.thinking).toEqual(subscriptionThinking);
+			expect(rows[i]).toMatchObject({
+				id: known[i],
+				reasoning: true,
+				thinking: { mode: "anthropic-adaptive", efforts: bundled.thinking.efforts },
+				input: bundled.input,
+				contextWindow: bundled.contextWindow,
+				maxTokens: bundled.maxTokens,
+			});
+			expect(rows[i].thinking).not.toHaveProperty("unverified");
+		}
+		expect(runtime.provisional).toBe(true);
+		expect(provider.hasApiKey).toBe(true);
+		expect(provider).not.toHaveProperty("apiKeyPreview");
+		expect(provider).not.toHaveProperty("apiKey");
+		const before = readFileSync(file, "utf8");
+		vi.stubGlobal("fetch", () => Response.json({ data: [], has_more: false }));
+		await expect(
+			upsertModelsProvider({ ...input, onlyIfAbsent: undefined, apiKey: "invalid-dummy" }),
+		).rejects.toThrow("[source_unavailable]");
+		expect(readFileSync(file, "utf8")).toBe(before);
+	});
+
+	test("refresh appends new offers only at the verified config revision and preserves old explicit rows", async () => {
+		const id = "anthropic-api-key";
+		const legacy = { id: "old-only", name: "Old explicit model" };
+		const route = {
+			api: "anthropic-messages",
+			auth: "apiKey",
+			baseUrl: CLAUDE_API_URL,
+			apiKey: "dummy-good",
+			models: [legacy],
+		};
+		const second = { ...route, apiKey: "dummy-second" };
+		writeFileSync(file, JSON.stringify({ providers: { [id]: route, [`${id}-2`]: second } }));
+		const { stamp } = await readModelsText();
+		const addition = { id: "new-only", name: "New only" };
+		const updated = await extendClaudeKeyModels({ stamp, models: { [id]: [addition] } });
+		expect(updated).not.toBe(stamp);
+		expect(saved().providers[id].models).toEqual([legacy, addition]);
+		expect(saved().providers[`${id}-2`]).toEqual(second);
+		const replacement = "# An edit from another window\nproviders: {}\n";
+		writeFileSync(file, replacement);
+		await expect(extendClaudeKeyModels({ stamp: updated, models: { [id]: [addition] } })).rejects.toThrow(
+			/changed_on_disk/,
+		);
+		expect(readFileSync(file, "utf8")).toBe(replacement);
+	});
+
+	test("stock sends a saved key only as x-api-key and verifies legacy catalog rows per key without a paid call", () => {
+		const provider = "anthropic-api-key-2";
+		const key = "old-offline-probe-key";
+		const route = {
+			baseUrl: CLAUDE_API_URL,
+			api: "anthropic-messages",
+			auth: "apiKey",
+			apiKey: key,
+			models: [{ id: "shared" }, { id: "old-only" }],
+		};
+		const refused = "anthropic-api-key-3";
+		writeFileSync(
+			file,
+			JSON.stringify({ providers: { [provider]: route, [refused]: { ...route, apiKey: "dummy-refused" } } }),
+		);
+		const bridge = join(process.cwd(), "resources", "gui-bridge");
+		const root = stock.ok && ompPackageRoot(stock.runtime.bin);
+		const probe = `
+			import { createHash } from "node:crypto";
+			import { readFile, unlink, writeFile } from "node:fs/promises";
+			import { discoverClaudeKeys, keyAdditionsSaved, keyDiscoveryStates, keyOffer } from ${JSON.stringify(join(bridge, "claude-key-catalog.ts"))};
+			const dir = ${JSON.stringify(dir)};
+			let calls = 0;
+			let retry = false;
+			let recover = false;
+			const started = Promise.withResolvers();
+			const release = Promise.withResolvers();
+			globalThis.fetch = Object.assign(async (url, init) => {
+				if (url.origin + url.pathname !== ${JSON.stringify(`${CLAUDE_API_URL}/v1/models`)} || (init.method ?? "GET") !== "GET") throw Error("network disabled");
+				calls++;
+				const good = new Headers(init.headers).get("x-api-key") === ${JSON.stringify(key)};
+				if (retry) {
+					started.resolve();
+					await release.promise;
+					if (recover && !good) return Response.json({ data: [], has_more: false });
+				}
+				return good && !retry
+					? Response.json({ data: [{ id: "shared" }, { id: "new" }], has_more: false })
+					: new Response("private provider error " + init.headers["x-api-key"], { status: 401 });
+			}, { preconnect() {} });
+			const load = name => import(Bun.resolveSync("@oh-my-pi/" + name, ${JSON.stringify(root)}));
+			const { AuthStorage } = await load("pi-ai/auth-storage");
+			const { ModelRegistry } = await load("pi-coding-agent/config/model-registry");
+			const { buildAnthropicClientOptions } = await load("pi-ai/providers/anthropic");
+			const auth = await AuthStorage.create(":memory:");
+			try {
+				const registry = new ModelRegistry(auth, ${JSON.stringify(file)});
+				const model = registry.find(${JSON.stringify(provider)}, "shared");
+				const apiKey = await registry.getApiKey(model);
+				const options = buildAnthropicClientOptions({ model, apiKey, isOAuth: model.isOAuth });
+				const headers = new Headers(options.defaultHeaders);
+				const other = registry.find(${JSON.stringify(refused)}, "shared");
+				const session = { settings: { getAgentDir: () => dir }, getAvailableModels: () => [model, other], modelRegistry: registry };
+				let now = Date.now();
+				const firstTime = now;
+				Date.now = () => now;
+				const states = () => Object.fromEntries(keyDiscoveryStates(session).map(s => [s.provider, s]));
+				const [additions] = await Promise.all([discoverClaudeKeys(session, false), discoverClaudeKeys(session, false)]);
+				now += 1000;
+				await discoverClaudeKeys(session, false);
+				const initial = [keyOffer(session, model), keyOffer(session, other), keyOffer(session, { ...model, id: "old-only" }), calls];
+				const initialStates = states();
+				const file = ${JSON.stringify(file)};
+				const config = JSON.parse(await readFile(file, "utf8"));
+				config.providers[model.provider].models.push(...additions.models[model.provider]);
+				const bytes = JSON.stringify(config);
+				await writeFile(file, bytes);
+				await keyAdditionsSaved(session, additions.stamp, null);
+				const conflicted = [keyOffer(session, model), keyDiscoveryStates(session)];
+				await keyAdditionsSaved(session, additions.stamp, createHash("sha256").update(bytes).digest("hex"));
+				await discoverClaudeKeys(session, false);
+				const savedOffer = keyOffer(session, registry.find(model.provider, "new"));
+				const savedStates = states();
+				const oldStock = { ...session, modelRegistry: {} };
+				await discoverClaudeKeys(oldStock, false);
+				const withoutResolver = keyOffer(oldStock, model);
+				retry = true;
+				const refreshing = discoverClaudeKeys(session, true);
+				await started.promise;
+				const whileRefreshing = keyOffer(session, model);
+				const concurrent = discoverClaudeKeys(session, false);
+				release.resolve();
+				await Promise.all([refreshing, concurrent]);
+				const retryStates = states();
+				const refusedProof = keyOffer(session, model);
+				recover = true;
+				await discoverClaudeKeys(session, false, other.provider);
+				const recovered = states();
+				await unlink(${JSON.stringify(file)});
+				await discoverClaudeKeys(session, false);
+				console.log(JSON.stringify({
+					keyMatched: headers.get("x-api-key") === ${JSON.stringify(key)},
+					bearer: headers.has("authorization"), oauth: options.isOAuthToken,
+					initial, additions: additions?.models, refusedProof, withoutResolver, calls,
+					initialStates, savedStates, recovered, retryStates, firstTime, retryTime: now, whileRefreshing, conflicted, savedOffer,
+					unrelatedUntouched: keyOffer(session, { ...model, provider: "manual" }) === undefined,
+					unreadable: keyOffer(session, model),
+				}));
+			} finally { auth.close(); }
+		`;
+		const output = execFileSync("bun", ["-e", probe], { cwd: dir, encoding: "utf8", env: stockFixtureEnv(dir) });
+		const { initialStates, savedStates, recovered, retryStates, firstTime, retryTime, ...observed } =
+			JSON.parse(output);
+		const state = (provider: string, status: string, fetchedAt: number, models: string[]) => ({
+			provider,
+			status,
+			fetchedAt,
+			models,
+			optional: true,
+			stale: false,
+		});
+		expect(initialStates).toEqual({
+			[provider]: state(provider, "ok", firstTime, ["shared", "new"]),
+			[refused]: state(refused, "unavailable", firstTime, []),
+		});
+		expect(savedStates).toEqual(initialStates);
+		expect(retryStates).toEqual({
+			[provider]: state(provider, "unavailable", retryTime, []),
+			[refused]: state(refused, "unavailable", retryTime, []),
+		});
+		expect(recovered).toEqual({ ...retryStates, [refused]: state(refused, "empty", retryTime, []) });
+		expect(observed).toEqual({
+			keyMatched: true,
+			bearer: false,
+			oauth: false,
+			initial: [true, false, false, 2],
+			additions: { [provider]: [{ id: "new", name: "new" }] },
+			refusedProof: false,
+			whileRefreshing: false,
+			conflicted: [false, []],
+			savedOffer: true,
+			withoutResolver: false,
+			calls: 5,
+			unrelatedUntouched: true,
+			unreadable: false,
+		});
 	});
 
 	test("accepts the entry the local engine detector writes and lists it as discovery-only", async () => {

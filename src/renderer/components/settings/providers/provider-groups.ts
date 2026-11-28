@@ -4,8 +4,9 @@
  * brand-mark table (`sortProvidersByCompany`) and is needed only where a provider list is drawn.
  */
 
+import { isClaudeKeyAccount } from "../../../../../resources/gui-bridge/claude-key-models";
+import type { CustomProviderView } from "../../../../shared/ipc-types";
 import type { ProviderInfo } from "../../../../shared/rpc-types";
-import { groupProviders } from "./provider-catalog";
 import { sortProvidersByCompany } from "./provider-marks";
 
 /**
@@ -68,6 +69,7 @@ export function listsAccounts(provider: ProviderInfo): boolean {
 /** One connected provider of the Providers & accounts list. */
 export interface ProviderGroup {
 	provider: ProviderInfo;
+	apiKeys?: readonly CustomProviderView[];
 	/** The brand: the header's name. */
 	shortName: string;
 	/** Stock's own name: the tooltip and the accessible name. */
@@ -79,12 +81,31 @@ export interface ProviderGroup {
 }
 
 /** The list's groups, one per connected provider, sorted by company with a company's providers adjacent. */
-export function buildProviderGroups(providers: readonly ProviderInfo[]): ProviderGroup[] {
-	return sortProvidersByCompany(groupProviders(providers).connected).map(provider => ({
+export function buildProviderGroups(
+	providers: readonly ProviderInfo[],
+	configs: readonly CustomProviderView[] = [],
+): ProviderGroup[] {
+	const apiKeys = configs.filter(isClaudeKeyAccount);
+	const keyIds = new Set(apiKeys.map(key => key.id));
+	const connected = providers.filter(provider => provider.authenticated && !keyIds.has(provider.id));
+	if (apiKeys.length && !connected.some(provider => provider.id === "anthropic")) {
+		connected.push(
+			providers.find(provider => provider.id === "anthropic") ?? {
+				id: "anthropic",
+				name: "Claude",
+				authenticated: false,
+				loginAvailable: true,
+				disabled: false,
+				modelCount: 0,
+			},
+		);
+	}
+	return sortProvidersByCompany(connected).map(provider => ({
 		provider,
 		shortName: shortProviderName(provider),
 		fullName: provider.name,
-		plan: providerPlan(provider),
-		kind: listsAccounts(provider) ? "accounts" : "single",
+		plan: provider.authenticated ? providerPlan(provider) : null,
+		kind: listsAccounts(provider) || (provider.id === "anthropic" && apiKeys.length > 0) ? "accounts" : "single",
+		apiKeys: provider.id === "anthropic" ? apiKeys : undefined,
 	}));
 }

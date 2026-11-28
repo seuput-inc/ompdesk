@@ -531,6 +531,31 @@ export function entriesFor(tabId: string): Entry[] {
 	if (tabId !== "tab-1") return entriesFixture(tabId).slice(0, 4);
 	const params = typeof location !== "undefined" ? new URLSearchParams(location.search) : new URLSearchParams();
 	const card = params.get("card");
+	if (card === "claude-refusal") {
+		const messages = [
+			{ role: "user", content: "이번 주 작업을 정리해 줘.", timestamp: NOW - MINUTE },
+			{
+				role: "assistant",
+				provider: "anthropic-api-key",
+				content: [],
+				stopReason: "aborted",
+				errorMessage: "Claude API thinking probe returned HTTP 429; no answer was sent",
+				timestamp: NOW,
+				claudeApiRoute: {
+					provider: "anthropic-api-key",
+					skipped: [],
+					refusal: { kind: "transient", retryAfterSeconds: 12 },
+				},
+			},
+		];
+		return messages.map((message, i) => ({
+			type: "message",
+			id: `refusal-${i}`,
+			parentId: i ? "refusal-0" : null,
+			timestamp: new Date(message.timestamp).toISOString(),
+			message,
+		}));
+	}
 	if (!quietScenario && !params.has("stress") && !params.has("mail") && !BOARD_BUSY && !card)
 		return entriesFixture(tabId);
 	const all = quietScenario

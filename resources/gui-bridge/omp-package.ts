@@ -15,6 +15,7 @@ export const OMP_PACKAGE_MODULES = [
 	"pi-ai",
 	"pi-catalog/compat/auth",
 	"pi-catalog/compat/providers",
+	"pi-catalog/models",
 	"pi-catalog/provider-models",
 	"pi-coding-agent/cli/npm-registry",
 	"pi-coding-agent/config/all-settings",

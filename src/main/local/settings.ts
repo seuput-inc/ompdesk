@@ -5,7 +5,9 @@
  * session, keeping the fork's wire shapes. Provider accounts reuse stock
  * `get_logout_accounts` / `logout` and add only the per-account quota stock lacks.
  */
+
 import { z } from "zod";
+import { type ClaudeKeyAdditions, isClaudeKeyProvider } from "../../../resources/gui-bridge/claude-key-models";
 import type {
 	AccountCredits,
 	AccountUsageState,
@@ -17,6 +19,7 @@ import type {
 	UsageLimit,
 } from "../../shared/rpc-types";
 import { core } from "../core/process";
+import { extendClaudeKeyModels } from "../models-config";
 import { withDeadline } from "../preview/preview-check";
 import { loopbackCallback } from "../sign-in-callback";
 import { stockHelperRequest } from "../stock-helper";
@@ -123,14 +126,32 @@ export async function cancelBrowserLogin(authorizationUrl: string): Promise<void
 	await core().call("remotebytes.signInCancel", { url: flow.url.href, state: flow.state });
 }
 
+function catalog(method: "models_catalog" | "providers"): LocalHandler {
+	return async (command, ctx) => {
+		const retryKey = command.retryKey;
+		if (
+			retryKey !== undefined &&
+			(method !== "providers" || typeof retryKey !== "string" || !isClaudeKeyProvider(retryKey))
+		)
+			throw new LocalCommandError("Invalid Claude API key provider", "invalid_params");
+		const result = await ctx.bridge.request<{ claudeKeyAdditions?: ClaudeKeyAdditions }>(method, {
+			forceRefresh: retryKey === undefined && command.forceRefresh === true,
+			...(retryKey === undefined ? {} : { retryKey }),
+		});
+		if (!result?.claudeKeyAdditions) return result;
+		const { stamp } = result.claudeKeyAdditions;
+		const saved = await extendClaudeKeyModels(result.claudeKeyAdditions).catch(() => null);
+		return ctx.bridge.request(method, { previousKeyStamp: stamp, savedKeyStamp: saved });
+	};
+}
+
 export const handlers: Record<string, LocalHandler> = {
 	get_settings: (command, ctx) => ctx.bridge.request("settings_get", { paths: command.paths }),
 	set_setting: (command, ctx) => ctx.bridge.request("settings_set", { path: command.path, value: command.value }),
-	get_available_models: (command, ctx) =>
-		ctx.bridge.request("models_catalog", { forceRefresh: command.forceRefresh === true }),
+	get_available_models: catalog("models_catalog"),
 	// The core fetches and keeps them (`crates/core/src/models/release_dates.rs`); never an error, unknown dates are absent.
 	get_model_release_dates: async () => (await core().call<ModelReleaseDatesResult>("models.releaseDates", {})).result,
-	get_providers: (command, ctx) => ctx.bridge.request("providers", { forceRefresh: command.forceRefresh === true }),
+	get_providers: catalog("providers"),
 	login_cancel: async command => cancelBrowserLogin(z.string().url().parse(command.url)),
 	// One account goes through stock `logout`; the whole provider only when asked for explicitly.
 	logout: async (command, ctx) => {

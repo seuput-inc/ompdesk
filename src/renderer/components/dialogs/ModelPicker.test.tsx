@@ -4,6 +4,7 @@ import type { Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { codexPickerSequence, hasCodexProbe } from "../../../main/test-codex-picker";
 import type { AvailableModelsResult, ModelInfo, ModelReleaseDatesResult } from "../../../shared/rpc-types";
+import { formatClock } from "../../lib/format";
 import { I18nProvider, translate } from "../../lib/i18n";
 import { useModelStore } from "../../stores/model";
 import { useSessionStore } from "../../stores/session";
@@ -25,6 +26,7 @@ if (typeof elementPrototype.scrollIntoView !== "function") elementPrototype.scro
 const ok = (data: unknown) => ({ type: "response", command: "x", success: true, data });
 let recent: unknown = { selectors: ["openai/gpt-5", "gone/model", "anthropic/claude"] };
 const setModel = vi.fn(async (provider: string, id: string) => ok({ provider, id }));
+const command = vi.fn(async () => ok({}));
 const setModelRole = vi.fn(async () => ok({}));
 const setThinkingLevel = vi.fn(async (level: string) => ok({ thinkingLevel: level, thinkingConfigured: level }));
 const getModelReleaseDates = vi.fn(async () => ok({ dates: { old: 100, "new-a": 200, "new-b": 200 } }));
@@ -33,6 +35,7 @@ Reflect.set(window, "omp", {
 		getRecentModels: vi.fn(async () => ok(recent)),
 		getModelReleaseDates,
 		getSettings: vi.fn(async () => ok({ values: {} })),
+		command,
 		setModel,
 		setModelRole,
 		setThinkingLevel,
@@ -113,6 +116,7 @@ afterEach(async () => {
 	container?.remove();
 	recent = { selectors: ["openai/gpt-5", "gone/model", "anthropic/claude"] };
 	setModel.mockClear();
+	command.mockClear();
 	setModelRole.mockClear();
 	getModelReleaseDates.mockReset();
 	getModelReleaseDates.mockResolvedValue(ok({ dates: { old: 100, "new-a": 200, "new-b": 200 } }));
@@ -155,6 +159,47 @@ describe("ModelPicker Recent group", () => {
 });
 
 describe("ModelPicker account availability", () => {
+	it("withholds a failed key even from Recent, then restores its verified models after recovery", async () => {
+		const provider = "anthropic-api-key-2";
+		const fetchedAt = 1_800_000_000_000;
+		const state = { provider, fetchedAt, optional: false, stale: false, models: [] };
+		const other = "anthropic-api-key";
+		const failures = [provider, other].map(provider => ({ ...state, provider, status: "unavailable" as const }));
+		useModelStore.setState({ discoveryStates: failures });
+		recent = { selectors: [`${provider}/opus`, `${other}/opus`] };
+		await mount(
+			[provider, other].map(provider => ({
+				provider,
+				id: "opus",
+				name: "Opus",
+				pickerAvailability: "account-verified",
+			})),
+		);
+		expect(document.body.textContent).toContain(
+			translate("providers.keyModelQueryFailed", { time: formatClock(fetchedAt) }),
+		);
+		expect(document.querySelector('[role="option"]')).toBeNull();
+		expect(document.body.textContent).not.toContain(translate("modelPicker.connectProvider"));
+		const retry = (id: string) => document.querySelector<HTMLElement>(`[data-key-query-failed="${id}"] button`);
+		const original = useModelStore.getState().refreshProviders;
+		const refresh = vi.fn<typeof original>(async (force, key) => {
+			if (key === provider)
+				useModelStore.setState({ discoveryStates: [{ ...state, status: "ok", models: ["opus"] }, failures[1]] });
+			return original(force, key);
+		});
+		await act(async () => useModelStore.setState({ refreshProviders: refresh }));
+		expect(retry(other)).not.toBeNull();
+		await act(async () => retry(provider)?.click());
+		expect(refresh).toHaveBeenCalledWith(false, provider);
+		expect(rows(provider)).toEqual(["Opus"]);
+		expect(retry(provider)).toBeNull();
+		expect(retry(other)).not.toBeNull();
+		const recovered = document.querySelector<HTMLElement>('[data-model-group="recent"] [role="option"]');
+		expect(recovered).toBeTruthy();
+		await act(async () => recovered?.click());
+		expect(setModel).toHaveBeenCalledWith(provider, "opus");
+	});
+
 	const notice = "We haven’t confirmed which models this account can use yet.";
 	const supported = {
 		provider: "openai-codex",
@@ -260,6 +305,25 @@ describe("ModelPicker account availability", () => {
 });
 
 describe("ModelPicker pick", () => {
+	it("offers auto first only for models shared by connected keys; explicit routes stay selectable", async () => {
+		const a = "anthropic-api-key";
+		const b = `${a}-2`;
+		await mount([
+			{ provider: a, id: "shared", pickerAvailability: "account-verified" },
+			{ provider: b, id: "shared", pickerAvailability: "account-verified" },
+			{ provider: b, id: "private", pickerAvailability: "account-verified" },
+			{ provider: a, id: "private", pickerAvailability: "account-unverified" },
+		]);
+		expect(groupNames()[0]).toBe("Claude API (auto)");
+		expect(rows("claude-api-auto")).toEqual(["shared"]);
+		expect(rows(b)).toContain("private");
+		const first = document.querySelector('[role="option"]');
+		if (!(first instanceof HTMLElement)) throw new Error("Missing auto option");
+		await act(async () => first.click());
+		expect(command).toHaveBeenCalledWith({ type: "set_claude_api_auto_model", modelId: "shared" });
+		expect(setModel).not.toHaveBeenCalled();
+		expect(setModelRole).not.toHaveBeenCalled();
+	});
 	it("keeps connected routes distinct for the same model and reopens on the saved route", async () => {
 		const ids = ["anthropic", "anthropic-api-key", "anthropic-api-key-2", "openai-codex", "signed-out"];
 		const models = ids.map(provider => ({ provider, id: "same", name: "Same" }));

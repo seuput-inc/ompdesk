@@ -335,6 +335,7 @@ const RPC_COMMAND_TIMEOUTS: Record<string, number> = {
 	eval: 660_000,
 	compact: 660_000,
 	set_model: 30_000,
+	set_claude_api_auto_model: 30_000,
 	cycle_model: 30_000,
 	export_html: 120_000,
 	// Reads and anonymizes the whole transcript and every subagent's, then zips them.

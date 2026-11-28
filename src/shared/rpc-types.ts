@@ -110,6 +110,7 @@ export type RpcCommand =
 			knownTail?: string;
 	  }
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
+	| { id?: string; type: "set_claude_api_auto_model"; modelId: string }
 	| { id?: string; type: "cycle_model"; direction?: "forward" | "backward" }
 	| { id?: string; type: "get_available_models"; forceRefresh?: boolean }
 	| { id?: string; type: "get_model_release_dates" }
@@ -232,7 +233,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_settings_schema" }
 	| { id?: string; type: "get_settings"; paths?: string[] }
 	| { id?: string; type: "set_setting"; path: string; value: unknown }
-	| { id?: string; type: "get_providers"; forceRefresh?: boolean }
+	| { id?: string; type: "get_providers"; forceRefresh?: boolean; retryKey?: string }
 	// Plan mode was removed (src/main/local/modes.ts `removedModeRefusal`): an older client may still send this; only
 	// "off" is answered, since plan mode is never on.
 	| { id?: string; type: "set_plan_mode"; enabled: false }
@@ -1862,6 +1863,7 @@ export interface RpcSessionState {
 	 * starts on it; `model` stays the model that answers. Absent while `model` is the person's own.
 	 */
 	chosenModel?: ModelInfo | null;
+	claudeApiRoute?: ClaudeApiRoute;
 	thinkingLevel: ThinkingLevel | undefined;
 	/** Configured selector: "auto" while auto mode is active, else the effective level. */
 	thinkingConfigured?: ThinkingLevel | "auto";
@@ -2401,7 +2403,22 @@ export interface TodoTask {
 // Messages (simplified wire format)
 // ============================================================================
 
+export interface ClaudeApiRoute {
+	provider: string;
+	skipped: { provider: string; reason: "disabled" | "unavailable" | "unverified" | "not-offered" | "not-selected" }[];
+	/** Account response to this turn, never a property of the session's selected key. */
+	refusal?:
+		| "rateLimit"
+		| "spendLimit"
+		| "billing"
+		| "lowCredit"
+		| { kind: "transient"; retryAfterSeconds: number }
+		| { kind: "monthly"; resumesAt?: number }
+		| { kind: "console" };
+}
+
 export interface AgentMessage {
+	claudeApiRoute?: ClaudeApiRoute;
 	/** Persisted OMP session-tree node id, present on user/assistant transcript messages. */
 	entryId?: string;
 	/** GUI-only local echo awaiting ownership by the persisted transcript. */

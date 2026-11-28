@@ -7,6 +7,7 @@ import type { RpcResponse } from "../../shared/rpc-types";
 import { handlers as agentControl } from "./agent-control";
 import { handlers as agentFiles } from "./agent-files";
 import { handlers as autopilot } from "./autopilot";
+import { handlers as claudeApiRoute } from "./claude-api-route";
 import { handlers as composer } from "./composer";
 import { handlers as desktopSlot } from "./desktop-slot";
 import { handlers as extensions } from "./extensions";
@@ -44,6 +45,7 @@ const LOCAL_HANDLERS = mergeHandlers({
 	autopilot,
 	desktopSlot,
 	composer,
+	claudeApiRoute,
 	modes,
 	nextPrompt,
 	promptOrigin,

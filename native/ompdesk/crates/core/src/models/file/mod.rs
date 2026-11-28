@@ -3,6 +3,7 @@
 //!
 //! - `models.list {dir, host}` → the providers' views, keys masked.
 //! - `models.upsert {dir, host, input, onlyIfAbsent?}` → whether it wrote (false: `onlyIfAbsent` found the id).
+//! - `models.extend {dir, host, stamp, additions}` appends discovered models to existing routes at that file stamp.
 //! - `models.delete {dir, host, id}`, `models.override {dir, host, provider, model, input|null}`.
 //! - `models.text {dir}` → `{path, text, exists, stamp}`; `models.saveText {dir, host, text, stamp}` → the new stamp.
 //! - `models.path {dir, create?}` → `{path}`, the skeleton written first when `create` finds no file.
@@ -43,6 +44,13 @@ const STOCK_TIMEOUT: Duration = Duration::from_secs(30);
 /// One edit at a time, its read and its write in one turn (an entry added meanwhile is never overwritten).
 static EDITS: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
+fn claude_key_id(id: &str) -> bool {
+    id == "anthropic-api-key"
+        || id
+            .strip_prefix("anthropic-api-key-")
+            .is_some_and(|suffix| !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit()))
+}
+
 pub fn register(registry: &mut Registry) {
     registry.add("models.list", |call| {
         Box::pin(async move { Reply::json(&list(&lane(&call)?, &dir(&call)?).await?) })
@@ -66,6 +74,41 @@ pub fn register(registry: &mut Registry) {
                 )
                 .await?,
             )
+        })
+    });
+    registry.add("models.extend", |call| {
+        Box::pin(async move {
+            #[derive(Deserialize)]
+            struct Params {
+                stamp: String,
+                additions: std::collections::BTreeMap<String, Vec<Value>>,
+            }
+            let params: Params = call.params()?;
+            let _edit = EDITS.lock().await;
+            let stock = lane(&call)?;
+            let loaded = load(&stock, &dir(&call)?).await?;
+            if stamp(loaded.bytes.as_deref()) != params.stamp {
+                return Err(Fault::new(
+                    "changed_on_disk",
+                    "Model providers changed during discovery",
+                ));
+            }
+            let mut intended = loaded.raw.clone();
+            for (id, extra) in params.additions {
+                if !claude_key_id(&id) {
+                    return Err(Fault::new("models_config", "Not a dedicated Claude key"));
+                }
+                let models = intended
+                    .get_mut("providers")
+                    .and_then(|providers| providers.get_mut(&id))
+                    .and_then(|provider| provider.get_mut("models"))
+                    .and_then(Value::as_array_mut)
+                    .ok_or_else(|| {
+                        Fault::new("models_config", "No configured model list to extend")
+                    })?;
+                models.extend(extra);
+            }
+            Reply::json(&stamp(Some(&save(&stock, &loaded, Some(&intended)).await?)))
         })
     });
     registry.add("models.delete", |call| {

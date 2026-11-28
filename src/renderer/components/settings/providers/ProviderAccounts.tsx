@@ -16,17 +16,21 @@
  * (`CreditsFigure`). Names in toasts and dialogs are the brand (`group.shortName`), as in the list.
  */
 
-import { Copy, RefreshCw, Trash2, Users } from "lucide-react";
+import { Copy, Pencil, RefreshCw, Trash2, Users } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { CustomProviderView } from "../../../../shared/ipc-types";
 import type { ProviderAccount, ProviderAccountsResult, UsageLimit } from "../../../../shared/rpc-types";
 import { type InlineFailure, inlineFailure } from "../../../lib/error-detail";
 import { copyText } from "../../../lib/format";
 import { useT } from "../../../lib/i18n";
 import { useNowTick } from "../../../lib/now-tick";
+import { openExternal } from "../../../lib/open-external";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { gaugeColumns } from "../../../lib/usage-windows";
+import { useModelStore } from "../../../stores/model";
 import { toast, toastError } from "../../../stores/toast";
 import { Button, ConfirmDialog, type ContextMenuItem, InlineNotice, MAX_USAGE_COLUMNS } from "../../common";
+import { KeyQueryFailure } from "../../common/KeyQueryFailure";
 import { useSettingsNavigate } from "../settings-navigation";
 import { AccountBadges, accountNames, CreditsFigure, QuotaCell, quotaLimits } from "./AccountQuota";
 import { ConnectedRow, ProviderGroupItem } from "./ConnectedRow";
@@ -127,6 +131,18 @@ export function useProviderAccounts(
 	return { result, error, loading, load };
 }
 
+export function ClaudeApiBilling() {
+	const t = useT();
+	return (
+		<div className="flex flex-wrap items-center gap-x-2 text-sc-sm text-(--sc-text-muted)">
+			{t("providers.apiBalanceUnknown")}
+			<Button onClick={() => openExternal("https://platform.claude.com/settings/billing")} size="sm" variant="ghost">
+				{t("providers.consoleBilling")}
+			</Button>
+		</div>
+	);
+}
+
 /**
  * One subscription provider as a group: the header (brand, count, "Add account", provider actions) and an
  * account row each under it, or the header alone naming the problem while the accounts are being read, could
@@ -136,6 +152,9 @@ export function ProviderAccountRows({
 	group,
 	state,
 	layout,
+	keyName,
+	onEdit,
+	onDelete,
 	sidecarReady,
 	adding,
 	onAdd,
@@ -145,6 +164,9 @@ export function ProviderAccountRows({
 	group: ProviderGroup;
 	state: ProviderAccountsState;
 	layout: AccountRowLayout;
+	keyName: (id: string) => string;
+	onEdit: (config: CustomProviderView) => void;
+	onDelete: (config: CustomProviderView) => void;
 	sidecarReady: boolean;
 	/** A sign-in for this provider is in flight. */
 	adding: boolean;
@@ -156,12 +178,13 @@ export function ProviderAccountRows({
 }) {
 	const t = useT();
 	const tabRpc = useTabRpc();
+	const discovery = useModelStore(store => store.discoveryStates);
 	const navigate = useSettingsNavigate();
-	const { provider, shortName, fullName } = group;
+	const { provider, shortName, fullName, apiKeys = [] } = group;
 	const { result, error, loading, load } = state;
 	const [pendingRemove, setPendingRemove] = useState<ProviderAccount | null>(null);
 	const [removing, setRemoving] = useState<number | null>(null);
-	const accounts = result?.accounts ?? [];
+	const accounts = provider.authenticated ? (result?.accounts ?? []) : [];
 	const names = accountNames(accounts.map(account => account.label));
 	const now = useNowTick(accounts.length > 0);
 
@@ -213,13 +236,13 @@ export function ProviderAccountRows({
 	];
 	const header = {
 		group,
-		count: accounts.length,
-		menu: providerMenu,
+		count: accounts.length + apiKeys.length,
+		menu: provider.authenticated ? providerMenu : undefined,
 		onAdd,
 		addDisabled: !sidecarReady || adding,
 	};
 
-	if (accounts.length === 0) {
+	if (accounts.length === 0 && apiKeys.length === 0) {
 		return (
 			<ProviderGroupItem {...header} busy={loading && result === null} detail={error ? error.message : undefined} />
 		);
@@ -232,7 +255,7 @@ export function ProviderAccountRows({
 					busy={pendingRemove !== null && removing === pendingRemove.credentialId}
 					confirmLabel={t("providers.accounts.removeConfirm")}
 					message={
-						accounts.length > 1
+						accounts.length + apiKeys.length > 1
 							? t("providers.accounts.removeBody", { account: pendingRemove?.label ?? "", provider: shortName })
 							: t("providers.accounts.removeLastBody", {
 									account: pendingRemove?.label ?? "",
@@ -316,12 +339,53 @@ export function ProviderAccountRows({
 					rowProps={{ "data-provider-account": account.credentialId }}
 				/>
 			))}
-			{result?.usageError && (
+			{apiKeys.map(config => {
+				const name = keyName(config.id);
+				const failure = discovery.find(s => s.provider === config.id && s.status === "unavailable");
+				return (
+					<ConnectedRow
+						key={config.id}
+						account={name}
+						detail={
+							failure && (
+								<KeyQueryFailure
+									account={name}
+									disabled={!sidecarReady}
+									fetchedAt={failure.fetchedAt}
+									provider={config.id}
+								/>
+							)
+						}
+						rowProps={{ "data-provider-account": config.id, "data-custom-provider": config.id }}
+						menu={[
+							{
+								id: "edit",
+								icon: Pencil,
+								label: t("providers.editFor", { provider: name }),
+								onSelect: () => onEdit(config),
+							},
+							{
+								id: "delete",
+								icon: Trash2,
+								danger: true,
+								label: t("providerCfg.list.deleteFor", { provider: name }),
+								onSelect: () => onDelete(config),
+							},
+						]}
+					/>
+				);
+			})}
+			{apiKeys.length > 0 && (
+				<li className="pl-[calc(0.625rem+1.25rem+0.625rem)]">
+					<ClaudeApiBilling />
+				</li>
+			)}
+			{provider.authenticated && result?.usageError && (
 				<li>
 					<InlineNotice title={t("providers.accounts.quotaUnavailable")} tone="info" />
 				</li>
 			)}
-			{error && (
+			{provider.authenticated && error && (
 				<li>
 					<InlineNotice
 						action={

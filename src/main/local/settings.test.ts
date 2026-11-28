@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { extendClaudeKeyModels } from "../models-config";
 import { stockHelperRequest as stockHelperRequestImport } from "../stock-helper";
 import {
 	ACCOUNT_QUOTA_WAIT_MS,
@@ -11,6 +12,7 @@ import {
 } from "./settings";
 import type { LocalCommandContext } from "./types";
 
+vi.mock("../models-config", () => ({ extendClaudeKeyModels: vi.fn() }));
 vi.mock("../stock-helper", () => ({ stockHelperRequest: vi.fn() }));
 const stockHelperRequest = vi.mocked(stockHelperRequestImport);
 beforeEach(() => stockHelperRequest.mockReset());
@@ -63,6 +65,31 @@ describe("get_available_models handler", () => {
 		);
 		expect(result).toEqual(catalog);
 		expect(request).toHaveBeenCalledWith("models_catalog", { forceRefresh: true });
+	});
+
+	it("refuses to check another provider through the Claude key retry action", async () => {
+		const request = vi.fn();
+		await expect(
+			handlers.get_providers({ type: "get_providers", retryKey: "openai" }, fakeCtx(vi.fn(), request)),
+		).rejects.toMatchObject({ code: "invalid_params" });
+		expect(request).not.toHaveBeenCalled();
+	});
+
+	it("returns the reloaded catalog, not the host's config edit instruction", async () => {
+		const additions = { stamp: "before", models: { "anthropic-api-key": [{ id: "new", name: "New" }] } };
+		vi.mocked(extendClaudeKeyModels).mockResolvedValueOnce("after");
+		const catalog = { models: [{ id: "new", pickerAvailability: "account-verified" }] };
+		const request = vi
+			.fn()
+			.mockResolvedValueOnce({ models: [], claudeKeyAdditions: additions })
+			.mockResolvedValueOnce(catalog);
+		const result = await handlers.get_available_models({ type: "get_available_models" }, fakeCtx(vi.fn(), request));
+		expect(extendClaudeKeyModels).toHaveBeenCalledWith(additions);
+		expect(request).toHaveBeenLastCalledWith("models_catalog", {
+			previousKeyStamp: "before",
+			savedKeyStamp: "after",
+		});
+		expect(result).toEqual(catalog);
 	});
 
 	it("returns the stock catalog without starting or awaiting optional release metadata", async () => {

@@ -1,6 +1,7 @@
 import { createStore } from "zustand/vanilla";
 import type {
 	AvailableModelsResult,
+	ClaudeApiRoute,
 	ModelCatalogUpdateFrame,
 	ModelInfo,
 	ProviderDiscoveryState,
@@ -15,6 +16,7 @@ import { toastError } from "./toast";
 
 export interface ModelStore {
 	model: ModelInfo | null;
+	claudeApiRoute: ClaudeApiRoute | null;
 	/**
 	 * The person's model while stock runs the session on a stand-in (a retry fallback; `get_state.chosenModel`): what
 	 * the composer shows as chosen and every restart starts on. Null while `model`, the one answering, is their own.
@@ -56,7 +58,7 @@ export interface ModelStore {
 	 * the returned generation. `forceRefresh` must be true after any mutation
 	 * (credential, models.yml, discovery): a non-forced read is satisfied by a
 	 * still-fresh cache row and reports the old catalog. */
-	refreshProviders: (forceRefresh?: boolean) => Promise<ProvidersResult>;
+	refreshProviders: (forceRefresh?: boolean, retryKey?: string) => Promise<ProvidersResult>;
 	applyCatalogUpdate: (update: ModelCatalogUpdateFrame) => void;
 	/** Toggle fast mode via RPC and apply the returned {enabled, active} (fixes
 	 * call sites that fired setFastMode and ignored the response, desyncing the store). */
@@ -71,6 +73,7 @@ export interface ModelStore {
 /** What the composer's model chip, thinking control and fast-mode switch read. */
 const SELECTION_KEYS = [
 	"model",
+	"claudeApiRoute",
 	"chosenModel",
 	"thinkingLevel",
 	"thinkingConfigured",
@@ -90,6 +93,7 @@ export type ModelSelection = Pick<ModelStore, (typeof SELECTION_KEYS)[number]>;
 export function snapshotModelSelection(state: RpcSessionState): ModelSelection {
 	return {
 		model: state.model ?? null,
+		claudeApiRoute: state.claudeApiRoute ?? null,
 		chosenModel: state.chosenModel ?? null,
 		thinkingLevel: state.thinkingLevel,
 		thinkingConfigured: state.thinkingConfigured,
@@ -126,6 +130,7 @@ interface CatalogSnapshot {
 
 const initialState = {
 	model: null as ModelInfo | null,
+	claudeApiRoute: null as ClaudeApiRoute | null,
 	chosenModel: null as ModelInfo | null,
 	thinkingLevel: undefined as ThinkingLevel | undefined,
 	thinkingConfigured: undefined as ThinkingLevel | "auto" | undefined,
@@ -167,8 +172,9 @@ export const createModelStore = (command: TabCommand = activeTabCommand) =>
 		const readCatalog = async (
 			type: "get_available_models" | "get_providers",
 			forceRefresh: boolean,
+			retryKey?: string,
 		): Promise<CatalogSnapshot> => {
-			const response = await command({ type, forceRefresh });
+			const response = await command({ type, forceRefresh, ...(retryKey && { retryKey }) });
 			if (!response.success) throw new Error(response.error);
 			const data = response.data as Partial<ProvidersResult> | undefined;
 			return {
@@ -204,8 +210,8 @@ export const createModelStore = (command: TabCommand = activeTabCommand) =>
 					generation: snapshot.generation,
 				} satisfies AvailableModelsResult;
 			},
-			refreshProviders: async (forceRefresh = false) => {
-				const snapshot = await readCatalog("get_providers", forceRefresh);
+			refreshProviders: async (forceRefresh = false, retryKey) => {
+				const snapshot = await readCatalog("get_providers", forceRefresh, retryKey);
 				applyCatalog(snapshot);
 				return {
 					providers: snapshot.providers ?? [],

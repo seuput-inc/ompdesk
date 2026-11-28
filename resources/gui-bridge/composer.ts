@@ -13,6 +13,7 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import type { RestoreOptions } from "@oh-my-pi/pi-coding-agent/task/restore";
 import type { AgentMessage } from "../../src/shared/rpc-types";
 import { requireFn } from "./capabilities";
+import { activePins, claudeReplayBlocked, receipt } from "./claude-api-route-core";
 import { buildCopyTargets, type MarkdownToken } from "./copy-targets";
 import { guard } from "./health";
 import { jobRows } from "./jobs-core";
@@ -276,9 +277,11 @@ export const methods: BridgeMethods = {
 				import("./omp/pi-ai"),
 			]);
 			const model = session.model;
+			const pin = activePins.get(session);
 			return {
 				cwd: session.sessionManager.getCwd(),
 				autoRetryEnabled: session.autoRetryEnabled,
+				...(pin && { claudeApiRoute: receipt(pin) }),
 				thinkingConfigured: session.configuredThinkingLevel(),
 				prewalkArmed: session.getPrewalkState?.() !== undefined,
 				agentsPaused: agentPauseGate?.paused === true,
@@ -499,6 +502,7 @@ export const methods: BridgeMethods = {
 			const diagnostics = await import("./omp/pi-coding-agent/session/exit-diagnostics");
 			requireFn(diagnostics, "createInterruptedTurnAbortMessage", "relaunchResume", "session/exit-diagnostics");
 			const entries = session.sessionManager.getBranch();
+			if (claudeReplayBlocked(entries)) return { turn: false, subagents: [], replayBlocked: true };
 			const branch = entries as readonly JournalEntry[];
 			// This process's start: the entries before it are the lives of the processes the relaunch replaced.
 			const startedAt = performance.timeOrigin;

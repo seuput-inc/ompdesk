@@ -307,15 +307,78 @@ describe("ProvidersSection", () => {
 		expect(document.querySelector("[data-local-engine-detect]")).toBeNull();
 	});
 
+	it("keeps each failed lookup and its retry inside the matching key row", async () => {
+		const ids = ["anthropic-api-key", "anthropic-api-key-2"];
+		const fetchedAt = 1_800_000_000_000;
+		const states = ids.map(provider => ({
+			provider,
+			optional: false,
+			stale: false,
+			fetchedAt,
+			models: [],
+			status: "unavailable" as const,
+			error: "raw failure",
+		}));
+		const providers = ids.map((id, i) => row(id, { name: ["Studio", "Research"][i] }));
+		useSessionStore.setState({ status: "ready" });
+		listProviders.mockResolvedValue({
+			providers: ids.map(id =>
+				config(id, { api: "anthropic-messages", auth: "apiKey", baseUrl: "https://api.anthropic.com" }),
+			),
+			options: fixtureProviderOptions,
+		});
+		getProviders.mockResolvedValue(providersResponse(snapshot(providers, { discoveryStates: states })));
+		await mount(<ProvidersSection />);
+		const retry = (id: string) =>
+			document.querySelector<HTMLButtonElement>(
+				`[data-provider-account="${id}"] [data-key-query-failed="${id}"] button`,
+			);
+		for (const provider of providers) {
+			expect(retry(provider.id)?.getAttribute("aria-label")).toBe(
+				translate("providers.retryKeyModels", { account: provider.name }),
+			);
+		}
+		expect(text()).toContain(translate("providers.keyModelQueryFailed", { time: formatClock(fetchedAt) }));
+		expect(text()).not.toContain("raw failure");
+		getProviders.mockResolvedValue(
+			providersResponse(
+				snapshot(providers, { generation: 2, discoveryStates: [states[0], { ...states[1], status: "empty" }] }),
+			),
+		);
+		await act(async () => retry(ids[1])?.click());
+		expect(getProviders).toHaveBeenLastCalledWith(false, ids[1]);
+		expect(retry(ids[1])).toBeNull();
+		expect(retry(ids[0])).not.toBeNull();
+	});
+
 	it("shows the organization balance as unknown for an API key and opens Console Billing only on click", async () => {
 		const id = "anthropic-api-key";
 		useSessionStore.setState({ status: "ready" });
 		listProviders.mockResolvedValue({
-			providers: [config(id, { api: "anthropic-messages", baseUrl: "https://api.anthropic.com" })],
+			providers: [id, `${id}-2`].map(key =>
+				config(key, { api: "anthropic-messages", auth: "apiKey", baseUrl: "https://api.anthropic.com" }),
+			),
 			options: fixtureProviderOptions,
 		});
-		getProviders.mockResolvedValue(providersResponse(snapshot([row(id)])));
+		getProviders.mockResolvedValue(
+			providersResponse(
+				snapshot([
+					row("anthropic", { authenticated: false, loginAvailable: true }),
+					row(id),
+					row(`${id}-2`, { name: "Research" }),
+				]),
+			),
+		);
 		await mount(<ProvidersSection />);
+		const groups = document.querySelectorAll("[data-provider-list] > li");
+		expect(Array.from(groups, group => group.getAttribute("data-provider-row"))).toEqual(["anthropic"]);
+		expect(
+			Array.from(
+				groups[0].querySelectorAll("[data-provider-account] [data-account-label]"),
+				item => item.textContent,
+			),
+		).toEqual([translate("modelPicker.apiKeyNumber", { number: "1" }), "Research"]);
+		expect(groups[0].querySelector('[data-provider-add="anthropic"]')).not.toBeNull();
 		expect(text()).toContain(translate("providers.apiBalanceUnknown"));
 		expect(openExternal).not.toHaveBeenCalled();
 		await act(async () => button(translate("providers.consoleBilling"))?.click());
@@ -1270,6 +1333,29 @@ describe("ProviderAccounts", () => {
 		await mount(<ProvidersSection />);
 	}
 
+	it("keeps subscriptions and a configured API key under the same Claude heading", async () => {
+		listProviders.mockResolvedValue({
+			providers: [
+				config("anthropic-api-key", {
+					api: "anthropic-messages",
+					auth: "apiKey",
+					baseUrl: "https://api.anthropic.com",
+				}),
+			],
+			options: fixtureProviderOptions,
+		});
+		await mountWithAccounts();
+		const group = document.querySelector('[data-provider-row="anthropic"]');
+		expect(
+			Array.from(group?.querySelectorAll("[data-provider-account]") ?? [], item =>
+				item.getAttribute("data-provider-account"),
+			),
+		).toEqual(["7", "9", "anthropic-api-key"]);
+		expect(group?.querySelector("[data-account-count]")?.textContent).toContain(
+			translate("providers.accounts.count", { count: 3 }),
+		);
+	});
+
 	it("groups a provider's accounts under one header, open, without a toggle", async () => {
 		await mountWithAccounts();
 		expect(document.querySelector("[data-provider-list] [aria-controls]")).toBeNull();
@@ -1465,42 +1551,33 @@ describe("ProviderAccounts", () => {
 		expect(login).toHaveBeenCalledExactlyOnceWith("anthropic");
 	});
 
-	it.each(["model-from-old-catalog", "replacement-from-new-catalog"])(
-		"connects using the runtime catalog: %s",
-		async model => {
-			listProviders.mockResolvedValue({
-				providers: [],
-				options: { ...fixtureProviderOptions, anthropicModels: [{ id: model }] },
-			});
-			await mountWithAccounts();
-			await act(async () => button(translate("providers.accounts.addTo", { provider: "Anthropic" }))?.click());
-			await act(async () => button(translate("providers.featured.apiKey"))?.click());
-			await typeInto(document.querySelector('input[type="password"]'), "dummy-component-test-key");
-			expect(upsertProvider).not.toHaveBeenCalled();
-			const save = document.querySelector<HTMLButtonElement>('[data-claude-key] button[type="submit"]');
-			expect(save?.disabled).toBe(false);
-			await act(async () => {
-				if (save?.type === "submit") {
-					save.closest("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-				} else {
-					save?.click();
-				}
-			});
-			expect(upsertProvider).toHaveBeenCalledTimes(1);
-			expect(upsertProvider.mock.calls[0]?.[0]).toMatchObject({
-				id: "anthropic-api-key",
-				baseUrl: "https://api.anthropic.com",
-				api: "anthropic-messages",
-				apiKey: "dummy-component-test-key",
-				models: [{ id: model }],
-			});
-			expect(login).not.toHaveBeenCalled();
-			expect(openExternal).not.toHaveBeenCalled();
-		},
-	);
+	it("requests a verified key connection without copying the catalog or changing the subscription", async () => {
+		await mountWithAccounts();
+		await act(async () => button(translate("providers.accounts.addTo", { provider: "Anthropic" }))?.click());
+		await act(async () => button(translate("providers.featured.apiKey"))?.click());
+		await typeInto(document.querySelector('input[type="password"]'), "dummy-component-test-key");
+		expect(upsertProvider).not.toHaveBeenCalled();
+		await act(async () =>
+			document
+				.querySelector("[data-claude-key]")
+				?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+		);
+		expect(upsertProvider).toHaveBeenCalledTimes(1);
+		expect(upsertProvider.mock.calls[0]?.[0]).toEqual({
+			id: "anthropic-api-key",
+			baseUrl: "https://api.anthropic.com",
+			api: "anthropic-messages",
+			auth: "apiKey",
+			onlyIfAbsent: true,
+			apiKey: "dummy-component-test-key",
+			models: [],
+		});
+		expect(login).not.toHaveBeenCalled();
+		expect(openExternal).not.toHaveBeenCalled();
+	});
 
-	it("keeps the key unsaved when the installed catalog cannot supply Anthropic models", async () => {
-		listProviders.mockResolvedValue({ providers: [], options: { ...fixtureProviderOptions, anthropicModels: [] } });
+	it("keeps the connection form open without showing a key or raw failure when discovery fails", async () => {
+		upsertProvider.mockRejectedValueOnce(new Error("[source_unavailable] raw-probe-error"));
 		await mountWithAccounts();
 		await act(async () => button(translate("providers.accounts.addTo", { provider: "Anthropic" }))?.click());
 		await act(async () => button(translate("providers.featured.apiKey"))?.click());
@@ -1511,7 +1588,9 @@ describe("ProviderAccounts", () => {
 				?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
 		);
 		expect(text()).toContain(translate("providers.claude.noCatalog"));
-		expect(upsertProvider).not.toHaveBeenCalled();
+		expect(text()).not.toContain("raw-probe-error");
+		expect(text()).not.toContain("dummy");
+		expect(document.querySelector("[data-claude-key]")).not.toBeNull();
 	});
 
 	it("says how old each account's quota is and when each window resets", async () => {

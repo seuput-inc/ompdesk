@@ -156,6 +156,7 @@ export const FEATURES = {
 	answerFirst: "A person's message that joins a running turn is answered in text before the next tool call",
 	recentModels: "Recent models in the model picker",
 	modelChoice: "The person's model on the composer while a fallback model runs the session",
+	claudeApiRoute: "Verified Claude API key selection for a session",
 	inputHistory: "Shared prompt history",
 	accountPools: "Agent account pools",
 	worktreeLocation: "Where a repository's worktrees are kept",
@@ -2113,6 +2114,30 @@ export const REQUIREMENTS: Readonly<Record<FeatureId, FeatureRequirement>> = {
 		modules: {
 			[`${AGENT}/modes/model-browser-source`]: ["createModelBrowserSource()"],
 			[`${AGENT}/session/agent-storage`]: ["AgentStorage.prototype.getModelUsageOrder()"],
+		},
+	},
+	/** The offer check and selection commit are the two halves of one verified key pick. */
+	claudeApiRoute: {
+		session: [
+			"agent.streamFn()",
+			"setModel()",
+			"settings.hasRuntimeOverride()",
+			"modelRegistry.getApiKey()",
+			"modelRegistry.find()",
+			"modelRegistry.getProviderModels()",
+			"modelRegistry.awaitBackgroundRefresh()",
+			"sessionManager.getBranch()",
+			"sessionManager.getBranchView()",
+			"sessionManager.ensureOnDisk()",
+			"sessionManager.flush()",
+			"retry()",
+			"sessionManager.getLeafId()",
+			"sessionManager.appendCustomEntry()",
+			"sessionManager.appendModelChange()",
+		],
+		modules: {
+			[`${AGENT}/config/registry`]: ["lookup()"],
+			"@oh-my-pi/pi-ai": ["createAssistantMessageEventStream()"],
 		},
 	},
 	/** model-choice.ts: the session's own model while a retry fallback (or another temporary switch) runs it. */

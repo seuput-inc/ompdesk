@@ -1,12 +1,15 @@
 import { Ban, RotateCcw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { quotaResetAt } from "../../../shared/quota-reset";
+import type { ClaudeApiRoute } from "../../../shared/rpc-types";
 import { hydrateSession, hydrateTabSession } from "../../hooks/use-rpc-events";
 import { useUsageReports } from "../../hooks/use-usage-reports";
 import { formatClock, formatSpan } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { describeTurnError, retryLastTurn, runManualMaintenance, type TurnErrorAction } from "../../lib/messages";
+import { claudeApiKeyLabel } from "../../lib/model-provider-group";
 import { useNowTick } from "../../lib/now-tick";
+import { openExternal } from "../../lib/open-external";
 import { useTabRpc } from "../../lib/tab-rpc";
 import { useMessagesStore } from "../../stores/messages";
 import { useModelStore } from "../../stores/model";
@@ -15,7 +18,7 @@ import { sessionRuntime, useRuntimeTabId } from "../../stores/session-runtime-co
 import { useAwaitingConnection, useScheduledRetry } from "../../stores/tabs";
 import { toast, toastError } from "../../stores/toast";
 import { useUiStore } from "../../stores/ui";
-import { Banner, Button, Collapse, DisclosureButton } from "../common";
+import { Banner, Button, Collapse, DisclosureButton, LinkButton } from "../common";
 
 const ACTION_LABEL_KEYS: Record<TurnErrorAction, string> = {
 	retry: "turnError.action.retry",
@@ -38,10 +41,12 @@ const ACTION_LABEL_KEYS: Record<TurnErrorAction, string> = {
 export function TurnErrorNotice({
 	errorMessage,
 	stopReason,
+	claudeRoute,
 	timestamp,
 }: {
 	errorMessage?: string;
 	stopReason?: string;
+	claudeRoute?: ClaudeApiRoute;
 	/** The failed message's timestamp: the reset time shows only on the session's latest turn. */
 	timestamp?: string | number;
 }) {
@@ -53,6 +58,18 @@ export function TurnErrorNotice({
 	const [pending, setPending] = useState<TurnErrorAction | null>(null);
 	const [detailOpen, setDetailOpen] = useState(false);
 	const description = describeTurnError(errorMessage, stopReason);
+	const keyName = useModelStore(state => state.providers.find(p => p.id === claudeRoute?.provider)?.name);
+	const refusal = claudeRoute?.refusal;
+	const classified = typeof refusal === "object" ? refusal : undefined;
+	const refusalAction = classified?.kind === "transient" ? "chat.claudeApi.chooseModel" : "chat.claudeApi.choose";
+	const title = refusal
+		? t(`chat.claudeApi.refusal.${classified?.kind ?? refusal}`, {
+				key:
+					keyName?.trim() && keyName !== claudeRoute.provider
+						? t("chat.claudeApi.namedKey", { key: keyName.trim() })
+						: claudeApiKeyLabel(claudeRoute.provider, undefined, t),
+			})
+		: t(description.titleKey);
 	// A run's messages stay live (uncommitted) until its terminal end, and stock's retry saga is one run:
 	// its failed attempts are live messages, so both checks read the live tail before the committed one.
 	const latest = useMessagesStore(
@@ -73,7 +90,7 @@ export function TurnErrorNotice({
 		return false;
 	});
 	// A plan limit the Credit use switch refused to pass is a provider's limit as well: same reset line, same wait.
-	const quota = (description.kind === "rateLimit" || description.kind === "creditsOff") && latest;
+	const quota = !refusal && (description.kind === "rateLimit" || description.kind === "creditsOff") && latest;
 	const provider = useModelStore(state => state.model?.provider);
 	// main's retry of this failed turn (turn-resume.ts): shown on the card of the latest failure only.
 	const scheduled = useScheduledRetry();
@@ -88,7 +105,7 @@ export function TurnErrorNotice({
 	);
 	const now = useNowTick((quota && resetAt !== undefined) || retryArmed);
 
-	if (description.kind === "aborted") {
+	if (!refusal && description.kind === "aborted") {
 		return (
 			<p className="omp-turn-stopped mt-2 flex items-center gap-1.5 text-sc-sm text-(--sc-text-muted)">
 				<Ban aria-hidden className="size-(--sc-icon-sm) shrink-0" />
@@ -110,7 +127,7 @@ export function TurnErrorNotice({
 				data-turn-retried
 			>
 				<RotateCcw aria-hidden className="size-(--sc-icon-sm) shrink-0" />
-				{t("turnError.retried", { title: t(description.titleKey) })}
+				{t("turnError.retried", { title })}
 			</p>
 		);
 	}
@@ -153,7 +170,11 @@ export function TurnErrorNotice({
 
 	const showReset = quota && !retryArmed && resetAt !== undefined && resetAt > now;
 	// "Retry now" stands in for "Try again" while main waits to retry on its own.
-	const actions = retryArmed ? description.actions.filter(action => action !== "retry") : description.actions;
+	const actions: readonly TurnErrorAction[] = refusal
+		? ["changeModel"]
+		: retryArmed
+			? description.actions.filter(action => action !== "retry")
+			: description.actions;
 	const retrySeconds = scheduled ? Math.max(0, Math.ceil((scheduled.at - now) / 1000)) : 0;
 	return (
 		<Banner
@@ -198,15 +219,30 @@ export function TurnErrorNotice({
 						size="sm"
 						variant={index === 0 && !retryArmed ? "secondary" : "ghost"}
 					>
-						{t(ACTION_LABEL_KEYS[action])}
+						{t(refusal ? refusalAction : ACTION_LABEL_KEYS[action])}
 					</Button>
 				)),
 			]}
 			className="omp-message-error mt-3 flex-wrap"
-			title={t(description.titleKey)}
+			data-claude-refusal={refusal ? true : undefined}
+			title={title}
 			variant="danger"
 		>
-			<p>{t(description.guidanceKey)}</p>
+			<p>
+				{classified?.kind === "transient" &&
+					`${t("chat.claudeApi.retryAfter", { seconds: classified.retryAfterSeconds })} `}
+				{classified
+					? t("chat.claudeApi.sharedLimit")
+					: t(refusal ? "chat.claudeApi.sharedBalance" : description.guidanceKey)}
+			</p>
+			{classified?.kind === "monthly" && classified.resumesAt !== undefined && (
+				<p>{t("chat.claudeApi.resumesAt", { time: formatClock(classified.resumesAt) })}</p>
+			)}
+			{classified?.kind === "console" && (
+				<LinkButton onClick={() => openExternal("https://platform.claude.com/settings/spend-limits")}>
+					{t("chat.claudeApi.consoleLimits")}
+				</LinkButton>
+			)}
 			{retryArmed && scheduled?.limit ? (
 				<p className="omp-scheduled-retry tabular-nums" data-limit-wait data-scheduled-retry>
 					{t("turnError.limitWait", {

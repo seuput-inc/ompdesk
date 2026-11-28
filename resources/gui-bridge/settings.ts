@@ -14,6 +14,7 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import type { AccountCredits } from "../../src/shared/rpc-types";
 import { accountCredits, creditKind, creditLimitId, creditsInRaw, rawCredits } from "./account-credits";
 import { matchReportAccount, type StoredAccount } from "./accounts-core";
+import { discoverClaudeKeys, keyAdditionsSaved, keyDiscoveryStates, keyOffer } from "./claude-key-catalog";
 import { pickerAccounts, refreshForeignCatalog, wireModel } from "./codex-picker";
 import { creditSpendEnabled } from "./credit-spend-core";
 import { guard, probe } from "./health";
@@ -303,9 +304,11 @@ function discoveryStates(session: AgentSession) {
 		getDiscoverableProviders?(): string[];
 		getProviderDiscoveryState?(provider: string): Rec | undefined;
 	};
-	if (typeof registry.getDiscoverableProviders !== "function") return [];
+	const keys = keyDiscoveryStates(session);
+	if (typeof registry.getDiscoverableProviders !== "function") return keys;
 	const states: Rec[] = [];
 	for (const provider of registry.getDiscoverableProviders()) {
+		if (keys.some(state => state.provider === provider)) continue;
 		const state = registry.getProviderDiscoveryState?.(provider);
 		if (!state) continue;
 		states.push({
@@ -318,7 +321,7 @@ function discoveryStates(session: AgentSession) {
 			...(typeof state.error === "string" ? { error: state.error } : {}),
 		});
 	}
-	return states;
+	return keys.length ? [...states, ...keys] : states;
 }
 
 async function catalogSnapshot(session: AgentSession, refreshPending: boolean) {
@@ -326,7 +329,12 @@ async function catalogSnapshot(session: AgentSession, refreshPending: boolean) {
 	const rows = session.getAvailableModels();
 	const accounts = await pickerAccounts(session, rows);
 	return {
-		models: rows.map(model => wireModel(model, accounts)),
+		models: rows.flatMap(model => {
+			const offered = keyOffer(session, model);
+			if (offered === false) return [];
+			const row = wireModel(model, accounts);
+			return [offered ? { ...row, pickerAvailability: "account-verified" as const } : row];
+		}),
 		discoveryStates: discoveryStates(session),
 		refreshPending,
 		generation,
@@ -345,7 +353,8 @@ async function buildProviders(session: AgentSession) {
 	const loginNameById = new Map(loginProviders.map(provider => [provider.id, provider.name]));
 	const modelCount = new Map<string, number>();
 	for (const model of session.getAvailableModels()) {
-		modelCount.set(model.provider, (modelCount.get(model.provider) ?? 0) + 1);
+		const available = keyOffer(session, model) !== false;
+		modelCount.set(model.provider, (modelCount.get(model.provider) ?? 0) + (available ? 1 : 0));
 	}
 	const ids = new Set<string>([...modelCount.keys(), ...loginIds]);
 	try {
@@ -400,7 +409,18 @@ function watchRefresh(env: BridgeEnv, session: AgentSession, refresh: Promise<vo
 }
 
 // Stock get_available_models blocks on refresh; this richer bounded catalog is required for responsive GUI discovery.
-async function refreshCatalog(env: BridgeEnv, session: AgentSession, forceRefresh: boolean) {
+async function refreshCatalog(env: BridgeEnv, session: AgentSession, params: Rec) {
+	if (typeof params.previousKeyStamp === "string") {
+		const stamp = typeof params.savedKeyStamp === "string" ? params.savedKeyStamp : null;
+		await keyAdditionsSaved(session, params.previousKeyStamp, stamp);
+		return catalogSnapshot(session, session.modelRegistry.isBackgroundRefreshPending());
+	}
+	if (typeof params.retryKey === "string") {
+		const additions = await discoverClaudeKeys(session, false, params.retryKey);
+		const snapshot = await catalogSnapshot(session, session.modelRegistry.isBackgroundRefreshPending());
+		return additions ? { ...snapshot, claudeKeyAdditions: additions } : snapshot;
+	}
+	const forceRefresh = params.forceRefresh === true;
 	const registry = session.modelRegistry;
 	const credentials = registry.authStorage.credentials;
 	const before = credentials.generation;
@@ -423,7 +443,9 @@ async function refreshCatalog(env: BridgeEnv, session: AgentSession, forceRefres
 	]).finally(() => clearTimeout(timer));
 	if (!completed) watchRefresh(env, session, refresh);
 	await syncImageGeneration(session);
-	return catalogSnapshot(session, !completed);
+	const additions = await discoverClaudeKeys(session, forceRefresh);
+	const snapshot = await catalogSnapshot(session, !completed);
+	return additions ? { ...snapshot, claudeKeyAdditions: additions } : snapshot;
 }
 
 // ============================================================================
@@ -946,12 +968,12 @@ export const methods: BridgeMethods = {
 		},
 	}),
 	...guard("models", {
-		models_catalog: async (params, env) => refreshCatalog(env, env.session(), asRecord(params).forceRefresh === true),
+		models_catalog: async (params, env) => refreshCatalog(env, env.session(), asRecord(params)),
 	}),
 	...guard("providers", {
 		providers: async (params, env) => {
 			const session = env.session();
-			const catalog = await refreshCatalog(env, session, asRecord(params).forceRefresh === true);
+			const catalog = await refreshCatalog(env, session, asRecord(params));
 			return { providers: await buildProviders(session), ...catalog };
 		},
 	}),

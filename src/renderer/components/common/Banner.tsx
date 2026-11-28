@@ -155,7 +155,7 @@ export const Banner = forwardRef<HTMLDivElement, BannerProps>(function Banner(
 						)}
 					</div>
 					{actions && (
-						<div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2 self-center">
+						<div className="omp-banner-actions ml-auto flex max-w-full flex-wrap items-center justify-end gap-2 self-center">
 							{actions}
 						</div>
 					)}

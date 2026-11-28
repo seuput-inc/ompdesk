@@ -311,6 +311,7 @@ export const QUOTA_FREE_COMMAND_TYPES = [
 	"set_idle_compaction_draft",
 	"set_interrupt_mode",
 	"set_model",
+	"set_claude_api_auto_model",
 	"set_model_role",
 	"set_next_prompt_children",
 	"set_next_prompt_draft",

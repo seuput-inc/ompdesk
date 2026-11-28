@@ -153,6 +153,11 @@ describe("update repository wording", () => {
 	});
 });
 
+it("offers a different model in Korean without assuming other keys share the organization's limit", () => {
+	expect(ko["chat.claudeApi.chooseModel"]).toBe("다른 모델 선택");
+	expect(ko["chat.claudeApi.sharedLimit"]).toBe("다른 키도 같은 조직의 한도를 쓸 수 있어 자동으로 바꾸지 않았어요.");
+});
+
 describe("ko steer wording", () => {
 	// Stock's "steer" is one concept in the composer, the transcript, the queue, subagents and Settings.
 	it("calls a steer 추가 지시 wherever en mentions one, and never 스티어링", () => {

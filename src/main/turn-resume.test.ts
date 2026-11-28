@@ -1030,6 +1030,15 @@ describe("TurnResume launch", () => {
 		await settle();
 	});
 
+	it("never retries or resends the saved prompt when stock journaled a Claude API dispatch", async () => {
+		h = setup({ answers: { restore_interrupted: restoreAnswer({ replayBlocked: true }) } });
+		new InterruptedTurnStore(h.file).write([marker({ prompt: "fixture" })]);
+		h.facts.push(fact({ tabId: "restored", running: false }));
+		h.resume.launch();
+		await settle();
+		expect(h.commands).toEqual([{ type: "restore_interrupted" }]);
+	});
+
 	it("sends a new session's first prompt again when the cut-off turn left no file to restore", async () => {
 		h = setup({ answers: { restore_interrupted: restoreAnswer({}) } });
 		h.resume.launch();

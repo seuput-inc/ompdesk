@@ -23,12 +23,13 @@
 
 import { CircleDashed, FileCode2, KeyRound, LogOut, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useState } from "react";
+import { CLAUDE_API_URL, isClaudeKeyAccount } from "../../../../../resources/gui-bridge/claude-key-models";
 import type { CustomProviderView } from "../../../../shared/ipc-types";
 import type { ProviderAccountsResult, ProviderInfo } from "../../../../shared/rpc-types";
 import { useUsage } from "../../../hooks/use-usage-reports";
 import { errorDetail } from "../../../lib/error-detail";
 import { useT } from "../../../lib/i18n";
-import { openExternal } from "../../../lib/open-external";
+import { claudeApiKeyLabel } from "../../../lib/model-provider-group";
 import { useTabRpc } from "../../../lib/tab-rpc";
 import { useModelStore } from "../../../stores/model";
 import { useFocusedTabDevice } from "../../../stores/remote";
@@ -46,13 +47,19 @@ import {
 } from "../../common";
 import { SettingsAdvanced, SettingsSection } from "../SettingsLayout";
 import { AccountPoolsEditor } from "./AccountPoolsEditor";
-import { CLAUDE_API_URL, useProviderConnection } from "./ClaudeConnection";
+import { useProviderConnection } from "./ClaudeConnection";
 import { ProviderGroupItem } from "./ConnectedRow";
 import { CreditSpendRow } from "./CreditSpendRow";
 import { CustomProviderForm } from "./CustomProviderForm";
 import { LocalEnginesRow } from "./LocalEnginesRow";
 import { ModelOverrides } from "./ModelOverrides";
-import { type AccountRowLayout, accountRowLayout, ProviderAccountRows, useProviderAccounts } from "./ProviderAccounts";
+import {
+	type AccountRowLayout,
+	accountRowLayout,
+	ClaudeApiBilling,
+	ProviderAccountRows,
+	useProviderAccounts,
+} from "./ProviderAccounts";
 import {
 	authLabel,
 	type ProviderCatalog,
@@ -71,6 +78,9 @@ import { RotationModeControl } from "./RotationModeControl";
 function ConnectedProviderRows({
 	group,
 	config,
+	keyName,
+	onEdit,
+	onDelete,
 	login,
 	busyProvider,
 	sidecarReady,
@@ -83,6 +93,9 @@ function ConnectedProviderRows({
 }: {
 	group: ProviderGroup;
 	config: CustomProviderView | undefined;
+	keyName: (id: string) => string;
+	onEdit: (config: CustomProviderView) => void;
+	onDelete: (config: CustomProviderView) => void;
 	login: ProviderLogin;
 	busyProvider: string | null;
 	sidecarReady: boolean;
@@ -99,14 +112,18 @@ function ConnectedProviderRows({
 	const t = useT();
 	const { provider } = group;
 	const accounts = group.kind === "accounts";
-	const state = useProviderAccounts(provider.id, accounts && sidecarReady, revision, usagePolls);
-	useEffect(() => onAccounts(provider.id, state.result), [onAccounts, provider.id, state.result]);
+	const state = useProviderAccounts(provider.id, listsAccounts(provider) && sidecarReady, revision, usagePolls);
+	const result = provider.authenticated ? state.result : null;
+	useEffect(() => onAccounts(provider.id, result), [onAccounts, provider.id, result]);
 	if (accounts) {
 		return (
 			<ProviderAccountRows
 				adding={login.state.running || login.busy}
 				group={group}
 				layout={layout}
+				keyName={keyName}
+				onEdit={onEdit}
+				onDelete={onDelete}
 				onAdd={() => void login.start(provider.id)}
 				onChanged={onChanged}
 				onSignOutAll={() => handlers.onLogout?.(provider)}
@@ -149,20 +166,7 @@ function ConnectedProviderRows({
 		<ProviderGroupItem
 			addDisabled={!sidecarReady || login.busy}
 			onAdd={claudeApi ? () => void login.start("anthropic") : undefined}
-			after={
-				claudeApi && config.hasApiKey ? (
-					<div className="flex flex-wrap items-center gap-x-2 text-sc-sm text-(--sc-text-muted)">
-						{t("providers.apiBalanceUnknown")}
-						<Button
-							onClick={() => openExternal("https://platform.claude.com/settings/billing")}
-							size="sm"
-							variant="ghost"
-						>
-							{t("providers.consoleBilling")}
-						</Button>
-					</div>
-				) : undefined
-			}
+			after={claudeApi && config.hasApiKey ? <ClaudeApiBilling /> : undefined}
 			badges={provider.disabled && <Badge variant="warning">{t("providers.badge.disabled")}</Badge>}
 			busy={busyProvider === provider.id || (login.state.running && login.state.providerId === provider.id)}
 			detail={[
@@ -196,7 +200,7 @@ function CustomEndpoints({
 	const t = useT();
 	const device = useFocusedTabDevice();
 	const openProviderConfig = useUiStore(state => state.openProviderConfig);
-	const configs = catalog.customConfigs.filter(config => !config.builtin);
+	const configs = catalog.customConfigs.filter(config => !config.builtin && !isClaudeKeyAccount(config));
 	const listed = new Map(catalog.providers.map(provider => [provider.id, provider]));
 	return (
 		<SettingsSection
@@ -360,7 +364,7 @@ export function ProvidersSection({
 		if (returnTo && !customConfigs.some(config => config.id === returnTo)) return;
 		const section = document.getElementById("settings-models-custom");
 		const row = returnTo
-			? Array.from(section?.querySelectorAll<HTMLElement>("[data-custom-provider]") ?? []).find(
+			? Array.from(document.querySelectorAll<HTMLElement>("[data-custom-provider]")).find(
 					item => item.dataset.customProvider === returnTo,
 				)
 			: section?.querySelector<HTMLElement>("[data-custom-add]");
@@ -389,12 +393,14 @@ export function ProvidersSection({
 		const section = document.getElementById("settings-models-accounts");
 		const card = Array.from(
 			section?.querySelectorAll<HTMLElement>(
-				"[data-provider-row], [data-featured-provider], [data-provider-connect]",
+				"[data-provider-row], [data-custom-provider], [data-featured-provider], [data-provider-connect]",
 			) ?? [],
 		).find(
 			item =>
-				(item.dataset.providerRow ?? item.dataset.featuredProvider ?? item.dataset.providerConnect) ===
-				providerFocus.id,
+				(item.dataset.providerRow ??
+					item.dataset.customProvider ??
+					item.dataset.featuredProvider ??
+					item.dataset.providerConnect) === providerFocus.id,
 		);
 		(card ?? section)?.scrollIntoView({ block: "center" });
 		(card?.querySelector<HTMLElement>("button") ?? card)?.focus({ preventScroll: true });
@@ -475,10 +481,15 @@ export function ProvidersSection({
 		);
 	}
 
-	const discoveryErrors = providerDiscoveryErrors(discoveryStates, t("providers.discoveryUnavailable"));
-	const groups = buildProviderGroups(providers);
+	const savedKeys = new Set(catalog.customConfigs.filter(isClaudeKeyAccount).map(config => config.id));
+	const discoveryErrors = providerDiscoveryErrors(
+		discoveryStates.filter(state => !savedKeys.has(state.provider)),
+		t("providers.discoveryUnavailable"),
+	);
+	const groups = buildProviderGroups(providers, catalog.customConfigs);
 	const connected = groups.map(group => group.provider);
 	const configById = new Map(catalog.customConfigs.map(config => [config.id, config]));
+	const providerNames = new Map(providers.map(provider => [provider.id, provider.name]));
 	const handlers: RowHandlers = {
 		onConnect: provider => void login.start(provider.id),
 		onLogout: setPendingLogout,
@@ -545,6 +556,9 @@ export function ProvidersSection({
 								group={group}
 								handlers={handlers}
 								key={group.provider.id}
+								keyName={id => claudeApiKeyLabel(id, providerNames.get(id), t)}
+								onEdit={openProviderConfig}
+								onDelete={setPendingDelete}
 								layout={rowLayout}
 								login={login}
 								onAccounts={onAccounts}

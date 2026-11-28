@@ -54,6 +54,63 @@ afterEach(() => {
 	useToolsStore.getState().reset();
 });
 
+it("shows the actual key and why another was skipped even without token usage", () => {
+	const message: AgentMessage = {
+		role: "assistant",
+		provider: "anthropic-api-key-2",
+		content: "Reply",
+		claudeApiRoute: {
+			provider: "anthropic-api-key-2",
+			skipped: [{ provider: "anthropic-api-key", reason: "not-offered" }],
+		},
+	};
+	const html = renderToStaticMarkup(
+		<I18nProvider>
+			<MessageBubble message={message} />
+		</I18nProvider>,
+	);
+	expect(html).toContain("Claude API · API key 2");
+	expect(html).toContain("API key 1: model not offered");
+});
+
+it("names the refused automatic key and offers a manual choice instead of claiming a fallback", () => {
+	const html = renderToStaticMarkup(
+		<I18nProvider>
+			<MessageBubble
+				message={{
+					role: "assistant",
+					provider: "anthropic-api-key-2",
+					content: [],
+					stopReason: "aborted",
+					errorMessage: "HTTP 402",
+					claudeApiRoute: { provider: "anthropic-api-key-2", skipped: [], refusal: "billing" },
+				}}
+			/>
+		</I18nProvider>,
+	);
+	expect(html).toContain("A billing problem blocked the request with API key 2.");
+	expect(html).toContain("No other key was tried");
+	expect(html).toContain("Choose another key or model");
+	expect(html).not.toContain("data-claude-key-used");
+});
+
+it("does not claim a key was used when preflight refused the turn before dispatch", () => {
+	const html = renderToStaticMarkup(
+		<I18nProvider>
+			<MessageBubble
+				message={{
+					role: "assistant",
+					provider: "anthropic-api-key",
+					stopReason: "error",
+					errorMessage: "Key no longer offers the model",
+					content: [],
+				}}
+			/>
+		</I18nProvider>,
+	);
+	expect(html).not.toContain("data-claude-key-used");
+});
+
 describe("MessageBubble tool messages", () => {
 	it("hydrates a completed tool card and folds away the standalone result", () => {
 		useToolsStore.getState().hydrateMessages([assistantMessage, toolResultMessage]);

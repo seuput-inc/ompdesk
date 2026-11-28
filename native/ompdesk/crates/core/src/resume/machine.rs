@@ -1465,7 +1465,10 @@ impl Inst {
             )
             .await?
         };
-        let retried = action != Action::Revive
+        let replay_blocked =
+            restored.as_ref().and_then(|v| v.get("replayBlocked")) == Some(&Value::Bool(true));
+        let retried = !replay_blocked
+            && action != Action::Revive
             && !continues(restored.as_ref())
             && continues(
                 self.send(&ctx, &sidecar, "retry", &mut failures, &mut answered)
@@ -1483,6 +1486,7 @@ impl Inst {
             .filter(|p| !p.is_empty());
         let mut prompt_sent = false;
         if let (Some(pending), Some(prompt)) = (&pending, &unsaved_prompt)
+            && !replay_blocked
             && !started
             && !self.stale(&ctx).await?
         {

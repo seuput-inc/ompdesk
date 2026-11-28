@@ -240,6 +240,7 @@ const RUN_REPLY_PREVIEW_CHARS = 4000;
 /** Claude sets responseId at message_start and ttft at the first block, even before visible text. */
 export function claudeRetryBlocked(last: AgentMessage): boolean {
 	if (last.stopReason !== "error" || last.api !== "anthropic-messages") return false;
+	if (last.claudeApiRoute) return true;
 	if (last.responseId || typeof last.ttft === "number" || last.content?.length) return true;
 	if (/\bAnthropic stream (?:envelope )?error\b/i.test(last.errorMessage ?? "")) return true;
 	// A separately registered API key gets no automatic replay on an ambiguous transport failure.
