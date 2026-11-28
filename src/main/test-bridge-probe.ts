@@ -67,13 +67,13 @@ export function stockFixtureEnv(home: string): NodeJS.ProcessEnv {
 }
 
 /**
- * Ends the omp daemon a test's private config folder `folder` started, with what it runs. From omp 19 an omp starts
+ * Requests shutdown of the omp daemon a test's private config folder `folder` started and returns its pid. From omp 19 an omp starts
  * one per config folder (`<folder>/run/daemon`); it inherits that omp's working folder (stock `resolveWorkerSpawnCmd`
  * names none for the bundled entry), runs the session's units (bash services and the like) there and outlives it, so
  * on Windows the test's folders stay busy (EBUSY) while they run. Older omps have none (`omp ps --json` names no
  * daemon), and nothing is done.
  */
-export function stopOmpDaemon(folder: string, privateEnv?: NodeJS.ProcessEnv): void {
+export function stopOmpDaemon(folder: string, privateEnv?: NodeJS.ProcessEnv): number | undefined {
 	const ps = spawnSync(OMP_COMMAND.file, [...OMP_COMMAND.args, "ps", "--json"], {
 		env: {
 			...(privateEnv ?? process.env),
@@ -100,6 +100,7 @@ export function stopOmpDaemon(folder: string, privateEnv?: NodeJS.ProcessEnv): v
 			// Already gone.
 		}
 	}
+	return pid;
 }
 
 /**

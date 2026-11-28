@@ -15,7 +15,7 @@ import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { AGENT_DESKTOP_ENV } from "../../resources/gui-bridge/modes/computer-use-contracts";
 import { OMP_COMMAND, INSTALLED_OMP as omp, stockFixtureEnv, stopOmpDaemon } from "./test-bridge-probe";
-import { RM_TEMP, writeFakeBin } from "./test-fake-omp";
+import { ompRuns, RM_TEMP, writeFakeBin } from "./test-fake-omp";
 import { removeWhenFree } from "./test-folders";
 
 /** A command no machine has: stock's spawn fails at once. */
@@ -126,7 +126,13 @@ async function runCheck<T = Probe>(command: string, mode: string, checkMs: numbe
 		expect(line, stderr.slice(-2500)).toMatch(/^CHECK_PROBE=/);
 		return JSON.parse(line?.slice("CHECK_PROBE=".length) ?? "{}") as T;
 	} finally {
-		stopOmpDaemon(isolated, env);
+		const stoppedAt = Date.now();
+		const pid = stopOmpDaemon(isolated, env);
+		if (pid !== undefined) {
+			await expect
+				.poll(() => ompRuns(pid, stoppedAt), { timeout: 8_000, message: `Private MCP daemon ${pid} still running` })
+				.toBe(false);
+		}
 		await removeWhenFree(isolated);
 	}
 }
