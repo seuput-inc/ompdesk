@@ -36,7 +36,7 @@ pub(crate) mod triggers;
 mod unlanded;
 pub(crate) mod worktree;
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(crate) use scm::tests::{repo_at, sh};
 
 use serde::Deserialize;

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { AUTOPILOT_BRIDGE_METHODS, type AutopilotStatus } from "../../resources/gui-bridge/modes/autopilot-contracts";
@@ -18,6 +19,8 @@ import {
 } from "./autopilot-test-rig";
 import { gitSync } from "./local/git/test-repos";
 import type { SidecarLike } from "./sidecar-types";
+import { INSTALLED_OMP } from "./test-bridge-probe";
+import { startStockBrowserSession } from "./test-stock-browser-session";
 
 installAutopilotRig();
 
@@ -119,28 +122,48 @@ describe("a pipeline step stopped at its bound that answers late", () => {
 	}
 });
 
-describe("a settle that stalls while the ship queue drains", () => {
-	it("the drain it started is stopped with it: no push once the settle's bound passed", async () => {
-		build({ tuning: TUNING });
-		await start({ type: "set_autopilot", action: "start", preset: "push" });
-		await commit(path.join(tmp, "wt-2026-10-17"), "a.txt");
-		const sidecar = world.sidecars.get("ap-1") as unknown as SidecarLike;
-		// A push queued by the person; the turn is busy, so nothing drains it yet.
-		world.busy.add("ap-1");
-		await autopilot.handleCommand(win, sidecar, "ap-1", { type: "set_autopilot", action: "ship", kind: "push" }, "1");
-		world.busy.delete("ap-1");
-		// The drain's journal write never answers: the settle step waits inside the drain.
-		world.hang.add(`bridge:${AUTOPILOT_BRIDGE_METHODS.shipAction}`);
-		frame({ type: "autopilot_settled", reason: "user" });
-		await vi.waitFor(() => expect(world.held.length).toBeGreaterThan(0), { timeout: 5_000 });
-		await sleep(BOUND_MS + 300);
-		// The drain the settle awaited is stopped with it: its item fails now instead of running on behind it.
-		const queue = (await autopilot.status(sidecar, "ap-1")).ship?.queue ?? [];
-		expect(queue.map(item => item.state)).toEqual(["failed"]);
-		world.hang.clear();
-		for (const held of world.held.splice(0)) held.release();
-		await sleep(150);
-		await autopilot.idle();
-		expect(gitSync(remote, "for-each-ref", "refs/heads/autopilot")).toBe("");
-	});
+describe.each(["rig", "stock"] as const)("a settle that drains the ship queue (%s journal)", journalHost => {
+	it.skipIf(journalHost === "stock" && !existsSync(INSTALLED_OMP))(
+		"journals the queued push and sends its commit to the remote",
+		async ({ onTestFinished }) => {
+			if (journalHost === "stock") {
+				const stock = await startStockBrowserSession();
+				onTestFinished(stock.close);
+				const handle = world.handle.bind(world);
+				vi.spyOn(world, "handle").mockImplementation(async (tab, command) => {
+					const response = await handle(tab, command);
+					if (tab !== "ap-1" || command.type !== "autopilot_bridge") return response;
+					if (
+						command.method !== AUTOPILOT_BRIDGE_METHODS.arm &&
+						command.method !== AUTOPILOT_BRIDGE_METHODS.shipAction
+					)
+						return response;
+					return { ...response, data: await stock.client.request(command.method, command.params) };
+				});
+			}
+			await start({ type: "set_autopilot", action: "start", preset: "push" });
+			const sha = await commit(path.join(tmp, "wt-2026-10-17"), "a.txt");
+			const sidecar = world.sidecars.get("ap-1") as unknown as SidecarLike;
+			// A push queued by the person; the turn is busy, so nothing drains it yet.
+			world.busy.add("ap-1");
+			await autopilot.handleCommand(
+				win,
+				sidecar,
+				"ap-1",
+				{ type: "set_autopilot", action: "ship", kind: "push" },
+				"1",
+			);
+			world.busy.delete("ap-1");
+			frame({ type: "autopilot_settled", reason: "user" });
+			await autopilot.idle();
+			const status = await autopilot.status(sidecar, "ap-1");
+			const journal = world.bridgeCalls("ap-1", AUTOPILOT_BRIDGE_METHODS.shipAction);
+			const diagnosis = JSON.stringify({ queue: status.ship?.queue, stalls: status.stalls });
+			expect(
+				journal.map(call => call.params?.sha),
+				diagnosis,
+			).toEqual([sha]);
+			expect(gitSync(remote, "for-each-ref", "--format=%(objectname)", "refs/heads/autopilot")).toBe(sha);
+		},
+	);
 });

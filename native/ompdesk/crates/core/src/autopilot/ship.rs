@@ -441,6 +441,11 @@ impl ShipRunner {
         self.lock().items.clone()
     }
 
+    #[cfg(test)]
+    pub(super) async fn wait_for_drain(&self) {
+        self.chain.idle().await;
+    }
+
     /// Queue an item; it runs at the next `drain` (the end of the turn).
     pub fn enqueue(&self, request: &Request, id: String, at: i64) -> QueueItem {
         let item = QueueItem {

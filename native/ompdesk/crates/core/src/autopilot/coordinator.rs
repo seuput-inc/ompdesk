@@ -971,3 +971,6 @@ impl Hooks for RunHooks {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;
